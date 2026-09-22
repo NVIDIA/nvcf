@@ -1494,6 +1494,146 @@ async fn exercise_reverse_queue_mismatch(protocol: TunnelTransportProtocol) {
 }
 
 #[tokio::test]
+async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoints() {
+    for protocol in [
+        TunnelTransportProtocol::RawQuic,
+        TunnelTransportProtocol::Http3,
+        TunnelTransportProtocol::WebTransport,
+    ] {
+        for reverse in [false, true] {
+            let case = if reverse {
+                TunnelTestCase::reverse(protocol)
+            } else {
+                TunnelTestCase::direct(protocol)
+            };
+            let (mut fixture, _) = ProxyFixture::start_for_tunnel_case("test-overload", case).await;
+            let model = "overload-model";
+            let runtime = active_runtime(model);
+            set_model_queue(&runtime, model, 0);
+            observe_connecting_request(&runtime, model, "existing-work".to_string(), 100);
+            let backend = if reverse {
+                fixture
+                    .add_capturing_reverse_backend("overload-backend", "", protocol, runtime, false)
+                    .await
+            } else {
+                let backend = start_capturing_chat_backend(false).await;
+                let mut config = QuicHttpTunnelConfig::new(
+                    "127.0.0.1:0".parse().unwrap(),
+                    format!("http://{}", backend.addr),
+                );
+                config.tunnel_protocol = protocol;
+                config.forwarding.runtime_state = runtime.clone();
+                let tunnel = start_quic_http_tunnel(config)
+                    .await
+                    .expect("start overload tunnel");
+                fixture.register(
+                    active_registration_config_with_state(
+                        fixture.grpc_addr,
+                        "overload-backend",
+                        "",
+                        format!("quic://{}", tunnel.listen_addr()),
+                        format!("http://{}", backend.addr),
+                        runtime,
+                    ),
+                    "register overload backend",
+                );
+                fixture.own_tunnel(tunnel);
+                backend
+            };
+            wait_until(
+                "overload backend registration",
+                Duration::from_secs(5),
+                Duration::from_millis(20),
+                || {
+                    let state = fixture.handle.state();
+                    async move {
+                        let target = RoutingTargetKey {
+                            routing_key: None,
+                            model_id: model.to_string(),
+                        };
+                        let candidates = state.cluster_candidates_for_target(&target).await;
+                        if candidates.len() == 1 {
+                            Ok(())
+                        } else {
+                            Err(format!("candidates={candidates:?}"))
+                        }
+                    }
+                },
+            )
+            .await;
+            for (endpoint, body) in [
+                ("/v1/chat/completions", streaming_chat_body(model)),
+                (
+                    "/v1/responses",
+                    serde_json::json!({"model": model, "input": "hello", "stream": true}),
+                ),
+                (
+                    "/v1/embeddings",
+                    serde_json::json!({"model": model, "input": "hello"}),
+                ),
+            ] {
+                for budget in ["0", "1"] {
+                    let body = Bytes::from(body.to_string());
+                    let request_body =
+                        reqwest::Body::wrap_stream(futures::stream::once(async move {
+                            // Let a nonzero retry budget expire while Pylon waits for the request body.
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            Ok::<_, std::io::Error>(body)
+                        }));
+                    let response = proxy_request(
+                        &reqwest::Client::new(),
+                        fixture.http_addr,
+                        endpoint,
+                        model,
+                        "overload-request",
+                    )
+                    .header("content-type", "application/json")
+                    .header("x-stargate-max-wait-ms", budget)
+                    .body(request_body)
+                    .send()
+                    .await
+                    .expect("send overload request");
+                    assert_eq!(
+                        response.status().as_u16(),
+                        529,
+                        "{protocol:?}, reverse={reverse}, {endpoint}, budget={budget}"
+                    );
+                    assert_eq!(response.headers()["content-type"], "application/json");
+                    assert!(
+                        response
+                            .headers()
+                            .keys()
+                            .all(|name| !name.as_str().starts_with("x-stargate-"))
+                    );
+                    let body: serde_json::Value =
+                        response.json().await.expect("read overload body");
+                    assert_eq!(
+                        body,
+                        serde_json::json!({"error": {
+                            "code": "overloaded_error",
+                            "message": "Inference capacity is temporarily unavailable.",
+                            "param": "",
+                            "type": "overloaded_error",
+                        }})
+                    );
+                }
+            }
+            assert_eq!(backend.hits(), 0, "rejections must occur before inference");
+            let metrics = fixture.metrics();
+            assert!(
+                metrics.contains("result=\"upstream_429\""),
+                "Pylon must keep returning 429 internally"
+            );
+            assert!(
+                metrics.contains("status=\"529\""),
+                "public failures must be counted as 529"
+            );
+            fixture.shutdown().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn chat_completions_route_proxies_path_query_and_body_through_quic_tunnel() {
     exercise_endpoint_contract(EndpointContract::Chat).await;
 }
@@ -2232,7 +2372,7 @@ async fn retryable_upstream_rejection_retries_alternate_backend() {
         .await
         .expect("budget-limited request failed");
 
-        if budget_limited_resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        if budget_limited_resp.status().as_u16() == 529 {
             assert!(
                 budget_limited_resp
                     .headers()
@@ -2308,7 +2448,7 @@ async fn retryable_upstream_rejection_retries_alternate_backend() {
             "missing success attempt counter",
         ),
         (
-            r#"stargate_requests_total{inference_server_id="retry-reject",model="retry-model",routing_key="",status="429"} 1"#,
+            r#"stargate_requests_total{inference_server_id="retry-reject",model="retry-model",routing_key="",status="529"} 1"#,
             "hidden retryable attempt should not increment request counter",
         ),
         (
@@ -2392,16 +2532,24 @@ async fn queue_estimate_mismatch_retries_alternate_backend_before_upstream() {
             .await
             .expect("budget-limited queue mismatch body should be readable");
         let metrics = fixture.metrics();
-        if status == StatusCode::TOO_MANY_REQUESTS
+        if status.as_u16() == 529
             && metrics.contains(
                 r#"stargate_proxy_retry_exhausted_total{model="queue-mismatch-model",reason="retry_budget_exhausted",routing_key=""} 1"#,
             )
         {
             assert!(headers.get("x-stargate-retryable").is_none());
-            assert!(
-                response_text.contains("queue_estimate_mismatch"),
-                "final queue mismatch body should preserve the upstream reason: {response_text}"
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&response_text).unwrap(),
+                serde_json::json!({"error": {
+                    "code": "overloaded_error",
+                    "message": "Inference capacity is temporarily unavailable.",
+                    "param": "",
+                    "type": "overloaded_error",
+                }}),
             );
+            for name in headers.keys() {
+                assert!(!name.as_str().starts_with("x-stargate-"));
+            }
             assert_eq!(
                 reject_backend.hits(),
                 0,
@@ -2783,7 +2931,7 @@ async fn retryable_single_backend_exhausts_eligible_backends() {
             async move {
                 let response = request.send().await.expect("request failed");
                 let metrics = metrics_text(registry);
-                (response.status() == StatusCode::SERVICE_UNAVAILABLE
+                (response.status().as_u16() == 529
                     && metrics.contains(
                         r#"stargate_proxy_attempts_total{inference_server_id="single-reject",model="single-exhaust-model",result="upstream_429",routing_key=""}"#,
                     ))
@@ -2803,7 +2951,7 @@ async fn retryable_single_backend_exhausts_eligible_backends() {
 }
 
 #[tokio::test]
-async fn request_retry_limit_returns_last_retryable_rejection() {
+async fn request_retry_limit_returns_sanitized_overload() {
     let retry = ProxyRetryConfig {
         max_request_retries: 1,
         ..ProxyRetryConfig::default()
@@ -2817,18 +2965,24 @@ async fn request_retry_limit_returns_last_retryable_rejection() {
         .await;
 
     let response = poll_until(
-        "request retry limit should return the final retryable rejection",
+        "request retry limit should return a sanitized overload",
         Duration::from_secs(15),
         || {
             let request = fixture.chat_request("retry-limit-model", "req-retry-limit");
             async move {
                 let response = request.send().await.expect("request failed");
-                (response.status() == StatusCode::TOO_MANY_REQUESTS).then_some(response)
+                (response.status().as_u16() == 529).then_some(response)
             }
         },
     )
     .await;
     assert!(response.headers().get("x-stargate-retryable").is_none());
+    let body: serde_json::Value = response.json().await.expect("read public overload body");
+    assert_eq!(body["error"]["code"], "overloaded_error");
+    assert_eq!(
+        body["error"]["message"],
+        "Inference capacity is temporarily unavailable."
+    );
     assert_metric_sample(
         &fixture.metrics(),
         r#"stargate_proxy_retry_exhausted_total{model="retry-limit-model",reason="upstream_admission_rejected",routing_key=""} 1"#,

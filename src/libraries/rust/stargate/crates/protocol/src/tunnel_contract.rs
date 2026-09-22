@@ -33,6 +33,12 @@ pub const WEBTRANSPORT_TUNNEL_PATH: &str = "/_stargate/webtransport";
 pub const REQUIRED_REQUEST_HEADERS: [&str; 3] =
     [HEADER_REQUEST_ID, HEADER_MODEL, HEADER_INPUT_TOKENS];
 
+/// Stargate control metadata is consumed at a proxy boundary, never forwarded
+/// unchanged to an inference application or customer.
+pub fn is_internal_control_header(name: &http::header::HeaderName) -> bool {
+    name.as_str().starts_with("x-stargate-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

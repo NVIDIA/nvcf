@@ -508,7 +508,7 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
             .send()
             .await
             .expect("admission request failed");
-        if rejected.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        if rejected.status().as_u16() == 529 {
             break rejected;
         }
         assert!(
@@ -517,14 +517,17 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
         );
         tokio::task::yield_now().await;
     };
-    assert_eq!(rejected.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(rejected.status().as_u16(), 529);
     assert_eq!(
         rejected
             .headers()
             .get("x-stargate-error-code")
             .and_then(|value| value.to_str().ok()),
-        Some("input_work_limit_exceeded")
+        None
     );
+
+    let body: serde_json::Value = rejected.json().await.expect("read admission rejection");
+    assert_eq!(body["error"]["code"], "overloaded_error");
 
     let missing = with_proxy_headers(
         chat.client.post(&chat.url),

@@ -29,6 +29,7 @@ use stargate_protocol::common::is_hop_by_hop_header;
 use stargate_protocol::tunnel_contract::{
     HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
     HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
+    is_internal_control_header,
 };
 use stargate_telemetry::{
     inject_trace_context, parent_context_from_headers, traceparent_from_headers,
@@ -1381,13 +1382,7 @@ fn is_tunnel_control_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool
     // HeaderName is normalized, so this policy stays allocation-free on both hot paths.
     name == retry.upstream_retry_header
         || is_hop_by_hop_header(name)
-        || matches!(
-            name.as_str(),
-            HEADER_STARGATE_UPSTREAM_RETRYABLE
-                | HEADER_STARGATE_RETRYABLE
-                | HEADER_STARGATE_RETRY_REASON
-                | HEADER_STARGATE_RETRY_AFTER_MS
-        )
+        || is_internal_control_header(name)
 }
 
 #[cfg(test)]

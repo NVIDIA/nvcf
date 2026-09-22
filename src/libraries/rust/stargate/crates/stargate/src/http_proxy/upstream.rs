@@ -17,8 +17,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use stargate_protocol::common::is_hop_by_hop_header;
 use stargate_protocol::tunnel_contract::{
-    HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
-    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+    HEADER_STARGATE_EXPECTED_QUEUE_MS, is_internal_control_header,
 };
 use tracing::{Span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -26,7 +25,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::routing_state::RegistrationGeneration;
 use crate::telemetry::inject_trace_context;
 
-use super::{HEADER_ROUTING_METHOD, HEADER_STARGATE_ERROR_CODE, ProxyAppState};
+use super::{HEADER_ROUTING_METHOD, ProxyAppState};
 
 pub(super) struct UpstreamStreamingResponse {
     pub(super) status: StatusCode,
@@ -123,16 +122,8 @@ pub(super) fn headers_for_upstream_attempt(
 
 fn should_forward_header(name: &HeaderName) -> bool {
     !is_hop_by_hop_header(name)
-        && !matches!(
-            name.as_str(),
-            "host"
-                | HEADER_ROUTING_METHOD
-                | HEADER_STARGATE_RETRYABLE
-                | HEADER_STARGATE_RETRY_REASON
-                | HEADER_STARGATE_RETRY_AFTER_MS
-                | HEADER_STARGATE_EXPECTED_QUEUE_MS
-                | HEADER_STARGATE_ERROR_CODE
-        )
+        && !is_internal_control_header(name)
+        && !matches!(name.as_str(), "host" | HEADER_ROUTING_METHOD)
 }
 
 pub(super) fn copy_forwardable_headers(from: &HeaderMap, to: &mut HeaderMap) {
@@ -145,7 +136,11 @@ pub(super) fn copy_forwardable_headers(from: &HeaderMap, to: &mut HeaderMap) {
 
 #[cfg(test)]
 mod tests {
-    use stargate_protocol::tunnel_contract::HEADER_MODEL;
+    use super::super::HEADER_STARGATE_ERROR_CODE;
+    use stargate_protocol::tunnel_contract::{
+        HEADER_MODEL, HEADER_STARGATE_RETRY_AFTER_MS, HEADER_STARGATE_RETRY_REASON,
+        HEADER_STARGATE_RETRYABLE,
+    };
 
     use crate::routing_state::{RegistrationIdentity, test_registration_generation};
 
@@ -222,6 +217,32 @@ mod tests {
         assert!(!downstream.contains_key(HEADER_STARGATE_RETRY_AFTER_MS));
         assert!(!downstream.contains_key(HEADER_STARGATE_EXPECTED_QUEUE_MS));
         assert_eq!(downstream.get("x-upstream-header").unwrap(), "preserved");
+    }
+
+    #[test]
+    fn control_namespace_is_filtered_in_both_directions() {
+        let mut headers = HeaderMap::new();
+        for name in [
+            "X-Stargate-Upstream-Retryable",
+            "X-Stargate-Auth-Token",
+            "X-Stargate-Max-Wait-Ms",
+            "X-Stargate-Additional-Control",
+        ] {
+            let name = HeaderName::from_bytes(name.as_bytes()).unwrap();
+            headers.append(name.clone(), HeaderValue::from_static("one"));
+            headers.append(name, HeaderValue::from_static("two"));
+        }
+        headers.insert("x-request-id", HeaderValue::from_static("request-a"));
+        headers.insert("retry-after", HeaderValue::from_static("1"));
+        for forwarded in [prepare_forwarded_headers(&headers), {
+            let mut response = HeaderMap::new();
+            copy_forwardable_headers(&headers, &mut response);
+            response
+        }] {
+            assert_eq!(forwarded.len(), 2);
+            assert_eq!(forwarded["x-request-id"], "request-a");
+            assert_eq!(forwarded["retry-after"], "1");
+        }
     }
 
     #[tokio::test]

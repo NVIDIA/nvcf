@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use rand::Rng;
 use tracing::{Span, warn};
 
@@ -33,14 +33,30 @@ use super::HEADER_STARGATE_ERROR_CODE;
 const ERROR_NO_ELIGIBLE_CANDIDATES: &str = "no_eligible_candidates";
 const ERROR_NO_ELIGIBLE_CANDIDATES_BODY: &str =
     r#"{"error":"no eligible candidates","code":"no_eligible_candidates"}"#;
-const ERROR_INPUT_WORK_LIMIT_EXCEEDED: &str = "input_work_limit_exceeded";
-const ERROR_INPUT_WORK_LIMIT_EXCEEDED_BODY: &str =
-    r#"{"error":"input work admission limit exceeded","code":"input_work_limit_exceeded"}"#;
 const ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED: &str = "input_work_limit_exceeded";
 const ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE: &str = "input_work_capacity_unavailable";
 const ROUTING_RETRY_SLEEP_MIN_MS: u64 = 1;
 const ROUTING_RETRY_SLEEP_MAX_MS: u64 = 10;
 const ROUTING_RETRY_MAX_WAIT_MS: u64 = 60_000;
+pub(super) const STATUS_OVERLOADED: StatusCode = match StatusCode::from_u16(529) {
+    Ok(status) => status,
+    Err(_) => panic!("529 is a valid HTTP status"),
+};
+
+pub(super) fn overloaded_response() -> Response<Body> {
+    (
+        STATUS_OVERLOADED,
+        axum::Json(serde_json::json!({
+            "error": {
+                "code": "overloaded_error",
+                "message": "Inference capacity is temporarily unavailable.",
+                "param": "",
+                "type": "overloaded_error",
+            }
+        })),
+    )
+        .into_response()
+}
 
 pub(super) fn eligible_cluster_candidate_count(
     candidates: &[RoutedClusterSnapshot],
@@ -78,7 +94,7 @@ pub(super) fn input_work_admission_rejection_response(
     metrics
         .admission_rejections_total(rk_ref, model_id, reason)
         .inc();
-    metrics.requests_total(rk_ref, model_id, "", "503").inc();
+    metrics.requests_total(rk_ref, model_id, "", "529").inc();
     warn!(
         routing_key = ?target.routing_key,
         model_id = %model_id,
@@ -86,11 +102,7 @@ pub(super) fn input_work_admission_rejection_response(
         "rejecting request before routing due to input-work admission"
     );
 
-    json_error_response(
-        StatusCode::SERVICE_UNAVAILABLE,
-        ERROR_INPUT_WORK_LIMIT_EXCEEDED,
-        ERROR_INPUT_WORK_LIMIT_EXCEEDED_BODY,
-    )
+    overloaded_response()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +148,7 @@ pub(super) struct NoRoutingFinalizationContext<'a> {
     pub(super) failed_backend_count: usize,
     pub(super) failed_cluster_count: usize,
     pub(super) routing_retry_attempts: u64,
+    pub(super) capacity_rejected: bool,
 }
 
 pub(super) fn finalize_no_routing_choice(
@@ -167,6 +180,13 @@ pub(super) fn finalize_no_routing_choice(
                 .requests_total(rk_ref, model_id, "", "404")
                 .inc();
             Ok(no_eligible_candidates_response())
+        }
+        NoRoutingFinalization::ServiceUnavailable if context.capacity_rejected => {
+            context
+                .metrics
+                .requests_total(rk_ref, model_id, "", "529")
+                .inc();
+            Ok(overloaded_response())
         }
         NoRoutingFinalization::ServiceUnavailable => {
             context

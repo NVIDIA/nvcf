@@ -161,7 +161,7 @@ func copyProxyHeaders(dst http.Header, src http.Header) {
 		if _, skip := hopByHopHeaders[http.CanonicalHeaderKey(key)]; skip {
 			continue
 		}
-		if strings.EqualFold(key, echo.HeaderContentLength) {
+		if strings.EqualFold(key, echo.HeaderContentLength) || isInternalResponseHeader(key) {
 			continue
 		}
 		dst.Del(key)
@@ -169,4 +169,10 @@ func copyProxyHeaders(dst http.Header, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func isInternalResponseHeader(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasPrefix(name, "x-stargate-") ||
+		name == "x-inference-server-id" || name == "x-inference-server-url"
 }

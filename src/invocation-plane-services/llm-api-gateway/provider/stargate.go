@@ -468,6 +468,9 @@ func checkHTTPError(resp *http.Response) error {
 
 	var errorResponse models.ErrorResponse
 	if err := json.Unmarshal(body, &errorResponse); err == nil && errorResponse.Error.Message != "" {
+		if resp.StatusCode == 529 && errorResponse.Error.Code == "overloaded_error" {
+			return echo.NewHTTPError(resp.StatusCode, errorResponse)
+		}
 		message = errorResponse.Error.Message
 	}
 	if message == "" {
