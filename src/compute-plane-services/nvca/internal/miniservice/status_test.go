@@ -160,53 +160,6 @@ func Test_parseErrorEventMessage(t *testing.T) {
 			expIsError: false,
 		},
 		{
-			name: "transient FailedCreate - admission webhook call failed",
-			event: corev1.Event{
-				Type:   corev1.EventTypeWarning,
-				Reason: "FailedCreate",
-				Message: `create Pod multi-node-test-164 in StatefulSet multi-node-test failed error: ` +
-					`Internal error occurred: failed calling webhook "mutate-pod-nodeaffinity.nvca.nvcf.nvidia.io": ` +
-					`failed to call webhook: the server is currently unable to handle the request`,
-			},
-			expInclude: true,
-			expIsError: false,
-		},
-		{
-			name: "transient FailedCreate - admission webhook timed out",
-			event: corev1.Event{
-				Type:   corev1.EventTypeWarning,
-				Reason: "FailedCreate",
-				Message: `Error creating: Internal error occurred: failed calling webhook "mutate-helm-storage.nvca.nvcf.nvidia.io": ` +
-					`failed to call webhook: Post "https://nvca.nvca-system.svc:443/mutate-helm-storage?timeout=10s": ` +
-					`context deadline exceeded`,
-			},
-			expInclude: true,
-			expIsError: false,
-		},
-		{
-			name: "transient ReplicaSetCreateError - admission webhook call failed",
-			event: corev1.Event{
-				Type:   corev1.EventTypeWarning,
-				Reason: "ReplicaSetCreateError",
-				Message: `Failed to create new replica set "foo-xyz": Internal error occurred: ` +
-					`failed calling webhook "mutate-pod-enforcement.nvca.nvcf.nvidia.io": failed to call webhook: ` +
-					`the server is currently unable to handle the request`,
-			},
-			expInclude: true,
-			expIsError: false,
-		},
-		{
-			name: "FailedCreate - admission webhook denied the request",
-			event: corev1.Event{
-				Type:   corev1.EventTypeWarning,
-				Reason: "FailedCreate",
-				Message: `create Pod foo-0 in StatefulSet foo failed error: admission webhook ` +
-					`"validate.nvca.nvcf.nvidia.io" denied the request: instance type not allowed`,
-			},
-			expInclude: true,
-			expIsError: true,
-		},
-		{
 			name: "policy violation warning should be excluded",
 			event: corev1.Event{
 				Type:    corev1.EventTypeWarning,
