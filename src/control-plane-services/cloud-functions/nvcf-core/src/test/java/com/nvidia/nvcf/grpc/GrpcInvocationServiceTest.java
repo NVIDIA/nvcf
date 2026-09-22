@@ -175,6 +175,7 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
             assertThat(clientInvokeResponse.getFunctionId()).isEqualTo(functionId.toString());
             assertThat(clientInvokeResponse.getClientAuthSubject()).isEqualTo(TEST_ADMIN_SUBJECT);
             assertThat(clientInvokeResponse.getClientNcaId()).isEqualTo(TEST_NCA_ID);
+            assertThat(clientInvokeResponse.getClientOwnerNcaId()).isEqualTo(TEST_NCA_ID);
             assertThat(clientInvokeResponse.getFunctionVersionsList())
                     .containsExactly(ClientInvokeResponse.FunctionVersion.newBuilder()
                                              .setFunctionVersionId(versionIdActive.toString())
@@ -493,6 +494,7 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
         assertThat(clientInvokeResponse.getFunctionId()).isEqualTo(TEST_FUNCTION_ID.toString());
         assertThat(clientInvokeResponse.getClientAuthSubject()).isEqualTo(TEST_CLIENT_SUBJECT);
         assertThat(clientInvokeResponse.getClientNcaId()).isEqualTo(TEST_NCA_ID);
+        assertThat(clientInvokeResponse.getClientOwnerNcaId()).isEqualTo(TEST_NCA_ID);
         assertThat(clientInvokeResponse.getFunctionVersionsList())
                 .containsExactly(FunctionVersion.newBuilder()
                                          .setFunctionVersionId(TEST_VERSION_ID_1.toString())
@@ -501,6 +503,23 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
                                          .setHasRateLimit(false)
                                          .setSyncCheck(false)
                                          .build());
+    }
+
+    // A key whose owner was granted access to another account: clientNcaId is the account
+    // it's authorized against, clientOwnerNcaId the owner's own account.
+    @Test
+    void checkFunctionAuthWithKeyOwnedByAnotherAccount() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setResponse(TEST_NCA_ID, TEST_NCA_ID_2, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION));
+        var clientInvokeResponse = functionAuth(
+                "nvapi-stg-some-key", TEST_FUNCTION_ID.toString(), TEST_VERSION_ID_1.toString());
+        assertThat(clientInvokeResponse).isNotNull();
+        assertThat(clientInvokeResponse.getClientNcaId()).isEqualTo(TEST_NCA_ID);
+        assertThat(clientInvokeResponse.getClientOwnerNcaId()).isEqualTo(TEST_NCA_ID_2);
+        assertThat(clientInvokeResponse.getClientNcaId())
+                .isNotEqualTo(clientInvokeResponse.getClientOwnerNcaId());
     }
 
     @Test
