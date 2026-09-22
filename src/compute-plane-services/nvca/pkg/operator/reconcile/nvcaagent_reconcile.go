@@ -166,8 +166,7 @@ const (
 	NGCAPIKeySecretName    = "ngc-api-key"
 	NVCAVaultConfigmapName = "nvca-vault-agent"
 
-	NVCAInternalPersistentStorageConfigJSONBase64Key = "NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64"
-	NVCASharedStorageonfigJSONBase64Key              = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
+	NVCASharedStorageonfigJSONBase64Key = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
 
 	// default params for nvca deployment
 	DefaultLogLevel              = "info"
@@ -2695,26 +2694,6 @@ func completeInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1
 		dto.ResourceQuota.Hard[corev1.ResourceRequestsStorage] = resource.MustParse("500Gi")
 	}
 	return dto, nil
-}
-
-// returns a string of the internal persistent storage configuration base64 encoded
-func getInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
-	log := core.GetLogger(ctx)
-	dto, err := completeInternalPersistentStorageConfig(ctx, nb)
-	if err != nil {
-		return "", err
-	}
-	if dto == nil || !dto.Enabled {
-		return "", nil
-	}
-
-	buff := &bytes.Buffer{}
-	if err := json.NewEncoder(buff).Encode(dto); err != nil {
-		log.WithError(err).Error("failed to encode the persistent storage configuration")
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(buff.Bytes()), nil
 }
 
 func getSharedStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {

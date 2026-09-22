@@ -18,13 +18,17 @@ limitations under the License.
 package featureflag
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 )
@@ -37,10 +41,7 @@ type InternalPersistentStorageFeatureFlag struct {
 }
 
 func newHelmInternalPersistentStorageFeatureFlag(defaultValue bool) *InternalPersistentStorageFeatureFlag {
-	ctx := core.WithDefaultLogger(context.Background())
-	log := core.GetLogger(ctx)
-
-	f := &InternalPersistentStorageFeatureFlag{
+	return &InternalPersistentStorageFeatureFlag{
 		FeatureFlag: FeatureFlag{
 			defaultValue: newBool(defaultValue),
 			enabled:      newBool(defaultValue),
@@ -50,31 +51,83 @@ func newHelmInternalPersistentStorageFeatureFlag(defaultValue bool) *InternalPer
 			Enabled: false,
 		},
 	}
+}
 
-	// Retrieve the nvca internal key from the environment
-	if v, ok := os.LookupEnv(nvcaInternalPersistentStorageConfigJSONBase64Key); ok && v != "" {
-		b, err := base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			log.WithError(err).Errorf("failed to decode base64 env var %s", nvcaInternalPersistentStorageConfigJSONBase64Key)
-			return f
-		}
-		cfg := InternalPersistentStorageSpec{}
-		err = json.NewDecoder(bytes.NewReader(b)).Decode(&cfg)
-		if err != nil {
-			log.WithError(err).Errorf("failed to decode JSON resource for env var %s", nvcaInternalPersistentStorageConfigJSONBase64Key)
-			return f
-		}
-		// Ensure the persisent storage class name is set otherwise skip
-		if cfg.StorageClassName == "" {
-			log.Errorf("the env var %s contains an empty storageClassName, will not enable internal-persistent-storage",
-				nvcaInternalPersistentStorageConfigJSONBase64Key)
-			return f
-		}
-		f.Spec = cfg
-		f.enabled = newBool(cfg.Enabled)
+// ConfigureHelmInternalPersistentStorage initializes the runtime IPS feature
+// from the mounted agent configuration. The environment variable remains a
+// compatibility override for deployments that used the original activation
+// path before agent.internalPersistentStorage became authoritative.
+func ConfigureHelmInternalPersistentStorage(ctx context.Context, cfg nvcaconfig.InternalPersistentStorageConfig) error {
+	spec, source, overridesAgentConfig, err := resolveInternalPersistentStorageConfig(cfg)
+	if err != nil {
+		return err
 	}
 
-	return f
+	HelmInternalPersistentStorage.Spec = spec
+	HelmInternalPersistentStorage.enabled = newBool(spec.Enabled)
+
+	log := core.GetLogger(ctx)
+	if overridesAgentConfig {
+		log.WithField("environmentVariable", nvcaInternalPersistentStorageConfigJSONBase64Key).
+			Warn("Internal persistent storage environment configuration overrides agent config")
+	}
+	log.WithFields(logrus.Fields{
+		"source":            source,
+		"enabled":           spec.Enabled,
+		"storageClassName":  spec.StorageClassName,
+		"hardResourceQuota": spec.ResourceQuota.Hard,
+	}).Info("Configured internal persistent storage")
+
+	return nil
+}
+
+func resolveInternalPersistentStorageConfig(
+	cfg nvcaconfig.InternalPersistentStorageConfig,
+) (InternalPersistentStorageSpec, string, bool, error) {
+	spec := InternalPersistentStorageSpec{}
+	configuredInAgentConfig := cfg.StorageClassName != "" || len(cfg.HardResourceQuota) > 0
+	if configuredInAgentConfig {
+		storageClassName := strings.TrimSpace(cfg.StorageClassName)
+		if storageClassName == "" {
+			return InternalPersistentStorageSpec{}, "", false,
+				fmt.Errorf("agent.internalPersistentStorage.storageClassName is required when internal persistent storage is configured")
+		}
+		spec = InternalPersistentStorageSpec{
+			Enabled:          true,
+			StorageClassName: storageClassName,
+			ResourceQuota: nvcav1new.InternalPersistentStorageResourceQuotaSpec{
+				Hard: corev1.ResourceList(cfg.HardResourceQuota).DeepCopy(),
+			},
+		}
+	}
+
+	value, hasEnvironmentOverride := os.LookupEnv(nvcaInternalPersistentStorageConfigJSONBase64Key)
+	if !hasEnvironmentOverride || strings.TrimSpace(value) == "" {
+		source := "default"
+		if configuredInAgentConfig {
+			source = "agent-config"
+		}
+		return spec, source, false, nil
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return InternalPersistentStorageSpec{}, "", configuredInAgentConfig,
+			fmt.Errorf("decode base64 environment variable %s: %w", nvcaInternalPersistentStorageConfigJSONBase64Key, err)
+	}
+	var environmentSpec InternalPersistentStorageSpec
+	if err := json.Unmarshal(decoded, &environmentSpec); err != nil {
+		return InternalPersistentStorageSpec{}, "", configuredInAgentConfig,
+			fmt.Errorf("decode JSON environment variable %s: %w", nvcaInternalPersistentStorageConfigJSONBase64Key, err)
+	}
+	environmentSpec.StorageClassName = strings.TrimSpace(environmentSpec.StorageClassName)
+	if environmentSpec.Enabled && environmentSpec.StorageClassName == "" {
+		return InternalPersistentStorageSpec{}, "", configuredInAgentConfig,
+			fmt.Errorf("environment variable %s requires storageClassName when enabled",
+				nvcaInternalPersistentStorageConfigJSONBase64Key)
+	}
+
+	return environmentSpec, "environment-override", configuredInAgentConfig, nil
 }
 
 type InternalPersistentStorageSpec struct {
