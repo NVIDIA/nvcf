@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,10 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
-	ktesting "k8s.io/client-go/testing"
 )
 
 func dockerConfigBlob(t *testing.T, registry, user, pass string) []byte {
@@ -135,99 +131,6 @@ func TestFirstNonEmptyEnv(t *testing.T) {
 	})
 }
 
-func TestWriteDockerConfigSecret_Create(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	cfg := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
-
-	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, cfg, false), false)
-
-	got, err := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, corev1.SecretTypeDockerConfigJson, got.Type)
-	assert.Equal(t, cfg, got.Data[corev1.DockerConfigJsonKey])
-	assert.Equal(t, clusterValidatorAppLabel, got.Labels["app.kubernetes.io/name"],
-		"label must be attached so the secret is identifiable as CLI-managed")
-}
-
-func TestWriteDockerConfigSecret_Update(t *testing.T) {
-	old := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "stale-key")
-	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "rotated-key")
-
-	// Managed labels plus an unrelated one: only a secret we own may be
-	// updated, and updating must not drop labels the operator added.
-	existingLabels := clusterValidatorLabels()
-	existingLabels["existing-label"] = "preserved"
-
-	client := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nvcr-pull-secret",
-			Namespace: "default",
-			Labels:    existingLabels,
-		},
-		Type: corev1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{corev1.DockerConfigJsonKey: old},
-	})
-
-	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false), false)
-
-	got, _ := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
-	assert.Equal(t, fresh, got.Data[corev1.DockerConfigJsonKey], "data must be updated to the fresh body")
-	assert.Equal(t, "preserved", got.Labels["existing-label"], "pre-existing labels must be preserved on update")
-	assert.Equal(t, clusterValidatorAppLabel, got.Labels["app.kubernetes.io/name"], "CLI labels must be added on update")
-}
-
-// Regression guard for the immutable-Type silent-failure path: a pre-existing
-// secret with the wrong Type (but our labels) must be replaced (delete +
-// create), not Updated.
-func TestWriteDockerConfigSecret_TypeMismatchReplaces(t *testing.T) {
-	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
-	client := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nvcr-pull-secret",
-			Namespace: "default",
-			Labels:    clusterValidatorLabels(),
-		},
-		Type: corev1.SecretTypeOpaque, // wrong type — Update would 422
-		Data: map[string][]byte{"some-key": []byte("some-value")},
-	})
-
-	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false), false)
-
-	got, err := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, corev1.SecretTypeDockerConfigJson, got.Type,
-		"secret must be recreated with the correct dockerconfigjson type")
-	assert.Equal(t, fresh, got.Data[corev1.DockerConfigJsonKey])
-	assert.NotContains(t, got.Data, "some-key", "old Opaque payload must not survive the recreate")
-}
-
-// Operator-owned secret with the same name but no CLI labels must NOT be
-// destroyed. The replace path is the only place operator data is at risk
-// (immutable Type forces delete+create), so the label guard lives there.
-func TestWriteDockerConfigSecret_TypeMismatchRefusesUnlabeledSecret(t *testing.T) {
-	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
-	operatorPayload := []byte("operator-data-do-not-destroy")
-	client := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nvcr-pull-secret",
-			Namespace: "default",
-			// No CLI labels: an operator- or chart-owned secret.
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"operator-payload": operatorPayload},
-	})
-
-	err := writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false)
-	require.Error(t, err, "must refuse to destroy a non-CLI-managed secret")
-	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
-
-	// Original payload must still be intact.
-	got, getErr := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
-	require.NoError(t, getErr)
-	assert.Equal(t, corev1.SecretTypeOpaque, got.Type, "type must be unchanged")
-	assert.Equal(t, operatorPayload, got.Data["operator-payload"], "operator data must not be touched")
-}
-
 func TestScanAndMirrorPullSecret_FoundInDefault(t *testing.T) {
 	cfg := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
 	client := fake.NewSimpleClientset(&corev1.Secret{
@@ -236,7 +139,7 @@ func TestScanAndMirrorPullSecret_FoundInDefault(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "operator-secret", name)
 
@@ -257,11 +160,11 @@ func TestScanAndMirrorPullSecret_FoundInNvcfMirroredToDefault(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
-	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), name)
+	assert.Equal(t, validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), name)
 
-	mirrored, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
+	mirrored, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
 	require.NoError(t, err, "mirror must be created under the role-scoped managed name")
 	assert.Equal(t, cfg, mirrored.Data[corev1.DockerConfigJsonKey])
 
@@ -279,14 +182,14 @@ func TestScanAndMirrorPullSecret_RegistryMismatch(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "", name, "secret for a different registry must not match")
 }
 
 func TestScanAndMirrorPullSecret_NoSecrets(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "", name)
 }
@@ -306,7 +209,7 @@ func TestScanAndMirrorPullSecret_PrefersDefaultNamespace(t *testing.T) {
 		},
 	)
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "in-default", name)
 }
@@ -318,7 +221,7 @@ func TestAutoCreatePullSecretFromEnv_NoEnv(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset()
 
-	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
+	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "", got, "no env var set means no secret minted")
 
@@ -333,11 +236,11 @@ func TestAutoCreatePullSecretFromEnv_KeyPresent(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "nvapi-test-123")
 
 	client := fake.NewSimpleClientset()
-	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "nvcr.io", clusterValidatorControlPlaneRole, false)
+	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "nvcr.io", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
-	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), got)
+	assert.Equal(t, validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), got)
 
-	s, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
+	s, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.True(t, dockerConfigHasRegistry(s.Data[corev1.DockerConfigJsonKey], "nvcr.io"),
 		"minted secret must contain auth for the validator image's registry")
@@ -345,7 +248,7 @@ func TestAutoCreatePullSecretFromEnv_KeyPresent(t *testing.T) {
 
 func TestResolveValidatorPullSecret_FlagOverride(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	got, err := resolveValidatorPullSecret(context.Background(), client, "custom-secret", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "custom-secret", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "custom-secret", got, "explicit override always wins")
 
@@ -365,14 +268,14 @@ func TestResolveValidatorPullSecret_ScanWins(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	// Mirror destination is the validator's well-known name, not the
 	// source secret's name (avoids same-name collisions with operator
 	// or chart-owned secrets in the destination namespace).
-	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), got)
+	assert.Equal(t, validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), got)
 
-	mirrored, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
+	mirrored, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.True(t, dockerConfigHasRegistry(mirrored.Data[corev1.DockerConfigJsonKey], "private.registry.test"))
 }
@@ -384,11 +287,11 @@ func TestResolveValidatorPullSecret_EnvFallback(t *testing.T) {
 	t.Setenv("NVCF_NGC_API_KEY", "nvapi-fallback")
 	client := fake.NewSimpleClientset()
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
-	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), got)
+	assert.Equal(t, validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), got)
 
-	s, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
+	s, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.True(t, dockerConfigHasRegistry(s.Data[corev1.DockerConfigJsonKey], "nvcr.io"))
 }
@@ -403,7 +306,7 @@ func TestResolveValidatorPullSecret_EnvFallbackRefusesMirroredRegistry(t *testin
 	client := fake.NewSimpleClientset()
 
 	got, err := resolveValidatorPullSecret(context.Background(), client, "",
-		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
+		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Empty(t, got, "no secret may be minted for a non-NGC registry")
 }
@@ -414,7 +317,7 @@ func TestResolveValidatorPullSecret_AllEmpty(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset()
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "", got, "no override, no scan match, no env var -> empty so kubelet surfaces ImagePullBackOff")
 }
@@ -425,7 +328,7 @@ func TestResolveValidatorPullSecret_UnparsableImage(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset()
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "bareimage", clusterValidatorControlPlaneRole, false)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "bareimage", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "", got, "no registry hostname means no scan target and no auto-create")
 
@@ -443,7 +346,7 @@ func TestResolveValidatorPullSecret_UnparsableImage(t *testing.T) {
 // clientset implements DeleteCollection as a no-op.
 func TestManagedPullSecret_IsScopedPerRole(t *testing.T) {
 	ctx := context.Background()
-	cpName := validatorPullSecretRoleName(clusterValidatorControlPlaneRole)
+	cpName := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid")
 	gpuName := validatorPullSecretRoleName("compute-plane")
 	require.NotEqual(t, cpName, gpuName, "each role needs its own managed pull secret")
 
@@ -457,7 +360,7 @@ func TestManagedPullSecret_IsScopedPerRole(t *testing.T) {
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
 		"operator-owned-secret", clusterValidatorControlPlaneRole, cfg, false))
 
-	sweepManagedPullSecrets(ctx, client, clusterValidatorControlPlaneRole)
+	sweepManagedPullSecrets(ctx, client, clusterValidatorControlPlaneRole, "runid")
 
 	secrets := client.CoreV1().Secrets(clusterValidatorNamespace)
 	_, err := secrets.Get(ctx, cpName, metav1.GetOptions{})
@@ -475,181 +378,28 @@ func TestManagedPullSecret_IsScopedPerRole(t *testing.T) {
 func TestManagedPullSecret_LabelsMatchOnlyItsOwnRole(t *testing.T) {
 	ctx := context.Background()
 	client := fake.NewSimpleClientset()
-
-	// dockerConfigBlob encodes the auth value at runtime; a literal base64
-	// docker credential in the source trips secret scanners.
-	cfg := dockerConfigBlob(t, "private.registry.test", "user", "pass")
+	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
+	name := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid")
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
-		clusterValidatorControlPlaneRole, cfg, false))
+		name, clusterValidatorControlPlaneRole, cfg, false))
 
-	got, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(ctx,
-		validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
+	own, err := client.CoreV1().Secrets(clusterValidatorNamespace).List(ctx,
+		metav1.ListOptions{LabelSelector: validatorRoleSelector(clusterValidatorControlPlaneRole)})
 	require.NoError(t, err)
+	assert.Len(t, own.Items, 1, "the secret must match its own role's selector")
 
-	assert.Equal(t, clusterValidatorControlPlaneRole, got.Labels[clusterValidatorRoleLabel],
-		"a managed secret must carry its own role label")
-	assert.Equal(t, "nvcf-cli", got.Labels["app.kubernetes.io/managed-by"],
-		"the managed-by label is what excludes operator-supplied secrets from cleanup")
+	other, err := client.CoreV1().Secrets(clusterValidatorNamespace).List(ctx,
+		metav1.ListOptions{LabelSelector: validatorRoleSelector(clusterValidatorComputePlaneRole)})
+	require.NoError(t, err)
+	assert.Empty(t, other.Items, "it must not match the other role's selector")
 }
 
-// A matching Secret type is not permission to write. An operator-owned secret
-// with a colliding name holds their registry credentials; overwriting it would
-// also stamp our managed labels on it, after which the role sweep would delete
-// it outright.
-func TestWriteDockerConfigSecret_RefusesUnmanagedSameTypeSecret(t *testing.T) {
-	ctx := context.Background()
-	operatorOwned := dockerConfigBlob(t, "private.registry.test", "operator", "their-secret")
-	ours := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "ours")
-
-	client := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nvcf-preflight-pull-secret-control-plane",
-			Namespace: clusterValidatorNamespace,
-			Labels:    map[string]string{"owner": "operator"},
-		},
-		Type: corev1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{corev1.DockerConfigJsonKey: operatorOwned},
-	})
-
-	err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		"nvcf-preflight-pull-secret-control-plane", clusterValidatorControlPlaneRole, ours, false)
-
-	require.Error(t, err, "an unmanaged secret of the same type must not be overwritten")
-	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
-
-	got, getErr := client.CoreV1().Secrets(clusterValidatorNamespace).Get(ctx,
-		"nvcf-preflight-pull-secret-control-plane", metav1.GetOptions{})
-	require.NoError(t, getErr)
-	assert.Equal(t, operatorOwned, got.Data[corev1.DockerConfigJsonKey],
-		"the operator's credentials must be left untouched")
-	assert.NotContains(t, got.Labels, "app.kubernetes.io/managed-by",
-		"managed labels must not be stamped on it, or the sweep would later delete it")
-}
-
-// If an unmanaged Docker-config Secret appears between our Get and our Create,
-// Create fails with AlreadyExists and the recovery path refetches it. That path
-// must apply the same ownership check as the others, or a lost race silently
-// overwrites an operator-owned secret and marks it for sweep deletion.
-func TestWriteDockerConfigSecret_RefusesUnmanagedAfterCreateRace(t *testing.T) {
-	ctx := context.Background()
-	operatorOwned := dockerConfigBlob(t, "private.registry.test", "operator", "their-secret")
-	ours := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "ours")
-
-	const name = "nvcf-preflight-pull-secret-control-plane"
-	client := fake.NewSimpleClientset()
-
-	// First Get: absent, so the code proceeds to Create. Create: AlreadyExists,
-	// as though another actor won the race. Second Get: their unmanaged secret.
-	gets := 0
-	client.PrependReactor("get", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		gets++
-		if gets == 1 {
-			return true, nil, apierrors.NewNotFound(corev1.Resource("secrets"), name)
-		}
-		return true, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: clusterValidatorNamespace,
-				Labels:    map[string]string{"owner": "operator"},
-			},
-			Type: corev1.SecretTypeDockerConfigJson,
-			Data: map[string][]byte{corev1.DockerConfigJsonKey: operatorOwned},
-		}, nil
-	})
-	client.PrependReactor("create", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewAlreadyExists(corev1.Resource("secrets"), name)
-	})
-
-	var updated bool
-	client.PrependReactor("update", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		updated = true
-		return true, nil, nil
-	})
-
-	err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, name,
-		clusterValidatorControlPlaneRole, ours, false)
-
-	require.Error(t, err, "losing the create race to an unmanaged secret must not overwrite it")
-	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
-	assert.False(t, updated, "no Update may be issued against an unmanaged secret")
-}
-
-// The ownership check reads the Secret and then deletes it by name. In that
-// window another actor can delete and recreate it, so the delete has to name
-// the exact object that was vetted rather than whatever holds the name by then.
-func TestWriteDockerConfigSecret_TypeMismatchDeletePinsTheInspectedObject(t *testing.T) {
-	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
-	existing := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "nvcr-pull-secret",
-			Namespace:       "default",
-			Labels:          clusterValidatorLabels(),
-			UID:             "uid-1",
-			ResourceVersion: "42",
-		},
-		Type: corev1.SecretTypeOpaque,
-	}
-	client := fake.NewSimpleClientset(existing)
-
-	var opts metav1.DeleteOptions
-	client.PrependReactor("delete", "secrets", func(a ktesting.Action) (bool, runtime.Object, error) {
-		opts = a.(ktesting.DeleteActionImpl).DeleteOptions
-		return false, nil, nil
-	})
-
-	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default",
-		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false), false)
-
-	require.NotNil(t, opts.Preconditions, "delete must carry preconditions")
-	require.NotNil(t, opts.Preconditions.UID)
-	assert.Equal(t, existing.UID, *opts.Preconditions.UID)
-	assert.Nil(t, opts.Preconditions.ResourceVersion,
-		"UID alone pins identity; pinning ResourceVersion turns any concurrent "+
-			"write into a 409 that the sweeps swallow")
-}
-
-// A conflict means the object changed after the ownership check, so the run
-// must stop instead of creating over whatever now holds the name.
-func TestWriteDockerConfigSecret_TypeMismatchStopsOnDeleteConflict(t *testing.T) {
-	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
-	client := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nvcr-pull-secret",
-			Namespace: "default",
-			Labels:    clusterValidatorLabels(),
-			UID:       "uid-1",
-		},
-		Type: corev1.SecretTypeOpaque,
-	})
-	client.PrependReactor("delete", "secrets", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewConflict(
-			schema.GroupResource{Resource: "secrets"}, "nvcr-pull-secret",
-			errors.New("UID precondition mismatch"))
-	})
-
-	created := false
-	client.PrependReactor("create", "secrets", func(ktesting.Action) (bool, runtime.Object, error) {
-		created = true
-		return false, nil, nil
-	})
-
-	err := writeDockerConfigSecret(context.Background(), client, "default",
-		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false)
-	require.Error(t, err, "a changed object must abort the replace")
-	assert.False(t, created, "must not create over an object that was never vetted")
-}
-
-// NGC_API_KEY must never be minted as the password for a registry that is not
-// NGC. An operator who mirrors the validator image to ghcr.io or a corporate
-// Harbor and still exports NGC_API_KEY would otherwise have the kubelet send
-// the live key to a third party as HTTP Basic auth.
 func TestAutoCreatePullSecretFromEnv_RefusesNonNGCRegistry(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "nvapi-secret-value")
 	client := fake.NewSimpleClientset()
 
 	name, err := autoCreatePullSecretFromEnv(context.Background(), client,
-		"ghcr.io", clusterValidatorControlPlaneRole, false)
+		"ghcr.io", clusterValidatorControlPlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Empty(t, name, "no secret may be minted for a non-NGC registry")
 
@@ -666,7 +416,7 @@ func TestScanAndMirrorPullSecret_DoesNotAdoptTheOtherRolesSecret(t *testing.T) {
 	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
 	otherRole := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+			Name:      validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"),
 			Namespace: clusterValidatorNamespace,
 			Labels:    clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
 		},
@@ -676,7 +426,7 @@ func TestScanAndMirrorPullSecret_DoesNotAdoptTheOtherRolesSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(otherRole)
 
 	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
-		clusterValidatorComputePlaneRole, false)
+		clusterValidatorComputePlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.NotEqual(t, otherRole.Name, got,
 		"the compute role must not adopt the control-plane role's managed Secret")
@@ -694,7 +444,7 @@ func TestScanAndMirrorPullSecret_AdoptsOperatorSuppliedSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(operator)
 
 	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
-		clusterValidatorComputePlaneRole, false)
+		clusterValidatorComputePlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, "operator-pull", got)
 }
@@ -704,7 +454,7 @@ func TestScanAndMirrorPullSecret_AdoptsOwnRoleSecret(t *testing.T) {
 	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
 	own := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      validatorPullSecretRoleName(clusterValidatorComputePlaneRole),
+			Name:      validatorPullSecretRunName(clusterValidatorComputePlaneRole, "runid"),
 			Namespace: clusterValidatorNamespace,
 			Labels:    clusterValidatorRoleLabels(clusterValidatorComputePlaneRole),
 		},
@@ -714,7 +464,82 @@ func TestScanAndMirrorPullSecret_AdoptsOwnRoleSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(own)
 
 	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
-		clusterValidatorComputePlaneRole, false)
+		clusterValidatorComputePlaneRole, "runid", false)
 	require.NoError(t, err)
 	assert.Equal(t, own.Name, got)
+}
+
+// writeDockerConfigSecret is create-only. The name carries this run's
+// unguessable suffix, so nothing this CLI created can already hold it and any
+// collision is another object. Adopting one would write the NGC credential
+// into something we do not own, which label-based ownership cannot prevent:
+// the managed labels are three public constants anyone can copy.
+func TestWriteDockerConfigSecret_CreatesUnderTheRunScopedName(t *testing.T) {
+	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
+	client := fake.NewSimpleClientset()
+	name := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid")
+
+	require.NoError(t, writeDockerConfigSecret(context.Background(), client,
+		clusterValidatorNamespace, name, clusterValidatorControlPlaneRole, cfg, false))
+
+	s, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(
+		context.Background(), name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, corev1.SecretTypeDockerConfigJson, s.Type)
+	assert.True(t, hasValidatorManagedLabels(s.Labels))
+}
+
+func TestWriteDockerConfigSecret_RefusesAnyCollision(t *testing.T) {
+	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
+	name := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid")
+
+	// Even wearing our managed labels: labels are forgeable, the name is not.
+	squatter := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: clusterValidatorNamespace,
+			Labels: clusterValidatorLabels(),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"planted": []byte("x")},
+	}
+	client := fake.NewSimpleClientset(squatter)
+
+	err := writeDockerConfigSecret(context.Background(), client,
+		clusterValidatorNamespace, name, clusterValidatorControlPlaneRole, cfg, false)
+	require.Error(t, err, "a collision on an unguessable name must never be adopted")
+	assert.Contains(t, err.Error(), "refusing to overwrite")
+
+	got, gerr := client.CoreV1().Secrets(clusterValidatorNamespace).Get(
+		context.Background(), name, metav1.GetOptions{})
+	require.NoError(t, gerr)
+	assert.Equal(t, corev1.SecretTypeOpaque, got.Type, "the other object must be untouched")
+	assert.Contains(t, got.Data, "planted")
+	assert.NotContains(t, got.Data, corev1.DockerConfigJsonKey,
+		"the NGC credential must not be written into an object we do not own")
+}
+
+// The unguessable suffix is the actual control. Labels cannot carry it: they
+// are three public constants, so a predictable name lets anyone able to create
+// a Secret here pre-create it wearing those labels and receive the NGC
+// credential. Create-only is only safe because the name cannot be guessed.
+func TestValidatorPullSecretRunName_CarriesTheRunID(t *testing.T) {
+	name := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "a1b2c3d4e5")
+	assert.Contains(t, name, "a1b2c3d4e5",
+		"a predictable secret name can be pre-created by someone else")
+	assert.NotEqual(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), name)
+
+	// Two runs never collide, so one run's sweep cannot take out another's.
+	other := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "f6g7h8i9j0")
+	assert.NotEqual(t, name, other)
+}
+
+// The mint path must use the run-scoped name, not the role name.
+func TestAutoCreatePullSecretFromEnv_MintsUnderTheRunScopedName(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "nvapi-secret-value")
+	client := fake.NewSimpleClientset()
+
+	got, err := autoCreatePullSecretFromEnv(context.Background(), client,
+		"nvcr.io", clusterValidatorControlPlaneRole, "a1b2c3d4e5", false)
+	require.NoError(t, err)
+	assert.Contains(t, got, "a1b2c3d4e5", "the minted secret must be run-scoped")
 }

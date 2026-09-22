@@ -652,19 +652,19 @@ func TestEnsureClusterValidatorConfig_RefusesUnmanagedConfigMap(t *testing.T) {
 	ctx := context.Background()
 	client := fake.NewSimpleClientset(&corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusterValidatorConfigName,
+			Name:      clusterValidatorConfigRunName("runid"),
 			Namespace: clusterValidatorNamespace,
 			Labels:    map[string]string{"owner": "operator"},
 		},
 		Data: map[string]string{"config.yaml": "operator: content"},
 	})
 
-	err := ensureClusterValidatorConfig(ctx, client, nil)
+	err := ensureClusterValidatorConfig(ctx, client, nil, "runid", false)
 	require.Error(t, err, "an unmanaged ConfigMap must not be overwritten")
 	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
 
 	got, getErr := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx,
-		clusterValidatorConfigName, metav1.GetOptions{})
+		clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
 	require.NoError(t, getErr)
 	assert.Equal(t, "operator: content", got.Data["config.yaml"],
 		"the operator's ConfigMap content must be untouched")
@@ -805,24 +805,24 @@ func TestSweepPriorClusterValidatorJobs_RequiresGeneratedName(t *testing.T) {
 // cleanup path, so it accumulated in the cluster forever.
 func TestSweepClusterValidatorConfig_DeletesOwnAndSparesOperators(t *testing.T) {
 	managed := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: clusterValidatorConfigName, Namespace: clusterValidatorNamespace,
+		Name: clusterValidatorConfigRunName("runid"), Namespace: clusterValidatorNamespace,
 		Labels: clusterValidatorLabels(),
 	}}
 	client := fake.NewSimpleClientset(managed)
-	sweepClusterValidatorConfig(context.Background(), client)
+	sweepClusterValidatorConfig(context.Background(), client, "runid")
 	_, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
-		context.Background(), clusterValidatorConfigName, metav1.GetOptions{})
+		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(err), "our own ConfigMap must be reclaimed")
 
 	// Same name, operator-owned: the name is a constant they could also use.
 	operator := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: clusterValidatorConfigName, Namespace: clusterValidatorNamespace,
+		Name: clusterValidatorConfigRunName("runid"), Namespace: clusterValidatorNamespace,
 		Labels: map[string]string{"owner": "operator"},
 	}}
 	client2 := fake.NewSimpleClientset(operator)
-	sweepClusterValidatorConfig(context.Background(), client2)
+	sweepClusterValidatorConfig(context.Background(), client2, "runid")
 	_, err = client2.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
-		context.Background(), clusterValidatorConfigName, metav1.GetOptions{})
+		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
 	assert.NoError(t, err, "an unmanaged ConfigMap with the same name must survive")
 }
 
@@ -836,7 +836,7 @@ func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
 	}}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+			Name:      validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"),
 			Namespace: clusterValidatorNamespace,
 			Labels:    clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
 			// The fake clientset leaves this zero, which the orphan sweeper
@@ -916,7 +916,7 @@ func TestBuildClusterValidatorJob_SetsActiveDeadline(t *testing.T) {
 func TestSweepOrphanClusterValidatorRBAC_ReclaimsStalePullSecret(t *testing.T) {
 	old := metav1.NewTime(time.Now().Add(-time.Hour))
 	stale := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name:              validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+		Name:              validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"),
 		Namespace:         clusterValidatorNamespace,
 		Labels:            clusterValidatorLabels(),
 		CreationTimestamp: old,
@@ -933,7 +933,7 @@ func TestSweepOrphanClusterValidatorRBAC_ReclaimsStalePullSecret(t *testing.T) {
 // carries neither our labels nor our name.
 func TestSweepOrphanClusterValidatorRBAC_SparesFreshAndUnmanagedSecrets(t *testing.T) {
 	fresh := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name:              validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+		Name:              validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"),
 		Namespace:         clusterValidatorNamespace,
 		Labels:            clusterValidatorLabels(),
 		CreationTimestamp: metav1.NewTime(time.Now()),
@@ -978,7 +978,7 @@ func TestSweepOrphanClusterValidatorRBAC_SparesPreservedObjects(t *testing.T) {
 			Name: clusterValidatorName + "-control-plane-abc", Labels: labels, CreationTimestamp: old,
 		}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name:      validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+			Name:      validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"),
 			Namespace: clusterValidatorNamespace, Labels: labels, CreationTimestamp: old,
 		}},
 	)
@@ -988,7 +988,7 @@ func TestSweepOrphanClusterValidatorRBAC_SparesPreservedObjects(t *testing.T) {
 		clusterValidatorName+"-control-plane-abc", metav1.GetOptions{})
 	assert.NoError(t, err, "a preserved ClusterRole must survive the orphan sweep")
 	_, err = client.CoreV1().Secrets(clusterValidatorNamespace).Get(context.Background(),
-		validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
+		validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
 	assert.NoError(t, err, "a preserved pull secret must survive the orphan sweep")
 }
 
@@ -1015,5 +1015,85 @@ func TestEnsureClusterValidatorRBAC_NoPreserveLabelByDefault(t *testing.T) {
 		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "abc123"), metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.NotContains(t, cr.Labels, clusterValidatorPreserveLabel,
+		"an ordinary run must stay reclaimable")
+}
+
+// Run-scoping the ConfigMap name removed the accidental self-healing the fixed
+// name gave us: a killed run used to leave exactly one object that the next run
+// overwrote, and now each leaves its own. The deferred sweep is suppressed on
+// the pull-failure path, so the orphan sweeper is the only reclaim.
+func TestSweepOrphanClusterValidatorRBAC_ReclaimsStaleConfigMap(t *testing.T) {
+	old := metav1.NewTime(time.Now().Add(-time.Hour))
+	stale := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:              clusterValidatorConfigRunName("deadbeef01"),
+		Namespace:         clusterValidatorNamespace,
+		Labels:            clusterValidatorLabels(),
+		CreationTimestamp: old,
+	}}
+	client := fake.NewSimpleClientset(stale)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+
+	_, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
+		context.Background(), stale.Name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err),
+		"a per-run ConfigMap left by a killed run must be reclaimed")
+}
+
+func TestSweepOrphanClusterValidatorRBAC_SparesFreshAndUnmanagedConfigMaps(t *testing.T) {
+	fresh := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:              clusterValidatorConfigRunName("aaaaaaaa01"),
+		Namespace:         clusterValidatorNamespace,
+		Labels:            clusterValidatorLabels(),
+		CreationTimestamp: metav1.NewTime(time.Now()),
+	}}
+	operator := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:              "operator-owned",
+		Namespace:         clusterValidatorNamespace,
+		Labels:            clusterValidatorLabels(),
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
+	}}
+	client := fake.NewSimpleClientset(fresh, operator)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+
+	for _, name := range []string{fresh.Name, operator.Name} {
+		_, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
+			context.Background(), name, metav1.GetOptions{})
+		assert.NoError(t, err, "%s must survive the orphan sweep", name)
+	}
+}
+
+// --no-cleanup must preserve the ConfigMap as well as the Job and its RBAC.
+// Without the marker the next run's orphan sweeper reclaims it after the TTL,
+// and an operator re-running the Job they kept gets a validator that silently
+// skips the configurable reachability and enforcement checks.
+func TestEnsureClusterValidatorConfig_MarksPreservedRun(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	require.NoError(t, ensureClusterValidatorConfig(context.Background(), client, nil, "runid", true))
+
+	cm, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
+		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "true", cm.Labels[clusterValidatorPreserveLabel])
+
+	// And the orphan sweeper honours it even once it is older than the TTL.
+	cm.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	_, err = client.CoreV1().ConfigMaps(clusterValidatorNamespace).Update(
+		context.Background(), cm, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+
+	_, err = client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
+		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
+	assert.NoError(t, err, "a preserved ConfigMap must survive the orphan sweep")
+}
+
+func TestEnsureClusterValidatorConfig_NoPreserveMarkerByDefault(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	require.NoError(t, ensureClusterValidatorConfig(context.Background(), client, nil, "runid", false))
+
+	cm, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
+		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, cm.Labels, clusterValidatorPreserveLabel,
 		"an ordinary run must stay reclaimable")
 }

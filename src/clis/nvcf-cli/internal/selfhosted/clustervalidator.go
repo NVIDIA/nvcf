@@ -137,9 +137,24 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	// inside it reclaiming them breaks the pod that is still running.
 	podMayBeRunning := false
 
+	// Random per-run identity. Every object this run creates carries it, so a
+	// predictable name cannot be pre-created by someone else and then either
+	// bound to the validator's cluster-wide permissions or overwritten with the
+	// NGC credential. Generated before anything is created, because the pull
+	// secret name needs it too.
+	runID, err := newValidatorRunID()
+	if err != nil {
+		return ClusterValidatorResult{Err: err}
+	}
+
+	// Reclaim leftovers from dead runs before resolving this run's pull secret,
+	// not after: the sweep matches on the shared name prefix, so running it
+	// later can delete the Secret this run just selected.
+	sweepOrphanClusterValidatorRBAC(vctx, client, orphanValidatorRBACTTL)
+
 	// Resolver errors are non-fatal: fall through to the caller's value and
 	// let waitForClusterValidatorJob surface ImagePullBackOff if needed.
-	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image, role, noCleanup); err == nil {
+	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image, role, runID, noCleanup); err == nil {
 		pullSecret = resolved
 	}
 	// Sweep only this role's managed pull secret, and only once the pod can no
@@ -153,17 +168,10 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	// per-role secret scoping exists to prevent.
 	defer func() {
 		if !noCleanup && !podMayBeRunning {
-			sweepManagedPullSecrets(context.Background(), client, role)
+			sweepManagedPullSecrets(context.Background(), client, role, runID)
 		}
 	}()
 
-	// Random per-run identity for the SA/ClusterRole/ClusterRoleBinding, so a
-	// predictable name cannot be pre-created by someone else and then bound to
-	// the validator's cluster-wide permissions.
-	runID, err := newValidatorRunID()
-	if err != nil {
-		return ClusterValidatorResult{Err: err}
-	}
 	// Register the cleanup before the bootstrap, not after. ensureClusterValidatorRBAC
 	// creates three objects in sequence and returns on the first failure, so a
 	// kubeconfig that can create a ServiceAccount but not a cluster-scoped
@@ -193,10 +201,10 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 		// operator asked to keep the run's artifacts.
 		defer func() {
 			if !noCleanup && !podMayBeRunning {
-				sweepClusterValidatorConfig(context.Background(), client)
+				sweepClusterValidatorConfig(context.Background(), client, runID)
 			}
 		}()
-		if err := ensureClusterValidatorConfig(vctx, client, registries); err != nil {
+		if err := ensureClusterValidatorConfig(vctx, client, registries, runID, noCleanup); err != nil {
 			// Non-fatal: continue without the ConfigMap; the validator skips
 			// configurable reachability and enforcement checks silently unless
 			// we surface this note in the transcript.
@@ -204,7 +212,6 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 		}
 	}
 
-	sweepOrphanClusterValidatorRBAC(vctx, client, orphanValidatorRBACTTL)
 	// Skipped under --no-cleanup: this runs before the new Job is created, so
 	// otherwise the next same-role run destroys the Job the operator asked to
 	// keep. The singleton guarantee is worth less than the artifact they kept.
@@ -359,11 +366,36 @@ func clusterValidatorRoleLabelsPreserved(role string, preserve bool) map[string]
 // should read. Only the control-plane role has one; the compute-plane role gets
 // a sentinel that resolves to nothing so it cannot inherit the control-plane's
 // reachability and enforcement config.
-func validatorConfigNameForRole(role string) string {
+func validatorConfigNameForRole(role, runID string) string {
 	if role == clusterValidatorControlPlaneRole {
-		return clusterValidatorConfigName
+		return clusterValidatorConfigRunName(runID)
 	}
 	return clusterValidatorNoConfigName
+}
+
+// clusterValidatorConfigLabels are the managed labels for the network-checks
+// ConfigMap, plus the preserve marker when the run was asked to keep its
+// artifacts. Without the marker the next run's orphan sweeper reclaims the
+// ConfigMap once it is older than the TTL, and an operator re-running a Job
+// they deliberately kept gets a validator that silently skips the configurable
+// reachability and enforcement checks.
+func clusterValidatorConfigLabels(preserve bool) map[string]string {
+	l := clusterValidatorLabels()
+	if preserve {
+		l[clusterValidatorPreserveLabel] = "true"
+	}
+	return l
+}
+
+// clusterValidatorConfigRunName scopes the network-checks ConfigMap to one run.
+// A shared name lets two overlapping commands overwrite each other's registry
+// list, and lets the first to finish delete the config the other pod has not
+// read yet.
+func clusterValidatorConfigRunName(runID string) string {
+	if runID == "" {
+		return clusterValidatorConfigName
+	}
+	return clusterValidatorConfigName + "-" + runID
 }
 
 // sweepOrphanClusterValidatorRBAC removes validator RBAC left behind by a run
@@ -382,6 +414,18 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 	// reclaimable requires the generated name as well as the labels and the
 	// age. Labels alone are three public constants and can be copied onto
 	// anything, and this deletes cluster-scoped objects with errors swallowed.
+	// Network-check ConfigMaps carry their own generated-name prefix.
+	reclaimableConfig := func(o metav1.Object) bool {
+		if !strings.HasPrefix(o.GetName(), clusterValidatorConfigName) {
+			return false
+		}
+		if o.GetLabels()[clusterValidatorPreserveLabel] == "true" {
+			return false
+		}
+		ts := o.GetCreationTimestamp()
+		return ts.Before(&cutoff)
+	}
+
 	// Pull secrets carry the other generated-name prefix.
 	reclaimableSecret := func(o metav1.Object) bool {
 		if !strings.HasPrefix(o.GetName(), validatorPullSecretName) {
@@ -419,6 +463,19 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 			}
 		}
 	}
+	// Network-check ConfigMaps too. Run-scoping the name removed the accidental
+	// self-healing the fixed name gave us: a killed run used to leave exactly
+	// one object that the next run overwrote, and now each leaves its own, so
+	// under --wait they accumulate per poll. Same shape as the RBAC objects.
+	cms := client.CoreV1().ConfigMaps(clusterValidatorNamespace)
+	if l, err := cms.List(ctx, opts); err == nil {
+		for i := range l.Items {
+			if o := &l.Items[i]; reclaimableConfig(o) {
+				_ = cms.Delete(ctx, o.Name, deleteExactly(o))
+			}
+		}
+	}
+
 	// Pull secrets too: the deferred sweep is suppressed whenever the pod may
 	// still be running, and that is exactly the ImagePullBackOff path, so
 	// without this arm a Secret holding $oauthtoken:$NGC_API_KEY is the one
@@ -500,7 +557,7 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 // Operator-supplied secrets via --cluster-validator-pull-secret aren't
 // labeled by us and are skipped by the selector. Errors are swallowed:
 // failing to clean up is preferable to failing the check itself.
-func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, role string) {
+func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, role, runID string) {
 	// Same reasoning as sweepPriorClusterValidatorJobs: the generated name is
 	// part of the ownership test, not just the labels.
 	secrets := client.CoreV1().Secrets(clusterValidatorNamespace)
@@ -509,7 +566,9 @@ func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, r
 		return
 	}
 	for i := range l.Items {
-		if !strings.HasPrefix(l.Items[i].Name, validatorPullSecretName) {
+		// Only this run's Secret. The name is unguessable and unique per run,
+		// so a sweep can no longer take out a Secret another run selected.
+		if l.Items[i].Name != validatorPullSecretRunName(role, runID) {
 			continue
 		}
 		_ = secrets.Delete(ctx, l.Items[i].Name, deleteExactly(&l.Items[i]))
@@ -610,18 +669,18 @@ enforcement:
 // ensureClusterValidatorConfig creates or updates the network-check ConfigMap.
 // extraRegistries are added as non-critical tcp+tls probes. Best-effort: the
 // validator skips configurable checks when the ConfigMap is absent.
-func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interface, extraRegistries []string) error {
+func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interface, extraRegistries []string, runID string, preserve bool) error {
 	content := buildControlPlaneValidatorConfig(extraRegistries)
 	desired := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusterValidatorConfigName,
+			Name:      clusterValidatorConfigRunName(runID),
 			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorLabels(),
+			Labels:    clusterValidatorConfigLabels(preserve),
 		},
 		Data: map[string]string{"config.yaml": content},
 	}
 
-	existing, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx, clusterValidatorConfigName, metav1.GetOptions{})
+	existing, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx, clusterValidatorConfigRunName(runID), metav1.GetOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("get validator config ConfigMap: %w", err)
@@ -637,7 +696,7 @@ func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interfa
 	if !hasValidatorManagedLabels(existing.Labels) {
 		return fmt.Errorf(
 			"refusing to overwrite ConfigMap %s/%s which is not managed by nvcf-cli",
-			clusterValidatorNamespace, clusterValidatorConfigName)
+			clusterValidatorNamespace, clusterValidatorConfigRunName(runID))
 	}
 	existing.Data = desired.Data
 	existing.Labels = desired.Labels
@@ -757,7 +816,7 @@ func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCle
 				// default name, so both roles would resolve the same ConfigMap
 				// and the compute-plane preflight would silently run the
 				// control-plane's active NetworkPolicy enforcement.
-				{Name: "VALIDATOR_CONFIG_NAME", Value: validatorConfigNameForRole(role)},
+				{Name: "VALIDATOR_CONFIG_NAME", Value: validatorConfigNameForRole(role, runID)},
 				{Name: "VALIDATOR_PREFLIGHT", Value: "true"},
 				{Name: "VALIDATOR_ROLE", Value: role},
 			},
@@ -939,15 +998,17 @@ func kubectlLogsHint(kubeContext, jobName string) string {
 }
 
 // sweepClusterValidatorConfig removes the network-checks ConfigMap this run
-// created. Only ours: the name is a constant an operator could also be using,
-// so the managed labels decide. Errors are swallowed, as with the other sweeps.
-func sweepClusterValidatorConfig(ctx context.Context, client kubernetes.Interface) {
+// created. The name is scoped to this run, and the managed labels are checked
+// as well, so a same-named object belonging to anyone else is left alone.
+// Errors are swallowed, as with the other sweeps.
+func sweepClusterValidatorConfig(ctx context.Context, client kubernetes.Interface, runID string) {
 	cms := client.CoreV1().ConfigMaps(clusterValidatorNamespace)
-	cm, err := cms.Get(ctx, clusterValidatorConfigName, metav1.GetOptions{})
+	name := clusterValidatorConfigRunName(runID)
+	cm, err := cms.Get(ctx, name, metav1.GetOptions{})
 	if err != nil || !hasValidatorManagedLabels(cm.Labels) {
 		return
 	}
-	_ = cms.Delete(ctx, clusterValidatorConfigName, deleteExactly(cm))
+	_ = cms.Delete(ctx, name, deleteExactly(cm))
 }
 
 // clusterValidatorTolerations mirrors the chart's tolerations so the Job can
