@@ -21,6 +21,10 @@ metadata:
 spec:
   {{- if not .Values.reval.autoscaling.enabled }}
   replicas: {{ .Values.reval.replicaCount }}
+  {{- with .Values.reval.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
   selector:
     matchLabels:
@@ -108,6 +112,10 @@ spec:
       {{- end }}
       {{- with .Values.reval.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.reval.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.reval.tolerations }}
