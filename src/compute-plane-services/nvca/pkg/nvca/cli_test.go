@@ -28,6 +28,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/go-logr/logr"
 	"github.com/sirupsen/logrus"
@@ -304,6 +305,12 @@ workload:
 
 	t.Run("internal persistent storage config activates runtime feature", func(t *testing.T) {
 		t.Setenv("NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64", "")
+		t.Cleanup(func() {
+			require.NoError(t, featureflag.ConfigureHelmInternalPersistentStorage(
+				core.WithDefaultLogger(context.Background()),
+				nvcaconfig.InternalPersistentStorageConfig{},
+			))
+		})
 		a, block := newMockCLIAgent()
 		cmd := newCobraCommand(
 			newAgentFunc(a),

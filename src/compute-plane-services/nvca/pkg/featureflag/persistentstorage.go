@@ -18,10 +18,12 @@ limitations under the License.
 package featureflag
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -38,6 +40,12 @@ const nvcaInternalPersistentStorageConfigJSONBase64Key = "NVCA_INTERNAL_PERSISTE
 type InternalPersistentStorageFeatureFlag struct {
 	FeatureFlag
 	Spec InternalPersistentStorageSpec
+}
+
+type internalPersistentStorageEnvironmentConfig struct {
+	Enabled          *bool                                                `json:"enabled"`
+	StorageClassName string                                               `json:"storageClassName"`
+	ResourceQuota    nvcav1new.InternalPersistentStorageResourceQuotaSpec `json:"resourceQuota"`
 }
 
 func newHelmInternalPersistentStorageFeatureFlag(defaultValue bool) *InternalPersistentStorageFeatureFlag {
@@ -115,10 +123,27 @@ func resolveInternalPersistentStorageConfig(
 		return InternalPersistentStorageSpec{}, "", configuredInAgentConfig,
 			fmt.Errorf("decode base64 environment variable %s: %w", nvcaInternalPersistentStorageConfigJSONBase64Key, err)
 	}
-	var environmentSpec InternalPersistentStorageSpec
-	if err := json.Unmarshal(decoded, &environmentSpec); err != nil {
+	var environmentConfig internalPersistentStorageEnvironmentConfig
+	decoder := json.NewDecoder(bytes.NewReader(decoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&environmentConfig); err != nil {
 		return InternalPersistentStorageSpec{}, "", configuredInAgentConfig,
 			fmt.Errorf("decode JSON environment variable %s: %w", nvcaInternalPersistentStorageConfigJSONBase64Key, err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return InternalPersistentStorageSpec{}, "", configuredInAgentConfig,
+			fmt.Errorf("decode JSON environment variable %s: expected exactly one JSON object",
+				nvcaInternalPersistentStorageConfigJSONBase64Key)
+	}
+	if environmentConfig.Enabled == nil {
+		return InternalPersistentStorageSpec{}, "", configuredInAgentConfig,
+			fmt.Errorf("environment variable %s requires a non-null enabled field",
+				nvcaInternalPersistentStorageConfigJSONBase64Key)
+	}
+	environmentSpec := InternalPersistentStorageSpec{
+		Enabled:          *environmentConfig.Enabled,
+		StorageClassName: environmentConfig.StorageClassName,
+		ResourceQuota:    environmentConfig.ResourceQuota,
 	}
 	environmentSpec.StorageClassName = strings.TrimSpace(environmentSpec.StorageClassName)
 	if environmentSpec.Enabled && environmentSpec.StorageClassName == "" {

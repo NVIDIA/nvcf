@@ -120,6 +120,26 @@ func TestResolveInternalPersistentStorageConfig(t *testing.T) {
 			expectedErrorMessage: "decode JSON environment variable",
 		},
 		{
+			name:                 "environment configuration requires enabled",
+			environmentValue:     base64.StdEncoding.EncodeToString([]byte(`{"storageClassName":"premium"}`)),
+			expectedErrorMessage: "requires a non-null enabled field",
+		},
+		{
+			name:                 "environment configuration rejects null enabled",
+			environmentValue:     base64.StdEncoding.EncodeToString([]byte(`{"enabled":null}`)),
+			expectedErrorMessage: "requires a non-null enabled field",
+		},
+		{
+			name:                 "environment configuration rejects unknown fields",
+			environmentValue:     base64.StdEncoding.EncodeToString([]byte(`{"enabled":false,"unexpected":true}`)),
+			expectedErrorMessage: "unknown field",
+		},
+		{
+			name:                 "environment configuration rejects trailing JSON",
+			environmentValue:     base64.StdEncoding.EncodeToString([]byte(`{"enabled":false}{"enabled":true}`)),
+			expectedErrorMessage: "expected exactly one JSON object",
+		},
+		{
 			name:                 "enabled environment configuration requires a storage class",
 			environmentValue:     base64.StdEncoding.EncodeToString([]byte(`{"enabled":true}`)),
 			expectedErrorMessage: "requires storageClassName when enabled",
