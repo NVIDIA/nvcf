@@ -7,8 +7,8 @@ types and storage classes are AWS examples. For another cloud service provider
 storage classes that provide at least the listed vCPU, memory, storage, zone
 spread, and GPU compatibility characteristics. Actual requirements depend on
 workload characteristics, function count, and request concurrency. Use the
-[self-managed-grpc-load-test](/nvcf/self-managed/g-rpc-load-testing) and
-[self-managed-http-load-test](/nvcf/self-managed/http-load-testing) guides to validate
+[self-managed-grpc-load-test](/nvcf/overview/g-rpc-load-testing) and
+[self-managed-http-load-test](/nvcf/overview/http-load-testing) guides to validate
 throughput and tune your control plane accordingly.
 
 </Info>
@@ -180,8 +180,8 @@ The default control-plane resource sizing shipped with the helmfile stack is
 designed to handle approximately 100 concurrent users. If you need higher
 throughput:
 
-1. Benchmark your deployment using the [self-managed-grpc-load-test](/nvcf/self-managed/g-rpc-load-testing)
-   or [self-managed-http-load-test](/nvcf/self-managed/http-load-testing) guide. Start with
+1. Benchmark your deployment using the [self-managed-grpc-load-test](/nvcf/overview/g-rpc-load-testing)
+   or [self-managed-http-load-test](/nvcf/overview/http-load-testing) guide. Start with
    `--vus 100` and increase gradually.
 2. Scale node pools independently. Cassandra, OpenBao, and control-plane
    pools can each be scaled without affecting the others.
@@ -191,7 +191,7 @@ throughput:
 
 <Note>
 - [Quickstart](./quickstart.md): One-click fresh installation walkthrough
-- [self-managed-grpc-load-test](/nvcf/self-managed/g-rpc-load-testing): Validate control-plane throughput
-- [self-managed-http-load-test](/nvcf/self-managed/http-load-testing): Validate HTTP invocation throughput
+- [self-managed-grpc-load-test](/nvcf/overview/g-rpc-load-testing): Validate control-plane throughput
+- [self-managed-http-load-test](/nvcf/overview/http-load-testing): Validate HTTP invocation throughput
 
 </Note>

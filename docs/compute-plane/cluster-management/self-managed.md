@@ -40,7 +40,7 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 - `GPU Workload Components` must be available in a user-managed registry that your Kubernetes cluster can access. See `GPU Workload Components` under [self-hosted-artifact-manifest](/nvcf/overview/manifest) for necessary artifacts and [self-hosted-image-mirroring](/nvcf/overview/image-mirroring) for mirroring instructions.
 
 - `nvcf-cli` is available on the deployment machine. The compute-plane Makefile
-  calls it during cluster registration. See [self-hosted-cli](/nvcf/self-managed/cli) for
+  calls it during cluster registration. See [self-hosted-cli](/nvcf/overview/cli) for
   CLI installation and configuration.
 
 - The [SMB CSI driver](https://github.com/kubernetes-csi/csi-driver-smb) (`smb.csi.k8s.io`) must be installed on the GPU cluster. It is required for NVCA shared model cache storage (samba sidecar). Install it with:
@@ -152,8 +152,8 @@ compute-reachable endpoints from those inputs resolve from the GPU cluster. See
 Register the GPU cluster with the control plane before installing the operator.
 The `nvcf-cli` discovers the cluster's OIDC issuer and JWKS and records them
 with the control plane, then returns the Helm values the operator needs. See
-[self-hosted-cli](/nvcf/self-managed/cli) for CLI installation and configuration, and the
-[Cluster Registration](/nvcf/self-managed/cli#cluster-registration) reference for full flag
+[self-hosted-cli](/nvcf/overview/cli) for CLI installation and configuration, and the
+[Cluster Registration](/nvcf/overview/cli#cluster-registration) reference for full flag
 and output details.
 
 <Note>
@@ -586,7 +586,7 @@ The `instanceType` and `gpu` values depend on the GPU types available in your cl
 For invocation, the Host header uses wildcard subdomain routing: `<function-id>.invocation.<gateway-addr>`.
 The URL path should match the function's `inferenceUrl` (e.g., `/echo`).
 For full HTTP invocation behavior, streaming, and errors, see
-[Generic HTTP Function Invocation](/nvcf/self-managed/generic-http-function-invocation).
+[Generic HTTP Function Invocation](/nvcf/overview/generic-http-function-invocation).
 
 </Note>
 
@@ -595,7 +595,7 @@ You can also use the NVCF CLI for easier function management:
 - Create, deploy, and invoke functions with simple commands
 - Create or update registry credentials without manual API calls
 
-See [self-hosted-cli](/nvcf/self-managed/cli) for installation and usage instructions.
+See [self-hosted-cli](/nvcf/overview/cli) for installation and usage instructions.
 
 ## Re-registering a cluster
 
