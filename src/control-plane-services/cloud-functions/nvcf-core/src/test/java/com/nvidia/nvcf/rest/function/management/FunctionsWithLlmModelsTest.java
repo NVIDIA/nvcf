@@ -606,7 +606,7 @@ class FunctionsWithLlmModelsTest {
                 .isEqualTo(storedRoutingMethod);
         assertLlmConfigPersisted(function.versionId(), "1-M", storedRoutingMethod);
 
-        // A different value forces the sibling write, which copies the converter's trimmed DTO.
+        // A different value forces the sibling write, which stores the trimmed form too.
         var secondRoutingMethod = "wait-and-widen;n=3";
         var secondVersion = createAdditionalLlmFunctionVersion(
                 function.id(), functionName, "1-M", " " + secondRoutingMethod + " ");

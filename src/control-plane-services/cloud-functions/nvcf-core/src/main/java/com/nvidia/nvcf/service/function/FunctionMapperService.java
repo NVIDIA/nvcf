@@ -489,9 +489,11 @@ public class FunctionMapperService {
             var llmConfig = model.getLlmConfig();
             if (llmConfig != null) {
                 // Every write of modelSpecs passes here, so this is where routingMethod takes
-                // its stored form.
-                llmConfig.setRoutingMethod(
-                        LlmRoutingMethodValidator.withoutOuterSpaces(llmConfig.getRoutingMethod()));
+                // its stored form. The copy leaves the caller's DTO as received.
+                llmConfig = llmConfig.toBuilder()
+                        .routingMethod(LlmRoutingMethodValidator.withoutOuterSpaces(
+                                llmConfig.getRoutingMethod()))
+                        .build();
             }
             modelSpecs.put(model.getName(), jsonMapper.writeValueAsString(new ModelSpecValue(
                     model.getVersion(),

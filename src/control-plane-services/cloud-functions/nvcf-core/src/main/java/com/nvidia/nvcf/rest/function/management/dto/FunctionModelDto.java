@@ -54,7 +54,7 @@ public class FunctionModelDto {
     @Nullable
     private LlmConfigDto llmConfig;
 
-    @Builder
+    @Builder(toBuilder = true)
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
