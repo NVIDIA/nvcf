@@ -41,9 +41,11 @@ out of scope for 0.6.0.
 
 ## Add the Gateway Listener
 
-Add a TCP listener for the worker callback path only when enabling split or
-multi-cluster gRPC invocation. The listener name must match
-`ingress.gatewayApi.routes.grpcWorker.listenerName`.
+Provision a private Gateway for the worker callback path only when enabling
+split or multi-cluster gRPC invocation. Do not add this listener to the
+internet-facing Gateway from the Gateway quickstart. Restrict the private
+Gateway at the cloud load balancer and network-policy layers. The listener name
+must match `ingress.gatewayApi.routes.grpcWorker.listenerName`.
 
 ```yaml
 - name: worker-tcp
@@ -86,7 +88,15 @@ reach the grpc-proxy callback listener. The stack passes this value to the
 grpc-proxy chart, which renders the grpc-proxy container configuration. Do not
 set the raw container environment variable directly.
 
-For local multi-cluster testing with ncp-local, use:
+<Warning>
+The callback is cleartext HTTP/1 CONNECT. Keep the callback listener and route
+on a private, trusted network. This release does not document a supported TLS
+and edge-authentication configuration for port `10086`, so do not expose it
+across an untrusted network.
+
+</Warning>
+
+For local testing with ncp-local only, use:
 
 ```yaml
 grpcproxy:

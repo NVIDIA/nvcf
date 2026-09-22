@@ -106,20 +106,24 @@ This is only needed for a root rotation. If Pylon trusts the root, renewing an
 intermediate needs no trust-bundle change and no restart. Because trust does not
 reload yet, use this order for a root rotation:
 
-1. Add the new root CA certificate to the applicable Pylon trust bundle,
-   keeping the old root. In managed bundle mode, update the shared merged
-   bundle source.
-2. Roll the Pylon pods so both startup-loaded trust inputs pick up the new
-   bundle.
+1. Add the new root CA certificate to every affected startup-loaded trust
+   bundle while keeping the old root. This includes Pylon, Stargate when it
+   dials direct backends through `--tls-cert-path`, and
+   `stargate-k8s-router` through `--upstream-tls-cert-path`. In managed bundle
+   mode, update the shared merged bundle source.
+2. Roll every consumer whose trust bundle changed so Pylon, applicable
+   Stargate pods, and applicable `stargate-k8s-router` pods load both roots.
 3. Replace each affected server certificate and private key with an identity
    chaining to the new root. Mounted server identities reload in place. Update
    an NLB listener with its load-balancer certificate procedure.
 4. Verify new connections.
-5. Remove the old root from the applicable Pylon trust bundle and roll the
-   Pylon pods again.
+5. Remove the old root from every affected trust bundle.
+6. Roll every affected Pylon, Stargate, and `stargate-k8s-router` consumer
+   again, then verify new connections.
 
-For emergency revocation of a root, restart Pylon rather than waiting for a
-reload. Removing a trust root has no effect on a running process.
+For emergency revocation of a root, restart every affected trust consumer
+rather than waiting for a reload. Removing a trust root has no effect on a
+running process.
 
 ## Mount the Secret as a directory, not with subPath
 

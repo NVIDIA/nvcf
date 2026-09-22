@@ -107,10 +107,15 @@ kubectl -n nvcf rollout restart deployment/nvct-api
 
 ## Adding AWS ECR Registry Credentials
 
-AWS ECR requires **permanent IAM credentials** (Access Key ID + Secret Access Key). Temporary SSO/STS credentials will not work.
+NVCF's ECR integration requires permanent IAM credentials (Access Key ID and
+Secret Access Key). AWS ECR supports temporary SSO and STS credentials, but
+they do not work with the current NVCF registry credential contract.
 
 <Info>
-**Why SSO credentials don't work:** AWS SSO and assumed role credentials include a session token that must be passed alongside the access key and secret. The NVCF registry credential format (`ACCESS_KEY_ID:SECRET_ACCESS_KEY`) does not support session tokens, so temporary credentials will fail with `UnrecognizedClientException`.
+AWS SSO and assumed role credentials include a session token that must be
+passed alongside the access key and secret. The NVCF registry credential format
+accepts only `ACCESS_KEY_ID:SECRET_ACCESS_KEY` and cannot carry the session
+token, so temporary credentials fail with `UnrecognizedClientException`.
 
 </Info>
 
@@ -138,6 +143,12 @@ AWS_ACCOUNT_ID="<aws-account-id>"
 AWS_REGION="<aws-region>"
 REPO_PREFIX="<repo-prefix>"
 
+if [ "$REPO_PREFIX" = "*" ]; then
+  ECR_REPOSITORY_RESOURCE="arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/*"
+else
+  ECR_REPOSITORY_RESOURCE="arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${REPO_PREFIX}/*"
+fi
+
 # Create the policy
 ```
 
@@ -150,7 +161,9 @@ REPO_PREFIX="<repo-prefix>"
 - If your repositories are named `my-cluster/nvcf-api`, `my-cluster/nvcf-sis`, etc., set `REPO_PREFIX="my-cluster"`
 - To allow access to all repositories in the account, set `REPO_PREFIX="*"` (less secure)
 
-The resulting IAM resource ARN `arn:aws:ecr:<region>:<account>:repository/<prefix>/*` will match all repositories starting with that prefix.
+For a concrete prefix, the resulting IAM resource ARN ends in
+`repository/<prefix>/*`. The wildcard value uses `repository/*` so it also
+matches top-level repositories.
 
 </Note>
 
@@ -173,7 +186,7 @@ aws iam create-policy \
           "ecr:BatchCheckLayerAvailability",
           "ecr:DescribeImages"
         ],
-        "Resource": "arn:aws:ecr:'"${AWS_REGION}"':'"${AWS_ACCOUNT_ID}"':repository/'"${REPO_PREFIX}"'/*"
+        "Resource": "'"${ECR_REPOSITORY_RESOURCE}"'"
       }
     ]
   }'

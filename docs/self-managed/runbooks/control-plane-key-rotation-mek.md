@@ -2,214 +2,296 @@
 
 ## Overview
 
-The **Master Encryption Key (MEK)** is an AES-256-GCM key stored in OpenBAO that wraps all Namespace Encryption Keys (NEKs). The MEK is shared across NVCF services in the control plane -- ESS is its primary consumer.
+The Master Encryption Key (MEK) is an AES-256-GCM key stored in OpenBao that
+wraps Namespace Encryption Keys (NEKs). ESS uses NEKs to encrypt user secrets.
+The same OpenBao record also contains a separate payload-key JWKS used by API
+Keys. The MEK and payload key share a key ID, but their key material must remain
+different.
 
-Rotate the MEK on a regular schedule (for example, every 90 days) or when required by your security policy.
+Rotate the MEK on the schedule required by your security policy. Use a
+maintenance window because key propagation can briefly affect availability.
 
 ## Prerequisites
 
-- `kubectl` configured for your NVCF control plane cluster
-- Access to OpenBAO pods in the `vault-system` namespace
-- The OpenBAO root token (stored in the `openbao-server-root-token` secret in `vault-system`)
-- A tool to generate UUIDs (`uuidgen` or equivalent)
-- `base64`, `python3`, or `jq` for JSON manipulation
-- A maintenance window; MEK rotation can briefly affect availability
+- `kubectl` access to the NVCF control plane cluster
+- Permission to exec into OpenBao pods in the `vault-system` namespace
+- `python3` for key generation and JSON processing
+- Approved encrypted storage for the backup and temporary payload files
+- A documented retention and secure-deletion policy for key backups
 
-## Where the MEK is Stored
+## Stored Fields
 
-The MEK is stored in the `services/all/kv/` KV v2 secret engine in OpenBAO, at the path:
-
-`encryption/keys/stored_data`
-
-This path contains four fields:
+The record is in the `services/all/kv/` KV v2 secret engine at
+`encryption/keys/stored_data`.
 
 | Field | Description |
 | --- | --- |
-| `keys` | Base64-encoded JSON object containing an array of MEK keys. Each key is a JWK with fields: `kty` (`oct`), `use` (`enc`), `kid` (UUID), `k` (base64url-encoded 256-bit key), `alg` (`A256GCM`). |
-| `current_kid` | The `kid` of the active MEK used for encryption. Must match the first key in the `keys` array. |
-| `jwe_mapping` | JSON string mapping the active key ID, e.g. `{"payload_jwe_kid":"<kid>"}`. |
-| `private_jwks` | A separate key set used by other NVCF services. Update this field alongside `keys` during rotation. |
+| `keys` | Base64-encoded JWKS containing MEKs. |
+| `current_kid` | Key ID of the active MEK. It matches the first entry in `keys`. |
+| `jwe_mapping` | JSON mapping whose `payload_jwe_kid` selects the active payload key. |
+| `private_jwks` | Base64-encoded JWKS containing payload keys. These keys are independent from the MEKs even though they use the same key IDs. |
 
-## Inspecting Current State
+Do not remove an older entry from either key set until every dependent value
+has been re-encrypted and the supported key-retirement procedure confirms that
+the entry is no longer needed.
 
-**Retrieve the OpenBAO root token:**
+## Prepare Protected Storage and Helpers
 
-```bash
-VAULT_TOKEN=$(kubectl get secret -n vault-system openbao-server-root-token \
-  -o jsonpath='{.data.root_token}' | base64 -d)
-```
-
-**Read the current MEK data:**
+Set `MEK_WORKDIR` to an approved encrypted location. The directory and files in
+it contain recoverable encryption key material.
 
 ```bash
-kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-  sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv get \
-    services/all/kv/encryption/keys/stored_data"
+umask 077
+export MEK_WORKDIR="<absolute-path-on-approved-encrypted-storage>"
+install -d -m 700 "$MEK_WORKDIR"
+
+export MEK_BACKUP="$MEK_WORKDIR/mek_backup.json"
+export MEK_PAYLOAD="$MEK_WORKDIR/mek_updated.json"
+export MEK_METADATA="$MEK_WORKDIR/mek_metadata.json"
+export MEK_VERIFY="$MEK_WORKDIR/mek_verify.json"
 ```
 
-**Decode the keys array to see the current MEK(s):**
+The OpenBao pod already mounts its root token. These helpers read the token
+inside the pod, so the token and write payload do not appear in local or remote
+process arguments.
 
 ```bash
-kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-  sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv get \
-    -field=keys services/all/kv/encryption/keys/stored_data" \
-  | base64 -d | python3 -m json.tool
-```
+bao_root() {
+  kubectl exec -i openbao-server-0 -c openbao -n vault-system -- \
+    sh -c 'export BAO_TOKEN="$(cat /home/openbao/unseal/root_token)"; exec bao "$@"' \
+    sh "$@"
+}
 
-You should see output like:
-
-```json
-{
-    "keys": [
-        {
-            "kty": "oct",
-            "use": "enc",
-            "kid": "fa85bab2-fccd-11f0-b875-82c3b2df389e",
-            "k": "<base64url-encoded-256-bit-key>",
-            "alg": "A256GCM"
-        }
-    ]
+bao_put_stored_data() {
+  local payload_file="$1"
+  kubectl exec -i openbao-server-0 -c openbao -n vault-system -- \
+    sh -c 'export BAO_TOKEN="$(cat /home/openbao/unseal/root_token)"; \
+      exec bao kv put services/all/kv/encryption/keys/stored_data -' \
+    < "$payload_file"
 }
 ```
 
-## MEK Rotation Procedure
+## Rotation Procedure
 
-<Info>
-Do not remove the old MEK from the keys array. ESS needs the old MEK to decrypt existing NEKs during the transition.
-
-</Info>
-
-1. **Read the current stored_data** and save it as a backup:
+1. Back up the current record with restrictive permissions:
 
    ```bash
-   VAULT_TOKEN=$(kubectl get secret -n vault-system openbao-server-root-token \
-     -o jsonpath='{.data.root_token}' | base64 -d)
-
-   kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-     sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv get -format=json \
-       services/all/kv/encryption/keys/stored_data" > mek_backup.json
+   bao_root kv get -format=json \
+     services/all/kv/encryption/keys/stored_data > "$MEK_BACKUP"
+   chmod 600 "$MEK_BACKUP"
    ```
 
-2. **Generate a new MEK key ID and key material:**
+   Keep this backup only in the approved encrypted location. Do not copy it to
+   chat, tickets, source control, or an unencrypted workstation directory.
+
+2. Generate a new MEK and a separate payload key. The keys use the same new
+   key ID and retain every existing key needed for decryption:
 
    ```bash
-   NEW_KID=$(python3 -c "from uuid import uuid1; kid = str(uuid1()); print(kid)")
-   NEW_KEY=$(python3 -c "import secrets, base64; \
-     key = secrets.token_bytes(32); \
-     print(base64.urlsafe_b64encode(key).rstrip(b'=').decode())")
-   echo "New kid: $NEW_KID"
-   echo "New key: $NEW_KEY"
-   ```
+   python3 - "$MEK_BACKUP" "$MEK_PAYLOAD" "$MEK_METADATA" <<'PY'
+   import base64
+   import json
+   import secrets
+   import sys
+   import uuid
 
-3. **Build the updated keys JSON** with the new key as the first element:
+   backup_path, payload_path, metadata_path = sys.argv[1:]
+   with open(backup_path, encoding="utf-8") as stream:
+       stored = json.load(stream)["data"]["data"]
 
-   ```bash
-   # Extract current keys
-   CURRENT_KEYS_B64=$(kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-     sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv get \
-       -field=keys services/all/kv/encryption/keys/stored_data")
+   def decode_jwks(field):
+       return json.loads(base64.b64decode(stored[field]).decode("utf-8"))
 
-   # Build new keys array (new key first, then existing keys)
-   UPDATED_KEYS_B64=$(echo "$CURRENT_KEYS_B64" | base64 -d | python3 -c "
-   import sys, json, base64
-   data = json.load(sys.stdin)
-   new_key = {
-       'kty': 'oct',
-       'use': 'enc',
-       'kid': '$NEW_KID',
-       'k': '$NEW_KEY',
-       'alg': 'A256GCM'
+   def encode_jwks(value):
+       raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+       return base64.b64encode(raw).decode("ascii")
+
+   def new_key(kid):
+       material = base64.urlsafe_b64encode(secrets.token_bytes(32))
+       return {
+           "kty": "oct",
+           "use": "enc",
+           "kid": kid,
+           "k": material.rstrip(b"=").decode("ascii"),
+           "alg": "A256GCM",
+       }
+
+   mek_jwks = decode_jwks("keys")
+   payload_jwks = decode_jwks("private_jwks")
+   new_kid = str(uuid.uuid4())
+   new_mek = new_key(new_kid)
+   new_payload_key = new_key(new_kid)
+   if new_mek["k"] == new_payload_key["k"]:
+       raise RuntimeError("generated key material unexpectedly matches")
+
+   mek_jwks["keys"].insert(0, new_mek)
+   payload_jwks["keys"].insert(0, new_payload_key)
+   updated = {
+       "keys": encode_jwks(mek_jwks),
+       "current_kid": new_kid,
+       "jwe_mapping": json.dumps(
+           {"payload_jwe_kid": new_kid}, separators=(",", ":")
+       ),
+       "private_jwks": encode_jwks(payload_jwks),
    }
-   data['keys'].insert(0, new_key)
-   print(base64.b64encode(json.dumps(data).encode()).decode())
-   ")
+
+   with open(payload_path, "w", encoding="utf-8") as stream:
+       json.dump(updated, stream, separators=(",", ":"))
+   with open(metadata_path, "w", encoding="utf-8") as stream:
+       json.dump(
+           {"new_kid": new_kid, "old_kid": stored["current_kid"]}, stream
+       )
+   print(f"Prepared independent MEK and payload keys for kid {new_kid}")
+   PY
+
+   chmod 600 "$MEK_PAYLOAD" "$MEK_METADATA"
    ```
 
-4. **Write the updated values back to OpenBAO:**
+3. Write the complete updated record to OpenBao through standard input:
 
    ```bash
-   NEW_JWE_MAPPING="{\"payload_jwe_kid\":\"$NEW_KID\"}"
-
-   kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-     sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv put \
-       services/all/kv/encryption/keys/stored_data \
-       keys='$UPDATED_KEYS_B64' \
-       current_kid='$NEW_KID' \
-       jwe_mapping='$NEW_JWE_MAPPING' \
-       private_jwks='$UPDATED_KEYS_B64'"
+   bao_put_stored_data "$MEK_PAYLOAD"
    ```
 
-5. **Verify the update:**
+4. Verify the active selectors, retained old keys, and distinct new key
+   material without printing key values:
 
    ```bash
-   kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-     sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv get \
-       -field=current_kid services/all/kv/encryption/keys/stored_data"
+   bao_root kv get -format=json \
+     services/all/kv/encryption/keys/stored_data > "$MEK_VERIFY"
+   chmod 600 "$MEK_VERIFY"
+
+   python3 - "$MEK_VERIFY" "$MEK_METADATA" <<'PY'
+   import base64
+   import json
+   import sys
+
+   verify_path, metadata_path = sys.argv[1:]
+   with open(verify_path, encoding="utf-8") as stream:
+       stored = json.load(stream)["data"]["data"]
+   with open(metadata_path, encoding="utf-8") as stream:
+       metadata = json.load(stream)
+
+   def keys(field):
+       value = json.loads(base64.b64decode(stored[field]).decode("utf-8"))
+       return value["keys"]
+
+   mek_keys = keys("keys")
+   payload_keys = keys("private_jwks")
+   new_kid = metadata["new_kid"]
+   old_kid = metadata["old_kid"]
+   mapping = json.loads(stored["jwe_mapping"])
+
+   assert stored["current_kid"] == new_kid
+   assert mapping["payload_jwe_kid"] == new_kid
+   assert mek_keys[0]["kid"] == new_kid
+   assert payload_keys[0]["kid"] == new_kid
+   assert mek_keys[0]["k"] != payload_keys[0]["k"]
+   assert any(key["kid"] == old_kid for key in mek_keys)
+   assert any(key["kid"] == old_kid for key in payload_keys)
+   print(f"Verified rotation metadata for kid {new_kid}")
+   PY
+
+   rm -f "$MEK_PAYLOAD" "$MEK_VERIFY"
    ```
 
-   The output should show your new key ID (`$NEW_KID`).
+5. Verify service health and read and write a test secret through the NVCF API:
 
-## Verification
+   ```bash
+   kubectl get pods -n ess
+   kubectl get pods -n api-keys
+   kubectl logs -n ess -l app.kubernetes.io/name=helm-nvcf-ess-api \
+     -c helm-nvcf-ess-api --tail=200 | grep -i error
+   ```
 
-After completing MEK rotation:
+## Propagation Grace Period
 
-- OpenBAO shows the updated `current_kid`:
+ESS does not start using the new MEK immediately. Each ESS pod refreshes its
+OpenBao material through the vault-agent sidecar roughly every 24 hours.
+Different pods can refresh at different times, so allow the default 48-hour
+grace period before treating the new key as fully active.
 
-  ```bash
-  kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-    sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv get \
-      -field=current_kid services/all/kv/encryption/keys/stored_data"
-  ```
-
-- ESS pods are `Running` and `Ready` with no MEK/decryption errors:
-
-  ```bash
-  kubectl get pods -n ess
-  kubectl logs -n ess -l app.kubernetes.io/name=helm-nvcf-ess-api \
-    -c helm-nvcf-ess-api --tail=200 | grep -i error
-  ```
-
-- Secrets can still be read and written through the NVCF API.
-
-## MEK Propagation Grace Period
-
-After writing the new MEK to OpenBAO, ESS does **not** start using it immediately. Each ESS pod refreshes its secrets from OpenBAO via the `vault-agent` sidecar container roughly every **24 hours**. Because different pods refresh at different times, there is a default grace period of **48 hours** before the new MEK is actively used for encryption.
-
-This grace period prevents a race condition: if pod A picks up the new MEK and uses it to write encrypted data to the database before pod B has refreshed, pod B would be unable to decrypt that data because it still only has the old MEK loaded.
-
-<Info>
-- Do **not** remove the old MEK from the `keys` array as ESS needs the old MEK to decrypt existing NEKs during the transition.
-- During the grace period the old MEK remains the active encryption key; the new MEK is present in the key set but not yet used for writes.
-- After the grace period, ESS switches to the new MEK for all new encryption operations while retaining the old MEK for decrypting previously encrypted data.
-
-</Info>
+Keep both old and new entries in `keys` and `private_jwks` throughout the grace
+period and afterward. The old entries remain necessary to decrypt values
+written before the rotation. The new entries may become necessary as soon as
+any consumer refreshes, so rollback must preserve them.
 
 ## Rollback
 
-If the rotation causes issues:
+Rollback changes the active selectors back to the previous key ID but retains
+all currently published MEK and payload-key entries. Never restore the backup
+as a complete replacement after any service might have used the new key.
 
-1. Restore the previous `keys`, `current_kid`, `jwe_mapping`, and `private_jwks` from the backup (`mek_backup.json`) taken in Step 1:
-
-   ```bash
-   # Extract original values from backup
-   ORIG_KEYS=$(python3 -c "import json; d=json.load(open('mek_backup.json')); print(d['data']['data']['keys'])")
-   ORIG_KID=$(python3 -c "import json; d=json.load(open('mek_backup.json')); print(d['data']['data']['current_kid'])")
-   ORIG_JWE=$(python3 -c "import json; d=json.load(open('mek_backup.json')); print(d['data']['data']['jwe_mapping'])")
-   ORIG_PRIV=$(python3 -c "import json; d=json.load(open('mek_backup.json')); print(d['data']['data']['private_jwks'])")
-
-   kubectl exec -n vault-system openbao-server-0 -c openbao -- \
-     sh -c "VAULT_TOKEN=$VAULT_TOKEN bao kv put \
-       services/all/kv/encryption/keys/stored_data \
-       keys='$ORIG_KEYS' \
-       current_kid='$ORIG_KID' \
-       jwe_mapping='$ORIG_JWE' \
-       private_jwks='$ORIG_PRIV'"
-   ```
-
-2. Restart ESS to pick up the restored MEK:
+1. Read the current record and build a rollback payload that moves the previous
+   keys to the front without removing the new keys:
 
    ```bash
-   kubectl rollout restart deployment -n ess ess-api-helm-nvcf-ess-api-deployment
+   export MEK_CURRENT="$MEK_WORKDIR/mek_current.json"
+   export MEK_ROLLBACK="$MEK_WORKDIR/mek_rollback.json"
+
+   bao_root kv get -format=json \
+     services/all/kv/encryption/keys/stored_data > "$MEK_CURRENT"
+   chmod 600 "$MEK_CURRENT"
+
+   python3 - "$MEK_CURRENT" "$MEK_BACKUP" "$MEK_ROLLBACK" <<'PY'
+   import base64
+   import json
+   import sys
+
+   current_path, backup_path, rollback_path = sys.argv[1:]
+   with open(current_path, encoding="utf-8") as stream:
+       current = json.load(stream)["data"]["data"]
+   with open(backup_path, encoding="utf-8") as stream:
+       backup = json.load(stream)["data"]["data"]
+
+   old_kid = backup["current_kid"]
+
+   def reorder(field):
+       jwks = json.loads(base64.b64decode(current[field]).decode("utf-8"))
+       matching = [key for key in jwks["keys"] if key["kid"] == old_kid]
+       if not matching:
+           raise RuntimeError(f"previous kid {old_kid} is missing from {field}")
+       remaining = [key for key in jwks["keys"] if key["kid"] != old_kid]
+       jwks["keys"] = matching + remaining
+       raw = json.dumps(jwks, separators=(",", ":")).encode("utf-8")
+       return base64.b64encode(raw).decode("ascii")
+
+   rollback = {
+       "keys": reorder("keys"),
+       "current_kid": old_kid,
+       "jwe_mapping": backup["jwe_mapping"],
+       "private_jwks": reorder("private_jwks"),
+   }
+   with open(rollback_path, "w", encoding="utf-8") as stream:
+       json.dump(rollback, stream, separators=(",", ":"))
+   print(f"Prepared rollback selectors for kid {old_kid}")
+   PY
+
+   chmod 600 "$MEK_ROLLBACK"
+   bao_put_stored_data "$MEK_ROLLBACK"
    ```
 
-3. Do not remove the old key from the keys array until the new key has been verified and ESS is healthy.
+2. Restart both consumers so they load the rollback selectors:
+
+   ```bash
+   kubectl rollout restart \
+     deployment/ess-api-helm-nvcf-ess-api-deployment -n ess
+   kubectl rollout restart deployment/api-keys -n api-keys
+   kubectl rollout status \
+     deployment/ess-api-helm-nvcf-ess-api-deployment -n ess
+   kubectl rollout status deployment/api-keys -n api-keys
+   ```
+
+3. Verify existing secrets and API keys, then test new writes. Retain the new
+   entries until a supported re-encryption and key-retirement procedure confirms
+   that no data depends on them.
+
+4. Remove temporary rollback files from the encrypted workspace:
+
+   ```bash
+   rm -f "$MEK_CURRENT" "$MEK_ROLLBACK"
+   ```
+
+Retain `mek_backup.json` and `mek_metadata.json` only for the approved rollback
+window. At the end of that window, securely delete the files and workspace
+according to your encrypted-storage and media-sanitization policy.

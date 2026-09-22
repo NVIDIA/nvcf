@@ -49,7 +49,9 @@ echo -n '$oauthtoken:nvapi-1234567890abcdef' | base64
    # Add 'set -x' at the top of the script
    ```
 
-3. Fix your secrets.yaml with correct base64 credential, then follow the [clean-install-procedure](./troubleshooting.md).
+3. Fix `secrets.yaml` with the correct base64 credential, then follow the
+   [Uninstalling](./helmfile-installation.md#uninstalling) procedure before
+   reinstalling.
 
 **How to Prevent:**
 
@@ -58,17 +60,26 @@ echo -n '$oauthtoken:nvapi-1234567890abcdef' | base64
 2. **Verify before deploying**: Decode your base64 string to verify it's correct:
 
    ```bash
-   # Verify your encoded credential
-   echo 'YOUR_BASE64_STRING' | base64 -d
-   # Should output: $oauthtoken:nvapi-1234567890abcdef
+   # Validate without printing the decoded credential
+   decoded="$(printf '%s' 'YOUR_BASE64_STRING' | base64 -d 2>/dev/null)"
+   if [[ "$decoded" == *:* ]]; then
+     echo "Credential format is valid"
+   else
+     echo "Credential format is invalid" >&2
+   fi
+   unset decoded
    ```
 
 3. **Test NGC authentication**: Before deploying, test that your credential works:
 
    ```bash
    # Test NGC login with your credential
-   echo 'YOUR_BASE64_STRING' | base64 -d | IFS=: read username password
-   docker login nvcr.io -u "$username" -p "$password"
+   decoded="$(printf '%s' 'YOUR_BASE64_STRING' | base64 -d)"
+   username="${decoded%%:*}"
+   password="${decoded#*:}"
+   printf '%s' "$password" \
+     | docker login nvcr.io --username "$username" --password-stdin
+   unset decoded username password
    ```
 
 ### Registry Credential Change Not Taking Effect
@@ -194,8 +205,13 @@ Fix your `secrets/<environment-name>-secrets.yaml` file, then follow the "Recove
    # Check secret exists
    kubectl get secret -n nvcf nvcf-image-pull-secret
 
-   # Verify credential is valid
-   kubectl get secret -n nvcf nvcf-image-pull-secret -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d
+   # Validate the Docker configuration without printing credentials
+   kubectl get secret -n nvcf nvcf-image-pull-secret \
+     -o jsonpath='{.data.\.dockerconfigjson}' \
+     | base64 -d \
+     | jq -e 'type == "object" and (.auths | type == "object" and length > 0)' \
+     >/dev/null \
+     && echo "Docker configuration is valid"
    ```
 
 2. Verify images exist in your registry:
@@ -273,7 +289,7 @@ A race condition occurs where Helm validates CRD references before the CRD is cr
 
 **Solution:**
 
-Two changes are required in `helmfile.d/03-worker.yaml.gotmpl`:
+Two changes are required in `helmfile.d/02-nvca.yaml.gotmpl`:
 
 1. **Add \`\`disableValidation: true\`\`** to the nvca-operator release to disable OpenAPI validation:
 
@@ -315,19 +331,23 @@ The KV secrets engine commands are documented at
 
 </Note>
 
-### Retrieve the Root Token
+### Use the Mounted Root Token
 
-The OpenBao root token is stored in a Kubernetes secret created during initialization:
+The OpenBao pod mounts the root token at
+`/home/openbao/unseal/root_token`. Define a helper that reads the token inside
+the pod so it does not appear in local shell history or process arguments:
 
 ```bash
-# Retrieve the root token
-export BAO_ROOT_TOKEN=$(kubectl get secret openbao-server-root-token \
-  -n vault-system -o jsonpath='{.data.root_token}' | base64 -d)
+bao_root() {
+  kubectl exec -i openbao-server-0 -c openbao -n vault-system -- \
+    sh -c 'export BAO_TOKEN="$(cat /home/openbao/unseal/root_token)"; exec bao "$@"' \
+    sh "$@"
+}
 ```
 
 <Warning>
-The root token grants unrestricted access to all secrets in OpenBao. Treat it as a
-highly sensitive credential and avoid storing it in shell history or logs.
+Commands run through `bao_root` have unrestricted access to all secrets in
+OpenBao. Use the helper only from a trusted administrative session.
 
 </Warning>
 
@@ -336,9 +356,7 @@ highly sensitive credential and avoid storing it in shell history or logs.
 To see all mounted secrets engines (each NVCF service has its own path):
 
 ```bash
-kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
-  env BAO_TOKEN=$BAO_ROOT_TOKEN \
-  bao secrets list
+bao_root secrets list
 ```
 
 Example output (abbreviated):
@@ -367,19 +385,13 @@ Browse secrets under a specific engine path:
 
 ```bash
 # List top-level keys under a secrets engine
-kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
-  env BAO_TOKEN=$BAO_ROOT_TOKEN \
-  bao kv list services/nvcf-api/kv
+bao_root kv list services/nvcf-api/kv
 
 # List keys in a subdirectory (paths ending in / are directories)
-kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
-  env BAO_TOKEN=$BAO_ROOT_TOKEN \
-  bao kv list services/nvcf-api/kv/cassandra
+bao_root kv list services/nvcf-api/kv/cassandra
 
 # Read a specific secret
-kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
-  env BAO_TOKEN=$BAO_ROOT_TOKEN \
-  bao kv get services/nvcf-api/kv/cassandra/creds
+bao_root kv get services/nvcf-api/kv/cassandra/creds
 ```
 
 <Tip>
@@ -390,24 +402,18 @@ Use `bao kv get -format=json <path>` for machine-readable output, or
 
 ### Run Arbitrary `bao` Commands
 
-You can run any `bao` subcommand by exec-ing into the pod with the root token:
+You can run any `bao` subcommand through the helper:
 
 ```bash
 # General pattern
-kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
-  env BAO_TOKEN=$BAO_ROOT_TOKEN \
-  bao <command> [args]
+bao_root <command> [args]
 
 # Examples:
 # Check server status
-kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
-  env BAO_TOKEN=$BAO_ROOT_TOKEN \
-  bao status
+bao_root status
 
 # List auth methods
-kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
-  env BAO_TOKEN=$BAO_ROOT_TOKEN \
-  bao auth list
+bao_root auth list
 ```
 
 ## Debugging Techniques
@@ -479,7 +485,7 @@ For detailed recovery steps, see the **Recovering from Partial Deployments** sec
 
 | Failure Scenario | Recovery Strategy | Reference |
 | --- | --- | --- |
-| **Dependencies failed** (Cassandra, NATS, OpenBao) | Redeploy individual dependency | See `Redeploy Stuck Dependencies`_ below |
+| **Dependencies failed** (Cassandra, NATS, OpenBao) | Redeploy individual dependency | See [Redeploy Stuck Dependencies](#redeploy-stuck-dependencies) below |
 | **Services failed** (API, api-keys, etc.) but dependencies OK | Partial recovery (preserve dependencies) | See "Recovering from Services Failures" in [helmfile-installation](./helmfile-installation.md) |
 | **Everything broken** or uncertain state | Full uninstall and reinstall | See "Uninstalling" in [helmfile-installation](./helmfile-installation.md) |
 
@@ -513,7 +519,10 @@ If NVCF services are also broken, follow the "Recovering from Services Failures"
 
 ### NVCA Force Cleanup Script
 
-If `helmfile destroy` hangs on NVCA cleanup (typically when functions are still deployed in `nvcf-backend`), use the force cleanup script in a new terminal. See [force-cleanup-script](./troubleshooting.md) for the full script and usage instructions.
+If `helmfile destroy` hangs on NVCA cleanup (typically when functions are still
+deployed in `nvcf-backend`), use the force cleanup script in a new terminal. See
+[NVCA Force Cleanup Script](#nvca-force-cleanup-script) for the full script and
+usage instructions.
 
 ```bash
 ./force-cleanup-nvcf.sh --dry-run  # Preview
@@ -620,9 +629,23 @@ The migration bookkeeping tables live in the `schema_migrations` keyspace, with 
 CPASS=$(kubectl -n cassandra-system get secret cassandra \
   -o jsonpath='{.data.cassandra-password}' | base64 -d)
 
-kubectl -n cassandra-system exec cassandra-0 -c cassandra -- \
-  /opt/bitnami/cassandra/bin/cqlsh -u cassandra -p "$CPASS" localhost \
-  -e "SELECT version, dirty FROM schema_migrations.<keyspace>;"
+run_cqlsh() {
+  local statement="$1"
+  printf '%s\n%s\n' "$CPASS" "$statement" \
+    | kubectl -n cassandra-system exec -i cassandra-0 -c cassandra -- sh -c '
+        umask 077
+        credentials="$(mktemp)"
+        trap "rm -f \"$credentials\"" EXIT HUP INT TERM
+        IFS= read -r password
+        IFS= read -r statement
+        printf "[PlainTextAuthProvider]\nusername = cassandra\npassword = %s\n" \
+          "$password" > "$credentials"
+        /opt/bitnami/cassandra/bin/cqlsh \
+          --credentials "$credentials" localhost -e "$statement"
+      '
+}
+
+run_cqlsh "SELECT version, dirty FROM schema_migrations.<keyspace>;"
 ```
 
 Root cause:
@@ -634,9 +657,8 @@ Solution:
 First verify whether the failed migration's DDL was applied or needs manual reconciliation. After the schema matches the dirty version, clear the dirty flag and rerun the migration job:
 
 ```bash
-kubectl -n cassandra-system exec cassandra-0 -c cassandra -- \
-  /opt/bitnami/cassandra/bin/cqlsh -u cassandra -p "$CPASS" localhost \
-  -e "UPDATE schema_migrations.<keyspace> SET dirty = false WHERE version = <version>;"
+run_cqlsh "UPDATE schema_migrations.<keyspace> SET dirty = false WHERE version = <version>;"
+unset CPASS
 
 HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
 ```
@@ -673,7 +695,8 @@ configmap/cassandra-init-script   1      100s  # This one may be missing
 configmap/kube-root-ca.crt        1      8d
 ```
 
-If you only see 2 ConfigMaps (missing `cassandra-migrations`), this is a race condition during deployment.
+If you see only 2 ConfigMaps because `cassandra-init-cql` or
+`cassandra-init-script` is missing, this is a race condition during deployment.
 
 **Root Cause:**
 
@@ -1090,7 +1113,8 @@ echo "=============================================="
 
 ```
 
-[force-cleanup-nvcf.sh](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/overview/samples/scripts/force-cleanup-nvcf.sh)
+The complete versioned `force-cleanup-nvcf.sh` script is embedded above. Copy
+it to your working directory before continuing.
 
 **Usage:**
 

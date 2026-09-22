@@ -64,8 +64,12 @@ chains, and hostname mismatches prevent the gRPC watch and registration
 connections. Replace or rotate the bundle with a rolling restart of the worker
 pods. The `pylonGrpcDialAddress` override must be an explicit `https://` URI
 when a custom CA is configured. The separate
-`global.workerEndpoints.llmRequestRouterAddress` input remains a scheme-less
-`host:port` initial address.
+`global.workerEndpoints.llmRequestRouterAddress` input can remain a scheme-less
+`host:port` only for the default in-cluster initial connection. External LLM
+routing requires the same explicit `https://` or development-only `http://`
+URI used by `pylonGrpcDialAddress`. The
+`pylonReverseTunnelDialAddress` value remains a scheme-less `host:port` QUIC
+address.
 
 For gRPC, TLS SNI and hostname verification always use the external HTTPS dial
 hostname. After discovery, Pylon separately sends the concrete request-router
@@ -253,12 +257,14 @@ ingress:
 
 Set both `pylonGrpcDialAddress` and `pylonReverseTunnelDialAddress`, or omit
 both to use the in-cluster backend-router Service. Helmfile rendering rejects a
-partial override. The gRPC worker address normally uses the same HTTPS endpoint
-as `pylonGrpcDialAddress`. A secure external route requires the same explicit
-`https://` URI in both values and `grpcTls.enabled: true`. Development-only
-plaintext requires `http://` in both values and
-`grpcTls.allowInsecureHttp: true`; a scheme-less external route is rejected.
-Port 443 alone does not make a connection secure.
+partial override. For external routing,
+`global.workerEndpoints.llmRequestRouterAddress` and
+`pylonGrpcDialAddress` use the same explicit `https://` URI, while
+`pylonReverseTunnelDialAddress` uses a scheme-less `host:port` QUIC address. A
+secure external route requires `grpcTls.enabled: true`. Development-only
+plaintext requires `http://` in both gRPC address values and
+`grpcTls.allowInsecureHttp: true`; a scheme-less external gRPC route is
+rejected. Port 443 alone does not make a connection secure.
 
 To recursively discover request routers in another region, set explicit remote
 Watch dial URIs on the self-managed operator surface:

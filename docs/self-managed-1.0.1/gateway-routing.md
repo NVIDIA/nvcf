@@ -215,8 +215,10 @@ EOF
 ### gRPC worker callback listener
 
 Split or multi-cluster gRPC invocation needs an additional TCP listener for the
-worker callback path. Add this listener only when enabling split or
-multi-cluster gRPC invocation.
+worker callback path. The Gateway created earlier in this quickstart is
+internet-facing. Provision a separate private Gateway with provider-level
+network restrictions, and add the following listener only to that private
+Gateway:
 
 ```yaml
   - name: worker-tcp
@@ -234,6 +236,11 @@ The listener name must match
 `ingress.gatewayApi.routes.grpcWorker.listenerName`.
 
 <Warning>
+The callback uses cleartext HTTP/1 CONNECT and has no documented edge
+authentication. Expose port `10086` only through a private, restricted Gateway
+on a trusted network. Do not place this listener on the internet-facing Gateway
+from this quickstart.
+
 The `grpcWorker` route is beta in 0.6.0. Enable it only when the control-plane
 grpc-proxy runs one replica and the grpc-proxy HPA is disabled. Multiple
 grpc-proxy replicas are not supported by this shared TCPRoute.
@@ -916,7 +923,8 @@ aws route53 change-resource-record-sets --hosted-zone-id YOUR_ZONE_ID --change-b
   "Changes": [
     {"Action": "CREATE", "ResourceRecordSet": {"Name": "api-keys.nvcf.example.com", "Type": "CNAME", "TTL": 300, "ResourceRecords": [{"Value": "'$GATEWAY_ADDR'"}]}},
     {"Action": "CREATE", "ResourceRecordSet": {"Name": "api.nvcf.example.com", "Type": "CNAME", "TTL": 300, "ResourceRecords": [{"Value": "'$GATEWAY_ADDR'"}]}},
-    {"Action": "CREATE", "ResourceRecordSet": {"Name": "invocation.nvcf.example.com", "Type": "CNAME", "TTL": 300, "ResourceRecords": [{"Value": "'$GATEWAY_ADDR'"}]}}
+    {"Action": "CREATE", "ResourceRecordSet": {"Name": "invocation.nvcf.example.com", "Type": "CNAME", "TTL": 300, "ResourceRecords": [{"Value": "'$GATEWAY_ADDR'"}]}},
+    {"Action": "CREATE", "ResourceRecordSet": {"Name": "*.invocation.nvcf.example.com", "Type": "CNAME", "TTL": 300, "ResourceRecords": [{"Value": "'$GATEWAY_ADDR'"}]}}
   ]
 }'
 ```
@@ -932,7 +940,8 @@ Update your helmfile environment to use your custom domain instead of the load b
 
 ```yaml
 # Use your custom domain
-domain: "nvcf.example.com"
+global:
+  domain: "nvcf.example.com"
 
 # Gateway configuration remains the same
 ingress:
@@ -977,13 +986,16 @@ For TLS, you have two main options:
 
 Terminate TLS at the AWS NLB using ACM certificates:
 
-1. Request a certificate in AWS Certificate Manager for `*.nvcf.example.com`
-2. Update the Gateway to use HTTPS listeners
+1. Request a certificate in AWS Certificate Manager with both
+   `*.nvcf.example.com` and `*.invocation.nvcf.example.com`.
+2. Configure the NLB TLS listener to terminate TLS and forward the decrypted
+   connection to the Gateway's HTTP listener.
 
-```yaml
-# Update Gateway listeners for TLS passthrough or termination
-# This varies by cloud provider - consult your provider's documentation
-```
+Keep the backend Gateway listener protocol set to `HTTP`. Use an `HTTPS`
+Gateway listener only when the NLB uses TLS passthrough or re-encrypts traffic
+to the Gateway. Match the load balancer target port to that listener. The exact
+listener and target configuration depends on the AWS load balancer controller
+that owns the generated Service.
 
 ### Option B: TLS at the Gateway with cert-manager
 
@@ -992,6 +1004,11 @@ Use cert-manager to automatically provision Let's Encrypt certificates:
 ```bash
 # Install cert-manager
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+
+# Enable the Gateway API HTTP-01 solver in cert-manager v1.14
+kubectl -n cert-manager patch deployment cert-manager --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]'
+kubectl -n cert-manager rollout status deployment cert-manager
 
 # Create a ClusterIssuer for Let's Encrypt
 kubectl apply -f - <<EOF
@@ -1014,7 +1031,11 @@ spec:
 EOF
 ```
 
-Then update your Gateway to use HTTPS listeners with the certificate secret.
+The HTTP-01 solver can issue certificates only for explicit hostnames. It
+cannot issue the required `*.invocation.nvcf.example.com` wildcard. Configure a
+DNS-01 solver for production function invocation, and request a certificate
+that includes both wildcard names from Option A. Then update your Gateway to
+use HTTPS listeners with the certificate Secret.
 
 ### Step 5: Update Client Configuration
 

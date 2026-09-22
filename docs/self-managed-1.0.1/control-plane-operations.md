@@ -21,15 +21,19 @@ When a user stores a secret through the NVCF API, ESS encrypts it with the activ
 
 ### Service Reference
 
-The following table lists all NVCF control plane services with their namespace, resource name,
-and resource type. Use these values in the commands throughout this section.
+The following table lists common NVCF control plane workloads with their namespace,
+resource name, and resource type. Use these values in the commands throughout this section.
 
 | Namespace | Service | Resource Name | Type |
 | --- | --- | --- | --- |
 | `nvcf` | NVCF API | `nvcf-api` | Deployment |
 | `nvcf` | Invocation Service | `invocation-service` | Deployment |
+| `nvcf` | Task Service | `nvct-api` | Deployment |
 | `nvcf` | gRPC Proxy | `grpc-proxy-deployment` | Deployment |
 | `nvcf` | Notary Service | `notary-service` | Deployment |
+| `nvcf` | ReVal | `reval` | Deployment |
+| `nvcf` | State Metrics (optional) | `state-metrics` | Deployment |
+| `nvcf` | Function Autoscaler (optional) | `function-autoscaler` | Deployment |
 | `sis` | Spot Instance Service | `spot-instance-service` | Deployment |
 | `api-keys` | API Keys Service | `api-keys` | Deployment |
 | `api-keys` | Admin Issuer Proxy | `admin-token-issuer-proxy` | Deployment |
@@ -37,8 +41,6 @@ and resource type. Use these values in the commands throughout this section.
 | `nats-system` | NATS | `nats` | StatefulSet |
 | `vault-system` | OpenBao | `openbao-server` | StatefulSet |
 | `cassandra-system` | Cassandra | `cassandra` | StatefulSet |
-| `nvca-operator` | NVCA Operator | `nvca-operator` | Deployment |
-| `envoy-gateway-system` | Envoy Gateway | `envoy-gateway` | Deployment |
 
 ### Restarting a Service
 
@@ -75,7 +77,13 @@ For OpenBao, verify the seal status after the rollout completes. Each pod must u
 before it can serve requests:
 
 ```bash
-kubectl exec -n vault-system openbao-server-0 -- bao status
+replicas="$(kubectl get statefulset openbao-server -n vault-system \
+  -o jsonpath='{.spec.replicas}')"
+ordinal=0
+while [ "$ordinal" -lt "$replicas" ]; do
+  kubectl exec -n vault-system "openbao-server-${ordinal}" -- bao status
+  ordinal=$((ordinal + 1))
+done
 ```
 
 </Note>
@@ -126,13 +134,18 @@ To temporarily take a service offline (for example, during maintenance), scale i
 perform the work, then scale it back:
 
 ```bash
+# Record the current capacity before maintenance
+ORIGINAL_REPLICAS="$(kubectl get deployment/<name> -n <namespace> \
+  -o jsonpath='{.spec.replicas}')"
+ORIGINAL_REPLICAS="${ORIGINAL_REPLICAS:-1}"
+
 # Scale down
 kubectl scale deployment/<name> -n <namespace> --replicas=0
 
 # ... perform maintenance ...
 
 # Scale back up
-kubectl scale deployment/<name> -n <namespace> --replicas=1
+kubectl scale deployment/<name> -n <namespace> --replicas="$ORIGINAL_REPLICAS"
 
 # Verify
 kubectl rollout status deployment/<name> -n <namespace>
@@ -225,7 +238,7 @@ helm upgrade api \
   --wait --timeout 5m \
   -f nvcf-api-values.yaml
 
-kubectl rollout status deployment/api -n nvcf --timeout=120s
+kubectl rollout status deployment/nvcf-api -n nvcf --timeout=120s
 ```
 
 <Info>

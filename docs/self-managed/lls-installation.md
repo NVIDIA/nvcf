@@ -158,7 +158,7 @@ Create a security group with the following rules:
 
 ### Target Group
 
-- **Target type**: Instance
+- **Target type**: IP
 - **Protocol**: UDP
 - **Port**: 30504
 - **Health check protocol**: HTTP
@@ -399,7 +399,9 @@ echo "  $TG_ARN"
 ```
 
 <Info>
-**Save the Target Group ARN** — you will need it for the adding streaming proxy container nodes as targets to the target group [lls-step3-helm-values](./lls-installation.md).
+Save the Target Group ARN. You will need it when you add streaming proxy
+container nodes to the target group in
+[Step 4](#step-4-deploy-lls-operator).
 
 </Info>
 
@@ -559,9 +561,12 @@ kubectl delete ns gdn-streaming
 
 ### Step 2: Delete Manual NLB Resources
 
-The NLB and its associated resources created in [lls-step2-nlb](./lls-installation.md) must be manually deleted.
+The NLB and its associated resources created in
+[Step 2](#step-2-create-network-load-balancer) must be manually deleted.
 
-Save your NLB cleanup script as `lls-nlb-cleanup.sh`, then run:
+Download the versioned
+[lls-nlb-cleanup.sh](./samples/scripts/lls-nlb-cleanup.sh), inspect it, then
+run:
 
 ```bash
 chmod +x lls-nlb-cleanup.sh

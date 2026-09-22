@@ -14,7 +14,7 @@ annotations on the Gateway, the `storageClass` name, and the `kubectl` context
 names. Substitute the equivalents for GKE, AKS, or on-prem.
 
 For a deeper reference on each release and on values, see
-[Helmfile Installation](../helmfile-installation). For pulling and mirroring
+[Helmfile Installation](./helmfile-installation.md). For pulling and mirroring
 the bundles and images, see [Image Mirroring](/nvcf/overview/image-mirroring).
 
 <Info>
@@ -132,7 +132,7 @@ printf '%s' "${NGC_API_KEY}" | helm registry login nvcr.io --username '$oauthtok
 ## Step 1: Install the Gateway and capture the load balancer address
 
 Install the Gateway on the control-plane cluster by following the
-[Gateway quickstart](../gateway-routing#gateway-quickstart). It installs the
+[Gateway quickstart](./gateway-routing.md#gateway-quickstart). It installs the
 Gateway API CRDs, the Envoy Gateway controller, the `GatewayClass`, and the
 `nvcf-gateway` Gateway, and exports `GATEWAY_ADDR`. Run it against
 `${CONTROL_PLANE_CONTEXT}`.
@@ -668,4 +668,4 @@ are correct.
   wrong context active. Switch to the compute context and re-run
   `make register-cluster`.
 
-See [Troubleshooting](../troubleshooting) for more.
+See [Troubleshooting](./troubleshooting.md) for more.

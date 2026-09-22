@@ -132,7 +132,7 @@ If your client is too new, install a matching version directly from the [Kuberne
   environment must be authenticated. Examples:
 
   - AWS ECR: `aws ecr get-login-password --region <region> | helm registry login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`
-  - NGC: `docker login nvcr.io -u '$oauthtoken' -p <NGC_API_KEY>`
+  - NGC: `printf '%s' '<NGC_API_KEY>' | docker login nvcr.io --username '$oauthtoken' --password-stdin`
   - Other registries: Use `docker login` or `helm registry login` as appropriate for your registry
 
 <Note>
@@ -1230,7 +1230,16 @@ helm list -A
 
 #### Verify API Connectivity (Optional)
 
-If you configured Gateway API ingress, you can verify the NVCF API is accessible by running the following commands.
+If you configured Gateway API ingress, you can verify the NVCF API is accessible
+with the following commands.
+
+<Warning>
+The raw `GATEWAY_ADDR` commands use cleartext HTTP and `Host` overrides. Run
+them only in an isolated local or trusted test environment. For production or
+remote EKS access, configure DNS and HTTPS first, validate the certificate and
+hostname, and use the production hostnames shown below.
+
+</Warning>
 
 1. Set up environment variables:
 
@@ -1247,17 +1256,31 @@ echo "Gateway Address: $GATEWAY_ADDR"
 export NVCF_TOKEN=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/admin/keys" \
   -H "Host: api-keys.${GATEWAY_ADDR}" \
   | grep -o '"value":"[^"]*"' | cut -d'"' -f4)
-
-echo "Token generated: ${NVCF_TOKEN:0:20}..."
 ```
 
 1. List functions. The list should be empty initially:
 
 ```bash
 # List all functions
-curl -s -X GET "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
-  -H "Host: api.${GATEWAY_ADDR}" \
-  -H "Authorization: Bearer ${NVCF_TOKEN}" | jq .
+printf 'header = "Host: api.%s"\nheader = "Authorization: Bearer %s"\n' \
+  "$GATEWAY_ADDR" "$NVCF_TOKEN" \
+  | curl -s --config - -X GET \
+      "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
+  | jq .
+```
+
+For production, use the DNS names from
+[Gateway Routing](./gateway-routing.md#production-dns-and-tls-setup):
+
+```bash
+export NVCF_TOKEN=$(curl --fail --silent --show-error -X POST \
+  "https://api-keys.nvcf.example.com/v1/admin/keys" \
+  | jq -r '.value')
+
+printf 'header = "Authorization: Bearer %s"\n' "$NVCF_TOKEN" \
+  | curl --fail --silent --show-error --config - \
+      "https://api.nvcf.example.com/v2/nvcf/functions" \
+  | jq .
 ```
 
 ### Step 7. Configure the compute-plane Helmfile environment

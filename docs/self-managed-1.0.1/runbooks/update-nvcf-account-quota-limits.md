@@ -84,46 +84,47 @@ SA_TOKEN="$(kubectl -n nvcf create token nvcf-api-account-bootstrap \
 Log in to OpenBao using that service account token:
 
 ```bash
-VAULT_TOKEN="$(curl -s \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -d "{\"role\":\"nvcf-api-account-bootstrap\",\"jwt\":\"${SA_TOKEN}\"}" \
-  "http://127.0.0.1:18200/v1/auth/jwt/login" \
+VAULT_TOKEN="$(jq -nc --arg jwt "$SA_TOKEN" \
+  '{role:"nvcf-api-account-bootstrap",jwt:$jwt}' \
+  | curl -s -X POST \
+      -H "Content-Type: application/json" \
+      --data-binary @- \
+      "http://127.0.0.1:18200/v1/auth/jwt/login" \
   | jq -r '.auth.client_token')"
+unset SA_TOKEN
 ```
 
 Generate an NVCF admin JWT using the OpenBao signing role:
 
 ```bash
-ADMIN_TOKEN="$(curl -s \
-  -X PUT \
-  -H "X-Vault-Token: ${VAULT_TOKEN}" \
-  -d '{}' \
-  "http://127.0.0.1:18200/v1/services/nvcf-api/jwt/sign/nvcf-api-admin" \
+ADMIN_TOKEN="$(printf 'header = "X-Vault-Token: %s"\n' "$VAULT_TOKEN" \
+  | curl -s --config - -X PUT -d '{}' \
+      "http://127.0.0.1:18200/v1/services/nvcf-api/jwt/sign/nvcf-api-admin" \
   | jq -r '.data.token')"
+unset VAULT_TOKEN
 ```
 
 Patch one or more account limits in a single request. Include only the fields
 you want to change:
 
 ```bash
-curl -i -w "\nHTTP_STATUS=%{http_code}\n" \
-  -X PATCH \
-  "http://127.0.0.1:18080/v2/nvcf/accounts/nvcf-default" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  --data '{"maxFunctionsAllowed":50}'
+printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_TOKEN" \
+  | curl --config - -i -w "\nHTTP_STATUS=%{http_code}\n" \
+      -X PATCH \
+      "http://127.0.0.1:18080/v2/nvcf/accounts/nvcf-default" \
+      -H "Content-Type: application/json" \
+      --data '{"maxFunctionsAllowed":50}'
 ```
 
 To update multiple limits at once:
 
 ```bash
-curl -i -w "\nHTTP_STATUS=%{http_code}\n" \
-  -X PATCH \
-  "http://127.0.0.1:18080/v2/nvcf/accounts/nvcf-default" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  --data '{"maxFunctionsAllowed":50,"maxTasksAllowed":50,"maxTelemetriesAllowed":20}'
+printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_TOKEN" \
+  | curl --config - -i -w "\nHTTP_STATUS=%{http_code}\n" \
+      -X PATCH \
+      "http://127.0.0.1:18080/v2/nvcf/accounts/nvcf-default" \
+      -H "Content-Type: application/json" \
+      --data '{"maxFunctionsAllowed":50,"maxTasksAllowed":50,"maxTelemetriesAllowed":20}'
 ```
 
 Expected success response:
@@ -147,9 +148,9 @@ Expected success response:
 Verify the updated limits:
 
 ```bash
-curl -s \
-  "http://127.0.0.1:18080/v2/nvcf/accounts/nvcf-default" \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_TOKEN" \
+  | curl -s --config - \
+      "http://127.0.0.1:18080/v2/nvcf/accounts/nvcf-default" \
   | jq .
 ```
 
