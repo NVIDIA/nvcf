@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -920,6 +921,88 @@ func TestDoSharedStorageSMB(t *testing.T) {
 
 			if tt.expectedPhase != "" {
 				assert.Equal(t, tt.expectedPhase, stCopy.Status.Phase)
+			}
+		})
+	}
+}
+
+func TestDoSharedStorageSMB_TaskDataStorageClass(t *testing.T) {
+	ctx := newTestContext()
+	storageClassName := "task-data"
+
+	for _, tt := range []struct {
+		name            string
+		storageClasses  []client.Object
+		wantPhase       nvcav1new.StoragePhase
+		wantStatus      metav1.ConditionStatus
+		wantReason      string
+		wantErrContains string
+	}{
+		{
+			name:            "missing",
+			wantPhase:       nvcav1new.StorageFailed,
+			wantStatus:      metav1.ConditionFalse,
+			wantReason:      conditionReasonStorageClassNotFound,
+			wantErrContains: `task-data StorageClass "task-data" not found`,
+		},
+		{
+			name: "available",
+			storageClasses: []client.Object{&storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{Name: storageClassName},
+			}},
+			wantPhase:  nvcav1new.StorageInitRunning,
+			wantStatus: metav1.ConditionTrue,
+			wantReason: conditionReasonStorageClassFound,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sch := newTestScheme()
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "task-data-" + tt.name}}
+			objects := append([]client.Object{namespace}, tt.storageClasses...)
+			k8sClient := newFakeClient(sch, objects...)
+			stReq := &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-storage",
+					Namespace: namespace.Name,
+					Labels:    map[string]string{"function-version-id": "test-function"},
+				},
+				Spec: nvcav1new.StorageRequestSpec{
+					Type: nvcav1new.SharedStorageRequest,
+					SharedStorage: &nvcav1new.SharedStorageSpec{
+						SMBContainerImage: "smb:latest",
+						Size:              resource.MustParse("1Gi"),
+						TaskData: &nvcav1new.SharedStorageTaskDataSpec{
+							StorageClassName: &storageClassName,
+							Size:             resource.MustParse("1Gi"),
+						},
+					},
+				},
+				Status: nvcav1new.StorageRequestStatus{Phase: nvcav1new.StoragePending},
+			}
+			stCopy := stReq.DeepCopy()
+			r := &Reconciler{Client: k8sClient, fff: &featureflagmock.Fetcher{}}
+
+			_, err := r.doSharedStorageSMB(ctx, stReq, stCopy)
+			if tt.wantErrContains == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.wantErrContains)
+				assert.True(t, isTerminal(err))
+			}
+			assert.Equal(t, tt.wantPhase, stCopy.Status.Phase)
+			condition := meta.FindStatusCondition(
+				stCopy.Status.Conditions, conditionTypeTaskDataStorageClassAvailable)
+			require.NotNil(t, condition)
+			assert.Equal(t, tt.wantStatus, condition.Status)
+			assert.Equal(t, tt.wantReason, condition.Reason)
+			assert.Contains(t, condition.Message, storageClassName)
+
+			if tt.wantPhase == nvcav1new.StorageFailed {
+				err := k8sClient.Get(ctx, client.ObjectKey{
+					Name:      SharedStorageTaskDataSMBServerPVCName,
+					Namespace: namespace.Name,
+				}, &corev1.PersistentVolumeClaim{})
+				assert.Error(t, err, "a missing StorageClass must fail before creating the task-data PVC")
 			}
 		})
 	}
