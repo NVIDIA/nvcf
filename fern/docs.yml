@@ -36,11 +36,11 @@ products:
   - display-name: Self-Managed Stack
     subtitle: Control plane installation and operations
     slug: self-managed
-    path: products/self-managed/1.0.0.yml
+    path: products/self-managed/1.0.1.yml
     versions:
-      - display-name: "1.0.0"
-        path: products/self-managed/1.0.0.yml
-        slug: "1.0.0"
+      - display-name: "1.0.1"
+        path: products/self-managed/1.0.1.yml
+        slug: "1.0.1"
       - display-name: dev
         path: products/self-managed/dev.yml
         slug: dev
@@ -100,11 +100,11 @@ redirects:
   - source: "/nvcf/v0.5/:slug*"
     destination: "/nvcf/self-managed/v0.5/:slug*"
   - source: "/nvcf/cp-0.20.6-compute-0.4.4-obs-0.2.2/:slug*"
-    destination: "/nvcf/self-managed/1.0.0/:slug*"
+    destination: "/nvcf/self-managed/1.0.1/:slug*"
   - source: "/nvcf/self-managed/cp-0.20.6-compute-0.4.4-obs-0.2.2/:slug*"
-    destination: "/nvcf/self-managed/1.0.0/:slug*"
+    destination: "/nvcf/self-managed/1.0.1/:slug*"
   - source: "/nvcf/self-managed/1.0/:slug*"
-    destination: "/nvcf/self-managed/1.0.0/:slug*"
+    destination: "/nvcf/self-managed/1.0.1/:slug*"
   - source: "/nvcf/compute-plane/1.0/:slug*"
     destination: "/nvcf/compute-plane/1.0.0/:slug*"
   - source: "/nvcf/observability/1.0/:slug*"
@@ -679,3 +679,5 @@ redirects:
     destination: "/nvcf/overview/1-0-release-notes"
   - source: "/nvcf/self-managed/1.0.0/0-6-1-to-0-20-6-upgrade"
     destination: "/nvcf/overview/0-6-1-to-1-0-upgrade"
+  - source: "/nvcf/self-managed/1.0.0/:slug*"
+    destination: "/nvcf/self-managed/1.0.1/:slug*"
