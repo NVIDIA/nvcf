@@ -263,7 +263,7 @@ agent:
 webhook:
   resources:
     limits:
-      cpu: 200m
+      cpu: "1"
       memory: 200Mi
     requests:
       cpu: 50m

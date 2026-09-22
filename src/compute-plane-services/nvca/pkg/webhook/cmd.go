@@ -138,7 +138,8 @@ func NewCommand() *cobra.Command {
 				k8sClient:        k8sClient,
 				dcgmMetrics:      dcgmMetricsCfg,
 				readTimeout:      5 * time.Second,
-				writeTimeout:     10 * time.Second,
+				writeTimeout:     defaultAdmissionHandlerTimeout + 5*time.Second,
+				handlerTimeout:   defaultAdmissionHandlerTimeout,
 				attrFetcher:      featureflag.DefaultFetcher,
 				addNodePublisher: sharedcluster.AddNodePublisher,
 			}
@@ -165,6 +166,10 @@ func NewCommand() *cobra.Command {
 	return cmd
 }
 
+// defaultAdmissionHandlerTimeout matches the default admission webhook timeoutSeconds
+// the API server applies when a MutatingWebhookConfiguration does not set one.
+const defaultAdmissionHandlerTimeout = 10 * time.Second
+
 func setDefaults(cfg nvcaconfig.Config) nvcaconfig.Config {
 	cmdutil.SetEmptyValue(&cfg.Webhook.SvcAddress, "127.0.0.1:8443")
 	return cfg
@@ -175,7 +180,12 @@ type webhookManager struct {
 
 	readTimeout  time.Duration
 	writeTimeout time.Duration
-	dcgmMetrics  DCGMMetricsConfig
+	// handlerTimeout bounds a single admission request. It must not be shorter than
+	// the API server's webhook timeout (10s by default), otherwise the server answers
+	// a slow but still valid request with an HTTP 503 before the API server would have
+	// given up, and the API server reports that 503 as a failed pod create.
+	handlerTimeout time.Duration
+	dcgmMetrics    DCGMMetricsConfig
 
 	attrFetcher featureflag.AttributeFetcher
 
@@ -282,8 +292,16 @@ func (m *webhookManager) startWebhooks(ctx context.Context, shutdownSignal chan 
 	// since full object(s) are embedded in webhook req/res.
 	// https://github.com/kubernetes-sigs/controller-runtime/blob/961fc2c/pkg/webhook/admission/http.go#L55
 	const maxRequestSize = int64(7 * 1024 * 1024)
+	handlerTimeout := m.handlerTimeout
+	if handlerTimeout <= 0 {
+		handlerTimeout = defaultAdmissionHandlerTimeout
+	}
 	httpOpts := []core.HTTPMiddlewareOption{
 		core.WithRequestBodyLimit(maxRequestSize),
+		// The shared middleware defaults to a 5s http.TimeoutHandler, which replies with a
+		// plain-text HTTP 503 that the API server surfaces as a failed pod create. Match the
+		// admission timeout instead so the API server's own deadline is the one that applies.
+		core.WithHandlerTimeout(handlerTimeout),
 	}
 	r.Use(core.NewHTTPMiddleware(ctx, httpOpts...)...)
 

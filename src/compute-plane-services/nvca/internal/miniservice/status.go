@@ -1378,6 +1378,11 @@ func (r *Reconciler) getUnexpectedEventsForObject(
 // parseErrorEventMessage parses event.Message to make it more human-readable and remove
 // internal cluster details when possible. It returns false when event is not an error message.
 func parseErrorEventMessage(event *corev1.Event) (message string, include, isError bool) {
+	// The API server reports an admission webhook it could not reach, or that timed out,
+	// with this prefix. The owning controller retries the create with backoff and the
+	// object stays pending until the scheduling timeout, so the failure is not terminal.
+	// A webhook that denies the request uses a different message and remains an error.
+	const emStrWebhookCallFailed = "failed calling webhook"
 	switch event.Reason {
 	case "FailedCreate", "FailedUpdate":
 		// FailedCreate/Update is added to an event and/or in a ReplicaSet or StatefulSet condition
@@ -1394,7 +1399,7 @@ func parseErrorEventMessage(event *corev1.Event) (message string, include, isErr
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/controller_utils.go#L596C75-L596C89
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/statefulset/stateful_pod_control.go#L297-L300
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/statefulset/stateful_pod_control.go#L314-L317
-		isError = true
+		isError = !strings.Contains(event.Message, emStrWebhookCallFailed)
 	case "ReplicaSetCreateError":
 		// ReplicaSetCreateError is set when Deployments fail to create their ReplicaSet's.
 		//
@@ -1402,7 +1407,7 @@ func parseErrorEventMessage(event *corev1.Event) (message string, include, isErr
 		//   "Failed to create new replica set <name>: <error message>"
 		//
 		// Ref: https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/deployment/sync.go#L267-L269
-		isError = true
+		isError = !strings.Contains(event.Message, emStrWebhookCallFailed)
 	case "PolicyViolation":
 		// PolicyViolation events from Kyverno and other policy engines are informational
 		// and should not be included in error messages as they don't indicate workload failures.

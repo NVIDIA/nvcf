@@ -87,7 +87,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 
 | Name                                | Description                                   | Value   |
 | ----------------------------------- | --------------------------------------------- | ------- |
-| `webhook.resources.limits.cpu`      | CPU limit for the nvca webhook container      | `200m`  |
+| `webhook.resources.limits.cpu`      | CPU limit for the nvca webhook container      | `1`     |
 | `webhook.resources.limits.memory`   | Memory limit for the nvca webhook container   | `200Mi` |
 | `webhook.resources.requests.cpu`    | CPU request for the nvca webhook container    | `50m`   |
 | `webhook.resources.requests.memory` | Memory request for the nvca webhook container | `50Mi`  |
