@@ -181,6 +181,7 @@ func TestConfig_DecodeSharedStorageCapacity(t *testing.T) {
 	})
 }
 
+// TestConfig_EncodeSharedStorageCapacity verifies quantity string serialization and round-trip decoding.
 func TestConfig_EncodeSharedStorageCapacity(t *testing.T) {
 	want := resource.MustParse("20Gi")
 	cfg := Config{
