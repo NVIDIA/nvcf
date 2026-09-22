@@ -481,6 +481,30 @@ impl ProxyFixture {
         self.registrations.push(start_registration(config, failure));
     }
 
+    async fn wait_for_clusters(&self, model: &str, count: usize) {
+        wait_until(
+            "backend registration",
+            Duration::from_secs(5),
+            Duration::from_millis(20),
+            || {
+                let state = self.handle.state();
+                async move {
+                    let target = RoutingTargetKey {
+                        routing_key: None,
+                        model_id: model.to_string(),
+                    };
+                    let candidates = state.cluster_candidates_for_target(&target).await;
+                    if candidates.len() == count {
+                        Ok(())
+                    } else {
+                        Err(format!("candidates={candidates:?}"))
+                    }
+                }
+            },
+        )
+        .await;
+    }
+
     fn own_tunnel(&mut self, tunnel: QuicHttpTunnelHandle) {
         self.tunnels.push(tunnel);
     }
@@ -576,6 +600,7 @@ impl ProxyFixture {
         &mut self,
         backend_id: &str,
         cluster_id: &str,
+        protocol: TunnelTransportProtocol,
         runtime_state: PylonRuntimeState,
         retryable_rejection: bool,
     ) -> CapturingChatBackend {
@@ -584,6 +609,7 @@ impl ProxyFixture {
             "127.0.0.1:0".parse().unwrap(),
             format!("http://{}", backend.addr),
         );
+        tunnel_config.tunnel_protocol = protocol;
         tunnel_config.forwarding.runtime_state = runtime_state.clone();
         let tunnel = start_quic_http_tunnel(tunnel_config)
             .await
@@ -1516,51 +1542,11 @@ async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoi
                     .add_capturing_reverse_backend("overload-backend", "", protocol, runtime, false)
                     .await
             } else {
-                let backend = start_capturing_chat_backend(false).await;
-                let mut config = QuicHttpTunnelConfig::new(
-                    "127.0.0.1:0".parse().unwrap(),
-                    format!("http://{}", backend.addr),
-                );
-                config.tunnel_protocol = protocol;
-                config.forwarding.runtime_state = runtime.clone();
-                let tunnel = start_quic_http_tunnel(config)
+                fixture
+                    .add_capturing_direct_backend("overload-backend", "", protocol, runtime, false)
                     .await
-                    .expect("start overload tunnel");
-                fixture.register(
-                    active_registration_config_with_state(
-                        fixture.grpc_addr,
-                        "overload-backend",
-                        "",
-                        format!("quic://{}", tunnel.listen_addr()),
-                        format!("http://{}", backend.addr),
-                        runtime,
-                    ),
-                    "register overload backend",
-                );
-                fixture.own_tunnel(tunnel);
-                backend
             };
-            wait_until(
-                "overload backend registration",
-                Duration::from_secs(5),
-                Duration::from_millis(20),
-                || {
-                    let state = fixture.handle.state();
-                    async move {
-                        let target = RoutingTargetKey {
-                            routing_key: None,
-                            model_id: model.to_string(),
-                        };
-                        let candidates = state.cluster_candidates_for_target(&target).await;
-                        if candidates.len() == 1 {
-                            Ok(())
-                        } else {
-                            Err(format!("candidates={candidates:?}"))
-                        }
-                    }
-                },
-            )
-            .await;
+            fixture.wait_for_clusters(model, 1).await;
             for (endpoint, body) in [
                 ("/v1/chat/completions", streaming_chat_body(model)),
                 (
@@ -2342,7 +2328,13 @@ async fn retryable_upstream_rejection_retries_alternate_backend() {
     let mut fixture = ProxyFixture::start("test-sg-retryable-rejection").await;
     let reject_runtime = active_runtime("retry-model");
     let reject_backend = fixture
-        .add_capturing_direct_backend("retry-reject", "", reject_runtime.clone(), true)
+        .add_capturing_direct_backend(
+            "retry-reject",
+            "",
+            TunnelTransportProtocol::RawQuic,
+            reject_runtime.clone(),
+            true,
+        )
         .await;
 
     let success_runtime = active_runtime("retry-model");
@@ -2372,7 +2364,7 @@ async fn retryable_upstream_rejection_retries_alternate_backend() {
         .await
         .expect("budget-limited request failed");
 
-        if budget_limited_resp.status().as_u16() == 529 {
+        if budget_limited_resp.status() == StatusCode::TOO_MANY_REQUESTS {
             assert!(
                 budget_limited_resp
                     .headers()
@@ -2448,7 +2440,7 @@ async fn retryable_upstream_rejection_retries_alternate_backend() {
             "missing success attempt counter",
         ),
         (
-            r#"stargate_requests_total{inference_server_id="retry-reject",model="retry-model",routing_key="",status="529"} 1"#,
+            r#"stargate_requests_total{inference_server_id="retry-reject",model="retry-model",routing_key="",status="429"} 1"#,
             "hidden retryable attempt should not increment request counter",
         ),
         (
@@ -2481,6 +2473,7 @@ async fn queue_estimate_mismatch_retries_alternate_backend_before_upstream() {
         .add_capturing_direct_backend(
             "queue-mismatch-reject",
             "",
+            TunnelTransportProtocol::RawQuic,
             reject_runtime_state.clone(),
             false,
         )
@@ -2652,6 +2645,7 @@ async fn queue_estimate_mismatch_retries_sibling_in_selected_shared_cluster() {
         .add_capturing_direct_backend(
             "queue-mismatch-a-reject",
             "queue-mismatch-shared-cluster",
+            TunnelTransportProtocol::RawQuic,
             reject_runtime_state.clone(),
             false,
         )
@@ -2931,7 +2925,7 @@ async fn retryable_single_backend_exhausts_eligible_backends() {
             async move {
                 let response = request.send().await.expect("request failed");
                 let metrics = metrics_text(registry);
-                (response.status().as_u16() == 529
+                (response.status() == StatusCode::SERVICE_UNAVAILABLE
                     && metrics.contains(
                         r#"stargate_proxy_attempts_total{inference_server_id="single-reject",model="single-exhaust-model",result="upstream_429",routing_key=""}"#,
                     ))
@@ -2951,7 +2945,146 @@ async fn retryable_single_backend_exhausts_eligible_backends() {
 }
 
 #[tokio::test]
-async fn request_retry_limit_returns_sanitized_overload() {
+async fn queue_mismatch_single_backend_returns_overload() {
+    let mut fixture = ProxyFixture::start("test-sg-queue-exhaust").await;
+    let model = "queue-exhaust-model";
+    let runtime = active_runtime(model);
+    set_model_queue(&runtime, model, 0);
+    observe_connecting_request(&runtime, model, "existing-work".to_string(), 100);
+    let backend = fixture
+        .add_capturing_direct_backend(
+            "queue-reject",
+            "",
+            TunnelTransportProtocol::RawQuic,
+            runtime,
+            false,
+        )
+        .await;
+    fixture.wait_for_clusters(model, 1).await;
+
+    let response = fixture
+        .chat_request(model, "queue-exhaust-request")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 529);
+    assert!(
+        response
+            .headers()
+            .keys()
+            .all(|name| !name.as_str().starts_with("x-stargate-"))
+    );
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "overloaded_error");
+    assert_eq!(backend.hits(), 0);
+    assert_metric_sample(
+        &fixture.metrics(),
+        r#"stargate_proxy_retry_exhausted_total{model="queue-exhaust-model",reason="no_eligible_backend",routing_key=""} 1"#,
+        true,
+        "queue rejection should exhaust the only destination",
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn retryable_application_errors_preserve_response_after_retries_stop() {
+    for status in [
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::SERVICE_UNAVAILABLE,
+    ] {
+        let expected_body = format!(r#"{{"error":"application rejection {}"}}"#, status.as_u16());
+        let response_body = expected_body.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/v1/chat/completions",
+                post(move || {
+                    let body = response_body.clone();
+                    async move {
+                        Response::builder()
+                            .status(status)
+                            .header("content-type", "application/json")
+                            .header("retry-after", "7")
+                            .body(Body::from(body))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route("/health", get(|| async { "ok" }));
+        let upstream_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let retry = ProxyRetryConfig {
+            max_request_retries: 1,
+            ..ProxyRetryConfig::default()
+        };
+        let mut fixture = ProxyFixture::start_with_retry("application-retry", retry).await;
+        let model = "application-error-model";
+        for backend_id in ["application-error-a", "application-error-b"] {
+            let mut config = QuicHttpTunnelConfig::new(
+                "127.0.0.1:0".parse().unwrap(),
+                format!("http://{upstream_addr}"),
+            );
+            config.forwarding.retry.require_upstream_retry_header = false;
+            let tunnel = start_quic_http_tunnel(config)
+                .await
+                .expect("start application error tunnel");
+            fixture.register(
+                active_registration_config(
+                    fixture.grpc_addr,
+                    backend_id,
+                    format!("quic://{}", tunnel.listen_addr()),
+                    format!("http://{upstream_addr}"),
+                    model,
+                ),
+                "register application error backend",
+            );
+            fixture.own_tunnel(tunnel);
+        }
+        fixture.wait_for_clusters(model, 2).await;
+
+        for budget in [Some("0"), None] {
+            let before = fixture.metrics();
+            let request = fixture.chat_request(model, "application-retry-request");
+            let request = if let Some(budget) = budget {
+                request.header("x-stargate-max-wait-ms", budget)
+            } else {
+                request
+            };
+            let response = request
+                .send()
+                .await
+                .expect("send application retry request");
+            assert_eq!(response.status(), status, "retry budget: {budget:?}");
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert_eq!(response.headers()["retry-after"], "7");
+            assert!(response.headers().get("x-stargate-retryable").is_none());
+            assert!(response.headers().get("x-stargate-retry-reason").is_none());
+            assert_eq!(response.text().await.unwrap(), expected_body);
+            let after = fixture.metrics();
+            assert_delta!(
+                &before, &after, "stargate_proxy_retries_total", if budget.is_some() { 0.0 } else { 1.0 };
+                r#"model="application-error-model""#,
+                r#"reason="upstream_admission_rejected""#
+            );
+            let reason = if budget.is_some() {
+                "retry_budget_exhausted"
+            } else {
+                "upstream_admission_rejected"
+            };
+            assert_delta!(
+                &before, &after, "stargate_proxy_retry_exhausted_total", 1.0;
+                r#"model="application-error-model""#,
+                &format!("reason=\"{reason}\"")
+            );
+        }
+        fixture.shutdown().await;
+        upstream_task.abort();
+        let _ = upstream_task.await;
+    }
+}
+
+#[tokio::test]
+async fn request_retry_limit_returns_last_retryable_rejection() {
     let retry = ProxyRetryConfig {
         max_request_retries: 1,
         ..ProxyRetryConfig::default()
@@ -2965,24 +3098,20 @@ async fn request_retry_limit_returns_sanitized_overload() {
         .await;
 
     let response = poll_until(
-        "request retry limit should return a sanitized overload",
+        "request retry limit should preserve the upstream rejection",
         Duration::from_secs(15),
         || {
             let request = fixture.chat_request("retry-limit-model", "req-retry-limit");
             async move {
                 let response = request.send().await.expect("request failed");
-                (response.status().as_u16() == 529).then_some(response)
+                (response.status() == StatusCode::TOO_MANY_REQUESTS).then_some(response)
             }
         },
     )
     .await;
     assert!(response.headers().get("x-stargate-retryable").is_none());
-    let body: serde_json::Value = response.json().await.expect("read public overload body");
-    assert_eq!(body["error"]["code"], "overloaded_error");
-    assert_eq!(
-        body["error"]["message"],
-        "Inference capacity is temporarily unavailable."
-    );
+    let body: serde_json::Value = response.json().await.expect("read upstream rejection body");
+    assert_eq!(body, serde_json::json!({"error": "queue full"}));
     assert_metric_sample(
         &fixture.metrics(),
         r#"stargate_proxy_retry_exhausted_total{model="retry-limit-model",reason="upstream_admission_rejected",routing_key=""} 1"#,

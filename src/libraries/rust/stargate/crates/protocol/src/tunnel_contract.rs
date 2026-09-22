@@ -25,6 +25,10 @@ pub const HEADER_STARGATE_RETRYABLE: &str = "x-stargate-retryable";
 pub const HEADER_STARGATE_RETRY_REASON: &str = "x-stargate-retry-reason";
 pub const HEADER_STARGATE_RETRY_AFTER_MS: &str = "x-stargate-retry-after-ms";
 
+pub const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
+pub const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
+pub const RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED: &str = "chat_usage_rewrite_saturated";
+
 pub const HEADER_INFERENCE_SERVER_ID: &str = "x-inference-server-id";
 pub const HEADER_REVERSE_AUTH_TOKEN: &str = "x-stargate-auth-token";
 

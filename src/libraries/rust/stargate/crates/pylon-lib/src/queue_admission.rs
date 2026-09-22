@@ -26,8 +26,6 @@ use stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS;
 use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
 use crate::runtime_state::ModelGeneration;
 
-pub(crate) const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
-
 #[derive(Debug, Clone)]
 pub struct PylonQueueMismatchRetryConfig {
     pub enabled: bool,

@@ -16,15 +16,15 @@
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderName, StatusCode};
-use stargate_protocol::tunnel_contract::{HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE};
+use stargate_protocol::tunnel_contract::{
+    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED, RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
+};
 
 mod replay;
 
 pub(super) use replay::{ReplayReadiness, ReplayableRequestBody};
 
-const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
-const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
-const RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED: &str = "chat_usage_rewrite_saturated";
 const RETRY_REASON_RETRYABLE_PROXY_ERROR: &str = "retryable_proxy_error";
 const DEFAULT_RETRY_BUDGET_MS_HEADER: &str = "x-stargate-max-wait-ms";
 const DEFAULT_MAX_REPLAY_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -186,11 +186,7 @@ pub(super) fn is_internal_capacity_rejection(status: StatusCode, headers: &Heade
         .is_some_and(|value| value.eq_ignore_ascii_case("true"))
         && matches!(
             header_str(headers, HEADER_STARGATE_RETRY_REASON),
-            Some(
-                RETRY_REASON_QUEUE_ESTIMATE_MISMATCH
-                    | RETRY_REASON_UPSTREAM_ADMISSION_REJECTED
-                    | RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED
-            )
+            Some(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH | RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED)
         )
 }
 
@@ -256,6 +252,7 @@ mod tests {
     use super::*;
 
     use axum::http::HeaderValue;
+    use stargate_protocol::tunnel_contract::RETRY_REASON_UPSTREAM_ADMISSION_REJECTED;
 
     fn retry_headers(retryable: &'static str, reason: Option<&'static str>) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -285,7 +282,6 @@ mod tests {
     fn capacity_rejection_requires_trusted_admission_metadata() {
         for reason in [
             RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
-            RETRY_REASON_UPSTREAM_ADMISSION_REJECTED,
             RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
         ] {
             let headers = retry_headers("true", Some(reason));
@@ -299,15 +295,18 @@ mod tests {
         }
         for headers in [
             HeaderMap::new(),
+            retry_headers("true", Some(RETRY_REASON_UPSTREAM_ADMISSION_REJECTED)),
             retry_headers("false", Some(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH)),
             retry_headers("true", Some("local_connect_failure")),
             retry_headers("true", Some("model_generation_unavailable")),
             retry_headers("true", None),
         ] {
-            assert!(!is_internal_capacity_rejection(
+            for status in [
                 StatusCode::TOO_MANY_REQUESTS,
-                &headers
-            ));
+                StatusCode::SERVICE_UNAVAILABLE,
+            ] {
+                assert!(!is_internal_capacity_rejection(status, &headers));
+            }
         }
     }
 
