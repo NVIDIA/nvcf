@@ -3102,6 +3102,7 @@ func TestSetupNVCADeployment_SecurityContext(t *testing.T) {
 	}
 }
 
+// TestVendoredNVCAConfigDecodeSharedStorageCapacity verifies the production decoder path.
 func TestVendoredNVCAConfigDecodeSharedStorageCapacity(t *testing.T) {
 	cfg, err := nvcaconfig.DecodeConfig([]byte(`agent:
   sharedStorage:
