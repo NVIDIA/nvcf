@@ -55,6 +55,7 @@
     {
       "id": "nvcf-self-managed-stack",
       "path": "deploy/stacks/self-managed",
+      "migration_paths": ["migrations/cassandra", "migrations/openbao"],
       "service_name": "nvcf-self-managed-stack",
       "tag_format": "deploy/stacks/self-managed/v${version}",
       "version_file": "VERSION",

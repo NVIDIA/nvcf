@@ -188,6 +188,54 @@ jobs:
       - name: Build, vet, and test the Go modules under tools/
         run: tools/ci/check-go-tools
 
+  stack-upgrade-policy:
+    name: stack upgrade policy
+    # Pull requests only. The check weighs the migrations a candidate
+    # introduces against the version bump its commits imply, which needs two
+    # sides: a baseline to measure from, and a proposal to measure. A pull
+    # request has both -- origin/main is the baseline and the branch is the
+    # proposal. A push to main has already merged, so origin/main..HEAD is
+    # empty and there is no proposal left to judge.
+    #
+    # Concretely: a branch that adds
+    # migrations/cassandra/keyspaces/nvct_api/05_drop_health_info.up.sql and
+    # carries only `fix:` commits fails this job, because dropping a column
+    # cannot be skipped past and so needs a major, while `fix` asks for a
+    # patch. Once those same commits are on main, running here would compare
+    # main against itself and find nothing to report.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack:
+          - nvcf-self-managed-stack
+          - nvcf-compute-plane-stack
+          - nvcf-observability-stack
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # The check diffs against the stack's last published release tag, so
+          # it needs the tags and the history behind them.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      # Interpolations go through env, never into the script body: a ref name
+      # expanded inline is a shell injection.
+      - name: Check migrations against the proposed version bump
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          STACK: ${{ matrix.stack }}
+        run: |
+          bump="$(tools/ci/release-bump-type for-branch "origin/${BASE_REF}")"
+          echo "proposed bump: ${bump}"
+          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}"
+
   github-release-helper:
     name: GitHub release helper
     runs-on: ubuntu-latest
