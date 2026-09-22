@@ -212,6 +212,23 @@ public class AccountService {
                                                        .formatted(authentication.getClass()));
     }
 
+    // The NCA Id the ApiKey's owner belongs to, as opposed to the resolved ncaId which is the
+    // account the key/token is authorized against -- these differ only when the key's owner was
+    // granted access to another account. For non-ApiKey authentication (JWT,
+    // NotaryService) -- including admin/super-admin JWTs that aren't mapped to any single NCA
+    // Id -- owner and authorized account are the same, so this falls back to the already-
+    // resolved ncaId instead of doing a fresh lookup that can fail for those tokens.
+    public String getOwnerNcaId(Authentication authentication, String resolvedNcaId) {
+        if (authentication.getPrincipal() instanceof DefaultOAuth2AuthenticatedPrincipal principal
+                && principal.getAttributes() != null
+                && principal.getAttributes()
+                .get(POLICY_RESULT_ATTRIBUTE) instanceof ApiKeyValidationResult policyResult) {
+            return policyResult.ownerNcaId();
+        }
+
+        return resolvedNcaId;
+    }
+
     public AccountDto createCloudAccount(
             String ncaId,
             CreateAccountRequest request,
