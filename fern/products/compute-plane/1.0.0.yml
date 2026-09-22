@@ -6,25 +6,25 @@ navigation:
     skip-slug: true
     contents:
       - page: GPU Cluster Setup
-        path: ../../../docs/compute-plane-1.0/cluster-management/index.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/index.md
       - page: Self-Managed Clusters
-        path: ../../../docs/compute-plane-1.0/cluster-management/self-managed.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/self-managed.md
       - page: Nsight Profiling
-        path: ../../../docs/compute-plane-1.0/cluster-management/nsight-profiling.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/nsight-profiling.md
       - page: Fake GPU Operator
-        path: ../../../docs/compute-plane-1.0/fake-gpu-operator.md
+        path: ../../../docs/compute-plane-1.0.0/fake-gpu-operator.md
 
   - section: Configuration
     skip-slug: true
     contents:
       - page: Cluster Configuration
-        path: ../../../docs/compute-plane-1.0/cluster-management/configuration.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/configuration.md
       - page: KAI Scheduler
-        path: ../../../docs/compute-plane-1.0/cluster-management/kai-scheduler.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/kai-scheduler.md
       - page: Gang Scheduling
-        path: ../../../docs/compute-plane-1.0/cluster-management/gang-scheduling.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/gang-scheduling.md
       - page: Topology-Aware Scheduling
-        path: ../../../docs/compute-plane-1.0/cluster-management/topology-aware-scheduling.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/topology-aware-scheduling.md
 
   - section: Caching
     skip-slug: true
@@ -33,16 +33,16 @@ navigation:
         skip-slug: true
         contents:
           - page: Helm Model Caching
-            path: ../../../docs/compute-plane-1.0/cluster-management/model-cache.md
+            path: ../../../docs/compute-plane-1.0.0/cluster-management/model-cache.md
           - page: Container Cache
-            path: ../../../docs/compute-plane-1.0/cluster-management/container-cache.md
+            path: ../../../docs/compute-plane-1.0.0/cluster-management/container-cache.md
           - page: GXCache
-            path: ../../../docs/compute-plane-1.0/cluster-management/gxcache.md
+            path: ../../../docs/compute-plane-1.0.0/cluster-management/gxcache.md
       - section: Physical Simulation Caches
         skip-slug: true
         contents:
           - page: Simulation Caches
-            path: ../../../docs/compute-plane-1.0/caches.md
+            path: ../../../docs/compute-plane-1.0.0/caches.md
           - section: DDCS
             skip-slug: true
             contents:
@@ -69,7 +69,7 @@ navigation:
         skip-slug: true
         contents:
           - page: Caches Overview
-            path: ../../../docs/compute-plane-1.0/runbooks/caches.md
+            path: ../../../docs/compute-plane-1.0.0/runbooks/caches.md
           - link: DDCS Cache Misses
             href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/cache-misses.html
           - link: DDCS Client Sharding
@@ -95,10 +95,10 @@ navigation:
     skip-slug: true
     contents:
       - page: Cluster Monitoring
-        path: ../../../docs/compute-plane-1.0/cluster-management/monitoring.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/monitoring.md
 
   - section: Reference
     skip-slug: true
     contents:
       - page: Cluster Reference
-        path: ../../../docs/compute-plane-1.0/cluster-management/reference.md
+        path: ../../../docs/compute-plane-1.0.0/cluster-management/reference.md

@@ -91,10 +91,10 @@ how inventories reach a release.
 
 Each stack is published as its own Fern product with its own version list, so
 documentation for one stack can be frozen without touching the other two.
-After a train's first release, freeze that stack's docs with:
+After QA approves a stack release, freeze that exact version's docs with:
 
 ```sh
-./tools/scripts/cut-docs-version.sh --stack <self-managed|compute-plane|observability> --train X.Y
+./tools/scripts/cut-docs-version.sh --stack <self-managed|compute-plane|observability> --version X.Y.Z
 ```
 
 `nvca` used the same model until the 3.3 line and now releases from `main`

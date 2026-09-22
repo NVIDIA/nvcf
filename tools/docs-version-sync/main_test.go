@@ -183,7 +183,7 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 func TestCatalogRefreshPreservesCompatibility(t *testing.T) {
 	base := testCatalog()
 	base.Compatibility = []CompatibilityEntry{
-		{Stack: "control-plane", Train: "1.0", CompatibleWith: map[string]string{"compute-plane": "1.0+", "observability": "1.0+"}},
+		{Stack: "control-plane", Version: "1.0.0", CompatibleWith: map[string]string{"compute-plane": "1.0.0+", "observability": "1.0.0+"}},
 	}
 
 	updated := refreshCatalogFromArtifacts("1.0.0", []Artifact{{
@@ -193,7 +193,7 @@ func TestCatalogRefreshPreservesCompatibility(t *testing.T) {
 		Version:  "1.30.0",
 	}}, base)
 
-	if len(updated.Compatibility) != 1 || updated.Compatibility[0].CompatibleWith["compute-plane"] != "1.0+" {
+	if len(updated.Compatibility) != 1 || updated.Compatibility[0].CompatibleWith["compute-plane"] != "1.0.0+" {
 		t.Fatalf("compatibility = %#v, want the base entries preserved across a refresh", updated.Compatibility)
 	}
 }
@@ -985,7 +985,7 @@ func TestRunRejectsFreezeFlagsWithoutEachOther(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "must be used together") {
 		t.Fatalf("run error = %v, want paired flag rejection", err)
 	}
-	err = run([]string{"--freeze-stack", "observability", "--freeze-train", "1.1", "--update-catalog"})
+	err = run([]string{"--freeze-stack", "observability", "--freeze-version", "1.1.0", "--update-catalog"})
 	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Fatalf("run error = %v, want combination rejection", err)
 	}
@@ -999,19 +999,19 @@ func TestFreezeStackDocumentationWritesQualifiedSnapshotForOneStack(t *testing.T
 		t.Fatal(err)
 	}
 
-	snapshotPath, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4")
+	snapshotPath, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4.5")
 	if err != nil {
 		t.Fatalf("freezeStackDocumentation failed: %v", err)
 	}
-	if filepath.Base(snapshotPath) != "observability-3.4.yaml" {
-		t.Fatalf("snapshot path = %s, want observability-3.4.yaml", snapshotPath)
+	if filepath.Base(snapshotPath) != "observability-3.4.5.yaml" {
+		t.Fatalf("snapshot path = %s, want observability-3.4.5.yaml", snapshotPath)
 	}
 	snapshot, err := LoadCatalog(snapshotPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.ReleaseSet.Stacks.Observability.Status != ReleaseSetQualified || snapshot.ReleaseSet.Stacks.Observability.DocumentationVersion != "3.4" {
-		t.Fatalf("snapshot observability = %#v, want qualified 3.4", snapshot.ReleaseSet.Stacks.Observability)
+	if snapshot.ReleaseSet.Stacks.Observability.Status != ReleaseSetQualified || snapshot.ReleaseSet.Stacks.Observability.DocumentationVersion != "3.4.5" {
+		t.Fatalf("snapshot observability = %#v, want qualified 3.4.5", snapshot.ReleaseSet.Stacks.Observability)
 	}
 	if snapshot.ReleaseSet.Stacks.ControlPlane.Status != ReleaseSetDevelopment || snapshot.ReleaseSet.Stacks.ComputePlane.Status != ReleaseSetDevelopment {
 		t.Fatalf("snapshot froze other stacks: %#v", snapshot.ReleaseSet.Stacks)
@@ -1024,12 +1024,12 @@ func TestFreezeStackDocumentationWritesQualifiedSnapshotForOneStack(t *testing.T
 		t.Fatalf("main catalog was modified by freeze: %#v", main.ReleaseSet.Stacks.Observability)
 	}
 
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4"); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4.5"); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
 		t.Fatalf("second freeze error = %v, want overwrite refusal", err)
 	}
 }
 
-func TestFreezeStackDocumentationRejectsTrainMismatch(t *testing.T) {
+func TestFreezeStackDocumentationRejectsVersionMismatch(t *testing.T) {
 	tmp := t.TempDir()
 	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
 	catalog := testCatalogWithReleaseSet()
@@ -1037,13 +1037,13 @@ func TestFreezeStackDocumentationRejectsTrainMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "compute-plane", "2.4"); err == nil || !strings.Contains(err.Error(), "belongs to train 2.3, not 2.4") {
-		t.Fatalf("freeze error = %v, want train mismatch", err)
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "compute-plane", "2.3.5"); err == nil || !strings.Contains(err.Error(), "version is 2.3.4, not 2.3.5") {
+		t.Fatalf("freeze error = %v, want version mismatch", err)
 	}
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2.3"); err == nil || !strings.Contains(err.Error(), "must use "+documentationTrainFormat) {
-		t.Fatalf("freeze error = %v, want train format rejection", err)
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2"); err == nil || !strings.Contains(err.Error(), "must use "+documentationVersionFormat) {
+		t.Fatalf("freeze error = %v, want version format rejection", err)
 	}
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "self-managed", "1.2"); err == nil || !strings.Contains(err.Error(), "unknown release_set stack") {
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "self-managed", "1.2.3"); err == nil || !strings.Contains(err.Error(), "unknown release_set stack") {
 		t.Fatalf("freeze error = %v, want unknown stack rejection", err)
 	}
 
@@ -1057,7 +1057,7 @@ func TestFreezeStackDocumentationAllowsPendingPublications(t *testing.T) {
 	if err := WriteCatalog(catalogPath, catalog); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2")
+	snapshot, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2.3")
 	if err != nil {
 		t.Fatalf("freeze with pending publications failed: %v", err)
 	}
@@ -1082,16 +1082,16 @@ func TestValidateCatalogRejectsPartiallyPopulatedReleaseSet(t *testing.T) {
 
 func TestValidateCatalogRejectsMalformedCompatibility(t *testing.T) {
 	for name, entries := range map[string][]CompatibilityEntry{
-		"unknown stack":     {{Stack: "self-managed", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1+", "observability": "1.1+"}}},
-		"full version":      {{Stack: "control-plane", Train: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "1.1+", "observability": "1.1+"}}},
-		"own stack":         {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"control-plane": "1.1+", "observability": "1.1+"}}},
-		"missing stack":     {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1+"}}},
-		"empty requirement": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "", "observability": "1.1+"}}},
-		"patch requirement": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1.0+", "observability": "1.1+"}}},
-		"range requirement": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": ">=1.1", "observability": "1.1+"}}},
+		"unknown stack":     {{Stack: "self-managed", Version: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "1.1.0+", "observability": "1.1.0+"}}},
+		"minor version":     {{Stack: "control-plane", Version: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1.0+", "observability": "1.1.0+"}}},
+		"own stack":         {{Stack: "control-plane", Version: "1.1.0", CompatibleWith: map[string]string{"control-plane": "1.1.0+", "observability": "1.1.0+"}}},
+		"missing stack":     {{Stack: "control-plane", Version: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "1.1.0+"}}},
+		"empty requirement": {{Stack: "control-plane", Version: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "", "observability": "1.1.0+"}}},
+		"minor requirement": {{Stack: "control-plane", Version: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "1.1+", "observability": "1.1.0+"}}},
+		"range requirement": {{Stack: "control-plane", Version: "1.1.0", CompatibleWith: map[string]string{"compute-plane": ">=1.1.0", "observability": "1.1.0+"}}},
 		"duplicate": {
-			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1+", "observability": "1.1+"}},
-			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.0+", "observability": "1.0+"}},
+			{Stack: "control-plane", Version: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "1.1.0+", "observability": "1.1.0+"}},
+			{Stack: "control-plane", Version: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "1.0.0+", "observability": "1.0.0+"}},
 		},
 	} {
 		catalog := testCatalog()
@@ -1104,23 +1104,23 @@ func TestValidateCatalogRejectsMalformedCompatibility(t *testing.T) {
 
 func TestPreserveQualifiedDocumentationAcrossRefresh(t *testing.T) {
 	base := testCatalogWithReleaseSet().ReleaseSet
-	base.Stacks.ControlPlane.DocumentationVersion = "1.2"
+	base.Stacks.ControlPlane.DocumentationVersion = "1.2.3"
 	base.Stacks.ControlPlane.Status = ReleaseSetQualified
-	base.Stacks.Observability.DocumentationVersion = "3.4"
+	base.Stacks.Observability.DocumentationVersion = "3.4.5"
 	base.Stacks.Observability.Status = ReleaseSetQualified
 
 	refreshed := testCatalogWithReleaseSet().ReleaseSet
-	refreshed.Stacks.ControlPlane.Version = "1.2.9"
-	refreshed.Stacks.Observability.Version = "3.5.0"
+	refreshed.Stacks.ControlPlane.Version = "1.2.3"
+	refreshed.Stacks.Observability.Version = "3.4.6"
 
 	if err := preserveQualifiedDocumentation(&refreshed, base); err != nil {
 		t.Fatalf("preserveQualifiedDocumentation failed: %v", err)
 	}
-	if refreshed.Stacks.ControlPlane.Status != ReleaseSetQualified || refreshed.Stacks.ControlPlane.DocumentationVersion != "1.2" {
-		t.Fatalf("control plane patch release lost its qualified train: %#v", refreshed.Stacks.ControlPlane)
+	if refreshed.Stacks.ControlPlane.Status != ReleaseSetQualified || refreshed.Stacks.ControlPlane.DocumentationVersion != "1.2.3" {
+		t.Fatalf("unchanged control plane release lost its qualified docs: %#v", refreshed.Stacks.ControlPlane)
 	}
 	if refreshed.Stacks.Observability.Status != ReleaseSetDevelopment || refreshed.Stacks.Observability.DocumentationVersion != "dev" {
-		t.Fatalf("observability release on a new train should fall back to dev: %#v", refreshed.Stacks.Observability)
+		t.Fatalf("new observability patch release should fall back to dev: %#v", refreshed.Stacks.Observability)
 	}
 	if refreshed.Stacks.ComputePlane.Status != ReleaseSetDevelopment {
 		t.Fatalf("compute plane was never qualified and should stay dev: %#v", refreshed.Stacks.ComputePlane)
@@ -1133,12 +1133,12 @@ func TestPreserveQualifiedDocumentationAcrossRefresh(t *testing.T) {
 
 func TestRenderCompatibilityMatrix(t *testing.T) {
 	catalog := testCatalogWithReleaseSet()
-	catalog.ReleaseSet.Stacks.Observability.DocumentationVersion = "3.4"
+	catalog.ReleaseSet.Stacks.Observability.DocumentationVersion = "3.4.5"
 	catalog.ReleaseSet.Stacks.Observability.Status = ReleaseSetQualified
 	catalog.Compatibility = []CompatibilityEntry{
-		{Stack: "observability", Train: "3.3", CompatibleWith: map[string]string{"control-plane": "1.2", "compute-plane": "2.3+"}},
-		{Stack: "observability", Train: "3.4", CompatibleWith: map[string]string{"control-plane": "1.1+", "compute-plane": "2.3+"}},
-		{Stack: "control-plane", Train: "1.2", CompatibleWith: map[string]string{"compute-plane": "2.3+", "observability": "3.3+"}},
+		{Stack: "observability", Version: "3.3.9", CompatibleWith: map[string]string{"control-plane": "1.2.3", "compute-plane": "2.3.4+"}},
+		{Stack: "observability", Version: "3.4.5", CompatibleWith: map[string]string{"control-plane": "1.1.8+", "compute-plane": "2.3.4+"}},
+		{Stack: "control-plane", Version: "1.2.3", CompatibleWith: map[string]string{"compute-plane": "2.3.4+", "observability": "3.3.9+"}},
 	}
 	got, err := Render("compatibility-matrix", catalog)
 	if err != nil {
@@ -1152,19 +1152,19 @@ func TestRenderCompatibilityMatrix(t *testing.T) {
 		"| [Observability](/nvcf/observability/) | `3.4.5` | `deploy/stacks/observability/v3.4.5` |",
 		"## Compatible stack versions",
 		"| Stack | Release | Works with |",
-		"| Self-managed (control plane) | `1.2` | Compute plane `2.3` or later, Observability `3.3` or later |",
-		"| Observability | `3.4` | Self-managed (control plane) `1.1` or later, Compute plane `2.3` or later |",
-		"| Observability | `3.3` | Self-managed (control plane) `1.2` only, Compute plane `2.3` or later |",
+		"| Self-managed (control plane) | `1.2.3` | Compute plane `2.3.4` or later, Observability `3.3.9` or later |",
+		"| Observability | `3.4.5` | Self-managed (control plane) `1.1.8` or later, Compute plane `2.3.4` or later |",
+		"| Observability | `3.3.9` | Self-managed (control plane) `1.2.3` only, Compute plane `2.3.4` or later |",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered matrix missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Index(got, "| Self-managed (control plane) | `1.2` |") > strings.Index(got, "| Observability | `3.4` |") {
+	if strings.Index(got, "| Self-managed (control plane) | `1.2.3` |") > strings.Index(got, "| Observability | `3.4.5` |") {
 		t.Fatalf("rows are not ordered by stack:\n%s", got)
 	}
-	if strings.Index(got, "| Observability | `3.4` |") > strings.Index(got, "| Observability | `3.3` |") {
-		t.Fatalf("trains are not ordered newest first:\n%s", got)
+	if strings.Index(got, "| Observability | `3.4.5` |") > strings.Index(got, "| Observability | `3.3.9` |") {
+		t.Fatalf("versions are not ordered newest first:\n%s", got)
 	}
 
 	catalog.Compatibility = nil
