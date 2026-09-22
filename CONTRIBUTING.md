@@ -171,7 +171,7 @@ Documentation content lives under `docs/`. Fern publishes one site with four pro
 |---|---|---|---|
 | `docs/overview/` | Customers | Yes | Unversioned shared content: compatibility matrix, quickstart, manifest, image mirroring, local development, shared images and samples. Publishes at `/nvcf/overview/`. |
 | `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/` | Customers | Yes | Top-of-tree content for one stack, published as that product's `dev` version at `/nvcf/<stack>/dev/`. |
-| `docs/<stack>-<train>/` | Customers on a release train | Yes | Frozen content for one stack train, for example `docs/observability-1.3/`. Publishes at `/nvcf/<stack>/<train>/`. |
+| `docs/<stack>-<version>/` | Customers on a stack release | Yes | Frozen content for one exact stack version, for example `docs/observability-1.3.2/`. Publishes at `/nvcf/<stack>/<version>/`. |
 | `docs/v0.5/`, `docs/v0.6.0/`, `docs/v0.6.1/`, `docs/cp-*/` | Customers on legacy releases | Yes | Frozen legacy full-tree content from before the per-stack split, attached to the Self-Managed Stack product. |
 | `docs/dev/` | Contributors / internal dev | Only if symlinked | Developer-oriented source pages. These are published only when a symlink from a product tree is listed in that product's Fern nav. |
 | `fern/docs.yml` | Docs site | Yes | Declares products, their versions, display names, slugs, and the nav file for each version. |

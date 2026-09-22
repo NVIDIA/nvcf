@@ -926,7 +926,7 @@ release_set:
       source_tag: deploy/stacks/self-managed/v1.0.0
       source_commit: 98c440f90a9df76b82be84791a574732b712bce9
       inventory_asset: nvcf-self-managed-stack-inventory.json
-      documentation_version: "1.0"
+      documentation_version: "1.0.0"
       status: qualified
     compute-plane:
       version: 1.0.0
@@ -940,24 +940,24 @@ release_set:
       source_tag: deploy/stacks/observability/v1.0.0
       source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
       inventory_asset: nvcf-observability-stack-inventory.json
-      documentation_version: "1.0"
+      documentation_version: "1.0.0"
       status: qualified
 compatibility:
   - stack: control-plane
-    train: "1.0"
+    version: "1.0.0"
     compatible_with:
-      compute-plane: 1.0+
-      observability: 1.0+
+      compute-plane: 1.0.0+
+      observability: 1.0.0+
   - stack: compute-plane
-    train: "1.0"
+    version: "1.0.0"
     compatible_with:
-      control-plane: 1.0+
-      observability: 1.0+
+      control-plane: 1.0.0+
+      observability: 1.0.0+
   - stack: observability
-    train: "1.0"
+    version: "1.0.0"
     compatible_with:
-      compute-plane: 1.0+
-      control-plane: 1.0+
+      compute-plane: 1.0.0+
+      control-plane: 1.0.0+
 stack:
   name: nvcf-self-managed-stack
   version: 1.0.0

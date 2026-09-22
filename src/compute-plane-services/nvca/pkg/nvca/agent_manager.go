@@ -158,6 +158,10 @@ func startControllerManagerForAgent(
 	}
 
 	log.Info("Starting MiniService controller")
+	k8sVersion, err := resolveK8sVersion(ctx, a.K8sVersion, a.backendk8scache.clients.DiscoveryClient)
+	if err != nil {
+		return fmt.Errorf("resolve Kubernetes version for MiniService controller: %w", err)
+	}
 
 	kartas, err := mscontroller.GetKartaObjects(ctx, a.backendk8scache.clients)
 	if err != nil {
@@ -189,7 +193,7 @@ func startControllerManagerForAgent(
 		mscontroller.ControllerOptions{
 			SystemNamespace:            a.SystemNamespace,
 			ICMSRequestNamespace:       a.RequestsNamespace,
-			K8sVersion:                 a.K8sVersion,
+			K8sVersion:                 k8sVersion,
 			FeatureFlagFetcher:         a.backendk8scache.featureFlagFetcher,
 			K8sTimeConfig:              a.K8sTimeConfig,
 			InstanceNamespaceLabels:    a.NamespaceLabels,

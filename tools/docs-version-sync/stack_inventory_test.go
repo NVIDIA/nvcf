@@ -58,7 +58,7 @@ func TestReleaseSetRecordsAllThreeImmutableSources(t *testing.T) {
 	}
 }
 
-func TestValidateReleaseSetChecksPerStackDocumentationTrain(t *testing.T) {
+func TestValidateReleaseSetChecksPerStackDocumentationVersion(t *testing.T) {
 	releaseSet := ReleaseSetMetadata{Stacks: ReleaseSetStacks{
 		ControlPlane: StackReleaseMetadata{
 			Version: "1.2.3", SourceTag: stackInventorySpecs[0].TagPrefix + "1.2.3",
@@ -73,28 +73,28 @@ func TestValidateReleaseSetChecksPerStackDocumentationTrain(t *testing.T) {
 		Observability: StackReleaseMetadata{
 			Version: "3.4.5", SourceTag: stackInventorySpecs[2].TagPrefix + "3.4.5",
 			SourceCommit: strings.Repeat("c", 40), InventoryAsset: stackInventorySpecs[2].AssetName,
-			DocumentationVersion: "3.4", Status: ReleaseSetQualified,
+			DocumentationVersion: "3.4.5", Status: ReleaseSetQualified,
 		},
 	}}
 	if err := validateReleaseSet(releaseSet); err != nil {
-		t.Fatalf("validateReleaseSet rejected a qualified observability train: %v", err)
+		t.Fatalf("validateReleaseSet rejected a qualified observability version: %v", err)
 	}
 
-	wrongTrain := releaseSet
-	wrongTrain.Stacks.Observability.DocumentationVersion = "3.5"
-	if err := validateReleaseSet(wrongTrain); err == nil || !strings.Contains(err.Error(), "must be 3.4 for version 3.4.5") {
-		t.Fatalf("validateReleaseSet error = %v, want train mismatch", err)
+	wrongVersion := releaseSet
+	wrongVersion.Stacks.Observability.DocumentationVersion = "3.4.4"
+	if err := validateReleaseSet(wrongVersion); err == nil || !strings.Contains(err.Error(), "must be 3.4.5") {
+		t.Fatalf("validateReleaseSet error = %v, want version mismatch", err)
 	}
 
-	fullVersion := releaseSet
-	fullVersion.Stacks.Observability.DocumentationVersion = "3.4.5"
-	if err := validateReleaseSet(fullVersion); err == nil || !strings.Contains(err.Error(), "must use "+documentationTrainFormat) {
-		t.Fatalf("validateReleaseSet error = %v, want train format rejection", err)
+	minorVersion := releaseSet
+	minorVersion.Stacks.Observability.DocumentationVersion = "3.4"
+	if err := validateReleaseSet(minorVersion); err == nil || !strings.Contains(err.Error(), "must use "+documentationVersionFormat) {
+		t.Fatalf("validateReleaseSet error = %v, want version format rejection", err)
 	}
 
-	devWithTrain := releaseSet
-	devWithTrain.Stacks.ControlPlane.DocumentationVersion = "1.2"
-	if err := validateReleaseSet(devWithTrain); err == nil || !strings.Contains(err.Error(), "documentation_version must be dev") {
+	devWithVersion := releaseSet
+	devWithVersion.Stacks.ControlPlane.DocumentationVersion = "1.2.3"
+	if err := validateReleaseSet(devWithVersion); err == nil || !strings.Contains(err.Error(), "documentation_version must be dev") {
 		t.Fatalf("validateReleaseSet error = %v, want development docs rejection", err)
 	}
 
