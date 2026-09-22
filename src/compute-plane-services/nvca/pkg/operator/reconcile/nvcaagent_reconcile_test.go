@@ -3112,6 +3112,7 @@ func TestVendoredNVCAConfigDecodeSharedStorageCapacity(t *testing.T) {
 	assert.Equal(t, resource.MustParse("20Gi"), cfg.Agent.SharedStorage.TaskData.StorageCapacity)
 }
 
+// TestVendoredNVCAConfigEncodeSharedStorageCapacity verifies the production vendored round trip.
 func TestVendoredNVCAConfigEncodeSharedStorageCapacity(t *testing.T) {
 	want := resource.MustParse("20Gi")
 	cfg := nvcaconfig.Config{

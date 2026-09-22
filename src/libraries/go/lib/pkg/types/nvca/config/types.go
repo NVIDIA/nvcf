@@ -777,6 +777,7 @@ type SharedStorageTaskDataConfig struct {
 	StorageCapacity resource.Quantity `yaml:",omitempty"`
 }
 
+// MarshalYAML encodes storage capacity as its canonical Kubernetes quantity string.
 func (c SharedStorageTaskDataConfig) MarshalYAML() (any, error) {
 	storageCapacity := ""
 	if !c.StorageCapacity.IsZero() {
