@@ -356,8 +356,14 @@ nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
 {{- end -}}
 
 {{/*
-Get the BYOO OTel collector repository based on image.repository.
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Get the BYOO OTel collector repository based on image.repository and
+ngcConfig.clusterSource. If imageRepository is explicitly set, use it.
+Otherwise, staging resolves by image.repository prefix, and production
+resolves by cluster source: BYOC (ngc-managed) clusters authenticate image
+pulls with the NGC Cluster Key issued at registration, which is scoped to
+nvcf-core, not nvidia/nvcf-byoc (see NVIDIA/nvcf#798 and the follow-up fix
+for the staging repository in NVIDIA/nvcf#1040). Other cluster sources keep
+the nvidia/nvcf-byoc default pending their own verification.
 Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 */}}
 {{- define "nvcaop.byooOtelCollectorRepository" -}}
@@ -365,6 +371,8 @@ Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 {{- .imageRepository -}}
 {{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
 stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector
+{{- else if eq .clusterSource "ngc-managed" -}}
+nvcr.io/qtfpt1h0bieu/nvcf-core/byoo-otel-collector
 {{- else -}}
 nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
@@ -381,7 +389,7 @@ Get the BYOO OTel collector image when its tag is configured.
 {{- $imageTag = $byooOtelCollector.imageTag -}}
 {{- end -}}
 {{- if $imageTag -}}
-{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository)) $imageTag -}}
+{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository "clusterSource" ((.Values.ngcConfig).clusterSource | default "ngc-managed"))) $imageTag -}}
 {{- end -}}
 {{- end -}}
 

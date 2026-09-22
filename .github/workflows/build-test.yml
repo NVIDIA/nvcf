@@ -121,9 +121,10 @@ jobs:
           NVCA_OTEL_COLLECTOR_IMAGE_TAG="$(yq '.otelCollector.imageTag' nvca-operator/values.yaml)" \
             make check-vendor-chart
 
-      - name: Test NVCA default ownership
+      - name: Test NVCA chart schema and defaults
         run: |
           make -C deploy/helm/nvca-operator test-default-ownership
+          make -C deploy/helm/nvca-operator test-resource-quantity-schema
           make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
 
       - name: Run self-managed Helmfile render tests
