@@ -158,6 +158,7 @@ workload:
 	assert.Equal(t, expCfg, gotDecodedCfg)
 }
 
+// TestConfig_DecodeSharedStorageCapacity verifies valid and invalid quantity decoding.
 func TestConfig_DecodeSharedStorageCapacity(t *testing.T) {
 	t.Run("valid quantity", func(t *testing.T) {
 		cfg, err := DecodeConfig([]byte(`agent:
@@ -181,6 +182,30 @@ func TestConfig_DecodeSharedStorageCapacity(t *testing.T) {
 	})
 }
 
+// TestConfig_EncodeSharedStorageCapacity verifies quantity string serialization and round-trip decoding.
+func TestConfig_EncodeSharedStorageCapacity(t *testing.T) {
+	want := resource.MustParse("20Gi")
+	cfg := Config{
+		Agent: AgentConfig{
+			SharedStorage: SharedStorageConfig{
+				TaskData: SharedStorageTaskDataConfig{
+					StorageCapacity: want,
+				},
+			},
+		},
+	}
+
+	encoded, err := EncodeConfig(cfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "storageCapacity: 20Gi")
+	assert.NotContains(t, string(encoded), "format: BinarySI")
+
+	decoded, err := DecodeConfig(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, want, decoded.Agent.SharedStorage.TaskData.StorageCapacity)
+}
+
+// TestStringToResourceQuantityHookFunc_IgnoresUnsupportedTypes verifies hook type guards.
 func TestStringToResourceQuantityHookFunc_IgnoresUnsupportedTypes(t *testing.T) {
 	quantityType := reflect.TypeFor[resource.Quantity]()
 	tests := []struct {
