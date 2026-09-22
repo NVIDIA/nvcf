@@ -28,7 +28,8 @@ import org.apache.commons.lang3.StringUtils;
 /**
  * Validates the syntax of {@code llmConfig.routingMethod} at create/update: a method name
  * optionally followed by {@code ;key=value} parameters. Methods and parameters are not
- * interpreted here; the router owns their semantics and the value is stored as received.
+ * interpreted here; the router owns their semantics and the value is stored as received
+ * apart from its outer spaces.
  */
 @Slf4j
 public final class LlmRoutingMethodValidator {
@@ -66,18 +67,15 @@ public final class LlmRoutingMethodValidator {
     private LlmRoutingMethodValidator() {}
 
     /**
-     * Rejects a routingMethod whose syntax the router could not parse and returns the value to
-     * store: the input without outer spaces, so validated and stored bytes are identical. Any
-     * other outer character, including tabs and line breaks, fails the grammar.
+     * Rejects a routingMethod whose syntax the router could not parse. Outer spaces are ignored
+     * to match the stored form (see {@link #withoutOuterSpaces}); any other outer character,
+     * including tabs and line breaks, fails the grammar. A null or blank value is the router
+     * default and passes.
      */
-    @Nullable
-    public static String validate(String modelName, @Nullable String routingMethod) {
-        if (routingMethod == null) {
-            return null;
-        }
-        var value = StringUtils.strip(routingMethod, " ");
-        if (value.isEmpty()) {
-            return value;
+    public static void validate(String modelName, @Nullable String routingMethod) {
+        var value = withoutOuterSpaces(routingMethod);
+        if (StringUtils.isEmpty(value)) {
+            return;
         }
         if (value.getBytes(StandardCharsets.UTF_8).length > MAX_EXPRESSION_BYTES) {
             reject(modelName, MESG_EXPRESSION_TOO_LONG);
@@ -96,7 +94,16 @@ public final class LlmRoutingMethodValidator {
         for (var index = 1; index < segments.length; index++) {
             validateParameter(modelName, segments[index], keys);
         }
-        return value;
+    }
+
+    /**
+     * The stored form of a routingMethod: the value without its outer spaces, which carry no
+     * meaning. Every write of {@code modelSpecs} applies this, so validated and stored bytes are
+     * identical.
+     */
+    @Nullable
+    public static String withoutOuterSpaces(@Nullable String routingMethod) {
+        return StringUtils.strip(routingMethod, " ");
     }
 
     private static void validateParameter(String modelName, String segment, Set<String> keys) {

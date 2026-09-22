@@ -179,6 +179,8 @@ public class FunctionLlmService {
         var requestedByName = requestedModels.stream()
                 .collect(Collectors.toMap(FunctionModelDto::getName, Function.identity()));
 
+        // Overrides hold the stored routingMethod form so a request that differs only by outer
+        // spaces does not rewrite an unchanged sibling.
         var overrides = requestedModels.stream()
                 .filter(m -> m.getLlmConfig() != null)
                 .filter(m -> m.getLlmConfig().getTokenRateLimit() != null
@@ -187,7 +189,8 @@ public class FunctionLlmService {
                         FunctionModelDto::getName,
                         m -> FunctionModelDto.LlmConfigDto.builder()
                                 .tokenRateLimit(m.getLlmConfig().getTokenRateLimit())
-                                .routingMethod(m.getLlmConfig().getRoutingMethod())
+                                .routingMethod(LlmRoutingMethodValidator.withoutOuterSpaces(
+                                        m.getLlmConfig().getRoutingMethod()))
                                 .build()));
 
         // One pass per sibling: validate uris/tokenizer and apply overrides, re-serializing only
@@ -265,8 +268,7 @@ public class FunctionLlmService {
                         UpdateFunctionRequest.ModelUpdateDto::modelName,
                         u -> FunctionModelDto.LlmConfigDto.builder()
                                 .tokenRateLimit(u.llmConfig().tokenRateLimit())
-                                .routingMethod(LlmRoutingMethodValidator.validate(
-                                        u.modelName(), u.llmConfig().routingMethod()))
+                                .routingMethod(u.llmConfig().routingMethod())
                                 .build()));
         if (overrides.isEmpty()) {
             return Map.of();
@@ -405,8 +407,9 @@ public class FunctionLlmService {
                     llmConfig.setTokenRateLimit(llmConfigUpdate.tokenRateLimit());
                 }
                 if (llmConfigUpdate.routingMethod() != null) {
-                    llmConfig.setRoutingMethod(LlmRoutingMethodValidator.validate(
-                            modelUpdate.modelName(), llmConfigUpdate.routingMethod()));
+                    LlmRoutingMethodValidator.validate(
+                            modelUpdate.modelName(), llmConfigUpdate.routingMethod());
+                    llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
                 }
                 updated = true;
                 break;

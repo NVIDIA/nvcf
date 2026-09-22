@@ -111,8 +111,8 @@ class LlmRoutingMethodValidatorTest {
 
     @ParameterizedTest(name = "{index}: [{0}] is stored as [{1}]")
     @MethodSource("storedValues")
-    void returnsValueWithoutOuterSpaces(String routingMethod, String stored) {
-        assertThat(LlmRoutingMethodValidator.validate(MODEL, routingMethod)).isEqualTo(stored);
+    void withoutOuterSpacesReturnsStoredForm(String routingMethod, String stored) {
+        assertThat(LlmRoutingMethodValidator.withoutOuterSpaces(routingMethod)).isEqualTo(stored);
     }
 
     private static Stream<Arguments> storedValues() {
