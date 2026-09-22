@@ -256,6 +256,30 @@ public class IcmsConfigurationPropertiesTest extends IntegrationTest {
         assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_1", null));
     }
 
+    @Test
+    void test_gpuGating_nullOrBlankGpuNameIsDropped() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+
+        Map<String, List<String>> gpus = new HashMap<>();
+        gpus.put(null, List.of("dummy_gpu_1.large"));
+        gpus.put("  ", List.of("dummy_gpu_2.large"));
+        gpus.put("DUMMY_GPU_3", List.of("dummy_gpu_3.large"));
+        props.setGpuGating(Map.of("gated-nca", gpus));
+
+        assertTrue(props.hasGpuGating("gated-nca"));
+
+        // The malformed keys are not in the allowlist, so neither they nor their instance types
+        // are reachable.
+        assertFalse(props.isGpuAllowedForNca("gated-nca", null));
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", null, "dummy_gpu_1.large"));
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "  "));
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", "  ", "dummy_gpu_2.large"));
+
+        // The valid GPU on the same account is unaffected.
+        assertTrue(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_3"));
+        assertTrue(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_3", "dummy_gpu_3.large"));
+    }
+
     /**
      * gpu-allowed-nca-ids and gpu-gating are separate maps answering independently, so both must
      * pass and neither rewrites the other's verdict. A deployment can run either or both.

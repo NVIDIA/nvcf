@@ -200,6 +200,10 @@ public class IcmsConfigurationProperties {
             "icms.gpu-gating lists GPU {} for ncaId {} with no instance types, denying the GPU " +
                     "for this account";
 
+    private static final String MESG_GPU_GATING_BLANK_GPU_NAME =
+            "icms.gpu-gating lists an entry with a null or blank GPU name for ncaId {}, dropping " +
+                    "the entry";
+
     // Temporary verification hook; remove after remote config support is complete.
     @EventListener(RefreshScopeRefreshedEvent.class)
     public void logRemoteConfigRefresh() {
@@ -424,12 +428,19 @@ public class IcmsConfigurationProperties {
 
             Map<String, Set<String>> allowedByGpu = new HashMap<>();
             for (Map.Entry<String, List<String>> gpuEntry : configuredGpus.entrySet()) {
-                Set<String> instanceTypes = toNonBlankSet(gpuEntry.getValue());
-                if (instanceTypes.isEmpty()) {
-                    log.error(MESG_GPU_GATING_NO_INSTANCE_TYPES, gpuEntry.getKey(), ncaId);
+                String gpuName = gpuEntry.getKey();
+                // A null key would make isGpuAllowedForNca allow a destination with no GPU name.
+                if (gpuName == null || gpuName.isBlank()) {
+                    log.error(MESG_GPU_GATING_BLANK_GPU_NAME, ncaId);
                     continue;
                 }
-                allowedByGpu.put(gpuEntry.getKey(), instanceTypes);
+
+                Set<String> instanceTypes = toNonBlankSet(gpuEntry.getValue());
+                if (instanceTypes.isEmpty()) {
+                    log.error(MESG_GPU_GATING_NO_INSTANCE_TYPES, gpuName, ncaId);
+                    continue;
+                }
+                allowedByGpu.put(gpuName, instanceTypes);
             }
 
             // Kept even when every GPU was dropped: the org asked to be gated, so denying its
