@@ -237,6 +237,39 @@ func NewWorkloadContainerSecurityContext() *corev1.SecurityContext {
 	}
 }
 
+// WorkerInitUID is the numeric identity used by the worker-init image.
+const WorkerInitUID int64 = 1000
+
+// NewWorkerInitContainerSecurityContext matches the worker-init OCI user.
+func NewWorkerInitContainerSecurityContext() *corev1.SecurityContext {
+	uid := WorkerInitUID
+	nonRoot := true
+	allowPrivilegeEscalation := false
+	return &corev1.SecurityContext{
+		RunAsUser:                &uid,
+		RunAsGroup:               &uid,
+		RunAsNonRoot:             &nonRoot,
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+// EnsureWorkerInitFSGroup makes pod volumes writable by worker-init while
+// preserving an explicitly configured fsGroup.
+func EnsureWorkerInitFSGroup(spec *corev1.PodSpec) {
+	if spec.SecurityContext == nil {
+		spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	if spec.SecurityContext.FSGroup == nil {
+		group := WorkerInitUID
+		spec.SecurityContext.FSGroup = &group
+		if spec.SecurityContext.FSGroupChangePolicy == nil {
+			policy := corev1.FSGroupChangeOnRootMismatch
+			spec.SecurityContext.FSGroupChangePolicy = &policy
+		}
+	}
+}
+
 func NewInfraContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		Capabilities: &corev1.Capabilities{

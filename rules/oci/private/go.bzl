@@ -147,7 +147,7 @@ go_oci_image = macro(
     },
 )
 
-def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, cmd, extra_layers, registry, extra_registries, tags):
+def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, cmd, extra_layers, registry, extra_registries, tags, user):
     """Pack multiple go_binary targets into a single OCI image layer.
 
     Used for images that bundle several binaries (eg nvca-operator's image
@@ -192,6 +192,7 @@ def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint
         base = base,
         entrypoint = entrypoint,
         cmd = cmd,
+        user = user,
         visibility = visibility,
         registry = registry,
         extra_registries = extra_registries,
@@ -239,6 +240,10 @@ go_oci_multi_binary_image = macro(
         ),
         "tags": attr.string_list(
             doc = "Tags for generated targets. 'manual' is always added.",
+            configurable = False,
+        ),
+        "user": attr.string(
+            doc = "Numeric UID:GID recorded in the OCI image configuration.",
             configurable = False,
         ),
     },
