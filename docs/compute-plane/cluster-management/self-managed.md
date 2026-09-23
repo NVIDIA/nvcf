@@ -242,6 +242,17 @@ Use `global.nvcaOperator.nodeSelector`, `global.nvcaOperator.tolerations`, and
 `global.nvcaOperator.agent.*` in the compute-plane environment when you need to
 place the operator, agent, or workloads on specific nodes.
 
+### Worker init image permissions
+
+Generated function and task init containers run as UID and GID 1000. NVCA sets
+`fsGroup: 1000` when the workload does not specify an `fsGroup`. If your
+deployment overrides the `INIT_CONTAINER` image, its files must be readable by
+UID 1000 and its shared output paths must be writable by that user or the pod's
+`fsGroup`. An init image that requires root will fail before the workload starts.
+
+When NVCA supplies the default `fsGroup`, Kubernetes may adjust ownership on
+the first mount. `OnRootMismatch` skips repeat changes when the root group matches.
+
 <Warning>
 The `KAIScheduler` feature flag is optional. Enable it only if the
 [KAI Scheduler](./kai-scheduler.md) is installed on the GPU cluster. The flag has no effect,
