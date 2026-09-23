@@ -213,7 +213,7 @@ cassandra:
     defaultStorageClass: {{ .Values.global.storageClass }}
     {{- end }}
 
-  replicaCount: {{ if $haEnabled }}3{{ else }}{{ dig "cassandra" "replicaCount" 3 .Values }}{{ end }}
+  replicaCount: {{ if $haEnabled }}{{ max 3 (dig "cassandra" "replicaCount" 3 .Values | int) }}{{ else }}{{ dig "cassandra" "replicaCount" 3 .Values }}{{ end }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
   {{- if $haEnabled }}
@@ -234,7 +234,6 @@ cassandra:
   {{- with include "nvcf.tolerations" (dict "type" "cassandra" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if $haEnabled }}
   {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "cassandra" "class" "cassandra") }}
   affinity:
     {{- . | nindent 4 }}
@@ -242,7 +241,6 @@ cassandra:
   {{- with include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "cassandra" "class" "cassandra") }}
   topologySpreadConstraints:
     {{- . | nindent 4 }}
-  {{- end }}
   {{- end }}
   persistence:
     size: {{ .Values.global.storageSize | default "10Gi" }}
@@ -365,7 +363,7 @@ openbao:
     {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
     {{- . | nindent 4 }}
     {{- end }}
-    replicas: {{ if $haEnabled }}2{{ else }}{{ .Values.openbao.injector.replicas }}{{ end }}
+    replicas: {{ if $haEnabled }}{{ max 2 (.Values.openbao.injector.replicas | int) }}{{ else }}{{ .Values.openbao.injector.replicas }}{{ end }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
     {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
@@ -386,7 +384,6 @@ openbao:
     podDisruptionBudget:
       minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
-    {{- if $haEnabled }}
     {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "openbao-server" "class" "vault") }}
     # String form: OpenBao tpl-renders server.affinity.
     affinity: |
@@ -396,7 +393,6 @@ openbao:
     # String form: OpenBao tpl-renders server.topologySpreadConstraints.
     topologySpreadConstraints: |
       {{- . | nindent 6 }}
-    {{- end }}
     {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
@@ -417,7 +413,7 @@ openbao:
     ha:
       {{- if $haEnabled }}
       enabled: true
-      replicas: 3
+      replicas: {{ max 3 (dig "openbao" "server" "ha" "replicas" 3 .Values | int) }}
       {{- end }}
       {{- $openbaoDisruptionBudget := dict }}
       {{- if $haEnabled }}
@@ -472,12 +468,8 @@ nats:
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
-  {{- $natsAffinity := "" -}}
-  {{- $natsTopoSpread := "" -}}
-  {{- if $haEnabled -}}
-  {{- $natsAffinity = include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
-  {{- $natsTopoSpread = include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
-  {{- end -}}
+  {{- $natsAffinity := include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
+  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
   {{- if or $natsNs $natsTol $natsAffinity $natsTopoSpread }}
   podTemplate:
     merge:
@@ -516,7 +508,7 @@ nats:
     {{- if $haEnabled }}
     cluster:
       enabled: true
-      replicas: 3
+      replicas: {{ max 3 (dig "nats" "config" "cluster" "replicas" 3 .Values | int) }}
     {{- end }}
     {{- if .Values.global.storageClass }}
     jetstream:
@@ -545,7 +537,7 @@ nats:
 apikeys:
   fullnameOverride: api-keys
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "apikeys" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -592,7 +584,7 @@ apikeys:
 
 natsAuthCalloutService:
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "natsAuthCalloutService" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -789,7 +781,7 @@ natsAuthCalloutService:
 api:
   fullnameOverride: nvcf-api
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "api" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -999,7 +991,7 @@ invocation:
 nvctApi:
   fullnameOverride: nvct-api
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "nvctApi" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -1130,7 +1122,7 @@ rateLimiter:
   nodeSelector:
     {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
   {{- end }}
-  replicaCount: {{ if $haEnabled }}{{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}{{ else }}{{ .Values.rateLimiter.replicaCount }}{{ end }}
+  replicaCount: {{ if $haEnabled }}{{ max 2 (.Values.rateLimiter.replicaCount | int) }}{{ else }}{{ .Values.rateLimiter.replicaCount }}{{ end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
   {{- . | nindent 4 }}
@@ -1160,7 +1152,9 @@ rateLimiter:
 ess:
   fullnameOverride: ess-api
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "ess" "replicaCount" 1 .Values | int) }}
+  autoscaling:
+    minReplicas: {{ max 2 (dig "ess" "autoscaling" "minReplicas" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -1207,7 +1201,7 @@ ess:
 notary:
   fullnameOverride: notary-service
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "notary" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -1249,7 +1243,7 @@ notary:
 sis:
   fullnameOverride: spot-instance-service
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "sis" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -1307,7 +1301,7 @@ sis:
 adminIssuerProxy:
   fullnameOverride: admin-token-issuer-proxy
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "adminIssuerProxy" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -1441,7 +1435,7 @@ functionautoscaler:
 reval:
   fullnameOverride: reval
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  replicaCount: {{ max 2 (dig "reval" "replicaCount" 1 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -1484,7 +1478,7 @@ reval:
 llmApiGateway:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-api-gateway
-  replicaCount: {{ if $haEnabled }}{{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}{{ else }}{{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}{{ end }}
+  replicaCount: {{ if $haEnabled }}{{ max 2 (dig "addons" "llm" "gateway" "replicaCount" 3 .Values | int) }}{{ else }}{{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}{{ end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
   {{- . | nindent 4 }}

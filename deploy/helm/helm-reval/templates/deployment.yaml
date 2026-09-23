@@ -21,10 +21,10 @@ metadata:
 spec:
   {{- if not .Values.reval.autoscaling.enabled }}
   replicas: {{ .Values.reval.replicaCount }}
+  {{- end }}
   {{- with .Values.reval.strategy }}
   strategy:
     {{- toYaml . | nindent 4 }}
-  {{- end }}
   {{- end }}
   selector:
     matchLabels:

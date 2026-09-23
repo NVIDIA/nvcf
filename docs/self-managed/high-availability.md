@@ -160,9 +160,13 @@ stack, so the in-stack ESS API scales safely.)
 Under HA each of these gets:
 
 - **2 replicas.**
-- **Hostname pod anti-affinity** so the two replicas never share a node.
-- **Zone topology spread** (`topology.kubernetes.io/zone`, `maxSkew: 1`) so they
-  land in different AZs when zones are labelled.
+- **Hostname pod anti-affinity** — under `enforced` the two replicas can never
+  share a node; under `preferred` the scheduler separates them when it can but
+  may co-locate under capacity pressure (so `preferred` does not by itself
+  guarantee node-loss survival).
+- **Zone topology spread** (`topology.kubernetes.io/zone`, `maxSkew: 1`) —
+  `enforced` requires different AZs (a replica stays Pending otherwise);
+  `preferred` spreads when it can. Requires nodes labelled with the zone.
 - **A PodDisruptionBudget** (`minAvailable: 1`) so voluntary disruptions
   (drains, upgrades) never take the last replica.
 - **A surge rolling-update strategy** (`maxSurge: 1`, `maxUnavailable: 0`) so a
@@ -177,9 +181,10 @@ below.
 
 `Cassandra`, `NATS`, and `OpenBao` run as **3-replica quorum StatefulSets** with:
 
-- **Hostname pod anti-affinity** so the 3 peers land on 3 distinct nodes.
-  Following the mode, this is preferred (soft) under `preferred` and required
-  (hard) under `enforced` — the same convention as replica-safe Deployments.
+- **Hostname pod anti-affinity** to keep the 3 peers on distinct nodes.
+  Following the mode, this is preferred (soft) under `preferred` — the scheduler
+  may co-locate under capacity pressure — and required (hard) under `enforced`,
+  the same convention as replica-safe Deployments.
   OpenBao's upstream chart ships a hard anti-affinity that the stack disables
   for single-node installs and re-enables (soft/hard by mode) under HA.
 - **Zone topology spread** across `topology.kubernetes.io/zone`, same
@@ -253,6 +258,10 @@ use Raft quorum: RF=3 tolerates the loss of one replica, matching the
 3-member NATS cluster. **RF=2 is not sufficient** — a 2-member Raft group
 loses quorum the moment either replica is unavailable, so it provides no
 resilience benefit over RF=1.
+
+RF applies when a stream is **created**. Streams already created at RF=1 are not
+rewritten by changing this value — after enabling HA, recreate or edit those
+streams (for example `nats stream edit`) to raise their replica factor.
 
 #### Cassandra replication and consistency
 
@@ -336,7 +345,7 @@ kubectl -n nvcf get pods -o wide -l app.kubernetes.io/instance=nvcf-api
 # invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy)
 kubectl -n nvcf get deploy invocation-service grpc-proxy -o wide
 # ess-api scales to 2 (its scheduled crypto jobs run only in a separate worker, not in-stack)
-kubectl -n ess get deploy ess-api -o wide
+kubectl -n ess get deploy ess-api-deployment -o wide
 ```
 
 Confirm the JetStream RF took effect (streams report `Replicas: 3`):
