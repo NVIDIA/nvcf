@@ -196,15 +196,20 @@ func (c *Client) Introspect(ctx context.Context, token string) (*IntrospectResul
 // token's remaining lifetime.
 //
 // An inactive result is never cached: clock skew or an nbf window can make
-// the same token valid moments later. An invalid-subject result is cached
-// regardless of ClusterID: a token's subject can't change once issued, so
-// the denial is permanent. A valid-subject result with an empty ClusterID is
-// not cached: that's an incomplete response from the introspection endpoint
-// (a caller requiring ClusterID would reject it), and caching it would pin
-// that rejection for the full TTL even after the endpoint starts returning a
+// the same token valid moments later. A result with an empty Sub is never
+// cached either: that's an incomplete response from the introspection
+// endpoint, not evidence of an invalid identity. A non-empty, invalid-subject
+// result is cached regardless of ClusterID: a token's subject can't change
+// once issued, so that denial is permanent. A valid-subject result with an
+// empty ClusterID is not cached: that's also an incomplete response (a
+// caller requiring ClusterID would reject it), and caching it would pin that
+// rejection for the full TTL even after the endpoint starts returning a
 // complete response.
 func shouldCache(result *IntrospectResult) bool {
 	if !result.Active {
+		return false
+	}
+	if result.Sub == "" {
 		return false
 	}
 	if !IsValidNVCASubject(result.Sub) {
