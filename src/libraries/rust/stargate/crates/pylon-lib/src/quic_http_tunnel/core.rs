@@ -25,7 +25,7 @@ use reqwest::header::{
 };
 use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
-use stargate_protocol::common::is_hop_by_hop_header;
+use stargate_protocol::common::{connection_header_names, is_hop_by_hop_header};
 use stargate_protocol::tunnel_contract::{
     HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
     HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
@@ -964,8 +964,9 @@ async fn send_upstream_request(
         Span::none()
     };
     let mut upstream_headers = HeaderMap::with_capacity(request_headers.len());
+    let connection_headers = connection_header_names(request_headers);
     for (name, value) in request_headers {
-        if should_forward_header(name, &app.retry) {
+        if should_forward_header(name, &app.retry) && !connection_headers.contains(name) {
             upstream_headers.append(name, value.clone());
         }
     }
@@ -1212,8 +1213,9 @@ pub(super) fn build_response_headers(
             );
         }
     }
+    let connection_headers = connection_header_names(response_headers);
     for (name, value) in response_headers {
-        if should_forward_response_header(name, retry) {
+        if should_forward_response_header(name, retry) && !connection_headers.contains(name) {
             header_frame.append(name, value.clone());
         }
     }
@@ -1452,6 +1454,55 @@ mod tests {
                 .try_acquire_owned()
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn connection_nominated_headers_are_filtered_in_both_directions() {
+        let server = TestHttpServer::spawn(Router::new().route(
+            "/headers",
+            post(|headers: HeaderMap| async move {
+                assert!(!headers.contains_key("x-hop-one"));
+                assert!(!headers.contains_key("x-hop-two"));
+                assert!(!headers.contains_key("connection"));
+                assert_eq!(headers["x-end-to-end"], "preserved");
+                "ok"
+            }),
+        ))
+        .await;
+        let app = TunnelServerApp::new(
+            "header-test".to_string(),
+            server.as_str().to_string(),
+            TunnelForwardingConfig::default(),
+        );
+        let mut headers = HeaderMap::new();
+        for value in ["", " X-Hop-One, keep-alive", "x-HOP-two\t"] {
+            headers.append("connection", HeaderValue::from_static(value));
+        }
+        headers.append("x-hop-one", HeaderValue::from_static("private-one"));
+        headers.append("x-hop-one", HeaderValue::from_static("private-two"));
+        headers.insert("x-hop-two", HeaderValue::from_static("private-three"));
+        headers.insert("x-end-to-end", HeaderValue::from_static("preserved"));
+        let response = send_upstream_request(
+            &app,
+            None,
+            UpstreamRequestParts {
+                method: Method::POST,
+                path_and_query: "/headers",
+                headers: &headers,
+                body: Vec::new(),
+                health_request: true,
+                priority: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.text().await.unwrap(), "ok");
+        let forwarded =
+            build_response_headers(StatusCode::OK, &headers, &app.retry, None, "header-test")
+                .unwrap();
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(forwarded["x-end-to-end"], "preserved");
+        server.shutdown().await;
     }
 
     #[tokio::test]

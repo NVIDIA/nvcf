@@ -15,7 +15,7 @@
 
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use stargate_protocol::common::is_hop_by_hop_header;
+use stargate_protocol::common::{connection_header_names, is_hop_by_hop_header};
 use stargate_protocol::tunnel_contract::{
     HEADER_STARGATE_EXPECTED_QUEUE_MS, is_internal_control_header,
 };
@@ -127,8 +127,9 @@ fn should_forward_header(name: &HeaderName) -> bool {
 }
 
 pub(super) fn copy_forwardable_headers(from: &HeaderMap, to: &mut HeaderMap) {
+    let connection_headers = connection_header_names(from);
     for (name, value) in from {
-        if should_forward_header(name) {
+        if should_forward_header(name) && !connection_headers.contains(name) {
             to.append(name, value.clone());
         }
     }
@@ -242,6 +243,27 @@ mod tests {
             assert_eq!(forwarded.len(), 2);
             assert_eq!(forwarded["x-request-id"], "request-a");
             assert_eq!(forwarded["retry-after"], "1");
+        }
+    }
+
+    #[test]
+    fn connection_nominated_headers_are_filtered_in_both_directions() {
+        let mut headers = headers([
+            ("x-hop-one", "private-one"),
+            ("x-hop-two", "private-two"),
+            ("x-end-to-end", "preserved"),
+        ]);
+        for value in ["", " X-Hop-One, keep-alive", "x-HOP-two\t"] {
+            headers.append("connection", HeaderValue::from_static(value));
+        }
+        headers.append("x-hop-one", HeaderValue::from_static("private-three"));
+        for forwarded in [prepare_forwarded_headers(&headers), {
+            let mut response = HeaderMap::new();
+            copy_forwardable_headers(&headers, &mut response);
+            response
+        }] {
+            assert_eq!(forwarded.len(), 1);
+            assert_eq!(forwarded["x-end-to-end"], "preserved");
         }
     }
 

@@ -157,8 +157,22 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 }
 
 func copyProxyHeaders(dst http.Header, src http.Header) {
+	connectionHeaders := make(map[string]struct{})
+	for key, values := range src {
+		if !strings.EqualFold(key, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			for _, name := range strings.Split(value, ",") {
+				connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(name))] = struct{}{}
+			}
+		}
+	}
 	for key, values := range src {
 		if _, skip := hopByHopHeaders[http.CanonicalHeaderKey(key)]; skip {
+			continue
+		}
+		if _, skip := connectionHeaders[http.CanonicalHeaderKey(key)]; skip {
 			continue
 		}
 		if strings.EqualFold(key, echo.HeaderContentLength) || isInternalResponseHeader(key) {

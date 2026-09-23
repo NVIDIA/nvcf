@@ -145,6 +145,12 @@ func TestProxyResponseStripsInternalHeaders(t *testing.T) {
 		src.Add("Vary", "Accept")
 		src.Add("Vary", "Origin")
 		src.Set("Content-Length", "42")
+		src.Add("Connection", "")
+		src.Add("Connection", " X-Hop-One, keep-alive")
+		src.Add("Connection", "x-hOP-tWO\t")
+		src.Add("X-Hop-One", "private-one")
+		src.Add("X-Hop-One", "private-two")
+		src.Add("X-Hop-Two", "private-three")
 		e := echo.New()
 		rec := httptest.NewRecorder()
 		ctx := &GatewayContext{Context: e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil), rec)}

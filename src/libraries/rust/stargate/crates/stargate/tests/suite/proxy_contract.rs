@@ -1520,6 +1520,116 @@ async fn exercise_reverse_queue_mismatch(protocol: TunnelTransportProtocol) {
 }
 
 #[tokio::test]
+async fn connection_nominated_headers_do_not_cross_http1_proxy_hops() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = listener.local_addr().unwrap();
+    let upstream_task = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut headers = String::new();
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                let line = line.to_ascii_lowercase();
+                if let Some(value) = line.strip_prefix("content-length:") {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+                headers.push_str(&line);
+            }
+            let mut body = vec![0; content_length];
+            stream.read_exact(&mut body).await.unwrap();
+            stream
+                .get_mut()
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\
+                  Connection:\r\nConnection: X-Response-One, close\r\n\
+                  Connection: x-RESPONSE-two\r\nX-Response-One: private-one\r\n\
+                  X-Response-One: private-two\r\nX-Response-Two: private-three\r\n\
+                  X-End-To-End: preserved\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+            if headers.starts_with("post /v1/embeddings ") {
+                return (headers, body);
+            }
+            assert!(headers.starts_with("get /health "), "{headers}");
+        }
+    });
+    let mut fixture = ProxyFixture::start("http1-header-filter").await;
+    let tunnel = start_quic_http_tunnel(QuicHttpTunnelConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        format!("http://{upstream_addr}"),
+    ))
+    .await
+    .unwrap();
+    let model = "header-model";
+    fixture.register(
+        active_registration_config(
+            fixture.grpc_addr,
+            "header-backend",
+            format!("quic://{}", tunnel.listen_addr()),
+            format!("http://{upstream_addr}"),
+            model,
+        ),
+        "register header backend",
+    );
+    fixture.own_tunnel(tunnel);
+    fixture.wait_for_clusters(model, 1).await;
+    let body = r#"{"model":"header-model","input":"hello"}"#;
+    let request = format!(
+        "POST /v1/embeddings HTTP/1.1\r\nHost: {}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\
+         X-Model: {model}\r\nX-Request-Id: header-request\r\nX-Input-Tokens: 1\r\n\
+         Connection:\r\nConnection: X-Request-One, close\r\n\
+         Connection: x-REQUEST-two\r\nX-Request-One: private-one\r\n\
+         X-Request-One: private-two\r\nX-Request-Two: private-three\r\n\
+         X-End-To-End: preserved\r\n\r\n{body}",
+        fixture.http_addr,
+        body.len(),
+    );
+    let mut client = TcpStream::connect(fixture.http_addr).await.unwrap();
+    client.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    tokio::time::timeout(Duration::from_secs(5), client.read_to_string(&mut response))
+        .await
+        .expect("HTTP/1 response should complete")
+        .unwrap();
+    let (request_headers, upstream_body) = upstream_task.await.unwrap();
+    assert_eq!(
+        upstream_body,
+        body.as_bytes(),
+        "{request_headers}\n{response}"
+    );
+    for name in ["x-request-one:", "x-request-two:"] {
+        assert!(!request_headers.contains(name), "{request_headers}");
+    }
+    assert!(request_headers.contains("x-end-to-end: preserved\r\n"));
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let response_headers = response
+        .split_once("\r\n\r\n")
+        .unwrap()
+        .0
+        .to_ascii_lowercase();
+    for name in ["x-response-one:", "x-response-two:"] {
+        assert!(!response_headers.contains(name), "{response}");
+    }
+    assert!(response_headers.contains("x-end-to-end: preserved"));
+    assert!(
+        response.split_once("\r\n\r\n").unwrap().1.contains("{}"),
+        "{response}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoints() {
     for protocol in [
         TunnelTransportProtocol::RawQuic,
