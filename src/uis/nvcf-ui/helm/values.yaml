@@ -100,12 +100,14 @@ nvcfUi:
       limits:
         cpu: 250m
         memory: 256Mi
-    # Container securityContext for the hook Job. Its own knob (not the shared
-    # top-level nvcfUi.securityContext) because the hook runs the
-    # nvcf-openbao-migrations image, which may not support the server's
-    # runAsUser 65532. Empty by default so the image's own user/settings apply;
-    # set it to harden the hook.
-    securityContext: {}
+    # The migration image uses the OpenBao account, not the UI server UID.
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 100
+      runAsGroup: 1000
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
 
   podAnnotations: {}
   # This is for setting Kubernetes Labels to a Pod.
