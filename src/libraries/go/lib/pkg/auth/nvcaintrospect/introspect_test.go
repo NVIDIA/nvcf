@@ -210,3 +210,28 @@ func TestClientIntrospectCacheEvictsAtCapacity(t *testing.T) {
 	client.cacheMu.RUnlock()
 	assert.LessOrEqual(t, size, maxCacheEntries, "cache must never grow past maxCacheEntries")
 }
+
+func TestClientIntrospectCachedResultIsIsolatedFromCallerMutation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(IntrospectResult{
+			Active:    true,
+			Sub:       "system:serviceaccount:customer-ns:nvca",
+			ClusterID: "cluster-a",
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, time.Second, time.Minute)
+	require.NoError(t, err)
+
+	token := signedTestToken(t, time.Now().Add(time.Hour))
+
+	result, err := client.Introspect(context.Background(), token)
+	require.NoError(t, err)
+	result.ClusterID = "tampered"
+
+	again, err := client.Introspect(context.Background(), token)
+	require.NoError(t, err)
+	assert.Equal(t, "cluster-a", again.ClusterID, "mutating a returned result must not corrupt the cached value")
+}

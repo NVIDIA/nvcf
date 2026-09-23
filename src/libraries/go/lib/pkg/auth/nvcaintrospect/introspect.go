@@ -269,7 +269,8 @@ func (c *Client) cacheLookup(key string) (*IntrospectResult, bool) {
 	if !ok || !time.Now().Before(entry.expiresAt) {
 		return nil, false
 	}
-	return entry.result, true
+	cp := *entry.result
+	return &cp, true
 }
 
 func (c *Client) cacheStore(key string, result *IntrospectResult, token string) {
@@ -285,6 +286,7 @@ func (c *Client) cacheStore(key string, result *IntrospectResult, token string) 
 	if ttl <= 0 {
 		return
 	}
+	stored := *result
 	c.cacheMu.Lock()
 	if _, exists := c.cache[key]; !exists && len(c.cache) >= maxCacheEntries {
 		// At capacity: evict one entry rather than scanning the whole map.
@@ -295,6 +297,6 @@ func (c *Client) cacheStore(key string, result *IntrospectResult, token string) 
 			break
 		}
 	}
-	c.cache[key] = cacheEntry{result: result, expiresAt: time.Now().Add(ttl)}
+	c.cache[key] = cacheEntry{result: &stored, expiresAt: time.Now().Add(ttl)}
 	c.cacheMu.Unlock()
 }
