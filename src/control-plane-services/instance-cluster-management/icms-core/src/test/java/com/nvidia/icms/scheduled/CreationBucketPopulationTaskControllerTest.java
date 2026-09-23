@@ -17,7 +17,9 @@
 package com.nvidia.icms.scheduled;
 
 import static com.nvidia.icms.scheduled.CreationBucketPopulationTaskController.CREATION_BUCKET_POPULATION_TASK_NAME;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -27,10 +29,14 @@ import com.nvidia.icms.service.LockProviderService;
 import com.nvidia.icms.service.scheduled.CreationBucketPopulationTask;
 import com.nvidia.icms.service.scheduled.CreationBucketPopulationTask.PopulationResult;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
+import com.nvidia.icms.service.telemetry.model.GenericMetric;
+import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -60,10 +66,11 @@ class CreationBucketPopulationTaskControllerTest {
     @Test
     void populateCreationBuckets_whenLockAcquired_executesTask() {
         when(configuration.isCreationBucketPopulationTaskEnabled()).thenReturn(true);
-        when(configuration.getCreationBucketPopulationTaskLockTtlInSeconds()).thenReturn(120);
+        when(configuration.getCreationBucketPopulationTaskLockTtl())
+                .thenReturn(Duration.ofSeconds(120));
         when(lockProviderService.obtainLockWithTtl(
                 CREATION_BUCKET_POPULATION_TASK_NAME, 120)).thenReturn(true);
-        when(task.execute()).thenReturn(new PopulationResult(2, 0, 3, 1));
+        when(task.execute()).thenReturn(new PopulationResult(2, 0, 3, 1, null));
 
         controller.populateCreationBuckets();
 
@@ -74,12 +81,30 @@ class CreationBucketPopulationTaskControllerTest {
     @Test
     void populateCreationBuckets_whenLockNotAcquired_doesNotExecuteTask() {
         when(configuration.isCreationBucketPopulationTaskEnabled()).thenReturn(true);
-        when(configuration.getCreationBucketPopulationTaskLockTtlInSeconds()).thenReturn(120);
+        when(configuration.getCreationBucketPopulationTaskLockTtl())
+                .thenReturn(Duration.ofSeconds(120));
         when(lockProviderService.obtainLockWithTtl(
                 CREATION_BUCKET_POPULATION_TASK_NAME, 120)).thenReturn(false);
 
         controller.populateCreationBuckets();
 
         verifyNoInteractions(task, telemetryEventClient);
+    }
+
+    @Test
+    void populateCreationBuckets_whenTaskFails_reportsError() {
+        when(configuration.isCreationBucketPopulationTaskEnabled()).thenReturn(true);
+        when(configuration.getCreationBucketPopulationTaskLockTtl())
+                .thenReturn(Duration.ofSeconds(120));
+        when(lockProviderService.obtainLockWithTtl(
+                CREATION_BUCKET_POPULATION_TASK_NAME, 120)).thenReturn(true);
+        doThrow(new RuntimeException("task failed")).when(task).execute();
+
+        controller.populateCreationBuckets();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<GenericMetric>> captor = ArgumentCaptor.forClass(List.class);
+        verify(telemetryEventClient).triggerEvent(captor.capture());
+        assertEquals("task failed", captor.getValue().getFirst().getError());
     }
 }
