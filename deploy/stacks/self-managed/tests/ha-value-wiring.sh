@@ -328,6 +328,22 @@ render_chart_values ratelimiter "$work_dir/ratelimiter-enforced.yaml" "$core" --
 awk '/^rateLimiter:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/ratelimiter-enforced.yaml" | grep -q "requiredDuringSchedulingIgnoredDuringExecution:" ||
   fail "ratelimiter: expected required anti-affinity when highAvailability.mode=enforced"
 
+echo "== highAvailability sizing is a floor, not a replacement =="
+write_env <<'EOF'
+highAvailability:
+  mode: preferred
+cassandra:
+  replicaCount: 5
+api:
+  replicaCount: 4
+EOF
+render_chart_values cassandra "$work_dir/cassandra-floor.yaml" "$deps" || fail "render cassandra (floor)"
+grep -E "replicaCount:[[:space:]]*5" "$work_dir/cassandra-floor.yaml" >/dev/null ||
+  fail "cassandra: HA must floor (not replace) a higher configured replicaCount (expected 5)"
+render_chart_values api "$work_dir/api-floor.yaml" "$core" || fail "render api (floor)"
+awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-floor.yaml" | grep -E "replicaCount:[[:space:]]*4" >/dev/null ||
+  fail "api: HA must floor (not replace) a higher configured replicaCount (expected 4)"
+
 echo "== highAvailability invalid mode fails render =="
 write_env <<'EOF'
 highAvailability:
