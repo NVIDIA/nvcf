@@ -84,6 +84,8 @@ check sis "$helm/icms/icms-api" sis "pdb spread strategy affinity" \
 check api-keys "$helm/api-keys-colocated/api-keys" apikeys "pdb spread strategy affinity" \
   --set apikeys.image.registry=r --set apikeys.image.repository=repo
 check reval "$helm/helm-reval" reval "pdb spread strategy affinity"
+check ess "$helm/encrypted-secret-store/ess-api" ess "pdb spread strategy affinity" \
+  --set ess.image.registry=r --set ess.image.repository=repo
 
 # --- Envoy-deferred: single-replica, but the zone-spread hook must still exist
 #     so the value is not a silent no-op once Envoy allows scaling. grpc-proxy

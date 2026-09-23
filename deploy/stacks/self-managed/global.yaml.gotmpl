@@ -1159,6 +1159,19 @@ rateLimiter:
 
 ess:
   fullnameOverride: ess-api
+  {{- if $haEnabled }}
+  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "ess-api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "ess-api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -1179,9 +1192,16 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "ess" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 notary:

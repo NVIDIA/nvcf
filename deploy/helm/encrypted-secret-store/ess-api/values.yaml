@@ -63,6 +63,11 @@ ess:
   #   nvc.nvidia.com/workload: "control-plane"
   nodeSelector: {}
 
+  # HA hooks; set by the HA value layer, off by default.
+  affinity: {}
+  topologySpreadConstraints: []
+  strategy: {}
+
   # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
   service:
     port: 8080
