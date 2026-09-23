@@ -82,8 +82,8 @@ public class CreationBucketPopulationTask {
         }
         try {
             Instant bucket = getCreationBucket(request.getCreateTimeuuid());
-            request.setCreationBucket(bucket);
-            requestRepository.update(request);
+            requestRepository.updateCreationBucket(
+                    request.getRequestId(), bucket, getWriteTimestamp(request.getCreateTimeuuid()));
             updated.incrementAndGet();
         } catch (Exception exception) {
             failed.incrementAndGet();
@@ -102,8 +102,8 @@ public class CreationBucketPopulationTask {
         }
         try {
             Instant bucket = getCreationBucket(instance.getCreateTimeuuid());
-            instance.setCreationBucket(bucket);
-            instanceRepository.update(instance);
+            instanceRepository.updateCreationBucket(
+                    instance.getInstanceId(), bucket, getWriteTimestamp(instance.getCreateTimeuuid()));
             updated.incrementAndGet();
         } catch (Exception exception) {
             failed.incrementAndGet();
@@ -118,6 +118,10 @@ public class CreationBucketPopulationTask {
             throw new IllegalArgumentException("create_timeuuid is missing");
         }
         return TimeUtils.getDateFromInstant(TimeUtils.getInstantFromUuid(createTimeuuid));
+    }
+
+    private long getWriteTimestamp(UUID createTimeuuid) {
+        return TimeUtils.getInstantFromUuid(createTimeuuid).toEpochMilli() * 1000;
     }
 
     public record PopulationResult(

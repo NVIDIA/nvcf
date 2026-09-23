@@ -171,6 +171,23 @@ public class InstanceRequestV2Repository {
     }
 
     @Observed
+    public void updateCreationBucket(
+            String requestId,
+            Instant creationBucket,
+            long writeTimestamp) {
+        try {
+            instanceRequestV2Repo.updateCreationBucket(
+                    requestId, creationBucket, writeTimestamp);
+        } catch (Exception exception) {
+            log.error("Failed to update creation bucket for request {}, error: {}",
+                    requestId, exception.getMessage(), exception);
+            throw new IcmsInternalServerException(
+                    String.format("%s, error: %s", REQUEST_UPDATE_FAILED,
+                            exception.getMessage()), exception);
+        }
+    }
+
+    @Observed
     public Optional<InstanceRequestV2Entity> findRequestById(@Nullable String requestId) {
 
         try {

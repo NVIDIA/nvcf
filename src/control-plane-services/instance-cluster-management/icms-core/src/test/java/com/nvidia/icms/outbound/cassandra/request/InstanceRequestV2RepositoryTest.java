@@ -140,6 +140,51 @@ public class InstanceRequestV2RepositoryTest  extends InstanceRequestTestBase {
 
     }
 
+    @Test
+    void updateCreationBucket_preservesNewerRequestUpdate() {
+        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
+        var request = InstanceRequestEntityFactory.createDefaultInstanceRequestV2(
+                RandomFactory.getRandomStringWithPrefix("request", 5),
+                createTime,
+                "customer",
+                null);
+        instanceRequestV2Repo.update(request);
+
+        var scannedRequest = instanceRequestV2Repo.findById(request.getRequestId()).orElseThrow();
+        request.setStatusMessage("newer status");
+        instanceRequestV2Repo.update(request);
+
+        Instant creationBucket = createTime.truncatedTo(ChronoUnit.DAYS);
+        instanceRequestV2Repository.updateCreationBucket(
+                scannedRequest.getRequestId(),
+                creationBucket,
+                createTime.toEpochMilli() * 1000);
+
+        var updatedRequest = instanceRequestV2Repo.findById(request.getRequestId()).orElseThrow();
+        assertEquals("newer status", updatedRequest.getStatusMessage());
+        assertEquals(creationBucket, updatedRequest.getCreationBucket());
+    }
+
+    @Test
+    void updateCreationBucket_doesNotRecreateDeletedRequest() {
+        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
+        var request = InstanceRequestEntityFactory.createDefaultInstanceRequestV2(
+                RandomFactory.getRandomStringWithPrefix("request", 5),
+                createTime,
+                "customer",
+                null);
+        instanceRequestV2Repo.update(request);
+
+        var scannedRequest = instanceRequestV2Repo.findById(request.getRequestId()).orElseThrow();
+        instanceRequestV2Repo.deleteById(request.getRequestId());
+        instanceRequestV2Repository.updateCreationBucket(
+                scannedRequest.getRequestId(),
+                createTime.truncatedTo(ChronoUnit.DAYS),
+                createTime.toEpochMilli() * 1000);
+
+        assertTrue(instanceRequestV2Repo.findById(request.getRequestId()).isEmpty());
+    }
+
 
     @ParameterizedTest
     @ValueSource(ints = {1, 0, -1})

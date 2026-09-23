@@ -195,6 +195,23 @@ public class InstanceV2Repository {
         instanceV2Repo.update(entity);
     }
 
+    @Observed
+    public void updateCreationBucket(
+            String instanceId,
+            Instant creationBucket,
+            long writeTimestamp) {
+        try {
+            instanceV2Repo.updateCreationBucket(
+                    instanceId, creationBucket, writeTimestamp);
+        } catch (Exception exception) {
+            log.error("Failed to update creation bucket for instance {}, error: {}",
+                    instanceId, exception.getMessage(), exception);
+            throw new IcmsInternalServerException(
+                    String.format("Failed to update instance creation bucket, error: %s",
+                            exception.getMessage()), exception);
+        }
+    }
+
 
     // Find instances by instance ID
     @Observed
