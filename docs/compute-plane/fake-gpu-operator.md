@@ -1,1 +1,0 @@
-../dev/fake-gpu-operator.md

@@ -19,12 +19,8 @@ own documentation set and version menu.
 ## Getting started
 
 - [Quickstart](./quickstart.md)
-  : Install the control plane, register a GPU cluster, and validate the deployment with the one-click CLI flow.
-- [Deployment](/nvcf/self-managed/installation-overview)
-  : Compare the one-click and Helmfile installation paths.
-- [GPU Cluster Setup](/nvcf/compute-plane/gpu-cluster-setup)
-  : Connect GPU clusters to the NVCF control plane.
-- [Configuration](/nvcf/self-managed/gateway-routing)
-  : Configure gateway routing, registries, and invocation options.
+  : Install the control plane, register a GPU cluster, and validate the deployment locally with the one-click CLI flow.
+- [Installation Guide](./installation-guide.md)
+  : Plan the deployment, install the control plane, register GPU clusters, and operate the result.
 - [Using Cloud Functions](./api.md)
   : Create and invoke functions using the NVCF API and CLI.

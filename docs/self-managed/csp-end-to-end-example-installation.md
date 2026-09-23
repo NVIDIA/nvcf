@@ -1,32 +1,32 @@
 # CSP End-to-End Example Installation (Helmfile)
 
-This page provides a complete end-to-end example for installing NVCF on
-pre-provisioned managed Kubernetes clusters using the split Helmfile bundles.
-It covers both topologies:
+This page is a worked example of the Helmfile installation path on
+pre-provisioned managed Kubernetes clusters. Amazon EKS is the example
+provider. It covers both topologies:
 
 - Single-cluster: the control plane and the NVCA operator run on the same cluster.
 - Multi-cluster: the control plane runs on one cluster, and the NVCA operator is
   registered and installed on a separate GPU (compute) cluster.
 
-The commands are written to work on any cloud provider (CSP). Amazon EKS is used
-as the worked example. The only provider-specific pieces are the load balancer
-annotations on the Gateway, the `storageClass` name, and the `kubectl` context
-names. Substitute the equivalents for GKE, AKS, or on-prem.
+The procedures themselves live on two canonical pages. This page adds the
+provider-specific values, the environment variables that tie the steps
+together, and the multi-cluster deltas:
 
-For a deeper reference on each release and on values, see
-[Helmfile Installation](../helmfile-installation). For pulling and mirroring
-the bundles and images, see [Image Mirroring](/nvcf/overview/image-mirroring).
+- [Helmfile Installation](./helmfile-installation.md) installs the control plane.
+- [Register a GPU Cluster](/nvcf/compute-plane/register-gpu-cluster) registers a
+  compute plane and installs the NVCA operator.
+
+The only provider-specific pieces are the load balancer annotations on the
+Gateway, the `storageClass` name, and the `kubectl` context names. Substitute
+the equivalents for GKE, AKS, or on-prem.
 
 <Info>
-This guide assumes you have already downloaded and extracted the control-plane
-Helmfile bundle and have a source checkout for the compute plane:
-
-- `nvcf-self-managed-stack` for the control plane.
-- `deploy/stacks/nvcf-compute-plane` in the source repository for the compute
-  plane (NVCA operator).
-
-Control-plane commands run from inside the `nvcf-self-managed-stack` directory.
-Compute-plane commands run from the repository root with `make -C`.
+This guide assumes you have downloaded and extracted the control-plane
+Helmfile bundle (`nvcf-self-managed-stack`) and have a source checkout for the
+compute plane (`deploy/stacks/nvcf-compute-plane`). Control-plane commands run
+from inside the bundle directory. Compute-plane commands run from the
+repository root with `make -C`. See [Image Mirroring](/nvcf/overview/image-mirroring)
+for pulling the bundles.
 
 ```bash
 git clone https://github.com/nvidia/nvcf.git
@@ -50,38 +50,28 @@ environment file, because it becomes `global.domain` and the NVCA Host headers.
 7. Verify the agent is healthy
 ```
 
-Single-cluster and multi-cluster share steps 1 through 4. Step 5 requires a
-compute-plane environment file for both topologies. Only the cluster target and
-control-plane endpoint values differ. See
+Single-cluster and multi-cluster share steps 1 through 4. Steps 5 and 6 differ
+only in the cluster target and the control-plane endpoint values. See
 [Single-cluster vs multi-cluster](#single-cluster-vs-multi-cluster).
 
 ## Prerequisites
 
 ### Tools
 
-Install on the machine you run these commands from:
-
-- `kubectl`
-- `helm` (3.x)
-- `helmfile`
-- `nvcf-cli`
+Install on the machine you run these commands from: `kubectl`, `helm` (3.x),
+`helmfile` (1.1.x), and `nvcf-cli`. Version constraints are in
+[Helmfile Installation prerequisites](./helmfile-installation.md#prerequisites).
 
 ### Clusters
 
 The clusters must be provisioned before you start. This guide does not create
-them. Each cluster needs:
+them. Each cluster needs a default-capable `StorageClass` with dynamic
+provisioning. On EKS this is `gp3`, backed by the EBS CSI driver.
 
-- A default-capable `StorageClass` with dynamic provisioning. On EKS this is
-  `gp3`, backed by the EBS CSI driver. Substitute your provider's class name.
-- The compute (GPU) cluster needs a GPU operator (real or the fake GPU operator
-  for non-GPU validation). See [Fake GPU Operator](/nvcf/compute-plane/fake-gpu-operator).
-- The compute cluster needs the
-  [SMB CSI driver](https://github.com/kubernetes-csi/csi-driver-smb)
-  (`smb.csi.k8s.io`). NVCA uses it for shared model cache storage that function
-  worker pods mount. Install and verify the driver before registering the GPU
-  cluster. See the
-  [Self-Managed Clusters prerequisites](/nvcf/compute-plane/self-managed-clusters#prerequisites)
-  for the installation command.
+The compute (GPU) cluster also needs a GPU operator (real, or the
+[fake GPU operator](/nvcf/developer-guide/fake-gpu-operator) for non-GPU
+validation) and the SMB CSI driver. See the
+[GPU cluster prerequisites](/nvcf/compute-plane/register-gpu-cluster#prerequisites).
 
 Both clusters must be reachable through `kubectl` contexts:
 
@@ -94,7 +84,8 @@ kubectl --context "${COMPUTE_CONTEXT}" get nodes -o name
 ### Environment variables
 
 Set these once. In single-cluster, `COMPUTE_CONTEXT` equals
-`CONTROL_PLANE_CONTEXT`.
+`CONTROL_PLANE_CONTEXT`. Later steps substitute them into the canonical
+commands.
 
 ```bash
 # Cluster targeting
@@ -132,16 +123,20 @@ printf '%s' "${NGC_API_KEY}" | helm registry login nvcr.io --username '$oauthtok
 ## Step 1: Install the Gateway and capture the load balancer address
 
 Install the Gateway on the control-plane cluster by following the
-[Gateway quickstart](../gateway-routing#gateway-quickstart). It installs the
-Gateway API CRDs, the Envoy Gateway controller, the `GatewayClass`, and the
-`nvcf-gateway` Gateway, and exports `GATEWAY_ADDR`. Run it against
-`${CONTROL_PLANE_CONTEXT}`.
+[Gateway quickstart](./gateway-routing.md#gateway-quickstart) against
+`${CONTROL_PLANE_CONTEXT}`. It installs the Gateway API CRDs, the Envoy
+Gateway controller, the `GatewayClass`, and the `nvcf-gateway` Gateway, and
+exports `GATEWAY_ADDR`.
+
+On EKS, the Gateway `Service` needs the AWS load balancer annotations from the
+quickstart so that an NLB is provisioned. Other providers use their own
+annotations.
 
 <Note>
-This guide's NVCA path also routes NATS. Make sure the `nvcf-gateway` Gateway
-includes a `nats` listener on port 4222 (in addition to the `http` and `tcp`
-listeners from the quickstart), and enable `routes.nats.enabled` in the
-environment file in Step 2.
+The NVCA path also routes NATS. Make sure the `nvcf-gateway` Gateway includes a
+`nats` listener on port 4222 (in addition to the `http` and `tcp` listeners
+from the quickstart), and enable `routes.nats.enabled` in the environment file
+in Step 2.
 </Note>
 
 After the quickstart, confirm the address is set:
@@ -165,206 +160,48 @@ in the compute-plane environment file in Step 5. This requires
 
 ## Step 2: Configure the control-plane environment and secrets files
 
-This step produces two files in the `nvcf-self-managed-stack` bundle: the
-environment values file `environments/<env>.yaml` (copied from `base.yaml`) and
-the secrets file `secrets/<env>-secrets.yaml` (copied from
-`secrets.yaml.template`). Both are required before the install.
+Follow [Helmfile Installation Steps 2 to 4](./helmfile-installation.md#step-2-configure-your-environment-file-environmentsenvironment-nameyaml)
+to create `environments/${HELMFILE_ENV}.yaml`, `secrets/${HELMFILE_ENV}-secrets.yaml`,
+and the image pull secrets. Every key is documented in the
+[Environment File Reference](./environment-reference.md). The EKS-specific
+values are:
 
-From the `nvcf-self-managed-stack` directory, copy the base template. The file
-name (`<env>`) must match `HELMFILE_ENV`.
+| Key | Value for this example |
+| --- | --- |
+| `global.domain` | `${GATEWAY_ADDR}` |
+| `global.helm.sources.repository`, `global.image.repository` | `${REPOSITORY}` |
+| `global.imagePullSecrets` | `[{name: nvcr-pull-secret}]` |
+| `global.storageClass` | `${STORAGE_CLASS}` (`gp3`) |
+| `cassandra.resourcesPreset` | `xlarge` (do not use `small` on cloud installs) |
+| `openbao.migrations.issuerDiscovery.enabled` | `true` (required on managed Kubernetes) |
+| `ingress.gatewayApi.controllerNamespace` | `envoy-gateway-system` |
+| `ingress.gatewayApi.gateways.*` | `name: nvcf-gateway`, `namespace: envoy-gateway` |
+| `ingress.gatewayApi.routes.nats.enabled`, `routes.ess.enabled` | `true` (the NVCA agent and worker containers need them) |
 
-```bash
-cd <path to nvcf-self-managed-stack>/
-cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
-```
+Multi-cluster only: worker pods run on the compute cluster and cannot resolve
+in-cluster service names on the control-plane cluster. Also set:
 
-Edit `environments/${HELMFILE_ENV}.yaml`. Every field is explained inline below.
-Lines marked `CHANGE` must be updated for your cluster; replace the `${...}`
-values with the literals you exported earlier.
-
-```yaml
-global:
-  domain: "${GATEWAY_ADDR}"        # CHANGE: from "localhost". Builds HTTPRoute hostnames (api.<domain>, etc.)
-
-  helm:
-    sources:
-      registry: "nvcr.io"          # OCI registry NVCF charts are pulled from. Change only if you mirror.
-      repository: "${REPOSITORY}"  # CHANGE: from "YOUR_ORG/YOUR_TEAM". NGC org/team or mirror path.
-
-  imagePullSecrets:
-    - name: nvcr-pull-secret       # CHANGE: from []. Pull secret applied to all workloads (created below).
-
-  image:
-    registry: nvcr.io              # Container image registry. Change only if you mirror.
-    repository: "${REPOSITORY}"    # CHANGE: from "YOUR_ORG/YOUR_TEAM". NGC org/team or mirror path.
-
-  workerEndpoints:
-    nvcfServiceURL: ""             # CHANGE (multi-cluster): "http://api.${GATEWAY_ADDR}". Worker env NVCF_FQDN.
-    nvcfGrpcServiceURL: ""         # CHANGE (multi-cluster): "http://worker-api.${GATEWAY_ADDR}". Worker env NVCF_FQDN_GRPC.
-    nvcfNatsServiceURL: ""         # CHANGE (multi-cluster): "nats://${GATEWAY_ADDR}:4222". Worker env NVCF_NATS_WORKER_URL.
-    essServiceURL: ""              # Empty = in-cluster default. Workers use this to reach the Encrypted Secrets Service.
-    nvctServiceURL: ""             # CHANGE (multi-cluster): "http://tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN.
-    nvctGrpcServiceURL: ""         # CHANGE (multi-cluster): "http://worker-tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN_GRPC.
-    invocationServiceURL: ""       # Empty = in-cluster default. Workers use this for the invocation stream address.
-    # CHANGE (multi-cluster): worker-reachable request-router host:port. Empty uses
-    # llm-request-router-backend-router.nvcf.svc.cluster.local:50071 when backend routing is enabled,
-    # otherwise llm-request-router.nvcf.svc.cluster.local:50071.
-    llmRequestRouterAddress: ""
-
-  nodeSelectors:
-    enabled: false                 # Pin system workloads to labeled node pools. Leave false unless nodes are labeled.
-    vault:
-      key: nvcf.nvidia.com/workload
-      value: vault                 # Node label for the vault pool (applied only when enabled: true).
-    cassandra:
-      key: nvcf.nvidia.com/workload
-      value: cassandra             # Node label for the cassandra pool.
-    controlplane:
-      key: nvcf.nvidia.com/workload
-      value: control-plane         # Node label for the control-plane pool.
-
-  tolerations:
-    enabled: false                 # Tolerations for tainted node pools. Leave false unless nodes are tainted.
-    all: []                        # Tolerations applied to all system workloads when enabled.
-
-  storageClass: "${STORAGE_CLASS}" # CHANGE: from "". Dynamic-provisioning StorageClass (gp3 on EKS).
-  storageSize: "10Gi"              # Per-PVC size. Default works; raise for larger control-plane data (Cassandra).
-
-  observability:
-    tracing:
-      enabled: false               # OpenTelemetry trace export. Set true plus a collector endpoint to enable.
-      collectorEndpoint: ""        # OTLP collector endpoint when tracing is enabled.
-      collectorPort: 4317          # OTLP collector port.
-      collectorProtocol: http      # OTLP protocol (http or grpc).
-    metrics:
-      enabled: false               # Prometheus metrics. Set true if you run the Prometheus Operator.
-
-accounts:
-  limits:
-    maxFunctions: 10               # Max functions per account.
-    maxTasks: 10                   # Max tasks per account.
-    maxTelemetries: 10             # Max telemetry endpoints per account.
-    maxRegistryCreds: 10           # Max registry credentials per account.
-
-nats:
-  enabled: true                    # Deploy the NATS messaging layer. Keep true; the control plane depends on it.
-
-cassandra:
-  enabled: true                    # Deploy Cassandra. Keep true.
-  resourcesPreset: "xlarge"        # CPU/memory preset. Do not use small for cloud installs (OOM on first boot).
-
-certManager:
-  enabled: true                    # Install cert-manager for the self-managed PKI. Keep true.
-
-openbao:
-  enabled: true                    # Deploy OpenBao (Vault) for secrets. Keep true.
-  migrations:
-    issuerDiscovery:
-      enabled: true                # CHANGE: from false. Discover the cluster OIDC issuer. Required on managed Kubernetes.
-  injector:
-    replicas: 2                    # OpenBao injector replicas (HA). Set 1 on single-node / minimal pools.
-
-addons:
-  lls:
-    enabled: false                 # Low Latency Streaming (TURN) addon. Optional.
-  llm:
-    enabled: false                 # LLM gateway + request router (Stargate). Optional.
-    pki:
-      enabled: false               # OpenBao-issued QUIC TLS for the request router. Optional.
-      allowedDomains: ""           # Required only when llm.pki.enabled: comma-separated DNS suffixes.
-      dnsNames: []                 # Required only when llm.pki.enabled: SANs on the issued certificate.
-  vanityGateway:
-    enabled: false                 # Vanity and OpenAI-compatible invocation routes. Optional.
-    replicaCount: 2                # Vanity gateway replicas (applied only when enabled).
-
-stateMetrics:
-  enabled: false                   # State-metrics exporter. Optional.
-  serviceMonitor:
-    enabled: false                 # ServiceMonitor for the exporter. Requires the Prometheus Operator.
-
-rateLimiter:
-  enabled: false                   # Invocation rate limiter. Optional.
-  replicaCount: 1                  # Rate limiter replicas (applied only when enabled).
-
-ingress:
-  gatewayApi:
-    enabled: true                  # Enable Gateway API ingress. Keep true.
-    controllerNamespace: envoy-gateway-system  # CHANGE: from "". Namespace of the gateway controller.
-    routes:
-      nvcfApi:
-        routeAnnotations: {}       # Optional per-route annotations for the NVCF API route.
-        grpc:
-          enabled: false           # CHANGE (multi-cluster): true. Creates a GRPCRoute for worker-facing API gRPC.
-          hostnames:
-            - "worker-api.${GATEWAY_ADDR}"  # CHANGE (multi-cluster): externally resolvable hostname for the API gRPC route.
-      nvctApi:
-        routeAnnotations: {}       # Optional annotations for the NVCT API route.
-        grpc:
-          enabled: false           # CHANGE (multi-cluster): true. Creates a GRPCRoute for worker-facing NVCT gRPC.
-          hostnames:
-            - "worker-tasks.${GATEWAY_ADDR}"  # CHANGE (multi-cluster): externally resolvable hostname for the NVCT gRPC route.
-      apiKeys:
-        routeAnnotations: {}       # Optional annotations for the api-keys route.
-      invocation:
-        routeAnnotations: {}       # Optional annotations for the invocation route.
-      llmInvocation:
-        routeAnnotations: {}       # Optional annotations for the LLM invocation route.
-      vanityGateway:
-        hostnames: []              # Override vanity hostnames. Default is vanity.<domain>.
-        routeAnnotations: {}       # Optional annotations for the vanity route.
-      grpc:
-        routeAnnotations: {}       # Optional annotations for the gRPC route.
-      nats:
-        enabled: true              # CHANGE: from false. Create the NATS route (the NVCA agent needs it).
-        routeAnnotations: {}       # Optional annotations for the NATS route.
-      ess:
-        enabled: true              # CHANGE: from false. Create the ESS route (the nvcf worker container needs it).
-        routeAnnotations: {}       # Optional annotations for the ESS route.
-    gateways:
-      shared:
-        name: nvcf-gateway         # CHANGE: from "". Gateway the HTTP routes attach to.
-        namespace: envoy-gateway   # CHANGE: from "". Namespace of that Gateway.
-      grpc:
-        name: nvcf-gateway         # CHANGE: from "". Gateway the gRPC route attaches to.
-        namespace: envoy-gateway   # CHANGE: from "".
-      nats:
-        name: nvcf-gateway         # CHANGE: from "". Gateway the NATS route attaches to (when routes.nats.enabled).
-        namespace: envoy-gateway   # CHANGE: from "".
-        listenerName: nats         # Gateway listener name for NATS. Keep as nats.
-```
+| Key | Value for multi-cluster |
+| --- | --- |
+| `global.workerEndpoints.nvcfServiceURL` | `http://api.${GATEWAY_ADDR}` |
+| `global.workerEndpoints.nvcfGrpcServiceURL` | `http://worker-api.${GATEWAY_ADDR}` |
+| `global.workerEndpoints.nvcfNatsServiceURL` | `nats://${GATEWAY_ADDR}:4222` |
+| `global.workerEndpoints.nvctServiceURL` | `http://tasks.${GATEWAY_ADDR}` |
+| `global.workerEndpoints.nvctGrpcServiceURL` | `http://worker-tasks.${GATEWAY_ADDR}` |
+| `global.workerEndpoints.llmRequestRouterAddress` | a worker-reachable request-router host and port, only when `addons.llm` is enabled |
+| `ingress.gatewayApi.routes.nvcfApi.grpc.enabled` | `true`, with hostname `worker-api.${GATEWAY_ADDR}` |
+| `ingress.gatewayApi.routes.nvctApi.grpc.enabled` | `true`, with hostname `worker-tasks.${GATEWAY_ADDR}` |
 
 <Info>
-Multi-cluster worker endpoints and GRPCRoutes
-
-In single-cluster deployments, leave the URL fields under `workerEndpoints`
-empty and leave `grpc.enabled` false. Worker pods resolve control-plane
-services through in-cluster DNS. The LLM request-router address also defaults
-to its cluster-local service.
-
-In multi-cluster deployments, worker pods run on a separate compute cluster and
-cannot resolve in-cluster service names from the control-plane cluster. Set each
-`workerEndpoints` field to an externally resolvable address (the Gateway load
-balancer hostname with a per-service route hostname). Enable the `nvcfApi.grpc`
-and `nvctApi.grpc` GRPCRoutes so workers can reach the API and NVCT gRPC
-endpoints through the Gateway. When the LLM addon is enabled, also set
-`llmRequestRouterAddress` to a request-router host and port that workers can
-reach.
-
 The `selfManaged.*Override` values in the compute-plane environment file
 configure the NVCA agent's own connections to the control plane. The
 `workerEndpoints` values configure the URLs that the control plane advertises
 into launched worker pods. Both layers are required for multi-cluster function
 execution.
-
-The stack maps the effective `llmRequestRouterAddress` to the NVCF API
-remote-config key `nvcf.llm-request-router.worker-address` only when the LLM
-addon is enabled. Do not place this value under `api.env`.
 </Info>
 
-### Create the registry pull secret
-
-The control-plane charts reference an image pull secret named `nvcr-pull-secret`
-in each namespace. Create it in every control-plane namespace:
+Create the pull secret in every control-plane namespace on the control-plane
+cluster, and populate the secrets file with the base64 NGC credential:
 
 ```bash
 for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-manager; do
@@ -374,19 +211,9 @@ for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-m
     --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="${NGC_API_KEY}" \
     -n "${ns}" --dry-run=client -o yaml | kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f -
 done
-```
 
-### Create the bundle secrets file
-
-The control-plane bundle reads a secrets file for the OpenBao migration and API
-account bootstrap. Create it from the template and set the base64 dockerconfig
-credential:
-
-```bash
 cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
-
 DOCKER_CRED_B64=$(printf '%s' '$oauthtoken:'"${NGC_API_KEY}" | base64 | tr -d '\n')
-# Replace every REPLACE_WITH_BASE64_DOCKER_CREDENTIAL in the secrets file with ${DOCKER_CRED_B64}.
 sed -i.bak "s|REPLACE_WITH_BASE64_DOCKER_CREDENTIAL|${DOCKER_CRED_B64}|g" \
   "secrets/${HELMFILE_ENV}-secrets.yaml"
 rm "secrets/${HELMFILE_ENV}-secrets.yaml.bak"
@@ -399,7 +226,9 @@ cluster-specific and credential material.
 
 ## Step 3: Install the control plane
 
-Run from the `nvcf-self-managed-stack` bundle directory:
+Run from the `nvcf-self-managed-stack` bundle directory. This is
+[Helmfile Installation Step 5](./helmfile-installation.md#step-5-deploy-the-nvcf-control-plane-components)
+wrapped by the bundle Makefile:
 
 ```bash
 cd <path to nvcf-self-managed-stack>/
@@ -407,24 +236,20 @@ kubectl config use-context "${CONTROL_PLANE_CONTEXT}"
 make install HELMFILE_ENV="${HELMFILE_ENV}"
 ```
 
-Verify the releases are deployed:
+Verify the releases are deployed and that `global.domain` propagated into the
+API HTTPRoute hostname:
 
 ```bash
 helm list --all-namespaces --kube-context "${CONTROL_PLANE_CONTEXT}"
+kubectl --context "${CONTROL_PLANE_CONTEXT}" get httproute nvcf-api -n envoy-gateway \
+  -o jsonpath='{.spec.hostnames[0]}'
+# Expected: api.${GATEWAY_ADDR}
 ```
 
 Expected releases include `nats`, `cert-manager`, `openbao-server`, `cassandra`,
 `api-keys`, `sis`, `api`, `nvct-api`, `invocation-service`, `grpc-proxy`,
 `ess-api`, `notary-service`, `admin-issuer-proxy`, `reval`,
 `nats-auth-callout-service`, and `ingress`.
-
-Confirm `global.domain` propagated into the API HTTPRoute hostname:
-
-```bash
-kubectl --context "${CONTROL_PLANE_CONTEXT}" get httproute nvcf-api -n envoy-gateway \
-  -o jsonpath='{.spec.hostnames[0]}'
-# Expected: api.${GATEWAY_ADDR}
-```
 
 ## Step 4: Author the nvcf-cli config
 
@@ -457,26 +282,10 @@ export NVCF_CLI_CONFIG="$(pwd)/nvcf-cli.yaml"
 
 ## Step 5: Register the GPU cluster and install the NVCA operator
 
-This is where single-cluster and multi-cluster diverge. Pick the matching
-section. Run both from the source repository root.
-
-```bash
-cd <path-to-nvcf-repository>
-```
-
-Create the compute-plane environment file for either topology. The compute-plane
-Makefile reads
-`deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml`, and the
-`selfManaged` values tell the NVCA agent how to reach the control plane. The
-sections below use different cluster targets and endpoint values.
-
-```bash
-cp deploy/stacks/nvcf-compute-plane/environments/base.yaml \
-  "deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml"
-```
-
-Set these keys in
-`deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml`:
+Follow [Register a GPU Cluster](/nvcf/compute-plane/register-gpu-cluster) from
+the source repository root. The compute-plane environment file
+`deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml` uses these
+values for both topologies:
 
 ```yaml
 global:
@@ -497,50 +306,19 @@ global:
       natsHostOverride: "nats.${GATEWAY_ADDR}"
 ```
 
-Then follow the matching subsection below.
+Then apply the topology-specific deltas below to the canonical
+`control-plane profile export`, `register-cluster`, and `install` commands.
 
 ### Single-cluster
 
-The GPU cluster is the same cluster as the control plane, so registration uses
-the current context. Create the pull secret in `nvca-operator`; the operator
-propagates it to the managed namespaces after installation:
+The GPU cluster is the same cluster as the control plane.
 
-```bash
-kubectl --context "${CONTROL_PLANE_CONTEXT}" create namespace nvca-operator \
-  --dry-run=client -o yaml | kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f -
-kubectl --context "${CONTROL_PLANE_CONTEXT}" create secret docker-registry nvcr-pull-secret \
-  --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="${NGC_API_KEY}" \
-  -n nvca-operator --dry-run=client -o yaml | kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f -
-```
-
-Register, then install:
-
-```bash
-kubectl config use-context "${CONTROL_PLANE_CONTEXT}"
-
-"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" self-hosted \
-  --control-plane-stack deploy/stacks/self-managed \
-  --env "${HELMFILE_ENV}" \
-  control-plane profile export \
-  --cluster-name "${CLUSTER_NAME}" \
-  --region "${CLUSTER_REGION}"
-
-"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" init
-
-make -C deploy/stacks/nvcf-compute-plane register-cluster \
-  CLUSTER_NAME="${CLUSTER_NAME}" \
-  CLUSTER_REGION="${CLUSTER_REGION}" \
-  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
-  COMPUTE_KUBE_CONTEXT="${CONTROL_PLANE_CONTEXT}" \
-  NVCF_CLI="${NVCF_CLI}" \
-  NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
-
-make -C deploy/stacks/nvcf-compute-plane install \
-  CLUSTER_NAME="${CLUSTER_NAME}" \
-  HELMFILE_ENV="${HELMFILE_ENV}" \
-  NVCF_CLI="${NVCF_CLI}" \
-  NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
-```
+- Create the `nvca-operator` namespace and the `nvcr-pull-secret` on
+  `${CONTROL_PLANE_CONTEXT}`.
+- Run `control-plane profile export` without `--control-plane-context` or
+  `--compute-plane-context`, and pass `--cluster-name "${CLUSTER_NAME}"`.
+- Pass `COMPUTE_KUBE_CONTEXT="${CONTROL_PLANE_CONTEXT}"` to `register-cluster`.
+  `KUBECONFIG_FILE` is not used.
 
 ### Multi-cluster
 
@@ -550,8 +328,8 @@ The NVCA operator installs on a separate compute cluster. Two extra concerns:
    not the control-plane cluster. Switch the context to the compute cluster and
    pass a compute-scoped kubeconfig to `register-cluster`.
 2. The compute-plane environment file must carry the control-plane service URLs
-   and Host headers so the agent on the compute cluster can reach the control
-   plane through the Gateway.
+   and Host headers (the `selfManaged` values above) so the agent on the
+   compute cluster can reach the control plane through the Gateway.
 
 <Warning>
 Register with the compute cluster context active. The registration step probes
@@ -561,53 +339,21 @@ then fails authentication at runtime with `Signed JWT rejected: no matching
 key(s) found`.
 </Warning>
 
-You already created the compute-plane environment file with the `selfManaged`
-values above. Create the pull secret in `nvca-operator` on the compute cluster;
-the operator propagates it to the managed namespaces after installation. Also
-create a compute-scoped kubeconfig:
+- Create the `nvca-operator` namespace and the `nvcr-pull-secret` on
+  `${COMPUTE_CONTEXT}`, and export a compute-scoped kubeconfig:
 
-```bash
-kubectl --context "${COMPUTE_CONTEXT}" create namespace nvca-operator \
-  --dry-run=client -o yaml | kubectl --context "${COMPUTE_CONTEXT}" apply -f -
-kubectl --context "${COMPUTE_CONTEXT}" create secret docker-registry nvcr-pull-secret \
-  --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="${NGC_API_KEY}" \
-  -n nvca-operator --dry-run=client -o yaml | kubectl --context "${COMPUTE_CONTEXT}" apply -f -
+  ```bash
+  kubectl --context "${COMPUTE_CONTEXT}" config view --raw --minify --flatten > compute-kubeconfig.yaml
+  export COMPUTE_KUBECONFIG="$(pwd)/compute-kubeconfig.yaml"
+  kubectl config use-context "${COMPUTE_CONTEXT}"
+  ```
 
-kubectl --context "${COMPUTE_CONTEXT}" config view --raw --minify --flatten > compute-kubeconfig.yaml
-export COMPUTE_KUBECONFIG="$(pwd)/compute-kubeconfig.yaml"
-```
-
-Register with the compute context active, then install onto the compute cluster:
-
-```bash
-kubectl config use-context "${COMPUTE_CONTEXT}"
-
-"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" self-hosted \
-  --control-plane-stack deploy/stacks/self-managed \
-  --env "${HELMFILE_ENV}" \
-  --control-plane-context "${CONTROL_PLANE_CONTEXT}" \
-  --compute-plane-context "${COMPUTE_CONTEXT}" \
-  control-plane profile export \
-  --region "${CLUSTER_REGION}"
-
-"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" init
-
-make -C deploy/stacks/nvcf-compute-plane register-cluster \
-  CLUSTER_NAME="${CLUSTER_NAME}" \
-  CLUSTER_REGION="${CLUSTER_REGION}" \
-  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
-  COMPUTE_KUBE_CONTEXT="${COMPUTE_CONTEXT}" \
-  KUBECONFIG_FILE="${COMPUTE_KUBECONFIG}" \
-  NVCF_CLI="${NVCF_CLI}" \
-  NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
-
-make -C deploy/stacks/nvcf-compute-plane install \
-  CLUSTER_NAME="${CLUSTER_NAME}" \
-  HELMFILE_ENV="${HELMFILE_ENV}" \
-  KUBECONFIG_FILE="${COMPUTE_KUBECONFIG}" \
-  NVCF_CLI="${NVCF_CLI}" \
-  NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
-```
+- Run `control-plane profile export` with
+  `--control-plane-context "${CONTROL_PLANE_CONTEXT}"` and
+  `--compute-plane-context "${COMPUTE_CONTEXT}"`.
+- Pass `COMPUTE_KUBE_CONTEXT="${COMPUTE_CONTEXT}"` and
+  `KUBECONFIG_FILE="${COMPUTE_KUBECONFIG}"` to both `register-cluster` and
+  `install`.
 
 <Info>
 Profile export captures the installed control plane's endpoints and trust.
@@ -632,11 +378,7 @@ kubectl rollout status deployment/nvca-operator -n nvca-operator \
 kubectl wait nvcfbackend "${CLUSTER_NAME}" -n nvca-operator \
   --context "${COMPUTE_CONTEXT}" \
   --for=jsonpath='{.status.agentStatus}'=healthy --timeout=10m
-```
 
-Confirm that the operator propagated the pull secret to `nvca-system`:
-
-```bash
 kubectl --context "${COMPUTE_CONTEXT}" get secret nvcr-pull-secret -n nvca-system
 ```
 
@@ -668,4 +410,6 @@ are correct.
   wrong context active. Switch to the compute context and re-run
   `make register-cluster`.
 
-See [Troubleshooting](../troubleshooting) for more.
+See [Troubleshooting](./troubleshooting.md) for control-plane issues and
+[Compute Plane Troubleshooting](/nvcf/compute-plane/dev/troubleshooting) for NVCA
+issues.

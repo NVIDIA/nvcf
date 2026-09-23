@@ -10,20 +10,22 @@ external workspace index.
 
 ## Layout
 
-The published site is one Fern site with four products. Each stack product
-has its own version menu. Overview is unversioned.
+The published site is one Fern site with five products: Overview, three stack
+products, and Developer Guide. Each stack product has its own version menu.
+Overview and Developer Guide are unversioned.
 
-- `docs/overview/`: unversioned shared documentation: compatibility matrix, quickstart, manifest, image mirroring, multi-tenancy, function usage (API, CLI, function and task creation, invocation, LLM gateway), load testing, release-notes index, local development, and shared assets under `images/` and `samples/`.
+- `docs/overview/`: unversioned shared documentation: installation guide, quickstart, compatibility matrix, release notes, manifest, image mirroring, infrastructure sizing, multi-tenancy, function usage (API, CLI, function and task creation, invocation, LLM gateway), load testing, and shared assets under `images/` and `samples/`.
 - `docs/self-managed/`: top-of-tree Self-Managed Stack (control plane) documentation published as `dev`.
 - `docs/compute-plane/`: top-of-tree Compute Plane Stack documentation published as `dev`.
 - `docs/observability/`: top-of-tree Observability Stack documentation published as `dev`.
 - `docs/<stack>-<version>/`: frozen per-stack documentation for an exact release, for example `docs/observability-1.3.2/`. Do not edit these trees unless the user explicitly asks for a historical docs fix. `docs/self-managed-1.0.0/` is the full pre-split tree frozen at the 1.0.0 retag and contains compute-plane and observability pages as well.
 - `docs/v*/`: frozen legacy full-tree documentation from before the per-stack split. Same rule: do not edit.
 - `docs/ngc-managed/`: legacy NGC-managed (BYOC) platform documentation, published under Overview.
-- `docs/dev/`: developer and local workflow documentation.
+- `docs/dev/`: developer documentation published as the unversioned Developer Guide product: architecture, local k3d development flows, and the fake GPU operator.
 - `docs/version-catalog/main.yaml`: source of truth for generated artifact versions in top-of-tree docs.
 - `fern/docs.yml`: product and version registry.
 - `fern/products/overview.yml`: Overview navigation.
+- `fern/products/developer-guide.yml`: Developer Guide navigation over `docs/dev/`.
 - `fern/products/<stack>/dev.yml`: top-of-tree navigation for one stack.
 - `fern/products/<stack>/<version>.yml`: frozen navigation for one stack version. Legacy full-tree versions live under `fern/products/self-managed/`.
 
@@ -31,6 +33,10 @@ A page belongs to exactly one product. Links inside a product stay relative.
 Links to a page in another product use an absolute site path such as
 `/nvcf/self-managed/installation-overview` or `/nvcf/overview/quickstart`,
 because Fern resolves relative links inside the rendering product.
+
+A versionless product link resolves against that product's default version,
+which is its latest frozen version. Link a page that exists only in `dev` as
+`/nvcf/<product>/dev/<slug>` until the next train is frozen.
 
 ## Navigation
 

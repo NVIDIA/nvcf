@@ -1,113 +1,52 @@
-# Deployment
+# Installation Overview
 
-Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
-
-For a local k3d fresh install, start with the [Quickstart](/nvcf/overview/quickstart). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
-
-For a full list of required artifacts, see [self-hosted-artifact-manifest](/nvcf/overview/manifest).
+The self-managed control plane is the first NVCF stack you install. After it
+is healthy you register one or more GPU clusters with it, then deploy
+functions. The end-to-end sequence, from planning through operations, is in
+the [Installation Guide](/nvcf/overview/installation-guide). This page helps
+you choose how to install the control plane.
 
 ![Self-hosted component overview](../overview/images/nvcf-high-level-stack.svg)
-
-<Tip>
-Want to try NVCF locally first? See [Local Development](/nvcf/overview/local-development) to create a k3d cluster, then use the [Quickstart](/nvcf/overview/quickstart) local k3d flow.
-
-</Tip>
 
 ## Choose an installation path
 
 | Path | Use when | Starting point |
 | --- | --- | --- |
-| Local one-click CLI installation | You want the fastest local k3d install and cluster registration path. | [Quickstart](/nvcf/overview/quickstart) |
-| Helmfile installation | You need manual release control, partial recovery, upgrades, or detailed Helmfile operations. | [Helmfile Installation](./helmfile-installation.md) |
+| One-click CLI (local) | You want to evaluate NVCF on a single local k3d cluster. `nvcf-cli self-hosted up` installs the control plane, registers the local cluster, installs NVCA, and runs health checks. Not for remote clusters. | [Quickstart](/nvcf/overview/quickstart) |
+| Helmfile | You are installing on a real Kubernetes cluster and need explicit release control, partial recovery, upgrades, or direct access to Helmfile values. This is the production path. | [Helmfile Installation](./helmfile-installation.md) |
+| CSP end-to-end example | You want a worked Amazon EKS walkthrough of the Helmfile path, single-cluster and multi-cluster, with the provider-specific values filled in. | [CSP End-to-End Example](./csp-end-to-end-example-installation.md) |
 
-The control plane and GPU cluster can be the same Kubernetes cluster or separate clusters when you use Helmfile or the explicit CLI install primitives. The quickstart supports only a single local k3d cluster. For a complete Amazon EKS example of both topologies, see the [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
+The control plane and the GPU cluster can be the same Kubernetes cluster or
+separate clusters. The quickstart supports only a single local k3d cluster;
+the Helmfile and CSP paths support both topologies.
 
-For remote installs, prepare the Gateway API ingress path and CLI endpoint
-configuration before registering GPU clusters or running post-install CLI
-checks. See [Helmfile Installation](./helmfile-installation.md),
-[Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters), and
-[Gateway Routing](./gateway-routing.md).
+## Before you start
 
-## Overview
+- Size the clusters and storage. See [Infrastructure Sizing](/nvcf/overview/infrastructure-sizing).
+- Make the stack artifacts reachable from your clusters, either directly from
+  NGC or from a registry you mirror to. See [Manifest](/nvcf/overview/manifest)
+  and [Image Mirroring](/nvcf/overview/image-mirroring).
+- Prepare Gateway API ingress on the control-plane cluster. See
+  [Gateway Routing](./gateway-routing.md#gateway-quickstart).
 
-Every installation path follows the same high-level sequence:
+## Kubernetes cluster requirements
 
-1. Clone the [NVCF source repository](https://github.com/nvidia/nvcf) and run
-   repository-based commands from its root directory.
+- Supported versions are the latest Kubernetes minor release and the two prior
+  minor releases (N-2). See the Kubernetes
+  [version skew policy](https://kubernetes.io/releases/version-skew-policy/#supported-versions).
+- A StorageClass with dynamic persistent volume provisioning. Common options
+  are `gp3` on Amazon EKS and `local-path` for local development. Some
+  providers enforce a minimum PVC size; AWS EBS gp3 volumes have a 1Gi minimum.
+- Kubernetes Network Policy support if you require network isolation.
 
-2. Make NVCF artifacts available to your Kubernetes clusters. Pull them
-   directly from NGC when the clusters have NGC access, or follow the
-   [image mirroring instructions](/nvcf/overview/image-mirroring) to copy them to a
-   registry that the clusters can access.
-
-3. Create or select Kubernetes cluster targets. You need a cluster for the control plane and a GPU cluster for function workloads. These can be the same cluster or separate clusters.
-
-4. Install the self-hosted control plane. Use the [Quickstart](/nvcf/overview/quickstart) for a local k3d install or [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations.
-
-5. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters).
-
-6. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
-
-7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing, NVCF UI when your stack package includes that addon. See [Simulation Caches](/nvcf/compute-plane/simulation-caches), [LLS Installation](./lls-installation.md), [Gateway Routing](./gateway-routing.md), and [NVCF UI](./nvcf-ui.md).
-
-## Kubernetes Cluster Requirements
-
-### Cluster Version
-
-- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions).
-- Support for dynamic persistent volume provisioning
-
-### Required Operators and Components
-
-#### NVIDIA GPU Operator
-
-Required for GPU workload scheduling. The GPU Operator automates the management of all NVIDIA software components needed to provision GPUs in Kubernetes, including:
-
-- NVIDIA device drivers
-- Kubernetes device plugin for GPU discovery
-- GPU feature discovery for node labeling
-- Container runtime integration (containerd, CRI-O, or Docker)
-- Monitoring and telemetry tools
-
-See [NVIDIA GPU Operator documentation](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/) for installation instructions.
-
-<Note>
-Fake GPU Operator for development and testing:
-
-For environments without actual GPU hardware, install the fake GPU operator to simulate
-GPU resources. See [fake-gpu-operator](/nvcf/compute-plane/fake-gpu-operator) for full instructions.
-</Note>
-
-#### SMB CSI Driver
-
-The [SMB CSI driver](https://github.com/kubernetes-csi/csi-driver-smb)
-(`smb.csi.k8s.io`) must be installed on every GPU cluster. NVCA uses the
-driver for shared model cache storage that function worker pods mount. Install
-and verify the driver before registering the GPU cluster. See the
-[Self-Managed Clusters prerequisites](/nvcf/compute-plane/self-managed-clusters#prerequisites)
-for the installation command.
-
-#### Network Policies
-
-Your cluster must support Kubernetes Network Policies if network isolation is required.
-
-#### Persistent Storage
-
-A StorageClass must be configured for persistent volumes. Common options:
-
-- Amazon EKS: `gp3` (default)
-- Local development: `local-path`
-- Other platforms: Any CSI-compatible storage class
-
-<Note>
-Some cloud providers have minimum PVC size requirements. For example, AWS EBS gp3 volumes have a 1Gi minimum.
-
-</Note>
-
-### Cluster Sizing and Storage
-
-See [infrastructure-sizing](/nvcf/overview/infrastructure-sizing) for node pool specifications, storage
-recommendations, and three recommended sizing tiers (Development, Minimal HA,
-and Production).
+GPU cluster requirements (the NVIDIA GPU Operator, the SMB CSI driver, and the
+optional fake GPU operator for test environments) are listed in
+[Register a GPU Cluster](/nvcf/compute-plane/register-gpu-cluster).
 
 ![Self-hosted minimum topology](../overview/images/self-hosted-min-topology.png)
+
+## After the control plane is installed
+
+1. [Register a GPU Cluster](/nvcf/compute-plane/register-gpu-cluster) and install the NVCA operator on it.
+2. Enable optional features as needed: [LLS Installation](./lls-installation.md), [Gateway Routing](./gateway-routing.md), [NVCF UI](./nvcf-ui.md), and the compute-plane [caches](/nvcf/compute-plane/simulation-caches).
+3. Deploy and invoke a function. See [Function Creation](/nvcf/overview/function-creation).

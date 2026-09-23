@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 navigation:
-  - section: Deployment
+  - section: Install
     skip-slug: true
     contents:
       - page: Installation Overview
@@ -12,51 +12,56 @@ navigation:
       - page: CSP End-to-End Example
         path: ../../../docs/self-managed/csp-end-to-end-example-installation.md
 
-  - section: Configuration
+  - section: Configure
     skip-slug: true
     contents:
+      - section: Gateway and Networking
+        skip-slug: true
+        contents:
+          - page: Gateway Routing
+            path: ../../../docs/self-managed/gateway-routing.md
+          - page: gRPC Invocation Enablement
+            path: ../../../docs/self-managed/grpc-invocation-enablement.md
+          - page: LLS Installation
+            path: ../../../docs/self-managed/lls-installation.md
+      - section: Function Features
+        skip-slug: true
+        contents:
+          - page: LLM Function Enablement
+            path: ../../../docs/self-managed/llm-function-enablement.md
+          - page: LLM Request Router Load Balancing
+            path: ../../../docs/self-managed/llm-request-router-load-balancing.md
+          - page: Function Autoscaling Overview
+            path: ../../../docs/self-managed/autoscaling/index.md
+          - page: Autoscaling Architecture
+            slug: architecture
+            path: ../../../docs/self-managed/autoscaling/architecture.md
+      - page: Registries
+        path: ../../../docs/self-managed/registries.md
       - page: NVCF UI
         path: ../../../docs/self-managed/nvcf-ui.md
       - page: Pod Disruption Budgets
         path: ../../../docs/self-managed/pod-disruption-budgets.md
-      - page: gRPC Invocation Enablement
-        path: ../../../docs/self-managed/grpc-invocation-enablement.md
-      - page: LLM Function Enablement
-        path: ../../../docs/self-managed/llm-function-enablement.md
-      - page: LLM Request Router Load Balancing
-        path: ../../../docs/self-managed/llm-request-router-load-balancing.md
-      - page: Gateway Routing
-        path: ../../../docs/self-managed/gateway-routing.md
-      - page: Third-Party Registries
-        path: ../../../docs/self-managed/third-party-registries.md
-      - page: Registry Allowlist
-        path: ../../../docs/self-managed/registry-allowlist.md
-      - section: Low Latency Streaming
-        skip-slug: true
-        contents:
-          - page: LLS Installation
-            path: ../../../docs/self-managed/lls-installation.md
 
-  - section: Function Autoscaling
-    skip-slug: true
-    contents:
-      - page: Function Autoscaling Overview
-        path: ../../../docs/self-managed/autoscaling/index.md
-      - page: Architecture
-        path: ../../../docs/self-managed/autoscaling/architecture.md
-      - page: Operations
-        path: ../../../docs/self-managed/autoscaling/operations.md
-
-  - section: Operations
+  - section: Operate
     skip-slug: true
     contents:
       - page: Control Plane Operations
         path: ../../../docs/self-managed/control-plane-operations.md
       - page: Troubleshooting
         path: ../../../docs/self-managed/troubleshooting.md
+      - page: Autoscaler Operations
+        slug: operations
+        path: ../../../docs/self-managed/autoscaling/operations.md
       - page: Key Rotation
         path: ../../../docs/self-managed/runbooks/control-plane-key-rotation-mek.md
       - page: Transport TLS Rotation
         path: ../../../docs/self-managed/runbooks/transport-tls-rotation.md
       - page: Quota Management
         path: ../../../docs/self-managed/runbooks/update-nvcf-account-quota-limits.md
+
+  - section: Reference
+    skip-slug: true
+    contents:
+      - page: Environment File Reference
+        path: ../../../docs/self-managed/environment-reference.md

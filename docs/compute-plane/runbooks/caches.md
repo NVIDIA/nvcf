@@ -52,3 +52,21 @@ storage to attempt to return the service to normal operation.
 
 Monitor the offending pod(s) and ensure that Kubernetes correctly re-creates and
 attaches new PVCs to recreated Cache pod(s).
+
+## Vendor Runbooks
+
+DDCS:
+
+- [Cache Misses](https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/cache-misses.html)
+- [Client Sharding](https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/client-sharding.html)
+- [Disk Exhaustion](https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/disk-exhaustion.html)
+- [Network Bottlenecks](https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/network-bottlenecks.html)
+- [RocksDB Corruption](https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/rocksdb-corruption.html)
+
+UCC:
+
+- [Connection Saturation](https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/connection-saturation.html)
+- [Data Disk Bandwidth](https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/data-disk-bandwidth.html)
+- [Metadata Cache Undersizing](https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/metadata-cache-undersizing.html)
+- [Network Bandwidth Saturation](https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/network-bandwidth-saturation.html)
+- [Upstream S3 Connections](https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/upstream-s3-connections.html)

@@ -75,4 +75,4 @@ Coordination relies on Cassandra TTLs to recover from failures without operator 
 - [Configure Autoscaling](/nvcf/overview/configure-autoscaling) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
 - [Function Autoscaler Operations](./operations.md) for health endpoints and common issues.
 - [Autoscaler Metrics](/nvcf/observability/autoscaler) for emitted metrics, traces, and logs.
-- [Helmfile Installation](../helmfile-installation.md#observability-configuration) for deployment profiles and metrics stack settings.
+- [Environment File Reference](../environment-reference.md#observability-configuration) for deployment profiles and metrics stack settings.

@@ -56,7 +56,7 @@ For local development of the stack or functions, CI pipelines, or quick demos,
 you can run the entire NVCF stack on a single machine using k3d. This setup
 uses a single Cassandra replica, fake GPUs, and ephemeral `local-path` storage.
 
-See [local-development](../local-development) for full step-by-step instructions.
+See [local-development](/nvcf/developer-guide/local-development) for full step-by-step instructions.
 
 ### Staging / Demo
 
@@ -80,7 +80,7 @@ Use this tier for:
 
 <Tip>
 You can also run the full stack on your laptop using Kind or k3d. See
-[local-development](../local-development) for instructions.
+[local-development](/nvcf/developer-guide/local-development) for instructions.
 
 </Tip>
 
@@ -153,7 +153,7 @@ GPU requirements:
 - Physical GPU hardware on worker nodes
 
 For development and testing environments without GPUs, install the fake GPU
-operator to simulate GPU resources. See [fake-gpu-operator](/nvcf/compute-plane/fake-gpu-operator) for
+operator to simulate GPU resources. See [fake-gpu-operator](/nvcf/developer-guide/fake-gpu-operator) for
 instructions.
 
 ## Storage Recommendations

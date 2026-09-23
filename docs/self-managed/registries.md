@@ -1,8 +1,24 @@
-# Working with Third-Party Registries
+# Registries
 
-This guide covers how to configure and manage registry credentials for function container images and Helm charts in self-hosted NVCF deployments.
+NVCF pulls function container images and Helm charts from container
+registries that you control. This page covers the two registry tasks a
+platform operator performs on the self-managed control plane:
 
-## Overview
+- [Configuring registry credentials](#configuring-registry-credentials) so the
+  NVCF API can validate images and the compute plane can pull them. This
+  applies to the registries NVCF recognizes natively.
+- [Allowlisting an unsupported registry](#allowlisting-an-unsupported-registry)
+  so function creation accepts images from a registry NVCF does not
+  recognize.
+
+Registries that host the NVCF stack artifacts themselves are covered by
+[Image Mirroring](/nvcf/overview/image-mirroring).
+
+## Configuring registry credentials
+
+This section covers how to configure and manage registry credentials for function container images and Helm charts in self-hosted NVCF deployments.
+
+### Overview
 
 In NVCF, **third-party registries** refer to container registries used for hosting:
 
@@ -15,7 +31,7 @@ When a function is created or deployed, these credentials are used by different 
 2. **NVCA (Cluster Agent)** - Renders Helm charts or pod specs for container functions and handles deployment lifecycle. Generates image pull credentials based on the registry type.
 3. **Worker init container** - Responsible for pulling the function container images during deployment.
 
-### Supported Registries
+#### Supported Registries
 
 NVCF supports the following container registries:
 
@@ -26,7 +42,7 @@ NVCF supports the following container registries:
 - **JFrog Artifactory**
 - **Harbor**
 
-### Registry Credential Format
+#### Registry Credential Format
 
 All registry credentials in NVCF use a base64-encoded `username:password` format:
 
@@ -36,9 +52,9 @@ echo -n "username:password" | base64
 
 The specific username and password values depend on your registry type. See the sections below for registry-specific instructions.
 
-## Bootstrap vs. Runtime Credentials
+### Bootstrap vs. Runtime Credentials
 
-### Understanding Initial Bootstrap
+#### Understanding Initial Bootstrap
 
 When you first deploy the NVCF control plane, registry credentials are configured in the `secrets/<environment>-secrets.yaml` file under `api.accountBootstrap.registryCredentials`. Example using ECR:
 
@@ -81,7 +97,7 @@ The `registryHostname` must be the **registry base URL only** (e.g., `7798468073
 
 </Info>
 
-### Managing Credentials After Deployment
+#### Managing Credentials After Deployment
 
 After initial deployment, registry credentials can be managed dynamically using the **NVCF API** or **CLI** without redeploying the control plane:
 
@@ -92,7 +108,7 @@ After initial deployment, registry credentials can be managed dynamically using 
 
 This is the recommended approach for credential rotation and adding or modifying registries post-deployment of the control plane.
 
-### Credential Propagation Delay
+#### Credential Propagation Delay
 
 Registry credential changes do not take effect for task creation immediately. Task processing caches each account's registry credentials with a time-to-live of about 5 minutes (`nvct.nvcf.cache-ttl`, default `PT5M` in the self-managed stack). After you add, update, or delete a credential, allow up to about 5 minutes for the change to apply to new tasks. The API and `nvcf-cli registry-credential list` and `get` reflect the change immediately, but task validation can keep using the previous value until the cached entry expires.
 
@@ -105,7 +121,7 @@ kubectl -n nvcf rollout restart deployment/nvct-api
 
 </Warning>
 
-## Adding AWS ECR Registry Credentials
+### Adding AWS ECR Registry Credentials
 
 AWS ECR requires **permanent IAM credentials** (Access Key ID + Secret Access Key). Temporary SSO/STS credentials will not work.
 
@@ -119,14 +135,14 @@ NVCF supports both **ECR Private** and **ECR Public** registries:
 - **ECR Private**: `<account-id>.dkr.ecr.<region>.amazonaws.com`
 - **ECR Public**: `public.ecr.aws`
 
-### Step 1: Create an IAM User
+#### Step 1: Create an IAM User
 
 ```bash
 # Create IAM user for NVCF
 aws iam create-user --user-name nvcf-ecr-service-account
 ```
 
-### Step 2: Create and Attach ECR Policy
+#### Step 2: Create and Attach ECR Policy
 
 Create a least privilege IAM policy based on your ECR type.
 
@@ -226,7 +242,7 @@ aws iam attach-user-policy \
   --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/NVCFECRPublicAccess
 ```
 
-### Step 3: Create Access Keys
+#### Step 3: Create Access Keys
 
 ```bash
 # Create access keys and save the output securely
@@ -251,7 +267,7 @@ Example response:
 
 </Warning>
 
-### Step 4: Add ECR Credentials via CLI
+#### Step 4: Add ECR Credentials via CLI
 
 Generate the base64-encoded credential and add it using the CLI.
 
@@ -289,7 +305,7 @@ ECR_SECRET=$(echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0)
   --description "ECR Public Registry"
 ```
 
-### Cleanup IAM Resources (if needed)
+#### Cleanup IAM Resources (if needed)
 
 To remove the IAM user and associated resources:
 
@@ -318,16 +334,16 @@ aws iam delete-policy \
 aws iam delete-user --user-name nvcf-ecr-service-account
 ```
 
-## Adding NGC Registry Credentials
+### Adding NGC Registry Credentials
 
 NGC (NVIDIA GPU Cloud) uses API keys for authentication.
 
-### Step 1: Generate NGC API Key
+#### Step 1: Generate NGC API Key
 
 1. Navigate to [https://ngc.nvidia.com/setup/api-key](https://ngc.nvidia.com/setup/api-key) to generate a new API key or use an existing one if you have one saved.
 2. Copy the key (format: `nvapi-xxxxxxxxxxxx`)
 
-### Step 2: Add NGC Credentials via CLI
+#### Step 2: Add NGC Credentials via CLI
 
 For NGC, the username is always `$oauthtoken`:
 
@@ -352,17 +368,17 @@ NGC_SECRET=$(echo -n '$oauthtoken:'"${NGC_API_KEY}" | base64 -w 0)
   --description "NGC Helm Registry"
 ```
 
-## Adding Volcano Engine Container Registry Credentials
+### Adding Volcano Engine Container Registry Credentials
 
 Volcano Engine Container Registry (VCR) uses access keys for authentication.
 
-### Step 1: Get Volcano Engine Access Key
+#### Step 1: Get Volcano Engine Access Key
 
 1. Login to the Volcano Engine Console
 2. Go to the **Access Key** management page: [https://console.volcengine.com/iam/keymanage](https://console.volcengine.com/iam/keymanage).
 3. Copy the **Access Key ID** and **Secret Access Key**. (Click on **Create Access Key** if you don't have one already.)
 
-### Step 2: Add VCR Credentials via CLI
+#### Step 2: Add VCR Credentials via CLI
 
 ```bash
 # Generate base64 credential (format: ACCESS_KEY_ID:SECRET_ACCESS_KEY)
@@ -380,7 +396,7 @@ VCR_SECRET=$(echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0)
   --description "Volcano Engine Container and Helm Registry"
 ```
 
-## Listing Registry Credentials
+### Listing Registry Credentials
 
 To view all configured registry credentials:
 
@@ -388,7 +404,7 @@ To view all configured registry credentials:
 ./nvcf-cli registry-credential list
 ```
 
-## Deleting Registry Credentials
+### Deleting Registry Credentials
 
 To remove a registry credential:
 
@@ -397,7 +413,7 @@ To remove a registry credential:
 ./nvcf-cli registry-credential delete <credential-id>
 ```
 
-## How NVCF Matches Registries to Images
+### How NVCF Matches Registries to Images
 
 When you create or deploy a function, NVCF automatically matches the `containerImage` path to the appropriate registry credentials based on the **hostname**.
 
@@ -428,9 +444,9 @@ If credentials are found, they are used to:
 1. Validate the image exists (during function creation)
 2. Pull the image (during function deployment)
 
-## Troubleshooting
+### Troubleshooting
 
-### Incorrect registryHostname Format
+#### Incorrect registryHostname Format
 
 The `registryHostname` in your credentials must **exactly match** the hostname portion of your container image path. Do not include repository paths in the hostname.
 
@@ -449,7 +465,7 @@ The `registryHostname` in your credentials must **exactly match** the hostname p
 - Correct: `nvcr.io`
 - Incorrect: `nvcr.io/nvidia/pytorch`
 
-### UnrecognizedClientException
+#### UnrecognizedClientException
 
 **Error:**
 
@@ -469,9 +485,9 @@ The `registryHostname` in your credentials must **exactly match** the hostname p
 
 1. Verify you are using permanent IAM user credentials (Access Key ID + Secret Access Key), not temporary credentials
 2. Re-generate the base64-encoded credential ensuring the format is exactly `ACCESS_KEY_ID:SECRET_ACCESS_KEY` with no trailing newlines etc.
-3. If using SSO/assumed roles, create a dedicated IAM user instead. See [ecr-registry-setup](./third-party-registries.md)
+3. If using SSO/assumed roles, create a dedicated IAM user instead. See [Adding AWS ECR Registry Credentials](#adding-aws-ecr-registry-credentials)
 
-### Registry Not Found
+#### Registry Not Found
 
 **Error:**
 
@@ -487,7 +503,7 @@ No registry credential found for hostname: example.dkr.ecr.us-west-2.amazonaws.c
 2. Verify the hostname matches exactly (no trailing slashes, no repository paths)
 3. Add the missing registry credential if needed
 
-### Authentication Failed
+#### Authentication Failed
 
 **Error:**
 
@@ -503,3 +519,113 @@ authentication required / unauthorized
 2. For ECR: Use `ACCESS_KEY_ID:SECRET_ACCESS_KEY`
 3. For NGC: Use `$oauthtoken:NGC_API_KEY`
 4. Re-add the credential with correct values
+
+## Allowlisting an unsupported registry
+
+This section is for customers deploying the `helm-nvcf-api` chart who need to use a container registry that is not in the NVCF API's built-in recognized list. Examples include `ghcr.io`, an internal corporate registry, or any third-party registry that NVCF does not yet natively recognize.
+
+The procedure registers the registry hostname with the NVCF API as a custom registry. Custom registries are not subject to artifact or credential validation, so function creation no longer fails with `Missing CONTAINER registry for hostname '<host>'`. The same steps work for any registry hostname. Only the `HOSTNAME` value and the registry key (`GHCR`, `INTERNAL`, `MYREG`, etc.) change.
+
+<Warning>
+Container functions only. This section covers allowlisting registries used for container function images. Allowlisting registries for Helm-chart functions is not supported today. Support is planned for a later release.
+
+</Warning>
+
+### When to use this
+
+Use this only if all of the following are true:
+
+- Your function image is hosted on a registry hostname that NVCF does not natively validate. You are seeing `Missing CONTAINER registry for hostname '<host>'` on function create.
+- Your cluster (kubelet or the worker init container) can already pull from that registry.
+- You accept that the NVCF API will not pre-validate that the image exists at function-create time. Any pull failure surfaces later as `ErrImagePull` on the workload pod.
+
+If the registry you need is in the supported list (ECR, NGC, ACR, VolcEngine, Artifactory, Harbor), follow the standard registry guidance instead. See [Configuring registry credentials](#configuring-registry-credentials) below.
+
+### Step 1: Apply the Helm env vars
+
+Pick a short uppercase key for your registry. The key is used only as a config map key. The example below uses `GHCR` for `ghcr.io`. The two env vars register the hostname under the `container` artifact type as a custom registry.
+
+```bash
+# Customize for your environment.
+KUBE_CONTEXT="<your-context>"
+CHART_VERSION="<chart-version>"
+ORG_PATH="<your-org>"
+
+# Customize for the registry you want to allowlist.
+REG_KEY="GHCR"
+REG_HOSTNAME="ghcr.io"
+REG_NAME="GitHub Container Registry"
+
+helm upgrade api "oci://nvcr.io/${ORG_PATH}/helm-nvcf-api" \
+  --version "${CHART_VERSION}" --namespace nvcf \
+  --kube-context "${KUBE_CONTEXT}" \
+  --reuse-values \
+  --set-string "api.env.NVCF_REGISTRIES_RECOGNIZED_CONTAINER_${REG_KEY}_NAME=${REG_NAME}" \
+  --set-string "api.env.NVCF_REGISTRIES_RECOGNIZED_CONTAINER_${REG_KEY}_HOSTNAME=${REG_HOSTNAME}"
+```
+
+`NAME` and `HOSTNAME` are both required by the schema.
+
+### Step 2: Wait for the rollout
+
+The NVCF API container is distroless, so a rollout is required for env changes to take effect. After each `helm upgrade`, force the new pod to schedule and wait for it to become ready:
+
+```bash
+kubectl delete pod -n nvcf \
+  --kube-context "${KUBE_CONTEXT}" \
+  -l app.kubernetes.io/name=helm-nvcf-api \
+  --field-selector=status.phase=Running
+
+kubectl rollout status deployment/nvcf-api -n nvcf \
+  --kube-context "${KUBE_CONTEXT}" --timeout=120s
+```
+
+### Step 3: Verify the env vars are applied
+
+Use `helm get values` because the API container has no shell:
+
+```bash
+helm get values api -n nvcf --kube-context "${KUBE_CONTEXT}" \
+  | grep -A1 "${REG_KEY}"
+```
+
+You should see both env vars (`NAME` and `HOSTNAME`) under `api.env`.
+
+### Step 4: Test that function creation now succeeds
+
+Use the nvcf-cli to create a function pointing at an image on the new registry:
+
+```bash
+IMAGE_PATH="<your-namespace>/<your-image>:<tag>"
+
+nvcf-cli function create \
+  --name "registry-allowlist-test-$(date +%s)" \
+  --image "${REG_HOSTNAME}/${IMAGE_PATH}" \
+  --inference-url "/health" --inference-port 8080 \
+  --health-uri "/health" --health-timeout PT30S
+```
+
+Expected: a 2xx response with a function id and version id. Before this change, the same call returned `400 Missing CONTAINER registry for hostname '${REG_HOSTNAME}'`.
+
+The create call succeeds even if you have not registered a credential for `${REG_HOSTNAME}` in the NVCF credential store. The workload pod will fail later with `ErrImagePull` if the kubelet cannot pull the image; pulling is the cluster's responsibility, not NVCF's.
+
+### Rolling back
+
+To remove the registry, delete the entries from the chart's persisted values:
+
+```bash
+helm get values api -n nvcf --kube-context "${KUBE_CONTEXT}" -o yaml > values.yaml
+# Edit values.yaml to remove the api.env.NVCF_REGISTRIES_RECOGNIZED_CONTAINER_${REG_KEY}_* keys
+helm upgrade api "oci://nvcr.io/${ORG_PATH}/helm-nvcf-api" \
+  --version "${CHART_VERSION}" --namespace nvcf \
+  --kube-context "${KUBE_CONTEXT}" \
+  -f values.yaml
+```
+
+Then repeat Step 2 (force rollout) and Step 3 (verify the env vars are gone). After rollback, function create against the registry returns the original `400 Missing CONTAINER registry for hostname` error.
+
+### Important notes
+
+This procedure does not pull the image. The cluster is responsible for that. The kubelet (or the worker init container) must already have a way to authenticate to the registry. Common paths are an auto-injected image pull secret on the workload namespace (for example via Kyverno), or a kubelet integration provided by the cloud (for example ECR, GCR, and ACR on CSP-managed clusters where node IAM lets the kubelet pull without an explicit secret).
+
+The `REG_KEY` you choose is a Spring Boot map key. Use anything short and uppercase that is not already in use by a built-in registry (`DOCKER`, `NGC`, `ECR`, `ECR_PUBLIC`, `VOLCENGINE`, `ACR`).
