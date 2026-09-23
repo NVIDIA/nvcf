@@ -202,6 +202,29 @@ class GpuGatingServiceTest {
     }
 
     @Test
+    void removeGatedAuthorizedClusters_whenAllowedGpuLosesAllInstanceTypes_removesItsCapacity() {
+        String b200TypeAllowed = "DGX-CLOUD.GPU.B200_1x";
+        String b200TypeWithheld = "DGX-CLOUD.GPU.B200_8x";
+        GpuGatingService gatingService = gatingFor(GATED_NCA_ID, Map.of(
+                GPU_ALLOWED, List.of(INSTANCE_TYPE_ALLOWED),
+                GPU_DENIED, List.of(b200TypeAllowed)));
+
+        GetClusterResponse borrowed = cluster("cluster-1", OTHER_NCA_ID,
+                                              gpu(GPU_ALLOWED, INSTANCE_TYPE_ALLOWED),
+                                              gpu(GPU_DENIED, b200TypeWithheld));
+        borrowed.setGpuUsage(new HashMap<>(Map.of(
+                GPU_ALLOWED, GpuCapacity.builder().capacity(8).build(),
+                GPU_DENIED, GpuCapacity.builder().capacity(4).build())));
+        List<GetClusterResponse> clusters = new ArrayList<>(List.of(borrowed));
+
+        gatingService.removeGatedAuthorizedClusters(clusters, GATED_NCA_ID);
+
+        assertEquals(1, clusters.size());
+        assertEquals(Set.of(GPU_ALLOWED), gpuNames(clusters.getFirst()));
+        assertEquals(Set.of(GPU_ALLOWED), clusters.getFirst().getGpuUsage().keySet());
+    }
+
+    @Test
     void removeGatedAuthorizedClusters_whenGpuListedWithNoInstanceTypes_dropsCluster() {
         GpuGatingService gatingService = gatingFor(GATED_NCA_ID, Map.of(GPU_ALLOWED, List.of()));
         List<GetClusterResponse> clusters = new ArrayList<>(List.of(
