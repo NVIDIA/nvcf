@@ -53,6 +53,27 @@ fn main() -> std::io::Result<()> {
     write!(counter, "{}", index + 1)?;
     counter.unlock()?;
 
+    let barrier = root.join("wait-for-calls");
+    if barrier.exists() {
+        let expected = fs::read_to_string(barrier)?.parse::<usize>().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let mut calls = 0;
+            for entry in fs::read_dir(root)? {
+                if entry?.file_name().to_string_lossy().starts_with("call-") {
+                    calls += 1;
+                }
+            }
+            if calls >= expected {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(std::io::Error::other("parallel command barrier timed out"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     if root.join("forward-exit-on-start").exists()
         && arguments.iter().any(|argument| argument == "port-forward")
     {

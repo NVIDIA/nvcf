@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::process::Output;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -13,6 +14,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
+use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, sleep, timeout_at};
 
 use crate::process::capture;
@@ -29,7 +31,7 @@ pub enum Phase {
     Regional,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Region {
     pub region: String,
@@ -40,25 +42,25 @@ pub struct Region {
     observability: Observability,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Clusters {
     pub stargate: Cluster,
     pub mockdcs: Vec<Cluster>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cluster {
     pub name: String,
     pub kube_context: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct Observability {
     namespace: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Topology {
     pub regions: Vec<Region>,
     executable: PathBuf,
@@ -366,18 +368,32 @@ impl Topology {
     pub async fn wait_ready(&self) -> Result<Vec<Value>> {
         let deadline = Instant::now() + Duration::from_secs(300);
         let mut last_error = String::from("verification has not completed");
+        let topology = Arc::new(self.clone());
         loop {
             let verification = async {
-                let mut evidence = Vec::new();
+                let mut checks = JoinSet::new();
                 for index in 0..self.regions.len() {
-                    evidence.extend(self.verify_region(index, Phase::Regional).await?);
+                    let topology = Arc::clone(&topology);
+                    checks.spawn(async move {
+                        topology
+                            .verify_region(index, Phase::Regional)
+                            .await
+                            .map(|evidence| (index, evidence))
+                    });
                 }
-                Ok::<_, anyhow::Error>(evidence)
+                let mut evidence = vec![Vec::new(); self.regions.len()];
+                while let Some(check) = checks.join_next().await {
+                    let (index, region_evidence) =
+                        check.context("join regional readiness check")??;
+                    evidence[index] = region_evidence;
+                }
+                Ok::<_, anyhow::Error>(evidence.into_iter().flatten().collect())
             };
             match timeout_at(deadline, verification).await {
                 Ok(Ok(evidence)) => return Ok(evidence),
                 Ok(Err(error)) => {
                     if error.downcast_ref::<AuthenticationFailure>().is_some()
+                        || error.downcast_ref::<JoinError>().is_some()
                         || error
                             .downcast_ref::<crate::process::Interrupted>()
                             .is_some()
@@ -1288,6 +1304,27 @@ mod tests {
             assert!(error.downcast_ref::<AuthenticationFailure>().is_some());
             assert_eq!(fake.calls().len(), 1);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn readiness_checks_all_regions_concurrently_and_stops_on_authentication_failure()
+    -> Result<()> {
+        let fake = FakeCommand::new();
+        fake.default_response(&[(1, "", "Unauthorized")]);
+        let root = fake.executable().parent().unwrap().to_owned();
+        std::fs::write(root.join("wait-for-calls"), "5")?;
+        let peers =
+            ["us-east-1", "eu-west-1", "ap-northeast-1", "ap-southeast-2"].map(str::to_owned);
+        let topology = Topology::load("us-west-2", &peers)?.with_executable(fake.executable());
+        let error = tokio::time::timeout(Duration::from_secs(3), topology.wait_ready())
+            .await?
+            .unwrap_err();
+        assert!(error.downcast_ref::<AuthenticationFailure>().is_some());
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 5);
+        let contexts: BTreeSet<_> = calls.iter().map(|args| args[1].to_string_lossy()).collect();
+        assert_eq!(contexts.len(), 5);
         Ok(())
     }
 
