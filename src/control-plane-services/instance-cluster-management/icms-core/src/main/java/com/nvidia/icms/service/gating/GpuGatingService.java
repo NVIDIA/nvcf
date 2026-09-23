@@ -22,17 +22,24 @@ import static com.nvidia.icms.uec.IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_IN
 import static com.nvidia.icms.util.InstanceServiceUtil.isSetEmptyOrNull;
 
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
+import com.nvidia.icms.inbound.rest.model.account.GpuUsageResponse;
 import com.nvidia.icms.inbound.rest.model.account.InstanceTypeAvailabilityResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.GpuResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.InstanceTypeResponse;
+import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse;
+import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.GpuResponseSchema;
+import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.InstanceTypeResponseSchema;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
 import com.nvidia.icms.service.createInstances.RequestInstanceDestination;
 import com.nvidia.icms.uec.IcmsHttpUnifiedErrorException;
 import com.nvidia.icms.uec.IcmsUnifiedError;
 import com.nvidia.icms.uec.UnifiedErrorReporter;
+import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -107,38 +114,65 @@ public class GpuGatingService {
     }
 
     /**
-     * Rebuilds the GPU set keeping only the allowed GPUs and, within them, the allowed instance
-     * types.
+     * Removes GPUs and instance types withheld from this NCA ID from the authorized cluster
+     * listing, dropping clusters left with no GPUs. Clusters the NCA ID owns are left untouched:
+     * gating controls what an org may borrow from others, not whether it can still see and manage
+     * the clusters it registered itself.
      */
-    private Set<GpuResponse> retainAllowedGpus(Set<GpuResponse> gpus, String ncaId) {
-        if (isSetEmptyOrNull(gpus)) {
-            return new HashSet<>();
+    public void removeGatedAuthorizedClusters(@NotNull List<GetClusterResponse> clusters,
+                                              @NotNull String ncaId) {
+        if (!icmsConfigurationProperties.hasGpuGating(ncaId)) {
+            return;
         }
 
-        Set<GpuResponse> allowedGpus = new HashSet<>();
-        for (GpuResponse gpu : gpus) {
-            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getName())) {
-                continue;
+        clusters.removeIf(cluster -> {
+            if (Objects.equals(cluster.getNcaId(), ncaId)) {
+                return false;
             }
 
-            Set<InstanceTypeResponse> allowedInstanceTypes = Optional
-                    .ofNullable(gpu.getInstanceTypes())
-                    .orElseGet(HashSet::new)
-                    .stream()
-                    .filter(instanceType -> icmsConfigurationProperties.isInstanceTypeAllowedForNca(
-                            ncaId, gpu.getName(), instanceType.getName()))
-                    .collect(Collectors.toSet());
+            // Order matters: the capacity map is pruned against the GPUs that actually survived,
+            // so it has to run after the GPU set has been rebuilt.
+            cluster.setGpus(retainAllowedClusterGpus(cluster.getGpus(), ncaId));
+            removeGatedGpuUsage(cluster);
 
-            if (allowedInstanceTypes.isEmpty()) {
-                continue;
+            boolean noGpusLeft = isSetEmptyOrNull(cluster.getGpus());
+            if (noGpusLeft) {
+                log.trace("NcaId {}: cluster {} removed from authorized cluster listing by gpu "
+                                 + "gating", ncaId, cluster.getClusterId());
             }
+            return noGpusLeft;
+        });
+    }
 
-            allowedGpus.add(GpuResponse.builder()
-                                    .name(gpu.getName())
-                                    .instanceTypes(allowedInstanceTypes)
-                                    .build());
+    /**
+     * Removes GPUs and instance types withheld from this NCA ID from a GPU usage response. A GPU
+     * left with no instances is dropped entirely.
+     */
+    public void removeGatedGpusFromGpuUsage(@Nullable List<GpuUsageResponse.Gpu> gpus,
+                                            @NotNull String ncaId) {
+        if (!icmsConfigurationProperties.hasGpuGating(ncaId) || gpus == null) {
+            return;
         }
-        return allowedGpus;
+
+        gpus.removeIf(gpu -> {
+            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getGpuName())) {
+                return true;
+            }
+
+            if (gpu.getInstances() != null) {
+                gpu.getInstances().removeIf(
+                        instance -> !icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                                ncaId, gpu.getGpuName(), instance.getInstanceName()));
+            }
+
+            boolean noInstancesLeft =
+                    gpu.getInstances() == null || gpu.getInstances().isEmpty();
+            if (noInstancesLeft) {
+                log.info("NcaId {}: GPU {} removed from gpu usage response because gpu gating "
+                                 + "left it with no instances", ncaId, gpu.getGpuName());
+            }
+            return noInstancesLeft;
+        });
     }
 
     /**
@@ -191,6 +225,100 @@ public class GpuGatingService {
         throwGatingError(anyGpuAllowed
                                  ? NVCF_CUSTOMER_NO_ACCESS_TO_INSTANCE_TYPE
                                  : NVCF_CUSTOMER_NO_ACCESS_TO_GPU, instanceRequest);
+    }
+
+    /**
+     * Rebuilds the GPU set keeping only the allowed GPUs and, within them, the allowed instance
+     * types.
+     */
+    private Set<GpuResponse> retainAllowedGpus(Set<GpuResponse> gpus, String ncaId) {
+        if (isSetEmptyOrNull(gpus)) {
+            return new HashSet<>();
+        }
+
+        Set<GpuResponse> allowedGpus = new HashSet<>();
+        for (GpuResponse gpu : gpus) {
+            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getName())) {
+                continue;
+            }
+
+            Set<InstanceTypeResponse> allowedInstanceTypes = Optional
+                    .ofNullable(gpu.getInstanceTypes())
+                    .orElseGet(HashSet::new)
+                    .stream()
+                    .filter(instanceType -> icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                            ncaId, gpu.getName(), instanceType.getName()))
+                    .collect(Collectors.toSet());
+
+            if (allowedInstanceTypes.isEmpty()) {
+                continue;
+            }
+
+            allowedGpus.add(GpuResponse.builder()
+                                    .name(gpu.getName())
+                                    .instanceTypes(allowedInstanceTypes)
+                                    .build());
+        }
+        return allowedGpus;
+    }
+
+    /**
+     * Rebuilds the GPU set of an authorized cluster keeping only the allowed GPUs and, within
+     * them, the allowed instance types.
+     */
+    private Set<GpuResponseSchema> retainAllowedClusterGpus(Set<GpuResponseSchema> gpus,
+                                                            String ncaId) {
+        if (isSetEmptyOrNull(gpus)) {
+            return new HashSet<>();
+        }
+
+        Set<GpuResponseSchema> allowedGpus = new HashSet<>();
+        for (GpuResponseSchema gpu : gpus) {
+            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getName())) {
+                continue;
+            }
+
+            Set<InstanceTypeResponseSchema> allowedInstanceTypes = Optional
+                    .ofNullable(gpu.getInstanceTypes())
+                    .orElseGet(HashSet::new)
+                    .stream()
+                    .filter(instanceType -> icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                            ncaId, gpu.getName(), instanceType.getName()))
+                    .collect(Collectors.toSet());
+
+            if (allowedInstanceTypes.isEmpty()) {
+                continue;
+            }
+
+            allowedGpus.add(GpuResponseSchema.builder()
+                                    .name(gpu.getName())
+                                    .capacity(gpu.getCapacity())
+                                    .instanceTypes(allowedInstanceTypes)
+                                    .build());
+        }
+        return allowedGpus;
+    }
+
+    /**
+     * Drops per-GPU capacity entries for GPUs that did not survive gating, so a withheld GPU name
+     * is not disclosed through the cluster capacity map. Keyed off the already filtered GPU set
+     * rather than off the allow list, because a GPU the NCA ID is allowed in general is still
+     * dropped from this cluster when none of the instance types it offers here are permitted.
+     *
+     * <p>Must be called after the cluster GPU set has been rebuilt.
+     */
+    private void removeGatedGpuUsage(GetClusterResponse cluster) {
+        if (cluster.getGpuUsage() == null) {
+            return;
+        }
+
+        Set<String> survivingGpuNames = Optional.ofNullable(cluster.getGpus())
+                .orElseGet(HashSet::new)
+                .stream()
+                .map(GpuResponseSchema::getName)
+                .collect(Collectors.toSet());
+
+        cluster.getGpuUsage().keySet().removeIf(gpuName -> !survivingGpuNames.contains(gpuName));
     }
 
     private void throwGatingError(@NotNull IcmsUnifiedError icmsUnifiedError,
