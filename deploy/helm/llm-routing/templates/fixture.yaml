@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if .Values.fixture.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-routing-fixture
+spec:
+  replicas: {{ .Values.fixture.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-routing-fixture
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-routing-fixture
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/fixture: {{ toJson .Values.fixture | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fixture
+          image: {{ .Values.fixture.image | quote }}
+          imagePullPolicy: {{ .Values.fixture.pullPolicy }}
+          env:
+            - name: MODEL
+              value: {{ .Values.fixture.model | quote }}
+          ports:
+            - name: http
+              containerPort: 8090
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+        - name: pylon
+          image: {{ .Values.fixture.pylonImage | quote }}
+          imagePullPolicy: {{ .Values.fixture.pullPolicy }}
+          args:
+            - --upstream-http-base-url=http://127.0.0.1:8090
+            - --upstream-health-path=/health
+            - --stargate-address=http://llm-request-router-backend-router:50071
+            - --backend-connectivity=reverse
+            - --quic-insecure
+            - --model-name={{ .Values.fixture.model }}
+            - --inference-server-id=$(POD_NAME)
+            - --cluster-id={{ .Values.fixture.clusterId }}
+            - --auth-token=$(WORKER_TOKEN)
+            - --engine-stats-stream=off
+            - --max-engine-concurrency=8
+            - --active-canary-interval-ms=0
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            - name: WORKER_TOKEN
+              value: {{ .Values.fixture.workerToken | quote }}
+          ports:
+            - name: metrics
+              containerPort: 9089
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-routing-fixture
+spec:
+  selector:
+    app.kubernetes.io/name: llm-routing-fixture
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+    - name: metrics
+      port: 9089
+      targetPort: metrics
+{{- end }}

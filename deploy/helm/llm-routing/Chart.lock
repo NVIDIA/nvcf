@@ -1,0 +1,9 @@
+dependencies:
+- name: helm-nvcf-llm-api-gateway
+  repository: file://../llm-api-gateway/llm-api-gateway
+  version: 0.0.0
+- name: helm-nvcf-llm-request-router
+  repository: file://../llm-request-router/llm-request-router
+  version: 0.0.0
+digest: sha256:df5a8bf9f659608fbe7101eb301b4703e9c64515fa1b2ea46552e5aa904731e4
+generated: "2026-09-23T16:05:32.59673-07:00"

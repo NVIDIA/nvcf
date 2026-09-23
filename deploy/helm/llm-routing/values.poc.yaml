@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+developmentMode: true
+router:
+  llmRequestRouter:
+    auth:
+      workerAuthEndpoint: http://llm-routing-auth-fixture:50051
+fixture:
+  enabled: true

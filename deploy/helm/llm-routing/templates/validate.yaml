@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if not .Values.developmentMode }}
+{{- fail "This POC requires developmentMode=true in an isolated cluster. Standalone caller auth, authenticated cluster identity, and bare-model routing need runtime changes." }}
+{{- end }}
+{{- if .Values.fixture.enabled }}
+{{- $_ := required "fixture.pylonImage is required" .Values.fixture.pylonImage }}
+{{- if ne .Values.router.llmRequestRouter.auth.workerAuthEndpoint "http://llm-routing-auth-fixture:50051" }}
+{{- fail "fixture.enabled requires router.llmRequestRouter.auth.workerAuthEndpoint=http://llm-routing-auth-fixture:50051" }}
+{{- end }}
+{{- end }}

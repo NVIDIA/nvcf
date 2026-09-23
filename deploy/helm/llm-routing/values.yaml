@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Current service images still use the NVCF authentication and model contract.
+# Explicitly opt into isolated development use until standalone auth ships.
+developmentMode: false
+
+gateway:
+  llmApiGateway:
+    replicaCount: 1
+    image:
+      repository: ""
+      tag: "0.14.2"
+    config:
+      requestRouterUrl: http://llm-request-router:8000
+      nvcfGrpcAddr: ""
+      rateLimitEnabled: false
+    olric:
+      enabled: false
+      rbac:
+        create: false
+    vault:
+      noVaultAnnotations: true
+    podAnnotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9464"
+    metrics:
+      enabled: true
+
+router:
+  llmRequestRouter:
+    replicaCount: 1
+    image:
+      repository: ""
+      tag: "0.18.0"
+    vault:
+      noVaultAnnotations: true
+    auth:
+      workerAuthEndpoint: ""
+    readiness:
+      warmupMs: 1000
+    backendRouter:
+      enabled: true
+      replicaCount: 1
+      podDisruptionBudget:
+        enabled: false
+    metrics:
+      enabled: true
+
+# Optional CPU-only test backend plus Pylon and a legacy gRPC auth fixture.
+# These are test infrastructure, not the LLM agent or a model recipe.
+fixture:
+  enabled: false
+  image: llm-routing-fixture:dev
+  pylonImage: ""
+  pullPolicy: IfNotPresent
+  replicas: 1
+  model: poc-model
+  routingKey: poc
+  clusterId: cpu-poc
+  # Public test tokens. Never use these outside an isolated development cluster.
+  workerToken: poc-worker

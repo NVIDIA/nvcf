@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if .Values.fixture.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-routing-auth-fixture
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-routing-auth-fixture
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-routing-auth-fixture
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: auth
+          image: {{ .Values.fixture.image | quote }}
+          imagePullPolicy: {{ .Values.fixture.pullPolicy }}
+          env:
+            - name: MODE
+              value: auth
+            - name: ROUTING_KEY
+              value: {{ .Values.fixture.routingKey | quote }}
+            - name: WORKER_TOKEN
+              value: {{ .Values.fixture.workerToken | quote }}
+          ports:
+            - name: auth
+              containerPort: 50051
+          readinessProbe:
+            tcpSocket: {port: auth}
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-routing-auth-fixture
+spec:
+  selector:
+    app.kubernetes.io/name: llm-routing-auth-fixture
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: auth
+      port: 50051
+      targetPort: auth
+{{- end }}
