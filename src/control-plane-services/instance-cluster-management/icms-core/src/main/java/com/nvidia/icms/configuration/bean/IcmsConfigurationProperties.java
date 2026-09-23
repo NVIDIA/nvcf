@@ -35,6 +35,7 @@ import org.springframework.cloud.context.scope.refresh.RefreshScopeRefreshedEven
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.event.EventListener;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -129,7 +130,7 @@ public class IcmsConfigurationProperties {
     private boolean gpuV5PopulationTaskEnabled;
 
     private boolean creationBucketPopulationTaskEnabled = true;
-    private int creationBucketPopulationTaskLockTtlInSeconds = 1800;
+    private Duration creationBucketPopulationTaskLockTtl = Duration.ofHours(1);
 
     private int databaseReadPageSize;
 

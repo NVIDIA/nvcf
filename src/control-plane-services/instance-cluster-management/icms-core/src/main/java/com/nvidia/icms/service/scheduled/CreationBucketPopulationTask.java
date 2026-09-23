@@ -26,6 +26,7 @@ import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity
 import com.nvidia.icms.util.TimeUtils;
 import io.micrometer.observation.annotation.Observed;
 import java.time.Instant;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,19 +49,26 @@ public class CreationBucketPopulationTask {
         AtomicInteger instancesUpdated = new AtomicInteger();
         AtomicInteger instancesFailed = new AtomicInteger();
 
-        requestRepository.findAllRequestsAndApplyAction(
-                request -> populateRequest(request, requestsUpdated, requestsFailed),
-                PAUSE_BETWEEN_PAGES_IN_MS,
-                0,
-                configuration.getDatabaseReadPageSize());
+        String error = null;
+        try {
+            requestRepository.findAllRequestsAndApplyAction(
+                    request -> populateRequest(request, requestsUpdated, requestsFailed),
+                    PAUSE_BETWEEN_PAGES_IN_MS,
+                    0,
+                    configuration.getDatabaseReadPageSize());
 
-        instanceRepository.findAllInstancesAndApplyAction(
-                instance -> populateInstance(instance, instancesUpdated, instancesFailed),
-                PAUSE_BETWEEN_PAGES_IN_MS);
+            instanceRepository.findAllInstancesAndApplyAction(
+                    instance -> populateInstance(instance, instancesUpdated, instancesFailed),
+                    PAUSE_BETWEEN_PAGES_IN_MS);
+        } catch (Exception exception) {
+            error = exception.getMessage();
+            log.error("Job: {} scan failed with error: {}",
+                    CREATION_BUCKET_POPULATION_TASK_NAME, error, exception);
+        }
 
         PopulationResult result = new PopulationResult(
                 requestsUpdated.get(), requestsFailed.get(),
-                instancesUpdated.get(), instancesFailed.get());
+                instancesUpdated.get(), instancesFailed.get(), error);
         log.info("Job: {} completed with result {}", CREATION_BUCKET_POPULATION_TASK_NAME, result);
         return result;
     }
@@ -105,7 +113,7 @@ public class CreationBucketPopulationTask {
         }
     }
 
-    private Instant getCreationBucket(java.util.UUID createTimeuuid) {
+    private Instant getCreationBucket(UUID createTimeuuid) {
         if (createTimeuuid == null) {
             throw new IllegalArgumentException("create_timeuuid is missing");
         }
@@ -116,6 +124,7 @@ public class CreationBucketPopulationTask {
             int requestsUpdated,
             int requestsFailed,
             int instancesUpdated,
-            int instancesFailed) {
+            int instancesFailed,
+            String error) {
     }
 }

@@ -59,15 +59,17 @@ public class CreationBucketPopulationTaskController {
 
         Stopwatch stopwatch = Stopwatch.createUnstarted();
         String capturedError = null;
-        PopulationResult result = new PopulationResult(0, 0, 0, 0);
+        PopulationResult result = new PopulationResult(0, 0, 0, 0, null);
         try {
             if (!lockProviderService.obtainLockWithTtl(
                     CREATION_BUCKET_POPULATION_TASK_NAME,
-                    configuration.getCreationBucketPopulationTaskLockTtlInSeconds())) {
+                    Math.toIntExact(configuration.getCreationBucketPopulationTaskLockTtl()
+                            .toSeconds()))) {
                 return;
             }
             stopwatch.start();
             result = task.execute();
+            capturedError = result.error();
         } catch (Exception exception) {
             capturedError = exception.getMessage();
             log.error("{} job failed with error: {}",

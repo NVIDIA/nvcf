@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -87,7 +88,7 @@ class CreationBucketPopulationTaskTest {
         }).when(instanceRepository).findAllInstancesAndApplyAction(any(), eq(5));
         var result = task.execute();
 
-        assertEquals(new CreationBucketPopulationTask.PopulationResult(1, 0, 1, 0), result);
+        assertEquals(new CreationBucketPopulationTask.PopulationResult(1, 0, 1, 0, null), result);
         assertEquals(expectedBucket, missingRequest.getCreationBucket());
         assertEquals(expectedBucket, missingInstance.getCreationBucket());
         verify(requestRepository).update(missingRequest);
@@ -111,6 +112,27 @@ class CreationBucketPopulationTaskTest {
 
         var result = task.execute();
 
-        assertEquals(new CreationBucketPopulationTask.PopulationResult(0, 1, 0, 1), result);
+        assertEquals(new CreationBucketPopulationTask.PopulationResult(0, 1, 0, 1, null), result);
+    }
+
+    @Test
+    void execute_preservesCountsWhenInstanceScanFails() {
+        Instant creationTime = Instant.parse("2026-09-15T18:42:31Z");
+        var request = InstanceRequestV2Entity.builder()
+                .requestId("request-1")
+                .createTimeuuid(TimeUtils.getUuidFromTimeStamp(creationTime))
+                .build();
+        doAnswer(invocation -> {
+            Consumer<InstanceRequestV2Entity> action = invocation.getArgument(0);
+            action.accept(request);
+            return null;
+        }).when(requestRepository).findAllRequestsAndApplyAction(any(), eq(5), eq(0), eq(500));
+        doThrow(new RuntimeException("instance scan failed"))
+                .when(instanceRepository).findAllInstancesAndApplyAction(any(), eq(5));
+
+        var result = task.execute();
+
+        assertEquals(new CreationBucketPopulationTask.PopulationResult(
+                1, 0, 0, 0, "instance scan failed"), result);
     }
 }
