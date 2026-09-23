@@ -148,8 +148,14 @@ func NewClient(introspectURL string, timeout, cacheTTL time.Duration) (*Client, 
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	// Clone DefaultTransport to include the HTTP proxy env vars.
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Clone DefaultTransport to include the HTTP proxy env vars. Fall back to
+	// DefaultTransport as-is if it's been replaced with a non-*http.Transport
+	// RoundTripper (e.g. by an httpmock-style test helper), since the single-
+	// value assertion would otherwise panic.
+	var transport http.RoundTripper = http.DefaultTransport
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = t.Clone()
+	}
 	return &Client{
 		introspectURL: introspectURL,
 		httpClient: &http.Client{

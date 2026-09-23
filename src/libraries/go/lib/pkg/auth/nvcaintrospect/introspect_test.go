@@ -113,6 +113,26 @@ func TestClientIntrospectDoesNotFollowRedirects(t *testing.T) {
 	require.Error(t, err, "a redirect response must not be silently followed and treated as success")
 }
 
+// stubRoundTripper is a http.RoundTripper that is not a *http.Transport, to
+// simulate a host application replacing http.DefaultTransport (as
+// github.com/jarcoal/httpmock does when activated).
+type stubRoundTripper struct{}
+
+func (stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("stubRoundTripper: not implemented")
+}
+
+func TestNewClientDoesNotPanicWhenDefaultTransportIsReplaced(t *testing.T) {
+	prevTransport := http.DefaultTransport
+	http.DefaultTransport = stubRoundTripper{}
+	defer func() { http.DefaultTransport = prevTransport }()
+
+	require.NotPanics(t, func() {
+		_, err := NewClient("http://example.invalid", time.Second, 0)
+		require.NoError(t, err)
+	})
+}
+
 func TestClientIntrospectRecordsErrorOnSpan(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	prevTP := otel.GetTracerProvider()
