@@ -328,6 +328,18 @@ jobs:
             exit 1
           fi
           echo "discovered: ${indexes[*]}"
+          # A subtree with several targets all named `image` (nvca: cmd/nvca,
+          # cmd/nvca-operator, cmd/cluster-validator, cmd/tools) would map every
+          # one of them to the service repo and the last push would win. When
+          # that is the case, the package leaf names the repo instead, with the
+          # leaf that equals the service keeping the plain service name. A
+          # subtree with a single `image` target keeps mapping to the service
+          # wherever that target lives (cmd/, crates/server/, ...).
+          plain_image_count=0
+          for tgt in "${indexes[@]}"; do
+            n="${tgt##*:}"; n="${n%_index}"
+            [ "$n" = "image" ] && plain_image_count=$((plain_image_count + 1))
+          done
           for tgt in "${indexes[@]}"; do
             name="${tgt##*:}"; name="${name%_index}"
             # Two naming conventions exist in the tree and they mean different
@@ -342,7 +354,13 @@ jobs:
             # Previously the hyphenated form fell through to the default and
             # produced names like byoo-otel-collector-byoo-otel-collector-image.
             case "$name" in
-              image)   repo="${svc}" ;;
+              image)
+                if [ "$plain_image_count" -gt 1 ]; then
+                  pkg="${tgt%%:*}"; leaf="${pkg##*/}"
+                  if [ "$leaf" = "$svc" ]; then repo="${svc}"; else repo="${leaf}"; fi
+                else
+                  repo="${svc}"
+                fi ;;
               *_image) sub="$(printf '%s' "${name%_image}" | tr '_' '-')"; repo="${svc}-${sub}" ;;
               *-image) repo="${name%-image}" ;;
               *)       sub="$(printf '%s' "$name" | tr '_' '-')"; repo="${svc}-${sub}" ;;

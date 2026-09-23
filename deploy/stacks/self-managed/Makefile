@@ -15,6 +15,7 @@ test:
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh
+	@tests/upgrade-receipt-wiring.sh
 	@tests/cassandra-openbao-credential-wiring.sh
 	@tests/llm-pki-release.sh
 	@tests/check-llm-pki-issuer.sh
@@ -39,4 +40,5 @@ test-published-charts:
 	@tests/llm-router-published-chart.sh
 	@tests/gateway-routes-published-chart.sh
 	@tests/openbao-published-chart.sh
+	@tests/state-metrics-chart-contract.sh
 	@tests/cassandra-autoscaler-published-compatibility.sh

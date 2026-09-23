@@ -31,17 +31,20 @@ const (
 	controlStackResourceName       = "nvcf-self-managed-stack"
 	computeStackResourceName       = "nvcf-compute-plane-stack"
 	observabilityStackResourceName = "nvcf-observability-stack"
-	releaseSetVersionFormat        = "cp-X.Y.Z-compute-X.Y.Z-obs-X.Y.Z"
+	documentationVersionFormat     = "X.Y.Z"
 	defaultStackRegistry           = "public-resources"
 	defaultImageRegistry           = "public-images"
 	defaultChartRegistry           = "public-helm"
 )
 
 var (
-	fullLowercaseCommitSHARe         = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	lowercaseSHA256DigestRe          = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	releaseSetDocumentationVersionRe = regexp.MustCompile(`^cp-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-compute-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-obs-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$`)
+	fullLowercaseCommitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	lowercaseSHA256DigestRe  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
+
+// documentationProductTrees are the only documentation trees that carry generated blocks.
+// Frozen copies (docs/<product>-<version>/) are never regenerated.
+var documentationProductTrees = []string{"docs/overview/", "docs/self-managed/", "docs/compute-plane/", "docs/observability/"}
 
 type ArtifactType string
 
@@ -88,19 +91,20 @@ type ManifestEntry struct {
 }
 
 type Catalog struct {
-	Version               int                 `yaml:"version"`
-	Target                string              `yaml:"target"`
-	Registries            map[string]Registry `yaml:"registries"`
-	Publications          []Publication       `yaml:"publications,omitempty"`
-	VersionOverrides      []VersionOverride   `yaml:"version_overrides,omitempty"`
-	PublicationPending    []string            `yaml:"publication_pending,omitempty"`
-	Manifest              ManifestMetadata    `yaml:"manifest,omitempty"`
-	ReleaseSet            ReleaseSetMetadata  `yaml:"release_set,omitempty"`
-	Stack                 StackMetadata       `yaml:"stack"`
-	Denylist              []DenylistEntry     `yaml:"denylist,omitempty"`
-	Artifacts             []Artifact          `yaml:"artifacts"`
-	SupplementalArtifacts []Artifact          `yaml:"supplemental_artifacts"`
-	Outputs               []OutputFile        `yaml:"outputs"`
+	Version               int                  `yaml:"version"`
+	Target                string               `yaml:"target"`
+	Registries            map[string]Registry  `yaml:"registries"`
+	Publications          []Publication        `yaml:"publications,omitempty"`
+	VersionOverrides      []VersionOverride    `yaml:"version_overrides,omitempty"`
+	PublicationPending    []string             `yaml:"publication_pending,omitempty"`
+	Manifest              ManifestMetadata     `yaml:"manifest,omitempty"`
+	ReleaseSet            ReleaseSetMetadata   `yaml:"release_set,omitempty"`
+	Compatibility         []CompatibilityEntry `yaml:"compatibility,omitempty"`
+	Stack                 StackMetadata        `yaml:"stack"`
+	Denylist              []DenylistEntry      `yaml:"denylist,omitempty"`
+	Artifacts             []Artifact           `yaml:"artifacts"`
+	SupplementalArtifacts []Artifact           `yaml:"supplemental_artifacts"`
+	Outputs               []OutputFile         `yaml:"outputs"`
 }
 
 type ReleaseSetStatus string
@@ -111,10 +115,10 @@ const (
 )
 
 // ReleaseSetMetadata identifies the three stack releases represented by the catalog.
+// Each stack carries its own documentation version because the stacks release
+// and freeze documentation independently.
 type ReleaseSetMetadata struct {
-	DocumentationVersion string           `yaml:"documentation_version"`
-	Status               ReleaseSetStatus `yaml:"status"`
-	Stacks               ReleaseSetStacks `yaml:"stacks"`
+	Stacks ReleaseSetStacks `yaml:"stacks"`
 }
 
 type ReleaseSetStacks struct {
@@ -124,10 +128,66 @@ type ReleaseSetStacks struct {
 }
 
 type StackReleaseMetadata struct {
-	Version        string `yaml:"version"`
-	SourceTag      string `yaml:"source_tag"`
-	SourceCommit   string `yaml:"source_commit"`
-	InventoryAsset string `yaml:"inventory_asset"`
+	Version              string           `yaml:"version"`
+	SourceTag            string           `yaml:"source_tag"`
+	SourceCommit         string           `yaml:"source_commit"`
+	InventoryAsset       string           `yaml:"inventory_asset"`
+	DocumentationVersion string           `yaml:"documentation_version"`
+	Status               ReleaseSetStatus `yaml:"status"`
+}
+
+// CompatibilityEntry declares the minimum release of each other stack that
+// one stack release works with. Keys use the release_set stack names. Values
+// are "X.Y.Z+" (that release or later) or "X.Y.Z" (that release only).
+type CompatibilityEntry struct {
+	Stack          string            `yaml:"stack"`
+	Version        string            `yaml:"version"`
+	CompatibleWith map[string]string `yaml:"compatible_with"`
+}
+
+const (
+	releaseSetStackControlPlane  = "control-plane"
+	releaseSetStackComputePlane  = "compute-plane"
+	releaseSetStackObservability = "observability"
+)
+
+var releaseSetStackNames = []string{releaseSetStackControlPlane, releaseSetStackComputePlane, releaseSetStackObservability}
+
+// documentationProductSlug maps a release_set stack name to its Fern product slug.
+func documentationProductSlug(stack string) (string, error) {
+	switch stack {
+	case releaseSetStackControlPlane:
+		return "self-managed", nil
+	case releaseSetStackComputePlane, releaseSetStackObservability:
+		return stack, nil
+	default:
+		return "", fmt.Errorf("unknown release_set stack %q; want %s", stack, strings.Join(releaseSetStackNames, ", "))
+	}
+}
+
+func documentationStackDisplayName(stack string) string {
+	switch stack {
+	case releaseSetStackControlPlane:
+		return "Self-managed (control plane)"
+	case releaseSetStackComputePlane:
+		return "Compute plane"
+	case releaseSetStackObservability:
+		return "Observability"
+	}
+	return stack
+}
+
+func (stacks *ReleaseSetStacks) byName(stack string) (*StackReleaseMetadata, error) {
+	switch stack {
+	case releaseSetStackControlPlane:
+		return &stacks.ControlPlane, nil
+	case releaseSetStackComputePlane:
+		return &stacks.ComputePlane, nil
+	case releaseSetStackObservability:
+		return &stacks.Observability, nil
+	default:
+		return nil, fmt.Errorf("unknown release_set stack %q; want %s", stack, strings.Join(releaseSetStackNames, ", "))
+	}
 }
 
 type Registry struct {
@@ -359,6 +419,9 @@ func ValidateCatalog(catalog *Catalog) error {
 			return err
 		}
 	}
+	if err := validateCompatibility(catalog.Compatibility); err != nil {
+		return err
+	}
 	if strings.TrimSpace(catalog.Stack.Name) == "" {
 		return fmt.Errorf("stack name cannot be empty")
 	}
@@ -464,33 +527,14 @@ func ValidateCatalog(catalog *Catalog) error {
 }
 
 func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
-	if releaseSet.DocumentationVersion == "" || releaseSet.DocumentationVersion != strings.TrimSpace(releaseSet.DocumentationVersion) {
-		return fmt.Errorf("release_set documentation_version must be non-empty and trimmed")
-	}
-	if releaseSet.Status != ReleaseSetDevelopment && releaseSet.Status != ReleaseSetQualified {
-		return fmt.Errorf("release_set status must be development or qualified")
-	}
-	if releaseSet.Status == ReleaseSetDevelopment && releaseSet.DocumentationVersion != "dev" {
-		return fmt.Errorf("development release_set documentation_version must be dev")
-	}
-	if releaseSet.Status == ReleaseSetQualified {
-		_, _, _, ok := parseReleaseSetDocumentationVersion(releaseSet.DocumentationVersion)
-		if !ok {
-			return fmt.Errorf("qualified release_set documentation_version must use %s", releaseSetVersionFormat)
-		}
-		expected := releaseSetDocumentationVersion(releaseSet.Stacks)
-		if releaseSet.DocumentationVersion != expected {
-			return fmt.Errorf("qualified release_set documentation_version must be %s", expected)
-		}
-	}
 	for _, stack := range []struct {
 		name     string
 		metadata StackReleaseMetadata
 		key      string
 	}{
-		{name: "control-plane", metadata: releaseSet.Stacks.ControlPlane, key: selfManagedStackKey},
-		{name: "compute-plane", metadata: releaseSet.Stacks.ComputePlane, key: computePlaneStackKey},
-		{name: "observability", metadata: releaseSet.Stacks.Observability, key: observabilityStackKey},
+		{name: releaseSetStackControlPlane, metadata: releaseSet.Stacks.ControlPlane, key: selfManagedStackKey},
+		{name: releaseSetStackComputePlane, metadata: releaseSet.Stacks.ComputePlane, key: computePlaneStackKey},
+		{name: releaseSetStackObservability, metadata: releaseSet.Stacks.Observability, key: observabilityStackKey},
 	} {
 		spec, err := stackInventorySpecByKey(stack.key)
 		if err != nil {
@@ -508,26 +552,69 @@ func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
 		if stack.metadata.InventoryAsset != spec.AssetName {
 			return fmt.Errorf("release_set %s inventory_asset must be %s", stack.name, spec.AssetName)
 		}
+		if err := validateStackDocumentationVersion(stack.name, stack.metadata); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func parseReleaseSetDocumentationVersion(version string) (string, string, string, bool) {
-	match := releaseSetDocumentationVersionRe.FindStringSubmatch(version)
-	if match == nil {
-		return "", "", "", false
+func validateStackDocumentationVersion(name string, metadata StackReleaseMetadata) error {
+	if metadata.DocumentationVersion == "" || metadata.DocumentationVersion != strings.TrimSpace(metadata.DocumentationVersion) {
+		return fmt.Errorf("release_set %s documentation_version must be non-empty and trimmed", name)
 	}
-	return match[1], match[2], match[3], true
+	switch metadata.Status {
+	case ReleaseSetDevelopment:
+		if metadata.DocumentationVersion != "dev" {
+			return fmt.Errorf("development release_set %s documentation_version must be dev", name)
+		}
+	case ReleaseSetQualified:
+		if !validStableStackVersion(metadata.DocumentationVersion) {
+			return fmt.Errorf("qualified release_set %s documentation_version must use %s", name, documentationVersionFormat)
+		}
+		if metadata.DocumentationVersion != metadata.Version {
+			return fmt.Errorf("qualified release_set %s documentation_version must be %s", name, metadata.Version)
+		}
+	default:
+		return fmt.Errorf("release_set %s status must be development or qualified", name)
+	}
+	return nil
 }
 
-func releaseSetDocumentationVersion(stacks ReleaseSetStacks) string {
-	return fmt.Sprintf(
-		"cp-%s-compute-%s-obs-%s",
-		stacks.ControlPlane.Version,
-		stacks.ComputePlane.Version,
-		stacks.Observability.Version,
-	)
+func validateCompatibility(entries []CompatibilityEntry) error {
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		if _, err := documentationProductSlug(entry.Stack); err != nil {
+			return fmt.Errorf("compatibility: %w", err)
+		}
+		if !validStableStackVersion(entry.Version) {
+			return fmt.Errorf("compatibility %s version %q must use %s", entry.Stack, entry.Version, documentationVersionFormat)
+		}
+		key := entry.Stack + "\x00" + entry.Version
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate compatibility entry for %s %s", entry.Stack, entry.Version)
+		}
+		seen[key] = struct{}{}
+		if len(entry.CompatibleWith) != len(releaseSetStackNames)-1 {
+			return fmt.Errorf("compatibility %s %s must list exactly the other %d stacks", entry.Stack, entry.Version, len(releaseSetStackNames)-1)
+		}
+		for other, requirement := range entry.CompatibleWith {
+			if _, err := documentationProductSlug(other); err != nil {
+				return fmt.Errorf("compatibility %s %s: %w", entry.Stack, entry.Version, err)
+			}
+			if other == entry.Stack {
+				return fmt.Errorf("compatibility %s %s cannot list its own stack", entry.Stack, entry.Version)
+			}
+			requiredVersion := strings.TrimSuffix(requirement, "+")
+			if !validStableStackVersion(requiredVersion) {
+				return fmt.Errorf("compatibility %s %s: %s requirement %q must use %s", entry.Stack, entry.Version, other, requirement, compatibilityRequirementFormat)
+			}
+		}
+	}
+	return nil
 }
+
+const compatibilityRequirementFormat = "X.Y.Z+ (that release or later) or X.Y.Z (that release only)"
 
 func validateManifestMetadata(metadata ManifestMetadata) error {
 	seen := map[string]struct{}{}
@@ -661,13 +748,15 @@ func validateOutputPath(path string) error {
 	if filepath.IsAbs(path) || strings.HasPrefix(clean, "../") || clean == ".." {
 		return fmt.Errorf("output path %s must be repository relative", path)
 	}
-	if strings.HasPrefix(clean, "docs/v0.5/") {
-		return fmt.Errorf("output path %s is not allowed: versioned docs are generated from main", path)
+	for _, tree := range documentationProductTrees {
+		if strings.HasPrefix(clean, tree) {
+			return nil
+		}
 	}
-	if !strings.HasPrefix(clean, "docs/user/") {
-		return fmt.Errorf("output path %s is outside docs/user", path)
+	if strings.HasPrefix(clean, "docs/") {
+		return fmt.Errorf("output path %s is not allowed: frozen docs are generated from the product trees", path)
 	}
-	return nil
+	return fmt.Errorf("output path %s is outside the documentation product trees %s", path, strings.Join(documentationProductTrees, ", "))
 }
 
 func (catalog *Catalog) DenylistMap() map[string]DenylistEntry {
@@ -844,6 +933,7 @@ func refreshCatalogFromArtifacts(stackVersion string, artifacts []Artifact, base
 	catalog.PublicationPending = append(catalog.PublicationPending, base.PublicationPending...)
 	catalog.Denylist = append(catalog.Denylist, base.Denylist...)
 	catalog.Manifest = base.Manifest
+	catalog.Compatibility = append(catalog.Compatibility, base.Compatibility...)
 	resolvedArtifacts := make(map[string]struct{}, len(catalog.Artifacts))
 	for _, artifact := range catalog.Artifacts {
 		resolvedArtifacts[artifactNameAndTypeKey(artifact)] = struct{}{}
@@ -961,14 +1051,21 @@ func (catalog *Catalog) pruneUnusedRegistries() {
 func defaultOutputs() []OutputFile {
 	return []OutputFile{
 		{
-			Path: "docs/user/manifest.md",
+			Path: "docs/overview/compatibility-matrix.md",
+			Blocks: []OutputBlock{{
+				Marker:   "compatibility-matrix",
+				Renderer: "compatibility-matrix",
+			}},
+		},
+		{
+			Path: "docs/overview/manifest.md",
 			Blocks: []OutputBlock{{
 				Marker:   "manifest-artifact-registry-paths",
 				Renderer: "manifest-artifact-registry-paths",
 			}},
 		},
 		{
-			Path: "docs/user/image-mirroring.md",
+			Path: "docs/overview/image-mirroring.md",
 			Blocks: []OutputBlock{
 				{
 					Marker:   "image-mirroring-resource-examples",
@@ -992,7 +1089,7 @@ func defaultOutputs() []OutputFile {
 				},
 			},
 		},
-		{Path: "docs/user/cluster-management/self-managed.md"},
-		{Path: "docs/user/cluster-management/reference.md"},
+		{Path: "docs/compute-plane/cluster-management/self-managed.md"},
+		{Path: "docs/compute-plane/cluster-management/reference.md"},
 	}
 }

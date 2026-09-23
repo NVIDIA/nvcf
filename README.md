@@ -1,9 +1,9 @@
 <!-- markdownlint-disable-next-line MD041 -->
-![NVCF banner](docs/user/images/nvcf-banner.svg)
+![NVCF banner](docs/overview/images/nvcf-banner.svg)
 
 [![bazel](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml/badge.svg?branch=main)](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml?query=branch%3Amain)
 
-[Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
+[Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/self-managed/installation.md) | [API Reference](docs/overview/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
 > **Repository move in progress.** This repo is transferring from `NVIDIA/nvcf` to
 > `dsx-ai-factory/nvcf`. Now targeted for **after 2026-09-27** — exact date and
@@ -23,7 +23,7 @@ examples, CLI code, agent skills, and validation tooling.
 
 ## Architecture
 
-![NVCF architecture](docs/user/images/nvcf-high-level-stack.svg)
+![NVCF architecture](docs/overview/images/nvcf-high-level-stack.svg)
 
 NVCF runs as Kubernetes services that manage function lifecycle, invocation
 routing, GPU cluster integration, artifact access, secrets, observability, and
@@ -44,7 +44,7 @@ At a high level:
 The following diagram shows how self-managed NVCF can span regions and GPU
 clusters.
 
-<img src="docs/user/images/nvcf-multi-region-multi-cluster.svg" alt="NVCF multi-region and multi-cluster architecture" width="80%">
+<img src="docs/overview/images/nvcf-multi-region-multi-cluster.svg" alt="NVCF multi-region and multi-cluster architecture" width="80%">
 
 ### Workload types
 
@@ -90,8 +90,8 @@ nvcf-cli function invoke --request-body '{"message": "hello world"}'
 ```
 
 For the full setup, cleanup, and configuration flow, see
-[`docs/user/cli.md`](docs/user/cli.md) and
-[`docs/user/quickstart.md`](docs/user/quickstart.md).
+[`docs/overview/cli.md`](docs/overview/cli.md) and
+[`docs/overview/quickstart.md`](docs/overview/quickstart.md).
 
 ## Repository map
 
@@ -102,7 +102,7 @@ For the full setup, cleanup, and configuration flow, see
 | Compute plane | [`src/compute-plane-services/`](src/compute-plane-services/) | GPU cluster integration, cache services, image credentials, ESS Agent, and telemetry collection. |
 | CLI and libraries | [`src/clis/`](src/clis/), [`src/libraries/`](src/libraries/) | User and developer clients plus shared Go and Python code. |
 | Deployment | [`deploy/`](deploy/), [`migrations/`](migrations/) | Helm charts, stack installation, infrastructure services, and datastore migrations. |
-| Documentation | [`docs/user/`](docs/user/index.md), [`docs/dev/`](docs/dev/), [`fern/`](fern/) | Self-managed user docs, developer docs, and published docs navigation. |
+| Documentation | [`docs/overview/`](docs/overview/index.md), [`docs/self-managed/`](docs/self-managed/), [`docs/compute-plane/`](docs/compute-plane/), [`docs/observability/`](docs/observability/), [`docs/dev/`](docs/dev/), [`fern/`](fern/) | Per-stack user docs, shared overview docs, developer docs, and published docs navigation. |
 | Examples | [`examples/`](examples/) | Local development guides, function samples, and load-test assets. |
 | Tools | [`tools/`](tools/) | Build, docs, dependency, license, and validation utilities. |
 | AI tooling | [`ai-tooling/`](ai-tooling/) | Public agent skills and workflow helpers for NVCF users and developers. |

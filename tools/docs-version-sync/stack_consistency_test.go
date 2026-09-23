@@ -205,7 +205,7 @@ func TestPendingPublicationsNeverRenderPrivateRegistryPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	imageMirroringPath := filepath.Join(root, "docs", "user", "image-mirroring.md")
+	imageMirroringPath := filepath.Join(root, "docs", "overview", "image-mirroring.md")
 	imageMirroring, err := os.ReadFile(imageMirroringPath)
 	if err != nil {
 		t.Fatal(err)

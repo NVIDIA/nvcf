@@ -53,6 +53,7 @@ import com.nvidia.nvcf.rest.function.management.dto.FunctionTypeEnum;
 import com.nvidia.nvcf.rest.function.management.dto.HealthDto;
 import com.nvidia.nvcf.rest.function.management.dto.InstanceDto;
 import com.nvidia.nvcf.rest.function.management.dto.LlmInvocationConfigDto;
+import com.nvidia.nvcf.rest.function.management.dto.LlmRoutingMethodValidator;
 import com.nvidia.nvcf.rest.function.management.dto.ProtocolEnum;
 import com.nvidia.nvcf.rest.function.management.dto.RateLimitDto;
 import com.nvidia.nvcf.rest.telemetry.dto.TelemetriesDto;
@@ -486,6 +487,14 @@ public class FunctionMapperService {
         var modelSpecs = new LinkedHashMap<String, String>();
         for (var model : models) {
             var llmConfig = model.getLlmConfig();
+            if (llmConfig != null) {
+                // Every write of modelSpecs passes here, so this is where routingMethod takes
+                // its stored form. The copy leaves the caller's DTO as received.
+                llmConfig = llmConfig.toBuilder()
+                        .routingMethod(LlmRoutingMethodValidator.withoutOuterSpaces(
+                                llmConfig.getRoutingMethod()))
+                        .build();
+            }
             modelSpecs.put(model.getName(), jsonMapper.writeValueAsString(new ModelSpecValue(
                     model.getVersion(),
                     model.getUri(),

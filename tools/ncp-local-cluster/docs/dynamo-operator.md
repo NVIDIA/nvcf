@@ -22,7 +22,7 @@ NVCF API; both are cluster infrastructure that the Dynamo Operator relies on.
 
 ## 1. Install KAI Scheduler
 
-Follow the [KAI Scheduler installation guide](/docs/user/cluster-management/kai-scheduler.md).
+Follow the [KAI Scheduler installation guide](../../../docs/compute-plane/cluster-management/kai-scheduler.md).
 
 **Note:** topology-aware scheduling with Dynamo requires Grove v0.14.0 or later,
 so ensure that version is set instead of the default version if you want to test that behavior.

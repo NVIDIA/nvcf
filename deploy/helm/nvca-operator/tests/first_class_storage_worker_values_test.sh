@@ -122,7 +122,7 @@ storage:
   internalPersistentStorage:
     storageClassName: standard
     hardResourceQuota:
-      storage: 50Gi
+      requests.storage: 50Gi
 worker:
   minHealthcheckRefreshWait: "30s"
   staticGPUCapacity: 8
@@ -147,7 +147,7 @@ assert_equal "fast-ssd" "$(agent_config_value "${explicit_manifest}" '.agent.sha
 assert_equal "noatime" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.taskData.pvMountOptions[0]')" "unexpected shared-storage task data mount options"
 assert_equal "200Gi" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.taskData.storageCapacity')" "unexpected shared-storage task data storage capacity"
 assert_equal "standard" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.storageClassName')" "unexpected IPS storage class"
-assert_equal "50Gi" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.hardResourceQuota.storage')" "unexpected IPS hard resource quota"
+assert_equal "50Gi" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.hardResourceQuota."requests.storage"')" "unexpected IPS hard resource quota"
 assert_equal "30s" "$(agent_config_value "${explicit_manifest}" '.agent.minHealthcheckRefreshWait')" "unexpected healthcheck refresh wait"
 assert_equal "8" "$(agent_config_value "${explicit_manifest}" '.agent.staticGPUCapacity')" "unexpected static GPU capacity"
 assert_equal "k8s" "$(agent_config_value "${explicit_manifest}" '.agent.computeBackend')" "unexpected compute backend"
@@ -159,6 +159,18 @@ assert_equal "ro" "$(agent_config_value "${explicit_manifest}" '.agent.csiVolume
 assert_equal "45m" "$(agent_config_value "${explicit_manifest}" '.agent.credRenewInterval')" "unexpected cred renew interval"
 assert_equal "5m" "$(agent_config_value "${explicit_manifest}" '.agent.heartbeatInterval')" "unexpected heartbeat interval"
 assert_equal "5m" "$(agent_config_value "${explicit_manifest}" '.agent.icmsRequestAckRetryTimeout')" "unexpected ICMS request ack retry timeout"
+
+if render "${tmp_dir}/invalid-ips-manifest.yaml" \
+  --set-string 'storage.internalPersistentStorage.hardResourceQuota.requests\.storage=7Gi' \
+  2>"${tmp_dir}/invalid-ips-error.log"; then
+  echo "IPS quota without storage class: expected helm template to fail, but it succeeded" >&2
+  exit 1
+fi
+if ! grep -q "storage.internalPersistentStorage.storageClassName is required" "${tmp_dir}/invalid-ips-error.log"; then
+  echo "IPS quota without storage class: helm template failed for an unexpected reason:" >&2
+  cat "${tmp_dir}/invalid-ips-error.log" >&2
+  exit 1
+fi
 
 yq eval '
   .agentConfig.mergeConfig = "agent:\n  computeBackend: legacy-backend\n  sharedStorage:\n    server:\n      image: legacy-image\ncluster:\n  validationPolicy:\n    name: Unrestricted\n    allowedExtraKubernetesTypes:\n      - group: nvidia.com\n        kind: DynamoGraphDeployment\n        resource: dynamographdeployments\n        version: v1alpha1" |

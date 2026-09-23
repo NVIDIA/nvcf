@@ -1682,7 +1682,7 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments)
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 1, nil)
 	})
 	t.Run("required domains", func(t *testing.T) {
 		helmObjs := []client.Object{
@@ -1789,11 +1789,83 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments)
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 1, nil)
+	})
+	t.Run("disabled via workload config", func(t *testing.T) {
+		helmObjs := []client.Object{
+			&appsv1.Deployment{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "foo",
+				},
+				Spec: appsv1.DeploymentSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{
+								Name:    "test",
+								Image:   "nvcr.io/foo/bar:baz",
+								Command: []string{"yes"},
+								Resources: corev1.ResourceRequirements{
+									Limits: gpuLimits,
+								},
+							}},
+						},
+					},
+				},
+			},
+			&corev1.ConfigMap{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: featureflag.WorkloadConfigConfigMapName,
+				},
+				Data: map[string]string{
+					featureflag.WorkloadConfigDataKey: "featureFlags:\n  " + featureflag.DisableNVLinkComputeDomain + ": true\n",
+				},
+			},
+		}
+		// Workload objects are bare Helm renders; labels/annotations/pod-spec fields
+		// (service account, affinity, DRA resource claims, NVLink labels) are injected
+		// by the webhook at Pod admission time, not on Deployments. The
+		// nvcf-workload-config ConfigMap is dropped during decode and never applied.
+		expDeployments := []appsv1.Deployment{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "foo",
+				},
+				Spec: appsv1.DeploymentSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{
+								Name:    "test",
+								Image:   "nvcr.io/foo/bar:baz",
+								Command: []string{"yes"},
+								Env:     []corev1.EnvVar{},
+								Resources: corev1.ResourceRequirements{
+									Limits: gpuLimits,
+								},
+							}},
+						},
+					},
+				},
+			},
+		}
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 0, map[string]bool{featureflag.DisableNVLinkComputeDomain: true})
 	})
 }
 
-func testReconcileNVLinkOptimizedHelper(t *testing.T, helmObjs []client.Object, expDeployments []appsv1.Deployment) {
+func testReconcileNVLinkOptimizedHelper(
+	t *testing.T,
+	helmObjs []client.Object,
+	expDeployments []appsv1.Deployment,
+	expComputeDomainCount int,
+	expWorkloadFeatureFlags map[string]bool,
+) {
 	ctx := newTestContext()
 	testScheme := mgrScheme
 
@@ -2153,6 +2225,23 @@ rules:
 		expDeployment.Spec.Template.Annotations = filterNVCFAnnotations(expDeployment.Spec.Template.Annotations)
 		assert.Equal(t, expDeployment, gotDeployment)
 	}
+
+	gotComputeDomains := &nvresourcev1beta1.ComputeDomainList{}
+	err = r.Client.List(ctx, gotComputeDomains, client.InNamespace(ms.Spec.Namespace))
+	require.NoError(t, err)
+	assert.Len(t, gotComputeDomains.Items, expComputeDomainCount)
+
+	// Verify the flag actually reaches the webhook through the miniservice metadata
+	// ConfigMap, not just the reconciler's local decision to (not) create a ComputeDomain.
+	metadataCM := &corev1.ConfigMap{}
+	err = r.Client.Get(ctx, client.ObjectKey{
+		Namespace: ms.Spec.Namespace,
+		Name:      nvcatypes.MiniserviceMetadataConfigMapName,
+	}, metadataCM)
+	require.NoError(t, err, "metadata ConfigMap should exist")
+	msMeta, err := nvcatypes.FromConfigMapData(metadataCM.Data)
+	require.NoError(t, err, "metadata ConfigMap should deserialize")
+	assert.Equal(t, expWorkloadFeatureFlags, msMeta.WorkloadFeatureFlags)
 
 	err = r.Client.Get(ctx, client.ObjectKeyFromObject(ms), ms)
 	require.NoError(t, err)

@@ -1023,6 +1023,109 @@ class GithubReleaseTest(unittest.TestCase):
             )
             self.assertIn("would create deploy/stacks/self-managed/v0.21.0", on_branch)
 
+    def test_release_branch_skips_a_push_that_does_not_touch_the_stack(self):
+        # Backporting CI, tooling, or anything outside the stack's own tree is
+        # not a reason to publish a stack version.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "1.0.0", "release-deploy/stacks/self-managed/v1.0")
+            git(root, "tag", "deploy/stacks/self-managed/v1.0.0")
+            (root / "tools").mkdir(parents=True, exist_ok=True)
+            (root / "tools" / "ci-helper").write_text("backported tooling\n")
+            self.commit_all(root, "ci(self-managed): backport the release tooling")
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertIn("nothing changed under deploy/stacks/self-managed", output.getvalue())
+            self.assertNotIn("would create", output.getvalue())
+
+    def test_release_branch_skips_a_version_file_only_change(self):
+        # The exact bootstrap case: a branch cut from a commit that predates the
+        # VERSION file needs one commit to add it, and that commit ships nothing.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            stack_dir = root / "deploy/stacks/self-managed"
+            stack_dir.mkdir(parents=True, exist_ok=True)
+            (stack_dir / "helmfile.yaml").write_text("qualified content\n")
+            self.commit_all(root, "chore: the qualified commit, with no VERSION file")
+            git(root, "tag", "deploy/stacks/self-managed/v1.0.0")
+
+            git(root, "switch", "-c", "release-deploy/stacks/self-managed/v1.0")
+            (stack_dir / "VERSION").write_text("1.0.0\n")
+            self.commit_all(root, "chore(self-managed): seed VERSION for the 1.0 train")
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertNotIn("would create", output.getvalue())
+
+            # A real backport on top still releases, and it is the next patch.
+            (stack_dir / "helmfile.yaml").write_text("qualified content plus a backported fix\n")
+            self.commit_all(root, "fix(self-managed): backport the fix")
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertIn("would create deploy/stacks/self-managed/v1.0.1", output.getvalue())
+
+    def test_stack_change_detection_fails_closed_when_the_diff_cannot_run(self):
+        # A diff that does not run must not read as "the stack changed".
+        # run(capture=True) folds stderr into stdout, so an unreadable tag would
+        # come back as `fatal: bad revision ...`, parse as one changed path, and
+        # publish a version off an error message.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "1.0.0", "release-deploy/stacks/self-managed/v1.0")
+
+            with self.assertRaisesRegex(SystemExit, "cannot compare deploy/stacks/self-managed"):
+                self.github_release.stack_content_changed_since(
+                    root, self.SELF_MANAGED_STACK_SERVICE, "deploy/stacks/self-managed/v9.9.9"
+                )
+
+    def test_stack_change_detection_survives_a_synthetic_branch_root(self):
+        # A release branch is rooted at a synthetic commit, so the train's tags
+        # are not ancestors of HEAD. Comparison must be by tree, not by ancestry.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            stack_dir = root / "deploy/stacks/self-managed"
+            stack_dir.mkdir(parents=True, exist_ok=True)
+            (stack_dir / "helmfile.yaml").write_text("qualified content\n")
+            (stack_dir / "VERSION").write_text("1.0.0\n")
+            self.commit_all(root, "chore: qualified")
+            git(root, "tag", "deploy/stacks/self-managed/v1.0.0")
+            qualified = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+
+            # Graft: same tree, unrelated parentage.
+            base = self.github_release.linear_release_branch_base(root, qualified)
+            orphan = self.github_release.run(
+                ["git", "commit-tree", self.github_release.commit_tree(root, qualified), "-m", "snapshot"],
+                cwd=root,
+                capture=True,
+            ).strip()
+            git(root, "switch", "-c", "release-deploy/stacks/self-managed/v1.0", orphan)
+
+            self.assertFalse(
+                self.github_release.tag_is_reachable(root, "deploy/stacks/self-managed/v1.0.0"),
+                "the tag must not be an ancestor, or this test is not exercising the graft",
+            )
+            self.assertFalse(
+                self.github_release.stack_content_changed_since(
+                    root, self.SELF_MANAGED_STACK_SERVICE, "deploy/stacks/self-managed/v1.0.0"
+                ),
+                "identical trees across a graft must read as unchanged",
+            )
+            self.assertEqual(self.github_release.commit_tree(root, base), self.github_release.commit_tree(root, qualified))
+
     def test_release_branch_release_is_idempotent_at_head(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1502,6 +1605,52 @@ class GithubReleaseTest(unittest.TestCase):
                 service = self.github_release.release_asset_service(metadata, tag, SCRIPT_PATH.parents[2])
                 self.assertIsNotNone(service)
                 self.assertEqual(service["resolved_inventory_asset"], asset_name)
+
+    STACK_INVENTORY_PUBLISHERS = {
+        "self-managed": ("nvcf-self-managed-stack", "nvcf-self-managed-stack-inventory.json"),
+        "nvcf-compute-plane": ("nvcf-compute-plane-stack", "nvcf-compute-plane-stack-inventory.json"),
+        "observability": ("nvcf-observability-stack", "nvcf-observability-stack-inventory.json"),
+    }
+
+    def test_release_branch_tags_keep_the_same_inventory_publisher(self):
+        # Inventory attachment is keyed by the tag alone. A tag cut from a
+        # release train branch must resolve exactly as one cut from main did
+        # before the stacks moved to release branching.
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        root = SCRIPT_PATH.parents[2]
+        for stack, (service_id, asset_name) in self.STACK_INVENTORY_PUBLISHERS.items():
+            tag = f"deploy/stacks/{stack}/v1.1.0"
+            with self.subTest(tag=tag):
+                service = self.github_release.release_asset_service(metadata, tag, root)
+                self.assertIsNotNone(service)
+                self.assertEqual(service["id"], service_id)
+                self.assertEqual(service["resolved_inventory_asset"], asset_name)
+                self.assertEqual(self.github_release.version_from_tag(service, tag, root), "1.1.0")
+
+    def test_compute_plane_legacy_prefix_tag_still_resolves_its_inventory_publisher(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        root = SCRIPT_PATH.parents[2]
+        tag = "nvcf-compute-plane-stack-v0.2.0"
+        service = self.github_release.release_asset_service(metadata, tag, root)
+        self.assertIsNotNone(service)
+        self.assertEqual(service["id"], "nvcf-compute-plane-stack")
+        self.assertEqual(service["resolved_inventory_asset"], "nvcf-compute-plane-stack-inventory.json")
+        self.assertEqual(self.github_release.version_from_tag(service, tag, root), "0.2.0")
+
+    def test_release_train_branch_name_round_trips_for_every_stack(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        root = SCRIPT_PATH.parents[2]
+        for stack, (service_id, _asset_name) in self.STACK_INVENTORY_PUBLISHERS.items():
+            with self.subTest(stack=stack):
+                service = self.github_release.find_service(metadata, service_id)
+                branch = self.github_release.service_release_branch(service, "1.1.0", root)
+                self.assertEqual(branch, f"release-deploy/stacks/{stack}/v1.1")
+                self.assertEqual(self.github_release.release_branch_train(service, branch, root), "1.1")
+                self.assertEqual(
+                    self.github_release.tag_for_version(service, "1.1.0", root),
+                    f"deploy/stacks/{stack}/v1.1.0",
+                )
+                self.assertTrue(service.get("release_branch_only"))
 
     def chart_release_metadata(self):
         """Return minimal release metadata for the chart publication tests."""

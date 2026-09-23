@@ -32,9 +32,13 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -923,6 +927,160 @@ func TestDoSharedStorageSMB(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDoSharedStorageSMB_TaskDataStorageClass(t *testing.T) {
+	ctx := newTestContext()
+	storageClassName := "task-data"
+
+	for _, tt := range []struct {
+		name                string
+		storageClassName    string
+		storageClassPresent bool
+		wantPhase           nvcav1new.StoragePhase
+		wantCondition       bool
+		wantStatus          metav1.ConditionStatus
+		wantReason          string
+		wantErrContains     string
+	}{
+		{
+			name:             "missing",
+			storageClassName: storageClassName,
+			wantPhase:        nvcav1new.StorageFailed,
+			wantCondition:    true,
+			wantStatus:       metav1.ConditionFalse,
+			wantReason:       conditionReasonStorageClassNotFound,
+			wantErrContains:  `task-data StorageClass "task-data" not found`,
+		},
+		{
+			name:                "available",
+			storageClassName:    storageClassName,
+			storageClassPresent: true,
+			wantPhase:           nvcav1new.StorageInitRunning,
+			wantCondition:       true,
+			wantStatus:          metav1.ConditionTrue,
+			wantReason:          conditionReasonStorageClassFound,
+		},
+		{
+			name:      "explicit empty class",
+			wantPhase: nvcav1new.StorageInitRunning,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sch := newTestScheme()
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "task-data-" + strings.ReplaceAll(tt.name, " ", "-")},
+			}
+			objects := []client.Object{namespace}
+			if tt.storageClassPresent {
+				objects = append(objects, &storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{Name: tt.storageClassName},
+				})
+			}
+			k8sClient := newFakeClient(sch, objects...)
+			configuredStorageClassName := tt.storageClassName
+			stReq := &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-storage",
+					Namespace: namespace.Name,
+					Labels:    map[string]string{"function-version-id": "test-function"},
+				},
+				Spec: nvcav1new.StorageRequestSpec{
+					Type: nvcav1new.SharedStorageRequest,
+					SharedStorage: &nvcav1new.SharedStorageSpec{
+						SMBContainerImage: "smb:latest",
+						Size:              resource.MustParse("1Gi"),
+						TaskData: &nvcav1new.SharedStorageTaskDataSpec{
+							StorageClassName: &configuredStorageClassName,
+							Size:             resource.MustParse("1Gi"),
+						},
+					},
+				},
+				Status: nvcav1new.StorageRequestStatus{Phase: nvcav1new.StoragePending},
+			}
+			stCopy := stReq.DeepCopy()
+			r := &Reconciler{Client: k8sClient, fff: &featureflagmock.Fetcher{}}
+
+			_, err := r.doSharedStorageSMB(ctx, stReq, stCopy)
+			if tt.wantErrContains == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.wantErrContains)
+				assert.True(t, isTerminal(err))
+			}
+			assert.Equal(t, tt.wantPhase, stCopy.Status.Phase)
+			condition := meta.FindStatusCondition(
+				stCopy.Status.Conditions, conditionTypeTaskDataStorageClassAvailable)
+			if tt.wantCondition {
+				require.NotNil(t, condition)
+				assert.Equal(t, tt.wantStatus, condition.Status)
+				assert.Equal(t, tt.wantReason, condition.Reason)
+				assert.Contains(t, condition.Message, tt.storageClassName)
+			} else {
+				assert.Nil(t, condition)
+			}
+
+			if tt.wantPhase == nvcav1new.StorageFailed {
+				err := k8sClient.Get(ctx, client.ObjectKey{
+					Name:      SharedStorageTaskDataSMBServerPVCName,
+					Namespace: namespace.Name,
+				}, &corev1.PersistentVolumeClaim{})
+				assert.Error(t, err, "a missing StorageClass must fail before creating the task-data PVC")
+			}
+		})
+	}
+}
+
+func TestDoSharedStorageSMB_TaskDataStorageClassTransientLookupError(t *testing.T) {
+	ctx := newTestContext()
+	sch := newTestScheme()
+	namespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "task-data-transient-lookup"},
+	}
+	storageClassName := "task-data"
+	k8sClient := clientfake.NewClientBuilder().
+		WithScheme(sch).
+		WithRESTMapper(newTestRESTMapper(sch)).
+		WithObjects(namespace).
+		WithStatusSubresource(&nvcav1new.StorageRequest{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey,
+				obj client.Object, opts ...client.GetOption,
+			) error {
+				if _, ok := obj.(*storagev1.StorageClass); ok && key.Name == storageClassName {
+					return apierrors.NewServiceUnavailable("storageclass lookup failed")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	stReq := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "shared-storage",
+			Namespace: namespace.Name,
+			Labels:    map[string]string{"function-version-id": "test-function"},
+		},
+		Spec: nvcav1new.StorageRequestSpec{
+			Type: nvcav1new.SharedStorageRequest,
+			SharedStorage: &nvcav1new.SharedStorageSpec{
+				SMBContainerImage: "smb:latest",
+				Size:              resource.MustParse("1Gi"),
+				TaskData: &nvcav1new.SharedStorageTaskDataSpec{
+					StorageClassName: &storageClassName,
+					Size:             resource.MustParse("1Gi"),
+				},
+			},
+		},
+		Status: nvcav1new.StorageRequestStatus{Phase: nvcav1new.StoragePending},
+	}
+	stCopy := stReq.DeepCopy()
+	r := &Reconciler{Client: k8sClient, fff: &featureflagmock.Fetcher{}}
+
+	result, err := r.doSharedStorageSMB(ctx, stReq, stCopy)
+	require.NoError(t, err)
+	assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
+	assert.Equal(t, nvcav1new.StoragePending, stCopy.Status.Phase)
+	assert.Empty(t, stCopy.Status.Conditions)
 }
 
 // TestDoSharedStorageSMB_GetError_Requeues verifies that transient Get errors

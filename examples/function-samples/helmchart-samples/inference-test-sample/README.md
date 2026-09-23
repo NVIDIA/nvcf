@@ -50,7 +50,7 @@ nvcf-cli registry add \
 To opt into worker-readiness-based instance health, set
 `statusByWorkerReadiness: true` in `inference-test/values.yaml`. This
 renders the optional `nvcf-workload-config` ConfigMap described in
-[Helm Functions](../../../../docs/user/helm-functions.md#use-worker-readiness-for-function-health).
+[Helm Functions](../../../../docs/overview/helm-functions.md#use-worker-readiness-for-function-health).
 
 The chart declares CPU and memory requests and limits because self-managed
 NVCF validates resource limits before admitting Helm function workloads.
