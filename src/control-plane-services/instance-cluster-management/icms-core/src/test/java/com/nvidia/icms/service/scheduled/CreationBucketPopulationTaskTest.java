@@ -89,10 +89,11 @@ class CreationBucketPopulationTaskTest {
         var result = task.execute();
 
         assertEquals(new CreationBucketPopulationTask.PopulationResult(1, 0, 1, 0, null), result);
-        assertEquals(expectedBucket, missingRequest.getCreationBucket());
-        assertEquals(expectedBucket, missingInstance.getCreationBucket());
-        verify(requestRepository).update(missingRequest);
-        verify(instanceRepository).update(missingInstance);
+        long writeTimestamp = creationTime.toEpochMilli() * 1000;
+        verify(requestRepository).updateCreationBucket(
+                "request-1", expectedBucket, writeTimestamp);
+        verify(instanceRepository).updateCreationBucket(
+                "instance-1", expectedBucket, writeTimestamp);
     }
 
     @Test

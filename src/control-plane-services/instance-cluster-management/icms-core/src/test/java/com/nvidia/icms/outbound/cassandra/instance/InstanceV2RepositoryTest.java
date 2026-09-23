@@ -155,6 +155,54 @@ class InstanceV2RepositoryTest extends InstanceTestBase {
 
     }
 
+    @Test
+    void updateCreationBucket_preservesNewerInstanceUpdate() {
+        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
+        var instance = createDefaultInstanceV2(
+                RandomFactory.getRandomStringWithPrefix("instance", 5),
+                RandomFactory.getRandomStringWithPrefix("request", 5),
+                createTime,
+                "customer",
+                null);
+        instanceV2Repo.update(instance);
+
+        var scannedInstance = instanceV2Repo.findById(instance.getInstanceId()).orElseThrow();
+        instance.setInstanceStateName(SpotInstanceInternalState.TERMINATED);
+        instanceV2Repo.update(instance);
+
+        Instant creationBucket = createTime.truncatedTo(ChronoUnit.DAYS);
+        instanceV2Repository.updateCreationBucket(
+                scannedInstance.getInstanceId(),
+                creationBucket,
+                createTime.toEpochMilli() * 1000);
+
+        var updatedInstance = instanceV2Repo.findById(instance.getInstanceId()).orElseThrow();
+        assertEquals(SpotInstanceInternalState.TERMINATED,
+                updatedInstance.getInstanceStateName());
+        assertEquals(creationBucket, updatedInstance.getCreationBucket());
+    }
+
+    @Test
+    void updateCreationBucket_doesNotRecreateDeletedInstance() {
+        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
+        var instance = createDefaultInstanceV2(
+                RandomFactory.getRandomStringWithPrefix("instance", 5),
+                RandomFactory.getRandomStringWithPrefix("request", 5),
+                createTime,
+                "customer",
+                null);
+        instanceV2Repo.update(instance);
+
+        var scannedInstance = instanceV2Repo.findById(instance.getInstanceId()).orElseThrow();
+        instanceV2Repo.deleteById(instance.getInstanceId());
+        instanceV2Repository.updateCreationBucket(
+                scannedInstance.getInstanceId(),
+                createTime.truncatedTo(ChronoUnit.DAYS),
+                createTime.toEpochMilli() * 1000);
+
+        assertTrue(instanceV2Repo.findById(instance.getInstanceId()).isEmpty());
+    }
+
     @ParameterizedTest
     @ValueSource(ints = {1, 0, -1})
     void delete_ok(int monthOffset) {
