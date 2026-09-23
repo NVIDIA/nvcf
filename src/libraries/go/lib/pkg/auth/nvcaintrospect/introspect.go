@@ -184,15 +184,32 @@ func (c *Client) Introspect(ctx context.Context, token string) (*IntrospectResul
 		return nil, err
 	}
 
-	// An inactive result is never cached: clock skew or an nbf window can
-	// make the same token valid moments later. Both a valid-subject and an
-	// invalid-subject active result are cached, since a token's subject is
-	// fixed once issued.
-	if result.Active {
+	if shouldCache(result) {
 		c.cacheStore(key, result, token)
 	}
 
 	return result, nil
+}
+
+// shouldCache reports whether an introspection result is safe to reuse for a
+// token's remaining lifetime.
+//
+// An inactive result is never cached: clock skew or an nbf window can make
+// the same token valid moments later. An invalid-subject result is cached
+// regardless of ClusterID: a token's subject can't change once issued, so
+// the denial is permanent. A valid-subject result with an empty ClusterID is
+// not cached: that's an incomplete response from the introspection endpoint
+// (a caller requiring ClusterID would reject it), and caching it would pin
+// that rejection for the full TTL even after the endpoint starts returning a
+// complete response.
+func shouldCache(result *IntrospectResult) bool {
+	if !result.Active {
+		return false
+	}
+	if !IsValidNVCASubject(result.Sub) {
+		return true
+	}
+	return result.ClusterID != ""
 }
 
 func (c *Client) callIntrospect(ctx context.Context, token string) (*IntrospectResult, error) {

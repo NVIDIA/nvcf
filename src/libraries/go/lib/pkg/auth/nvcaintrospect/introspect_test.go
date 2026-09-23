@@ -162,6 +162,31 @@ func TestClientIntrospectCachesActiveInvalidSubject(t *testing.T) {
 	assert.Equal(t, 1, calls, "an active token's subject is immutable, so an invalid-subject result must be cached")
 }
 
+func TestClientIntrospectDoesNotCacheValidSubjectMissingClusterID(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(IntrospectResult{
+			Active: true,
+			Sub:    "system:serviceaccount:customer-ns:nvca",
+			// ClusterID intentionally omitted.
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, time.Second, time.Minute)
+	require.NoError(t, err)
+
+	token := signedTestToken(t, time.Now().Add(time.Hour))
+
+	_, err = client.Introspect(context.Background(), token)
+	require.NoError(t, err)
+	_, err = client.Introspect(context.Background(), token)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls, "a valid-subject result missing ClusterID is incomplete and must not be cached, or a later complete response stays hidden behind the stale entry")
+}
+
 func TestClientIntrospectDoesNotCacheInactiveResult(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
