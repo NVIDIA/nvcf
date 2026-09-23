@@ -29,7 +29,8 @@ use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, Infere
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
 use super::grpc_endpoint::{
-    StargateGrpcEndpoint, connect_stargate_grpc_channel, log_stargate_grpc_certificate_failure,
+    StargateGrpcEndpoint, connect_stargate_grpc_channel, grpc_error_chain,
+    log_stargate_grpc_certificate_failure,
 };
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
@@ -58,16 +59,21 @@ pub(super) async fn run_router_registration_stream(
             ) => connection,
         };
         let (mut ack_stream, update_tx) = match connection {
-            Ok(connection) => {
-                last_certificate_failure = None;
-                connection
-            }
+            Ok(connection) => connection,
             Err(error) => {
                 last_certificate_failure = log_stargate_grpc_certificate_failure(
                     &router_endpoint,
                     "register_inference_server",
                     error.as_ref(),
                     last_certificate_failure,
+                );
+                tracing::warn!(
+                    transport = "grpc",
+                    operation = "register_inference_server",
+                    endpoint = %router_endpoint,
+                    cluster_id = %config.cluster_id,
+                    error = %grpc_error_chain(error.as_ref()),
+                    "Stargate gRPC operation failed"
                 );
                 if stop
                     .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
@@ -160,8 +166,32 @@ pub(super) async fn run_router_registration_stream(
                     connected
                 }
                 maybe_ack = ack_stream.message() => {
-                    let Ok(Some(ack)) = maybe_ack else {
-                        break false;
+                    let ack = match maybe_ack {
+                        Ok(Some(ack)) => {
+                            last_certificate_failure = None;
+                            ack
+                        }
+                        Ok(None) => {
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                "Stargate registration response stream ended"
+                            );
+                            break false;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                error = %grpc_error_chain(&error),
+                                "Stargate gRPC operation failed"
+                            );
+                            break false;
+                        }
                     };
                     if config.reverse_tunnel {
                         let endpoint = reverse_tunnel_endpoint_from_ack(&ack);
@@ -185,7 +215,12 @@ pub(super) async fn run_router_registration_stream(
         if let Some(task) = reverse_task {
             task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
         }
-        if stopped {
+        if stopped
+            || stop
+                .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+                .await
+                .is_none()
+        {
             return;
         }
     }
@@ -298,7 +333,10 @@ pub(super) async fn open_registration_stream(
         min_update_interval.as_millis().to_string().parse()?,
     );
     if let Some(provider) = auth_token_provider {
-        let token = provider.resolve_token().await?;
+        let token = provider
+            .resolve_token()
+            .await
+            .context("failed to resolve registration token")?;
         request.metadata_mut().insert(
             "authorization",
             format!("Bearer {token}")
