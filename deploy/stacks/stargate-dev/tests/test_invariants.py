@@ -184,7 +184,13 @@ class RenderedStackTests(unittest.TestCase):
 
     def test_routing_policy_override_preserves_omitted_queue_bounds(self) -> None:
         root = Path(self.temporary.name)
-        for region_name in ("us-west-2", "us-east-1"):
+        for region_name in (
+            "us-west-2",
+            "us-east-1",
+            "eu-west-1",
+            "ap-northeast-1",
+            "ap-southeast-2",
+        ):
             with self.subTest(region=region_name):
                 region = yaml.safe_load(
                     (STACK_DIR / "environments" / f"{region_name}.yaml").read_text()
@@ -234,75 +240,89 @@ class RenderedStackTests(unittest.TestCase):
                     json.loads(configmap["data"]["lb-config.json"]), policy
                 )
 
-    def test_east_region_renders_remote_discovery_and_unique_backends(self) -> None:
-        root = Path(self.temporary.name)
-        credentials = root / "east-credentials.json"
-        credentials.write_text(json.dumps({**self.credentials, "region": "us-east-1"}))
-        credentials.chmod(0o600)
-        values = root / "east-values.yaml"
-        remote = "https://router.usw2.stargate-dev.example.invalid:50071"
-        values.write_text(yaml.safe_dump({"router": {"remoteWatchUrls": [remote]}}))
-        environment = dict(
-            os.environ,
-            STARGATE_DEV_CREDENTIALS_FILE=str(credentials),
-            STARGATE_DEV_VALUES_FILE=str(values),
-        )
-        rendered = subprocess.run(
-            ["helmfile", "-e", "us-east-1", "template"],
-            cwd=STACK_DIR,
-            env=environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        resources = [
-            resource
-            for resource in yaml.safe_load_all(rendered.stdout)
-            if isinstance(resource, dict)
-        ]
-        deployments = {
-            resource["metadata"]["name"]: resource
-            for resource in resources
-            if resource.get("kind") == "Deployment"
-        }
-        router = deployments["llm-request-router"]["spec"]["template"]["spec"][
-            "containers"
-        ][0]
-        self.assertIn(f"--remote-stargate-url={remote}", router["args"])
-        actual = set()
-        for name, deployment in deployments.items():
-            if not name.startswith("mockdc-"):
-                continue
-            containers = deployment["spec"]["template"]["spec"]["containers"]
-            pylon = next(
-                container for container in containers if container["name"] == "pylon"
-            )
-            actual.update(
-                argument.split("=", 1)[1]
-                for argument in pylon["args"]
-                if argument.startswith("--inference-server-id=")
-            )
-        self.assertEqual(
-            actual,
-            {
-                f"mockdc-ue1-{dc}-backend-{index}"
-                for dc in ("a", "b")
-                for index in range(2)
-            },
-        )
-        roles = {
-            resource["metadata"]
-            .get("annotations", {})
-            .get("eks.amazonaws.com/role-arn")
-            for resource in resources
-            if resource.get("kind") == "ServiceAccount"
-        }
-        self.assertIn(
-            "arn:aws:iam::000000000000:role/stargate-dev-us-east-1-amp-writer", roles
-        )
-        self.assertNotIn(
-            "arn:aws:iam::000000000000:role/stargate-dev-amp-writer", roles
-        )
+    def test_peer_regions_render_remote_discovery_and_unique_backends(self) -> None:
+        for region_name, code in [
+            ("us-east-1", "ue1"),
+            ("eu-west-1", "ew1"),
+            ("ap-northeast-1", "an1"),
+            ("ap-southeast-2", "as2"),
+        ]:
+            with self.subTest(region=region_name):
+                root = Path(self.temporary.name)
+                credentials = root / f"{region_name}-credentials.json"
+                credentials.write_text(
+                    json.dumps({**self.credentials, "region": region_name})
+                )
+                credentials.chmod(0o600)
+                values = root / f"{region_name}-values.yaml"
+                remote = "https://router.usw2.stargate-dev.example.invalid:50071"
+                values.write_text(
+                    yaml.safe_dump({"router": {"remoteWatchUrls": [remote]}})
+                )
+                environment = dict(
+                    os.environ,
+                    STARGATE_DEV_CREDENTIALS_FILE=str(credentials),
+                    STARGATE_DEV_VALUES_FILE=str(values),
+                )
+                rendered = subprocess.run(
+                    ["helmfile", "-e", region_name, "template"],
+                    cwd=STACK_DIR,
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                resources = [
+                    resource
+                    for resource in yaml.safe_load_all(rendered.stdout)
+                    if isinstance(resource, dict)
+                ]
+                deployments = {
+                    resource["metadata"]["name"]: resource
+                    for resource in resources
+                    if resource.get("kind") == "Deployment"
+                }
+                router = deployments["llm-request-router"]["spec"]["template"]["spec"][
+                    "containers"
+                ][0]
+                self.assertIn(f"--remote-stargate-url={remote}", router["args"])
+                actual = set()
+                for name, deployment in deployments.items():
+                    if not name.startswith("mockdc-"):
+                        continue
+                    containers = deployment["spec"]["template"]["spec"]["containers"]
+                    pylon = next(
+                        container
+                        for container in containers
+                        if container["name"] == "pylon"
+                    )
+                    actual.update(
+                        argument.split("=", 1)[1]
+                        for argument in pylon["args"]
+                        if argument.startswith("--inference-server-id=")
+                    )
+                self.assertEqual(
+                    actual,
+                    {
+                        f"mockdc-{code}-{dc}-backend-{index}"
+                        for dc in ("a", "b")
+                        for index in range(2)
+                    },
+                )
+                roles = {
+                    resource["metadata"]
+                    .get("annotations", {})
+                    .get("eks.amazonaws.com/role-arn")
+                    for resource in resources
+                    if resource.get("kind") == "ServiceAccount"
+                }
+                self.assertIn(
+                    f"arn:aws:iam::000000000000:role/stargate-dev-{region_name}-amp-writer",
+                    roles,
+                )
+                self.assertNotIn(
+                    "arn:aws:iam::000000000000:role/stargate-dev-amp-writer", roles
+                )
 
     def test_every_release_has_the_intended_explicit_context(self) -> None:
         releases = next(

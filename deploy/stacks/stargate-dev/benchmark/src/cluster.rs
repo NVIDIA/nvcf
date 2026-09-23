@@ -101,6 +101,9 @@ impl Topology {
             let source = match name {
                 "us-west-2" => include_str!("../../environments/us-west-2.yaml"),
                 "us-east-1" => include_str!("../../environments/us-east-1.yaml"),
+                "eu-west-1" => include_str!("../../environments/eu-west-1.yaml"),
+                "ap-northeast-1" => include_str!("../../environments/ap-northeast-1.yaml"),
+                "ap-southeast-2" => include_str!("../../environments/ap-southeast-2.yaml"),
                 _ => bail!("unsupported region {name:?}"),
             };
             let region: Region = serde_yaml_ng::from_str(source)
@@ -1146,6 +1149,31 @@ mod tests {
         let connected = Topology::load("us-east-1", &["us-west-2".into()])?;
         assert_eq!(connected.backend_targets().count(), 8);
         assert_eq!(connected.primary().region, "us-east-1");
+        let regions = [
+            "us-west-2",
+            "us-east-1",
+            "eu-west-1",
+            "ap-northeast-1",
+            "ap-southeast-2",
+        ];
+        for primary in regions {
+            let peers = regions
+                .iter()
+                .filter(|region| **region != primary)
+                .map(|region| (*region).to_owned())
+                .collect::<Vec<_>>();
+            let global = Topology::load(primary, &peers)?;
+            assert_eq!(global.primary().region, primary);
+            assert_eq!(global.backend_targets().count(), 20);
+            assert_eq!(
+                global
+                    .backend_targets()
+                    .map(|(_, _, name)| name)
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                20
+            );
+        }
         assert!(Topology::load("us-west-2", &["us-west-2".into()]).is_err());
         assert!(Topology::load("../us-west-2", &[]).is_err());
         Ok(())

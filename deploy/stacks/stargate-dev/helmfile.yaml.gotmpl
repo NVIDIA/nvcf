@@ -2,6 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 environments:
+  eu-west-1:
+    values:
+      - environments/eu-west-1.yaml
+      - values/versions.yaml
+      - {{ requiredEnv "STARGATE_DEV_VALUES_FILE" }}
+  ap-northeast-1:
+    values:
+      - environments/ap-northeast-1.yaml
+      - values/versions.yaml
+      - {{ requiredEnv "STARGATE_DEV_VALUES_FILE" }}
+  ap-southeast-2:
+    values:
+      - environments/ap-southeast-2.yaml
+      - values/versions.yaml
+      - {{ requiredEnv "STARGATE_DEV_VALUES_FILE" }}
   us-east-1:
     values:
       - environments/us-east-1.yaml

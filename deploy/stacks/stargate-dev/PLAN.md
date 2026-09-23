@@ -2,9 +2,9 @@
 
 ## Current scope
 
-The checked-in stack supports `us-west-2` and `us-east-1`. Each region has one
-Stargate hub cluster and two MockDC clusters. Connected regions provide eight
-backends. Deployment and observability provisioning remain in `scripts/deploy.py`
+The checked-in stack supports `us-west-2`, `us-east-1`, `eu-west-1`,
+`ap-northeast-1`, and `ap-southeast-2`. Each region has one Stargate hub cluster
+and two MockDC clusters. The five connected regions provide 20 backends. Deployment and observability provisioning remain in `scripts/deploy.py`
 and `scripts/observability.py`.
 
 Verification and benchmark orchestration use the standalone Rust 2024 CLI in
@@ -66,16 +66,16 @@ has six measured arms and eight reports. It excludes smoke, extra repeats,
 long-context, and east-ingress traffic. The same file exposes `session-affinity`,
 `mixed-sessions`, and `capacity` to select one pair independently.
 
-Verify the west ingress hub against the connected eight-backend topology:
+Verify the west ingress hub against the connected 20-backend topology:
 
 ```sh
-"$STARGATE_BENCH" verify --region us-west-2 --peer-region us-east-1 --phase regional
+"$STARGATE_BENCH" verify --region us-west-2 --peer-region us-east-1 --peer-region eu-west-1 --peer-region ap-northeast-1 --peer-region ap-southeast-2 --phase regional
 ```
 
 Run through an existing Pod with a container named `spark`:
 
 ```sh
-"$STARGATE_BENCH" --suite-file deploy/stacks/stargate-dev/loadtest/reduced.yaml run --suite reduced --region us-west-2 --peer-region us-east-1 --spark-pod SPARK_POD --spark-image IMAGE --expected-config deploy/stacks/stargate-dev/loadtest/queue-bounds-none-max-queued-4.json --output RESULTS
+"$STARGATE_BENCH" --suite-file deploy/stacks/stargate-dev/loadtest/reduced.yaml run --suite reduced --region us-west-2 --peer-region us-east-1 --peer-region eu-west-1 --peer-region ap-northeast-1 --peer-region ap-southeast-2 --spark-pod SPARK_POD --spark-image IMAGE --expected-config deploy/stacks/stargate-dev/loadtest/queue-bounds-none-max-queued-4.json --output RESULTS
 ```
 
 `IMAGE` must match the selected container's image reference exactly. The
@@ -95,7 +95,10 @@ Without `--spark-pod`, the controller uses a local Docker image and an owned
 WebSocket port-forward. `--endpoint` supplies a different reachable endpoint.
 Runs reset caches and restart participating backends and routers when the plan
 requires clean caches. Readiness and control checks include peer regions;
-benchmark ingress remains the selected `--region`.
+benchmark ingress remains the selected `--region`. Include every connected
+region as a peer so readiness checks use the complete backend count. The saved
+eight-backend measurements describe the two-region topology used for those runs;
+they are not measurements of the expanded topology.
 
 ### Acceptance and recovery
 
