@@ -49,8 +49,8 @@ RUN GOOS=linux GOARCH="${TARGETARCH}" CGO_ENABLED=0 \
 FROM ${BAO_RUNTIME_IMAGE}
 ARG TARGETARCH
 
-# OpenBao 2.6.2 runs as the non-root openbao user by default. Escalate only
-# while installing the image's runtime packages, then restore that identity.
+# OpenBao 2.6.2 uses UID 100 and GID 1000. Escalate only while installing
+# runtime packages, then restore that identity as numeric OCI metadata.
 USER root
 # Upgrade packages inherited from the upstream image before installing the
 # runtime tools. This ensures security fixes from the pinned Alpine branch are
@@ -63,4 +63,4 @@ RUN apk upgrade --no-cache && \
 COPY --from=bao-build --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=plugin-build --chmod=0555 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
 
-USER openbao
+USER 100:1000

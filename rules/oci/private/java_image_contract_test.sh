@@ -185,6 +185,12 @@ assert_config() {  # assert_config <label> <flattened> <raw>
     printf '%s' "${flat}" | grep -o '"WorkingDir":"[^"]*"' >&2 || true
     return 1
   fi
+
+  if [[ -n "${EXPECT_USER:-}" ]] && ! printf '%s' "${flat}" | grep -F "\"User\":\"${EXPECT_USER}\"" >/dev/null; then
+    echo "${label}: runtime user is not ${EXPECT_USER}" >&2
+    printf '%s' "${flat}" | grep -o '"User":"[^"]*"' >&2 || true
+    return 1
+  fi
 }
 
 assert_config "host image" "${config_flat}" "${config_raw}"

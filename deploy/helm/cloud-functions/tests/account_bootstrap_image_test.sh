@@ -32,6 +32,8 @@ assert_image() {
 
 render_job "$work_dir/default.yaml"
 assert_image "$work_dir/default.yaml" "docker.io/alpine/k8s:1.37.0"
+test "$(yq -r '.spec.template.spec.containers[0].securityContext.runAsNonRoot' "$work_dir/default.yaml")" = true
+test "$(yq -r '.spec.template.spec.containers[0].securityContext.runAsUser' "$work_dir/default.yaml")" = 1000
 
 render_job "$work_dir/partial-override.yaml" \
   --set-string api.accountBootstrap.image.repository=mirror/alpine-k8s
