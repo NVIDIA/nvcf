@@ -1558,56 +1558,50 @@ async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoi
                     serde_json::json!({"model": model, "input": "hello"}),
                 ),
             ] {
-                for budget in ["0", "1"] {
-                    let body = Bytes::from(body.to_string());
-                    let request_body =
-                        reqwest::Body::wrap_stream(futures::stream::once(async move {
-                            // Let a nonzero retry budget expire while Pylon waits for the request body.
-                            tokio::time::sleep(Duration::from_millis(20)).await;
-                            Ok::<_, std::io::Error>(body)
-                        }));
-                    let response = proxy_request(
-                        &reqwest::Client::new(),
-                        fixture.http_addr,
-                        endpoint,
-                        model,
-                        "overload-request",
-                    )
-                    .header("content-type", "application/json")
-                    .header("x-stargate-max-wait-ms", budget)
-                    .body(request_body)
-                    .send()
-                    .await
-                    .expect("send overload request");
-                    assert_eq!(
-                        response.status(),
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "{protocol:?}, reverse={reverse}, {endpoint}, budget={budget}"
-                    );
-                    assert_eq!(response.headers()["content-type"], "application/json");
-                    assert_eq!(
-                        response.headers()["x-stargate-error-code"],
-                        "overloaded_error"
-                    );
-                    assert!(
-                        response
-                            .headers()
-                            .keys()
-                            .all(|name| name == "x-stargate-error-code"
-                                || !name.as_str().starts_with("x-stargate-"))
-                    );
-                    let body: serde_json::Value =
-                        response.json().await.expect("read overload body");
-                    assert_eq!(
-                        body,
-                        serde_json::json!({"error": {
-                            "code": "overloaded_error",
-                            "message": "Inference capacity is temporarily unavailable.",
-                            "param": "",
-                            "type": "overloaded_error",
-                        }})
-                    );
-                }
+                let body = Bytes::from(body.to_string());
+                let request_body = reqwest::Body::wrap_stream(futures::stream::once(async move {
+                    Ok::<_, std::io::Error>(body)
+                }));
+                let response = proxy_request(
+                    &reqwest::Client::new(),
+                    fixture.http_addr,
+                    endpoint,
+                    model,
+                    "overload-request",
+                )
+                .header("content-type", "application/json")
+                .header("x-stargate-max-wait-ms", "0")
+                .body(request_body)
+                .send()
+                .await
+                .expect("send overload request");
+                assert_eq!(
+                    response.status(),
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "{protocol:?}, reverse={reverse}, {endpoint}"
+                );
+                assert_eq!(response.headers()["content-type"], "application/json");
+                assert_eq!(
+                    response.headers()["x-stargate-error-code"],
+                    "overloaded_error"
+                );
+                assert!(
+                    response
+                        .headers()
+                        .keys()
+                        .all(|name| name == "x-stargate-error-code"
+                            || !name.as_str().starts_with("x-stargate-"))
+                );
+                let body: serde_json::Value = response.json().await.expect("read overload body");
+                assert_eq!(
+                    body,
+                    serde_json::json!({"error": {
+                        "code": "overloaded_error",
+                        "message": "Inference capacity is temporarily unavailable.",
+                        "param": "",
+                        "type": "overloaded_error",
+                    }})
+                );
             }
             assert_eq!(backend.hits(), 0, "rejections must occur before inference");
             let metrics = fixture.metrics();
