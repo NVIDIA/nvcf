@@ -6,7 +6,7 @@ lists the stack releases that are qualified to run together.
 
 ## Current
 
-- [1.0.0 Release Notes](./1.0.0.md)
+- [1.0.1 Release Notes](./1.0.1.md)
 - [Upgrade from 0.6.1 to 1.0.0](./0.6.1-to-1.0.0-upgrade.md)
 
 ## Legacy
