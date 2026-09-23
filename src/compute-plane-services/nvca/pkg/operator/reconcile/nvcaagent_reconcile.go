@@ -1311,6 +1311,9 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	if err != nil {
 		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
+	if err := validateGPUDiscoveryConfig(nb, mergeCfg); err != nil {
+		return nil, err
+	}
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
@@ -1327,6 +1330,14 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 			agentConfigFile: string(cb),
 		},
 	}, nil
+}
+
+func validateGPUDiscoveryConfig(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) error {
+	if nb.Spec.ClusterConfig.GPUDiscovery.Dynamic != nil && mergeCfg.Agent.StaticGPUCapacity != 0 {
+		return &invalidAgentConfigError{err: fmt.Errorf(
+			"worker.staticGPUCapacity requires static GPU discovery; remove the override for a dynamic-discovery cluster")}
+	}
+	return nil
 }
 
 type agentHostOverrides struct {

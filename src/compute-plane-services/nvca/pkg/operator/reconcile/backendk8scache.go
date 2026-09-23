@@ -949,6 +949,19 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 	} else {
 		evType = corev1.EventTypeWarning
 	}
+	if nvcaHealthResp.Status == nvidiaiov1.AgentStatusHealthy && nb.Spec.ClusterConfig.GPUDiscovery.Dynamic != nil {
+		mergeCfg, _, configErr := bc.getRawAgentConfigToMerge(ctx)
+		if configErr == nil {
+			configErr = validateGPUDiscoveryConfig(nb, mergeCfg)
+		}
+		if isInvalidAgentConfigError(configErr) {
+			log.WithError(configErr).Warn("NVCA agent configuration is invalid for dynamic GPU discovery")
+			nvcaHealthResp.Status = nvidiaiov1.AgentStatusUnhealthy
+			evType = corev1.EventTypeWarning
+		} else if configErr != nil {
+			log.WithError(configErr).Warn("Could not check GPU discovery configuration during health sync")
+		}
+	}
 
 	if shouldUpdateNVCFStatus(nb.Status, nvcaHealthResp) {
 		bc.eventRecorder.Eventf(nb, evType,
