@@ -65,6 +65,10 @@ pub fn run(root: &Path, arguments: &[OsString]) -> io::Result<bool> {
         // The simulated container has a process group separate from kubectl.
         let status = command.process_group(0).status()?;
         if !status.success() {
+            eprintln!(
+                "command terminated with exit code {}",
+                status.code().unwrap_or(1)
+            );
             std::process::exit(status.code().unwrap_or(1));
         }
         if root.join("lose-launch-ack").exists()

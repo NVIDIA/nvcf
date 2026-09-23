@@ -266,18 +266,24 @@ impl<'a> Runner<'a> {
         )?;
         for (name, fingerprint) in fingerprints {
             let final_path = format!("{directory}/{name}");
-            let exists = self
+            let response = self
                 .read_exec(
                     &target,
-                    &["bash", "-c", "test -e \"$1\"", "--", &final_path],
+                    &[
+                        "bash",
+                        "-c",
+                        "if test -e \"$1\"; then printf present; else printf absent; fi",
+                        "--",
+                        &final_path,
+                    ],
                 )
                 .await?;
-            if !exists.status.success() {
-                ensure!(
-                    exists.status.code() == Some(1) && exists.stderr.is_empty(),
-                    "cannot inspect remote workload: {}",
-                    String::from_utf8_lossy(&exists.stderr).trim()
-                );
+            let exists = match checked(response, "inspect remote workload")?.as_slice() {
+                b"present" => true,
+                b"absent" => false,
+                _ => bail!("invalid remote workload existence response"),
+            };
+            if !exists {
                 let staged = format!("{directory}/.upload-{}", Uuid::new_v4());
                 let local = below(output, &Path::new("workloads").join(name))?;
                 let mut copy =
