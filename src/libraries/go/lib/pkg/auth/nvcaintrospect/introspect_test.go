@@ -30,6 +30,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestIsValidNVCASubject(t *testing.T) {
@@ -107,6 +111,34 @@ func TestClientIntrospectDoesNotFollowRedirects(t *testing.T) {
 
 	_, err = client.Introspect(context.Background(), signedTestToken(t, time.Now().Add(time.Hour)))
 	require.Error(t, err, "a redirect response must not be silently followed and treated as success")
+}
+
+func TestClientIntrospectRecordsErrorOnSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	prevTP := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)))
+	defer otel.SetTracerProvider(prevTP)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, time.Second, 0)
+	require.NoError(t, err)
+
+	_, err = client.Introspect(context.Background(), signedTestToken(t, time.Now().Add(time.Hour)))
+	require.Error(t, err)
+
+	var found bool
+	for _, span := range recorder.Ended() {
+		if span.Name() != "nvcaintrospect.call" {
+			continue
+		}
+		found = true
+		assert.Equal(t, codes.Error, span.Status().Code, "a callIntrospect failure must be recorded as an error on its span")
+	}
+	require.True(t, found, "expected an ended nvcaintrospect.call span")
 }
 
 func TestClientIntrospectCachesActiveValidSubject(t *testing.T) {

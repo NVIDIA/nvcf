@@ -40,7 +40,11 @@ import (
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 )
+
+const instrumentationName = "nvcaintrospect"
 
 // MaxTokenSize bounds how much bearer token material the client will send.
 // Self-managed cluster PSATs are well under 2 KiB; larger tokens are treated
@@ -218,7 +222,16 @@ func shouldCache(result *IntrospectResult) bool {
 	return result.ClusterID != ""
 }
 
-func (c *Client) callIntrospect(ctx context.Context, token string) (*IntrospectResult, error) {
+func (c *Client) callIntrospect(ctx context.Context, token string) (result *IntrospectResult, err error) {
+	ctx, span := otel.Tracer(instrumentationName).Start(ctx, "nvcaintrospect.call")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	body, err := json.Marshal(IntrospectRequest{Token: token})
 	if err != nil {
 		return nil, fmt.Errorf("marshal introspect request: %w", err)
@@ -246,11 +259,11 @@ func (c *Client) callIntrospect(ctx context.Context, token string) (*IntrospectR
 		return nil, fmt.Errorf("introspect returned status %d", resp.StatusCode)
 	}
 
-	var result IntrospectResult
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	var parsed IntrospectResult
+	if err = json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, fmt.Errorf("decode introspect response: %w", err)
 	}
-	return &result, nil
+	return &parsed, nil
 }
 
 // cacheKey returns a stable, non-reversible key for a token. Hashing keeps
