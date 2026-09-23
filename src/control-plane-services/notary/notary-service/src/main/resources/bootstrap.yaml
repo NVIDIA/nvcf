@@ -24,6 +24,8 @@ spring:
     context.aws.enabled: false
 
 nv-boot:
+  info:
+    enabled: true
   reloadable-properties:
     enabled: true
     file: ${VAULT_SECRETS_JSON_PATH:vault-agent/secrets/vault-secrets.json}

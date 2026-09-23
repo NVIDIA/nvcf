@@ -40,6 +40,8 @@ spring:
         monitoring-secrets: false
 
 nv-boot:
+  info:
+    enabled: true
   reloadable-properties:
     enabled: true
     file: file:/home/tomcat/vault-agent/secrets/vault-secrets.json

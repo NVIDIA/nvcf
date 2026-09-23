@@ -39,5 +39,7 @@ spring:
       never-refreshable: com.zaxxer.hikari.HikariDataSource,org.springframework.cloud.kubernetes.commons.KubernetesClientProperties
 
 nv-boot:
+  info:
+    enabled: true
   reloadable-properties:
     file: local_env/vault/secrets.json
