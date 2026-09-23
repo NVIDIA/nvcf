@@ -143,9 +143,10 @@ silently disable HA.
 Active-active Deployments with no leader election: `api`, `rateLimiter`,
 `natsAuthCalloutService`, `adminIssuerProxy`, `llmApiGateway` (when the LLM
 addon is enabled), and the control-plane services `nvctApi`, `notary`, `sis`,
-`apiKeys`, and `reval` all follow the same convention. (`nvctApi` and `sis` run
-scheduled jobs but coordinate them with a distributed lock, so they scale
-safely.)
+`apiKeys`, `reval`, and `ess` all follow the same convention. (`nvctApi` and
+`sis` run scheduled jobs but coordinate them with a distributed lock; `ess` runs
+its scheduled crypto jobs only in a separate worker that is not part of this
+stack, so the in-stack ESS API scales safely.)
 
 > **Note — `invocation-service` and `grpc-proxy` are deferred.** These two are
 > stateless too, but their multi-replica scaling is intentionally **held at a
@@ -155,12 +156,6 @@ safely.)
 > Envoy dependency is for the cross-cluster case. Until then they keep hostname
 > anti-affinity and zone spread (no-ops at one replica) and get **no HA PDB**
 > (a `minAvailable: 1` PDB on a singleton would block node drains).
->
-> **Note — `ess` (Encrypted Secret Store) stays single-replica.** ESS runs
-> scheduled cryptographic jobs (key rotation, re-encryption, key promotion) that
-> are not yet coordinated across pods (no distributed lock), so multiple replicas
-> would fire them concurrently. It is intentionally excluded from HA sizing and
-> stays at one replica until that coordination is added.
 
 Under HA each of these gets:
 
@@ -338,9 +333,9 @@ Confirm the replica-safe Deployments scaled and spread:
 ```bash
 kubectl -n nvcf get deploy nvcf-api admin-token-issuer-proxy -o wide
 kubectl -n nvcf get pods -o wide -l app.kubernetes.io/instance=nvcf-api
-# invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy);
-# ess also stays at 1 (excluded from HA sizing, see note above)
+# invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy)
 kubectl -n nvcf get deploy invocation-service grpc-proxy -o wide
+# ess-api scales to 2 (its scheduled crypto jobs run only in a separate worker, not in-stack)
 kubectl -n ess get deploy ess-api -o wide
 ```
 

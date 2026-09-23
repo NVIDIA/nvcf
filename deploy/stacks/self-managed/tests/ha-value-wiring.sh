@@ -74,7 +74,7 @@ if awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-off.yaml" | grep -q
   fail "api: rollout strategy leaked while highAvailability.mode=none"
 fi
 # Group-B must also stay untouched when HA is off.
-for comp in nvctApi notary sis apikeys reval; do
+for comp in nvctApi notary sis apikeys reval ess; do
   sub="$(awk -v k="^$comp:" '$0~k{p=1;next} p&&/^[a-zA-Z]/{p=0} p' "$work_dir/api-off.yaml")"
   if echo "$sub" | grep -qE "replicaCount:[[:space:]]*[2-9]"; then
     fail "$comp: HA replicaCount leaked while highAvailability.mode=none"
@@ -200,9 +200,10 @@ render_chart_values llm-api-gateway "$work_dir/llmgw-on.yaml" "$core" --state-va
 awk '/^llmApiGateway:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/llmgw-on.yaml" | grep -q "preferredDuringSchedulingIgnoredDuringExecution:" ||
   fail "llm-api-gateway: expected preferred anti-affinity when highAvailability.mode=preferred"
 
-# Group-B services (nvct-api, notary, sis, api-keys, reval) join the replica-safe
-# set under HA. Every component subtree is emitted, so assert on api-on.yaml.
-for comp in nvctApi notary sis apikeys reval; do
+# Group-B services (nvct-api, notary, sis, api-keys, reval, ess) join the
+# replica-safe set under HA. Every component subtree is emitted, so assert on
+# api-on.yaml. (ess is safe: its scheduled crypto jobs are disabled in-stack.)
+for comp in nvctApi notary sis apikeys reval ess; do
   sub="$(awk -v k="^$comp:" '$0~k{p=1;next} p&&/^[a-zA-Z]/{p=0} p' "$work_dir/api-on.yaml")"
   echo "$sub" | grep -E "replicaCount:[[:space:]]*2" >/dev/null ||
     fail "$comp: expected replicaCount 2 when highAvailability.mode=preferred"
