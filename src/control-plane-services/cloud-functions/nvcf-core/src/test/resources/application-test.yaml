@@ -23,9 +23,7 @@ server:
     enabled: true
   forward-headers-strategy: framework
 
-grpc:
-  server:
-    port: 0
+spring.grpc.server.port: 0
 
 management:
   tracing:
@@ -185,7 +183,7 @@ nvcf:
   request:
     timeout: 1s # only whole seconds
   fqdn: http://localhost:${server.port}
-  global-fqdn-grpc: http://localhost:${grpc.server.port}
+  global-fqdn-grpc: http://localhost:${spring.grpc.server.port}
   llm-request-router:
     worker-address: llm-request-router.example.com:50071
   sidecars:
