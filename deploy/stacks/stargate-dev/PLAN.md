@@ -79,8 +79,11 @@ Run through an existing Pod with a container named `spark`:
 ```
 
 `IMAGE` must match the selected container's image reference exactly. The
-controller also freezes its runtime image ID, Spark version, resources, and Pod
-specification hash. Pod mode needs `kubectl` locally and Bash, coreutils,
+controller also freezes its runtime image ID, Spark version, resources, Pod
+specification hash, and open-file limit. It raises the owned Spark process's soft
+open-file limit to the container's hard limit and rejects worker counts without
+descriptor headroom. This prevents inherited limits from restricting client
+concurrency. Pod mode needs `kubectl` locally and Bash, coreutils,
 `setsid`, `flock`, `grep`, and `tar` in the Spark image. It sends the API key through stdin
 and the process environment. It does not require local Docker.
 

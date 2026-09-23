@@ -28,7 +28,7 @@ use crate::report;
 use crate::suite::{Arm, ArmKind, Plan, RunLimit, Stream};
 use crate::workload::Fingerprint;
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const OWNER_LABEL: &str = "nvcf.stargate-bench.owner";
 const CAMPAIGN_LABEL: &str = "nvcf.stargate-bench.campaign";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -691,9 +691,35 @@ async fn prepare_manifest(
         controls: topology.snapshot_controls().await?,
         workloads,
     };
+    if let EngineIdentity::Pod { environment } = &manifest.engine {
+        require_open_files(&manifest.plan, environment.open_file_limit)?;
+    }
     validate_expected_config(&manifest.settings, &manifest.controls)?;
     atomic_json(&path, &manifest)?;
     Ok(manifest)
+}
+
+fn require_open_files(plan: &Plan, limit: Option<u64>) -> Result<()> {
+    let Some(limit) = limit else {
+        return Ok(());
+    };
+    let workers = plan
+        .arms
+        .iter()
+        .flat_map(|arm| arm.warmup.iter().chain(&arm.streams))
+        .map(|stream| stream.workers)
+        .max()
+        .context("benchmark plan has no streams")?;
+    // Allow active and idle connections per worker, plus resolver and report files.
+    let required = u64::try_from(workers)?
+        .checked_mul(2)
+        .and_then(|files| files.checked_add(64))
+        .context("Spark open-file requirement overflow")?;
+    ensure!(
+        limit >= required,
+        "Spark open-file limit {limit} cannot support {workers} workers; require at least {required} descriptors"
+    );
+    Ok(())
 }
 
 fn validate_expected_config(settings: &Settings, controls: &Value) -> Result<()> {
@@ -1767,6 +1793,18 @@ mod tests {
                 .to_string()
                 .contains("JSON object")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pod_file_budget_covers_each_stream_and_rejects_insufficient_limits() -> Result<()> {
+        let mut plan = plan("canonical");
+        require_open_files(&plan, Some(320))?;
+        assert!(require_open_files(&plan, Some(319)).is_err());
+        plan.arms[0].streams[0].workers = 1280;
+        assert!(require_open_files(&plan, Some(1024)).is_err());
+        require_open_files(&plan, Some(2624))?;
+        require_open_files(&plan, None)?;
         Ok(())
     }
 

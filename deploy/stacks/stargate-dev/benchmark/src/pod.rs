@@ -26,7 +26,7 @@ const COPY_TIMEOUT: Duration = Duration::from_secs(300);
 const REMOTE_BASE: &str = "/tmp/stargate-bench";
 const CONTAINER: &str = "spark";
 const LAUNCH: &str = r#"IFS= read -r OPENAI_API_KEY || exit 1; export OPENAI_API_KEY; run_dir=$1; shift; nohup setsid bash -c "$@" > "$run_dir/spark.log" 2>&1 < /dev/null &"#;
-const WAIT: &str = r#"run_dir=$1; shift; exec 9>"$run_dir/spark.lock" || exit 1; flock -x -w 5 9 || exit 1; if test -e "$run_dir/spark.cancelled"; then exit 143; fi; printf "%s\n" "$$" > "$run_dir/spark.pid.tmp" && mv "$run_dir/spark.pid.tmp" "$run_dir/spark.pid" || exit 1; flock -u 9; exec 9>&-; "$@"; run_status=$?; printf "%s\n" "$run_status" > "$run_dir/spark.exit.tmp"; mv "$run_dir/spark.exit.tmp" "$run_dir/spark.exit"; exit "$run_status""#;
+const WAIT: &str = r#"run_dir=$1; shift; exec 9>"$run_dir/spark.lock" || exit 1; flock -x -w 5 9 || exit 1; if test -e "$run_dir/spark.cancelled"; then exit 143; fi; printf "%s\n" "$$" > "$run_dir/spark.pid.tmp" && mv "$run_dir/spark.pid.tmp" "$run_dir/spark.pid" || exit 1; flock -u 9; exec 9>&-; ulimit -Sn "$(ulimit -Hn)" && "$@"; run_status=$?; printf "%s\n" "$run_status" > "$run_dir/spark.exit.tmp"; mv "$run_dir/spark.exit.tmp" "$run_dir/spark.exit"; exit "$run_status""#;
 const CANCEL: &str = r#"run_dir=$1; mkdir -p "$run_dir" || exit 1; exec 9>"$run_dir/spark.lock" || exit 1; flock -x -w 5 9 || exit 1; : > "$run_dir/spark.cancelled""#;
 const STOP: &str =
     r#"if tr "\0" "\n" < "/proc/$1/cmdline" | grep -Fxq -- "$2"; then kill -KILL -- "-$1"; fi"#;
@@ -49,6 +49,7 @@ pub struct Environment {
     pub resources: Value,
     pub pod_spec_sha256: String,
     pub spark_version: String,
+    pub open_file_limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +216,16 @@ impl<'a> Runner<'a> {
             .trim()
             .to_owned();
         ensure!(!spark_version.is_empty(), "Spark version is empty");
+        let limit = checked(
+            self.read_exec(&target, &["bash", "-c", "ulimit -Hn"])
+                .await?,
+            "read Spark open-file limit",
+        )?;
+        let limit = std::str::from_utf8(&limit).context("open-file limit is not UTF-8")?;
+        let open_file_limit = match limit.trim() {
+            "unlimited" => None,
+            value => Some(value.parse().context("invalid Spark open-file limit")?),
+        };
         ensure!(
             self.identity(&target).await? == identity,
             "Spark container changed during inspection"
@@ -239,6 +250,7 @@ impl<'a> Runner<'a> {
                 )?)
             ),
             spark_version,
+            open_file_limit,
         })
     }
 
@@ -1242,6 +1254,31 @@ mod tests {
         assert!(!result?);
         assert_ne!(launch.phase, Phase::Cancelled);
         assert!(!runner.group_running(&launch.target, pid).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn launch_wrapper_raises_only_its_child_file_limit() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut command = Command::new("bash");
+        command
+            .args([
+                "-c",
+                "ulimit -Sn 64; exec \"$@\"",
+                "--",
+                "bash",
+                "-c",
+                WAIT,
+                "spark-limit-test",
+            ])
+            .arg(directory.path())
+            .args(["bash", "-c", "test \"$(ulimit -Sn)\" = \"$(ulimit -Hn)\""]);
+        let output = capture(command, None, Duration::from_secs(5)).await?;
+        checked(output, "run Spark wrapper with a low inherited file limit")?;
+        assert_eq!(
+            fs::read_to_string(directory.path().join("spark.exit"))?,
+            "0\n"
+        );
         Ok(())
     }
 
