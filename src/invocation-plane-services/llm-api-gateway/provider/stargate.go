@@ -62,6 +62,9 @@ const (
 	headerPriority           = "X-Priority"
 	headerInputTokens        = "X-Input-Tokens"
 	headerTokenEstimate      = "X-Token-Estimate"
+	headerStargateErrorCode  = "X-Stargate-Error-Code"
+	overloadErrorCode        = "overloaded_error"
+	statusOverloaded         = 529
 
 	contentTypeJSON = "application/json"
 	contentTypeSSE  = "text/event-stream"
@@ -403,7 +406,7 @@ func (p *StargateProvider) Proxy(
 
 	p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, nil)
 	return &ProxyResponse{
-		StatusCode: resp.StatusCode,
+		StatusCode: clientStatusCode(resp),
 		Header:     resp.Header.Clone(),
 		Body:       &proxyResponseBody{ReadCloser: resp.Body, cancel: cancel},
 	}, nil
@@ -458,18 +461,27 @@ func routingTokenEstimate(request *NormalizedRequest) int {
 	return max(0, request.InputTokens)
 }
 
+func clientStatusCode(resp *http.Response) int {
+	codes := resp.Header.Values(headerStargateErrorCode)
+	if resp.StatusCode == http.StatusServiceUnavailable && len(codes) == 1 && codes[0] == overloadErrorCode {
+		return statusOverloaded
+	}
+	return resp.StatusCode
+}
+
 func checkHTTPError(resp *http.Response) error {
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		return nil
 	}
 
+	statusCode := clientStatusCode(resp)
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
 	message := string(body)
 
 	var errorResponse models.ErrorResponse
 	if err := json.Unmarshal(body, &errorResponse); err == nil && errorResponse.Error.Message != "" {
-		if resp.StatusCode == 529 && errorResponse.Error.Code == "overloaded_error" {
-			return echo.NewHTTPError(resp.StatusCode, errorResponse)
+		if statusCode == statusOverloaded && errorResponse.Error.Code == overloadErrorCode {
+			return echo.NewHTTPError(statusCode, errorResponse)
 		}
 		message = errorResponse.Error.Message
 	}
@@ -477,7 +489,7 @@ func checkHTTPError(resp *http.Response) error {
 		message = http.StatusText(resp.StatusCode)
 	}
 
-	return echo.NewHTTPError(resp.StatusCode, message)
+	return echo.NewHTTPError(statusCode, message)
 }
 
 type chatCompletionChoiceAccumulator struct {

@@ -33,7 +33,7 @@ use super::retry::{
     decide_upstream_response_retry, header_str, is_internal_capacity_rejection,
     retry_budget_has_remaining, should_release_queue_mismatch_reservation,
 };
-use super::routing::{STATUS_OVERLOADED, overloaded_response};
+use super::routing::overloaded_response;
 use super::run::{ProxyRequestRun, SelectedClusterRun};
 use super::upstream::{
     UpstreamStreamingResponse, copy_forwardable_headers, headers_for_upstream_attempt,
@@ -373,7 +373,7 @@ fn finish_attempt(
         .as_ref()
         .is_ok_and(|response| is_internal_capacity_rejection(response.status, &response.headers));
     let status = if capacity_rejected {
-        STATUS_OVERLOADED
+        StatusCode::SERVICE_UNAVAILABLE
     } else {
         upstream_status(&upstream)
     };
@@ -524,6 +524,7 @@ mod tests {
     use stargate_protocol::tunnel_contract::HEADER_STARGATE_RETRY_AFTER_MS;
     use std::time::Duration;
 
+    use super::super::HEADER_STARGATE_ERROR_CODE;
     use super::super::request::ProxyRequestInputs;
     use super::super::retry::ReplayableRequestBody;
     use super::super::run::PreparedProxyRequest;
@@ -628,10 +629,14 @@ mod tests {
                 StatusCode::TOO_MANY_REQUESTS,
                 admission_headers(),
             ) else {
-                panic!("expected a public error response")
+                panic!("expected an overload response")
             };
-            assert_eq!(response.status().as_u16(), 529);
-            assert_eq!(response.headers().len(), 1);
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.headers().len(), 2);
+            assert_eq!(
+                response.headers()[HEADER_STARGATE_ERROR_CODE],
+                "overloaded_error"
+            );
             assert_eq!(
                 response.headers()[axum::http::header::CONTENT_TYPE],
                 "application/json"
@@ -665,6 +670,7 @@ mod tests {
                 panic!("expected the application response")
             };
             assert_eq!(response.status(), status);
+            assert!(!response.headers().contains_key(HEADER_STARGATE_ERROR_CODE));
             let body = axum::body::to_bytes(response.into_body(), 1024)
                 .await
                 .unwrap();

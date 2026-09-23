@@ -1580,16 +1580,21 @@ async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoi
                     .await
                     .expect("send overload request");
                     assert_eq!(
-                        response.status().as_u16(),
-                        529,
+                        response.status(),
+                        StatusCode::SERVICE_UNAVAILABLE,
                         "{protocol:?}, reverse={reverse}, {endpoint}, budget={budget}"
                     );
                     assert_eq!(response.headers()["content-type"], "application/json");
+                    assert_eq!(
+                        response.headers()["x-stargate-error-code"],
+                        "overloaded_error"
+                    );
                     assert!(
                         response
                             .headers()
                             .keys()
-                            .all(|name| !name.as_str().starts_with("x-stargate-"))
+                            .all(|name| name == "x-stargate-error-code"
+                                || !name.as_str().starts_with("x-stargate-"))
                     );
                     let body: serde_json::Value =
                         response.json().await.expect("read overload body");
@@ -1611,8 +1616,8 @@ async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoi
                 "Pylon must keep returning 429 internally"
             );
             assert!(
-                metrics.contains("status=\"529\""),
-                "public failures must be counted as 529"
+                metrics.contains("status=\"503\""),
+                "Stargate overload responses must be counted as 503"
             );
             fixture.shutdown().await;
         }
@@ -2525,12 +2530,13 @@ async fn queue_estimate_mismatch_retries_alternate_backend_before_upstream() {
             .await
             .expect("budget-limited queue mismatch body should be readable");
         let metrics = fixture.metrics();
-        if status.as_u16() == 529
+        if status == StatusCode::SERVICE_UNAVAILABLE
             && metrics.contains(
                 r#"stargate_proxy_retry_exhausted_total{model="queue-mismatch-model",reason="retry_budget_exhausted",routing_key=""} 1"#,
             )
         {
             assert!(headers.get("x-stargate-retryable").is_none());
+            assert_eq!(headers["x-stargate-error-code"], "overloaded_error");
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&response_text).unwrap(),
                 serde_json::json!({"error": {
@@ -2541,7 +2547,7 @@ async fn queue_estimate_mismatch_retries_alternate_backend_before_upstream() {
                 }}),
             );
             for name in headers.keys() {
-                assert!(!name.as_str().starts_with("x-stargate-"));
+                assert!(name == "x-stargate-error-code" || !name.as_str().starts_with("x-stargate-"));
             }
             assert_eq!(
                 reject_backend.hits(),
@@ -2967,12 +2973,15 @@ async fn queue_mismatch_single_backend_returns_overload() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status().as_u16(), 529);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers()["x-stargate-error-code"],
+        "overloaded_error"
+    );
     assert!(
-        response
-            .headers()
-            .keys()
-            .all(|name| !name.as_str().starts_with("x-stargate-"))
+        response.headers().keys().all(
+            |name| name == "x-stargate-error-code" || !name.as_str().starts_with("x-stargate-")
+        )
     );
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["error"]["code"], "overloaded_error");
@@ -3006,6 +3015,7 @@ async fn retryable_application_errors_preserve_response_after_retries_stop() {
                             .status(status)
                             .header("content-type", "application/json")
                             .header("retry-after", "7")
+                            .header("x-stargate-error-code", "overloaded_error")
                             .body(Body::from(body))
                             .unwrap()
                     }
@@ -3059,6 +3069,7 @@ async fn retryable_application_errors_preserve_response_after_retries_stop() {
             assert_eq!(response.headers()["retry-after"], "7");
             assert!(response.headers().get("x-stargate-retryable").is_none());
             assert!(response.headers().get("x-stargate-retry-reason").is_none());
+            assert!(response.headers().get("x-stargate-error-code").is_none());
             assert_eq!(response.text().await.unwrap(), expected_body);
             let after = fixture.metrics();
             assert_delta!(

@@ -33,7 +33,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
-func TestGatewayPreservesOverloadContractAcrossEndpoints(t *testing.T) {
+func TestGatewayTranslatesOnlyStargateOverloadResponses(t *testing.T) {
 	t.Parallel()
 
 	const body = `{"error":{"code":"overloaded_error","message":"Inference capacity is temporarily unavailable.","param":"","type":"overloaded_error"}}`
@@ -48,55 +48,77 @@ func TestGatewayPreservesOverloadContractAcrossEndpoints(t *testing.T) {
 		{"streaming responses", "/v1/responses", `{"model":"fn-alpha/company-name/model-name","input":"hello","stream":true}`},
 		{"embeddings", "/v1/embeddings", `{"model":"fn-alpha/company-name/model-name","input":"hello"}`},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		for _, response := range []struct {
+			name       string
+			status     int
+			codes      []string
+			wantStatus int
+		}{
+			{"stargate overload", http.StatusServiceUnavailable, []string{"overloaded_error"}, 529},
+			{"application unavailable", http.StatusServiceUnavailable, nil, http.StatusServiceUnavailable},
+			{"other router error", http.StatusServiceUnavailable, []string{"other_error"}, http.StatusServiceUnavailable},
+			{"conflicting codes", http.StatusServiceUnavailable, []string{"overloaded_error", "other_error"}, http.StatusServiceUnavailable},
+			{"application rate limit", http.StatusTooManyRequests, []string{"overloaded_error"}, http.StatusTooManyRequests},
+			{"existing overload status", 529, nil, 529},
+		} {
+			t.Run(tc.name+"/"+response.name, func(t *testing.T) {
+				t.Parallel()
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+					for _, name := range internalResponseHeadersForTest() {
+						w.Header().Add(name, "internal-value")
+						w.Header().Add(name, "second-value")
+					}
+					w.Header().Del("X-Stargate-Error-Code")
+					for _, code := range response.codes {
+						w.Header().Add("X-Stargate-Error-Code", code)
+					}
+					w.WriteHeader(response.status)
+					_, _ = io.WriteString(w, body)
+				}))
+				defer upstream.Close()
+
+				cfg := config.Default()
+				proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
+				if err != nil {
+					t.Fatal(err)
+				}
+				e := echo.New()
+				e.Use(NewContextMiddleware(cfg))
+				RegisterRoutes(e, NewHandlers(cfg, proxyProvider, nil, nil))
+				req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.payload))
+				req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+				req.Header.Set(HeaderRequestID, "request-a")
+				rec := httptest.NewRecorder()
+				e.ServeHTTP(rec, req)
+
+				if rec.Code != response.wantStatus {
+					t.Fatalf("status = %d, want %d: %s", rec.Code, response.wantStatus, rec.Body.String())
+				}
+				if rec.Header().Get(HeaderRequestID) != "request-a" {
+					t.Fatal("error response lost the public request ID")
+				}
+				if response.wantStatus == 529 {
+					var got, want models.ErrorResponse
+					if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal([]byte(body), &want); err != nil {
+						t.Fatal(err)
+					}
+					if got != want {
+						t.Fatalf("error = %+v, want %+v", got, want)
+					}
+				} else if !strings.Contains(rec.Body.String(), "Inference capacity is temporarily unavailable.") {
+					t.Fatalf("application error message was lost: %s", rec.Body.String())
+				}
 				for _, name := range internalResponseHeadersForTest() {
-					w.Header().Add(name, "internal-value")
-					w.Header().Add(name, "second-value")
+					if values := rec.Header().Values(name); len(values) != 0 {
+						t.Errorf("internal header %s leaked: %v", name, values)
+					}
 				}
-				w.WriteHeader(529)
-				_, _ = io.WriteString(w, body)
-			}))
-			defer upstream.Close()
-
-			cfg := config.Default()
-			proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := echo.New()
-			e.Use(NewContextMiddleware(cfg))
-			RegisterRoutes(e, NewHandlers(cfg, proxyProvider, nil, nil))
-			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.payload))
-			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-			req.Header.Set(HeaderRequestID, "request-a")
-			rec := httptest.NewRecorder()
-			e.ServeHTTP(rec, req)
-
-			if rec.Code != 529 {
-				t.Fatalf("status = %d, want 529: %s", rec.Code, rec.Body.String())
-			}
-			if rec.Header().Get(HeaderRequestID) != "request-a" {
-				t.Fatal("overload response lost the public request ID")
-			}
-			var got, want models.ErrorResponse
-			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal([]byte(body), &want); err != nil {
-				t.Fatal(err)
-			}
-			if got != want {
-				t.Fatalf("error = %+v, want %+v", got, want)
-			}
-			for _, name := range internalResponseHeadersForTest() {
-				if values := rec.Header().Values(name); len(values) != 0 {
-					t.Errorf("internal header %s leaked: %v", name, values)
-				}
-			}
-		})
+			})
+		}
 	}
 }
 
