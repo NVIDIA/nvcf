@@ -209,6 +209,21 @@ func newPolicyMiddleware(policyClient policy.Authorizer, serviceName string, log
 			// 1. Extract the token (simple bearer token extraction)
 			token := ""
 			authHeader := r.Header.Get("Authorization")
+			// No credentials at all on a write request is an authentication failure
+			// (401), not an authorization one (403), and needs no call to the
+			// evaluator. Safe (read) methods are left alone because the evaluator may
+			// still grant anonymous access to them.
+			if authHeader == "" && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+				// No credentials at all is an authentication failure (401), not an
+				// authorization one (403), and needs no call to the evaluator. The
+				// managed-mode JWT chain clears the header after local verification,
+				// so requests that already carry verified claims are exempt.
+				if _, hasClaims := r.Context().Value(claimsContextKey).(jwt.MapClaims); !hasClaims {
+					logger.WarnContext(traceCtx, "policy: missing authorization header")
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+			}
 			if strings.HasPrefix(authHeader, "Bearer ") {
 				token = strings.TrimPrefix(authHeader, "Bearer ")
 				logger.InfoContext(traceCtx, "policy: token extracted", zap.String("token_length", strconv.Itoa(len(token))))
