@@ -135,6 +135,12 @@ type Client struct {
 	cache         map[string]cacheEntry
 }
 
+// newHTTPTransport clones DefaultTransport, not a bare &http.Transport{}, so
+// the client still honors HTTP_PROXY/HTTPS_PROXY/NO_PROXY.
+func newHTTPTransport() *http.Transport {
+	return http.DefaultTransport.(*http.Transport).Clone()
+}
+
 // NewClient builds an introspection client. introspectURL is required. A
 // cacheTTL of 0 disables caching.
 func NewClient(introspectURL string, timeout, cacheTTL time.Duration) (*Client, error) {
@@ -144,7 +150,7 @@ func NewClient(introspectURL string, timeout, cacheTTL time.Duration) (*Client, 
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	transport := &http.Transport{}
+	transport := newHTTPTransport()
 	return &Client{
 		introspectURL: introspectURL,
 		httpClient: &http.Client{
