@@ -30,91 +30,170 @@ This is a deployment POC using the existing gateway and router contract. It is n
 - Caller auth is disabled in this isolated POC. The worker-auth fixture checks a public test token and assigns the `poc` routing key. It does not authenticate cluster identity.
 - QUIC certificate verification is disabled in the POC. Complete deployment needs caller TLS, a static caller key, authenticated cluster identity, and trusted registration/tunnel transport.
 - The LLM agent, InferenceEndpoint CRD, GPU recipes, and monitoring stack are separate work.
-- The fixture returns fixed text. It proves routing and streaming, not model quality, GPU execution, throughput, or production capacity.
+- The fixture returns fixed text. It exercises routing and SSE responses, not model quality, GPU execution, throughput, or production capacity.
 
 The chart refuses installation unless `developmentMode=true` is explicit. Use ClusterIP access through a loopback port-forward in a disposable development cluster. The existing child charts retain unused Vault template ConfigMaps and token projections, but no Vault process or injection is used.
 
-## Build and install the CPU POC
+## Local k3d assumptions
 
-From the repository root, package the local dependencies without refreshing external Helm repositories:
+You can run this POC on an existing local k3d cluster. No remote VM or GPU is required.
+
+For Docker, k3d, kubectl, and Helm installation, see the [local quickstart prerequisites](../../../docs/overview/quickstart.md#prerequisites). Only those tools are needed from that guide. Its full-stack cluster bootstrap, Helmfile, NVCF CLI, and fake GPUs are unnecessary here. Also install Bash, Python 3, Docker Buildx, and Go compatible with the gateway's `go.mod` (currently 1.25.6 or later).
+
+- Use a full checkout of this branch or commit. The chart references sibling charts, and the fixture builds against the gateway's Go module.
+- Use a development cluster with working pod networking, the default `cluster.local` DNS domain, and nodes of the same CPU architecture. You need permission to create namespaced workloads and RBAC.
+- Docker must use the daemon running the k3d nodes. Host Docker images must be imported into the nodes' containerd stores.
+- Obtain the gateway, Stargate, and Pylon image locations and registry access separately. Authenticate Docker before pulling. The examples use placeholders. Initial setup needs network access for images and Go dependencies.
+- Use an unused namespace. Fixed service names allow one routing release per namespace. The CPU POC creates five deployments.
+
+The commands below run in one Bash session from the repository root. Select your existing cluster and inspect its nodes and Helm releases first:
+
+```bash
+k3d cluster list
+llm_cluster=my-local-cluster # Replace with your existing k3d cluster name.
+llm_context="k3d-${llm_cluster}"
+llm_namespace=llm-routing-poc
+kubectl --context "$llm_context" get nodes -L kubernetes.io/arch
+helm list --kube-context "$llm_context" --all-namespaces
+```
+
+If the context is missing, use `export KUBECONFIG=$(k3d kubeconfig write "$llm_cluster")`. Adjust `llm_context` if you renamed it. If you need a new empty cluster, `k3d cluster create llm-routing-poc --servers 1 --agents 0` is sufficient. Set `llm_cluster` and `llm_context` accordingly.
+
+## Build the CPU fixture
+
+Package the local chart dependencies and check rendering:
 
 ```bash
 helm dependency build --skip-refresh deploy/helm/llm-routing
 bash deploy/helm/llm-routing/tests/render.sh
 ```
 
-Build the fixture with the gateway's existing Go dependencies. Set GOARCH for the target node architecture:
+Match the Go binary and images to the cluster architecture (`amd64` or `arm64`):
 
 ```bash
-mkdir -p /tmp/llm-routing-fixture
-cd src/invocation-plane-services/llm-api-gateway
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/llm-routing-fixture/fixture ../../../deploy/helm/llm-routing/tests/fixture.go
-cd ../../..
-cp deploy/helm/llm-routing/tests/Dockerfile /tmp/llm-routing-fixture/Dockerfile
-docker build -t llm-routing-fixture:dev /tmp/llm-routing-fixture
+llm_arch=$(kubectl --context "$llm_context" get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')
+llm_platform="linux/${llm_arch}"
+llm_workdir=$(mktemp -d "${TMPDIR:-/tmp}/llm-routing.XXXXXX")
+llm_fixture="llm-routing-fixture:local-$(date +%Y%m%d%H%M%S)"
+(
+  cd src/invocation-plane-services/llm-api-gateway
+  CGO_ENABLED=0 GOOS=linux GOARCH="$llm_arch" go build \
+    -o "$llm_workdir/fixture" ../../../deploy/helm/llm-routing/tests/fixture.go
+)
+cp deploy/helm/llm-routing/tests/Dockerfile "$llm_workdir/Dockerfile"
+docker build --platform "$llm_platform" --load -t "$llm_fixture" "$llm_workdir"
 ```
 
-Create an external `images.yaml` using repositories you can access:
+The unique tag avoids stale cached fixtures. Keep these shell variables for the following steps. Build artifacts and private values stay in `llm_workdir`, outside the checkout.
 
-```yaml
+## Load images into k3d
+
+Replace these repository placeholders. The Stargate image must include both Stargate and the Kubernetes tunnel router binary. Each service image must support `llm_platform`.
+
+```bash
+llm_gateway_repo=registry.example.com/llm-api-gateway
+llm_stargate_repo=registry.example.com/stargate
+llm_gateway_image="${llm_gateway_repo}:0.14.2"
+llm_stargate_image="${llm_stargate_repo}:0.18.0"
+llm_pylon_image=registry.example.com/pylon:0.18.0
+
+for llm_image in "$llm_gateway_image" "$llm_stargate_image" "$llm_pylon_image"; do
+  docker pull --platform "$llm_platform" "$llm_image"
+done
+k3d image import -c "$llm_cluster" \
+  "$llm_gateway_image" "$llm_stargate_image" "$llm_pylon_image" "$llm_fixture"
+```
+
+The import targets all nodes of the selected cluster. Stop on any pull or import error. For missing-digest errors, see the fallback below.
+
+This workflow preloads images and uses `pullPolicy: Never`. Child-chart `imagePullSecrets` cover only the gateway and routers, so they cannot replace preloading the fixture and Pylon images.
+
+Create the values file using exactly the imported image names:
+
+```bash
+cat > "$llm_workdir/images.yaml" <<EOF
 gateway:
   llmApiGateway:
     image:
-      repository: registry.example.com/llm-api-gateway
+      repository: ${llm_gateway_repo}
       tag: "0.14.2"
+      pullPolicy: Never
 router:
   llmRequestRouter:
     image:
-      repository: registry.example.com/stargate
+      repository: ${llm_stargate_repo}
       tag: "0.18.0"
+      pullPolicy: Never
+    backendRouter:
+      image:
+        pullPolicy: Never
 fixture:
-  pylonImage: registry.example.com/pylon:0.18.0
+  image: ${llm_fixture}
+  pylonImage: ${llm_pylon_image}
+  pullPolicy: Never
+EOF
 ```
 
-Preload these images and `llm-routing-fixture:dev` into your cluster, or provide image pull credentials through the child charts' `imagePullSecrets`. The fixture images must already be loaded for the example below. Use one release per namespace because the child charts use fixed service names.
+## Install and test
 
 ```bash
 helm upgrade --install llm-routing deploy/helm/llm-routing \
-  --kube-context k3d-llm-routing-poc --namespace llm-routing --create-namespace \
-  -f deploy/helm/llm-routing/values.poc.yaml -f images.yaml --wait --timeout 3m
-bash deploy/helm/llm-routing/tests/smoke.sh k3d-llm-routing-poc
+  --kube-context "$llm_context" --namespace "$llm_namespace" --create-namespace \
+  -f deploy/helm/llm-routing/values.poc.yaml -f "$llm_workdir/images.yaml" \
+  --wait --timeout 3m
+bash deploy/helm/llm-routing/tests/smoke.sh "$llm_context" "$llm_namespace" 18080
 ```
 
-The smoke test checks regular and streaming chat, exact mock response and token usage, missing-prefix rejection, and unknown-model rejection. It creates a temporary loopback port-forward and closes it on exit.
+The smoke test uses the default `poc/poc-model` fixture settings. It checks regular chat, SSE content and completion marker, token usage, missing-prefix rejection, and unknown-model rejection. It reads the complete SSE response, so it does not detect buffering or validate chunk timing. The script opens a loopback port-forward and closes it on exit. If port 18080 is occupied, supply a different local port as the third argument.
+
+`ErrImageNeverPull` means the exact image name is missing from the scheduled node. Import it into every cluster node. For scheduling failures, check node capacity and taints.
 
 ## Manual request
 
+In the same shell, open a port-forward:
+
 ```bash
-kubectl --context k3d-llm-routing-poc -n llm-routing port-forward svc/llm-api-gateway 18080:8080
+kubectl --context "$llm_context" -n "$llm_namespace" port-forward svc/llm-api-gateway 18080:8080
 ```
 
 In another terminal:
 
 ```bash
-curl http://127.0.0.1:18080/v1/chat/completions \
+curl --no-buffer http://127.0.0.1:18080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"poc/poc-model","messages":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
 
-## Offline and architecture checks
+## Image import fallback
 
-Resolve registry access and collect images before going offline. Package the chart with `helm package deploy/helm/llm-routing` after building its local dependencies. Transfer the package, fixture image, and all three service images to the target. No chart repository is needed to install the package.
-
-The configured image pull policy is `IfNotPresent`. To prove a deployment uses only cached images, override the gateway, router, backend router, and fixture pull policies to `Never` and reinstall on the prepared cluster. Check registry manifests for `linux/arm64` before a Spark installation. An amd64 VM test does not validate arm64 execution or GPU support.
-
-For Docker/containerd image transfer, export only the target architecture. An image index may reference architectures that were never downloaded:
+An image index can reference architectures that were never downloaded. If the normal import fails with missing-digest errors, export only the target architecture and import it directly into each node. This fallback requires a Docker client and daemon supporting [image save --platform](https://docs.docker.com/reference/cli/docker/image/save/#save-a-specific-platform---platform) (API 1.48 or later). k3d node names correspond to Docker container names.
 
 ```bash
-docker save --platform linux/amd64 IMAGE | docker exec -i K3D_NODE ctr -n k8s.io images import --platform linux/amd64 -
+set -o pipefail
+for llm_image in "$llm_gateway_image" "$llm_stargate_image" "$llm_pylon_image" "$llm_fixture"; do
+  for llm_node in $(kubectl --context "$llm_context" get nodes -o jsonpath='{.items[*].metadata.name}'); do
+    docker save --platform "$llm_platform" "$llm_image" | \
+      docker exec -i "$llm_node" ctr -n k8s.io images import --platform "$llm_platform" -
+  done
+done
 ```
+
+Check that each import succeeds before retrying Helm. If your Docker version lacks `save --platform`, upgrade it before using this fallback.
+
+## Validation scope and offline use
+
+The runtime POC was validated on an amd64 k3d cluster. The fixture also cross-compiles for arm64, but arm64 runtime, Spark hardware, and GPU inference have not been validated. Local k3d uses the same chart and services, subject to the assumptions above.
+
+The chart defaults to `IfNotPresent`. The local example overrides it to `Never` to expose missing imports and exercise cached-image startup. This does not establish that the whole setup works on a disconnected machine.
+
+For offline installation, collect the service images and build the fixture while online. Run `helm package deploy/helm/llm-routing` after building its dependencies. Transfer the package, all four images, and your values file to the target. Import the images into its nodes before installation. The packaged chart needs no chart repository, but an offline fixture build additionally requires the Go toolchain and dependencies to be cached.
 
 ## Cleanup
 
-Remove the release when finished. For a disposable k3d cluster, deleting that named cluster also removes its releases and cluster data:
+Remove only the POC release from your existing cluster:
 
 ```bash
-helm uninstall llm-routing --kube-context k3d-llm-routing-poc -n llm-routing
-k3d cluster delete llm-routing-poc
+helm uninstall llm-routing --kube-context "$llm_context" -n "$llm_namespace"
 ```
 
-Keep source worktrees, image credentials, and unrelated Docker data separate from cluster cleanup.
+This leaves the namespace, imported images, local build files, and other releases in place. Do not delete an existing shared cluster to clean up this POC.
