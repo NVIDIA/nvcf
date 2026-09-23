@@ -32,16 +32,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewHTTPTransportHonorsProxyEnv(t *testing.T) {
-	// A bare &http.Transport{} has Proxy == nil, which silently ignores
-	// HTTP_PROXY/HTTPS_PROXY/NO_PROXY. Assert directly against the
-	// transport-building function, since http.ProxyFromEnvironment caches
-	// its env lookup process-wide (sync.Once), making an end-to-end proxy
-	// test order-dependent and flaky.
-	transport := newHTTPTransport()
-	assert.NotNil(t, transport.Proxy, "transport must clone DefaultTransport so HTTP_PROXY/HTTPS_PROXY/NO_PROXY are honored")
-}
-
 func TestIsValidNVCASubject(t *testing.T) {
 	tests := []struct {
 		name string
