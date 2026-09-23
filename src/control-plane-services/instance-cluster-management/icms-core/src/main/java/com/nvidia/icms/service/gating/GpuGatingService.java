@@ -22,17 +22,24 @@ import static com.nvidia.icms.uec.IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_IN
 import static com.nvidia.icms.util.InstanceServiceUtil.isSetEmptyOrNull;
 
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
+import com.nvidia.icms.inbound.rest.model.account.GpuUsageResponse;
 import com.nvidia.icms.inbound.rest.model.account.InstanceTypeAvailabilityResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.GpuResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.InstanceTypeResponse;
+import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse;
+import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.GpuResponseSchema;
+import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.InstanceTypeResponseSchema;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
 import com.nvidia.icms.service.createInstances.RequestInstanceDestination;
 import com.nvidia.icms.uec.IcmsHttpUnifiedErrorException;
 import com.nvidia.icms.uec.IcmsUnifiedError;
 import com.nvidia.icms.uec.UnifiedErrorReporter;
+import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -139,6 +146,116 @@ public class GpuGatingService {
                                     .build());
         }
         return allowedGpus;
+    }
+
+    /**
+     * Removes GPUs and instance types withheld from this NCA ID from the authorized cluster
+     * listing, dropping clusters left with no GPUs. Clusters the NCA ID owns are left untouched:
+     * gating controls what an org may borrow from others, not whether it can still see and manage
+     * the clusters it registered itself.
+     */
+    public void removeGatedAuthorizedClusters(@NotNull List<GetClusterResponse> clusters,
+                                              @NotNull String ncaId) {
+        if (!icmsConfigurationProperties.hasGpuGating(ncaId)) {
+            return;
+        }
+
+        clusters.removeIf(cluster -> {
+            if (Objects.equals(cluster.getNcaId(), ncaId)) {
+                return false;
+            }
+
+            cluster.setGpus(retainAllowedClusterGpus(cluster.getGpus(), ncaId));
+            removeGatedGpuUsage(cluster, ncaId);
+
+            boolean noGpusLeft = isSetEmptyOrNull(cluster.getGpus());
+            if (noGpusLeft) {
+                log.trace("NcaId {}: cluster {} removed from authorized cluster listing by gpu "
+                                 + "gating", ncaId, cluster.getClusterId());
+            }
+            return noGpusLeft;
+        });
+    }
+
+    /**
+     * Rebuilds the GPU set of an authorized cluster keeping only the allowed GPUs and, within
+     * them, the allowed instance types.
+     */
+    private Set<GpuResponseSchema> retainAllowedClusterGpus(Set<GpuResponseSchema> gpus,
+                                                            String ncaId) {
+        if (isSetEmptyOrNull(gpus)) {
+            return new HashSet<>();
+        }
+
+        Set<GpuResponseSchema> allowedGpus = new HashSet<>();
+        for (GpuResponseSchema gpu : gpus) {
+            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getName())) {
+                continue;
+            }
+
+            Set<InstanceTypeResponseSchema> allowedInstanceTypes = Optional
+                    .ofNullable(gpu.getInstanceTypes())
+                    .orElseGet(HashSet::new)
+                    .stream()
+                    .filter(instanceType -> icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                            ncaId, gpu.getName(), instanceType.getName()))
+                    .collect(Collectors.toSet());
+
+            if (allowedInstanceTypes.isEmpty()) {
+                continue;
+            }
+
+            allowedGpus.add(GpuResponseSchema.builder()
+                                    .name(gpu.getName())
+                                    .capacity(gpu.getCapacity())
+                                    .instanceTypes(allowedInstanceTypes)
+                                    .build());
+        }
+        return allowedGpus;
+    }
+
+    /**
+     * Drops per-GPU capacity entries for GPUs that did not survive gating, so a withheld GPU name
+     * is not disclosed through the cluster capacity map.
+     */
+    private void removeGatedGpuUsage(GetClusterResponse cluster, String ncaId) {
+        if (cluster.getGpuUsage() == null) {
+            return;
+        }
+
+        cluster.getGpuUsage().keySet().removeIf(
+                gpuName -> !icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpuName));
+    }
+
+    /**
+     * Removes GPUs and instance types withheld from this NCA ID from a GPU usage response. A GPU
+     * left with no instances is dropped entirely.
+     */
+    public void removeGatedGpusFromGpuUsage(@Nullable List<GpuUsageResponse.Gpu> gpus,
+                                            @NotNull String ncaId) {
+        if (!icmsConfigurationProperties.hasGpuGating(ncaId) || gpus == null) {
+            return;
+        }
+
+        gpus.removeIf(gpu -> {
+            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getGpuName())) {
+                return true;
+            }
+
+            if (gpu.getInstances() != null) {
+                gpu.getInstances().removeIf(
+                        instance -> !icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                                ncaId, gpu.getGpuName(), instance.getInstanceName()));
+            }
+
+            boolean noInstancesLeft =
+                    gpu.getInstances() == null || gpu.getInstances().isEmpty();
+            if (noInstancesLeft) {
+                log.info("NcaId {}: GPU {} removed from gpu usage response because gpu gating "
+                                 + "left it with no instances", ncaId, gpu.getGpuName());
+            }
+            return noInstancesLeft;
+        });
     }
 
     /**
