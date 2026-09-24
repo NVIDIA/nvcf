@@ -507,8 +507,16 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 		logging.LogHTTPResponse(traceCtx, ctxLogger, http.StatusUnauthorized, w.Header())
 	}
 
+	// writeResponse=false means a caller (the PSAT fallback path) has another
+	// verification method to try before treating this as a real failure, so
+	// log quietly here and let that caller log once both paths are done.
+	logFailure := ctxLogger.WarnContext
+	if !writeResponse {
+		logFailure = ctxLogger.DebugContext
+	}
+
 	if opts.JwksURL == "" {
-		ctxLogger.WarnContext(traceCtx, ErrMissingJWKSURL)
+		logFailure(traceCtx, ErrMissingJWKSURL)
 		err := errors.New(ErrMissingJWKSURL)
 		respondUnauthorized(err)
 		return nil, err
@@ -517,7 +525,7 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	// Get the token from the Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		ctxLogger.WarnContext(traceCtx, ErrMissingAuthHeader)
+		logFailure(traceCtx, ErrMissingAuthHeader)
 		err := errors.New(ErrMissingAuthHeader)
 		respondUnauthorized(err)
 		return nil, err
@@ -528,27 +536,27 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	if tokenString == authHeader {
-		ctxLogger.WarnContext(traceCtx, ErrInvalidAuthFormat)
+		logFailure(traceCtx, ErrInvalidAuthFormat)
 		err := errors.New(ErrInvalidAuthFormat)
 		respondUnauthorized(err)
 		return nil, err
 	}
 
 	// Get the key function for token verification
-	keyFunc := newJWKKeyFunc(traceCtx, opts, jwkCache, ctxLogger)
+	keyFunc := newJWKKeyFunc(traceCtx, opts, jwkCache, ctxLogger, !writeResponse)
 
 	// Parse and validate the token
 	claims := jwt.MapClaims{}
 	token, err := parseJWTWithOptions(tokenString, claims, keyFunc, opts)
 	if err != nil {
-		ctxLogger.WarnContext(traceCtx, "invalid token", zap.Error(err))
+		logFailure(traceCtx, "invalid token", zap.Error(err))
 		err = fmt.Errorf("%s: %v", ErrInvalidToken, err)
 		respondUnauthorized(err)
 		return nil, err
 	}
 
 	if !token.Valid {
-		ctxLogger.WarnContext(traceCtx, ErrInvalidToken)
+		logFailure(traceCtx, ErrInvalidToken)
 		err = errors.New(ErrInvalidToken)
 		respondUnauthorized(err)
 		return nil, err
@@ -558,7 +566,7 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	if opts.TenantClaim != "" {
 		authorizedTenants := tenantValuesFromClaim(claims[opts.TenantClaim])
 		if len(authorizedTenants) == 0 {
-			ctxLogger.WarnContext(traceCtx, "missing or invalid tenant claim", zap.String("claim", opts.TenantClaim))
+			logFailure(traceCtx, "missing or invalid tenant claim", zap.String("claim", opts.TenantClaim))
 			err = errors.New(ErrInvalidToken)
 			respondUnauthorized(err)
 			return nil, err
@@ -586,10 +594,15 @@ func newParseJWTMiddleware(opts JWTParserOptions, jwkCache *jwk.Cache) mux.Middl
 	}
 }
 
-func newJWKKeyFunc(ctx context.Context, opts JWTParserOptions, jwkCache *jwk.Cache, ctxLogger *logging.TraceLogger) jwt.Keyfunc {
+func newJWKKeyFunc(ctx context.Context, opts JWTParserOptions, jwkCache *jwk.Cache, ctxLogger *logging.TraceLogger, quiet bool) jwt.Keyfunc {
 	// Create a safe context if nil
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	logFailure := ctxLogger.ErrorContext
+	if quiet {
+		logFailure = ctxLogger.DebugContext
 	}
 
 	return func(token *jwt.Token) (interface{}, error) {
@@ -599,26 +612,26 @@ func newJWKKeyFunc(ctx context.Context, opts JWTParserOptions, jwkCache *jwk.Cac
 
 		keySet, err := fetchJwk(ctx, opts, jwkCache, ctxLogger)
 		if err != nil {
-			ctxLogger.ErrorContext(ctx, "failed to fetch jwk", zap.Error(err))
+			logFailure(ctx, "failed to fetch jwk", zap.Error(err))
 			return nil, errors.New(ErrFetchingJwk)
 		}
 
 		kid, err := extractKidFromTokenHeaders(token.Header)
 		if err != nil {
-			ctxLogger.ErrorContext(ctx, "failed to extract kid from token headers", zap.Error(err))
+			logFailure(ctx, "failed to extract kid from token headers", zap.Error(err))
 			// this is already assured to be of type nverror
 			return nil, err
 		}
 
 		key, ok := keySet.LookupKeyID(kid)
 		if !ok {
-			ctxLogger.ErrorContext(ctx, "jwk not found for kid", zap.String("kid", kid))
+			logFailure(ctx, "jwk not found for kid", zap.String("kid", kid))
 			return nil, errors.New(ErrMissingJwk)
 		}
 
 		var cryptoKey interface{}
 		if err := key.Raw(&cryptoKey); err != nil {
-			ctxLogger.ErrorContext(ctx, "failed to get raw crypto key", zap.Error(err))
+			logFailure(ctx, "failed to get raw crypto key", zap.Error(err))
 			return nil, fmt.Errorf("failed to get raw crypto key: %w", err)
 		}
 

@@ -31,6 +31,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	policyclient "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 	"github.com/golang-jwt/jwt/v5"
@@ -39,7 +40,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -808,6 +812,40 @@ func TestNVCAIntrospectionAuthorizesWriteRoute(t *testing.T) {
 	identity, ok := NVCAIdentityFromContext(capturedCtx)
 	require.True(t, ok)
 	assert.Equal(t, "cluster-a", identity.ClusterID)
+}
+
+func TestNVCAIntrospectionValidPSATDoesNotLogAtWarnOrAbove(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+
+	observedCore, observedLogs := observer.New(zapcore.DebugLevel)
+	logger := otelzap.New(zap.New(observedCore))
+
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, logger)
+	scoped := MaybeRequireScopesAllowNVCA(logger, true, WriteScopes, RequireAnyScopes)
+	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	ctx := context.WithValue(req.Context(), logging.LoggerKey, logging.NewTraceLogger(req.Context(), logger))
+	req = req.WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	for _, entry := range observedLogs.All() {
+		assert.Lessf(t, entry.Level, zapcore.WarnLevel, "expected local-verification-failure path for a valid PSAT must not log at warn or above, got %q at %s", entry.Message, entry.Level)
+	}
 }
 
 func TestNVCAIntrospectionDeniesReadRoute(t *testing.T) {
