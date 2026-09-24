@@ -788,7 +788,7 @@ func TestNVCAIntrospectionAuthorizesWriteRoute(t *testing.T) {
 	logger := testLogger(t)
 
 	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, logger)
-	scoped := MaybeRequireScopes(logger, true, WriteScopes, RequireAnyScopes)
+	scoped := MaybeRequireScopesAllowNVCA(logger, true, WriteScopes, RequireAnyScopes)
 
 	var capturedCtx context.Context
 	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -833,7 +833,7 @@ func TestNVCAIntrospectionDeniesReadRoute(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 
-	assert.Equal(t, http.StatusUnauthorized, recorder.Code, "an NVCA identity must not stand in for a read scope it was never issued")
+	assert.Equal(t, http.StatusForbidden, recorder.Code, "an NVCA identity must not stand in for a read scope it was never issued, but it is authenticated so this is 403, not 401")
 }
 
 func TestNVCAIntrospectionRejectsInactiveToken(t *testing.T) {

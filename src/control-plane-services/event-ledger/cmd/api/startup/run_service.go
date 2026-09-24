@@ -466,12 +466,12 @@ func runService(cfg config.Config) error {
 	}
 
 	authRouter.Handle("/v3/ledger/k8s-events",
-		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(wrapper(http.HandlerFunc(server.PostK8sEventV3))),
+		middleware.MaybeRequireScopesAllowNVCA(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(wrapper(http.HandlerFunc(server.PostK8sEventV3))),
 	).Methods("POST", "OPTIONS")
 
 	// CloudEvents receiver endpoint
 	authRouter.Handle("/v3/ledger/cloudevents",
-		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.PostCloudEventV3)),
+		middleware.MaybeRequireScopesAllowNVCA(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.PostCloudEventV3)),
 	).Methods("POST", "OPTIONS")
 
 	// V3 Stats endpoint - retrieve aggregated stats for a namespace

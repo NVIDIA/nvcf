@@ -243,7 +243,20 @@ func MaybeRequireScopes(logger *otelzap.Logger, authEnabled bool, requiredScopes
 		if !authEnabled {
 			return next
 		}
-		return requireScopes(requiredScopes, scopeRequirement)(next)
+		return requireScopes(requiredScopes, scopeRequirement, false)(next)
+	}
+}
+
+// MaybeRequireScopesAllowNVCA is MaybeRequireScopes, but also trusts an
+// SIS-introspected NVCA identity for write routes. Use only where the
+// handler also binds the identity to a specific cluster (see
+// bindNVCAClusterID in cmd/api/service/v3.go).
+func MaybeRequireScopesAllowNVCA(logger *otelzap.Logger, authEnabled bool, requiredScopes Scopes, scopeRequirement ScopeRequirement) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if !authEnabled {
+			return next
+		}
+		return requireScopes(requiredScopes, scopeRequirement, true)(next)
 	}
 }
 
@@ -287,7 +300,7 @@ func getScopesFromClaims(claims jwt.MapClaims) ([]string, bool) {
 	return result, len(result) > 0
 }
 
-func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement) func(http.Handler) http.Handler {
+func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement, allowNVCAIdentity bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			parentCtx := r.Context()
@@ -304,11 +317,18 @@ func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement) fun
 					next.ServeHTTP(w, r)
 					return
 				}
-				// An SIS-introspected NVCA identity carries no scopes either.
-				// Only trust it on the write routes it was scoped for, never
-				// as a stand-in for an arbitrary required scope.
-				if _, ok := NVCAIdentityFromContext(parentCtx); ok && requiredScopes == WriteScopes {
-					next.ServeHTTP(w, r)
+				if _, nvcaOK := NVCAIdentityFromContext(parentCtx); nvcaOK {
+					// NVCA's PSAT carries no scopes; only trust it on routes
+					// that opt in and bind it to a specific cluster (see
+					// bindNVCAClusterID in cmd/api/service/v3.go).
+					if allowNVCAIdentity && requiredScopes == WriteScopes {
+						next.ServeHTTP(w, r)
+						return
+					}
+					logger.WarnContext(traceCtx, ErrInsufficientPermissions)
+					status := http.StatusForbidden
+					api_error.GenerateErrorResponse(traceCtx, errType, "Forbidden", r.URL.Path, status, errors.New(ErrInsufficientPermissions), w)
+					logging.LogHTTPResponse(traceCtx, logger, status, w.Header())
 					return
 				}
 				logger.WarnContext(traceCtx, ErrMissingClaims)
