@@ -13,7 +13,7 @@ been fixed another way (the placeholder pid reservation).
 
 CRIU restore dies with one of:
 
-```
+```text
 Error (criu/cr-restore.c:1242): Can't fork for 364: File exists
 Error (criu/pie/restorer.c:2878): Unable to create a thread: -17
 ```
@@ -77,7 +77,7 @@ what a container checkpoint normally contains.
 
 Measured, not theorised. With the gate on, the dump ran as:
 
-```
+```sh
 nsenter -t <hostPID> -m -p -n -i -u -r -w -- criu dump -t 1 ...
 ```
 
