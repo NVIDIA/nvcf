@@ -48,13 +48,6 @@ NVSNAP_SERVER_VERSION="${NVSNAP_SERVER_VERSION:-v0.0.31}"
 NVSNAP_BLOBSTORE_VERSION="${NVSNAP_BLOBSTORE_VERSION:-v0.0.1}"
 NVSNAP_L2WAIT_VERSION="${NVSNAP_L2WAIT_VERSION:-v0.0.1}"
 
-# Dependency builder images — also reset to v0.0.1. They retain their
-# CRIU/NCCL patches; the version is just a new tag on the new registry.
-NVSNAP_UVLOOP_VERSION="${NVSNAP_UVLOOP_VERSION:-v0.0.1}"
-NVSNAP_LIBZMQ_VERSION="${NVSNAP_LIBZMQ_VERSION:-v0.0.1}"
-NVSNAP_PYZMQ_VERSION="${NVSNAP_PYZMQ_VERSION:-v0.0.1}"
-NVSNAP_LIBUV_VERSION="${NVSNAP_LIBUV_VERSION:-v0.0.1}"
-
 # Dependency / CRIU fork repos + refs. All forks now live under
 # github.com/balajinvda. These are consumed by ci/build-image.sh when a
 # dep-builder or base image actually has to be (re)built; day to day the
@@ -75,17 +68,6 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 # Only the clean-checkout path fetches, so a developer with a local ../criu
 # checkout never sees this; it breaks OSS clone-and-build only.
 NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-169595fd8ff115690c35d70c1fae90a8d03a7321}"
-NVSNAP_LIBZMQ_REPO="${NVSNAP_LIBZMQ_REPO:-https://github.com/balajinvda/libzmq.git}"
-NVSNAP_LIBZMQ_REF="${NVSNAP_LIBZMQ_REF:-checkpoint-restore-v1}"
-NVSNAP_LIBUV_REPO="${NVSNAP_LIBUV_REPO:-https://github.com/balajinvda/libuv.git}"
-NVSNAP_LIBUV_REF="${NVSNAP_LIBUV_REF:-fix/issue-41-no-sqarray}"
-NVSNAP_UVLOOP_REPO="${NVSNAP_UVLOOP_REPO:-https://github.com/balajinvda/uvloop.git}"
-NVSNAP_UVLOOP_REF="${NVSNAP_UVLOOP_REF:-checkpoint-restore-v1}"
-NVSNAP_PYZMQ_REPO="${NVSNAP_PYZMQ_REPO:-https://github.com/balajinvda/pyzmq.git}"
-NVSNAP_PYZMQ_REF="${NVSNAP_PYZMQ_REF:-main}"
-
-# Combined init container — always matches agent version to prevent build-ID mismatch
-NVSNAP_INIT_VERSION="${NVSNAP_INIT_VERSION:-${NVSNAP_APP_VERSION}}"
 
 # vLLM base image
 NVSNAP_VLLM_VERSION="${NVSNAP_VLLM_VERSION:-v0.20.0}"

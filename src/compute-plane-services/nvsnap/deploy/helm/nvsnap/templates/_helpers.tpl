@@ -155,17 +155,6 @@ registry. Keeping our registry under our own namespace prevents that.
        hostPath mounts from there onto function pods. No
        cross-registry mirror required. */ -}}
 
-{{- define "nvsnap.builder.image" -}}
-{{- /* args: ctx, name (e.g. "uvloop-builder"). Same mandatory-tag rule
-       as nvsnap.image — if nvsnap.builderTag is empty the user has to
-       set it explicitly. */ -}}
-{{- $reg := .ctx.Values.nvsnap.imageRegistry -}}
-{{- if not .ctx.Values.nvsnap.builderTag -}}
-{{- fail (printf "nvsnap.builder.image: nvsnap.builderTag is required (rendering %q)" .name) -}}
-{{- end -}}
-{{- printf "%s/%s:%s" $reg .name .ctx.Values.nvsnap.builderTag -}}
-{{- end }}
-
 {{/*
 Image-pull-secrets block, rendered if any are configured. Used at the
 PodSpec level (not Deployment-level — Kubernetes requires it on pods).

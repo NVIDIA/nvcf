@@ -80,12 +80,6 @@ nvsnap:
   imagePullSecrets:
     - nvsnap-pull-secret
 
-  # Tag used for dependency builder images (uvloop-builder, libuv-builder,
-  # libzmq-builder). The agent passes these to its in-process webhook so
-  # it can auto-inject the right init container into BYOC workload pods.
-  # Must match what's actually been built+pushed to imageRegistry —
-  # there's no AppVersion fallback (see _helpers.tpl).
-  builderTag: "v0.0.1"
 
 # ─── NvSnap Agent (DaemonSet on GPU nodes) ───────────────────────────────
 

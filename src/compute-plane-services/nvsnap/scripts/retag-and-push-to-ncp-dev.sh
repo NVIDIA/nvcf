@@ -26,11 +26,6 @@ declare -a IMAGES=(
     "nvsnap-agent:v0.24.16-ensure-capture-endpoint"
     "nvsnap-server:v0.9.0-cross-node-restore"
     "nvsnap-blobstore:v0.2.0-stats-captures"
-    "nvsnap-init:v0.24.16-ensure-capture-endpoint"
-    "uvloop-builder:v0.22.1-multipy1"
-    "libuv-builder:v1.48.0-criu-v3"
-    "libzmq-builder:v4.3.6-criu-epoll-v12"
-    "pyzmq-builder:v27.2.0-gpucr3"
 )
 
 for entry in "${IMAGES[@]}"; do

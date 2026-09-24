@@ -30,20 +30,6 @@ echo "=========================================="
 
 ERRORS=0
 
-# 1. Check local library was built recently
-echo -e "\n${YELLOW}[1/6] Checking local library build...${NC}"
-LOCAL_LIB="lib/nvsnap_intercept/src/io_uring_intercept.c"
-if [ -f "$LOCAL_LIB" ]; then
-    MODIFIED=$(stat -c %Y "$LOCAL_LIB" 2>/dev/null || stat -f %m "$LOCAL_LIB")
-    NOW=$(date +%s)
-    AGE_HOURS=$(( (NOW - MODIFIED) / 3600 ))
-    if [ $AGE_HOURS -gt 2 ]; then
-        echo -e "${YELLOW}  WARNING: $LOCAL_LIB last modified $AGE_HOURS hours ago${NC}"
-    else
-        echo -e "${GREEN}  OK: Source modified recently ($AGE_HOURS hours ago)${NC}"
-    fi
-fi
-
 # 2. Check Docker image exists locally
 echo -e "\n${YELLOW}[2/6] Checking Docker image...${NC}"
 IMAGE="nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:$EXPECTED_VERSION"
@@ -52,7 +38,7 @@ if docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo -e "${GREEN}  OK: Image exists locally (created: $CREATED)${NC}"
 else
     echo -e "${RED}  ERROR: Image $IMAGE not found locally${NC}"
-    echo "  Run: ./scripts/build-agent-app.sh"
+    echo "  Run: NVSNAP_APP_VERSION=\"$EXPECTED_VERSION\" ./scripts/build-agent.sh app"
     ERRORS=$((ERRORS + 1))
 fi
 
