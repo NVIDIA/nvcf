@@ -167,6 +167,9 @@ cassandra:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Zone spread; set by the HA value layer, empty by default. Needs a
+  # WaitForFirstConsumer StorageClass so each zonal PV binds in the pod's zone.
+  topologySpreadConstraints: []
 
   hooks:
     cleanupLegacyInitializeClusterRbac:

@@ -720,3 +720,20 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# Control-plane high availability.
+# global.yaml.gotmpl maps mode onto chart values (replicaCount, affinity, zone
+# spread, PDB, update strategy).
+#   none      keep chart/env defaults (single-node, local, CI).
+#   preferred HA sizing; soft placement (schedules even if capacity is short).
+#   enforced  HA sizing; hard placement (Pending rather than co-locating).
+# preferred/enforced need >= 3 nodes (>= 3 zones for zone spread).
+# Optional overrides: global.affinity / global.topologySpreadConstraints.
+# Default preferred (real multi-node); set none for single-node / local / CI.
+highAvailability:
+  mode: preferred
+  nats:
+    jetstream:
+      # JetStream replica factor, applied to the stream creators (nvcf-api,
+      # invocation-service) via env. RF=2 loses quorum on one node loss.
+      replicaFactor: 3

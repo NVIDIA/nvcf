@@ -24,6 +24,11 @@ apikeys:
     minAvailable: ""
     maxUnavailable: ""
 
+  # HA hooks; set by the HA value layer, off by default.
+  affinity: {}
+  topologySpreadConstraints: []
+  strategy: {}
+
   image:
     registry: ""
     repository: ""

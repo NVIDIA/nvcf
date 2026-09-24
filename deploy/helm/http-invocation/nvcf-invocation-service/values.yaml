@@ -121,6 +121,9 @@ invocation:
 
   affinity: {}
 
+  # Zone spread; set by the HA value layer, empty by default.
+  topologySpreadConstraints: []
+
   ports:
     - name: http
       containerPort: 8080

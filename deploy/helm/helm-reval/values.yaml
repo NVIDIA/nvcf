@@ -84,6 +84,10 @@ reval:
   tolerations: []
   affinity: {}
 
+  # HA hooks; set by the HA value layer, off by default.
+  topologySpreadConstraints: []
+  strategy: {}
+
   jaeger:
     enabled: false
 

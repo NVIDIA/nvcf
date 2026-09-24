@@ -22,6 +22,10 @@ metadata:
     {{- include "sis.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.sis.replicaCount }}
+  {{- with .Values.sis.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "sis.selectorLabels" . | nindent 6 }}
@@ -131,6 +135,10 @@ spec:
       {{- end }}
       {{- with .Values.sis.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sis.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.sis.tolerations }}
