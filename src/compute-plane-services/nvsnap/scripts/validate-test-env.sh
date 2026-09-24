@@ -38,7 +38,7 @@ if docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo -e "${GREEN}  OK: Image exists locally (created: $CREATED)${NC}"
 else
     echo -e "${RED}  ERROR: Image $IMAGE not found locally${NC}"
-    echo "  Run: ./scripts/build-agent.sh app"
+    echo "  Run: NVSNAP_APP_VERSION=\"$EXPECTED_VERSION\" ./scripts/build-agent.sh app"
     ERRORS=$((ERRORS + 1))
 fi
 
