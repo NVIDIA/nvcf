@@ -17,7 +17,7 @@ has its own version menu. Overview is unversioned.
 - `docs/self-managed/`: top-of-tree Self-Managed Stack (control plane) documentation published as `dev`.
 - `docs/compute-plane/`: top-of-tree Compute Plane Stack documentation published as `dev`.
 - `docs/observability/`: top-of-tree Observability Stack documentation published as `dev`.
-- `docs/<stack>-<version>/`: frozen per-stack documentation for an exact release, for example `docs/observability-1.3.2/`. Do not edit these trees unless the user explicitly asks for a historical docs fix. `docs/self-managed-1.0.0/` is the full pre-split tree frozen at the 1.0.0 retag and contains compute-plane and observability pages as well.
+- `docs/<stack>-<version>/`: frozen per-stack documentation for an exact release, for example `docs/observability-1.3.2/`. Do not edit these trees unless the user explicitly asks for a historical docs fix. `docs/self-managed-1.0.1/` is the full pre-split tree carried forward from the 1.0.0 retag and contains compute-plane and observability pages as well.
 - `docs/v*/`: frozen legacy full-tree documentation from before the per-stack split. Same rule: do not edit.
 - `docs/ngc-managed/`: legacy NGC-managed (BYOC) platform documentation, published under Overview.
 - `docs/dev/`: developer and local workflow documentation.
