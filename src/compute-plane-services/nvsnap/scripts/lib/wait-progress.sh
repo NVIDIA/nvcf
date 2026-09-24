@@ -111,6 +111,15 @@ for cs in (s.get("initContainerStatuses") or []) + (s.get("containerStatuses") o
 '
 }
 
+# Seams. The loop below is the part that actually decides pass or fail, so it
+# has to be reachable by a test. These four wrap everything in it that touches
+# the world; wait-progress-test.sh redefines them to replay a scripted pod
+# sequence against a virtual clock, with no cluster and no real waiting.
+_wp_pod_json() { kubectl get pod "$1" -n "$2" -o json 2>/dev/null; }
+_wp_log_size() { kubectl logs "$1" -n "$2" --tail=-1 2>/dev/null | wc -c; }
+_wp_now()      { date +%s; }
+_wp_sleep()    { sleep "$1"; }
+
 # wait_pod_ready <pod> <namespace> [stall_timeout_s] [max_wait_s]
 # Returns 0 when ready, 1 on terminal failure or stall. Prints what it observed.
 wait_pod_ready() {
@@ -121,13 +130,13 @@ wait_pod_ready() {
 
     local pullstall="${NVSNAP_PULL_STALL_TIMEOUT:-1800}"
     local start last_change fingerprint prev logsize prevlog seen
-    start=$(date +%s); last_change=$start; prev=""; prevlog=""; seen=0
+    start=$(_wp_now); last_change=$start; prev=""; prevlog=""; seen=0
 
     while true; do
         local now elapsed json
-        now=$(date +%s); elapsed=$((now - start))
+        now=$(_wp_now); elapsed=$((now - start))
 
-        json=$(kubectl get pod "$pod" -n "$ns" -o json 2>/dev/null)
+        json=$(_wp_pod_json "$pod" "$ns")
         if [ -z "$json" ]; then
             # Empty output conflates "no such pod" with a transient API error, so
             # only treat it as fatal before the pod has ever been observed. After
@@ -140,7 +149,7 @@ wait_pod_ready() {
                 echo "wait_pod_ready: $ns/$pod unreadable at the ceiling ${max}s"
                 return 1
             fi
-            sleep "$interval"; continue
+            _wp_sleep "$interval"; continue
         fi
         seen=1
 
@@ -164,7 +173,7 @@ sys.exit(1)'; then
 
         # Log growth counts as progress: a model download or engine build emits
         # output steadily while producing no state transitions at all.
-        logsize=$(kubectl logs "$pod" -n "$ns" --tail=-1 2>/dev/null | wc -c)
+        logsize=$(_wp_log_size "$pod" "$ns")
         fingerprint=$(printf '%s' "$json" | progress_fingerprint_from_json)
 
         if [ "$fingerprint" != "$prev" ] || [ "$logsize" != "$prevlog" ]; then
@@ -194,6 +203,6 @@ sys.exit(1)'; then
             return 1
         fi
 
-        sleep "$interval"
+        _wp_sleep "$interval"
     done
 }
