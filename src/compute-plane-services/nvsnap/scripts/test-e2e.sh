@@ -32,6 +32,7 @@ fi
 # Verify deployed agent matches expected version
 source "$SCRIPT_DIR/versions.sh"
 source "$SCRIPT_DIR/lib/agent-auth.sh"
+source "$SCRIPT_DIR/lib/wait-progress.sh"
 DEPLOYED=$(kubectl get ds nvsnap-agent -n nvsnap-system -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
 EXPECTED="${NVSNAP_REGISTRY}/nvsnap-agent:${NVSNAP_APP_VERSION}"
 if [ "$DEPLOYED" != "$EXPECTED" ]; then
@@ -274,28 +275,21 @@ esac
 # General configuration
 NAMESPACE="nvsnap-system"
 
-# Timeouts (seconds) — 70B needs longer for model download + GPU memory dump/restore
-if [[ "$WORKLOAD" == *"70b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: 70B model download + load
-    MODELS_POLL_TIMEOUT=1200    # 20min
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=1200  # 20min: CRIU + 4x GPU memory restore
-elif [[ "$WORKLOAD" == trtllm-* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~25GB image pull + TRT engine compilation
-    MODELS_POLL_TIMEOUT=1200    # 20min
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=600   # 10min
-elif [[ "$WORKLOAD" == *"qwen32b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~64GB fp16 model download + load
-    MODELS_POLL_TIMEOUT=1200    # 20min
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=1200  # 20min: CRIU restore of ~64GB host-staged GPU memory
-else
-    POD_READY_TIMEOUT=600       # 10min
-    MODELS_POLL_TIMEOUT=600
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=600   # 10min
-fi
+# Readiness is progress-based, not deadline-based: see scripts/lib/wait-progress.sh.
+# There is deliberately no per-workload timeout table here. The old one keyed
+# fixed deadlines off substrings of the workload name, matched only 3 of the 13
+# workloads, and reported every miss as "Pod ready FAIL" -- which reads like a
+# capture bug. A pod that is still downloading a 64GB model is making progress
+# and is allowed to continue; a pod that has stopped changing is failed after
+# NVSNAP_STALL_TIMEOUT regardless of how large the model is.
+#
+#   NVSNAP_STALL_TIMEOUT  no observable progress for this long = hung (default 600)
+#   NVSNAP_MAX_WAIT       absolute ceiling, a backstop only     (default 5400)
+#
+# The HTTP polls below run against an already-ready pod, so a plain deadline is
+# appropriate there. They are single generous defaults rather than a table.
+MODELS_POLL_TIMEOUT="${NVSNAP_MODELS_POLL_TIMEOUT:-1200}"
+INFERENCE_POLL_TIMEOUT="${NVSNAP_INFERENCE_POLL_TIMEOUT:-300}"
 MODELS_POLL_INTERVAL=30
 INFERENCE_POLL_INTERVAL=30
 POST_MODELS_TIMEOUT=120
@@ -585,8 +579,8 @@ kubectl apply -f "$SOURCE_RENDERED"
 
 # ─── Step 3: Wait for pod ready (readiness probe checks /v1/models) ──────────
 step_start
-log_info "Step 3: Waiting for pod ready (up to ${POD_READY_TIMEOUT}s)..."
-if kubectl wait --for=condition=ready pod/$POD_NAME -n $NAMESPACE --timeout=${POD_READY_TIMEOUT}s; then
+log_info "Step 3: Waiting for pod ready (progress-based; stall after ${NVSNAP_STALL_TIMEOUT:-600}s)..."
+if wait_pod_ready "$POD_NAME" "$NAMESPACE"; then
     step_done "Pod ready" "OK"
 else
     kubectl logs $POD_NAME -n $NAMESPACE -c $CONTAINER_NAME --tail=20 || true
@@ -852,9 +846,9 @@ if [ "$CAPTURE_PATH" = "criu-v2" ]; then
     log_info "criu-v2: agent restore returned: $RESTORE_RESP"
 fi
 
-log_info "Waiting for restore pod ready (up to ${RESTORE_READY_TIMEOUT}s)..."
+log_info "Waiting for restore pod ready (progress-based)..."
 log_info "  (readiness probe polls /v1/models — succeeds only when serving)"
-if kubectl wait --for=condition=ready pod/$RESTORE_POD_NAME -n $NAMESPACE --timeout=${RESTORE_READY_TIMEOUT}s; then
+if wait_pod_ready "$RESTORE_POD_NAME" "$NAMESPACE"; then
     step_done "Restore pod ready" "OK"
 else
     log_warn "Restore pod not ready, checking status..."

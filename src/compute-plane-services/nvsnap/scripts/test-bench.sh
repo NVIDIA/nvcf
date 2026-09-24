@@ -33,6 +33,7 @@ set -euo pipefail
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/versions.sh"
+source "$SCRIPT_DIR/lib/wait-progress.sh"
 
 # ─── Global temp-file cleanup ────────────────────────────────────────────────
 # Single EXIT trap; each phase appends to TMP_FILES instead of installing its
@@ -300,7 +301,9 @@ fi
 CAPTURE_PATH="${CAPTURE_PATH:-rootfs}"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-POD_READY_TIMEOUT=1800  # 30m — gemma-4-31b NIM from NGC takes ~20-25 min cold download
+# Retained only for the rootfs-capture polling loops below; pod readiness is
+# progress-based (scripts/lib/wait-progress.sh) and ignores this.
+POD_READY_TIMEOUT=1800
 INFER_TIMEOUT=300
 NODE=""
 
@@ -424,7 +427,11 @@ wait_ready() {
         fi
         sleep 1
     done
-    kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/"$pod" --timeout="${timeout}s" >/dev/null
+    # Progress-based from here: the caller's $timeout is ignored deliberately.
+    # A benchmark pod pulling 60GB from NGC is making progress and must not be
+    # failed for being slow; a pod that has stopped changing is failed after
+    # NVSNAP_STALL_TIMEOUT. See scripts/lib/wait-progress.sh.
+    wait_pod_ready "$pod" "$NAMESPACE"
 }
 
 verify_infer() {
