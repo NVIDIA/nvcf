@@ -85,7 +85,7 @@ type PatchOp struct {
 }
 
 // mergeableArrayRe matches the per-container appendable arrays whose
-// bootstrap (`add <array> []`) the auto-inject and restore builders each
+// bootstrap (`add <array> []`) the cachedir and restore builders each
 // compute independently from the original pod.
 var mergeableArrayRe = regexp.MustCompile(`^/spec/containers/\d+/(volumeMounts|env)$`)
 
@@ -97,7 +97,7 @@ func isMergeableArray(path string) bool {
 
 // patchElementName pulls the "name" field out of a patch value (volume,
 // volumeMount, initContainer, env). JSON round-trip so it works for both
-// map[string]any (auto-inject) and typed corev1 values (restore builders).
+// map[string]any (cachedir) and typed corev1 values (restore builders).
 // Returns "" when there's no name (then the element can't be deduped).
 func patchElementName(v any) string {
 	b, err := json.Marshal(v)
@@ -113,12 +113,12 @@ func patchElementName(v any) string {
 	return named.Name
 }
 
-// mergePatchPlan reconciles the concatenation of auto-inject + restore
+// mergePatchPlan reconciles the concatenation of cachedir + restore
 // patches so they don't clobber each other (nvsnap#93). Both sides build
 // array bootstraps from the ORIGINAL pod, so a pod with empty spec.volumes
 // (or empty main-container volumeMounts/env) gets TWO `add <array> [..]`
 // ops — and under JSON Patch the second REPLACES the first, dropping the
-// auto-injected nvsnap-lib volume/mount. The same arrays can also receive a
+// restore-bundle volume/mount. The same arrays can also receive a
 // duplicate element (two nvsnap-lib volumes).
 //
 // Normalization, preserving order:
@@ -420,7 +420,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		// No-op when cachedir mode is off. (Restore pods get the rox mount
 		// + env from the cachedir restore path below, not this.)
 		injectPatches = append(injectPatches, m.cacheDirCapturePatches(pod)...)
-		// Return whatever auto-inject + cachedir-capture produced (may be
+		// Return whatever the cachedir-capture patches produced (may be
 		// nil, which is fine — pod admitted unchanged).
 		if len(injectPatches) > 0 {
 			m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
@@ -546,9 +546,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	if err != nil {
 		return nil, err
 	}
-	// Prepend any auto-inject patches so they're applied first by the
+	// Prepend the pre-patches so they're applied first by the
 	// API server (in-order JSON Patch application). Restore mount
-	// patches reference indices that auto-inject may also touch
+	// patches reference indices that the pre-patches may also touch
 	// (initContainers list, env list); doing inject-then-restore keeps
 	// path math straightforward.
 	patches = mergePatchPlan(append(injectPatches, patches...))

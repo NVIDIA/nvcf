@@ -34,7 +34,7 @@ limitations under the License.
 // SCOPE: this does NOT yet restore io_uring / libuv event-loop kernel
 // state. vLLM's uvloop aborts post-restore with io_uring enabled, so the
 // vllm-small manifest still sets USE_LIBUV=0 / UV_USE_IO_URING=0 and
-// preloads nvsnap_cr.so (verified: with those levers removed the restored
+// preloaded the interception library (verified: with those levers removed the restored
 // process aborts in uvloop.run, 2026-07-13). Restoring the rings at the
 // CRIU layer to drop those levers is tracked separately (NVCF-9641,
 // io_uring ring-restore work item).

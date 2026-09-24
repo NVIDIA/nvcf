@@ -35,7 +35,7 @@ benchmark summary. This directory holds the operator and developer docs.
 
 - [Third-party forks + fork-maintenance policy](THIRD-PARTY-FORKS.md)
 - [Benchmarks](BENCHMARK.md) · [PDF benchmark matrix](PDF-BENCH-RESULTS.md)
-- [Generic Python injection](GENERIC-PYTHON-INJECTION-DESIGN.md)
+- [Generic Python injection](archive/GENERIC-PYTHON-INJECTION-DESIGN.md) (archived; the injection stack was removed)
 - [L2 per-capture PVC (CRIU)](L2-PVC-CRIU-DESIGN.md)
 - [Multi-GPU rootfs fan-out](MULTI-GPU-ROOTFS-FANOUT-DESIGN.md)
 
