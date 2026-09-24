@@ -62,6 +62,10 @@ nvcf_java_library(
     name = "nvct_core",
     srcs = NVCT_CORE_SRCS,
     javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
+    runtime_deps = [
+        "@nv_third_party_deps//:io_grpc_grpc_services",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_grpc_server",
+    ],
     deps = [
         ":nvct_proto_java_grpc",
         "@nv_third_party_deps//:com_bucket4j_bucket4j_jdk17_core",
@@ -93,7 +97,7 @@ nvcf_java_library(
         "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
         "@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api",
         "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
-        "@nv_third_party_deps//:net_devh_grpc_server_spring_boot_starter",
+        "@nv_third_party_deps//:org_springframework_grpc_spring_grpc_core",
         "@nv_third_party_deps//:net_javacrumbs_shedlock_shedlock_core",
         "@nv_third_party_deps//:net_javacrumbs_shedlock_shedlock_provider_cassandra",
         "@nv_third_party_deps//:net_javacrumbs_shedlock_shedlock_spring",
@@ -175,7 +179,7 @@ NVCT_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:io_projectreactor_netty_reactor_netty_core",
     "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
     "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
-    "@nv_third_party_deps//:net_devh_grpc_server_spring_boot_starter",
+    "@nv_third_party_deps//:org_springframework_grpc_spring_grpc_core",
     "@nv_third_party_deps//:net_minidev_json_smart",
     "@nv_third_party_deps//:org_apache_commons_commons_lang3",
     "@nv_third_party_deps//:org_apache_logging_log4j_log4j_api",
