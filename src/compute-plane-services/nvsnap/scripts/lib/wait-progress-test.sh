@@ -40,5 +40,19 @@ C='{"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]
 [ "$(fingerprint "$A")" != "$(fingerprint "$B")" ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FAIL fingerprint blind to phase change"; }
 [ "$(fingerprint "$B")" != "$(fingerprint "$C")" ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FAIL fingerprint blind to restart"; }
 
+pull() { printf '%s' "$1" | pull_in_flight_from_json; }
+
+# --- image pull in flight must extend the budget, not look like a stall -------
+check "containercreating is a pull" "yes" "$(pull '{"status":{"phase":"Pending","containerStatuses":[{"name":"c","state":{"waiting":{"reason":"ContainerCreating"}}}]}}')"
+check "podinitializing is a pull" "yes" "$(pull '{"status":{"phase":"Pending","containerStatuses":[{"name":"c","state":{"waiting":{"reason":"PodInitializing"}}}]}}')"
+check "init container pull counts" "yes" "$(pull '{"status":{"phase":"Pending","initContainerStatuses":[{"name":"i","state":{"waiting":{"reason":"ContainerCreating"}}}]}}')"
+check "running container is not a pull" "EMPTY" "$(pull '{"status":{"phase":"Running","containerStatuses":[{"name":"c","state":{"running":{}}}]}}')"
+check "crashloop is not a pull" "EMPTY" "$(pull '{"status":{"phase":"Running","containerStatuses":[{"name":"c","state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}')"
+check "succeeded is not a pull" "EMPTY" "$(pull '{"status":{"phase":"Succeeded","containerStatuses":[{"name":"c","state":{"terminated":{"exitCode":0}}}]}}')"
+check "garbage json is not a pull" "EMPTY" "$(pull 'not json')"
+
+# A pod mid-pull must not also be reported terminal, or the budget never applies.
+check "pull is not terminal" "EMPTY" "$(fail_reason '{"status":{"phase":"Pending","containerStatuses":[{"name":"c","state":{"waiting":{"reason":"ContainerCreating"}}}]}}')"
+
 echo "wait-progress: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

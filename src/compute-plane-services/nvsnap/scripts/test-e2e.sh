@@ -283,8 +283,12 @@ NAMESPACE="nvsnap-system"
 # and is allowed to continue; a pod that has stopped changing is failed after
 # NVSNAP_STALL_TIMEOUT regardless of how large the model is.
 #
-#   NVSNAP_STALL_TIMEOUT  no observable progress for this long = hung (default 600)
-#   NVSNAP_MAX_WAIT       absolute ceiling, a backstop only     (default 5400)
+#   NVSNAP_STALL_TIMEOUT       no observable progress this long = hung (default 600)
+#   NVSNAP_PULL_STALL_TIMEOUT  the same, while an image pull is in flight, since
+#                              Kubernetes reports no byte-level pull progress
+#                              and a large pull is indistinguishable from a hang
+#                              (default 1800)
+#   NVSNAP_MAX_WAIT            absolute ceiling, a backstop only (default 5400)
 #
 # The HTTP polls below run against an already-ready pod, so a plain deadline is
 # appropriate there. They are single generous defaults rather than a table.

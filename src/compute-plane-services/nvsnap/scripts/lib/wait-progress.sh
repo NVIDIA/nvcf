@@ -86,6 +86,31 @@ print("|".join(parts))
 '
 }
 
+# pull_in_flight_from_json
+# Echoes "yes" when any container is still being created or its image pulled.
+# Kubernetes exposes no byte-level pull progress, so a 25GB pull looks identical
+# to a hang: Pending, ContainerCreating, no container logs, no state change. The
+# stall timer would fire on a perfectly healthy pull. While a pull is in flight
+# we apply the larger NVSNAP_PULL_STALL_TIMEOUT instead, which keeps a bound on
+# a genuinely stuck pull without failing a slow one.
+pull_in_flight_from_json() {
+    python3 -c '
+import json, sys
+try:
+    p = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+s = p.get("status", {})
+if s.get("phase") not in ("Pending", "Running"):
+    sys.exit(0)
+for cs in (s.get("initContainerStatuses") or []) + (s.get("containerStatuses") or []):
+    w = (cs.get("state") or {}).get("waiting") or {}
+    if w.get("reason") in ("ContainerCreating", "PodInitializing", "Pulling", "ImagePullBackOff_retry"):
+        print("yes")
+        sys.exit(0)
+'
+}
+
 # wait_pod_ready <pod> <namespace> [stall_timeout_s] [max_wait_s]
 # Returns 0 when ready, 1 on terminal failure or stall. Prints what it observed.
 wait_pod_ready() {
@@ -94,8 +119,9 @@ wait_pod_ready() {
     local max="${4:-${NVSNAP_MAX_WAIT:-5400}}"
     local interval="${NVSNAP_POLL_INTERVAL:-10}"
 
-    local start last_change fingerprint prev logsize prevlog
-    start=$(date +%s); last_change=$start; prev=""; prevlog=""
+    local pullstall="${NVSNAP_PULL_STALL_TIMEOUT:-1800}"
+    local start last_change fingerprint prev logsize prevlog seen
+    start=$(date +%s); last_change=$start; prev=""; prevlog=""; seen=0
 
     while true; do
         local now elapsed json
@@ -103,12 +129,20 @@ wait_pod_ready() {
 
         json=$(kubectl get pod "$pod" -n "$ns" -o json 2>/dev/null)
         if [ -z "$json" ]; then
-            if [ "$elapsed" -gt 120 ]; then
+            # Empty output conflates "no such pod" with a transient API error, so
+            # only treat it as fatal before the pod has ever been observed. After
+            # that it is an API blip and waiting is correct.
+            if [ "$seen" -eq 0 ] && [ "$elapsed" -gt 120 ]; then
                 echo "wait_pod_ready: pod $ns/$pod not found after ${elapsed}s"
+                return 1
+            fi
+            if [ "$elapsed" -ge "$max" ]; then
+                echo "wait_pod_ready: $ns/$pod unreadable at the ceiling ${max}s"
                 return 1
             fi
             sleep "$interval"; continue
         fi
+        seen=1
 
         if printf '%s' "$json" | python3 -c '
 import json,sys
@@ -140,9 +174,14 @@ sys.exit(1)'; then
             prev="$fingerprint"; prevlog="$logsize"; last_change=$now
         fi
 
+        local budget="$stall"
+        if [ -n "$(printf '%s' "$json" | pull_in_flight_from_json)" ]; then
+            budget="$pullstall"
+        fi
+
         local stalled_for=$((now - last_change))
-        if [ "$stalled_for" -ge "$stall" ]; then
-            echo "wait_pod_ready: $ns/$pod STALLED -- no observable progress for ${stalled_for}s (elapsed ${elapsed}s)"
+        if [ "$stalled_for" -ge "$budget" ]; then
+            echo "wait_pod_ready: $ns/$pod STALLED -- no observable progress for ${stalled_for}s (budget ${budget}s, elapsed ${elapsed}s)"
             echo "  last state: $fingerprint"
             echo "  this is a startup stall, not a checkpoint failure"
             return 1
