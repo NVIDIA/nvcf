@@ -38,7 +38,7 @@ products:
     slug: self-managed
     path: products/self-managed/1.0.0.yml
     versions:
-      - display-name: "1.0.0"
+      - display-name: "1.0.1"
         path: products/self-managed/1.0.0.yml
         slug: "1.0.0"
       - display-name: dev
