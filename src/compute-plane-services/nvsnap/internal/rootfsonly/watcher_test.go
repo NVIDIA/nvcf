@@ -414,3 +414,82 @@ func TestRefreshPodForCapture_FallsBackWhenReadFails(t *testing.T) {
 		t.Error("failed re-read should fall back to the pre-warmup copy")
 	}
 }
+
+// The dedup set marks a pod UID as SCHEDULED, and handlePodEvent treats a
+// marked UID as nothing-to-do. Every abort therefore has to release it, or
+// the pod is never retried and every later event returns silently. Only the
+// capture-error path used to release, so the aborts below poisoned the UID
+// for the life of the agent -- and because the multi-GPU branch logged
+// nothing, the result was invisible.
+
+func TestWatcher_CancelledWarmupIsRetryable(t *testing.T) {
+	env := newWatcherEnv(t)
+	w := env.watcher()
+	w.Capturer = env.capturer()
+	w.sem = make(chan struct{}, w.concurrency())
+	// Long enough that cancellation lands inside the warmup wait.
+	w.WarmupDelay = 5 * time.Second
+
+	pod := fakePod(types.UID(env.podUID), "p", map[string]string{DefaultCaptureLabel: "true"}, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	w.HandlePodEvent(ctx, pod)
+	if !waitFor(t, time.Second, func() bool { _, ok := w.captured.Load(pod.UID); return ok }) {
+		t.Fatal("expected the UID to be marked while the capture is scheduled")
+	}
+	cancel()
+
+	if !waitFor(t, 2*time.Second, func() bool { _, ok := w.captured.Load(pod.UID); return !ok }) {
+		t.Fatal("warmup was cancelled but the UID stayed marked; the pod can never be retried")
+	}
+}
+
+func TestWatcher_AbandonedPodReplacementIsRetryable(t *testing.T) {
+	env := newWatcherEnv(t)
+	w := env.watcher()
+	w.Capturer = env.capturer()
+	w.sem = make(chan struct{}, w.concurrency())
+	w.WarmupDelay = 0
+
+	// refreshPodForCapture re-reads the pod and abandons the capture when the
+	// UID changed, meaning ours was deleted and recreated. The client has no
+	// such pod at all, which drives the same abandon path.
+	pod := fakePod(types.UID("uid-that-is-not-in-the-fake-client"), "ghost",
+		map[string]string{DefaultCaptureLabel: "true"}, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	w.HandlePodEvent(ctx, pod)
+
+	if !waitFor(t, 2*time.Second, func() bool { _, ok := w.captured.Load(pod.UID); return !ok }) {
+		t.Fatal("capture was abandoned but the UID stayed marked; the pod can never be retried")
+	}
+}
+
+// A committed capture must KEEP the mark, or the watcher recaptures the same
+// pod on every resync. This is the case the release must not break.
+func TestWatcher_CommittedCaptureStaysDeduped(t *testing.T) {
+	env := newWatcherEnv(t)
+	// Same fixtures the happy-path test uses, so the capture actually
+	// commits; without them Capture fails and the release correctly fires,
+	// which would make this assert the opposite of what it means to.
+	env.addProc(t, env.upperdirMountinfo())
+	env.addUpperdirContent(t)
+	w := env.watcher()
+	w.Capturer = env.capturer()
+	w.sem = make(chan struct{}, w.concurrency())
+	w.WarmupDelay = 0
+
+	pod := fakePod(types.UID(env.podUID), "p", map[string]string{DefaultCaptureLabel: "true"}, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	w.HandlePodEvent(ctx, pod)
+
+	// Once the capture commits the mark must persist.
+	if !waitFor(t, 3*time.Second, func() bool { _, ok := w.captured.Load(pod.UID); return ok }) {
+		t.Fatal("expected the UID to remain marked after a committed capture")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, ok := w.captured.Load(pod.UID); !ok {
+		t.Fatal("a committed capture released its dedup mark; the pod would be recaptured on every resync")
+	}
+}
