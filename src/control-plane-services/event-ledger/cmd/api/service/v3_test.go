@@ -607,6 +607,34 @@ func TestPostK8sEventV3_StatsFailureAllFail(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "stats down")
 }
 
+func TestPostK8sEventV3_ClusterAuthorizationMismatchAbortsBatch(t *testing.T) {
+	mockDB := &mockDBHandlerV3{}
+	server := newServerWithMock(t, mockDB)
+
+	req := newOTLPRequest(
+		createOTLPLogRecord("pod.ready", "ns", "src", "pod-1", nil),
+		createOTLPLogRecord("pod.ready", "ns", "src", "pod-2", map[string]string{"cluster_id": "cluster-b"}),
+	)
+	body, err := proto.Marshal(req)
+	require.NoError(t, err)
+
+	logger := testutils.InitTestLogger(t)
+	httpReq := httptest.NewRequest("POST", "/v3/ledger/k8s-events", bytes.NewReader(body))
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	ctx := context.WithValue(httpReq.Context(), logging.LoggerKey, logging.NewTraceLogger(httpReq.Context(), logger))
+	ctx = middleware.WithNVCAIdentity(ctx, middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+	httpReq = httpReq.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	server.PostK8sEventV3(w, httpReq)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Empty(t, mockDB.storedEvents, "a cluster-authorization failure must abort the batch before any DB write")
+}
+
 // Test extractK8sEvent
 func TestExtractK8sEvent(t *testing.T) {
 	lr := createOTLPLogRecord("pod.ready", "tenant-123", "kubernetes", "pod-456", map[string]string{
@@ -937,6 +965,53 @@ func TestPostCloudEventV3_BatchMissingSpecversion(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "specversion")
+}
+
+func TestPostCloudEventV3_ClusterAuthorizationMismatchAbortsBatch(t *testing.T) {
+	body := []byte(`[
+		{
+			"specversion": "1.0",
+			"type": "pod.ready",
+			"source": "/test",
+			"id": "event-1",
+			"namespace": "ns"
+		},
+		{
+			"specversion": "1.0",
+			"type": "pod.ready",
+			"source": "/test",
+			"id": "event-2",
+			"namespace": "ns",
+			"clusterid": "cluster-b"
+		}
+	]`)
+
+	mockDB := &mockDBHandlerV3{}
+	logger := testutils.InitTestLogger(t)
+	server := NewServer(
+		Connections{DbHandlerV2: mockDB},
+		logger,
+		nil,
+		"test",
+		&config.HTTPClientConfig{},
+		config.PaginationConfig{},
+		config.StatsConfig{},
+	)
+
+	req := httptest.NewRequest("POST", "/v3/ledger/cloudevents", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/cloudevents-batch+json")
+	ctx := context.WithValue(req.Context(), logging.LoggerKey, logging.NewTraceLogger(req.Context(), logger))
+	ctx = middleware.WithNVCAIdentity(ctx, middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	server.PostCloudEventV3(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Empty(t, mockDB.storedEvents, "a cluster-authorization failure must abort the batch before any DB write")
 }
 
 func TestPostCloudEventV3_BatchRejectsNullEvent(t *testing.T) {

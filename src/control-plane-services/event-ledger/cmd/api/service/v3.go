@@ -282,10 +282,11 @@ func (s *Server) PostK8sEventV3(w http.ResponseWriter, r *http.Request) {
 
 // EventProcessingResult holds the results of processing a batch of events
 type EventProcessingResult struct {
-	SuccessCount    int
-	FailureCount    int
-	ProcessedEvents []ProcessedEventSummary
-	LastError       error
+	SuccessCount     int
+	FailureCount     int
+	ProcessedEvents  []ProcessedEventSummary
+	LastError        error
+	AuthorizationErr error
 }
 
 // processOTLPEvents extracts and stores K8s events from OTLP log records
@@ -299,6 +300,11 @@ func (s *Server) processOTLPEvents(traceCtx context.Context, req *collectorlogsv
 			for _, lr := range sl.LogRecords {
 				event, err := extractK8sEvent(traceCtx, lr)
 				if err != nil {
+					if errors.Is(err, errClusterAuthorization) {
+						logger.WarnContext(traceCtx, "Aborting batch", zap.Error(err))
+						result.AuthorizationErr = err
+						return result
+					}
 					logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
 					result.FailureCount++
 					result.LastError = err
@@ -442,6 +448,11 @@ func eventContextToCanonical(eventContext ContextV3) (string, error) {
 	return strings.Join(parts, ","), nil
 }
 
+// errClusterAuthorization is checked with errors.Is by the batch processors
+// to abort on a bindNVCAClusterID rejection, instead of skipping it like an
+// ordinary per-event validation error.
+var errClusterAuthorization = errors.New("cluster_id does not match the authorized cluster")
+
 // bindNVCAClusterID makes an SIS-verified NVCA cluster identity authoritative
 // over whatever cluster_id a request payload claims: a missing payload value
 // is populated from it, and a mismatching one is rejected outright, so a PSAT
@@ -456,7 +467,7 @@ func bindNVCAClusterID(ctx context.Context, payloadClusterID string) (string, er
 		return identity.ClusterID, nil
 	}
 	if payloadClusterID != identity.ClusterID {
-		return "", fmt.Errorf("cluster_id %q does not match the authorized cluster", payloadClusterID)
+		return "", fmt.Errorf("%w: %q", errClusterAuthorization, payloadClusterID)
 	}
 	return payloadClusterID, nil
 }
@@ -624,6 +635,11 @@ func (s *Server) processCloudEvents(traceCtx context.Context, cloudEvents []*clo
 
 		event, err := extractCloudEvent(traceCtx, cloudEvent)
 		if err != nil {
+			if errors.Is(err, errClusterAuthorization) {
+				logger.WarnContext(traceCtx, "Aborting batch", zap.Error(err))
+				result.AuthorizationErr = err
+				return result
+			}
 			logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
 			result.FailureCount++
 			result.LastError = err
@@ -748,6 +764,12 @@ func (s *Server) storeK8sEvent(traceCtx context.Context, event *EventV3) error {
 // sendEventResponse sends the HTTP response for event processing
 func (s *Server) sendEventResponse(w http.ResponseWriter, traceCtx context.Context, result EventProcessingResult) {
 	logger := logging.GetLogger(traceCtx)
+
+	if result.AuthorizationErr != nil {
+		logger.WarnContext(traceCtx, "Rejecting batch", zap.Error(result.AuthorizationErr))
+		sendProblemDetail(w, http.StatusForbidden, "Forbidden", result.AuthorizationErr.Error())
+		return
+	}
 
 	// Prepare response based on results
 	if result.SuccessCount == 0 && result.FailureCount == 0 {
