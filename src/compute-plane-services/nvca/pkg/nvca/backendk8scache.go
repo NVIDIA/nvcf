@@ -1704,6 +1704,17 @@ func getCurrentK8sVersion(ctx context.Context, serverVersionClient discovery.Ser
 	return ver.GitVersion, nil
 }
 
+func resolveK8sVersion(
+	ctx context.Context,
+	override string,
+	serverVersionClient discovery.ServerVersionInterface,
+) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	return getCurrentK8sVersion(ctx, serverVersionClient)
+}
+
 // TODO: Revisit to include this info in a new API from NVCA Operator to ICMS (via NGC API)
 func (c *BackendK8sCache) getNVCAUpgradeStatus(ctx context.Context) types.NVCAUpgradeStatus {
 	log := core.GetLogger(ctx)

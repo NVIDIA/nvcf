@@ -179,29 +179,33 @@ func renderManifestArtifactRegistryPaths(catalog *Catalog) (string, error) {
 }
 
 func renderReleaseSetSummary(releaseSet ReleaseSetMetadata) string {
-	if releaseSet.DocumentationVersion == "" {
+	if releaseSet == (ReleaseSetMetadata{}) {
 		return ""
 	}
-	return fmt.Sprintf("### Stack release set\n\nDocumentation: `%s` (%s)\n\n| Stack | Version | Source tag |\n| --- | --- | --- |\n| Control plane | `%s` | `%s` |\n| Compute plane | `%s` | `%s` |\n| Observability | `%s` | `%s` |\n\n",
-		releaseSet.DocumentationVersion,
-		releaseSet.Status,
-		releaseSet.Stacks.ControlPlane.Version,
-		releaseSet.Stacks.ControlPlane.SourceTag,
-		releaseSet.Stacks.ComputePlane.Version,
-		releaseSet.Stacks.ComputePlane.SourceTag,
-		releaseSet.Stacks.Observability.Version,
-		releaseSet.Stacks.Observability.SourceTag,
-	)
+	var b strings.Builder
+	b.WriteString("### Stack releases\n\n")
+	b.WriteString("| Stack | Version | Source tag |\n| --- | --- | --- |\n")
+	for _, stack := range releaseSetStackNames {
+		metadata, _ := releaseSet.Stacks.byName(stack)
+		slug, _ := documentationProductSlug(stack)
+		b.WriteString(fmt.Sprintf("| [%s](/nvcf/%s/) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), slug, metadata.Version, metadata.SourceTag))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func renderManifestTables(entries []resolvedManifestEntry) string {
 	var b strings.Builder
 	for _, section := range manifestSections {
+		sectionEntries := manifestEntriesForSection(entries, section)
+		if section.Kind == ManifestKindEACVE && len(sectionEntries) == 0 {
+			continue
+		}
 		b.WriteString("### " + section.Heading + "\n\n")
 		if section.Description != "" {
 			b.WriteString(section.Description + "\n\n")
 		}
-		sectionEntries := manifestEntriesForSection(entries, section)
 		if section.Kind == ManifestKindResource {
 			b.WriteString("| Artifact | Version | Stack | Description | Distribution | Source code |\n")
 			b.WriteString("| --- | --- | --- | --- | --- | --- |\n")

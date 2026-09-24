@@ -51,6 +51,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.service.CloudHealthService;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import jakarta.validation.constraints.NotNull;
 import java.util.ArrayList;
@@ -89,6 +90,8 @@ public class ClusterListingService {
     private final NvcaClusterConfigurationRepository nvcaClusterConfigurationRepository;
 
     private final ComputePlatformService computePlatformService;
+
+    private final GpuGatingService gpuGatingService;
 
     @Observed
     public String getClusterVersion(String ncaId) {
@@ -259,6 +262,11 @@ public class ClusterListingService {
                 }
             }
         }
+
+        // Applied last, on the clusters this NCA only borrows, so a gated org cannot discover
+        // GPUs or instance types it may not allocate through the cluster listing.
+        gpuGatingService.removeGatedAuthorizedClusters(clusterResponseList, ncaId);
+
         return clusterResponseList;
     }
 

@@ -42,7 +42,8 @@ func run(args []string) error {
 	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
 	computeStackVersion := flags.String("compute-stack-version", "", "compute-plane stack version to fetch")
 	observabilityStackVersion := flags.String("observability-stack-version", "", "observability stack version to fetch")
-	qualificationVersion := flags.String("qualification-version", "", "documentation version for an exact QA-qualified three-stack release set (cp-X.Y.Z-compute-X.Y.Z-obs-X.Y.Z)")
+	freezeStack := flags.String("freeze-stack", "", "release_set stack whose documentation version is being frozen (control-plane, compute-plane, or observability)")
+	freezeVersion := flags.String("freeze-version", "", "documentation version to freeze for --freeze-stack ("+documentationVersionFormat+")")
 	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
 	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
 	allowUnavailableSourceCharts := flags.Bool("allow-unavailable-source-charts", false, "use published charts when configured source paths are unavailable in a historical tag")
@@ -69,7 +70,7 @@ func run(args []string) error {
 		if *compareFrom == "" || *compareTo == "" {
 			return fmt.Errorf("--compare-release-set-from and --compare-release-set-to must be used together")
 		}
-		if *updateCatalog || *check || *inventoryOutput != "" || *qualificationVersion != "" ||
+		if *updateCatalog || *check || *inventoryOutput != "" || *freezeStack != "" || *freezeVersion != "" ||
 			*stackVersion != "" || *computeStackVersion != "" || *observabilityStackVersion != "" ||
 			*inventoryConfig != "" || *allowUnavailableSourceCharts || *stackSourceTag != "" || *stackSourceCommit != "" {
 			return fmt.Errorf("release-set comparison cannot be combined with catalog update, check, or inventory generation flags")
@@ -111,17 +112,6 @@ func run(args []string) error {
 	if !*updateCatalog && (*computeStackVersion != "" || *observabilityStackVersion != "") {
 		return fmt.Errorf("--compute-stack-version and --observability-stack-version require --update-catalog")
 	}
-	if *qualificationVersion != "" {
-		if !*updateCatalog {
-			return fmt.Errorf("--qualification-version requires --update-catalog")
-		}
-		if _, _, _, ok := parseReleaseSetDocumentationVersion(*qualificationVersion); !ok {
-			return fmt.Errorf("--qualification-version must use %s", releaseSetVersionFormat)
-		}
-		if *stackVersion == "" || *computeStackVersion == "" || *observabilityStackVersion == "" {
-			return fmt.Errorf("--qualification-version requires exact control-plane, compute-plane, and observability stack versions")
-		}
-	}
 	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" || *allowUnavailableSourceCharts {
 		return fmt.Errorf("--stack-source-tag, --stack-source-commit, --inventory-config, and --allow-unavailable-source-charts require --generate-stack-inventory")
 	}
@@ -130,6 +120,20 @@ func run(args []string) error {
 	}
 	if !filepath.IsAbs(*catalogPath) {
 		*catalogPath = filepath.Join(repoRoot, *catalogPath)
+	}
+	if *freezeStack != "" || *freezeVersion != "" {
+		if *freezeStack == "" || *freezeVersion == "" {
+			return fmt.Errorf("--freeze-stack and --freeze-version must be used together")
+		}
+		if *updateCatalog || *check || *stackVersion != "" || *computeStackVersion != "" || *observabilityStackVersion != "" {
+			return fmt.Errorf("--freeze-stack cannot be combined with catalog update, check, or stack version flags")
+		}
+		snapshotPath, err := freezeStackDocumentation(repoRoot, *catalogPath, *freezeStack, *freezeVersion)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s for %s version %s\n", relOrAbs(repoRoot, snapshotPath), *freezeStack, *freezeVersion)
+		return nil
 	}
 
 	var catalog *Catalog
@@ -142,7 +146,7 @@ func run(args []string) error {
 			selfManagedStackKey:   *stackVersion,
 			computePlaneStackKey:  *computeStackVersion,
 			observabilityStackKey: *observabilityStackVersion,
-		}, *qualificationVersion, base)
+		}, base)
 		if err != nil {
 			return err
 		}

@@ -166,8 +166,7 @@ const (
 	NGCAPIKeySecretName    = "ngc-api-key"
 	NVCAVaultConfigmapName = "nvca-vault-agent"
 
-	NVCAInternalPersistentStorageConfigJSONBase64Key = "NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64"
-	NVCASharedStorageonfigJSONBase64Key              = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
+	NVCASharedStorageonfigJSONBase64Key = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
 
 	// default params for nvca deployment
 	DefaultLogLevel              = "info"
@@ -1347,6 +1346,9 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	if err != nil {
 		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
+	if err := validateGPUDiscoveryConfig(nb, mergeCfg); err != nil {
+		return nil, err
+	}
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
@@ -1363,6 +1365,14 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 			agentConfigFile: string(cb),
 		},
 	}, nil
+}
+
+func validateGPUDiscoveryConfig(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) error {
+	if nb.Spec.ClusterConfig.GPUDiscovery.Dynamic != nil && mergeCfg.Agent.StaticGPUCapacity != 0 {
+		return &invalidAgentConfigError{err: fmt.Errorf(
+			"worker.staticGPUCapacity requires static GPU discovery; remove the override for a dynamic-discovery cluster")}
+	}
+	return nil
 }
 
 type agentHostOverrides struct {
@@ -2695,26 +2705,6 @@ func completeInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1
 		dto.ResourceQuota.Hard[corev1.ResourceRequestsStorage] = resource.MustParse("500Gi")
 	}
 	return dto, nil
-}
-
-// returns a string of the internal persistent storage configuration base64 encoded
-func getInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
-	log := core.GetLogger(ctx)
-	dto, err := completeInternalPersistentStorageConfig(ctx, nb)
-	if err != nil {
-		return "", err
-	}
-	if dto == nil || !dto.Enabled {
-		return "", nil
-	}
-
-	buff := &bytes.Buffer{}
-	if err := json.NewEncoder(buff).Encode(dto); err != nil {
-		log.WithError(err).Error("failed to encode the persistent storage configuration")
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(buff.Bytes()), nil
 }
 
 func getSharedStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {

@@ -270,6 +270,12 @@ what the commits since the last tag imply.
 NVCA declared the same pair until the 3.3 line and now uses
 semantic-release; see "NVCA's cutover onto semantic-release" below.
 
+All three stacks were level-set to `1.0.0` when they moved onto this
+model. Their trains advance independently from there. Nothing in the
+tooling ties a compute-plane train to a self-managed or observability
+train; the compatibility matrix (see "Compatibility and upgrade stops")
+records which trains run together.
+
 ### What runs where
 
 | Ref | What `auto` does |
@@ -358,6 +364,41 @@ pull request's branch in the run dialog to build that pull request.
 `workflow_dispatch` offers same-repository branches only, so a fork's
 branch cannot be selected and release credentials never run against
 unreviewed code.
+
+### Inventory attachment is keyed by the tag
+
+`tag` resolves the stack that owns a pushed tag with
+`release_asset_service`, which matches the tag against each service's
+`tag_format` (and `legacy_tag_prefix` for the compute plane). The
+matching service's `resolved_inventory_asset` is rendered at the tag and
+uploaded to the draft release before it is published. The branch that
+cut the tag never enters that decision, so a tag from
+`release-deploy/stacks/<stack>/vX.Y` attaches its inventory exactly as
+a tag from `main` did before the version-file model.
+
+### Compatibility and upgrade stops
+
+- Per stack, trains N and N-1 are maintained. Older trains receive no
+  patches.
+- Patch upgrades within a train are always supported.
+- Upgrading across more than one train steps through each intermediate
+  train's latest patch. Every train is an upgrade stop.
+- `docs/overview/compatibility-matrix.md` is the source of truth for
+  which trains of the three stacks run together. `tools/docs-version-sync`
+  generates it from the `compatibility:` block in
+  `docs/version-catalog/main.yaml`. A stack change that alters
+  cross-stack compatibility updates that block in the same change.
+
+### Per-stack documentation
+
+Each stack is a Fern product with its own version list. After QA approves a
+release, freeze that stack's exact version alone:
+
+```bash
+./tools/scripts/cut-docs-version.sh --stack observability --version 1.1.0
+```
+
+The other two stacks' documentation is untouched by that cut.
 
 ## NVCA's cutover onto semantic-release
 

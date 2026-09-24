@@ -75,11 +75,17 @@ render_with_quantity() {
   local value="$3"
   local output="$4"
   local error_output="$5"
+  local -a extra_args=()
+
+  if [[ "${path}" == storage.internalPersistentStorage.hardResourceQuota.* ]]; then
+    extra_args+=(--set-string storage.internalPersistentStorage.storageClassName=dummy)
+  fi
 
   helm template nvca-operator "${chart}" \
     --namespace nvca-operator \
     --set generateImagePullSecret=false \
     --set imagePullSecretName=dummy \
+    "${extra_args[@]}" \
     --set-string "${path}=${value}" \
     >"${output}" 2>"${error_output}"
 }

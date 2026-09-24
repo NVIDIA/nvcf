@@ -1606,6 +1606,52 @@ class GithubReleaseTest(unittest.TestCase):
                 self.assertIsNotNone(service)
                 self.assertEqual(service["resolved_inventory_asset"], asset_name)
 
+    STACK_INVENTORY_PUBLISHERS = {
+        "self-managed": ("nvcf-self-managed-stack", "nvcf-self-managed-stack-inventory.json"),
+        "nvcf-compute-plane": ("nvcf-compute-plane-stack", "nvcf-compute-plane-stack-inventory.json"),
+        "observability": ("nvcf-observability-stack", "nvcf-observability-stack-inventory.json"),
+    }
+
+    def test_release_branch_tags_keep_the_same_inventory_publisher(self):
+        # Inventory attachment is keyed by the tag alone. A tag cut from a
+        # release train branch must resolve exactly as one cut from main did
+        # before the stacks moved to release branching.
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        root = SCRIPT_PATH.parents[2]
+        for stack, (service_id, asset_name) in self.STACK_INVENTORY_PUBLISHERS.items():
+            tag = f"deploy/stacks/{stack}/v1.1.0"
+            with self.subTest(tag=tag):
+                service = self.github_release.release_asset_service(metadata, tag, root)
+                self.assertIsNotNone(service)
+                self.assertEqual(service["id"], service_id)
+                self.assertEqual(service["resolved_inventory_asset"], asset_name)
+                self.assertEqual(self.github_release.version_from_tag(service, tag, root), "1.1.0")
+
+    def test_compute_plane_legacy_prefix_tag_still_resolves_its_inventory_publisher(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        root = SCRIPT_PATH.parents[2]
+        tag = "nvcf-compute-plane-stack-v0.2.0"
+        service = self.github_release.release_asset_service(metadata, tag, root)
+        self.assertIsNotNone(service)
+        self.assertEqual(service["id"], "nvcf-compute-plane-stack")
+        self.assertEqual(service["resolved_inventory_asset"], "nvcf-compute-plane-stack-inventory.json")
+        self.assertEqual(self.github_release.version_from_tag(service, tag, root), "0.2.0")
+
+    def test_release_train_branch_name_round_trips_for_every_stack(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        root = SCRIPT_PATH.parents[2]
+        for stack, (service_id, _asset_name) in self.STACK_INVENTORY_PUBLISHERS.items():
+            with self.subTest(stack=stack):
+                service = self.github_release.find_service(metadata, service_id)
+                branch = self.github_release.service_release_branch(service, "1.1.0", root)
+                self.assertEqual(branch, f"release-deploy/stacks/{stack}/v1.1")
+                self.assertEqual(self.github_release.release_branch_train(service, branch, root), "1.1")
+                self.assertEqual(
+                    self.github_release.tag_for_version(service, "1.1.0", root),
+                    f"deploy/stacks/{stack}/v1.1.0",
+                )
+                self.assertTrue(service.get("release_branch_only"))
+
     def chart_release_metadata(self):
         """Return minimal release metadata for the chart publication tests."""
         return {
