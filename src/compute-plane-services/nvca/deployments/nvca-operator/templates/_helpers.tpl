@@ -429,6 +429,9 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "image" (dict "repository" "" "tag" "" "pullPolicy" "IfNotPresent")
     "schedule" "0 */3 * * *"
     "configMapName" "cluster-validator-network-checks"
+    "role" ""
+    "openBaoNamespace" ""
+    "envoyGatewayNamespace" ""
     "networkChecks" (dict)
     "resources" (dict
       "requests" (dict "cpu" "100m" "memory" "64Mi")

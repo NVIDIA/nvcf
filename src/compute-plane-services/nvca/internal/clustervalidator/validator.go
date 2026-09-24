@@ -27,9 +27,28 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Role is the check set selected by VALIDATOR_ROLE.
+type Role string
+
+// Role values for VALIDATOR_ROLE.
+const (
+	RoleComputePlane Role = "compute-plane"
+	RoleControlPlane Role = "control-plane"
+)
+
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
-	Log                 *logrus.Entry
+	Log *logrus.Entry
+	// NodeToNodeNotApplicable holds the reason the overlay probe could not
+	// apply (for example a single schedulable node). Non-empty means the check
+	// is reported as Not Applicable rather than Verified or Unknown, and is
+	// left out of the summary map so it is neither alerted on nor counted as
+	// a pass.
+	NodeToNodeNotApplicable string
+
+	// Role is "control-plane" or "compute-plane" (empty = compute-plane default).
+	// printSummary uses it to include only the checks relevant to the role.
+	Role                Role
 	ControlPlaneHealthy bool
 	// NodesAllReady tracks whether all worker nodes are Ready. False means at
 	// least one NotReady node. Warning only — does not flip cluster readiness.
@@ -67,6 +86,26 @@ type ValidationState struct {
 	// critical: true, meaning enforcement failure blocks readiness.
 	EnforcementCritical bool
 
+	// Control-plane-specific check outcomes. Nil means the check was not run
+	// (compute-plane role). Non-nil means the check ran and the bool holds
+	// the pass/fail result.
+	DefaultStorageClassOK *bool
+	GatewayAPICRDsOK      *bool
+	EnvoyGatewayOK        *bool
+	GatewayRoutesOK       *bool
+	ExternalLBOK          *bool
+	// NodeToNodeOK is nil when the check was skipped (single-node cluster or
+	// compute-plane role). true = overlay verified, false = failed.
+	NodeToNodeOK *bool
+	// Tier1DeploymentsOK is nil when the check did not run (compute-plane role)
+	// or when a Deployment list call fails. Pre-install (no Deployments found)
+	// sets this to true, not nil.
+	Tier1DeploymentsOK *bool
+	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role)
+	// or when a StatefulSet list call fails. No quorum StatefulSets found
+	// (pre-install or non-HA install) sets this to true, not nil.
+	Tier2StatefulSetsOK *bool
+
 	// EndpointResults captures per-endpoint reachability outcomes for the
 	// summary ConfigMap / metrics pipeline. Keyed by the user-supplied
 	// endpoint name (the same string Prometheus will use as the label
@@ -96,25 +135,15 @@ type NetpolPairResult struct {
 	Directions map[string]DirectionStatus
 }
 
-// Run executes all cluster validation checks and prints a summary.
-// It returns a non-nil error if the cluster is not ready, which the caller
-// should use to set the process exit code.
-//
-// configNamespace and configName identify an optional ConfigMap that holds
-// user-defined reachability and network-policy checks. When the ConfigMap
-// does not exist the configurable checks are silently skipped.
-//
-// summaryNamespace is where the summary ConfigMap is written for the agent to
-// read — kept separate from configNamespace so a config-namespace override
-// can't redirect the summary away from the namespace the agent watches.
-//
-// emitMetrics gates that write. In-cluster runs emit by default; callers pass
-// false for preflight (no agent to read it, no RBAC to write it).
+// Run executes all cluster validation checks and returns a non-nil error when
+// the cluster is not ready. role selects the check set; configNamespace/configName
+// identify the optional ConfigMap; emitMetrics gates the summary write.
 func Run(
 	ctx context.Context,
 	client kubernetes.Interface,
 	configNamespace, configName, summaryNamespace string,
 	emitMetrics bool,
+	role Role,
 ) error {
 	startedAt := time.Now()
 	log := core.GetLogger(ctx)
@@ -127,6 +156,7 @@ func Run(
 
 	state := &ValidationState{
 		Log:                 log,
+		Role:                role,
 		ControlPlaneHealthy: true,
 		NodesAllReady:       true,
 	}
@@ -145,7 +175,6 @@ func Run(
 	checkControlPlaneHealth(ctx, client, state)
 	checkWebhookSupport(ctx, client, state)
 	checkNetworkPolicies(ctx, client, state)
-	checkSMBCSIDriver(ctx, client, state)
 
 	var netCfg *NetworkCheckConfig
 	if configNamespace != "" && configName != "" {
@@ -161,8 +190,24 @@ func Run(
 		checkConfigurableReachability(state, netCfg.Reachability)
 	}
 
-	checkGPUResources(ctx, client, state)
-	checkGPUOperator(ctx, client, state)
+	if role == RoleControlPlane {
+		// Control-plane cluster: check gateway infrastructure, storage, and
+		// inter-node overlay connectivity. GPU operator and SMB CSI are
+		// compute-plane concerns and are skipped.
+		checkStorageClass(ctx, client, state)
+		checkGatewayAPICRDs(ctx, client, state)
+		checkEnvoyGateway(ctx, client, state)
+		checkGatewayRoutes(ctx, client, state)
+		checkExternalLoadBalancer(ctx, client, state)
+		checkNodeToNode(ctx, client, state, nodeToNodeProbeImage(netCfg))
+		checkTier1Deployments(ctx, client, state)
+		checkTier2StatefulSets(ctx, client, state)
+	} else {
+		// Compute-plane cluster (default): GPU operator, SMB CSI driver.
+		checkSMBCSIDriver(ctx, client, state)
+		checkGPUResources(ctx, client, state)
+		checkGPUOperator(ctx, client, state)
+	}
 
 	if netCfg != nil {
 		if netCfg.NetworkPolicies != nil && len(netCfg.NetworkPolicies.Pairs) > 0 {
@@ -205,6 +250,18 @@ func printSummary(state *ValidationState) error {
 		PassMsg  string
 		FailMsg  string
 		Critical bool
+		// Unknown marks a check that did not run. Rendered as its own row so a
+		// critical check cannot silently vanish from the verdict, which would
+		// otherwise make a throttled API call look better than a clean run.
+		Unknown    bool
+		UnknownMsg string
+		// NotApplicable marks a check this cluster's shape cannot exercise, as
+		// distinct from one we failed to observe. Both are non-passes, but
+		// only Unknown means something is hidden, so only Unknown blocks the
+		// verdict. Reporting a not-applicable check as Passed would claim a
+		// result the run never produced.
+		NotApplicable bool
+		NAMsg         string
 	}
 
 	// Distinguish "we listed nodes and found N not-ready" (NotReadyNodes>0)
@@ -219,69 +276,134 @@ func printSummary(state *ValidationState) error {
 	}
 
 	checks := []check{
-		{state.ControlPlaneHealthy, "Control Plane: Healthy", "Control Plane: Unhealthy", true},
-		{state.NodesAllReady,
-			"Worker Nodes: All Ready",
-			nodesFailMsg,
-			false},
-		{state.WebhooksSupported, "Admission Webhooks: Mutating & Validating Supported", "Admission Webhooks: Not Supported", true},
-		{state.NetworkPoliciesSupported, "Network Policies: Supported", "Network Policies: Not Confirmed", false},
-		// SMB CSI Driver missing is non-blocking: it is required only when
-		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
-		// pkg/storage/smbcsidriver.go's runtime health check itself flags
-		// this at StatusLevelWarn, not StatusLevelError — block install
-		// only when the customer has explicitly opted in to a feature that
-		// needs SMB CSI, not for every operator install.
-		{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", false},
+		{Passed: state.ControlPlaneHealthy, PassMsg: "Control Plane: Healthy",
+			FailMsg: "Control Plane: Unhealthy", Critical: true},
+		{Passed: state.NodesAllReady, PassMsg: "Worker Nodes: All Ready",
+			FailMsg: nodesFailMsg, Critical: false},
+		{Passed: state.WebhooksSupported, PassMsg: "Admission Webhooks: Mutating & Validating Supported",
+			FailMsg: "Admission Webhooks: Not Supported", Critical: true},
+		{Passed: state.NetworkPoliciesSupported, PassMsg: "Network Policies: Supported",
+			FailMsg: "Network Policies: Not Confirmed", Critical: false},
 	}
 
 	if state.ReachabilityOK != nil {
 		isCritical := state.ReachabilityCriticalOK != nil &&
 			!*state.ReachabilityCriticalOK
 		checks = append(checks, check{
-			*state.ReachabilityOK,
-			"Endpoint Reachability: All Endpoints Reachable",
-			"Endpoint Reachability: One or more endpoints not reachable",
-			isCritical,
+			Passed:   *state.ReachabilityOK,
+			PassMsg:  "Endpoint Reachability: All Endpoints Reachable",
+			FailMsg:  "Endpoint Reachability: One or more endpoints not reachable",
+			Critical: isCritical,
 		})
 	}
 
-	checks = append(checks,
-		check{state.GPUAvailable, "GPU Resources: Available", "GPU Resources: Not Available", true},
-		// GPU Operator missing is non-blocking: clusters registered with
-		// Manual Instance Configuration expose GPUs via an alternative
-		// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
-		// GPU Operator. GPU Resources above is the load-bearing signal —
-		// if GPUs aren't usable that fails Critical separately.
-		check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", false},
-	)
+	if state.Role == RoleControlPlane {
+		// Control-plane checks: gateway infrastructure and storage. GPU and
+		// SMB checks are compute-plane concerns and are excluded here.
+		//
+		// addCP renders a nil pointer as an explicit UNKNOWN row for critical
+		// checks, so an API error during the run cannot quietly drop a critical
+		// row and leave a cleaner-looking summary than a successful run.
+		addCP := func(ptr *bool, label, passDetail, failDetail string, critical bool) {
+			if ptr != nil {
+				checks = append(checks, check{
+					Passed:   *ptr,
+					PassMsg:  label + ": " + passDetail,
+					FailMsg:  label + ": " + failDetail,
+					Critical: critical,
+				})
+				return
+			}
+			if critical {
+				checks = append(checks, check{
+					Critical:   critical,
+					Unknown:    true,
+					UnknownMsg: label + ": Status Unknown (check did not run)",
+				})
+			}
+		}
+
+		addCP(state.DefaultStorageClassOK, "Default StorageClass", "Present", "Not Found", true)
+		addCP(state.GatewayAPICRDsOK, "Gateway API CRDs", "Installed", "Not Installed", true)
+		// Non-critical: Envoy Gateway is installed by nvcf-cli up, so it is
+		// expected to be absent on a fresh cluster before the first install.
+		// A missing Envoy is informative (tells the operator the stack is not
+		// yet deployed) but must not block a pre-install readiness check.
+		addCP(state.EnvoyGatewayOK, "Envoy Gateway", "Installed and Running", "Not Found or Not Running", false)
+		addCP(state.GatewayRoutesOK, "Gateway Route CR Types", "Registered", "Not Registered", false)
+		addCP(state.ExternalLBOK, "External Load Balancer", "IP Assigned", "No IP Assigned", false)
+		if state.NodeToNodeNotApplicable != "" {
+			// Non-blocking, but not "Verified": no cross-node packet was sent.
+			checks = append(checks, check{
+				NotApplicable: true,
+				NAMsg:         "Node-to-Node Communication: Not Applicable (" + state.NodeToNodeNotApplicable + ")",
+			})
+		} else {
+			addCP(state.NodeToNodeOK, "Node-to-Node Communication", "Verified", "Failed", true)
+		}
+		addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Under-replicated", true)
+		addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets",
+			"Quorum and Placement OK", "Quorum or Placement Failed", true)
+	} else {
+		// Compute-plane checks: GPU resources, GPU operator, SMB CSI driver.
+		// SMB CSI Driver missing is non-blocking: it is required only when
+		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
+		checks = append(checks,
+			check{Passed: state.SMBCSIDriverOK, PassMsg: "SMB CSI Driver: v1.16.0+ Installed",
+				FailMsg: "SMB CSI Driver: Not Installed or Below v1.16.0", Critical: false},
+			check{Passed: state.GPUAvailable, PassMsg: "GPU Resources: Available",
+				FailMsg: "GPU Resources: Not Available", Critical: true},
+			// GPU Operator missing is non-blocking: clusters registered with
+			// Manual Instance Configuration expose GPUs via an alternative
+			// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
+			// GPU Operator. GPU Resources above is the load-bearing signal.
+			check{Passed: state.GPUOperatorInstalled, PassMsg: "GPU Operator: Installed",
+				FailMsg: "GPU Operator: Not Installed", Critical: false},
+		)
+	}
 
 	if state.ConfigurableNetPolOK != nil {
 		isCritical := state.ConfigurableNetPolCriticalOK != nil &&
 			!*state.ConfigurableNetPolCriticalOK
 		checks = append(checks, check{
-			*state.ConfigurableNetPolOK,
-			"Configurable Network Policies: All Checks Passed",
-			"Configurable Network Policies: One or more checks failed",
-			isCritical,
+			Passed:   *state.ConfigurableNetPolOK,
+			PassMsg:  "Configurable Network Policies: All Checks Passed",
+			FailMsg:  "Configurable Network Policies: One or more checks failed",
+			Critical: isCritical,
 		})
 	}
 	if state.EnforcementOK != nil {
 		checks = append(checks, check{
-			*state.EnforcementOK,
-			"Network Policy Enforcement: Active Validation Passed",
-			"Network Policy Enforcement: Active Validation Failed",
-			state.EnforcementCritical,
+			Passed:   *state.EnforcementOK,
+			PassMsg:  "Network Policy Enforcement: Active Validation Passed",
+			FailMsg:  "Network Policy Enforcement: Active Validation Failed",
+			Critical: state.EnforcementCritical,
 		})
 	}
 
+	var unknownCritical []string
 	for _, c := range checks {
-		if c.Passed {
+		switch {
+		case c.NotApplicable:
+			// Neither pass nor failure: the cluster shape made the check moot.
+			printInfo(log, fmt.Sprintf("  %s", c.NAMsg))
+		case c.Unknown:
+			// A critical check we could not observe cannot be certified as
+			// ready. Logging it while still publishing verdict=NVCF-Ready and
+			// VerdictReady=true would export a perfect green SLI for a
+			// precondition nothing looked at, and the check key is pruned from
+			// the metric, so there is no series left to alert on either.
+			printWarning(log, fmt.Sprintf("  %s", c.UnknownMsg))
+			if c.Critical {
+				unknownCritical = append(unknownCritical, c.UnknownMsg)
+				isReady = false
+			}
+		case c.Passed:
 			printSuccess(log, fmt.Sprintf("  %s", c.PassMsg))
-		} else if c.Critical {
+		case c.Critical:
 			printError(log, fmt.Sprintf("  %s", c.FailMsg))
 			isReady = false
-		} else {
+		default:
 			printWarning(log, fmt.Sprintf("  %s", c.FailMsg))
 		}
 	}
@@ -316,6 +438,16 @@ func printSummary(state *ValidationState) error {
 		log.Infof("%s║              %s  Cluster is NVCF-Not-Ready  %s              ║%s", colorRed, iconCross, iconCross, colorReset)
 		log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorRed, colorReset)
 		log.Info("")
+		if len(unknownCritical) > 0 {
+			// Distinguish "could not check" from "checked and broken": the
+			// operator's next step is to fix access or re-run, not to go
+			// looking for a fault that was never observed.
+			printError(log, fmt.Sprintf(
+				"%d critical check(s) could not be observed, so readiness cannot be confirmed", len(unknownCritical)))
+			for _, m := range unknownCritical {
+				printInfo(log, "  "+m)
+			}
+		}
 		printError(log, "Your cluster does not meet all requirements for NVCF workloads")
 	}
 

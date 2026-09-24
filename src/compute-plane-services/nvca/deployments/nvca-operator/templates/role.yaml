@@ -114,7 +114,13 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "delete", "deletecollection", "patch"]
 - apiGroups: ["apps"]
   resources: ["daemonsets"]
-  verbs: ["get", "list", "watch"]
+  # create/delete: the cluster-validator init container runs under this
+  # ServiceAccount and the node-to-node overlay probe creates a short-lived
+  # DaemonSet in a per-run namespace. Without these the probe 403s, which is
+  # an unobserved critical check, which fails the verdict and CrashLoops the
+  # operator pod. Not an escalation: this role already has cluster-wide
+  # create/delete on namespaces, pods, deployments and statefulsets.
+  verbs: ["get", "list", "watch", "create", "delete"]
 - apiGroups: ["scheduling.run.ai"]
   resources: ["queues"]
   verbs: ["get", "list", "watch"]

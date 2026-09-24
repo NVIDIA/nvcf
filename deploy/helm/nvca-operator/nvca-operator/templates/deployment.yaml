@@ -95,6 +95,21 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        # Same role and namespace wiring as the CronJob. This init container
+        # writes the same summary ConfigMap, so without it every operator pod
+        # restart republishes a compute-plane summary over a control-plane
+        # one: the GPU keys reappear and all the control-plane keys are pruned
+        # until the next CronJob tick.
+        - name: VALIDATOR_ROLE
+          value: {{ $cv.role | quote }}
+        {{- if $cv.openBaoNamespace }}
+        - name: NVCF_OPENBAO_NAMESPACE
+          value: {{ $cv.openBaoNamespace | quote }}
+        {{- end }}
+        {{- if $cv.envoyGatewayNamespace }}
+        - name: NVCF_ENVOY_GATEWAY_NAMESPACE
+          value: {{ $cv.envoyGatewayNamespace | quote }}
+        {{- end }}
         resources:
           requests:
             cpu: {{ $cv.resources.requests.cpu | quote }}

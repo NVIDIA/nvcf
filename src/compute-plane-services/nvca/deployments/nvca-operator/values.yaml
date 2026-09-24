@@ -528,6 +528,9 @@ networkPolicy:
 ## @param clusterValidator.image.repository Cluster Validator container registry path, without tag
 ## @param clusterValidator.image.tag Cluster Validator container image tag
 ## @param clusterValidator.image.pullPolicy K8s ImagePullPolicy for cluster-validator
+## @param clusterValidator.role Check set to run: "control-plane" for gateway, storage, overlay and HA checks; any other value (including "") runs the compute-plane GPU checks
+## @param clusterValidator.openBaoNamespace Namespace holding OpenBao, when it is not vault-system; without it the Tier-2 quorum check skips its StatefulSet
+## @param clusterValidator.envoyGatewayNamespace Namespace holding Envoy Gateway, when it is not envoy-gateway-system
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
 ## @param clusterValidator.configMapName ConfigMap name for user-defined network checks (reachability + network policy validation)
 ## @param clusterValidator.resources.limits.cpu CPU limit for the cluster-validator container
@@ -537,6 +540,14 @@ networkPolicy:
 ## @param clusterValidator.networkChecks [object] Network check configuration (creates the ConfigMap automatically when set)
 clusterValidator:
   enabled: false
+  # Which check set the validator runs. "control-plane" enables the gateway,
+  # StorageClass, node-to-node overlay and Tier-1/Tier-2 HA checks and skips
+  # the GPU checks. Any other value (including "") runs the compute-plane set.
+  role: ""
+  # Set when OpenBao or Envoy Gateway are installed outside their default
+  # namespaces, so the control-plane checks look in the right place.
+  openBaoNamespace: ""
+  envoyGatewayNamespace: ""
   image:
     repository: ""
     tag: ""  # defaults to .Chart.AppVersion (same as nvca-operator)

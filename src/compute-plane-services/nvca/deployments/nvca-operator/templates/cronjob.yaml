@@ -80,6 +80,24 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
+                # Selects the check set: "control-plane" runs the gateway,
+                # storage, overlay and HA checks; anything else (including
+                # unset) runs the compute-plane GPU set. Without this the
+                # control-plane checks are unreachable from the chart.
+                - name: VALIDATOR_ROLE
+                  value: {{ $cv.role | quote }}
+                {{- if $cv.openBaoNamespace }}
+                # Relocated OpenBao: without this the Tier-2 quorum check
+                # silently skips its StatefulSet.
+                - name: NVCF_OPENBAO_NAMESPACE
+                  value: {{ $cv.openBaoNamespace | quote }}
+                {{- end }}
+                {{- if $cv.envoyGatewayNamespace }}
+                # Set when the stack's controllerNamespace differs from the
+                # Envoy Gateway chart default.
+                - name: NVCF_ENVOY_GATEWAY_NAMESPACE
+                  value: {{ $cv.envoyGatewayNamespace | quote }}
+                {{- end }}
               resources:
                 requests:
                   cpu: {{ $cv.resources.requests.cpu | quote }}
