@@ -37,12 +37,23 @@ spec:
         - |
           set -e
           mkdir -p /var/run/vllm
-          # NOTE: this pod does NOT reserve its own pid range. Writing
-          # /proc/sys/kernel/ns_last_pid from a container fails with EPERM
-          # (/proc/sys is mounted read-only into the pod) even when privileged,
-          # so the attempt that used to live here never did anything. The agent
-          # does it from the host instead, before invoking CRIU restore --
-          # see reservePlaceholderPIDs in internal/agent/restore_v2.go.
+          # Push this pod's own pid allocations clear of the range the dump
+          # captured, so CRIU's exact-pid forks find those pids free.
+          #
+          # Load-bearing, and quiet when it is missing. Without it the login
+          # shell forks a few hundred times sourcing profile.d before the tail
+          # below starts, parking a long-lived process inside the restored pid
+          # range; CRIU then dies with "Can't fork for <pid>: File exists" on
+          # most attempts, and passes on the rest, which reads as flakiness
+          # rather than breakage.
+          #
+          # This was deleted once on the belief that the write returns EPERM
+          # inside a container. It does not: /proc is mounted rw here and the
+          # write succeeds -- measured, next child landed at pid 100003.
+          # The agent independently refuses to restore into a placeholder whose
+          # pid range was never pushed up, so removing this line fails loudly
+          # instead of silently.
+          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump FAILED -- restore will collide)"
           # Restored workload stdio is a plain-file fd on /vllm.out (the
           # source manifest's setsid convention); surface it via kubelet.
           touch /vllm.out

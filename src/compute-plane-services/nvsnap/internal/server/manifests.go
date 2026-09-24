@@ -84,7 +84,20 @@ type CapturePath string
 
 // Capture path identifiers.
 const (
-	CapturePathCRIU   CapturePath = "criu"
+	CapturePathCRIU CapturePath = "criu"
+
+	// CapturePathCacheDir captures only the pod's cache mount (model +
+	// compile caches) rather than the whole container rootfs. This is what
+	// multi-GPU workloads use.
+	CapturePathCacheDir CapturePath = "cachedir"
+
+	// CapturePathRootfs captures the whole container rootfs.
+	//
+	// Deprecated: not used by any workload. It was the original multi-GPU
+	// path, and manifests kept declaring "rootfs" long after the agent's
+	// cachedir mode meant they were really capturing only the cache dir --
+	// so the label described a path that was not running. That mismatch
+	// cost real debugging time. Kept only so an older manifest still parses.
 	CapturePathRootfs CapturePath = "rootfs"
 )
 

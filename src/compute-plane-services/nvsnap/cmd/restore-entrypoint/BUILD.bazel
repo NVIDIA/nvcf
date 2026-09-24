@@ -26,6 +26,9 @@ go_binary(
 
 go_test(
     name = "restore-entrypoint_test",
-    srcs = ["cold_start_fallback_test.go"],
+    srcs = [
+        "cold_start_fallback_test.go",
+        "pid_reserve_test.go",
+    ],
     embed = [":restore-entrypoint_lib"],
 )

@@ -441,6 +441,10 @@ func main() {
 	}
 	fmt.Println("=== NVSNAP Restore Entrypoint (go-criu) ===")
 
+	// Before anything else forks: push this pod's pid allocations clear of the
+	// range the checkpoint captured.
+	reservePIDRange()
+
 	// OpenTelemetry. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
 	// When the agent sets OTEL_TRACE_PARENT in the placeholder pod env
 	// (see internal/agent/restore.go), our spans nest under the agent's
@@ -3546,4 +3550,58 @@ func discoverNvidiaMajors() map[uint32]bool {
 		majors[uint32(maj)] = true //nolint:gosec // bounded by the maj range check above
 	}
 	return majors
+}
+
+// pidReserveFloor is the value written to ns_last_pid so this pod's own
+// processes allocate above anything a checkpoint is likely to contain. It must
+// stay above the agent's acceptance floor (reservedPIDFloor in
+// internal/agent/restore_v2.go), which refuses to restore into a pod that
+// skipped this step.
+const pidReserveFloor = "100000"
+
+// reservePIDRange pushes this pid namespace's next allocation clear of the
+// range a checkpoint captured.
+//
+// CRIU recreates a dumped tree at its exact original pids -- they are baked
+// into the image (cached getpid, pthread TCBs, robust futex lists, file lock
+// owners), so it cannot renumber them. Any long-lived process this pod starts
+// before the restore therefore has to land somewhere the checkpoint does not
+// need, or the restore dies with:
+//
+//	Error (criu/cr-restore.c:1242): Can't fork for 363: File exists
+//
+// Doing it here rather than in the pod manifest is what makes it work for
+// production restores: the webhook rewrites the container command to this
+// binary (see internal/webhook/restore_entrypoint.go), so this runs as pid 1
+// on every restore pod regardless of what the tenant's own command is. A
+// manifest-level bump only ever covered pods whose manifest we wrote.
+//
+// Ordering is the whole point -- this must run before anything forks, which is
+// why it sits at the top of main rather than alongside the restore logic.
+//
+// Deliberately not fatal. A restore pod that cannot reserve still has the
+// cold-start fallback path, and crash-looping here would turn a degraded
+// restore into no workload at all. The agent enforces instead: it refuses to
+// restore into a pod whose pid range was never pushed up, so a silent failure
+// here surfaces as a named error there rather than as the intermittent
+// "flakiness" this cost us before.
+func reservePIDRange() {
+	reservePIDRangeAt(nsLastPIDPath)
+}
+
+// nsLastPIDPath is the real control file; tests point reservePIDRangeAt at a
+// temp file instead.
+const nsLastPIDPath = "/proc/sys/kernel/ns_last_pid"
+
+func reservePIDRangeAt(path string) {
+	if err := os.WriteFile(path, []byte(pidReserveFloor), 0o644); err != nil {
+		// Loud on purpose. The previous shell version ended in `|| echo`, and
+		// that swallowed failure is what let a 79% restore failure rate look
+		// like flakiness for days.
+		fmt.Printf("ERROR: could not reserve pid range: write %s: %v\n", path, err)
+		fmt.Println("ERROR: CRIU's exact-pid forks may collide with this pod's own processes;")
+		fmt.Println("ERROR: the agent will refuse the restore rather than fail in the middle of it.")
+		return
+	}
+	fmt.Printf("Reserved pid range: ns_last_pid=%s (own processes allocate above it)\n", pidReserveFloor)
 }
