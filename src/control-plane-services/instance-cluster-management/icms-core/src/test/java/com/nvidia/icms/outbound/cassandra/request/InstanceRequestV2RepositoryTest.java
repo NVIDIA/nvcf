@@ -135,7 +135,54 @@ public class InstanceRequestV2RepositoryTest  extends InstanceRequestTestBase {
         assertEquals(SpotRequestStatusCode.FULFILLED.toString(),
                      instanceRequestV2Entity.get().getStatusCode());
         assertEquals(statusMessage, instanceRequestV2Entity.get().getStatusMessage());
+        assertEquals(createTime.truncatedTo(ChronoUnit.DAYS),
+                instanceRequestV2Entity.get().getCreationBucket());
 
+    }
+
+    @Test
+    void updateCreationBucket_preservesNewerRequestUpdate() {
+        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
+        var request = InstanceRequestEntityFactory.createDefaultInstanceRequestV2(
+                RandomFactory.getRandomStringWithPrefix("request", 5),
+                createTime,
+                "customer",
+                null);
+        instanceRequestV2Repo.update(request);
+
+        var scannedRequest = instanceRequestV2Repo.findById(request.getRequestId()).orElseThrow();
+        request.setStatusMessage("newer status");
+        instanceRequestV2Repo.update(request);
+
+        Instant creationBucket = createTime.truncatedTo(ChronoUnit.DAYS);
+        instanceRequestV2Repository.updateCreationBucket(
+                scannedRequest.getRequestId(),
+                creationBucket,
+                createTime.toEpochMilli() * 1000);
+
+        var updatedRequest = instanceRequestV2Repo.findById(request.getRequestId()).orElseThrow();
+        assertEquals("newer status", updatedRequest.getStatusMessage());
+        assertEquals(creationBucket, updatedRequest.getCreationBucket());
+    }
+
+    @Test
+    void updateCreationBucket_doesNotRecreateDeletedRequest() {
+        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
+        var request = InstanceRequestEntityFactory.createDefaultInstanceRequestV2(
+                RandomFactory.getRandomStringWithPrefix("request", 5),
+                createTime,
+                "customer",
+                null);
+        instanceRequestV2Repo.update(request);
+
+        var scannedRequest = instanceRequestV2Repo.findById(request.getRequestId()).orElseThrow();
+        instanceRequestV2Repo.deleteById(request.getRequestId());
+        instanceRequestV2Repository.updateCreationBucket(
+                scannedRequest.getRequestId(),
+                createTime.truncatedTo(ChronoUnit.DAYS),
+                createTime.toEpochMilli() * 1000);
+
+        assertTrue(instanceRequestV2Repo.findById(request.getRequestId()).isEmpty());
     }
 
 
@@ -195,9 +242,10 @@ public class InstanceRequestV2RepositoryTest  extends InstanceRequestTestBase {
                      requestByDay.get().getKey().getTruncatedTsByDay());
         assertEquals(requestId, requestByDay.get().getKey().getRequestId());
         assertEquals(instanceRequestV2Entity.get().getCreateTimeuuid(),
-                     requestByDay.get().getCreateTimeuuid());
+                      requestByDay.get().getCreateTimeuuid());
+        assertEquals(createTime.truncatedTo(ChronoUnit.DAYS),
+                instanceRequestV2Entity.get().getCreationBucket());
     }
-
 
     @Test
     void findByRequestId_findRecord() {

@@ -43,6 +43,7 @@ gpu_specification_id uuid,
 nca_id text,
 reservation_id uuid,
 gpu_count_per_instance int,
+creation_bucket timestamp,
 PRIMARY KEY (request_id)
 );
 
@@ -54,6 +55,9 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_deployment_id
 
 CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_nca_id
    ON test.requests (nca_id) USING 'StorageAttachedIndex';
+
+CREATE CUSTOM INDEX IF NOT EXISTS  idx_requests_by_creation_day
+    ON test.requests  (creation_bucket) USING 'StorageAttachedIndex';
 
 
 CREATE TABLE IF NOT exists test.requests_by_day (
@@ -99,6 +103,7 @@ instance_expiration_time timestamp,
 backup_to_primary_migration_scheduled boolean,
 deployment_id uuid,
 gpu_specification_id uuid,
+creation_bucket timestamp,
 PRIMARY KEY (instance_id)
 );
 
@@ -119,6 +124,9 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_deployment_id
 
 CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_gpu_specification_id
     ON test.instances (gpu_specification_id) USING 'StorageAttachedIndex';
+
+CREATE CUSTOM INDEX IF NOT EXISTS  idx_instances_by_creation_day
+    ON test.instances (creation_bucket) USING 'StorageAttachedIndex';
 
 
 CREATE TABLE IF NOT exists test.instances_by_day (
