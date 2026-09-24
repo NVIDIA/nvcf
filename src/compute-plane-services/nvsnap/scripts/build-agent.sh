@@ -209,19 +209,10 @@ build_base() {
 }
 
 build_app() {
-    echo "=== Building APP image (Go binaries, intercept lib) ==="
+    echo "=== Building APP image (Go binaries + C helpers) ==="
     echo "Base: ${BASE_IMAGE}"
     echo "Image: ${APP_IMAGE}"
     echo ""
-
-    # Warn about untracked .c files in intercept library
-    local untracked
-    untracked=$(cd "$PROJECT_ROOT" && git ls-files --others --exclude-standard lib/nvsnap_intercept/src/*.c 2>/dev/null)
-    if [ -n "$untracked" ]; then
-        echo "WARNING: Untracked .c files in intercept library: $untracked"
-        echo "  These will be missing from the Docker build context!"
-        echo "  Run: git add $untracked"
-    fi
 
     # Verify base image CRIU binary
     echo "Verifying base image CRIU binary..."
@@ -262,9 +253,6 @@ build_app() {
         --exclude='*.tar.gz' \
         "${PROJECT_ROOT}/" "${BUILD_CTX}/"
 
-    # Copy intercept library source
-    cp -r "${PROJECT_ROOT}/lib/nvsnap_intercept" "${BUILD_CTX}/lib/"
-
     # cuda-checkpoint wrapper only: the real binary is built from source in
     # the BASE image (Dockerfile.base cuda-cli-builder stage); Dockerfile.app
     # just re-overlays the wrapper at /criu-bundle/cuda-checkpoint.
@@ -281,9 +269,6 @@ build_app() {
         $cache_flag \
         --platform linux/amd64 \
         --build-arg BASE_IMAGE="${BASE_IMAGE}" \
-        --build-arg UVLOOP_IMAGE="${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}" \
-        --build-arg LIBUV_IMAGE="${REGISTRY}/libuv-builder:${NVSNAP_LIBUV_VERSION}" \
-        --build-arg LIBZMQ_IMAGE="${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}" \
         -t "${APP_IMAGE}" \
         "${BUILD_CTX}"
 
@@ -318,28 +303,6 @@ push_app() {
     echo "Pushing app image: ${APP_IMAGE}"
     docker push "${APP_IMAGE}"
 
-    # Auto-build and push nvsnap-init with matching agent version.
-    # nvsnap-init bundles the agent's intercept lib + patched dependencies.
-    # Using the same tag as the agent prevents build-ID mismatch on restore.
-    local INIT_IMAGE="${REGISTRY}/nvsnap-init:${APP_VERSION}"
-    echo ""
-    echo "Building nvsnap-init: ${INIT_IMAGE}"
-    # --network=host so the build container's apt-get can reach
-    # archive.ubuntu.com via the host's DNS + proxy config. Without
-    # this, on a corp VPN the build container ends up in an isolated
-    # bridge network with no working DNS for ubuntu.com mirrors.
-    docker build --no-cache --network=host \
-        -t "${INIT_IMAGE}" \
-        --build-arg UVLOOP_IMAGE="${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}" \
-        --build-arg LIBUV_IMAGE="${REGISTRY}/libuv-builder:${NVSNAP_LIBUV_VERSION}" \
-        --build-arg LIBZMQ_IMAGE="${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}" \
-        --build-arg PYZMQ_IMAGE="${REGISTRY}/pyzmq-builder:${NVSNAP_PYZMQ_VERSION}" \
-        --build-arg AGENT_IMAGE="${APP_IMAGE}" \
-        -f "${PROJECT_ROOT}/docker/init/Dockerfile" \
-        "${PROJECT_ROOT}"
-
-    echo "Pushing nvsnap-init: ${INIT_IMAGE}"
-    docker push "${INIT_IMAGE}"
     echo "Done."
 }
 
@@ -418,9 +381,6 @@ sync_versions() {
     echo "=== Syncing versions from versions.sh to manifests ==="
     echo "  APP_VERSION:   ${APP_VERSION}"
     echo "  BASE_VERSION:  ${BASE_VERSION}"
-    echo "  UVLOOP:        ${NVSNAP_UVLOOP_VERSION}"
-    echo "  LIBZMQ:        ${NVSNAP_LIBZMQ_VERSION}"
-    echo "  PYZMQ:         ${NVSNAP_PYZMQ_VERSION}"
     echo "  VLLM:          ${NVSNAP_VLLM_VERSION}"
     echo ""
 
@@ -452,11 +412,7 @@ sync_versions() {
     sync_workload_manifest() {
         local manifest="$1"
         sed -i \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:[^ ]*|image: ${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}|" \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:[^ ]*|image: ${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}|" \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/pyzmq-builder:[^ ]*|image: ${REGISTRY}/pyzmq-builder:${NVSNAP_PYZMQ_VERSION}|" \
             -e "s|image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:[^ ]*|image: ${REGISTRY}/nvsnap-agent:${APP_VERSION}|" \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/nvsnap-init:[^ ]*|image: ${REGISTRY}/nvsnap-init:${NVSNAP_INIT_VERSION}|" \
             -e "s|image: vllm/vllm-openai:[^ ]*|image: vllm/vllm-openai:${NVSNAP_VLLM_VERSION}|" \
             "$manifest"
         # Restore manifests reference the agent's checkpoint hostPath.
@@ -506,9 +462,6 @@ show_versions() {
     echo "  App image:     ${REGISTRY}/nvsnap-agent:${APP_VERSION}"
     echo ""
     echo "  Dependencies:"
-    echo "    uvloop:      ${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}"
-    echo "    libzmq:      ${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}"
-    echo "    pyzmq:       ${REGISTRY}/pyzmq-builder:${NVSNAP_PYZMQ_VERSION}"
     echo "    vllm:        vllm/vllm-openai:${NVSNAP_VLLM_VERSION}"
     echo ""
     echo "  DOCKER_HOST:   ${DOCKER_HOST:-<not set>}"

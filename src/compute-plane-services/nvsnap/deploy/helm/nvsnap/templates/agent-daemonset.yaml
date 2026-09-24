@@ -154,15 +154,6 @@ spec:
             - --webhook-mount-prep-init-image={{ .Values.webhook.mountPrepInitImage | default (include "nvsnap.agent.image" .) }}
             - --webhook-agent-host-port={{ .Values.webhook.agentHostPort | default 8081 }}
             {{- end }}
-            # BYOC auto-inject: when a pod carries nvsnap.io/auto-inject: "true"
-            # the webhook stamps in the sitecustomize plumbing using these
-            # images. All four must be set; the agent image MUST match
-            # this DaemonSet's image so libnvsnap_intercept.so build-IDs
-            # line up at restore time.
-            - {{ include "nvsnap.builder.image" (dict "ctx" . "name" "uvloop-builder") }}
-            - {{ include "nvsnap.builder.image" (dict "ctx" . "name" "libuv-builder") }}
-            - {{ include "nvsnap.builder.image" (dict "ctx" . "name" "libzmq-builder") }}
-            - {{ include "nvsnap.agent.image" . }}
             {{- end }}
           securityContext:
             privileged: true

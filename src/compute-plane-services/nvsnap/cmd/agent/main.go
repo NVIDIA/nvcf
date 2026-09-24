@@ -146,19 +146,6 @@ func main() {
 	flag.StringVar(&config.Webhook.Path, "webhook-path", "/mutate",
 		"HTTP path the in-agent webhook listens on")
 
-	// BYOC auto-inject: image refs the webhook stamps into the four
-	// init containers when a pod has nvsnap.io/auto-inject: "true". All
-	// four must be set for the auto-inject branch to fire; otherwise
-	// the webhook fails open (admits the pod unchanged).
-	flag.StringVar(&config.Webhook.AutoInject.Uvloop, "webhook-image-uvloop", "", //nolint:staticcheck // deprecated field intentionally bound for flag back-compat
-		"Image ref for the auto-inject get-uvloop init container (multi-python uvloop wheels)")
-	flag.StringVar(&config.Webhook.AutoInject.LibUV, "webhook-image-libuv", "",
-		"Image ref for the auto-inject get-libuv init container")
-	flag.StringVar(&config.Webhook.AutoInject.LibZMQ, "webhook-image-libzmq", "",
-		"Image ref for the auto-inject get-libzmq init container")
-	flag.StringVar(&config.Webhook.AutoInject.Agent, "webhook-image-agent", "",
-		"Image ref for the auto-inject get-nvsnap init container (nvsnap-agent — must match running agent)")
-
 	// nvsnap#147: nvsnap-l2-wait init container ref. When set, the
 	// webhook prepends a nvsnap-l2-wait init container on restore pods
 	// that polls nvsnap-server until the L2 PVC promote is ready.

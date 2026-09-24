@@ -142,6 +142,15 @@ const (
 // pre-wired or webhook disabled). Never returns an error today —
 // the signature carries one so future validation has a place to
 // land.
+// The restore bundle is staged on the host and mounted into the restore pod:
+// nvsnap-tools carries the criu bundle, nvsnap-lib the shared libraries. These
+// constants lived in the interception stack until it was removed; this is now
+// their only user.
+const (
+	nvsnapLibVolumeName = "nvsnap-lib"
+	nvsnapLibMountPath  = "/nvsnap-lib"
+)
+
 func (m *Mutator) restoreBundleInjectPatches(pod *corev1.Pod) ([]PatchOp, error) {
 	if m.MainContainer < 0 || m.MainContainer >= len(pod.Spec.Containers) {
 		return nil, fmt.Errorf("restoreBundleInjectPatches: MainContainer index %d out of range (have %d containers)",

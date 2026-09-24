@@ -301,12 +301,6 @@ type Mutator struct {
 	// Log is the structured logger; nil disables logging.
 	Log logrus.FieldLogger
 
-	// AutoInject configures the image refs used when the webhook
-	// auto-injects sitecustomize plumbing for pods carrying the
-	// nvsnap.io/auto-inject: "true" annotation. Empty/zero = the
-	// auto-inject branch is a no-op (failing open).
-	AutoInject AutoInjectImages
-
 	// OverlayPreparer hands the webhook a per-restore-pod writable
 	// OverlayFS union layered on top of any captured volume — both
 	// rootfs-extract subpaths (nvsnap#194) AND hostPath/emptyDir
@@ -412,11 +406,11 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		span.SetAttributes(attribute.String("nvsnap.pod", pod.Namespace+"/"+pod.Name))
 	}
 
-	// Auto-inject sitecustomize plumbing first so the restore-from
-	// branch sees a pod that already has /nvsnap-lib volume + mounts
-	// + env vars. Both can run on the same pod (auto-injected
-	// boilerplate + restore mounts).
-	injectPatches := m.autoInjectPatches(pod)
+	// Patches that must land before the restore-from branch runs, so
+	// that branch sees the pod they produce. Only the cachedir capture
+	// patches below use this now; the LD_PRELOAD auto-injection that
+	// used to seed it was removed with the interception stack.
+	var injectPatches []PatchOp
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {
@@ -431,7 +425,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		if len(injectPatches) > 0 {
 			m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
 				WithField("patches", len(injectPatches)).
-				Info("auto-inject only")
+				Info("capture pod: cache-dir patches only")
 		}
 		return injectPatches, nil
 	}
@@ -563,7 +557,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 			"hash":        checkpointstore.ShortHash(hash),
 			"pod":         pod.Namespace + "/" + pod.Name,
 			"patches":     len(patches),
-			"auto_inject": len(injectPatches),
+			"pre_patches": len(injectPatches),
 		}).Info("rootfs-only mutation applied")
 	}
 	return patches, nil
