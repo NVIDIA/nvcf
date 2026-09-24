@@ -30,6 +30,9 @@ global:
     # ncp-local alias Service forwards it to the control-plane load balancer.
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
     llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
+    # Worker callbacks use the compute-cluster alias Service. The default
+    # invocation pod IP hostname exists only in the control-plane cluster.
+    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
 
 # Local BDD does not install the optional observability stack.
 observability:
@@ -45,6 +48,23 @@ stateMetrics:
     limits:
       cpu: 500m
       memory: 512Mi
+
+# Give the API Keys JVM enough CPU and startup time on a shared k3d host.
+apikeys:
+  startupProbe:
+    httpGet:
+      path: /admin/health/readiness
+      port: management-port
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 120
+  livenessProbe:
+    timeoutSeconds: 5
+  resources:
+    requests:
+      cpu: 500m
+    limits:
+      cpu: "1"
 
 cassandra:
   replicaCount: 1
