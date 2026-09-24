@@ -30,6 +30,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -52,6 +53,16 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/publisher/cloudevents"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations"
 )
+
+// registerUnauthenticatedRoutes registers routes that must be reachable before
+// (and regardless of) auth middleware: /health for liveness/readiness probes,
+// and /info for build-version discovery. /info is wrapped with tracing and
+// request logging via infoMiddleware; /health probes are left uninstrumented to
+// avoid span and log spam.
+func registerUnauthenticatedRoutes(router *mux.Router, server *service.Server, infoMiddleware func(http.Handler) http.Handler) {
+	router.HandleFunc("/health", server.Health)
+	router.Handle("/info", infoMiddleware(golibversion.Handler()))
+}
 
 func runService(cfg config.Config) error {
 	ctx := context.Background()
@@ -149,20 +160,23 @@ func runService(cfg config.Config) error {
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit
 	router.Use(metricsMiddleware)
 
-	router.HandleFunc("/health", server.Health)
-
 	spanNameFormatter := func(operation string, r *http.Request) string {
 		return r.Method + " " + operation // e.g., "GET /api/resource"
 	}
-	authRouter := router.PathPrefix("").Subrouter()
-	authRouter.Use(otelmux.Middleware("deployment-stages", otelmux.WithSpanNameFormatter(spanNameFormatter)))
-
-	// Initialize request logger mw
+	tracingMW := otelmux.Middleware("deployment-stages", otelmux.WithSpanNameFormatter(spanNameFormatter))
 	loggerMW := logging.LoggerMiddleware(logger)
+
+	// /info runs through tracing and request logging (RED metrics already apply
+	// on the base router). /health is left uninstrumented to avoid probe span and
+	// log spam.
+	registerUnauthenticatedRoutes(router, server, func(h http.Handler) http.Handler {
+		return tracingMW(loggerMW(h))
+	})
+
+	authRouter := router.PathPrefix("").Subrouter()
+	authRouter.Use(tracingMW)
 	authRouter.Use(loggerMW)
 
-	// If we're not using Policy, we need to handle scope checks locally in our middleware
-	// We assume we're using Policy by default
 	var requireLocalScopeCheck = false
 
 	if cfg.Auth.Enabled {
@@ -274,19 +288,25 @@ func runService(cfg config.Config) error {
 				}
 			}
 
-			// Create Policy middleware with the client
-			// The underlying HTTP client will be refreshed automatically when credentials change
-			policyMiddleware := middleware.NewPolicyMiddleware(
+			var jwtOpts *middleware.JWTParserOptions
+			if cfg.Auth.JWKSetUrl != "" {
+				opts := middleware.NewJWTParserOptions(cfg.Auth.JWKSetUrl, nil, cacheDuration, &cfg.HTTP)
+				opts.Issuer = cfg.Auth.Issuer
+				opts.Audience = cfg.Auth.Audience
+				opts.TenantClaim = cfg.Auth.TenantClaim
+				jwtOpts = &opts
+			}
+
+			requireLocalScopeCheck = cfg.SelfManaged
+
+			authRouter.Use(middleware.NewAuthMiddleware(
 				policyClient,
 				"nv-cloud-functions",
-				cfg.Auth.JWKSetUrl,
-				cacheDuration,
+				jwtOpts,
 				jwkCache,
-				&cfg.HTTP,
+				cfg.SelfManaged,
 				logger,
-			)
-
-			authRouter.Use(policyMiddleware)
+			))
 		default:
 			// This should never be reached since ValidateAuthConfig handles invalid providers
 			logger.Error("auth is enabled but no valid auth provider was provided")

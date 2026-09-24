@@ -449,7 +449,7 @@ persisted to `${CI_PROJECT_DIR}/.bazel-cache` and registered in GitLab's
 The repo enables the read-only `--config=remote` profile by default in
 `.bazelrc`. The behaviorally important lines are:
 
-```
+```text
 build --config=remote
 build:remote --remote_cache=grpc://<remote-cache-endpoint>
 build:remote --remote_upload_local_results=false

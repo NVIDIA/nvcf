@@ -53,11 +53,13 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -120,13 +122,14 @@ const (
 	SrvCertsMountDir           = "/certs/server"
 	CACertsMountDir            = "/certs/ca"
 
-	agentConfigDir                = "/var/run/nvca"
-	agentConfigFile               = "config.yaml"
-	agentConfigFilePath           = agentConfigDir + "/" + agentConfigFile
-	agentConfigConfigMapName      = "agent-config"
-	agentConfigMergeConfigMapName = "agent-config-merge"
-	nvcaOperatorConfigMapName     = "nvca-operator-config"
-	agentConfigVolumeName         = "agent-config"
+	agentConfigDir                   = "/var/run/nvca"
+	agentConfigFile                  = "config.yaml"
+	agentConfigFilePath              = agentConfigDir + "/" + agentConfigFile
+	agentConfigConfigMapName         = "agent-config"
+	agentConfigMergeConfigMapName    = "agent-config-merge"
+	nvcaOperatorConfigMapName        = "nvca-operator-config"
+	agentConfigVolumeName            = "agent-config"
+	legacyFirstClassConfigAnnotation = "nvcf.nvidia.com/legacy-first-class-config"
 
 	// ReVal config.
 	ReValCacheVolumeName = "reval-rendered-helmcharts"
@@ -163,8 +166,7 @@ const (
 	NGCAPIKeySecretName    = "ngc-api-key"
 	NVCAVaultConfigmapName = "nvca-vault-agent"
 
-	NVCAInternalPersistentStorageConfigJSONBase64Key = "NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64"
-	NVCASharedStorageonfigJSONBase64Key              = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
+	NVCASharedStorageonfigJSONBase64Key = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
 
 	// default params for nvca deployment
 	DefaultLogLevel              = "info"
@@ -248,6 +250,11 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		nvcatypes.WorkloadInstanceTypeLabel: WorkloadInstanceTypeValuePodSpec,
 	}
 
+	// set the label for gxcache if enabled
+	if bc.enableGXCache {
+		labels[clustermgmt.ShaderCacheLabelKey] = strconv.FormatBool(true)
+	}
+
 	reqNSObj := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   requestsNamespace,
@@ -255,22 +262,11 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		},
 	}
 
-	// set the labels for gxcache if enabled
-	if bc.enableGXCache {
-		if _, ok := reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey]; !ok {
-			if reqNSObj.Labels == nil {
-				reqNSObj.Labels = make(map[string]string)
-			}
-			reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey] = strconv.FormatBool(true)
-		}
-	} else {
-		if _, ok := reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey]; !ok {
-			delete(reqNSObj.Labels, clustermgmt.ShaderCacheLabelKey)
-		}
-	}
-
-	if err := bc.createOrUpdateNamespace(ctx, reqNSObj); err != nil {
-		return fmt.Errorf("failed to setup namespace %v", reqNSObj.Name)
+	// The GXCache label is NVCA-owned but conditional, so name it explicitly: reconciliation drops it from the
+	// namespace once the feature is turned off, while leaving metadata owned by other controllers alone.
+	ownedKeys := namespaceOwnedKeys{labels: []string{clustermgmt.ShaderCacheLabelKey}}
+	if err := bc.createOrUpdateNamespace(ctx, reqNSObj, ownedKeys); err != nil {
+		return fmt.Errorf("failed to setup namespace %v: %w", reqNSObj.Name, err)
 	}
 
 	defaultSA := &corev1.ServiceAccount{
@@ -299,7 +295,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 		},
 	}
 
-	if err := bc.createOrUpdateNamespace(ctx, sysNSObj); err != nil {
+	if err := bc.createOrUpdateNamespace(ctx, sysNSObj, namespaceOwnedKeys{}); err != nil {
 		return fmt.Errorf("failed to setup namespace %s: %v", sysNSObj.Name, err)
 	}
 
@@ -542,9 +538,9 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
-	webhookCert, err := generateWebhookCerts(nb, bc.now())
+	webhookCert, err := bc.ensureWebhookCert(ctx, nb, bc.now())
 	if err != nil {
-		return fmt.Errorf("failed to create webhookCerts, err: %w", err)
+		return fmt.Errorf("failed to ensure webhookCerts, err: %w", err)
 	}
 
 	if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {
@@ -578,6 +574,12 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 	err = bc.mirrorConfigMap(ctx, nb, nvcfCustomAnnotationsConfigMapName)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcfCustomAnnotationsConfigMapName,
+			nb.Namespace, nb.Name, err)
+	}
+
+	err = bc.setupStorageCapabilityCatalogConfigMap(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcastorage.StorageCapabilityConfigMapName,
 			nb.Namespace, nb.Name, err)
 	}
 
@@ -776,8 +778,11 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			},
 			{
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
-				Resources: []string{"storagerequests", "storagerequests/status"},
-				Verbs:     crudVerbs,
+				Resources: []string{
+					"modelcachebindings", "modelcachebindings/status",
+					"storagerequests", "storagerequests/status",
+				},
+				Verbs: crudVerbs,
 			},
 			{
 				APIGroups: []string{"storage.k8s.io"},
@@ -996,6 +1001,37 @@ func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.N
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      srcName,
 			Namespace: getSystemNamespace(nb),
+		},
+		Data: srcCM.Data,
+	}
+	return bc.createOrUpdateConfigMap(ctx, &cmTemplate)
+}
+
+// setupStorageCapabilityCatalogConfigMap mirrors the chart-created
+// nvcf-storage-capabilities ConfigMap into the agent's system namespace, where
+// the agent and the storage controller read it. The chart renders it into the
+// operator's release namespace; without this copy the agent never sees it. An
+// absent source is skipped with a warning rather than failing the reconcile:
+// the agent falls back to the catalog compiled into it until the chart that
+// ships the ConfigMap has converged.
+func (bc *BackendK8sCache) setupStorageCapabilityCatalogConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+	log := core.GetLogger(ctx)
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(
+		ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			log.Warnf("%v/%v configmap not found, not mirroring the storage capability catalog into %v",
+				NVCAOperatorNamespace, nvcastorage.StorageCapabilityConfigMapName, getSystemNamespace(nb))
+			return nil
+		}
+		return err
+	}
+	cmTemplate := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        nvcastorage.StorageCapabilityConfigMapName,
+			Namespace:   getSystemNamespace(nb),
+			Annotations: getNBAnnotations(nb),
+			Labels:      getAppLabels(),
 		},
 		Data: srcCM.Data,
 	}
@@ -1310,6 +1346,9 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	if err != nil {
 		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
+	if err := validateGPUDiscoveryConfig(nb, mergeCfg); err != nil {
+		return nil, err
+	}
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
@@ -1326,6 +1365,14 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 			agentConfigFile: string(cb),
 		},
 	}, nil
+}
+
+func validateGPUDiscoveryConfig(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) error {
+	if nb.Spec.ClusterConfig.GPUDiscovery.Dynamic != nil && mergeCfg.Agent.StaticGPUCapacity != 0 {
+		return &invalidAgentConfigError{err: fmt.Errorf(
+			"worker.staticGPUCapacity requires static GPU discovery; remove the override for a dynamic-discovery cluster")}
+	}
+	return nil
 }
 
 type agentHostOverrides struct {
@@ -1441,20 +1488,51 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 	if err != nil {
 		return nvcaconfig.Config{}, false, err
 	}
-	if !foundOperatorCfg {
-		return mergeCfg, foundMergeCfg, nil
-	}
-	if mergeCfg.Workload.TransportTLS != nil {
+	if foundOperatorCfg && mergeCfg.Workload.TransportTLS != nil {
 		return nvcaconfig.Config{}, false,
-			fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName)
+			nvcaoperatorerrors.FatalError(
+				fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName))
 	}
 
-	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
-	if err := mergeCfg.Validate(); err != nil {
+	if foundOperatorCfg {
+		mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	}
+	if err := validateAgentConfigToMerge(mergeCfg); err != nil {
 		return nvcaconfig.Config{}, false,
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
 	}
-	return mergeCfg, true, nil
+	return mergeCfg, foundMergeCfg || foundOperatorCfg, nil
+}
+
+func validateAgentConfigToMerge(cfg nvcaconfig.Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if cfg.Workload.TransportTLS == nil {
+		return nil
+	}
+	return transporttls.ValidateConfig(transporttls.NormalizeConfig(*cfg.Workload.TransportTLS))
+}
+
+type invalidAgentConfigError struct {
+	err error
+}
+
+func (e *invalidAgentConfigError) Error() string {
+	return e.err.Error()
+}
+
+func (e *invalidAgentConfigError) Unwrap() error {
+	return e.err
+}
+
+func isInvalidAgentConfigError(err error) bool {
+	var target *invalidAgentConfigError
+	return errors.As(err, &target)
+}
+
+func isResourceQuantityDecodeError(err error) bool {
+	return strings.Contains(err.Error(), "decode resource ")
 }
 
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
@@ -1474,10 +1552,34 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
 	if err != nil {
-		return nvcaconfig.Config{}, false,
-			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+		wrappedErr := fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err)
+		if isResourceQuantityDecodeError(err) {
+			return nvcaconfig.Config{}, false, &invalidAgentConfigError{err: wrappedErr}
+		}
+		return nvcaconfig.Config{}, false, nvcaoperatorerrors.FatalError(wrappedErr)
+	}
+	if bc.shouldWarnForLegacyFirstClassConfig(cm) {
+		log.WithFields(logrus.Fields{
+			"configmapNamespace": cm.Namespace,
+			"configmapName":      cm.Name,
+		}).Warn("ConfigMap contains deprecated agentConfig.mergeConfig settings that now have first-class chart values; migrate to the top-level byoo/utils/storage/worker chart values before the next minor release")
 	}
 	return cfg, true, nil
+}
+
+func (bc *BackendK8sCache) shouldWarnForLegacyFirstClassConfig(cm *corev1.ConfigMap) bool {
+	if cm.Annotations[legacyFirstClassConfigAnnotation] != "true" {
+		return false
+	}
+
+	bc.legacyFirstClassConfigWarningMu.Lock()
+	defer bc.legacyFirstClassConfigWarningMu.Unlock()
+	if bc.legacyFirstClassConfigWarningSeen && bc.legacyFirstClassConfigWarningResourceVersion == cm.ResourceVersion {
+		return false
+	}
+	bc.legacyFirstClassConfigWarningResourceVersion = cm.ResourceVersion
+	bc.legacyFirstClassConfigWarningSeen = true
+	return true
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {
@@ -2171,6 +2273,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 			},
 		},
 	}
+	// GracefulNoGPU deliberately keeps the agent NotReady while the cluster has
+	// no GPUs. A rolling update would therefore surge a second singleton agent
+	// and retain the old replica indefinitely. Recreate keeps configuration
+	// rollouts single-active while preserving the default rollout behavior for
+	// clusters that do not opt in.
+	if slices.Contains(strings.Split(bc.getNVCAFeatureFlags(nb), ","), featureflag.GracefulNoGPU.Key) {
+		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
+	}
 
 	if nb.Spec.VaultConfig.Enabled {
 		deployment.Spec.Template.Annotations = mergeMaps(deployment.Spec.Template.Annotations, getVaultAnnotations(nb))
@@ -2595,26 +2705,6 @@ func completeInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1
 		dto.ResourceQuota.Hard[corev1.ResourceRequestsStorage] = resource.MustParse("500Gi")
 	}
 	return dto, nil
-}
-
-// returns a string of the internal persistent storage configuration base64 encoded
-func getInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
-	log := core.GetLogger(ctx)
-	dto, err := completeInternalPersistentStorageConfig(ctx, nb)
-	if err != nil {
-		return "", err
-	}
-	if dto == nil || !dto.Enabled {
-		return "", nil
-	}
-
-	buff := &bytes.Buffer{}
-	if err := json.NewEncoder(buff).Encode(dto); err != nil {
-		log.WithError(err).Error("failed to encode the persistent storage configuration")
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(buff.Bytes()), nil
 }
 
 func getSharedStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {

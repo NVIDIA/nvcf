@@ -52,7 +52,7 @@ data:
           image:
             name: binder
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -69,7 +69,7 @@ data:
           image:
             name: resourcereservation
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
     
       podGrouper:
@@ -78,7 +78,7 @@ data:
           image:
             name: podgrouper
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -87,6 +87,11 @@ data:
             requests:
               cpu: 50m
               memory: 512Mi
+          podDisruptionBudget:
+            enabled: true
+            maxUnavailable: 1
+        args:
+          genericKartaFallback: true
     
       podGroupController:
         service:
@@ -94,7 +99,7 @@ data:
           image:
             name: podgroupcontroller
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -110,7 +115,7 @@ data:
           image:
             name: queuecontroller
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -126,7 +131,7 @@ data:
           image:
             name: admission
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -154,7 +159,7 @@ data:
           image:
             name: nodescaleadjuster
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -168,7 +173,7 @@ data:
           scalingPodImage:
             name: scalingpod
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
     
       scheduler:
@@ -177,7 +182,7 @@ data:
           image:
             name: scheduler
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -186,6 +191,9 @@ data:
             requests:
               cpu: 500m
               memory: 3Gi
+          podDisruptionBudget:
+            enabled: true
+            maxUnavailable: 1
         schedulerService:
           port: 8080
     
@@ -194,7 +202,7 @@ data:
           image:
             name: numa-placement-exporter
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.16.7
+            tag: v0.17.1
             pullPolicy: IfNotPresent
           resources:
             limits:

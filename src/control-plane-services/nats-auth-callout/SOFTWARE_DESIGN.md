@@ -94,6 +94,7 @@ account_configs:
 The Plugin Manager creates and manages plugin instances using a composite key system that combines account names with plugin names to route authentication requests to the appropriate plugin instance.
 
 The manager:
+
 - Creates plugin instances from configuration
 - Routes authentication requests to appropriate plugins
 - Manages plugin lifecycle and error handling
@@ -105,6 +106,7 @@ The manager:
 **Purpose**: Authenticates NATS clients using cryptographic NKey signatures.
 
 **Configuration**:
+
 ```yaml
 plugin_type: "nkey"
 config:
@@ -116,6 +118,7 @@ config:
 ```
 
 **Authentication Flow**:
+
 1. Client connects with NKey public key and signed nonce
 2. Plugin verifies the public key exists in mappings
 3. Plugin cryptographically verifies the signature using the public key
@@ -128,6 +131,7 @@ config:
 **Purpose**: Authenticates using OAuth2 JWT Bearer tokens with JWKS validation.
 
 **Configuration**:
+
 ```yaml
 plugin_type: "oauth"
 config:
@@ -146,6 +150,7 @@ config:
 ```
 
 **Authentication Flow**:
+
 1. Client provides JWT token in request payload
 2. Plugin validates JWT signature using JWKS
 3. Plugin verifies issuer, audience, and expiration
@@ -153,6 +158,7 @@ config:
 5. Returns user identity and permissions
 
 **Key Features**:
+
 - Automatic JWKS key rotation support
 - Scope-based permission mapping
 - JWT validation with configurable leeway
@@ -163,22 +169,24 @@ config:
 **Purpose**: Delegates authentication to external HTTP services.
 
 **Configuration**:
+
 ```yaml
 plugin_type: "webhook"
 config:
   url: "https://auth.service.com/validate"
   timeout: "30s"
   retry_attempts: 3
-  insecure_skip_verify: false
 ```
 
 **Authentication Flow**:
+
 1. Client provides authentication payload (token, credentials, etc.)
 2. Plugin sends HTTP POST to configured webhook URL
 3. Webhook service validates credentials and returns response
 4. Plugin processes response and returns result
 
 **Request Format**:
+
 ```json
 {
   "account": "production",
@@ -188,6 +196,7 @@ config:
 ```
 
 **Response Format**:
+
 ```json
 {
   "userId": "user123",
@@ -201,8 +210,9 @@ config:
 ```
 
 **Key Features**:
+
 - Configurable retry logic with exponential backoff
-- TLS configuration options
+- TLS certificate and hostname verification for HTTPS endpoints
 - Flexible payload handling
 - Error mapping to appropriate HTTP status codes
 
@@ -256,22 +266,26 @@ To implement a custom authentication plugin:
 ## Security Considerations
 
 ### NKey Security
+
 - NKey seeds must be securely stored and transmitted
 - Signature verification provides cryptographic authentication
 - Public keys can be safely stored in configuration
 
 ### JWT Security
+
 - JWKS endpoints should use HTTPS
 - JWT validation includes signature, expiration, issuer, and audience checks
 - Scope-based permissions provide fine-grained access control
 
 ### Webhook Security
+
 - Webhook endpoints should use HTTPS
 - Consider webhook authentication (API keys, mutual TLS)
 - Implement proper timeout and retry logic
 - Validate webhook responses thoroughly
 
 ### General Security
+
 - All configuration secrets should be externalized (environment variables, secrets management)
 - Service-to-service communication should be encrypted
 - Audit logging should capture authentication events
@@ -280,17 +294,20 @@ To implement a custom authentication plugin:
 ## Observability
 
 ### Metrics
+
 - Authentication request rates and latencies
 - Success/failure rates by plugin and account
 - Plugin-specific performance metrics
 
 ### Logging
+
 - Structured logging with correlation IDs
 - Authentication events with user and account context
 - Plugin-specific debug information
 - Error tracking and alerting
 
 ### Tracing
+
 - Distributed tracing through authentication flow
 - Plugin execution timing and dependencies
 - External service call tracing (JWKS, webhooks)
@@ -298,13 +315,13 @@ To implement a custom authentication plugin:
 ## Configuration Management
 
 ### Environment-Based Configuration
+
 - CLI flags override environment variables
 - Environment variables override configuration files
 - Configuration files provide defaults and documentation
 
-
-
 ### Secrets Management
+
 - NKey seeds and signing keys via vault agent json file
 
-This architecture provides a flexible, secure, and observable authentication system that can adapt to various organizational authentication requirements while maintaining strong integration with NATS Server's authorization model. 
+This architecture provides a flexible, secure, and observable authentication system that can adapt to various organizational authentication requirements while maintaining strong integration with NATS Server's authorization model.

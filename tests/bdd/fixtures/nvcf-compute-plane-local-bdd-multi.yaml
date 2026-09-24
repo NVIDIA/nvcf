@@ -10,9 +10,6 @@
 # Services in the compute cluster, and the alias Endpoints point at
 # the control-plane load balancer.
 global:
-  nodeSelectors:
-    enabled: false
-
   # REPLACE_WITH_SAMPLE_NGC_ORG / REPLACE_WITH_SAMPLE_NGC_TEAM
   # are overwritten by the feature's Background via
   # `I update yaml file ... with keys:` using ${SAMPLE_NGC_ORG} and
@@ -20,11 +17,9 @@ global:
   # the rationale.
   helm:
     sources:
-      registry: "nvcr.io"
       repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
 
   image:
-    registry: nvcr.io
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   # These service DNS names resolve to real control-plane Services in
@@ -32,14 +27,16 @@ global:
   # in the multi-cluster topology.
   nvcaOperator:
     selfManaged:
+      # The simulated GPU density exceeds laptop CPU and memory ratios. Keep
+      # dynamic discovery's 1x type so NVCA can report local GPU capacity.
+      featureGateValues:
+        - -InfraResourceOverhead
+        - -EnforceContainerFunctionResourceLimits
+        - -EnforceContainerTaskResourceLimits
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 
-agentConfig:
-  mergeConfig: |
-    cluster:
-      validationPolicy:
-        name: Unrestricted
-    workload:
-      stargateQUICInsecure: true
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled

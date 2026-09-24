@@ -22,7 +22,6 @@ NVCF_SERVICE_TEST_RESOURCES = glob(["src/test/resources/**"]) + [
 
 NVCF_SERVICE_DEPS = [
     "//src/control-plane-services/cloud-functions/nvcf-core:nvcf_core",
-    "@nv_third_party_deps//:net_devh_grpc_server_spring_boot_starter",
     "@nv_third_party_deps//:org_slf4j_slf4j_api",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
@@ -61,6 +60,16 @@ nvcf_java_test(
         "//src/control-plane-services/cloud-functions/nvcf-core:nvcf_core",
         "//src/control-plane-services/cloud-functions/nvcf-core:nvcf_core_test_fixtures",
         "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+        "@nv_third_party_deps//:io_grpc_grpc_api",
+        "@nv_third_party_deps//:io_grpc_grpc_protobuf",
+        "@nv_third_party_deps//:io_grpc_grpc_services",
+        "@nv_third_party_deps//:io_grpc_grpc_stub",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_grpc_server",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_health",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
+        "@nv_third_party_deps//:org_springframework_spring_context",
+        "@nv_third_party_deps//:org_springframework_spring_core",
         "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_testing",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
@@ -74,6 +83,7 @@ nvcf_java_test(
         "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
         "@nv_third_party_deps//:org_slf4j_slf4j_api",
         "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
     ],
     data = [
         "//src/control-plane-services/cloud-functions:integration_local_env",

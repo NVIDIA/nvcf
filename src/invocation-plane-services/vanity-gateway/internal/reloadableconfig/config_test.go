@@ -70,6 +70,18 @@ func TestSetupConfigReloadsValidFileUpdates(t *testing.T) {
 	requireConfigValue(t, cfg, "two")
 }
 
+func TestSetupConfigUsesInitialLoadTimeout(t *testing.T) {
+	useFastReloadTiming(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+
+	start := time.Now()
+	cfg, err := SetupConfig[testConfig](path, WithInitialLoadTimeout[testConfig](20*time.Millisecond))
+
+	require.Nil(t, cfg)
+	require.ErrorContains(t, err, "timed out waiting for config to become available")
+	require.Less(t, time.Since(start), time.Second)
+}
+
 func TestSetupConfigKeepsLastGoodConfigWhenReloadIsInvalid(t *testing.T) {
 	useFastReloadTiming(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")

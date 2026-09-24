@@ -52,6 +52,7 @@ impl PolicyCache {
         grpc_endpoint: String,
         oauth2_client: Arc<OAuth2Client>,
         ttl_seconds: u64,
+        request_timeout_seconds: u64,
         max_capacity: u64,
         default_thresholds: ScalingThresholds,
         default_factors: ScalingFactors,
@@ -61,7 +62,13 @@ impl PolicyCache {
             .time_to_live(Duration::from_secs(ttl_seconds))
             .build();
 
-        let grpc_client = Arc::new(PolicyClient::new_lazy(grpc_endpoint, oauth2_client)?);
+        let grpc_client = Arc::new(PolicyClient::new_lazy(
+            grpc_endpoint,
+            oauth2_client,
+            Duration::from_secs(request_timeout_seconds),
+            default_thresholds.clone(),
+            default_factors.clone(),
+        )?);
 
         Ok(Self {
             cache,
@@ -86,11 +93,20 @@ impl PolicyCache {
 
         // Cache miss - fetch from gRPC
         match self.fetch_from_grpc(function_version_id).await {
-            Ok(config) => {
+            Ok(Some(config)) => {
                 // Store in cache
                 self.cache.insert(function_version_id, config.clone()).await;
                 tracing::info!(
                     "Successfully fetched and cached custom policy for function_version_id: {}",
+                    function_version_id
+                );
+                Ok(config)
+            }
+            Ok(None) => {
+                let config = self.get_default_config(function_version_id);
+                self.cache.insert(function_version_id, config.clone()).await;
+                tracing::debug!(
+                    "Cached platform-default policy for function_version_id: {}",
                     function_version_id
                 );
                 Ok(config)
@@ -107,7 +123,10 @@ impl PolicyCache {
     }
 
     /// Fetch policy from gRPC service
-    async fn fetch_from_grpc(&self, function_version_id: Uuid) -> Result<CustomScalingConfig> {
+    async fn fetch_from_grpc(
+        &self,
+        function_version_id: Uuid,
+    ) -> Result<Option<CustomScalingConfig>> {
         self.grpc_client.fetch_policy(function_version_id).await
     }
 
@@ -176,6 +195,7 @@ mod tests {
             "http://localhost:50051".to_string(),
             oauth2_client,
             86400,
+            30,
             10000,
             ScalingThresholds::default(),
             ScalingFactors::default(),
@@ -192,6 +212,7 @@ mod tests {
             "http://localhost:50051".to_string(),
             oauth2_client,
             86400,
+            30,
             10000,
             ScalingThresholds::default(),
             ScalingFactors::default(),
@@ -211,6 +232,7 @@ mod tests {
             "http://localhost:50051".to_string(),
             oauth2_client,
             86400,
+            30,
             10000,
             ScalingThresholds::default(),
             ScalingFactors::default(),

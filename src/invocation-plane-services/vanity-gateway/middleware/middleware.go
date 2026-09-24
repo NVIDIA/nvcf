@@ -31,8 +31,16 @@ const (
 	serverOperationName = "vanity-gateway"
 	unknownHTTPRoute    = "unknown"
 
-	openAIModelNameAttribute attribute.Key = "openai_model_name"
-	functionIDAttribute      attribute.Key = "function_id"
+	openAIModelNameAttribute           attribute.Key = "openai_model_name"
+	functionIDAttribute                attribute.Key = "function_id"
+	GatewayProxyOutcomeMetricAttribute attribute.Key = "gateway_proxy_outcome"
+)
+
+type GatewayProxyOutcome string
+
+const (
+	GatewayProxyOutcomeClientCanceled GatewayProxyOutcome = "client_canceled"
+	GatewayProxyOutcomeProxyError     GatewayProxyOutcome = "gateway_proxy_error"
 )
 
 var spanNameFormatter = otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
@@ -78,6 +86,13 @@ func AddFunctionIDMetricAttribute(ctx context.Context, functionID string) {
 		return
 	}
 	addRequestMetricAttributes(ctx, functionIDAttribute.String(functionID))
+}
+
+func AddGatewayProxyOutcomeMetricAttribute(ctx context.Context, outcome GatewayProxyOutcome) {
+	switch outcome {
+	case GatewayProxyOutcomeClientCanceled, GatewayProxyOutcomeProxyError:
+		addRequestMetricAttributes(ctx, GatewayProxyOutcomeMetricAttribute.String(string(outcome)))
+	}
 }
 
 func addRequestMetricAttributes(ctx context.Context, attrs ...attribute.KeyValue) {

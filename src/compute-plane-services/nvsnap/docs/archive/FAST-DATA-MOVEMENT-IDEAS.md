@@ -24,7 +24,7 @@ help different legs of the pipeline.
 
 ## Legs of the pipeline (where the cost actually lives)
 
-```
+```text
 [Node A]           [NvSnap blobstore]         [S3]              [Cluster B]
    |                     |                    |                    |
    |  L1                 |  L2                |  L3                |
@@ -48,7 +48,7 @@ universal answer is forcing a compromise.
 
 ### 1. tar + zstd-3 in a streaming pipe (no disk staging)
 
-```
+```text
 Source:       tar -cf - dump-dir/ | zstd -T0 -3 | <uploader>
 Destination:  <downloader> | zstd -T0 -d | tar -xf - -C dump-dir/
 ```
@@ -65,7 +65,7 @@ recommendation for any leg that isn't RDMA-eligible.
 
 ### 2. EROFS (read-only compressed FS image)
 
-```
+```text
 Source:       mkfs.erofs -zlz4hc,9 <dumpdir> <id>.erofs
 Receive:      mount -t erofs -o ro,loop <id>.erofs <mountpoint>
               criu restore --images-dir=<mountpoint> ...
@@ -77,10 +77,7 @@ Receive:      mount -t erofs -o ro,loop <id>.erofs <mountpoint>
 | Pack time | **116 s** (single-threaded; `mkfs.erofs` doesn't parallelize) |
 | Pack throughput | **257 MB/s** |
 | Mount time | **<1 s** |
-| CRIU read-path compatibility | **validated** — `crit decode` works on
-  mount; `criu restore` reads the same image set and reaches the same
-  expected error line as a direct-dir restore (mount-NS mismatch
-  unrelated to EROFS). |
+| CRIU read-path compatibility | **validated** — `crit decode` works on mount; `criu restore` reads the same image set and reaches the same expected error line as a direct-dir restore (mount-NS mismatch unrelated to EROFS). |
 
 The operational story is the reason to consider EROFS, not the
 compression ratio (tar+zstd compresses better and packs ~5× faster).
@@ -133,6 +130,7 @@ takes longer (25 s) than transferring uncompressed (1.2 s). The right
 architecture *with* RDMA is "ship raw bytes, don't compress."
 
 Programming model — you need a library:
+
 - **NIXL** (NVIDIA Inference Xfer Library): purpose-built for moving
   inference state over RDMA. Closest tool to our use case.
 - **UCX**: abstracts RDMA verbs + TCP behind one API; picks best

@@ -6,7 +6,7 @@ metadata:
   name: grove-operator-cm-58969b77
   namespace: grove-system
   labels:
-    chart: "grove-charts-v0.1.0-alpha.11"
+    chart: "grove-charts-v0.1.0-alpha.12"
     release: "grove-operator"
     app.kubernetes.io/component: operator-configmap
     app.kubernetes.io/name: grove-operator

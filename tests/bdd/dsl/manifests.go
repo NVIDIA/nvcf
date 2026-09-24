@@ -18,9 +18,15 @@ limitations under the License.
 package dsl
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,6 +35,218 @@ const (
 	nvcrRegistry      = "nvcr.io"
 	ngcDockerUsername = "$oauthtoken"
 )
+
+// RenderedManifestsContainResource parses rendered YAML documents below root
+// and requires one top-level Kubernetes resource with the requested kind and
+// metadata.name. Nested references such as Certificate.spec.issuerRef do not
+// satisfy the assertion.
+func RenderedManifestsContainResource(root string, resource KubernetesResource) error {
+	root = strings.TrimSpace(Interpolate(root))
+	resource.Kind = strings.TrimSpace(Interpolate(resource.Kind))
+	resource.Name = strings.TrimSpace(Interpolate(resource.Name))
+	if root == "" {
+		return fmt.Errorf("rendered manifests directory is empty")
+	}
+	if resource.Kind == "" {
+		return fmt.Errorf("kubernetes resource kind is empty")
+	}
+	if resource.Name == "" {
+		return fmt.Errorf("kubernetes resource name is empty")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("inspect rendered manifests directory %q: %w", root, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("rendered manifests path %q is not a directory", root)
+	}
+
+	yamlFilesInspected := 0
+	found := false
+	err = filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("inspect rendered manifest %q: %w", filePath, walkErr)
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		extension := strings.ToLower(filepath.Ext(filePath))
+		if extension != ".yaml" && extension != ".yml" {
+			return nil
+		}
+		yamlFilesInspected++
+
+		manifestBody, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("read rendered manifest %q: %w", filePath, err)
+		}
+
+		decoder := yaml.NewDecoder(bytes.NewReader(manifestBody))
+		for document := 1; ; document++ {
+			var manifest struct {
+				Kind     string `yaml:"kind"`
+				Metadata struct {
+					Name string `yaml:"name"`
+				} `yaml:"metadata"`
+			}
+			if err := decoder.Decode(&manifest); err != nil {
+				if err == io.EOF {
+					break
+				}
+				return fmt.Errorf("parse rendered manifest %q document %d: invalid YAML", filePath, document)
+			}
+			if manifest.Kind == resource.Kind && manifest.Metadata.Name == resource.Name {
+				found = true
+				return fs.SkipAll
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if yamlFilesInspected == 0 {
+		return fmt.Errorf("rendered manifests directory %q contains no YAML files", root)
+	}
+	return fmt.Errorf("rendered manifests in %q do not contain Kubernetes resource %s/%s", root, resource.Kind, resource.Name)
+}
+
+// RenderedWorkloadImagesAreValid parses rendered Kubernetes workloads below
+// root and rejects container images with no repository name. Kubernetes
+// rejects references such as ":0.8.3" and "@sha256:..." as InvalidImageName.
+func RenderedWorkloadImagesAreValid(root string) error {
+	root = strings.TrimSpace(Interpolate(root))
+	if root == "" {
+		return fmt.Errorf("rendered manifests directory is empty")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("inspect rendered manifests directory %q: %w", root, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("rendered manifests path %q is not a directory", root)
+	}
+
+	yamlFilesInspected := 0
+	workloadsInspected := 0
+	err = filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("inspect rendered manifest %q: %w", filePath, walkErr)
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		extension := strings.ToLower(filepath.Ext(filePath))
+		if extension != ".yaml" && extension != ".yml" {
+			return nil
+		}
+		yamlFilesInspected++
+
+		manifestBody, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("read rendered manifest %q: %w", filePath, err)
+		}
+
+		decoder := yaml.NewDecoder(bytes.NewReader(manifestBody))
+		for document := 1; ; document++ {
+			var manifest map[string]any
+			if err := decoder.Decode(&manifest); err != nil {
+				if err == io.EOF {
+					break
+				}
+				return fmt.Errorf("parse rendered manifest %q document %d: invalid YAML", filePath, document)
+			}
+			podSpec, workload := renderedWorkloadPodSpec(manifest)
+			if !workload {
+				continue
+			}
+			workloadsInspected++
+			if err := validateRenderedContainerImages(podSpec); err != nil {
+				kind, _ := manifest["kind"].(string)
+				metadata, _ := manifest["metadata"].(map[string]any)
+				name, _ := metadata["name"].(string)
+				return fmt.Errorf("rendered manifest %q document %d workload %s/%s: %w", filePath, document, kind, name, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if yamlFilesInspected == 0 {
+		return fmt.Errorf("rendered manifests directory %q contains no YAML files", root)
+	}
+	if workloadsInspected == 0 {
+		return fmt.Errorf("rendered manifests in %q contain no Kubernetes workloads", root)
+	}
+	return nil
+}
+
+// renderedWorkloadPodSpec returns the Pod spec for a supported workload kind.
+func renderedWorkloadPodSpec(manifest map[string]any) (map[string]any, bool) {
+	kind, _ := manifest["kind"].(string)
+	var path []string
+	switch kind {
+	case "Pod":
+		path = []string{"spec"}
+	case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job":
+		path = []string{"spec", "template", "spec"}
+	case "CronJob":
+		path = []string{"spec", "jobTemplate", "spec", "template", "spec"}
+	default:
+		return nil, false
+	}
+
+	current := manifest
+	for _, key := range path {
+		next, ok := current[key].(map[string]any)
+		if !ok {
+			return map[string]any{}, true
+		}
+		current = next
+	}
+	return current, true
+}
+
+// validateRenderedContainerImages rejects missing, empty, and tag-only images
+// in one Pod spec.
+func validateRenderedContainerImages(podSpec map[string]any) error {
+	rawContainers, present := podSpec["containers"]
+	if !present {
+		return fmt.Errorf("containers is missing")
+	}
+	containers, ok := rawContainers.([]any)
+	if !ok || len(containers) == 0 {
+		return fmt.Errorf("containers is not a non-empty list")
+	}
+
+	for _, field := range []string{"initContainers", "containers", "ephemeralContainers"} {
+		rawContainers, present := podSpec[field]
+		if !present {
+			continue
+		}
+		containers, ok := rawContainers.([]any)
+		if !ok {
+			return fmt.Errorf("%s is not a list", field)
+		}
+		for index, rawContainer := range containers {
+			container, ok := rawContainer.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%s[%d] is not an object", field, index)
+			}
+			name, _ := container["name"].(string)
+			image, _ := container["image"].(string)
+			image = strings.TrimSpace(image)
+			if image == "" || strings.HasPrefix(image, ":") || strings.HasPrefix(image, "@") {
+				return fmt.Errorf("%s[%d] %q has invalid image reference %q", field, index, name, image)
+			}
+		}
+	}
+	return nil
+}
 
 // NamespaceManifest returns a v1/Namespace YAML manifest body. The
 // returned slice is the file contents the caller writes to disk and

@@ -6,8 +6,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "miniservice",
     srcs = [
+        "modelcache_storage_selection.go",
         "controller.go",
         "decode.go",
+        "events.go",
         "gvkcache.go",
         "metadata_configmap.go",
         "mutate.go",
@@ -124,6 +126,7 @@ go_test(
     name = "miniservice_test",
     srcs = [
         "controller_test.go",
+        "events_test.go",
         "gvkcache_test.go",
         "metadata_configmap_test.go",
         "mutate_test.go",
@@ -139,6 +142,7 @@ go_test(
         "tokenfetcher_test.go",
         "translate_workload_test.go",
         "transport_tls_test.go",
+        "modelcache_storage_selection_test.go",
     ],
     data = ["//src/compute-plane-services/nvca/internal/envtest:crds"],
     embed = [":miniservice"],

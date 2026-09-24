@@ -22,11 +22,11 @@ import (
 
 func SyncInlineVersions(path, content string, catalog *Catalog) (string, bool, error) {
 	switch path {
-	case "docs/user/image-mirroring.md":
+	case "docs/overview/image-mirroring.md":
 		return syncImageMirroring(content, catalog)
-	case "docs/user/cluster-management/self-managed.md":
+	case "docs/compute-plane/cluster-management/self-managed.md":
 		return syncClusterManagementSelfManaged(content, catalog)
-	case "docs/user/cluster-management/reference.md":
+	case "docs/compute-plane/cluster-management/reference.md":
 		return syncClusterManagementReference(content, catalog)
 	default:
 		return content, false, nil
@@ -45,7 +45,11 @@ func syncImageMirroring(content string, catalog *Catalog) (string, bool, error) 
 	updated := content
 	var total int
 	var count int
-	updated, count = replaceNVCAOperatorChartPull(updated, pullReference, chart.Version)
+	chartName := chart.RepositoryName
+	if chartName == "" {
+		chartName = chart.Name
+	}
+	updated, count = replaceNVCAOperatorChartPull(updated, pullReference, chartName, chart.Version)
 	total += count
 	updated, count = replaceNVCAOperatorChartArchiveComments(updated, chart.Version)
 	total += count
@@ -66,13 +70,6 @@ func syncClusterManagementSelfManaged(content string, catalog *Catalog) (string,
 	if count == 0 {
 		return "", false, fmt.Errorf("version table for %s not found", chart.Name)
 	}
-	updated, _ = replaceHelmVersionArgument(updated, chart.Name, chart.Version)
-
-	nvca, ok := catalog.findArtifact("nvca")
-	if !ok {
-		return "", false, fmt.Errorf("artifact nvca is required")
-	}
-	updated, count = replaceYAMLStringValue(updated, "nvcaVersion", nvca.Version)
 	return updated, updated != content, nil
 }
 
@@ -98,22 +95,13 @@ func replaceVersionTable(content, chartName, version string) (string, int) {
 	return re.ReplaceAllString(content, "${1}`"+version+"`${2}"), count
 }
 
-func replaceHelmVersionArgument(content, chartName, version string) (string, int) {
-	pattern := fmt.Sprintf(`(?ms)(oci://[^\s]+/%s\s+\\\n(?:[^\n]*\\\n)*?\s+--version )[^\s\\]+`, regexp.QuoteMeta(chartName))
-	re := regexp.MustCompile(pattern)
-	count := len(re.FindAllStringIndex(content, -1))
-	return re.ReplaceAllString(content, "${1}"+version), count
-}
-
-func replaceYAMLStringValue(content, key, value string) (string, int) {
-	pattern := fmt.Sprintf(`(?m)^(\s+%s:\s*)"[^"]+"`, regexp.QuoteMeta(key))
-	re := regexp.MustCompile(pattern)
-	count := len(re.FindAllStringIndex(content, -1))
-	return re.ReplaceAllString(content, "${1}\""+value+"\""), count
-}
-
-func replaceNVCAOperatorChartPull(content, pullReference, version string) (string, int) {
-	re := regexp.MustCompile(`(?:oci://[^\s]+/|[a-z0-9-]+/)(?:helm-nvca-operator|nvca-operator) --version [^\s]+`)
+func replaceNVCAOperatorChartPull(content, pullReference, chartName, version string) (string, int) {
+	chartNamePattern := `helm-nvca-operator|nvca-operator`
+	if chartName != "helm-nvca-operator" && chartName != "nvca-operator" {
+		chartNamePattern += "|" + regexp.QuoteMeta(chartName)
+	}
+	pattern := `(?:(?:oci://[^\s]+/|[a-z0-9-]+/)(?:%s)|--repo https://[^\s]+ (?:%s)|"\$\{HELM_NVCA_OPERATOR_REFERENCE:\?[^}]+\}") --version [^\s]+`
+	re := regexp.MustCompile(fmt.Sprintf(pattern, chartNamePattern, chartNamePattern))
 	count := len(re.FindAllStringIndex(content, -1))
 	replacement := pullReference + " --version " + version
 	return re.ReplaceAllString(content, replacement), count

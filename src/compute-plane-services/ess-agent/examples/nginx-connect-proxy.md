@@ -23,7 +23,7 @@ and, like it, reviews a simple example you can run locally. Please see the
 [mesh][mesh] introductory guide for more details as this guide will just run
 through the basics to get the example running.
 
-### Security/Techincal Note
+## Security/Technical Note
 
 This guide is only meant to demonstrate features and many things have been
 simplified, it is not a production ready or secure deployment.
@@ -46,10 +46,10 @@ Start the consul agent in dev mode using the configuration file below for the
 'webserver' and 'ingress' services.
 
 ```shell
-$ consul agent -dev -log-level=info -config-file=consul-services.json
+consul agent -dev -log-level=info -config-file=consul-services.json
 ```
 
-#### consul-services.json
+### consul-services.json
 
 This contains the service definitions for both the `webserver` and the
 `ingress` proxy (below). The names used are important as those are how you will
@@ -80,20 +80,22 @@ http server included with Python as you probably already have it installed. By
 default it listens on port 8000 and will publish an `index.html` if found.
 
 ```shell
-$ python -m SimpleHTTPServer
+python -m SimpleHTTPServer
 ```
+
 ### Use a Sidecar to add it to the Connect mesh network
 
 Then start the sidecar for the `webserver` service.
 
 ```shell
-$ consul connect proxy -sidecar-for webserver
+consul connect proxy -sidecar-for webserver
 ```
 
 **Note**: the argument to `-sidecar-for` needs to match the name registered
 with consul in the `consul-services.json` config file above.
 
 #### index.html
+
 ```html
 cat > index.html << EOF
 Brought to you by NGINX!
@@ -110,19 +112,24 @@ To connect to the mesh network you will need the required TLS certificates,
 the root certificate (the CA) and the client certificates. You can use a
 separate template for each certificate, to put each in their own file.
 
-#### ca.crt
+### ca.crt
+
 ```liquid
 cat > ca.crt.tmpl << EOF
 {{range caRoots}}{{.RootCertPEM}}{{end}}
 EOF
 ```
-#### cert.pem
+
+### cert.pem
+
 ```liquid
 cat > cert.pem.tmpl << EOF
 {{with caLeaf "ingress"}}{{.CertPEM}}{{end}}
 EOF
 ```
-#### cert.key
+
+### cert.key
+
 ```liquid
 cat > cert.key.tmpl << EOF
 {{with caLeaf "ingress"}}{{.PrivateKeyPEM}}{{end}}
@@ -133,7 +140,8 @@ With all the certificate templates in place, you now just need the
 configuration file template for the NGINX proxy, it uses the `connect` template
 function to get all the "webserver" connect enabled services.
 
-#### nginx-proxy.conf.tmpl
+### nginx-proxy.conf.tmpl
+
 ```nginx
 cat > nginx-proxy.conf.tmpl << EOF
 daemon off;
@@ -162,23 +170,24 @@ http {
 }
 EOF
 ```
+
 For more on the details of the NGINX configuration file, please see the [NGINX
 documentation][nginx].
-
 
 ## Running the NGINX Ingress Proxy with Consul-Template
 
 Using the consul-template configuration below, run the NGINX proxy.
 
 ```shell
-$ consul-template -config ingress-config.hcl -log-level=info
+consul-template -config ingress-config.hcl -log-level=info
 ```
 
 Consul-template will restart the NGINX server when any of the templates are
 rendered (files written). Note that if multiple templates are rendered, it will
 still only restart it once.
 
-#### ingress-config.hcl
+### ingress-config.hcl
+
 ```hcl
 cat > ingress-config.hcl << EOF
 exec {
@@ -204,6 +213,7 @@ EOF
 ```
 
 ## Test it
+
 ```shell
 $ curl http://localhost:8080
 Welcome to nginx!
@@ -253,6 +263,5 @@ $ ./run-nginx-connect-proxy
 
 [mesh]: https://learn.hashicorp.com/consul/getting-started/connect
 [nginx]: https://docs.nginx.com/
-[nginx_proxy]: https://nginx.org/en/docs/http/ngx_http_proxy_module.html
 [intentions]: https://www.consul.io/docs/connect/intentions.html
 [screen]: https://www.gnu.org/software/screen/

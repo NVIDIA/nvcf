@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "configutil",
+    srcs = ["utils.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/configutil",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":configutil",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+)
+
+go_test(
+    name = "configutil_test",
+    srcs = ["utils_test.go"],
+    embed = [":configutil"],
+    deps = ["@com_github_stretchr_testify//require"],
+)

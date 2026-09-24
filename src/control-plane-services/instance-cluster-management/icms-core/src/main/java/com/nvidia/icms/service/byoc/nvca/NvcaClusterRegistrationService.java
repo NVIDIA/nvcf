@@ -112,7 +112,7 @@ public class NvcaClusterRegistrationService {
 
     private final ByocServiceHelper byocServiceHelper;
 
-    public static final String SSA_CLUSTER_ID_PREFIX = "nvssa";
+    public static final String OAUTH_CLIENT_ID_PREFIX = "nvssa";
 
     /**
      * Enum representing the different types of creation queues that can be created/deleted.
@@ -849,7 +849,7 @@ public class NvcaClusterRegistrationService {
 
     private String getTerminationQueueUrl(String clusterId) {
         String trimmedClusterId = clusterId;
-        if (clusterId.startsWith(SSA_CLUSTER_ID_PREFIX)) {
+        if (clusterId.startsWith(OAUTH_CLIENT_ID_PREFIX)) {
             trimmedClusterId = clusterId.substring(10);
         }
 
@@ -867,7 +867,7 @@ public class NvcaClusterRegistrationService {
     private String getNvcaTasksCreationQueueUrl(String clusterId, String gpuName) {
         String truncatedClusterId = clusterId;
         // If clusterId is OAuth clientId then truncate it to match UUID length
-        if (truncatedClusterId.startsWith(SSA_CLUSTER_ID_PREFIX)) {
+        if (truncatedClusterId.startsWith(OAUTH_CLIENT_ID_PREFIX)) {
             // Begin from where we will get 36 chars which is the UUID length
             truncatedClusterId = clusterId.substring(clusterId.length() - 36);
         }

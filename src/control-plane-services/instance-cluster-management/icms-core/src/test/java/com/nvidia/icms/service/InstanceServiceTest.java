@@ -28,6 +28,7 @@ import static org.mockito.Mockito.when;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.CreateSpotInstancesResponse;
 import com.nvidia.icms.inbound.rest.model.GetSpotInstanceRequests;
+import com.nvidia.icms.inbound.rest.model.TerminateInstancesResponse;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
 import com.nvidia.icms.service.createInstances.CreateInstanceService;
 import java.util.Map;
@@ -107,6 +108,22 @@ public class InstanceServiceTest {
         Assertions.assertEquals(uuid, createInstancesResponse.getRequestId());
         verify(createInstanceService).processInstanceRequest(DUMMY_CUSTOMER_1,
                                                              instanceRequestSchema, Map.of());
+    }
+
+    @Test
+    void terminateInstancesByGpuSpec_delegatesToTerminateService() {
+        UUID deploymentId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        var response = new TerminateInstancesResponse();
+        when(terminateInstanceService.terminateInstances(
+                "nca", deploymentId, gpuSpecId, 2, Map.of())).thenReturn(response);
+
+        var result = instanceService.terminateInstances(
+                "nca", deploymentId, gpuSpecId, 2, Map.of());
+
+        Assertions.assertSame(response, result);
+        verify(terminateInstanceService).terminateInstances(
+                "nca", deploymentId, gpuSpecId, 2, Map.of());
     }
 
     @Test

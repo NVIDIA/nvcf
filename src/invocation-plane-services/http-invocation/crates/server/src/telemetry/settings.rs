@@ -71,6 +71,9 @@ pub struct TracingSettings {
     /// HTTP/gRPC headers forwarded to the OTLP collector (e.g. auth tokens).
     #[serde(default)]
     pub headers: Option<HashMap<String, String>>,
+    /// W3C baggage keys that may be copied to invocation span attributes.
+    #[serde(default)]
+    pub baggage_attribute_allowlist: Vec<String>,
 }
 
 impl TracingSettings {
@@ -171,5 +174,27 @@ mod tests {
     #[test]
     fn endpoint_port_out_of_range_errors() {
         assert!(parse_tracing(r#"{"endpoint_port": 99999}"#).is_err());
+    }
+
+    #[test]
+    fn baggage_attribute_allowlist_defaults_empty() {
+        assert!(
+            parse_tracing(r#"{}"#)
+                .unwrap()
+                .baggage_attribute_allowlist
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn baggage_attribute_allowlist_deserializes() {
+        let settings =
+            parse_tracing(r#"{"baggage_attribute_allowlist": ["allowed.one", "allowed.two"]}"#)
+                .unwrap();
+
+        assert_eq!(
+            settings.baggage_attribute_allowlist,
+            vec!["allowed.one", "allowed.two"]
+        );
     }
 }

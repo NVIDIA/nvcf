@@ -149,6 +149,47 @@ func TestBuildStatusReflectsCompleteness(t *testing.T) {
 	}
 }
 
+func TestStartupHealthIsReportedAndSerialized(t *testing.T) {
+	podStartedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	collectorStartedAt := podStartedAt.Add(2 * time.Second)
+	healthyAt := collectorStartedAt.Add(15 * time.Second)
+	startup := NewStartupHealth(podStartedAt, collectorStartedAt, healthyAt)
+
+	r := Build(Inputs{
+		Shape:         "container",
+		Profile:       "dev",
+		LogsPerSec:    100,
+		MetricsPerSec: 120,
+		Window:        window(),
+		Health:        PodHealth{Phase: "Running"},
+		StartupHealth: &startup,
+	})
+	if r.StartupHealth == nil {
+		t.Fatal("startup health was not added to the report")
+	}
+	if r.StartupHealth.PodToHealthSeconds != 17 || r.StartupHealth.CollectorToHealthSeconds != 15 {
+		t.Errorf("startup durations = %+v, want pod=17s collector=15s", r.StartupHealth)
+	}
+
+	data, err := r.JSON()
+	if err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	var decoded ShapeReport
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.StartupHealth == nil || !decoded.StartupHealth.HealthyAt.Equal(healthyAt) {
+		t.Errorf("serialized startup health = %+v, want healthy at %s", decoded.StartupHealth, healthyAt)
+	}
+
+	var buf bytes.Buffer
+	r.WriteSummary(&buf)
+	if !bytes.Contains(buf.Bytes(), []byte("collector_to_health=15s")) {
+		t.Errorf("summary missing startup duration:\n%s", buf.String())
+	}
+}
+
 // A series present only in the end scrape cannot yield a window delta: it must
 // be reported as missing (zero + note + partial status), not as a full
 // process-lifetime counter.

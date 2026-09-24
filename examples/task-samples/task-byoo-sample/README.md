@@ -72,7 +72,7 @@ export OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=grpc
 
 When a signal's `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` variable is unset, that signal is written to the console. NVCF populates the following variables at runtime when BYOO is configured:
 
-```
+```text
 OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT
 OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL
 ```

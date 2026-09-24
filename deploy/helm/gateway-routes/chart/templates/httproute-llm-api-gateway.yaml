@@ -37,7 +37,9 @@ spec:
     {{- end }}
 
   rules:
-    - matches:
+    - timeouts:
+        request: 0s
+      matches:
         - path:
             type: PathPrefix
             value: /

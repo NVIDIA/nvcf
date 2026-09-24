@@ -121,6 +121,185 @@ Reject transport trust settings that explicitly disable QUIC verification.
 {{- end -}}
 
 {{/*
+Render the effective chart-owned agent configuration. Top-level byoo/utils/
+storage/worker values provide the supported API. agentConfig.mergeConfig
+remains a legacy override and takes precedence for one minor-version
+transition.
+*/}}
+{{- define "nvcaop.effectiveAgentConfig" -}}
+{{- $byoo := .Values.byoo | default dict -}}
+{{- $utils := .Values.utils | default dict -}}
+{{- $storage := .Values.storage | default dict -}}
+{{- $worker := .Values.worker | default dict -}}
+{{- $agent := dict -}}
+{{- with $byoo.resources }}
+{{- $_ := set $agent "BYOOResources" . -}}
+{{- end -}}
+{{- with $byoo.logChunking }}
+{{- $_ := set $agent "byooLogChunking" . -}}
+{{- end -}}
+{{- with $byoo.otelCollector }}
+{{- $_ := set $agent "byooOtelCollector" . -}}
+{{- end -}}
+{{- with $byoo.additionalResourceOverhead }}
+{{- $_ := set $agent "additionalResourceOverhead" . -}}
+{{- end -}}
+{{- with ($byoo.fluentbit | default dict).resources }}
+{{- $_ := set $agent "BYOOFluentBitResources" . -}}
+{{- end -}}
+{{- with $utils.resources }}
+{{- $_ := set $agent "UtilsResources" . -}}
+{{- end -}}
+{{- $sharedStorage := $storage.sharedStorage | default dict -}}
+{{- $sharedStorageServer := dict -}}
+{{- with $sharedStorage.server }}
+{{- with .image }}
+{{- $_ := set $sharedStorageServer "image" . -}}
+{{- end -}}
+{{- with .resources }}
+{{- $_ := set $sharedStorageServer "containerResources" . -}}
+{{- end -}}
+{{- end -}}
+{{- $sharedStorageTaskData := dict -}}
+{{- with $sharedStorage.taskData }}
+{{- with .storageClassName }}
+{{- $_ := set $sharedStorageTaskData "storageClassName" . -}}
+{{- end -}}
+{{- with .mountOptions }}
+{{- $_ := set $sharedStorageTaskData "pvMountOptions" . -}}
+{{- end -}}
+{{- with .storageCapacity }}
+{{- $_ := set $sharedStorageTaskData "storageCapacity" . -}}
+{{- end -}}
+{{- end -}}
+{{- $sharedStorageEffective := dict -}}
+{{- if $sharedStorageServer }}
+{{- $_ := set $sharedStorageEffective "server" $sharedStorageServer -}}
+{{- end -}}
+{{- if $sharedStorageTaskData }}
+{{- $_ := set $sharedStorageEffective "taskData" $sharedStorageTaskData -}}
+{{- end -}}
+{{- if $sharedStorageEffective }}
+{{- $_ := set $agent "sharedStorage" $sharedStorageEffective -}}
+{{- end -}}
+{{- $internalPersistentStorage := $storage.internalPersistentStorage | default dict -}}
+{{- if and $internalPersistentStorage.hardResourceQuota (not $internalPersistentStorage.storageClassName) -}}
+{{- fail "storage.internalPersistentStorage.storageClassName is required when hardResourceQuota is configured" -}}
+{{- end -}}
+{{- $ipsEffective := dict -}}
+{{- with $internalPersistentStorage.storageClassName }}
+{{- $_ := set $ipsEffective "storageClassName" . -}}
+{{- end -}}
+{{- with $internalPersistentStorage.hardResourceQuota }}
+{{- $_ := set $ipsEffective "hardResourceQuota" . -}}
+{{- end -}}
+{{- if $ipsEffective }}
+{{- $_ := set $agent "internalPersistentStorage" $ipsEffective -}}
+{{- end -}}
+{{- with $worker.minHealthcheckRefreshWait }}
+{{- $_ := set $agent "minHealthcheckRefreshWait" . -}}
+{{- end -}}
+{{- with $worker.staticGPUCapacity }}
+{{- $_ := set $agent "staticGPUCapacity" . -}}
+{{- end -}}
+{{- with $worker.computeBackend }}
+{{- $_ := set $agent "computeBackend" . -}}
+{{- end -}}
+{{- with $worker.requestsNamespace }}
+{{- $_ := set $agent "requestsNamespace" . -}}
+{{- end -}}
+{{- with $worker.namespaceLabels }}
+{{- $_ := set $agent "namespaceLabels" . -}}
+{{- end -}}
+{{- with $worker.featureFlags }}
+{{- $_ := set $agent "featureFlags" . -}}
+{{- end -}}
+{{- with $worker.skipSelfDestruct }}
+{{- $_ := set $agent "skipSelfDestruct" . -}}
+{{- end -}}
+{{- with $worker.forceSelfDestruct }}
+{{- $_ := set $agent "forceSelfDestruct" . -}}
+{{- end -}}
+{{- with $worker.csiVolumeMountOptions }}
+{{- $_ := set $agent "csiVolumeMountOptions" . -}}
+{{- end -}}
+{{- $timeouts := $worker.timeouts | default dict -}}
+{{- with $timeouts.credRenewInterval }}
+{{- $_ := set $agent "credRenewInterval" . -}}
+{{- end -}}
+{{- with $timeouts.heartbeatInterval }}
+{{- $_ := set $agent "heartbeatInterval" . -}}
+{{- end -}}
+{{- with $timeouts.syncQueueInterval }}
+{{- $_ := set $agent "syncQueueInterval" . -}}
+{{- end -}}
+{{- with $timeouts.syncRequestStatusInterval }}
+{{- $_ := set $agent "syncRequestStatusInterval" . -}}
+{{- end -}}
+{{- with $timeouts.syncAcknowledgeRequestInterval }}
+{{- $_ := set $agent "syncAcknowledgeRequestInterval" . -}}
+{{- end -}}
+{{- with $timeouts.periodicInstanceStatusInterval }}
+{{- $_ := set $agent "periodicInstanceStatusInterval" . -}}
+{{- end -}}
+{{- with $timeouts.icmsRequestAckInterval }}
+{{- $_ := set $agent "icmsRequestAckInterval" . -}}
+{{- end -}}
+{{- with $timeouts.icmsRequestAckRetryTimeout }}
+{{- $_ := set $agent "icmsRequestAckRetryTimeout" . -}}
+{{- end -}}
+{{- $config := dict -}}
+{{- if $agent }}
+{{- $_ := set $config "agent" $agent -}}
+{{- end -}}
+{{- $agentConfig := .Values.agentConfig | default dict -}}
+{{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
+{{- if $mergeConfigData }}
+{{- $parsedMergeConfig := $mergeConfigData | fromYaml -}}
+{{- if hasKey $parsedMergeConfig "Error" -}}
+{{- fail (printf "agentConfig.mergeConfig contains invalid YAML: %s" $parsedMergeConfig.Error) -}}
+{{- end -}}
+{{- $config = mergeOverwrite $config ($parsedMergeConfig | default dict) -}}
+{{- end -}}
+{{- $finalAgent := $config.agent | default dict -}}
+{{- if and $finalAgent.skipSelfDestruct $finalAgent.forceSelfDestruct -}}
+{{- fail "worker.skipSelfDestruct and worker.forceSelfDestruct cannot both be true (including via agentConfig.mergeConfig); NVCA rejects this combination at startup" -}}
+{{- end -}}
+{{- $config | toYaml -}}
+{{- end -}}
+
+{{/*
+Keys under agentConfig.mergeConfig's "agent" map that now have first-class
+chart values. Used to detect legacy overrides so the operator can emit a
+source-aware migration warning.
+*/}}
+{{- define "nvcaop.firstClassAgentConfigKeys" -}}
+{{- list "additionalResourceOverhead" "UtilsResources" "sharedStorage" "internalPersistentStorage" "minHealthcheckRefreshWait" "staticGPUCapacity" "computeBackend" "requestsNamespace" "namespaceLabels" "featureFlags" "skipSelfDestruct" "forceSelfDestruct" "csiVolumeMountOptions" "credRenewInterval" "heartbeatInterval" "syncQueueInterval" "syncRequestStatusInterval" "syncAcknowledgeRequestInterval" "periodicInstanceStatusInterval" "icmsRequestAckInterval" "icmsRequestAckRetryTimeout" | toYaml -}}
+{{- end -}}
+
+{{/*
+Return true when legacy agentConfig.mergeConfig configures any field that now
+has a first-class chart value (BYOO, utils, storage, or worker). The ConfigMap
+annotation lets the operator emit a source-aware migration warning.
+*/}}
+{{- define "nvcaop.usesLegacyFirstClassConfig" -}}
+{{- $agentConfig := .Values.agentConfig | default dict -}}
+{{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
+{{- $legacyFirstClass := false -}}
+{{- if $mergeConfigData }}
+{{- $firstClassKeys := include "nvcaop.firstClassAgentConfigKeys" . | fromYamlArray -}}
+{{- $config := $mergeConfigData | fromYaml | default dict -}}
+{{- $agent := $config.agent | default dict -}}
+{{- range $key, $_ := $agent }}
+{{- if or (hasPrefix "byoo" (lower $key)) (has $key $firstClassKeys) }}
+{{- $legacyFirstClass = true -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $legacyFirstClass -}}
+{{- end -}}
+
+{{/*
 ImagePullSecret for images.
 */}}
 {{- define "nvcaop.generatedImagePullSecret" }}
@@ -180,15 +359,23 @@ nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
 {{- end -}}
 
 {{/*
-Get the BYOO OTel collector repository based on image.repository.
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Get the BYOO OTel collector repository based on image.repository and
+ngcConfig.clusterSource. If imageRepository is explicitly set, use it.
+Otherwise, staging resolves by image.repository prefix, and production
+resolves by cluster source: BYOC (ngc-managed) clusters authenticate image
+pulls with the NGC Cluster Key issued at registration, which is scoped to
+nvcf-core, not nvidia/nvcf-byoc (see NVIDIA/nvcf#798 and the follow-up fix
+for the staging repository in NVIDIA/nvcf#1040). Other cluster sources keep
+the nvidia/nvcf-byoc default pending their own verification.
 Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 */}}
 {{- define "nvcaop.byooOtelCollectorRepository" -}}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
 {{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
+stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector
+{{- else if eq .clusterSource "ngc-managed" -}}
+nvcr.io/qtfpt1h0bieu/nvcf-core/byoo-otel-collector
 {{- else -}}
 nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
@@ -200,12 +387,12 @@ Get the BYOO OTel collector image when its tag is configured.
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.157.11" -}}
+{{- $imageTag := "0.160.0-nv-0.2.5" -}}
 {{- if hasKey $byooOtelCollector "imageTag" -}}
 {{- $imageTag = $byooOtelCollector.imageTag -}}
 {{- end -}}
 {{- if $imageTag -}}
-{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository)) $imageTag -}}
+{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository "clusterSource" ((.Values.ngcConfig).clusterSource | default "ngc-managed"))) $imageTag -}}
 {{- end -}}
 {{- end -}}
 

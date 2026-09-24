@@ -32,74 +32,96 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 	switch renderer {
 	case "manifest-artifact-registry-paths":
 		return renderManifestArtifactRegistryPaths(catalog)
-	case "manifest-deployment-resources":
-		return renderManifestDeploymentResources(catalog)
 	case "image-mirroring-resource-examples":
 		return renderImageMirroringResourceExamples(catalog)
 	case "image-mirroring-stack-snippet":
 		return renderImageMirroringStackSnippet(catalog)
 	case "image-mirroring-compute-stack-snippet":
 		return renderImageMirroringComputeStackSnippet(catalog)
+	case "image-mirroring-observability-stack-snippet":
+		return renderImageMirroringObservabilityStackSnippet(catalog)
 	case "image-mirroring-cli-snippet":
 		return renderImageMirroringCLISnippet(catalog)
+	case "compatibility-matrix":
+		return renderCompatibilityMatrix(catalog)
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}
 }
 
-func renderManifestDeploymentResources(catalog *Catalog) (string, error) {
-	resources := catalog.resourceArtifacts()
-	var b strings.Builder
-	b.WriteString("| Type | Component Name | Full Path |\n")
-	b.WriteString("| --- | --- | --- |\n")
-	for _, artifact := range resources {
-		path, err := catalog.artifactPath(artifact)
-		if err != nil {
-			return "", err
-		}
-		b.WriteString(fmt.Sprintf("| Resource | %s | `%s` |\n", artifact.Name, path))
-	}
-	return b.String(), nil
-}
-
 func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 	stack := catalog.stackArtifact()
-	ref, err := catalog.resourceRef(stack)
-	if err != nil {
-		return "", err
-	}
-
-	compute, hasComputeStack := catalog.findArtifact(computeStackResourceName)
-	computeRef := ""
-	if hasComputeStack {
-		if compute.Type != ArtifactTypeResource {
-			return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
-		}
-		computeRef, err = catalog.resourceRef(compute)
+	stackPending := catalog.publicationIsPending(stack)
+	ref := ""
+	var err error
+	if !stackPending {
+		ref, err = catalog.resourceRef(stack)
 		if err != nil {
 			return "", err
 		}
 	}
 
-	refWithVersion := strings.Replace(ref, stack.Version, "${STACK_VERSION}", 1)
+	type supplementalStack struct {
+		artifact   Artifact
+		versionEnv string
+		label      string
+		pending    bool
+		ref        string
+	}
+	var supplementalStacks []supplementalStack
+	for _, config := range []struct {
+		name       string
+		versionEnv string
+		label      string
+	}{
+		{name: computeStackResourceName, versionEnv: "COMPUTE_STACK_VERSION", label: "compute-plane"},
+		{name: observabilityStackResourceName, versionEnv: "OBSERVABILITY_STACK_VERSION", label: "observability"},
+	} {
+		artifact, found := catalog.findArtifactByNameAndType(config.name, ArtifactTypeResource)
+		if !found {
+			continue
+		}
+		item := supplementalStack{
+			artifact:   artifact,
+			versionEnv: config.versionEnv,
+			label:      config.label,
+			pending:    catalog.publicationIsPending(artifact),
+		}
+		if !item.pending {
+			item.ref, err = catalog.resourceRef(artifact)
+			if err != nil {
+				return "", err
+			}
+		}
+		supplementalStacks = append(supplementalStacks, item)
+	}
 
 	var b strings.Builder
 	b.WriteString("```bash\n")
 	b.WriteString("# Set stack versions\n")
 	b.WriteString(fmt.Sprintf("export STACK_VERSION=%q\n", stack.Version))
-	if hasComputeStack {
-		b.WriteString(fmt.Sprintf("export COMPUTE_STACK_VERSION=%q\n", compute.Version))
+	for _, supplemental := range supplementalStacks {
+		b.WriteString(fmt.Sprintf("export %s=%q\n", supplemental.versionEnv, supplemental.artifact.Version))
 	}
 	b.WriteString("\n")
 	b.WriteString("# Download a specific control-plane stack version\n")
-	b.WriteString("ngc registry resource download-version \\\n")
-	b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
-
-	if hasComputeStack {
-		computeRefWithVersion := strings.Replace(computeRef, compute.Version, "${COMPUTE_STACK_VERSION}", 1)
-		b.WriteString("\n# Download a specific compute-plane stack version\n")
+	if stackPending {
+		b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", stack.Name, stack.Version))
+	} else {
+		refWithVersion := strings.Replace(ref, stack.Version, "${STACK_VERSION}", 1)
 		b.WriteString("ngc registry resource download-version \\\n")
-		b.WriteString(fmt.Sprintf("  %q\n", computeRefWithVersion))
+		b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
+	}
+
+	for _, supplemental := range supplementalStacks {
+		b.WriteString(fmt.Sprintf("\n# Download a specific %s stack version\n", supplemental.label))
+		if supplemental.pending {
+			b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", supplemental.artifact.Name, supplemental.artifact.Version))
+		} else {
+			refWithVersion := strings.Replace(supplemental.ref, supplemental.artifact.Version, "${"+supplemental.versionEnv+"}", 1)
+			b.WriteString("ngc registry resource download-version \\\n")
+			b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
+		}
 	}
 
 	b.WriteString("```\n")
@@ -108,6 +130,9 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 
 func renderImageMirroringStackSnippet(catalog *Catalog) (string, error) {
 	stack := catalog.stackArtifact()
+	if catalog.publicationIsPending(stack) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", stack.Name, stack.Version), nil
+	}
 	ref, err := catalog.resourceRef(stack)
 	if err != nil {
 		return "", err
@@ -124,25 +149,38 @@ func renderImageMirroringStackSnippet(catalog *Catalog) (string, error) {
 }
 
 func renderImageMirroringComputeStackSnippet(catalog *Catalog) (string, error) {
-	compute, ok := catalog.findArtifact(computeStackResourceName)
+	return renderImageMirroringSupplementalStackSnippet(catalog, computeStackResourceName, "COMPUTE_VERSION")
+}
+
+func renderImageMirroringObservabilityStackSnippet(catalog *Catalog) (string, error) {
+	return renderImageMirroringSupplementalStackSnippet(catalog, observabilityStackResourceName, "OBSERVABILITY_VERSION")
+}
+
+func renderImageMirroringSupplementalStackSnippet(catalog *Catalog, name, versionEnv string) (string, error) {
+	artifact, ok := catalog.findArtifactByNameAndType(name, ArtifactTypeResource)
 	if !ok {
-		return "", fmt.Errorf("supplemental artifact %s is required", computeStackResourceName)
+		return "", fmt.Errorf("supplemental artifact %s is required", name)
 	}
-	if compute.Type != ArtifactTypeResource {
-		return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
+	if catalog.publicationIsPending(artifact) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", artifact.Name, artifact.Version), nil
 	}
-	ref, err := catalog.resourceRef(compute)
+	ref, err := catalog.resourceRef(artifact)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("```bash\n# Set the version\nexport COMPUTE_VERSION=%q\n\nngc registry resource download-version %q && \\\n   mkdir -p %s && \\\n   tar -xzf %s_v${COMPUTE_VERSION}/%s-${COMPUTE_VERSION}.tar.gz -C %s && \\\n   rm -rf %s_v${COMPUTE_VERSION}\n```\n",
-		compute.Version,
-		strings.Replace(ref, compute.Version, "${COMPUTE_VERSION}", 1),
-		compute.Name,
-		compute.Name,
-		compute.Name,
-		compute.Name,
-		compute.Name,
+	versionRef := "${" + versionEnv + "}"
+	return fmt.Sprintf("```bash\n# Set the version\nexport %s=%q\n\nngc registry resource download-version %q && \\\n   mkdir -p %s && \\\n   tar -xzf %s_v%s/%s-%s.tar.gz -C %s && \\\n   rm -rf %s_v%s\n```\n",
+		versionEnv,
+		artifact.Version,
+		strings.Replace(ref, artifact.Version, versionRef, 1),
+		artifact.Name,
+		artifact.Name,
+		versionRef,
+		artifact.Name,
+		versionRef,
+		artifact.Name,
+		artifact.Name,
+		versionRef,
 	), nil
 }
 
@@ -151,11 +189,14 @@ func renderImageMirroringCLISnippet(catalog *Catalog) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("supplemental artifact nvcf-cli is required")
 	}
+	if catalog.publicationIsPending(cli) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n\nPackage contents and extraction instructions will be available after publication or mirroring.\n", cli.Name, cli.Version), nil
+	}
 	ref, err := catalog.resourceRef(cli)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("```bash\n# Set the version\nexport VERSION=%q\n\n# Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)\nexport PLATFORM=\"linux-amd64\"\n\nngc registry resource download-version %q\n\ntar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz\nmv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli\nchmod +x nvcf-cli/nvcf-cli\n```\n",
+	return fmt.Sprintf("```bash\n# Set the version\nexport VERSION=%q\n\n# Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)\nexport PLATFORM=\"linux-amd64\"\n\nngc registry resource download-version %q\n\ntar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz\nmv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli\nchmod +x nvcf-cli/nvcf-cli\n```\n\nThe extracted directory contains:\n\n- `nvcf-cli` - The CLI binary\n- `.nvcf-cli.yaml.template` - Configuration template\n- `examples/` - Sample configuration files for different environments\n- `USAGE-GUIDE.md` - Detailed usage documentation\n",
 		cli.Version,
 		strings.Replace(ref, cli.Version, "${VERSION}", 1),
 	), nil
@@ -167,51 +208,8 @@ func (catalog *Catalog) stackArtifact() Artifact {
 		Type:     ArtifactTypeResource,
 		Registry: catalog.Stack.Registry,
 		Version:  catalog.Stack.Version,
+		Stacks:   []string{selfManagedStackKey},
 	}
-}
-
-func (catalog *Catalog) artifactTypeLabel(artifact Artifact) string {
-	switch artifact.Type {
-	case ArtifactTypeChart:
-		if publication, ok := catalog.publicationFor(artifact); ok && publication.ChartFormat == ChartFormatHTTP {
-			return "Chart (HTTP)"
-		}
-		return "Chart (OCI)"
-	case ArtifactTypeResource:
-		return "Resource"
-	default:
-		return "Image"
-	}
-}
-
-func (catalog *Catalog) resourceArtifacts() []Artifact {
-	denylist := catalog.DenylistMap()
-	var resources []Artifact
-	if _, denied := denylist[catalog.Stack.Name]; !denied {
-		resources = append(resources, catalog.stackArtifact())
-	}
-	for _, artifact := range catalog.Artifacts {
-		if artifact.Type != ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if artifact.Name == catalog.Stack.Name {
-			continue
-		}
-		resources = append(resources, artifact)
-	}
-	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type != ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		resources = append(resources, artifact)
-	}
-	return resources
 }
 
 func (catalog *Catalog) findArtifact(name string) (Artifact, bool) {
@@ -225,6 +223,15 @@ func (catalog *Catalog) findArtifact(name string) (Artifact, bool) {
 	}
 	for _, artifact := range catalog.SupplementalArtifacts {
 		if artifact.Name == name {
+			return artifact, true
+		}
+	}
+	return Artifact{}, false
+}
+
+func (catalog *Catalog) findArtifactByNameAndType(name string, artifactType ArtifactType) (Artifact, bool) {
+	for _, artifact := range catalog.findArtifacts(name) {
+		if artifact.Type == artifactType {
 			return artifact, true
 		}
 	}
@@ -247,50 +254,6 @@ func (catalog *Catalog) findArtifacts(name string) []Artifact {
 		}
 	}
 	return artifacts
-}
-
-func (catalog *Catalog) uncategorizedArtifacts(used map[string]struct{}) []Artifact {
-	denylist := catalog.DenylistMap()
-	var artifacts []Artifact
-	for _, artifact := range catalog.Artifacts {
-		if artifact.Type == ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if _, ok := used[artifact.catalogKey()]; ok {
-			continue
-		}
-		artifacts = append(artifacts, artifact)
-	}
-	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type == ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if _, ok := used[artifact.catalogKey()]; ok {
-			continue
-		}
-		artifacts = append(artifacts, artifact)
-	}
-	return artifacts
-}
-
-func (catalog *Catalog) isDenied(name string) bool {
-	_, denied := catalog.DenylistMap()[name]
-	return denied
-}
-
-func appendIfMissing(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
 }
 
 func SyncDocs(repoRoot string, catalog *Catalog, check bool) error {
@@ -393,6 +356,10 @@ func markerSyntaxes(marker string) []markerSyntax {
 		{
 			Begin: fmt.Sprintf("{/* docs-version-sync:BEGIN %s */}", marker),
 			End:   fmt.Sprintf("{/* docs-version-sync:END %s */}", marker),
+		},
+		{
+			Begin: fmt.Sprintf("{/*docs-version-sync:BEGIN %s*/}", marker),
+			End:   fmt.Sprintf("{/*docs-version-sync:END %s*/}", marker),
 		},
 		{
 			Begin:  fmt.Sprintf("<!-- docs-version-sync:BEGIN %s -->", marker),

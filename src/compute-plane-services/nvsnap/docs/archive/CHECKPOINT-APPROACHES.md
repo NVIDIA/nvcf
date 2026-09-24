@@ -19,17 +19,20 @@ crictl checkpoint <container-id> --export=/path/to/checkpoint.tar
 ```
 
 ### How it works
+
 1. K8s API calls containerd checkpoint
 2. containerd uses runc + CRIU
 3. CRIU dumps process state
 4. cuda-checkpoint handles GPU state (if integrated)
 
 ### Current Blockers
+
 - NVIDIA container runtime conflicts with CRIU mount handling
 - Requires custom NVIDIA-aware CRIU or runtime modifications
 - Feature gate not enabled on most production clusters
 
 ### Roadmap
+
 - Work with NVIDIA to improve nvidia-container-runtime checkpoint support
 - Test with upcoming containerd releases
 
@@ -50,17 +53,20 @@ criu dump -t $PID -D /checkpoint --skip-mnt-ns --external net[]
 ```
 
 ### How it works
+
 1. Find container's main process PID on host
 2. Use cuda-checkpoint for GPU state
 3. Use forked CRIU with container-aware flags
 4. Restore requires matching container environment
 
 ### Current Status
+
 - ✅ Dump works with forked CRIU
 - ❌ Restore fails due to namespace/filesystem mismatches
 - Requires binary at same path in restore environment
 
 ### Roadmap
+
 - Implement restore-into-container support
 - Bundle required binaries in checkpoint archive
 
@@ -92,18 +98,21 @@ cuda-checkpoint --action unlock --pid $NEW_PID
 ```
 
 ### How it works
+
 1. GPU process runs directly on host
 2. cuda-checkpoint saves/restores GPU state (memory, contexts)
 3. CRIU saves/restores CPU state (memory, registers, file descriptors)
 4. Process resumes execution from checkpoint
 
 ### Requirements
+
 - NVIDIA Driver 555+ (for cuda-checkpoint)
 - Forked CRIU with NVIDIA fixes (v4.2.1+)
 - Root/sudo access on the host
 - Process binary available at same path
 
 ### Verified Working
+
 - ✅ Simple CUDA memory allocation
 - ✅ Multi-threaded GPU processes
 - ✅ GPU memory integrity preserved

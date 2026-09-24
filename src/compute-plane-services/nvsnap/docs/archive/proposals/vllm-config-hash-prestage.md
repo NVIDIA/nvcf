@@ -39,7 +39,7 @@ restore will resolve → identical `config_hash` → compile-cache hit at restor
 
 Injected by `cacheDirCapturePatches` alongside the existing `/opt/nvsnap` emptyDir:
 
-```
+```yaml
 initContainers:
 - name: nvsnap-prestage-model
   image: <same image as main container>     # has python + huggingface_hub
@@ -50,12 +50,14 @@ initContainers:
 ```
 
 ### Model-id extraction
+
 Parse the main container's `command`+`args` for the engine's model flag:
 `--model <X>` (vLLM), falling back to `--model-path <X>` (SGLang). If no flag is found,
 **skip pre-stage** (no regression — capture proceeds exactly as today, just without compile
 reuse). Optional override: a `nvsnap.io/model` pod annotation set by the operator.
 
 ### Key properties
+
 - **RO restore is untouched.** This is capture-side only. Restore still RO-mounts the model
   from rox; resolution + weight-load are pure reads (already proven). The model dir never
   needs to be writable at restore. (This is the explicit compatibility requirement.)
@@ -105,7 +107,7 @@ slower**. The weights are NOT pre-downloaded.
 Capture-side only (cachedir mode, no `restore-from`), gated on detecting a vLLM `--model
 <repo-id>`:
 
-```
+```yaml
 initContainers:
 - name: nvsnap-prestage-meta
   image: <same image as main container>             # has huggingface_hub already
@@ -124,14 +126,17 @@ initContainers:
   from the Hub as today).
 
 ### Model-id extraction
+
 Parse the main container's `command`+`args` for `--model <X>`. If absent → **skip** (no init
 injected, today's behavior). Optional `nvsnap.io/model` annotation override.
 
 ### Scope
+
 Inject ONLY when a vLLM `--model <repo-id>` is detected. SGLang/NIM pods get nothing (they
 don't have this config_hash issue) — no init container added.
 
 ## Validation
+
 Re-capture gpt-oss on the patched agent; on restore confirm vLLM logs
 `Directly load … from cache` (not `Compiling a graph … / saved AOT`) and `torch.compile`
 drops from ~20s to ~1s. Target: gpt-oss restore 234s → ~214s.

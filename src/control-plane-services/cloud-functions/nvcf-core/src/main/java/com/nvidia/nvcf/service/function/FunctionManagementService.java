@@ -392,21 +392,20 @@ public class FunctionManagementService {
             throw new ForbiddenException(mesg);
         }
 
-        log.info(MESG_FUNCTION_OPERATION, functionId, functionVersionId, "Deleting");
+        log.info(MESG_FUNCTION_OPERATION, functionId, functionVersionId, "Deleting function");
 
-        // Delete vestiges of the function from various tables.
+        // If the function is currently deployed, then force delete -- the queue, the workers
+        // associated with the function, and the deployment. Also, audit the operation.
+        deploymentService.deleteFunctionDeploymentIfPresent(function, payloadBuilder);
+
+        // Delete the function.
         functionsRepository.delete(function);
 
-        // If the function is currently deployed, delete the queue, the Workers associated
-        // with the function, and the deployment.
-        deploymentService.forceDeleteFunctionDeployment(functionVersionId);
-
-        // Delete any secrets associated with the function
+        // Then, delete any secrets associated with the function.
         essService.deleteFunctionVersionSecrets(functionId, functionVersionId);
 
         // If there are no more versions of a function, we should delete the function-specific
-        // secrets path in ESS and also delete any remaining vestiges such as authorized parties
-        // for wildcard version from azps tables.
+        // secrets path in ESS.
         try {
             functionLookupService.lookupUsingFunctionIdOrThrow(functionId);
         } catch (NotFoundException ex) {
@@ -414,7 +413,7 @@ public class FunctionManagementService {
             essService.deleteFunctionSecrets(functionId);
         }
         functionAuditService.auditFunctionDelete(payloadBuilder, function);
-        log.info(MESG_FUNCTION_OPERATION, functionId, functionVersionId, "Deleted");
+        log.info(MESG_FUNCTION_OPERATION, functionId, functionVersionId, "Deleted function");
     }
 
     public FunctionDto updateFunction(

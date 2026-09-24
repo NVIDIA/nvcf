@@ -18,6 +18,7 @@ package com.nvidia.icms.service.createInstances;
 
 import com.amazonaws.services.sqs.model.QueueAttributeName;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import com.nvidia.icms.service.extensions.impl.NoOpInstanceDestinationProvider;
@@ -57,10 +58,9 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
-import com.nvidia.icms.outbound.sqs.QueueManager;
 import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import com.nvidia.icms.service.InstanceServiceHelper;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
+import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
@@ -78,6 +78,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -128,6 +129,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -178,9 +180,6 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
     @Mock
     AwsConfigurationProperties awsConfigurationProperties;
-
-    @Mock
-    QueueManager queueManager;
 
     @Mock
     ReservationProcessor reservationProcessor;
@@ -235,13 +234,13 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 instanceLifecycleService,
                 byocValidationService,
                 icmsConfigurationProperties,
-                instanceValidationService,
                 requestDestinationProvider,
                 clusterTargetingHelper,
-                queueManager,
                 telemetryEventClient,
                 reservationProcessor,
-                computePlatformService);
+                computePlatformService,
+                instanceValidationService,
+                new GpuGatingService(icmsConfigurationProperties, unifiedErrorReporter));
 
         lenient().when(awsConfigurationProperties.getQueuePerInstanceNameFormat()).thenReturn("sqs_%s.fifo");
     }
@@ -638,7 +637,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     void processInstanceRequest_ncaIdNotProvided_throwsException() {
 
         // Prepare
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         // Act
         IcmsBadRequestException exception = assertThrows(IcmsBadRequestException.class,
@@ -655,7 +654,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                                 exception.getBody().getDetail());
 
         // Verify
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
     }
 
 
@@ -663,7 +662,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     void processInstanceRequest_gpuNotProvided_throwsException() {
 
         // Prepare
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         // Act
         IcmsBadRequestException exception = assertThrows(IcmsBadRequestException.class,
@@ -679,7 +678,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                                 exception.getBody().getDetail());
 
         // Verify
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -690,7 +689,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         // Prepare
         var clusterGroupName = ClusterProviderEnum.GDN.toString();
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_NON_BYOC_NCA_ID)).thenReturn(List.of());
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD)).thenReturn(List.of());
@@ -714,7 +713,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(DUMMY_NON_BYOC_NCA_ID);
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verifyNoMoreInteractions(clusterRepository);
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -724,7 +723,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         // Prepare
         var clusterGroupName = ClusterProviderEnum.AWS.toString();
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         ClustersByAuthorizedAccountsEntity cluster = createClusterForByoc(DUMMY_OCI_NCA_ID, clusterGroupName, PLATFORM_CLUSTER_GROUP_ID, DUMMY_CLUSTER_ID);
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_OCI_NCA_ID)).thenReturn(List.of(cluster));
@@ -757,7 +756,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         verifyNoMoreInteractions(clusterRepository);
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -863,7 +862,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         when(instanceServiceHelper.isNatsEnabled()).thenReturn(false);
         when(instanceServiceHelper.isTaskClusterCreationQueuesAllowed(Boolean.TRUE)).thenReturn(true);
-        doNothing().when(instanceValidationService).validationForNvct(instanceRequest);
+        doNothing().when(instanceValidationService).validateTaskWorkload(instanceRequest);
 
         CloudHealthEntity cloudHealth = createCloudHealthEntity(DUMMY_CLUSTER_ID, DUMMY_GPU_NAME, CloudHealthStatus.HEALTHY, ResourceProvider.BYOC, 10, 0, 10);
 
@@ -1012,7 +1011,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
 
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -1026,7 +1025,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 clusterGroupName, DUMMY_GPU_NAME,
                 DUMMY_BYOC_NCA_ID);
 
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
         // Mocking NVCA call
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_BYOC_NCA_ID))
                 .thenReturn(new ArrayList<>());
@@ -1048,7 +1047,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(DUMMY_BYOC_NCA_ID);
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verify(clusterRepository, times(0)).getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID);
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
     }
 
     @Test
@@ -1731,6 +1730,202 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         assertTrue(exception.getMessage().contains(DUMMY_GPU));
         assertTrue(exception.getMessage().contains("instance-type"));
+    }
+
+    @Test
+    void processTargetedInstanceRequest_gpuGatingAllowsRequestedGpu_proceeds() {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+                "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
+        Map<String, Object> auditProps = new HashMap<>();
+        CreateSpotInstancesResponse expectedResponse = new CreateSpotInstancesResponse();
+
+        setupGatedTargetedRequest(expectedResponse, instanceRequest, auditProps);
+        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+                .thenReturn(true);
+        when(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(true);
+
+        // Act
+        CreateSpotInstancesResponse response = createInstanceService.processInstanceRequest(
+                TEST_CUSTOMER, instanceRequest, auditProps);
+
+        // Assert
+        assertEquals(expectedResponse, response);
+    }
+
+    @Test
+    void processTargetedInstanceRequest_gpuGatingDeniesGpu_throwsNoAccessToGpuConflict() {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+                "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
+        Map<String, Object> auditProps = new HashMap<>();
+
+        setupGatedTargetedRequest(null, instanceRequest, auditProps);
+        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+                .thenReturn(false);
+
+        // Act & Assert
+        IcmsHttpUnifiedErrorException exception = assertThrows(IcmsHttpUnifiedErrorException.class, () ->
+                createInstanceService.processInstanceRequest(TEST_CUSTOMER, instanceRequest, auditProps));
+
+        assertEquals(IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_GPU, exception.unifiedError());
+        assertEquals(HttpStatus.CONFLICT, exception.getHttpStatus());
+        assertTrue(exception.getMessage().contains(DUMMY_GPU));
+        verify(byocCreateService, never()).processCreateRequest(any(), any(), any(), any());
+    }
+
+    @Test
+    void processTargetedInstanceRequest_gpuGatingDeniesInstanceType_throwsNoAccessToInstanceTypeConflict() {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+                "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
+        Map<String, Object> auditProps = new HashMap<>();
+
+        setupGatedTargetedRequest(null, instanceRequest, auditProps);
+        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+                .thenReturn(true);
+        when(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(false);
+
+        // Act & Assert
+        IcmsHttpUnifiedErrorException exception = assertThrows(IcmsHttpUnifiedErrorException.class, () ->
+                createInstanceService.processInstanceRequest(TEST_CUSTOMER, instanceRequest, auditProps));
+
+        assertEquals(IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_INSTANCE_TYPE, exception.unifiedError());
+        assertEquals(HttpStatus.CONFLICT, exception.getHttpStatus());
+        assertTrue(exception.getMessage().contains("instance-type"));
+        verify(byocCreateService, never()).processCreateRequest(any(), any(), any(), any());
+    }
+
+    /**
+     * Gating is the last filter, so a request that already fails on capacity must still report
+     * the capacity error. Otherwise a gating denial in the logs would not prove gating was the
+     * actual cause.
+     */
+    @Test
+    void processTargetedInstanceRequest_noCapacityAndGpuGated_reportsCapacityErrorNotGatingError() {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+                "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
+        Map<String, Object> auditProps = new HashMap<>();
+
+        setupTargetedRequestMocks(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID, DUMMY_BYOC_CLUSTER_NAME,
+                                  DUMMY_BYOC_CLUSTER_GROUP_NAME, DUMMY_GPU, "instance-type");
+        mockNonByocReservationProcessorWithNoOp();
+
+        CloudHealthEntity unhealthy = createCloudHealthEntity(DUMMY_CLUSTER_ID, DUMMY_GPU,
+                CloudHealthStatus.UNHEALTHY, ResourceProvider.BYOC, 10, 10, 0);
+        Map<String, CloudHealthEntity> healthMap = new HashMap<>();
+        healthMap.put(DUMMY_CLUSTER_ID, unhealthy);
+        when(clusterTargetingHelper.getAllClusterHealthInMap()).thenReturn(healthMap);
+
+        // Act & Assert
+        IcmsBadRequestException exception = assertThrows(IcmsBadRequestException.class, () ->
+                createInstanceService.processInstanceRequest(TEST_CUSTOMER, instanceRequest, auditProps));
+
+        assertTrue(exception.getMessage().contains("capacity"));
+        // Gating never runs, so the account is not even checked for a gating entry.
+        verify(icmsConfigurationProperties, never()).hasGpuGating(anyString());
+    }
+
+    /**
+     * Both create flows share filterAndValidateDestinations, so the non-targeted flow must reject
+     * a gated GPU the same way the targeted flow does.
+     */
+    @Test
+    void processNonTargetedInstanceRequest_gpuGatingDeniesGpu_throwsNoAccessToGpuConflict() {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+                DUMMY_NON_BYOC_INSTANCE_TYPE, DUMMY_BYOC_CLUSTER_GROUP_NAME, DUMMY_GPU,
+                DUMMY_BYOC_NCA_ID, false);
+        Map<String, Object> auditProps = new HashMap<>();
+
+        ClustersByAuthorizedAccountsEntity cluster = createClusterForByoc(
+                DUMMY_BYOC_NCA_ID, DUMMY_BYOC_CLUSTER_GROUP_NAME, PLATFORM_CLUSTER_GROUP_ID,
+                DUMMY_CLUSTER_ID);
+        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_BYOC_NCA_ID))
+                .thenReturn(List.of(cluster));
+        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD))
+                .thenReturn(List.of());
+
+        ClusterEntity clusterEntity = toClusterEntity(cluster);
+        clusterEntity.setClusterStatus(ClusterStatusEnum.READY);
+        clusterEntity.setClusterProvider(ClusterProviderEnum.GDN);
+        when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
+                .thenReturn(Optional.of(clusterEntity));
+
+        CloudHealthEntity cloudHealth = createCloudHealthEntity(DUMMY_CLUSTER_ID, DUMMY_GPU,
+                CloudHealthStatus.HEALTHY, ResourceProvider.BYOC, 10, 5, 5);
+        Map<String, CloudHealthEntity> healthMap = new HashMap<>();
+        healthMap.put(DUMMY_CLUSTER_ID, cloudHealth);
+        when(clusterTargetingHelper.getAllClusterHealthInMap()).thenReturn(healthMap);
+
+        mockNonByocReservationProcessorWithNoOp();
+
+        when(icmsConfigurationProperties.hasGpuGating(DUMMY_BYOC_NCA_ID)).thenReturn(true);
+        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+                .thenReturn(false);
+
+        // Act & Assert
+        IcmsHttpUnifiedErrorException exception = assertThrows(IcmsHttpUnifiedErrorException.class, () ->
+                createInstanceService.processInstanceRequest(TEST_CUSTOMER, instanceRequest, auditProps));
+
+        assertEquals(IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_GPU, exception.unifiedError());
+        assertEquals(HttpStatus.CONFLICT, exception.getHttpStatus());
+        verify(byocCreateService, never()).processCreateRequest(any(), any(), any(), any());
+    }
+
+    /**
+     * gpu-allowed-nca-ids and gpu-gating are independent gates that both run on the same request.
+     * The older gate only drops compute-platform destinations, so a BYOC destination survives it
+     * even for a non-allowlisted org and is then judged by gating alone.
+     */
+    @Test
+    void processTargetedInstanceRequest_bothGpuGatesApplyToTheSameRequest() {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+                "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
+        Map<String, Object> auditProps = new HashMap<>();
+        CreateSpotInstancesResponse expectedResponse = new CreateSpotInstancesResponse();
+
+        setupGatedTargetedRequest(expectedResponse, instanceRequest, auditProps);
+        when(icmsConfigurationProperties.isNcaAllowedForGpu(DUMMY_GPU, DUMMY_BYOC_NCA_ID))
+                .thenReturn(false);
+        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+                .thenReturn(true);
+        when(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(true);
+
+        // Act
+        CreateSpotInstancesResponse response = createInstanceService.processInstanceRequest(
+                TEST_CUSTOMER, instanceRequest, auditProps);
+
+        // Assert
+        assertEquals(expectedResponse, response);
+        verify(icmsConfigurationProperties).isNcaAllowedForGpu(DUMMY_GPU, DUMMY_BYOC_NCA_ID);
+        verify(icmsConfigurationProperties).isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU);
+    }
+
+    /** Healthy single-cluster targeted request with gating enabled for the requesting account. */
+    private void setupGatedTargetedRequest(CreateSpotInstancesResponse expectedResponse,
+                                           SpotInstanceRequestSchema instanceRequest,
+                                           Map<String, Object> auditProps) {
+        setupTargetedRequestMocks(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID, DUMMY_BYOC_CLUSTER_NAME,
+                                  DUMMY_BYOC_CLUSTER_GROUP_NAME, DUMMY_GPU, "instance-type");
+        mockNonByocReservationProcessorWithNoOp();
+
+        if (expectedResponse != null) {
+            setupByocCreateServiceMock(instanceRequest, auditProps, expectedResponse);
+        }
+
+        CloudHealthEntity cloudHealth = createCloudHealthEntity(DUMMY_CLUSTER_ID, DUMMY_GPU,
+                CloudHealthStatus.HEALTHY, ResourceProvider.BYOC, 10, 5, 5);
+        Map<String, CloudHealthEntity> healthMap = new HashMap<>();
+        healthMap.put(DUMMY_CLUSTER_ID, cloudHealth);
+        when(clusterTargetingHelper.getAllClusterHealthInMap()).thenReturn(healthMap);
+
+        when(icmsConfigurationProperties.hasGpuGating(DUMMY_BYOC_NCA_ID)).thenReturn(true);
     }
 
     private void mockNonByocReservationProcessorWithNoOp() {

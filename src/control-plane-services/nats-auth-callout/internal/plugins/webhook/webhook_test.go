@@ -104,7 +104,7 @@ func TestWebhookPlugin(t *testing.T) {
 				"url":                  "https://example.com/webhook",
 				"timeout":              "30s",
 				"retry_attempts":       5,
-				"insecure_skip_verify": true,
+				"insecure_skip_verify": false,
 			}
 			plugin, err := NewPlugin(configData, logger)
 			assert.NoError(t, err)
@@ -112,14 +112,21 @@ func TestWebhookPlugin(t *testing.T) {
 			assert.Equal(t, "https://example.com/webhook", plugin.config.URL)
 			assert.Equal(t, 30*time.Second, plugin.config.Timeout)
 			assert.Equal(t, 5, plugin.config.RetryAttempts)
-			assert.True(t, plugin.config.InsecureSkipVerify)
+		})
+		t.Run("when TLS certificate verification is disabled", func(t *testing.T) {
+			configData := map[string]any{
+				"url":                  "https://example.com/webhook",
+				"insecure_skip_verify": true,
+			}
+			plugin, err := NewPlugin(configData, logger)
+			assert.Nil(t, plugin)
+			assert.ErrorContains(t, err, "webhook TLS certificate verification is required")
 		})
 		t.Run("with struct configuration parses correctly", func(t *testing.T) {
 			configData := Config{
-				URL:                "https://example.com/webhook",
-				Timeout:            25 * time.Second,
-				RetryAttempts:      2,
-				InsecureSkipVerify: false,
+				URL:           "https://example.com/webhook",
+				Timeout:       25 * time.Second,
+				RetryAttempts: 2,
 			}
 			plugin, err := NewPlugin(configData, logger)
 			assert.NoError(t, err)
@@ -127,7 +134,6 @@ func TestWebhookPlugin(t *testing.T) {
 			assert.Equal(t, "https://example.com/webhook", plugin.config.URL)
 			assert.Equal(t, 25*time.Second, plugin.config.Timeout)
 			assert.Equal(t, 2, plugin.config.RetryAttempts)
-			assert.False(t, plugin.config.InsecureSkipVerify)
 		})
 	})
 
@@ -188,6 +194,21 @@ func TestWebhookPlugin(t *testing.T) {
 
 	t.Run("Error Handling", func(t *testing.T) {
 		t.Run("authentication failures", func(t *testing.T) {
+			t.Run("should reject an untrusted TLS certificate", func(t *testing.T) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(createSuccessfulResponse())
+				}))
+				defer server.Close()
+
+				plugin, err := NewPlugin(Config{URL: server.URL, Timeout: 5 * time.Second, RetryAttempts: 1}, logger)
+				assert.NoError(t, err)
+				authReq := &types.Request{Account: "test-account", PluginName: "webhook", Payload: "test-token"}
+				result, err := plugin.Authenticate(context.Background(), authReq)
+				assert.Nil(t, result)
+				assert.ErrorContains(t, err, "certificate")
+			})
+
 			t.Run("should return unauthorized error for 401 status", func(t *testing.T) {
 				server := createTestServer([]testServerResponse{{statusCode: http.StatusUnauthorized}})
 				defer server.Close()

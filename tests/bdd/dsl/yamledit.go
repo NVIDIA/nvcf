@@ -45,6 +45,32 @@ const (
 	MatchSubset
 )
 
+// RenderYAMLFromKeys builds a YAML document from the supplied
+// dotted-path/value pairs and returns its serialized bytes. It is the
+// pure counterpart of UpdateYAMLKeys for a file that does not exist
+// yet: the caller owns the destination path, the existence check, and
+// the write. Path syntax matches UpdateYAMLKeys. Value cells run
+// through Interpolate and then decodeTypedValue so booleans and
+// collection literals reach Helm as native YAML types rather than
+// quoted strings.
+func RenderYAMLFromKeys(keys [][2]string) ([]byte, error) {
+	rootMap := map[string]any{}
+	for _, kv := range keys {
+		segments, err := parsePath(kv[0])
+		if err != nil {
+			return nil, fmt.Errorf("render yaml: %w", err)
+		}
+		if err := setNested(rootMap, segments, decodeTypedValue(Interpolate(kv[1]))); err != nil {
+			return nil, fmt.Errorf("render yaml: %w", err)
+		}
+	}
+	body, err := yaml.Marshal(rootMap)
+	if err != nil {
+		return nil, fmt.Errorf("render yaml: marshal: %w", err)
+	}
+	return body, nil
+}
+
 // UpdateYAMLKeys reads the YAML file at path, applies each (dotted-path,
 // value) pair as an upsert, and writes the file back. Path syntax uses
 // "." between segments and "[n]" for list indices; missing intermediate
@@ -97,15 +123,34 @@ func ReadYAMLKey(path, dottedKey string) (string, bool, error) {
 	return fmt.Sprint(value), true, nil
 }
 
+// RequireNonEmptyYAMLKeys asserts that every dotted key exists in path and
+// resolves to a non-empty scalar representation. The first failing error names
+// the table row and distinguishes a missing key from an empty value.
+func RequireNonEmptyYAMLKeys(path string, keys []string) error {
+	for index, key := range keys {
+		got, found, err := ReadYAMLKey(path, key)
+		if err != nil {
+			return fmt.Errorf("row %d key %q: %w", index+1, key, err)
+		}
+		if !found {
+			return fmt.Errorf("row %d: %s key %q is missing (%s)", index+1, path, key, DescribeMissingKey(path, key))
+		}
+		if got == "" {
+			return fmt.Errorf("row %d: %s key %q is empty", index+1, path, key)
+		}
+	}
+	return nil
+}
+
 // MatchYAMLSubtree compares the subtree at keyPath inside the YAML file
 // at filePath to the parsed expectedYAML. Empty keyPath compares against
 // the whole file. The expected docstring runs through Interpolate before
 // parsing so ${VAR} cells resolve at compare time. On mismatch the
 // returned error names the first differing path.
 func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) error {
-	var expected any
-	if err := yaml.Unmarshal([]byte(Interpolate(expectedYAML)), &expected); err != nil {
-		return fmt.Errorf("parse expected yaml: %w", err)
+	expected, err := parseExpectedYAML(expectedYAML)
+	if err != nil {
+		return err
 	}
 	root, err := readYAMLAny(filePath)
 	if err != nil {
@@ -124,6 +169,30 @@ func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) er
 		actual = got
 	}
 	return deepCompare(expected, actual, mode, keyPath)
+}
+
+// MatchYAMLDocument compares expectedYAML to an actual YAML document already
+// held in memory. Expected values are interpolated before parsing. Mismatch
+// errors identify the first differing path without including either value, so
+// callers can safely compare Kubernetes resources that may contain secrets.
+func MatchYAMLDocument(actualYAML, expectedYAML string, mode MatchMode) error {
+	expected, err := parseExpectedYAML(expectedYAML)
+	if err != nil {
+		return err
+	}
+	var actual any
+	if err := yaml.Unmarshal([]byte(actualYAML), &actual); err != nil {
+		return fmt.Errorf("parse actual yaml: invalid YAML")
+	}
+	return deepCompare(expected, actual, mode, "")
+}
+
+func parseExpectedYAML(expectedYAML string) (any, error) {
+	var expected any
+	if err := yaml.Unmarshal([]byte(Interpolate(expectedYAML)), &expected); err != nil {
+		return nil, fmt.Errorf("parse expected yaml: %w", err)
+	}
+	return expected, nil
 }
 
 // SubstituteFile replaces every occurrence of placeholder in the file at
@@ -165,6 +234,30 @@ func SubstituteFileBlock(path, spec string) error {
 		return fmt.Errorf("%s: substitution old block is not present", path)
 	}
 	return SubstituteFile(path, oldBlock, newBlock)
+}
+
+// decodeTypedValue converts the YAML-significant literals that Helm
+// evaluates differently when quoted. Booleans are decoded because
+// Go templates treat the string "false" as truthy. Collection
+// literals like "[]" are decoded so Helm sees an empty list instead
+// of a non-empty string. Numbers are left as strings: Helm coerces
+// them in template expressions, and eagerly parsing "1.0" as a float
+// would lose the trailing zero on round-trip.
+func decodeTypedValue(s string) any {
+	switch s {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	var decoded any
+	if err := yaml.Unmarshal([]byte(s), &decoded); err == nil {
+		switch decoded.(type) {
+		case []any, map[string]any:
+			return decoded
+		}
+	}
+	return s
 }
 
 // readYAMLAny reads path and unmarshals into a generic any value.
@@ -395,7 +488,7 @@ func deepCompare(expected, actual any, mode MatchMode, path string) error {
 		return compareLists(expectedList, actualList, mode, path)
 	}
 	if !reflect.DeepEqual(expected, actual) {
-		return fmt.Errorf("%s: expected %v, got %v", displayPath(path), expected, actual)
+		return fmt.Errorf("%s: values differ", displayPath(path))
 	}
 	return nil
 }

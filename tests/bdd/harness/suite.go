@@ -23,7 +23,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -37,6 +40,12 @@ type Suite struct {
 	Ledger    *Ledger
 	EnvLedger *EnvLedger
 	Cache     *CommandCache
+
+	signalMu      sync.Mutex
+	signalContext context.Context
+	signalCancel  context.CancelFunc
+	stepMu        sync.RWMutex
+	teardownMu    sync.Mutex
 }
 
 // NewSuite resolves Config, creates the run-id directory tree, builds
@@ -118,7 +127,97 @@ func (s *Suite) snapshotCLIStateFile(contextName string) error {
 // Teardown restores every file the Ledger tracked and every env var
 // the EnvLedger tracked. Live entry points should defer it.
 func (s *Suite) Teardown() error {
+	s.teardownMu.Lock()
+	defer s.teardownMu.Unlock()
 	return errors.Join(s.Ledger.RestoreAll(), s.EnvLedger.RestoreAll())
+}
+
+type signalSafeStepKey struct{}
+
+type signalSafeStep struct {
+	parent  context.Context
+	once    sync.Once
+	cleanup func()
+}
+
+// BeginSignalSafeStep marks one live BDD step active and returns a context that
+// is canceled when SIGINT or SIGTERM starts cleanup. EndSignalSafeStep must be
+// called with the returned context. Signal cleanup waits for every active step
+// to finish, so a file-writing step cannot recreate a ledger-backed credential
+// after restoration.
+func (s *Suite) BeginSignalSafeStep(ctx context.Context) (context.Context, error) {
+	s.signalMu.Lock()
+	signalContext := s.signalContext
+	s.signalMu.Unlock()
+	if signalContext == nil {
+		return ctx, errors.New("signal cleanup is not installed")
+	}
+
+	s.stepMu.RLock()
+	stepContext, cancelStep := context.WithCancel(ctx)
+	stopSignalCancel := context.AfterFunc(signalContext, cancelStep)
+	step := &signalSafeStep{parent: ctx, cleanup: func() {
+		stopSignalCancel()
+		cancelStep()
+		s.stepMu.RUnlock()
+	}}
+	return context.WithValue(stepContext, signalSafeStepKey{}, step), nil
+}
+
+// EndSignalSafeStep releases the live-step guard installed by
+// BeginSignalSafeStep and returns the uncanceled parent context for the next
+// Godog step. Repeated calls are harmless.
+func (s *Suite) EndSignalSafeStep(ctx context.Context) context.Context {
+	step, ok := ctx.Value(signalSafeStepKey{}).(*signalSafeStep)
+	if !ok {
+		return ctx
+	}
+	step.once.Do(step.cleanup)
+	return step.parent
+}
+
+// InstallSignalCleanup restores ledger-backed files and environment variables
+// before an interrupted live run exits. It first cancels the active step, then
+// waits for that step to quiesce before restoring. The returned stop function
+// joins the signal goroutine and must run before normal Teardown.
+func (s *Suite) InstallSignalCleanup() func() {
+	signals := make(chan os.Signal, 1)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	s.signalMu.Lock()
+	s.signalContext, s.signalCancel = context.WithCancel(context.Background())
+	cancelSteps := s.signalCancel
+	s.signalMu.Unlock()
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	var stopOnce sync.Once
+	go func() {
+		defer close(done)
+		select {
+		case sig := <-signals:
+			cancelSteps()
+			s.stepMu.Lock()
+			if err := s.Teardown(); err != nil {
+				fmt.Fprintf(os.Stderr, "BDD interrupt cleanup failed: %v\n", err)
+			}
+			os.Exit(signalExitCode(sig))
+		case <-stop:
+		}
+	}()
+	return func() {
+		stopOnce.Do(func() {
+			signal.Stop(signals)
+			close(stop)
+			<-done
+			cancelSteps()
+		})
+	}
+}
+
+func signalExitCode(sig os.Signal) int {
+	if value, ok := sig.(syscall.Signal); ok {
+		return 128 + int(value)
+	}
+	return 1
 }
 
 // buildCLI invokes `go build` directly via exec.Command rather than

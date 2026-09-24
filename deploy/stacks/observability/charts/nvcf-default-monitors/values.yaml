@@ -33,6 +33,13 @@ controlPlane:
       selector:
         app.kubernetes.io/instance: state-metrics
         app.kubernetes.io/name: helm-nvcf-state-metrics
+    # The shared stack owns this ServiceMonitor. The application chart owns
+    # the metrics port and service labels.
+    - name: function-autoscaler
+      enabled: true
+      selector:
+        app.kubernetes.io/instance: function-autoscaler
+        app.kubernetes.io/name: helm-nvcf-function-autoscaler
     - name: grpc-proxy
       enabled: true
       selector:
@@ -85,5 +92,10 @@ computePlane:
           operator: Exists
     interval: 30s
     path: /metrics
-    port: metrics
+    port: worker-metrics
+    # Preserve function identity for autoscaler queries on worker metrics.
+    podTargetLabels:
+      - function-id
+      - function-version-id
+      - nca-id
     labels: {}

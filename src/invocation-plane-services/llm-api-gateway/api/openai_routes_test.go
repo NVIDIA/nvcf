@@ -19,9 +19,11 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -72,6 +74,98 @@ func TestRegisterRoutesRegistersOpenAIRoutes(t *testing.T) {
 		}
 		if strings.Contains(route, " /openai/v1/") {
 			t.Fatalf("unexpected openai-prefixed route %s", route)
+		}
+	}
+}
+
+func TestOpenAIRoutesUseOnlyMetadataRoutingMethod(t *testing.T) {
+	t.Parallel()
+
+	routes := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			"chat", "/v1/chat/completions",
+			`{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}],"stream":false}`,
+		},
+		{
+			"stream", "/v1/chat/completions",
+			`{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+		},
+		{"embeddings", "/v1/embeddings", `{"model":"fn-chat/company-name/model-name","input":"hello"}`},
+	}
+	methods := []struct {
+		name     string
+		metadata string
+		want     []string
+	}{
+		{"unset", "", nil},
+		{"blank", "   ", nil},
+		{"metadata", " pulsar;seed=a ", []string{"pulsar;seed=a"}},
+	}
+	for _, route := range routes {
+		for _, method := range methods {
+			t.Run(route.name+"/"+method.name, func(t *testing.T) {
+				t.Parallel()
+
+				captured := make(chan http.Header, 1)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					captured <- r.Header.Clone()
+					if r.URL.Path == "/v1/embeddings" {
+						w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+						_, _ = io.WriteString(w, `{"object":"list","data":[]}`)
+						return
+					}
+					w.Header().Set(echo.HeaderContentType, "text/event-stream")
+					_, _ = io.WriteString(w, `data: {"id":"chatcmpl-routing","object":"chat.completion.chunk",`+
+						`"created":123,"model":"company-name/model-name","choices":[{"index":0,`+
+						`"delta":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`+"\n\n"+
+						"data: [DONE]\n\n")
+				}))
+				defer upstream.Close()
+
+				stargateProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
+				if err != nil {
+					t.Fatalf("new stargate provider: %v", err)
+				}
+				authClient := &stubInvocationAuthClient{
+					authResponse: &nvcf.InvocationAuthResponse{
+						RoutingKey:   "fn-chat",
+						ClientAuthID: "subject-123",
+						RateLimitKey: "nca-456",
+						ModelSpecs: map[string]nvcf.ModelSpec{
+							"company-name/model-name": {RoutingMethod: method.metadata},
+						},
+					},
+				}
+				cfg := config.Default()
+				e := echo.New()
+				e.Use(NewContextMiddleware(cfg))
+				e.Use(NewNVCFAuthMiddleware(authClient))
+				RegisterRoutes(e, NewHandlers(cfg, stargateProvider, nil))
+
+				req := httptest.NewRequest(http.MethodPost, route.path, strings.NewReader(route.body))
+				req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+				req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+				req.Header[headerResponsesMethod] = []string{"client-method", "another-client-method"}
+				rec := httptest.NewRecorder()
+
+				e.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+				}
+				select {
+				case headers := <-captured:
+					if got := headers.Values(headerResponsesMethod); !slices.Equal(got, method.want) {
+						t.Fatalf("routing method = %q, want %q", got, method.want)
+					}
+				default:
+					t.Fatal("router did not receive a request")
+				}
+			})
 		}
 	}
 }

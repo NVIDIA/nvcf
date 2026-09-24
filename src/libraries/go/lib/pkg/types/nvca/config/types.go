@@ -608,6 +608,9 @@ type AgentConfig struct {
 	// CSIVolumeMountOptions for PVC provisioning
 	CSIVolumeMountOptions []string `yaml:",omitempty"`
 
+	// ModelCache configures the Helm model cache.
+	ModelCache ModelCacheConfig `yaml:",omitempty"`
+
 	// Function Deployment Stages service config
 	FunctionDeploymentStagesServiceURL string `yaml:",omitempty"`
 	// Function Deployment Stages OAuth endpoints are selected from FunctionDeploymentStagesServiceURL.
@@ -772,6 +775,30 @@ type SharedStorageTaskDataConfig struct {
 	PVMountOptions []string `yaml:",omitempty"`
 	// StorageCapacity of the provisioned volume.
 	StorageCapacity resource.Quantity `yaml:",omitempty"`
+}
+
+// MarshalYAML encodes storage capacity as its canonical Kubernetes quantity string.
+func (c SharedStorageTaskDataConfig) MarshalYAML() (any, error) {
+	storageCapacity := ""
+	if !c.StorageCapacity.IsZero() {
+		storageCapacity = c.StorageCapacity.String()
+	}
+	return struct {
+		StorageClassName *string  `yaml:"storageClassName,omitempty"`
+		PVMountOptions   []string `yaml:"pvMountOptions,omitempty"`
+		StorageCapacity  string   `yaml:"storageCapacity,omitempty"`
+	}{
+		StorageClassName: c.StorageClassName,
+		PVMountOptions:   c.PVMountOptions,
+		StorageCapacity:  storageCapacity,
+	}, nil
+}
+
+type ModelCacheConfig struct {
+	// StorageClassName is the storage class model cache volumes are provisioned on. Empty uses the default.
+	// Both the storage controller (which creates the volumes) and model cache backend selection (which checks
+	// the class exists before choosing a backend that needs it) read this one value.
+	StorageClassName string `yaml:",omitempty"`
 }
 
 type InternalPersistentStorageConfig struct {

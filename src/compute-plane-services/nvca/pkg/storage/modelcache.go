@@ -48,7 +48,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage/cacheprobe"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -96,6 +96,16 @@ const (
 	// lease. It is the PVC analogue of the primaryPVLabelKey marker.
 	cachePopulatedLabelKey   = fqdnPrefix + "/modelcache-populated"
 	cachePopulatedLabelValue = "true"
+	// ModelCachePopulatedLabelKey and ModelCachePopulatedLabelValue expose the
+	// populated marker to the agent, whose regular-workflow shared claim uses
+	// the same label so one definition of "populated" serves both workflows.
+	ModelCachePopulatedLabelKey   = cachePopulatedLabelKey
+	ModelCachePopulatedLabelValue = cachePopulatedLabelValue
+	// ModelCacheWriterPVCUIDAnnotationKey, on a writer Job's pod template,
+	// records the UID of the claim the Job populated. A completed Job only
+	// proves the claim it wrote to is populated, not a later claim of the same
+	// name.
+	ModelCacheWriterPVCUIDAnnotationKey = fqdnPrefix + "/model-cache-writer-pvc-uid"
 
 	// The annotation applied to primary PV's that denotes the last time
 	// a function or task referenced it.
@@ -227,42 +237,6 @@ func (r *Reconciler) doModelCacheRouted(ctx context.Context,
 	return res, err
 }
 
-// sharedFSProbeTTLSeconds is how long a cached CSI ROX/RWX probe result for
-// nvcf-miniservice-sc is reused before re-probing.
-const sharedFSProbeTTLSeconds = 3600
-
-// resolveSharedFSStrategy returns the cached probe strategy for nvcf-miniservice-sc,
-// re-probing (and persisting the result) when no valid cached strategy exists.
-func (r *Reconciler) resolveSharedFSStrategy(ctx context.Context) (cacheprobe.AccessModeStrategy, error) {
-	log := logf.FromContext(ctx)
-	store := cacheprobe.NewStateStore(r.Client, ModelCacheInitNamespace)
-	strategy, err := store.GetStrategy(ctx, HelmCacheSharedStorageClassName)
-	if err != nil {
-		return cacheprobe.StrategyFallback, err
-	}
-	if strategy != cacheprobe.StrategyFallback {
-		return strategy, nil
-	}
-	// GetStrategy returns Fallback both when results are missing/expired and
-	// when a fresh probe found the class unsupported. Honour the TTL of a fresh
-	// negative result: if the class was recently probed and found unusable, do
-	// not re-probe (which would create a PVC+pod) on every reconcile.
-	fresh, err := store.HasFreshResult(ctx, HelmCacheSharedStorageClassName)
-	if err != nil {
-		return cacheprobe.StrategyFallback, err
-	}
-	if fresh {
-		return cacheprobe.StrategyFallback, nil
-	}
-	// No valid cached result: probe ROX then RWX and persist.
-	prober := cacheprobe.NewProber(r.Client, ModelCacheInitNamespace, HelmCacheSharedStorageClassName, sharedFSProbeTTLSeconds)
-	strategy, results := prober.DetermineStrategy(ctx)
-	if err := store.Save(ctx, results); err != nil {
-		log.Error(err, "Failed to persist shared-FS probe results")
-	}
-	return strategy, nil
-}
-
 // doModelCacheSharedFS populates and exposes the model cache on a shared
 // filesystem storage class (nvcf-miniservice-sc), used when NVMesh is not present. The
 // cache is populated once (single-writer via the init lease/job, writing to the
@@ -296,8 +270,11 @@ func (r *Reconciler) doModelCacheSharedFS(ctx context.Context,
 	if err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
 	}
-	sharedSC := HelmCacheSharedStorageClassName
-	rwPVC.Spec.StorageClassName = &sharedSC
+	// The writer lands on the model cache class like every other backend. The
+	// class that selected this path, nvcf-miniservice-sc, is only how legacy
+	// selection detects an operator-provided shared filesystem; provisioning on
+	// it would strand the cache when a cluster has only the model cache class.
+	r.applyModelCacheStorageClass(ctx, rwPVC)
 
 	// Gate on the durable populated marker, mirroring the NVMesh/Samba
 	// getPrimaryPV gate. Shared storage shares data across namespaces natively
@@ -336,52 +313,41 @@ func (r *Reconciler) doModelCacheSharedFS(ctx context.Context,
 		}
 	}
 
-	// Reader RO PVC in the workload namespace on the shared class. With a
-	// shared-capable class all consumers see the same published cache data.
+	// Reader in the workload namespace, derived from the volume the writer
+	// populated. A claim that names only the shared StorageClass is not enough:
+	// a dynamic provisioner gives each claim its own volume, so the reader
+	// would mount an empty directory and the workload would find no model.
 	roPVCName := "ro-pvc-" + cacheHandle
 	roPVC := &corev1.PersistentVolumeClaim{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: roPVCName, Namespace: stCopy.Namespace}, roPVC); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, err
 		}
-		// The reader PVC does not exist yet: probe the shared class once to
-		// choose its access mode. The probe is intentionally scoped to reader
-		// creation; once the reader exists we never re-probe, so a transient
-		// probe failure after the TTL expires can never mark an already-healthy
-		// cache as failed.
-		strategy, err := r.resolveSharedFSStrategy(ctx)
+		writerPV, err := r.sharedFSWriterPV(ctx, writerPVC)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
-		if strategy == cacheprobe.StrategyFallback {
-			return reconcile.Result{}, r.terminalErrorWithMetric("shared_fs_unusable",
-				fmt.Sprintf("%s supports neither ROX nor RWX; shared caching disabled", HelmCacheSharedStorageClassName))
+		if writerPV == nil {
+			log.V(1).Info("Shared-FS writer volume not bound yet, waiting", "pvc", rwPVC.Name)
+			return reconcile.Result{}, nil
 		}
-		accessMode := corev1.ReadWriteMany
-		if strategy == cacheprobe.StrategyROX {
-			accessMode = corev1.ReadOnlyMany
+		roPV, err := r.newSharedFSReaderPV(ctx, stCopy, icmsReq, writerPV, roPVCName)
+		if err != nil {
+			return reconcile.Result{}, err
 		}
-		roPVC = &corev1.PersistentVolumeClaim{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        roPVCName,
-				Namespace:   stCopy.Namespace,
-				Labels:      types.GetLabelsForRequest(icmsReq, r.fff),
-				Annotations: types.GetAnnotationsForRequest(icmsReq),
-			},
-			Spec: corev1.PersistentVolumeClaimSpec{
-				AccessModes:      []corev1.PersistentVolumeAccessMode{accessMode},
-				StorageClassName: &sharedSC,
-				Resources:        rwPVC.Spec.Resources,
-			},
+		if err := r.Client.Create(ctx, roPV); err != nil && !apierrors.IsAlreadyExists(err) {
+			return reconcile.Result{}, err
 		}
+		roPVC = newDerivedModelCacheReaderPVC(roPVCName, stCopy.Namespace, roPV, icmsReq, r.fff)
 		maps.Copy(roPVC.Labels, getClusterWideResourceLabels(stCopy))
 		if err := r.setControlledObjectMeta(ctx, stCopy, roPVC); err != nil {
 			return reconcile.Result{}, err
 		}
-		if err := r.Client.Create(ctx, roPVC); err != nil {
+		if err := r.Client.Create(ctx, roPVC); err != nil && !apierrors.IsAlreadyExists(err) {
 			return reconcile.Result{}, err
 		}
-		log.Info("Shared-FS reader RO PVC created", "pvc", roPVCName, "accessMode", accessMode)
+		log.Info("Shared-FS reader created from the writer volume",
+			"pvc", roPVCName, "pv", roPV.Name, "volumeHandle", roPV.Spec.CSI.VolumeHandle)
 	}
 
 	switch r.getPVCState(roPVC) {
@@ -444,18 +410,20 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 	// is sized to it, not a global guess.
 	capacity := rwPVC.Spec.Resources.Requests[corev1.ResourceStorage]
 
-	// Ensure the per-handle Samba server + nvcf-sc backing PVC (samba-<handle>,
-	// sized to cacheSize). Idempotent: an existing backing PVC is reused.
+	// Ensure the per-handle Samba server + backing PVC (samba-<handle>, sized to
+	// cacheSize) on the model cache storage class. Idempotent: an existing
+	// backing PVC is reused.
 	smbResources := corev1.ResourceRequirements{
 		Limits:   corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Limits),
 		Requests: corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Requests),
 		Claims:   r.cfg.Agent.SharedStorage.Server.ContainerResources.Claims,
 	}
-	var ready bool
+	var infraState SambaModelCacheInfraState
 	err = nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.samba.ensure_infra",
 		func(ctx context.Context) error {
 			var e error
-			ready, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle, r.cfg.Agent.SharedStorage.Server.Image, smbResources, capacity)
+			infraState, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
+				r.cfg.Agent.SharedStorage.Server.Image, r.modelCacheStorageClass, smbResources, capacity)
 			return e
 		},
 		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.handle", cacheHandle)),
@@ -470,10 +438,25 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 			log.V(1).Info("Transient error ensuring Samba model cache infra, requeuing", "error", err.Error())
 			return reconcile.Result{Requeue: true}, nil
 		}
-		return reconcile.Result{}, r.terminalErrorWithMetricErr("samba_infra_failed", fmt.Errorf("ensure samba model cache infra: %w", err))
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonSambaInfraFailed,
+			fmt.Errorf("ensure samba model cache infra: %w", err))
 	}
-	if !ready {
-		log.V(1).Info("Samba model cache server not ready, requeuing")
+	if !infraState.Ready {
+		// Bound the bootstrap. The backing PVC can stay Pending for good (no
+		// capacity, provisioner down), and nothing downstream fails that wait:
+		// the request would requeue forever and hold the install in
+		// CacheInProgress. Failing the request lets the miniservice reconciler
+		// continue the install without a cache. This bounds server start-up
+		// only; the model download that follows is bounded separately by
+		// InitCacheJobFailureThreshold.
+		waited := r.nowFunc().Sub(infraState.CreatedAt)
+		if !infraState.CreatedAt.IsZero() && waited > r.k8sTimeConfig.SambaModelCacheReadyThreshold {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonSambaInfraTimeout,
+				fmt.Errorf("samba model cache server for handle %s still unavailable after %s, "+
+					"its backing PVC on storage class %s may be unbindable",
+					cacheHandle, waited.Round(time.Second), r.modelCacheStorageClass))
+		}
+		log.V(1).Info("Samba model cache server not ready, requeuing", "waited", waited.Round(time.Second))
 		return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
 	}
 
@@ -669,19 +652,6 @@ func builtinProvisionerMountOptions(provisioner string) ([]string, bool) {
 	return splitMountOptions(NVMeshCacheMountOptions), true
 }
 
-// modelCacheStorageClassName returns the storage class NVCA uses for model cache
-// volumes: the configured override when set, otherwise the default. NVCA owns
-// this choice rather than taking it from the request spec, so every model cache
-// volume in a cluster lands on the same class and its provisioner is the one
-// the mount option defaults were resolved from.
-func (r *Reconciler) modelCacheStorageClassName() string {
-	if r.modelCacheStorageClass != "" {
-		return r.modelCacheStorageClass
-	}
-
-	return DefaultModelCacheStorageClassName
-}
-
 // applyModelCacheStorageClass puts the configured storage class on a model cache
 // PVC, replacing whatever the request spec carried. NVCA owns this choice so
 // every model cache volume lands on the class whose provisioner the mount option
@@ -690,7 +660,7 @@ func (r *Reconciler) modelCacheStorageClassName() string {
 // Encryption overrides the result afterwards with its own per-NCA class, which
 // is created for that request.
 func (r *Reconciler) applyModelCacheStorageClass(ctx context.Context, pvc *corev1.PersistentVolumeClaim) {
-	scName := r.modelCacheStorageClassName()
+	scName := r.modelCacheStorageClass
 	if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == scName {
 		return
 	}
@@ -711,7 +681,7 @@ func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, boo
 	}
 
 	log := logf.FromContext(ctx)
-	scName := r.modelCacheStorageClassName()
+	scName := r.modelCacheStorageClass
 
 	sc := &storagev1.StorageClass{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, sc); err != nil {
@@ -731,6 +701,12 @@ func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, boo
 // keeping the key, so a log line stays useful for debugging without echoing
 // operator supplied values. Mount options are free form and can carry
 // credentials, a CIFS password being the obvious case.
+// RedactMountOptionValues masks the value part of key=value mount options so
+// they can be logged without leaking credentials a driver may carry there.
+func RedactMountOptionValues(opts []string) []string {
+	return redactMountOptionValues(opts)
+}
+
 func redactMountOptionValues(opts []string) []string {
 	redacted := make([]string, 0, len(opts))
 	for _, opt := range opts {
@@ -772,21 +748,82 @@ func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.Pe
 	if !found {
 		return r.csiVolumeMountOptions
 	}
+	return r.mergeRequiredMountOptions(ctx, pv, defaults)
+}
 
-	log := logf.FromContext(ctx)
-	configured := make([]string, 0, len(r.csiVolumeMountOptions))
-	for _, opt := range r.csiVolumeMountOptions {
-		if i := slices.IndexFunc(defaults, func(d string) bool { return negatesMountOption(d, opt) }); i >= 0 {
-			log.Info("Ignoring configured cache mount option that conflicts with a provisioner default",
-				"pv", pv.Name,
-				"ignored", redactMountOptionValues([]string{opt}),
-				"required", redactMountOptionValues([]string{defaults[i]}))
+// resolveReaderMountOptions returns the mount options for the read-only PV that
+// serves the given StorageRequest. A durable request carries the catalog's
+// readerMountOptions in its persisted selection, so those are the required set
+// and the configured options are appended except where they would negate one.
+// Requests without a durable selection, including in-flight legacy requests,
+// keep the per-provisioner ConfigMap path.
+func (r *Reconciler) resolveReaderMountOptions(ctx context.Context,
+	st *nvcav1new.StorageRequest, pv *corev1.PersistentVolume,
+) []string {
+	required, ok := selectionReaderMountOptions(ctx, st)
+	if !ok {
+		return r.resolveCacheMountOptions(ctx, pv)
+	}
+	return r.mergeRequiredMountOptions(ctx, pv, required)
+}
+
+// selectionReaderMountOptions returns the reader mount options recorded in the
+// StorageRequest's persisted selection. ok is false when the request has no
+// selection, the selection is not durable, or it cannot be parsed; the caller
+// then falls back to the ConfigMap path so a bad annotation never strips the
+// options a driver needs.
+func selectionReaderMountOptions(ctx context.Context, st *nvcav1new.StorageRequest) ([]string, bool) {
+	if st == nil {
+		return nil, false
+	}
+	raw := st.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return nil, false
+	}
+	selection, err := ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "Ignoring invalid model cache selection for reader mount options",
+			"storageRequest", client.ObjectKeyFromObject(st))
+		return nil, false
+	}
+	if selection.Mode != ModelCacheSelectionDurable {
+		return nil, false
+	}
+	return selection.RequiredMountOptions, true
+}
+
+// mergeRequiredMountOptions appends the configured options to the required
+// set, logging and dropping any configured option that would negate a required
+// one.
+func (r *Reconciler) mergeRequiredMountOptions(ctx context.Context,
+	pv *corev1.PersistentVolume, required []string,
+) []string {
+	merged, dropped := MergeReaderMountOptions(required, r.csiVolumeMountOptions)
+	if len(dropped) != 0 {
+		logf.FromContext(ctx).Info("Ignoring configured cache mount options that conflict with required ones",
+			"pv", pv.Name,
+			"ignored", redactMountOptionValues(dropped),
+			"required", redactMountOptionValues(required))
+	}
+	return merged
+}
+
+// MergeReaderMountOptions combines the options a read-only cache volume must
+// have with the operator-configured extras. Required options come first and are
+// never removed; a configured option that would negate a required one (rw
+// against ro, uuid against nouuid) is returned in dropped instead of merged.
+// The agent and the storage controller both use it so a reader PV gets the
+// same options whichever component creates it.
+func MergeReaderMountOptions(required, configured []string) (merged, dropped []string) {
+	kept := make([]string, 0, len(configured))
+	for _, opt := range configured {
+		if slices.ContainsFunc(required, func(req string) bool { return negatesMountOption(req, opt) }) {
+			dropped = append(dropped, opt)
 			continue
 		}
-		configured = append(configured, opt)
+		kept = append(kept, opt)
 	}
-
-	return mergeMountOptions(defaults, configured)
+	return mergeMountOptions(required, kept), dropped
 }
 
 // mergeMountOptions concatenates the given option lists, preserving order and
@@ -811,11 +848,11 @@ func mergeMountOptions(lists ...[]string) []string {
 // options when the volume is mounted, so a patch applies to the next mount and
 // leaves volumes that are already mounted untouched.
 func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
-	secondaryPV *corev1.PersistentVolume,
+	st *nvcav1new.StorageRequest, secondaryPV *corev1.PersistentVolume,
 ) error {
 	log := logf.FromContext(ctx)
 
-	want := r.resolveCacheMountOptions(ctx, secondaryPV)
+	want := r.resolveReaderMountOptions(ctx, st, secondaryPV)
 	if slices.Equal(secondaryPV.Spec.MountOptions, want) {
 		return nil
 	}
@@ -960,17 +997,18 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		}
 		maps.Copy(secondaryPV.Labels, getClusterWideResourceLabels(stCopy))
 		secondaryPV.Spec.AccessModes = accessModesRO
-		secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, secondaryPV)
+		secondaryPV.Spec.MountOptions = r.resolveReaderMountOptions(ctx, stCopy, secondaryPV)
 		secondaryPV.Spec.ClaimRef = &corev1.ObjectReference{
 			APIVersion: "v1",
 			Kind:       "PersistentVolumeClaim",
 			Name:       roPVCName,
 			Namespace:  stCopy.Namespace,
 		}
-		secondaryPV.Spec.CSI.VolumeHandle, err = updateSecondaryPVVolumeHandle(secondaryPV.Spec.CSI.VolumeHandle, st.Namespace)
+		secondaryPV.Spec.CSI.VolumeHandle, err = deriveReaderVolumeHandle(
+			secondaryPV.Spec.CSI.Driver, secondaryPV.Spec.CSI.VolumeHandle, st.Namespace)
 		if err != nil {
 			return reconcile.Result{}, r.terminalErrorWithMetricErr("pvc_setup_failed",
-				fmt.Errorf("update secondary PV volume handle: %w", err))
+				fmt.Errorf("derive reader PV volume handle: %w", err))
 		}
 		secondaryPV.Status = corev1.PersistentVolumeStatus{}
 
@@ -985,7 +1023,7 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		log.V(1).Info("Secondary PV already exists, checking status", "pv", secondaryPV.Name)
 		// Mount options are mutable via NGC/NVCFBackend, so an existing PV can be
 		// left behind when the configuration changes.
-		if err := r.reconcileSecondaryPVMountOptions(ctx, secondaryPV); err != nil {
+		if err := r.reconcileSecondaryPVMountOptions(ctx, stCopy, secondaryPV); err != nil {
 			if k8sutil.IsTransientK8sError(err) {
 				log.V(1).Info("Transient error reconciling secondary PV mount options, will retry",
 					"pv", secondaryPV.Name)
@@ -1792,6 +1830,139 @@ func (r *Reconciler) isVolumeDetached(ctx context.Context, volumeName string) (b
 // Cross-namespace NVMesh volumes (in NVMesh 3.2) are a required feature for this controller's
 // model caching implementation. This feature requires that the volumeHandle's 4-element encoding
 // contains the target PVC's namespace as the last element.
+// deriveReaderVolumeHandle returns the CSI volume handle a read-only reader PV
+// in namespace should use to address the volume the writer populated.
+//
+// NVMesh encodes the consuming namespace in the handle, so the reader needs
+// its own namespace substituted in. Every other driver addresses one volume by
+// one handle regardless of who mounts it, so the writer's handle is reused
+// unchanged. Both were measured on real clusters: Weka handles look like
+// weka/v2/csivol-<id> and OCI FSS handles like
+// <filesystem-ocid>:<mount-target-ip>:<export-path>, neither carrying a
+// namespace.
+func deriveReaderVolumeHandle(provisioner, volumeHandle, namespace string) (string, error) {
+	if provisioner != NVMeshStorageClassProvisioner {
+		return volumeHandle, nil
+	}
+	return updateSecondaryPVVolumeHandle(volumeHandle, namespace)
+}
+
+// sharedFSWriterPV returns the PV the writer claim is bound to, or nil when the
+// claim is not bound yet. That volume is the cache: readers are derived from it
+// rather than provisioned separately.
+func (r *Reconciler) sharedFSWriterPV(
+	ctx context.Context, writerPVC *corev1.PersistentVolumeClaim,
+) (*corev1.PersistentVolume, error) {
+	if writerPVC == nil || writerPVC.Spec.VolumeName == "" {
+		return nil, nil
+	}
+	pv := &corev1.PersistentVolume{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: writerPVC.Spec.VolumeName}, pv); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if pv.Spec.CSI == nil || pv.Spec.CSI.VolumeHandle == "" {
+		return nil, r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid,
+			fmt.Sprintf("shared-FS writer PV %s has no CSI volume handle", pv.Name))
+	}
+	return pv, nil
+}
+
+// newSharedFSReaderPV builds the read-only PV that exposes the writer's volume
+// in the request namespace. It is the shared-filesystem counterpart of the
+// NVMesh secondary PV and differs only in the volume handle, which
+// deriveReaderVolumeHandle leaves unchanged for drivers that do not encode the
+// namespace in it.
+func (r *Reconciler) newSharedFSReaderPV(
+	ctx context.Context,
+	stCopy *nvcav1new.StorageRequest,
+	icmsReq *nvcav2beta1.ICMSRequest,
+	writerPV *corev1.PersistentVolume,
+	roPVCName string,
+) (*corev1.PersistentVolume, error) {
+	roPV := writerPV.DeepCopy()
+	roPV.ObjectMeta = metav1.ObjectMeta{
+		Name:        "secondary-pv-" + stCopy.Spec.ICMSRequestName,
+		Labels:      types.GetLabelsForRequest(icmsReq, r.fff),
+		Annotations: types.GetAnnotationsForRequest(icmsReq),
+	}
+	maps.Copy(roPV.Labels, getClusterWideResourceLabels(stCopy))
+	roPV.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
+	// The reader PV is created statically and pre-bound by claimRef, so no
+	// provisioner is involved and it must carry no class. The claim asks for
+	// no class too; Kubernetes refuses to bind a pre-bound pair whose classes
+	// disagree, so inheriting the writer's class here would leave every reader
+	// claim Pending.
+	roPV.Spec.StorageClassName = ""
+	// Retain so removing one namespace's reader never destroys the cache the
+	// writer populated and other namespaces are still reading.
+	roPV.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	roPV.Spec.ClaimRef = &corev1.ObjectReference{
+		APIVersion: "v1",
+		Kind:       "PersistentVolumeClaim",
+		Name:       roPVCName,
+		Namespace:  stCopy.Namespace,
+	}
+	handle, err := deriveReaderVolumeHandle(
+		roPV.Spec.CSI.Driver, roPV.Spec.CSI.VolumeHandle, stCopy.Namespace)
+	if err != nil {
+		return nil, r.terminalErrorWithMetricErr("pvc_setup_failed",
+			fmt.Errorf("derive reader PV volume handle: %w", err))
+	}
+	roPV.Spec.CSI.VolumeHandle = handle
+	// Access modes are only used for binding; the kubelet does not enforce
+	// them. Without this the reader inherits the writer's read-write CSI
+	// source, and the only thing left standing between a consumer and the
+	// shared cache is mount options, which are empty for a provisioner that
+	// declares none. A reader could then mount the cache read-write and
+	// corrupt it for every other namespace reading the same volume.
+	roPV.Spec.CSI.ReadOnly = true
+	// A derived reader is a read-only model cache PV like any other, so it
+	// takes the provisioner's required reader options rather than inheriting
+	// whatever the writer was provisioned with. This matters for NVMesh, whose
+	// reader attaches the same XFS filesystem as the writer and needs nouuid
+	// and norecovery or the mount fails outright. deriveReaderVolumeHandle
+	// above already handles the NVMesh driver reaching this path.
+	roPV.Spec.MountOptions = r.resolveReaderMountOptions(ctx, stCopy, roPV)
+	roPV.Status = corev1.PersistentVolumeStatus{}
+	if err := r.setControlledObjectMeta(ctx, stCopy, roPV); err != nil {
+		return nil, err
+	}
+	return roPV, nil
+}
+
+// newDerivedModelCacheReaderPVC builds the claim bound by name to a derived
+// reader PV. StorageClassName is empty so no provisioner is involved: the
+// claim can only bind to the PV that names it.
+func newDerivedModelCacheReaderPVC(
+	pvcName, namespace string,
+	roPV *corev1.PersistentVolume,
+	icmsReq *nvcav2beta1.ICMSRequest,
+	fff featureflag.Fetcher,
+) *corev1.PersistentVolumeClaim {
+	emptySC := ""
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pvcName,
+			Namespace:   namespace,
+			Labels:      types.GetLabelsForRequest(icmsReq, fff),
+			Annotations: types.GetAnnotationsForRequest(icmsReq),
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			StorageClassName: &emptySC,
+			VolumeName:       roPV.Name,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: roPV.Spec.Capacity[corev1.ResourceStorage],
+				},
+			},
+		},
+	}
+}
+
 func updateSecondaryPVVolumeHandle(volumeHandle, namespace string) (string, error) {
 	lastColonIdx := strings.LastIndex(volumeHandle, ":")
 	if lastColonIdx == -1 {

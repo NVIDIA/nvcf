@@ -1,0 +1,141 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+  - page: Overview
+    path: ../../docs/overview/index.md
+  - link: Self-Managed Stack
+    href: /nvcf/self-managed/
+  - link: Compute Plane Stack
+    href: /nvcf/compute-plane/
+  - link: Observability Stack
+    href: /nvcf/observability/
+  - page: Quickstart
+    path: ../../docs/overview/quickstart.md
+
+  - section: Release Notes
+    skip-slug: true
+    contents:
+      - page: Release Notes Overview
+        path: ../../docs/overview/release-notes/index.md
+      - page: Compatibility Matrix
+        path: ../../docs/overview/compatibility-matrix.md
+      - page: "1.0.0 Release Notes"
+        path: ../../docs/overview/release-notes/1.0.0.md
+      - page: "0.6.1 to 1.0.0 Upgrade"
+        path: ../../docs/overview/release-notes/0.6.1-to-1.0.0-upgrade.md
+      - page: "(Legacy) 0.6.1 Release Notes"
+        path: ../../docs/overview/release-notes/0.6.1.md
+      - page: "(Legacy) 0.6.0 to 0.6.1 Upgrade"
+        path: ../../docs/overview/release-notes/0.6.0-to-0.6.1-upgrade.md
+      - page: "(Legacy) 0.6.0 Release Notes"
+        path: ../../docs/overview/release-notes/0.6.0.md
+      - page: "(Legacy) 0.5.0 to 0.6.0 Upgrade"
+        path: ../../docs/overview/release-notes/0.5.0-to-0.6.0-upgrade.md
+
+  - section: Before You Deploy
+    skip-slug: true
+    contents:
+      - page: Infrastructure Sizing
+        path: ../../docs/overview/infrastructure-sizing.md
+      - page: Manifest
+        path: ../../docs/overview/manifest.md
+      - page: Image Mirroring
+        path: ../../docs/overview/image-mirroring.md
+      - page: Multi-Tenancy
+        path: ../../docs/overview/multi-tenancy.md
+
+  - section: Using Cloud Functions
+    skip-slug: true
+    contents:
+      - page: API
+        path: ../../docs/overview/api.md
+      - page: Function Creation
+        path: ../../docs/overview/function-creation.md
+      - page: LLM Gateway
+        path: ../../docs/overview/llm-gateway.md
+      - page: Generic HTTP Function Invocation
+        path: ../../docs/overview/generic-http-function-invocation.md
+      - page: gRPC Function Invocation
+        path: ../../docs/overview/grpc-function-invocation.md
+      - page: Container Functions
+        path: ../../docs/overview/container-functions.md
+      - page: Helm Functions
+        path: ../../docs/overview/helm-functions.md
+      - page: Streaming Functions
+        path: ../../docs/overview/streaming-functions.md
+      - page: Configure Autoscaling
+        path: ../../docs/overview/configure-autoscaling.md
+      - page: CLI
+        path: ../../docs/overview/cli.md
+      - page: Task Creation
+        path: ../../docs/overview/task-creation.md
+      - page: Container-Based Task Creation
+        path: ../../docs/overview/container-tasks.md
+      - page: Helm-Based Task Creation
+        path: ../../docs/overview/helm-tasks.md
+
+  - section: Load Testing
+    skip-slug: true
+    contents:
+      - page: gRPC Load Testing
+        path: ../../docs/overview/grpc-load-testing.md
+      - page: gRPC Load Test SLI Guide
+        path: ../../docs/overview/grpc-load-test-sli-guide.md
+      - page: HTTP Load Testing
+        path: ../../docs/overview/http-load-testing.md
+      - page: HTTP Load Test SLI Guide
+        path: ../../docs/overview/http-load-test-sli-guide.md
+      - page: HTTP Soak Testing
+        path: ../../docs/overview/http-soak-testing.md
+
+  - section: Development
+    skip-slug: true
+    contents:
+      - page: Architecture Overview
+        path: ../../docs/dev/architecture.md
+      - section: Local Development
+        skip-slug: true
+        contents:
+          - page: Local Development
+            path: ../../docs/overview/local-development.md
+          - page: Single-cluster (CLI)
+            path: ../../docs/overview/local-development/single-cluster-cli.md
+          - page: Single-cluster (Helmfile)
+            path: ../../docs/overview/local-development/single-cluster-helmfile.md
+          - page: Multi-cluster (CLI)
+            path: ../../docs/overview/local-development/multi-cluster-cli.md
+          - page: Multi-cluster (Helmfile)
+            path: ../../docs/overview/local-development/multi-cluster-helmfile.md
+
+  - section: Managed (Legacy)
+    skip-slug: true
+    contents:
+      - section: Cluster Management
+        skip-slug: true
+        contents:
+          - page: NGC-Managed Clusters
+            path: ../../docs/ngc-managed/cluster-management/ngc-managed.md
+          - page: Helm-Managed Clusters
+            path: ../../docs/ngc-managed/cluster-management/helm-managed.md
+          - page: GitOps Cluster Registration
+            path: ../../docs/ngc-managed/cluster-management/gitops-registration.md
+          - page: Configuration
+            path: ../../docs/ngc-managed/cluster-management/configuration.md
+          - page: Monitoring
+            path: ../../docs/ngc-managed/cluster-management/monitoring.md
+          - page: Reference
+            path: ../../docs/ngc-managed/cluster-management/reference.md
+          - page: Container Cache
+            path: ../../docs/ngc-managed/cluster-management/container-cache.md
+          - page: GXCache
+            path: ../../docs/ngc-managed/cluster-management/gxcache.md
+          - page: KAI Scheduler
+            path: ../../docs/ngc-managed/cluster-management/kai-scheduler.md
+      - page: Function Lifecycle
+        path: ../../docs/ngc-managed/function-lifecycle.md
+      - page: Service Keys
+        path: ../../docs/ngc-managed/service-keys.md
+      - page: Observability
+        slug: managed-observability
+        path: ../../docs/ngc-managed/observability.md

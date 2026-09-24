@@ -386,7 +386,7 @@ impl TimeseriesDbClient {
             ("step", step.as_secs().to_string()),
         ];
 
-        if self.auth_mode != TimeseriesDbAuthMode::Token {
+        let result = if self.auth_mode != TimeseriesDbAuthMode::Token {
             self.execute_with_retry_no_auth(url, &query_params).await
         } else {
             self.execute_with_retry(move |token| {
@@ -395,7 +395,10 @@ impl TimeseriesDbClient {
                 async move { self.execute_request(url, &query_params, Some(&token)).await }
             })
             .await
-        }
+        };
+
+        *self.is_healthy.lock().unwrap() = result.is_ok();
+        result
     }
 
     // self and auth_token would add tokens or credentials to the traces, so they are excluded
@@ -710,7 +713,7 @@ mod tests {
     use std::path::Path;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     };
     use std::time::Duration as StdDuration;
     use std::time::Duration;
@@ -761,6 +764,7 @@ mod tests {
         request_count: AtomicUsize,
         responses: Vec<(StatusCode, String)>,
         expected_auth_tokens: Vec<String>,
+        response_override: Mutex<Option<(StatusCode, String)>>,
     }
 
     impl MockServerState {
@@ -769,7 +773,12 @@ mod tests {
                 request_count: AtomicUsize::new(0),
                 responses,
                 expected_auth_tokens,
+                response_override: Mutex::new(None),
             }
+        }
+
+        fn set_response_override(&self, status: StatusCode, body: &str) {
+            *self.response_override.lock().unwrap() = Some((status, body.to_string()));
         }
 
         fn get_response(&self, auth_header: Option<&str>) -> Response<Full<Bytes>> {
@@ -792,6 +801,13 @@ mod tests {
                         .body(Full::new(Bytes::from("Unauthorized: Missing token")))
                         .unwrap();
                 }
+            }
+
+            if let Some((status, body)) = &*self.response_override.lock().unwrap() {
+                return Response::builder()
+                    .status(*status)
+                    .body(Full::new(Bytes::from(body.clone())))
+                    .unwrap();
             }
 
             // Return configured response
@@ -906,6 +922,13 @@ mod tests {
             .with_max_delay(TEST_MAX_BACKOFF_DELAY)
             .with_min_delay(DEFAULT_MIN_BACKOFF_DELAY)
             .with_factor(1.5)
+    }
+
+    fn immediate_retry_test_backoff() -> ExponentialBuilder {
+        ExponentialBuilder::default()
+            .with_max_times(1)
+            .with_max_delay(StdDuration::ZERO)
+            .with_min_delay(StdDuration::ZERO)
     }
 
     fn generate_client_identity(expired: bool) -> Result<(Vec<u8>, Vec<u8>)> {
@@ -1158,6 +1181,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_query_health_tracks_outage_and_recovery() -> Result<()> {
+        let state = Arc::new(MockServerState::new(
+            vec![(StatusCode::OK, get_mock_response())],
+            vec![],
+        ));
+
+        let server_url = start_mock_server(state.clone()).await;
+        let config = TimeseriesDbSettings {
+            authn_url: "".to_string(),
+            timeseries_db_url: server_url,
+            disable_auth: true,
+            env: "stg".to_string(),
+            ignore_env: false,
+            backoff: Some(immediate_retry_test_backoff()),
+            ..Default::default()
+        };
+        let client = TimeseriesDbClient::new(&config, None)?;
+        let start = Utc.timestamp_opt(1748551740, 0).unwrap();
+        let end = Utc.timestamp_opt(1748551800, 0).unwrap();
+
+        client
+            .query_range("test_query", start, end, StdDuration::from_secs(60))
+            .await?;
+        assert!(client.health().await.is_healthy);
+
+        state.set_response_override(StatusCode::SERVICE_UNAVAILABLE, "Service unavailable");
+        let outage_result = client
+            .query_range("test_query", start, end, StdDuration::from_secs(60))
+            .await;
+        assert!(outage_result.is_err());
+        assert!(!client.health().await.is_healthy);
+
+        state.set_response_override(StatusCode::OK, &get_mock_response());
+        client
+            .query_range("test_query", start, end, StdDuration::from_secs(60))
+            .await?;
+        assert!(client.health().await.is_healthy);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_credential_refresh() -> Result<()> {
         let state = Arc::new(MockServerState::new(
             vec![
@@ -1240,6 +1305,7 @@ mod tests {
             .query_range("test_query", start, end, StdDuration::from_secs(60))
             .await?;
         assert_eq!(result.status, "success");
+        assert!(client.health().await.is_healthy);
 
         Ok(())
     }
@@ -1337,6 +1403,7 @@ mod tests {
             .query_range("test_query", start, end, StdDuration::from_secs(60))
             .await;
         assert!(result.is_err());
+        assert!(!client.health().await.is_healthy);
 
         Ok(())
     }
@@ -1408,8 +1475,11 @@ mod tests {
     #[tokio::test]
     async fn test_health_status_on_auth_vs_other_errors() -> Result<()> {
         let auth_error_state = Arc::new(MockServerState::new(
-            vec![(StatusCode::UNAUTHORIZED, "Unauthorized".to_string())],
-            vec!["test_token_0".to_string()],
+            vec![
+                (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
+                (StatusCode::OK, get_mock_response()),
+            ],
+            vec!["test_token_0".to_string(), "test_token_1".to_string()],
         ));
 
         let server_url = start_mock_server(auth_error_state).await;
@@ -1438,6 +1508,11 @@ mod tests {
         let health_result = client.health().await;
         assert!(!health_result.is_healthy);
         assert!(health_result.message.unwrap().contains("unhealthy"));
+
+        client
+            .query_range("test_query", start, end, StdDuration::from_secs(60))
+            .await?;
+        assert!(client.health().await.is_healthy);
 
         Ok(())
     }

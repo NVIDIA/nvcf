@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
@@ -95,8 +96,10 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 
 	llmWorker := findTransportTLSContainer(createdPod, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
-		findTransportTLSEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
+	expectedBundlePath := "/nvcf/transport-tls/ca-certificates.crt"
+	assert.Equal(t, expectedBundlePath,
+		findTransportTLSEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Empty(t, findTransportTLSEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	mount := findTransportTLSVolumeMount(llmWorker, "nvcf-trust-merged-certs")
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
@@ -104,7 +107,8 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findTransportTLSContainer(createdPod, name)
 		require.NotNil(t, container)
-		assert.Empty(t, findTransportTLSEnvValue(container, "STARGATE_TLS_CERT_PATH"), name)
+		assert.Empty(t, findTransportTLSEnvValue(container, transporttls.CertPathEnv), name)
+		assert.Empty(t, findTransportTLSEnvValue(container, transporttls.GrpcTLSCACertPathEnv), name)
 		assert.Nil(t, findTransportTLSVolumeMount(container, "nvcf-trust-merged-certs"), name)
 	}
 }
@@ -132,7 +136,8 @@ func TestCreatePodArtifactInstancesTransportTLSSystemDoesNotInjectBundle(t *test
 	llmWorker := findTransportTLSContainer(createdPod, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
 	assert.Contains(t, llmWorker.Args, "--quic-insecure")
-	assert.Empty(t, findTransportTLSEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
+	assert.Empty(t, findTransportTLSEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Empty(t, findTransportTLSEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 }
 
 func TestCreatePodArtifactInstancesTransportTLSBundleRejectsQUICInsecureTerminal(t *testing.T) {
@@ -186,6 +191,33 @@ func TestCreatePodArtifactInstancesTransportTLSBundleRejectsMismatchedFingerprin
 	_, getErr := clients.K8s.CoreV1().ConfigMaps(RequestsNamespace).Get(ctx, "nvcf-transport-trust-bundle",
 		metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(getErr))
+}
+
+func TestCreatePodArtifactInstancesTransportTLSBundleRejectsInvalidConfigWithoutLLMWorker(t *testing.T) {
+	ctx := newTestContext()
+	clients := makeMockKubeClients()
+	kb := newTransportTLSTestBackend(clients, nvcaconfig.TransportTLSConfig{
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+		TrustBundleKey:           "nvcf-ca-bundle.pem",
+		TrustBundleFingerprint:   "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		TrustBundlePEM:           testTransportRootCertPEM,
+	})
+	pod := newTransportTLSTestPod()
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			pod.Spec.Containers[i].Name = "non-llm-worker"
+		}
+	}
+
+	_, err := kb.CreatePodArtifactInstances(ctx, pod, newTransportTLSTestRequest(), transportTLSTestMutator)
+
+	require.Error(t, err)
+	assert.True(t, nvcaerrors.IsTerminal(err), "invalid static transport TLS config should fail before pod inspection")
+	assert.Contains(t, err.Error(), "trustBundleFingerprint does not match transportTls.trustBundlePem")
+	pods, listErr := clients.K8s.CoreV1().Pods(RequestsNamespace).List(ctx, metav1.ListOptions{})
+	require.NoError(t, listErr)
+	assert.Empty(t, pods.Items)
 }
 
 func TestCreatePodArtifactInstancesTransportTLSBundleRejectsInvalidConfigMapMetadata(t *testing.T) {

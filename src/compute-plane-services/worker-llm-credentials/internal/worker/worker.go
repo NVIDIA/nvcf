@@ -80,6 +80,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if w.config.ESSAssertionTokenPath != "" {
+		w.client.StartAssertionTokenRefresher(ctx, w.config.ESSAssertionTokenPath, true)
+	}
 
 	token.StartTokenRefresher(ctx, "llm worker token", true,
 		func(ctx context.Context) (token.Token, error) {

@@ -59,10 +59,15 @@ impl<'a> CandidateTtftAccumulator<'a> {
         self.max_queue_time_ms.is_some()
     }
 
-    pub(super) fn push_ttft(&mut self, candidate: &'a RoutedClusterSnapshot) {
+    pub(super) fn push_ttft(
+        &mut self,
+        candidate: &'a RoutedClusterSnapshot,
+        input_tokens_scale: f64,
+    ) {
         let ttft = ttft(
             candidate,
             self.input_tokens,
+            input_tokens_scale,
             self.priority,
             self.ignore_queue_time,
             self.ignore_input_processing_time,

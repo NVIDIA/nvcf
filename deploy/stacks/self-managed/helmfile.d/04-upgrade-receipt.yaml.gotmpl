@@ -1,0 +1,30 @@
+environments:
+  default:
+    values:
+      - ../environments/base.yaml
+      - ../environments/{{ requiredEnv "HELMFILE_ENV" }}.yaml
+
+---
+
+{{- /*
+  A stage of its own, and the last one, so the receipt is written only after
+  every other release has been applied. Ordering is a stage boundary rather
+  than a needs: edge on purpose: under the helmfile version this stack pins,
+  needs: places a release in a later DAG layer where it waits on every peer in
+  the previous one, and a single slow or failed peer silently skips it. See the
+  admin-issuer-proxy comment in 02-core.yaml.gotmpl.
+*/}}
+
+releases:
+  - name: upgrade-receipt
+    chart: ../charts/nvcf-upgrade-receipt
+    namespace: nvcf
+    values:
+      - stackVersion: {{ readFile "../VERSION" | trim | quote }}
+        image:
+          registry: {{ .Values.global.image.registry | quote }}
+          repository: {{ .Values.global.image.repository }}/alpine-k8s
+        {{- with .Values.global.imagePullSecrets }}
+        imagePullSecrets:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}

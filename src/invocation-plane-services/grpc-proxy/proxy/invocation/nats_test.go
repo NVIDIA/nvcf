@@ -17,16 +17,67 @@ limitations under the License.
 package invocation
 
 import (
+	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/nats-io/nats.go"
+	"net"
+
 	"github.com/nats-io/nkeys"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
+	"nvcf-grpc-proxy/proxy/metrics"
 )
+
+func TestNatsErrorReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "expired certificate", err: x509.CertificateInvalidError{Reason: x509.Expired}, want: metrics.NatsErrorReasonCertificateExpired},
+		{name: "verification failure", err: x509.UnknownAuthorityError{}, want: metrics.NatsErrorReasonTLSVerification},
+		{name: "generic tls failure", err: errors.New("remote error: tls: bad certificate"), want: metrics.NatsErrorReasonTLS},
+		{name: "authentication failure", err: nats.ErrAuthorization, want: metrics.NatsErrorReasonAuthentication},
+		{name: "timeout", err: context.DeadlineExceeded, want: metrics.NatsErrorReasonTimeout},
+		{name: "connection failure", err: io.EOF, want: metrics.NatsErrorReasonConnection},
+		{name: "other failure", err: errors.New("unexpected error"), want: metrics.NatsErrorReasonOther},
+		{name: "wrapped error", err: fmt.Errorf("reconnect: %w", nats.ErrAuthExpired), want: metrics.NatsErrorReasonAuthentication},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, natsErrorReason(test.err))
+		})
+	}
+}
+
+func TestRecordNatsDisconnect(t *testing.T) {
+	before := testutil.ToFloat64(metrics.NatsDisconnectCounter)
+	recordNatsDisconnect(io.EOF)
+	assert.Equal(t, before+1, testutil.ToFloat64(metrics.NatsDisconnectCounter))
+}
+
+func TestRecordNatsAsyncError(t *testing.T) {
+	failureCounter := metrics.NatsFailureCounter.WithLabelValues(metrics.NatsErrorReasonTimeout)
+	errorBefore := testutil.ToFloat64(metrics.NatsErrorCounter)
+	failureBefore := testutil.ToFloat64(failureCounter)
+	recordNatsAsyncError(context.DeadlineExceeded)
+	assert.Equal(t, errorBefore+1, testutil.ToFloat64(metrics.NatsErrorCounter))
+	assert.Equal(t, failureBefore+1, testutil.ToFloat64(failureCounter))
+}
 
 func TestNewNkeyAuthOption(t *testing.T) {
 	t.Run("valid nkey seed", func(t *testing.T) {
@@ -184,4 +235,64 @@ func TestAuthCalloutPluginTokenProviderMarshalling(t *testing.T) {
 		assert.Equal(t, "ssa", result["pluginName"])
 		assert.Equal(t, testPayload, result["payload"])
 	})
+}
+
+func TestRecordNatsStartupFailure(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	defer zap.ReplaceGlobals(zap.New(core))()
+
+	failureCounter := metrics.NatsFailureCounter.WithLabelValues(metrics.NatsErrorReasonAuthentication)
+	before := testutil.ToFloat64(failureCounter)
+
+	recordNatsStartupFailure("nats initial connection failed", nats.ErrAuthorization)
+
+	assert.Equal(t, before+1, testutil.ToFloat64(failureCounter))
+
+	entries := logs.FilterMessage("nats initial connection failed").All()
+	require.Len(t, entries, 1)
+	// Startup failures are fatal to the process, so they must not be logged at warn.
+	assert.Equal(t, zap.ErrorLevel, entries[0].Level)
+	assert.Equal(t, metrics.NatsErrorReasonAuthentication, entries[0].ContextMap()["reason"])
+}
+
+// TestNewNatsConnectionRecordsInitialConnectFailure covers the gap this change
+// closes: nats.Connect returns the error synchronously and never invokes the
+// registered ErrorHandler, so nothing was recorded for a failed initial connect.
+func TestNewNatsConnectionRecordsInitialConnectFailure(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	defer zap.ReplaceGlobals(zap.New(core))()
+
+	// Bind and immediately release a port so the dial is refused rather than timing out.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	unreachable := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	kp, err := nkeys.CreateUser()
+	require.NoError(t, err)
+	seed, err := kp.Seed()
+	require.NoError(t, err)
+
+	failureCounter := metrics.NatsFailureCounter.WithLabelValues(metrics.NatsErrorReasonConnection)
+	before := testutil.ToFloat64(failureCounter)
+
+	nc, err := NewNatsConnection("nats://"+unreachable, string(seed), "test-service", "", "")
+
+	assert.Error(t, err)
+	assert.Nil(t, nc)
+	assert.Equal(t, before+1, testutil.ToFloat64(failureCounter))
+	assert.Len(t, logs.FilterMessage("nats initial connection failed").All(), 1)
+}
+
+func TestNewNatsConnectionRecordsNkeySetupFailure(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	defer zap.ReplaceGlobals(zap.New(core))()
+
+	nc, err := NewNatsConnection("nats://127.0.0.1:4222", "invalid-seed", "test-service", "", "")
+
+	assert.Error(t, err)
+	assert.Nil(t, nc)
+	assert.Len(t, logs.FilterMessage("nats nkey auth setup failed").All(), 1)
+	// The connect is never attempted, so no connection failure should be logged.
+	assert.Empty(t, logs.FilterMessage("nats initial connection failed").All())
 }

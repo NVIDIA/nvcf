@@ -15,7 +15,7 @@ CRIU's `dump_io_uring()` groups VMAs by inode, assuming each io_uring has a uniq
 
 ## Current Behavior (Bug)
 
-```
+```text
 fd 4: io_uring with 64 entries, inode 15288
 fd 5: io_uring with 256 entries, inode 15288  ← SAME INODE!
 
@@ -72,6 +72,7 @@ Each io_uring has two types of mappings:
 ### Key Changes
 
 1. Add struct to track fd info before VMA processing:
+
 ```c
 struct io_uring_fd_info {
     int fd;
@@ -83,9 +84,9 @@ struct io_uring_fd_info {
 };
 ```
 
-2. Pre-scan all io_uring fds and calculate expected sizes
+1. Pre-scan all io_uring fds and calculate expected sizes
 
-3. Match VMAs by size instead of inode
+2. Match VMAs by size instead of inode
 
 ---
 

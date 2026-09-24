@@ -108,7 +108,7 @@ Commit and pull request messages must adhere to the [conventional commit v1.0.0 
 
 Examples:
 
-```
+```text
 fix(docs): remove dead hyperlink
 refactor(docs): use java 8 streams
 perf(workspace): improve workspace mount speed
@@ -155,7 +155,7 @@ git commit -s -m "Add cool feature."
 
 This will append the following to your commit message:
 
-```
+```text
 Signed-off-by: Your Name <your@email.com>
 ```
 
@@ -165,19 +165,21 @@ For more information, see the [Developer Certificate of Origin](https://develope
 
 ## Documentation Contributions
 
-Documentation content lives under `docs/`. Fern publishes that content using version-specific navigation files under `fern/versions/`, and `fern/docs.yml` declares the public version list.
+Documentation content lives under `docs/`. Fern publishes one site with four products: Overview plus one product per Helm stack. Each stack product has its own version menu. `fern/docs.yml` declares the products and their versions, and navigation files live under `fern/products/`.
 
 | Path | Audience | Published | Versioning role |
 |---|---|---|---|
-| `docs/user/` | Customers | Yes | Source content for the default `main` docs version. `fern/versions/main.yml` points here and publishes at `/nvcf/`. |
-| `docs/v0.5/` | Customers using release 0.5 | Yes | Frozen content for the `0.5` docs version. `fern/versions/v0.5.yml` points here and publishes at `/nvcf/v0.5/`. |
-| `docs/dev/` | Contributors / internal dev | Only if symlinked | Developer-oriented source pages. These are published only when a symlink from a versioned content tree, usually `docs/user/`, is listed in that version's Fern nav. |
-| `fern/docs.yml` | Docs site | Yes | Declares public versions, display names, slugs, and the nav file for each version. |
-| `fern/versions/*.yml` | Docs site | Yes | Defines navigation and page order for one published version. Page paths are relative to the version file. |
+| `docs/overview/` | Customers | Yes | Unversioned shared content: compatibility matrix, quickstart, manifest, image mirroring, local development, shared images and samples. Publishes at `/nvcf/overview/`. |
+| `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/` | Customers | Yes | Top-of-tree content for one stack, published as that product's `dev` version at `/nvcf/<stack>/dev/`. |
+| `docs/<stack>-<version>/` | Customers on a stack release | Yes | Frozen content for one exact stack version, for example `docs/observability-1.3.2/`. Publishes at `/nvcf/<stack>/<version>/`. |
+| `docs/v0.5/`, `docs/v0.6.0/`, `docs/v0.6.1/`, `docs/cp-*/` | Customers on legacy releases | Yes | Frozen legacy full-tree content from before the per-stack split, attached to the Self-Managed Stack product. |
+| `docs/dev/` | Contributors / internal dev | Only if symlinked | Developer-oriented source pages. These are published only when a symlink from a product tree is listed in that product's Fern nav. |
+| `fern/docs.yml` | Docs site | Yes | Declares products, their versions, display names, slugs, and the nav file for each version. |
+| `fern/products/overview.yml`, `fern/products/<stack>/*.yml` | Docs site | Yes | Defines navigation and page order for one product version. Page paths are relative to the nav file. |
 
-Use `docs/user/` for changes that should appear in the default `main` docs. Update `docs/v0.5/` only for fixes that must also apply to the 0.5 release docs. When adding, renaming, moving, or removing a published page, update the matching `fern/versions/<version>.yml` file.
+A page belongs to exactly one product. Use the product tree that owns the page for changes that should appear in `dev`. Edit frozen trees only for fixes that must also apply to that released version. When adding, renaming, moving, or removing a published page, update the matching nav file under `fern/products/`. Links to pages in another product must be absolute site paths such as `/nvcf/overview/quickstart`, because Fern resolves relative links inside the rendering product.
 
-All navigation sections use `skip-slug: true`, so each page title becomes a flat URL slug within its published version. Keep page titles unique and descriptive within the version nav. Run `fern check` to validate the docs after any navigation or link change. Preview locally with `fern docs dev` from the `fern/` directory.
+All navigation sections use `skip-slug: true`, so each page title becomes a flat URL slug within its product version. Keep page titles unique and descriptive within each product nav. Run `fern check` to validate the docs after any navigation or link change. Preview locally with `fern docs dev` from the `fern/` directory.
 
 ---
 

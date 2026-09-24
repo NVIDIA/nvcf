@@ -157,11 +157,25 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 }
 
 func copyProxyHeaders(dst http.Header, src http.Header) {
+	connectionHeaders := make(map[string]struct{})
+	for key, values := range src {
+		if !strings.EqualFold(key, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			for _, name := range strings.Split(value, ",") {
+				connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(name))] = struct{}{}
+			}
+		}
+	}
 	for key, values := range src {
 		if _, skip := hopByHopHeaders[http.CanonicalHeaderKey(key)]; skip {
 			continue
 		}
-		if strings.EqualFold(key, echo.HeaderContentLength) {
+		if _, skip := connectionHeaders[http.CanonicalHeaderKey(key)]; skip {
+			continue
+		}
+		if strings.EqualFold(key, echo.HeaderContentLength) || isInternalResponseHeader(key) {
 			continue
 		}
 		dst.Del(key)
@@ -169,4 +183,10 @@ func copyProxyHeaders(dst http.Header, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func isInternalResponseHeader(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasPrefix(name, "x-stargate-") ||
+		name == "x-inference-server-id" || name == "x-inference-server-url"
 }

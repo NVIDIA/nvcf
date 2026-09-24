@@ -10,6 +10,8 @@ metadata:
   annotations:
     "helm.sh/hook": post-delete
     "helm.sh/hook-delete-policy": hook-succeeded
+    argocd.argoproj.io/hook: PostDelete
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 spec:
   template:
     metadata:
@@ -22,7 +24,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: deleter
-          image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.16.7"
+          image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1"
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

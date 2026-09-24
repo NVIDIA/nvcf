@@ -18,6 +18,8 @@ limitations under the License.
 package cli
 
 import (
+	"os"
+
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -27,9 +29,19 @@ func SetEmbeddedConfig(configData []byte) {
 	config.SetEmbeddedDefaults(configData)
 }
 
+// commandArgs returns the args to pass to the root command.
+// When invoked with no subcommand (container default), it defaults to ["server"].
+func commandArgs() []string {
+	if len(os.Args) < 2 {
+		return []string{"server"}
+	}
+	return os.Args[1:]
+}
+
 // Execute runs the root command
 func Execute() error {
 	rootCmd := NewRootCommand()
+	rootCmd.SetArgs(commandArgs())
 	return rootCmd.Execute()
 }
 

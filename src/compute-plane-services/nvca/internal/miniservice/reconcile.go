@@ -289,6 +289,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 	}
+	r.emitConditionEvents(ms, ms.Status.Conditions, msCopy.Status.Conditions)
+
 	if phaseChanged {
 		fromPhase := normalizeMiniServicePhase(ms.Status.Phase)
 		toPhase := normalizeMiniServicePhase(msCopy.Status.Phase)
@@ -298,12 +300,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		if ms.Status.Phase == "" {
 			log.Info("MiniService changed phase", "new_status", msCopy.Status.Phase)
-			r.eventRecorder.Eventf(ms, "Normal", "PhaseChange", "phase changed to %s",
+			r.recordEvent(ms, corev1.EventTypeNormal, "PhaseChange", "phase changed to %s",
 				msCopy.Status.Phase)
 		} else {
 			log.Info("MiniService changed phase", "prev_status", ms.Status.Phase,
 				"new_status", msCopy.Status.Phase)
-			r.eventRecorder.Eventf(ms, "Normal", "PhaseChange", "phase changed from %s to %s",
+			r.recordEvent(ms, corev1.EventTypeNormal, "PhaseChange", "phase changed from %s to %s",
 				ms.Status.Phase, msCopy.Status.Phase)
 		}
 	}
@@ -629,6 +631,12 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
 		return reconcile.Result{}, err
 	}
+	// Carry the decoded workload feature flags through to the admission webhook via the
+	// miniservice metadata ConfigMap, so it can read them at Pod admission time. Only the
+	// feature flags are carried, not the rest of WorkloadConfig, which the webhook has no use for.
+	if workloadConfig != nil {
+		metaInput.WorkloadFeatureFlags = workloadConfig.FeatureFlags
+	}
 	// Update the resources status in the MiniService status.
 	updateResourcesStatus(ms, resources)
 	// ReVal may render filtered workload pull secrets, which should be used if possible.
@@ -744,14 +752,16 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	// transient error (timeout, rate-limit) must be retried.
 	cacheBackend := nvcastorage.HelmCacheBackendNone
 	if cacheLaunchRequested(icmsReq) {
-		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher)
+		// Same config value the storage controller provisions cache volumes
+		// with, so the class checked here is the class they land on.
+		cacheBackend, err = r.selectHelmCacheBackend(ctx, icmsReq, ms.Spec.Namespace)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
 		}
 	}
 
 	// Create storage requests if configured for the cluster.
-	stDone, err := r.doStorageRequests(ctx,
+	stDone, readyStorageRequests, err := r.doStorageRequests(ctx,
 		ms, icmsReq, infraObjectMutators,
 		workerPullSecrets, cacheInitJob, cacheInitPVC, cacheBackend,
 	)
@@ -759,11 +769,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	stList := &nvcav2beta1.StorageRequestList{}
-	if err := r.Client.List(ctx, stList, client.InNamespace(ms.Spec.Namespace)); err != nil {
-		return reconcile.Result{}, (err)
-	}
-	instanceStorageAnnos, utilsStorageAnnos := getAnnotationsForReadyStorageRequests(stList)
+	instanceStorageAnnos, utilsStorageAnnos := getAnnotationsForReadyStorageRequests(readyStorageRequests)
 	if len(instanceStorageAnnos) != 0 {
 		maps.Copy(metaInput.PodAnnotations, instanceStorageAnnos)
 	}
@@ -847,7 +853,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 
 	infraObjs = append(infraObjs, utilsPod)
 
-	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
+	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) &&
+		!workloadConfig.IsFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain) {
 		infraObjs = append(infraObjs, nvcfdra.NewSingleChannelComputeDomain())
 	}
 

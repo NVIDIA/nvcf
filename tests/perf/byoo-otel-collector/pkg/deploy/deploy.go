@@ -29,6 +29,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -65,6 +66,9 @@ const (
 	accountsSecretsMountPath = "/var/secrets"
 	// accountsSecretsFile is the input file name the extractor waits for.
 	accountsSecretsFile = "accounts-secrets.json"
+
+	collectorHealthPort = "13133"
+	collectorHealthPath = "/health"
 )
 
 // Client wraps a Kubernetes clientset with the operations the suite needs.
@@ -149,6 +153,13 @@ type deploySettings struct {
 	// secrets volume so the generated exporter config can resolve the
 	// ${file:...} references it needs to start.
 	exportCredentials map[string]string
+	// collectorEnv adds or overrides environment variables on the collector
+	// container before it is applied (e.g. BYOO_LOG_CHUNKING_ENABLED).
+	collectorEnv map[string]string
+	// collectorMemoryLimit, when non-empty, overrides the collector container's
+	// memory request and limit (a Kubernetes quantity such as "512Mi"). Used to
+	// sweep the collector's memory ceiling to find its OOM point.
+	collectorMemoryLimit string
 }
 
 // DeployOption customizes Deploy.
@@ -162,6 +173,20 @@ type DeployOption func(*deploySettings)
 // rendering.
 func WithExportCredentials(creds map[string]string) DeployOption {
 	return func(s *deploySettings) { s.exportCredentials = creds }
+}
+
+// WithCollectorEnv adds or overrides environment variables on the collector
+// container. It is how the suite toggles collector features (such as log
+// chunking) that are driven by env at startup.
+func WithCollectorEnv(env map[string]string) DeployOption {
+	return func(s *deploySettings) { s.collectorEnv = env }
+}
+
+// WithCollectorMemoryLimit overrides the collector container's memory request
+// and limit with the given Kubernetes quantity (e.g. "512Mi"). An empty value
+// leaves the translated resources untouched.
+func WithCollectorMemoryLimit(limit string) DeployOption {
+	return func(s *deploySettings) { s.collectorMemoryLimit = limit }
 }
 
 // Deploy applies the rendered workload for the shape into the namespace: the
@@ -185,6 +210,10 @@ func (c *Client) Deploy(ctx context.Context, namespace string, res *render.Resul
 	pod.Labels[partOfLabelKey] = partOfLabelValue
 	pod.Labels[managedByLabelKey] = managedByLabelValue
 	pod.Labels[instanceLabelKey] = instance
+
+	if err := applyCollectorOverrides(pod, settings); err != nil {
+		return nil, err
+	}
 
 	if len(settings.exportCredentials) > 0 {
 		secretName := instance + "-export-creds"
@@ -221,6 +250,61 @@ func (c *Client) Deploy(ctx context.Context, namespace string, res *render.Resul
 		deployed.Endpoints[p.Name] = fmt.Sprintf("%s.%s.svc.cluster.local:%d", svc.Name, namespace, p.Port)
 	}
 	return deployed, nil
+}
+
+// applyCollectorOverrides mutates the collector container in the rendered pod
+// per the deploy settings: it adds/overrides environment variables and, when
+// requested, overrides the memory request and limit.
+func applyCollectorOverrides(pod *corev1.Pod, s deploySettings) error {
+	if len(s.collectorEnv) == 0 && s.collectorMemoryLimit == "" {
+		return nil
+	}
+	idx := -1
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == render.CollectorContainerName {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("collector container %q not found in rendered pod", render.CollectorContainerName)
+	}
+	c := &pod.Spec.Containers[idx]
+
+	for k, v := range s.collectorEnv {
+		setEnv(c, k, v)
+	}
+
+	if s.collectorMemoryLimit != "" {
+		q, err := resource.ParseQuantity(s.collectorMemoryLimit)
+		if err != nil {
+			return fmt.Errorf("parse collector memory limit %q: %w", s.collectorMemoryLimit, err)
+		}
+		if q.Sign() <= 0 {
+			return fmt.Errorf("collector memory limit %q: must be positive", s.collectorMemoryLimit)
+		}
+		if c.Resources.Requests == nil {
+			c.Resources.Requests = corev1.ResourceList{}
+		}
+		if c.Resources.Limits == nil {
+			c.Resources.Limits = corev1.ResourceList{}
+		}
+		c.Resources.Requests[corev1.ResourceMemory] = q
+		c.Resources.Limits[corev1.ResourceMemory] = q
+	}
+	return nil
+}
+
+// setEnv adds or overrides a literal environment variable on the container.
+func setEnv(c *corev1.Container, key, value string) {
+	for i := range c.Env {
+		if c.Env[i].Name == key {
+			c.Env[i].Value = value
+			c.Env[i].ValueFrom = nil
+			return
+		}
+	}
+	c.Env = append(c.Env, corev1.EnvVar{Name: key, Value: value})
 }
 
 // mountSecretOverPath finds the volume backing the collector volumeMount at
@@ -344,7 +428,11 @@ func (c *Client) DeploySink(ctx context.Context, namespace string, opts sink.Opt
 	if err := c.applyConfigMap(ctx, namespace, sink.ConfigMap(namespace)); err != nil {
 		return nil, err
 	}
-	if err := c.applyPod(ctx, namespace, sink.Pod(namespace, opts)); err != nil {
+	pod, err := sink.Pod(namespace, opts)
+	if err != nil {
+		return nil, fmt.Errorf("build sink pod: %w", err)
+	}
+	if err := c.applyPod(ctx, namespace, pod); err != nil {
 		return nil, err
 	}
 	svc := sink.Service(namespace)
@@ -358,6 +446,28 @@ func (c *Client) DeploySink(ctx context.Context, namespace string, opts sink.Opt
 		HTTPEndpoint:    sink.HTTPEndpoint(namespace),
 		MetricsEndpoint: sink.MetricsEndpoint(namespace),
 	}, nil
+}
+
+// DeletePod deletes a single pod by name, treating a missing pod as success,
+// and blocks until the pod has actually disappeared. The suite uses it to induce
+// downstream backpressure by removing the OTLP sink pod mid-run while leaving
+// its Service in place, so the collector's export target still resolves but
+// refuses connections. Waiting for the pod to be gone (not just for the delete
+// request to be accepted) ensures the backend is truly down before the caller
+// starts load, so the run does not measure a window where the terminating sink
+// still drains traffic.
+func (c *Client) DeletePod(ctx context.Context, namespace, name string) error {
+	err := c.cs.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete pod %q in namespace %q: %w", name, namespace, err)
+	}
+	if err := c.waitPodDeleted(ctx, namespace, name, 60*time.Second); err != nil {
+		return fmt.Errorf("wait for pod %q deletion in namespace %q: %w", name, namespace, err)
+	}
+	return nil
 }
 
 // StartLoad creates the telemetrygen Jobs without waiting. Existing Jobs with
@@ -462,24 +572,34 @@ func (c *Client) RunLoad(ctx context.Context, namespace string, jobs []*batchv1.
 // as a missing (best-effort) sample. It is a variable so tests can shorten it.
 var scrapeTimeout = 15 * time.Second
 
+// healthPollInterval is the cadence for observing collector startup health. It
+// is a variable so tests can shorten it.
+var healthPollInterval = time.Second
+
 // proxyGet performs the low-level API-proxy fetch. It is a seam so tests can
 // exercise the timeout path without a live cluster.
 var proxyGet = func(ctx context.Context, cs kubernetes.Interface, namespace, pod, port, path string) ([]byte, error) {
 	return cs.CoreV1().Pods(namespace).ProxyGet("http", pod, port, path, nil).DoRaw(ctx)
 }
 
-// ScrapePodMetrics fetches a pod's Prometheus endpoint through the API server
-// proxy. This works without a metrics-server, an ingress, or port-forwarding,
-// and is the only cross-namespace-safe way to read in-cluster endpoints from
-// outside the cluster. Each scrape is bounded by scrapeTimeout.
-func (c *Client) ScrapePodMetrics(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
+// FetchPodEndpoint fetches an HTTP pod endpoint through the API server proxy.
+// This works without a metrics-server, an ingress, or port-forwarding, and is
+// the only cross-namespace-safe way to read in-cluster endpoints from outside
+// the cluster. Each fetch is bounded by scrapeTimeout.
+func (c *Client) FetchPodEndpoint(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, scrapeTimeout)
 	defer cancel()
 	raw, err := proxyGet(ctx, c.cs, namespace, pod, port, path)
 	if err != nil {
-		return nil, fmt.Errorf("scrape %s/%s:%s%s: %w", namespace, pod, port, path, err)
+		return nil, fmt.Errorf("fetch %s/%s:%s%s: %w", namespace, pod, port, path, err)
 	}
 	return raw, nil
+}
+
+// ScrapePodMetrics fetches a pod's Prometheus endpoint through the API server
+// proxy. It is a metrics-specific wrapper around FetchPodEndpoint.
+func (c *Client) ScrapePodMetrics(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
+	return c.FetchPodEndpoint(ctx, namespace, pod, port, path)
 }
 
 // PodHealth reports the collector pod's phase, aggregate restart count, and
@@ -560,6 +680,65 @@ func (c *Client) WaitPodReady(ctx context.Context, namespace, podName string, ti
 		}
 		return false, nil
 	})
+}
+
+// WaitCollectorHealth waits up to timeout for the BYOO collector container to
+// start. Once started, it waits no longer than startupMax for the health
+// endpoint to return successfully. The returned timestamps separate pod
+// scheduling/image-pull delay from collector initialization delay.
+func (c *Client) WaitCollectorHealth(ctx context.Context, namespace, podName, collectorContainer string, timeout, startupMax time.Duration) (report.StartupHealth, error) {
+	var startup report.StartupHealth
+	err := wait.PollUntilContextTimeout(ctx, healthPollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		pod, err := c.cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		if pod.Status.Phase == corev1.PodFailed {
+			return false, fmt.Errorf("pod %q failed: %s", podName, pod.Status.Reason)
+		}
+		if reason, ok := terminalContainerFailure(pod); ok {
+			return false, fmt.Errorf("pod %q not schedulable/healthy: %s", podName, reason)
+		}
+		if pod.Status.StartTime == nil {
+			return false, nil
+		}
+		collectorStartedAt, ok := containerStartedAt(pod, collectorContainer)
+		if !ok {
+			return false, nil
+		}
+		startupDeadline := collectorStartedAt.Add(startupMax)
+		if time.Now().After(startupDeadline) {
+			return false, fmt.Errorf("collector container %q exceeded startup maximum %s without reporting healthy", collectorContainer, startupMax)
+		}
+		healthCtx, cancel := context.WithDeadline(ctx, startupDeadline)
+		_, healthErr := c.FetchPodEndpoint(healthCtx, namespace, podName, collectorHealthPort, collectorHealthPath)
+		cancel()
+		healthyAt := time.Now().UTC()
+		if healthyAt.After(startupDeadline) {
+			return false, fmt.Errorf("collector container %q exceeded startup maximum %s without reporting healthy", collectorContainer, startupMax)
+		}
+		if healthErr == nil {
+			startup = report.NewStartupHealth(pod.Status.StartTime.Time, collectorStartedAt, healthyAt)
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil {
+		return report.StartupHealth{}, fmt.Errorf("wait for collector health endpoint %s:%s%s: %w", podName, collectorHealthPort, collectorHealthPath, err)
+	}
+	return startup, nil
+}
+
+func containerStartedAt(pod *corev1.Pod, name string) (time.Time, bool) {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == name && status.State.Running != nil {
+			return status.State.Running.StartedAt.Time, !status.State.Running.StartedAt.IsZero()
+		}
+	}
+	return time.Time{}, false
 }
 
 func (c *Client) waitPodDeleted(ctx context.Context, namespace, podName string, timeout time.Duration) error {

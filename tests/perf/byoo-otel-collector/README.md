@@ -8,8 +8,8 @@ library (`icms-translate`) rather than hand-written collector manifests.
 > Status: `render` (translate + validate, no cluster), `run` (provision a
 > managed k3d cluster or use a remote one, deploy an in-cluster OTLP sink + the
 > authentic collector pointed at it, drive telemetrygen load, and measure a
-> baseline), and `cleanup` are implemented. There are no pass/fail thresholds
-> yet; `run` establishes a reproducible baseline.
+> baseline), and `cleanup` are implemented. Collector startup health has a
+> target and maximum duration. Throughput has no pass/fail threshold yet.
 
 ## Why translation-driven
 
@@ -37,8 +37,8 @@ what the suite measures.
   the profile's rates.
 - `pkg/deploy`: applies the rendered workload and the sink to a cluster (k3d or
   remote), fronts the collector with a harness OTLP Service, backs its secrets
-  volume with export credentials, waits for readiness, runs the load, and tears
-  everything down.
+  volume with export credentials, measures collector startup health, waits for
+  readiness, runs the load, and tears everything down.
 - `pkg/labels`: the shared labels every object carries so cleanup is scoped.
 - `pkg/k3d`: provisions/tears down the managed local k3d cluster (`k3d` mode).
 - `pkg/report`: parses collector/sink metric scrapes over the measurement
@@ -103,8 +103,9 @@ multi-document stream (`---`-separated) and `json` emits an array, so
 2. renders the authentic collector with its export redirected at the sink
    (provider `OTEL_COLLECTOR`, endpoints pointed at the sink Service) and backs
    its secrets volume with dummy export credentials so the exporter can start;
-3. deploys the collector (fronted by a harness ClusterIP OTLP Service) and waits
-   for it to become ready;
+3. deploys the collector (fronted by a harness ClusterIP OTLP Service), polls
+   its `/health` endpoint, records startup timing, and waits for it to become
+   ready;
 4. repeats the following load+measure cycle once per profile repetition
    (`dev` runs once, `baseline` runs three times):
    1. drives telemetrygen load at the profile's rates, waiting for the generator
@@ -125,6 +126,17 @@ multi-document stream (`---`-separated) and `json` emits an array, so
 6. prints a summary per run (and writes results to `<results-dir>` if set:
    `<shape>.json` for a single repetition, `<shape>-run<N>.json` for several),
    then cleans up unless `--retain` is set.
+
+Startup health is the first successful HTTP response from the collector's
+`/health` endpoint on port `13133`. Reports record both Pod start to health and
+collector-container start to health. The first duration includes Pod startup
+and image pull. The second isolates collector initialization and is enforced.
+
+The default target is 15 seconds. The command emits a warning above the target
+and fails above the 30-second maximum. Adjust either bound with
+`--startup-target` or `--startup-max` when characterizing a known slower
+environment. These bounds do not alter the telemetry warmup or throughput
+measurement window.
 
 The target cluster depends on `--mode`:
 
@@ -159,13 +171,13 @@ GOWORK=off go run ./cmd/perf run --shape both --results-dir ./results
 
 Flags: `--shape`, `--profile`, `--mode` (`k3d`/`remote`), `--collector-image`,
 `--sink-image`, `--loadgen-image`, `--namespace`, `--kubeconfig`, `--context`,
-`--ready-timeout` (`3m`), `--retain`, `--skip-load`, `--k3d-cluster`,
-`--import-images`, `--results-dir`.
+`--ready-timeout` (`3m`), `--startup-target` (`15s`), `--startup-max` (`30s`),
+`--retain`, `--skip-load`, `--k3d-cluster`, `--import-images`, `--results-dir`.
 
-The baseline has no pass/fail thresholds yet; the numbers establish a
-reproducible baseline. Metric-name suffixes vary across collector-contrib
-versions, so `pkg/report` matches a list of candidate names per concept and
-notes any that were missing from the scrape rather than failing.
+The startup-health bound is the only pass/fail threshold. The remaining numbers
+establish a reproducible baseline. Metric-name suffixes vary across
+collector-contrib versions, so `pkg/report` matches a list of candidate names
+per concept and notes any that were missing from the scrape rather than failing.
 
 ### `cleanup`
 

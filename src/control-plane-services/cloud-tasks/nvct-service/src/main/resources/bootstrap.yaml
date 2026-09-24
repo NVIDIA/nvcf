@@ -16,7 +16,6 @@ spring:
   application:
     name: nvct-api
     env: default
-    version: ${SPRING_APPLICATION_VERSION:0.0.1-dummy-version}
     host:
       id: ${HOSTNAME:${spring.application.name}-${random.int}-host}
       dc: ${AWS_REGION:${spring.application.name}-${random.uuid}-dc}

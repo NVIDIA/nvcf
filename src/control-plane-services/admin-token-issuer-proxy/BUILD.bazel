@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@gazelle//:def.bzl", "gazelle")
+
+# gazelle:prefix github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy
+# gazelle:proto disable_global
+# gazelle:go_naming_convention import_alias
+# gazelle:exclude docs
+
+gazelle(
+    name = "gazelle",
+)
+
+alias(
+    name = "admin-issuer-proxy",
+    actual = "//src/control-plane-services/admin-token-issuer-proxy/cmd/admin-issuer-proxy",
+    visibility = ["//visibility:public"],
+)

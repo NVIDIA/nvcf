@@ -1,4 +1,4 @@
-## TL;DR
+# TL;DR
 <!--Provide a brief description of what changed and why it is needed.-->
 
 ## Additional Details (optional for docs, build, test, refactor, ci, chore, style, and revert PRs)
@@ -26,8 +26,8 @@ refs, other-repo refs, or commented-out template examples. If context is
 private, create a generic public issue without private details.
 -->
 
-
 ## Checklist
+
 - [ ] I am familiar with the [Contributing Guidelines](../CONTRIBUTING.md).
 - [ ] I have signed off my commits for Developer Certificate of Origin (DCO) compliance.
 - [ ] New or existing tests cover these changes.

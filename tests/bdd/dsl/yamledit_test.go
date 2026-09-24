@@ -113,6 +113,34 @@ list:
 	}
 }
 
+func TestRequireNonEmptyYAMLKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registration.yaml")
+	writeFile(t, path, `clusterID: cluster-123
+clusterGroupID: ""
+selfManaged:
+  identitySource: psat
+`)
+
+	if err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "selfManaged.identitySource"}); err != nil {
+		t.Fatalf("non-empty keys: %v", err)
+	}
+
+	t.Run("missing key", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "missingID"})
+		if err == nil || !strings.Contains(err.Error(), `row 2`) || !strings.Contains(err.Error(), `key "missingID" is missing`) {
+			t.Fatalf("err = %v, want row-specific missing-key error", err)
+		}
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterGroupID"})
+		if err == nil || !strings.Contains(err.Error(), `row 1`) || !strings.Contains(err.Error(), `key "clusterGroupID" is empty`) {
+			t.Fatalf("err = %v, want row-specific empty-value error", err)
+		}
+	})
+}
+
 func TestMatchYAMLSubtreeExactAndSubset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "profile.yaml")
@@ -175,6 +203,59 @@ func TestMatchYAMLSubtreeInterpolatesExpected(t *testing.T) {
 	}
 }
 
+func TestMatchYAMLDocumentSubsetInterpolatesExpected(t *testing.T) {
+	t.Setenv("BDD_TEST_GATEWAY", "gateway.example.invalid")
+	actual := `apiVersion: v1
+kind: ConfigMap
+data:
+  API_URL: http://gateway.example.invalid
+  EXTRA: preserved
+`
+	expected := `data:
+  API_URL: http://${BDD_TEST_GATEWAY}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("document subset: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentHelmValuesSubset(t *testing.T) {
+	t.Setenv("BDD_TMP_COLLECTOR_ENABLED", "true")
+	actual := `selfManaged:
+  otelCollector:
+    enabled: true
+    imageTag: 0.157.9
+`
+	expected := `selfManaged:
+  otelCollector:
+    enabled: ${BDD_TMP_COLLECTOR_ENABLED}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("Helm values subset: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentMismatchDoesNotExposeValues(t *testing.T) {
+	actual := `data:
+  token: actual-secret-value
+`
+	expected := `data:
+  token: expected-secret-value
+`
+	err := MatchYAMLDocument(actual, expected, MatchSubset)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	if !strings.Contains(err.Error(), "data.token") {
+		t.Fatalf("error %q does not name the mismatched path", err)
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
 func TestSubstituteFileReplacesPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.yaml")
@@ -229,6 +310,107 @@ func TestSubstituteFileBlockRejectsMissingOldBlock(t *testing.T) {
 	err := SubstituteFileBlock(path, "old\n---\nnew")
 	if err == nil || !strings.Contains(err.Error(), "not present") {
 		t.Fatalf("err = %v, want missing old block error", err)
+	}
+}
+
+// TestRenderYAMLFromKeysBuildsNestedDocument verifies that
+// RenderYAMLFromKeys produces a nested YAML structure from dotted-path
+// key/value pairs without touching the filesystem.
+func TestRenderYAMLFromKeysBuildsNestedDocument(t *testing.T) {
+	keys := [][2]string{
+		{"llmRequestRouter.fullnameOverride", "llm-request-router-region-b"},
+		{"llmRequestRouter.replicaCount", "2"},
+		{"llmRequestRouter.workload.kind", "StatefulSet"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	out := string(body)
+	for _, want := range []string{
+		"fullnameOverride: llm-request-router-region-b",
+		"replicaCount: \"2\"",
+		"kind: StatefulSet",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderYAMLFromKeysPreservesBoolsAndCollections verifies that
+// booleans and collection literals are decoded to native YAML types
+// while numbers remain as quoted strings.
+func TestRenderYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
+	keys := [][2]string{
+		{"router.enabled", "true"},
+		{"router.pki.enabled", "false"},
+		{"router.replicaCount", "2"},
+		{"router.discovery.remoteWatchUrls", "[]"},
+		{"router.name", "region-b"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := string(body)
+
+	for _, want := range []string{
+		"enabled: true",
+		"enabled: false",
+		"remoteWatchUrls: []",
+		"name: region-b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		`enabled: "true"`,
+		`enabled: "false"`,
+		`remoteWatchUrls: "[]"`,
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("value emitted as quoted string %q:\n%s", unwanted, out)
+		}
+	}
+	// Numbers stay as quoted strings; Helm coerces them in templates.
+	if !strings.Contains(out, `replicaCount: "2"`) {
+		t.Fatalf("replicaCount should remain a quoted string:\n%s", out)
+	}
+}
+
+// TestRenderYAMLFromKeysRejectsInvalidPath confirms that a malformed
+// dotted path surfaces as an error instead of a partial document.
+func TestRenderYAMLFromKeysRejectsInvalidPath(t *testing.T) {
+	keys := [][2]string{
+		{"router.name", "region-b"},
+		{"router..enabled", "true"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err == nil || !strings.Contains(err.Error(), "empty segment") {
+		t.Fatalf("err = %v, want invalid-path error", err)
+	}
+	if body != nil {
+		t.Fatalf("body should be nil on error, got:\n%s", body)
+	}
+}
+
+// TestRenderYAMLFromKeysInterpolatesValues confirms that ${VAR}
+// references in value cells are expanded before serialization.
+func TestRenderYAMLFromKeysInterpolatesValues(t *testing.T) {
+	t.Setenv("BDD_TEST_HOST", "region-b.example.invalid")
+
+	keys := [][2]string{
+		{"service.host", "${BDD_TEST_HOST}"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(string(body), "host: region-b.example.invalid") {
+		t.Fatalf("interpolation failed:\n%s", body)
 	}
 }
 

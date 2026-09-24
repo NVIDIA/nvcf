@@ -17,20 +17,22 @@
 
 # The script runs in an image that must contain:
 # - bash
-# - kubectl
-# - jq
+# - cqlsh
 {{- if .Values.cassandra.hooks.initializeCluster.enabled }}
 {{- $fullname := include "cassandra.fullname" . }}
+{{- $namespace := include "cassandra.namespace" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ $fullname }}-initialize-cluster
-  namespace: {{ include "cassandra.namespace" . }}
+  namespace: {{ $namespace }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
+  activeDeadlineSeconds: {{ .Values.cassandra.hooks.initializeCluster.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.cassandra.hooks.initializeCluster.backoffLimit }}
   template:
     {{- with .Values.cassandra.hooks.initializeCluster.podAnnotations }}
     metadata:
@@ -39,6 +41,9 @@ spec:
     {{- end }}
     spec:
       {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.cassandra.podSecurityContext }}
+      securityContext: {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.cassandra.hooks.initializeCluster.schedulingGates }}
       schedulingGates:
         {{- toYaml . | nindent 8 }}
@@ -49,28 +54,45 @@ spec:
           {{- if .Values.cassandra.migrations.image.pullPolicy }}
           imagePullPolicy: {{ .Values.cassandra.migrations.image.pullPolicy | title }}
           {{- end }}
+          {{- with .Values.cassandra.containerSecurityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
           command: ["/bin/bash"]
           args:
             - -c
-            - /scripts/initdb.sh {{ include "cassandra.namespace" . }} {{ $fullname }}
+            - /scripts/initdb.sh
           env:
+            - name: CASSANDRA_HOSTS
+              value: {{ include "cassandra.firstReplicaHost" . | quote }}
+            - name: CASSANDRA_READY_HOSTS
+              value: {{ include "cassandra.replicaHosts" . | quote }}
+            - name: CASSANDRA_PORT
+              value: "9042"
             - name: CASSANDRA_USER
               value: {{ .Values.cassandra.dbUser.user | quote }}
             - name: CASSANDRA_PASSWORD
               value: {{ .Values.cassandra.dbUser.password | quote }}
+            - name: REPLICA_COUNT
+              value: {{ .Values.cassandra.replicaCount | quote }}
           volumeMounts:
             - name: init-script
               readOnly: true
               mountPath: "/scripts"
+            - name: cassandra-init-cql
+              readOnly: true
+              mountPath: /opt/nvcf/cassandra/cql
           resources:
             {{- toYaml .Values.cassandra.hooks.initializeCluster.resources | nindent 12 }}
       restartPolicy: Never
-      serviceAccountName: {{ $fullname }}-initialize-cluster
       volumes:
         - name: init-script
           configMap:
             name: cassandra-init-script # static name is intentional
-            defaultMode: 0500
+            defaultMode: 0555
+        - name: cassandra-init-cql
+          configMap:
+            name: cassandra-init-cql # static name is intentional
+            defaultMode: 0444
 ---
 apiVersion: v1
 kind: ConfigMap

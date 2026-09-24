@@ -239,7 +239,7 @@ fn observe_connecting_request(
     request_id: String,
     input_tokens: u64,
 ) {
-    runtime.observe_request(RequestObservation {
+    runtime.observe_request_for_test(RequestObservation {
         endpoint: RequestObservationEndpoint::ChatCompletions,
         request_id,
         routing_key: None,
@@ -481,6 +481,30 @@ impl ProxyFixture {
         self.registrations.push(start_registration(config, failure));
     }
 
+    async fn wait_for_clusters(&self, model: &str, count: usize) {
+        wait_until(
+            "backend registration",
+            Duration::from_secs(5),
+            Duration::from_millis(20),
+            || {
+                let state = self.handle.state();
+                async move {
+                    let target = RoutingTargetKey {
+                        routing_key: None,
+                        model_id: model.to_string(),
+                    };
+                    let candidates = state.cluster_candidates_for_target(&target).await;
+                    if candidates.len() == count {
+                        Ok(())
+                    } else {
+                        Err(format!("candidates={candidates:?}"))
+                    }
+                }
+            },
+        )
+        .await;
+    }
+
     fn own_tunnel(&mut self, tunnel: QuicHttpTunnelHandle) {
         self.tunnels.push(tunnel);
     }
@@ -576,6 +600,7 @@ impl ProxyFixture {
         &mut self,
         backend_id: &str,
         cluster_id: &str,
+        protocol: TunnelTransportProtocol,
         runtime_state: PylonRuntimeState,
         retryable_rejection: bool,
     ) -> CapturingChatBackend {
@@ -584,6 +609,7 @@ impl ProxyFixture {
             "127.0.0.1:0".parse().unwrap(),
             format!("http://{}", backend.addr),
         );
+        tunnel_config.tunnel_protocol = protocol;
         tunnel_config.forwarding.runtime_state = runtime_state.clone();
         let tunnel = start_quic_http_tunnel(tunnel_config)
             .await
@@ -1494,6 +1520,215 @@ async fn exercise_reverse_queue_mismatch(protocol: TunnelTransportProtocol) {
 }
 
 #[tokio::test]
+async fn connection_nominated_headers_do_not_cross_http1_proxy_hops() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = listener.local_addr().unwrap();
+    let upstream_task = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut headers = String::new();
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                let line = line.to_ascii_lowercase();
+                if let Some(value) = line.strip_prefix("content-length:") {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+                headers.push_str(&line);
+            }
+            let mut body = vec![0; content_length];
+            stream.read_exact(&mut body).await.unwrap();
+            stream
+                .get_mut()
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\
+                  Connection:\r\nConnection: X-Response-One, close\r\n\
+                  Connection: x-RESPONSE-two\r\nX-Response-One: private-one\r\n\
+                  X-Response-One: private-two\r\nX-Response-Two: private-three\r\n\
+                  X-End-To-End: preserved\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+            if headers.starts_with("post /v1/embeddings ") {
+                return (headers, body);
+            }
+            assert!(headers.starts_with("get /health "), "{headers}");
+        }
+    });
+    let mut fixture = ProxyFixture::start("http1-header-filter").await;
+    let tunnel = start_quic_http_tunnel(QuicHttpTunnelConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        format!("http://{upstream_addr}"),
+    ))
+    .await
+    .unwrap();
+    let model = "header-model";
+    fixture.register(
+        active_registration_config(
+            fixture.grpc_addr,
+            "header-backend",
+            format!("quic://{}", tunnel.listen_addr()),
+            format!("http://{upstream_addr}"),
+            model,
+        ),
+        "register header backend",
+    );
+    fixture.own_tunnel(tunnel);
+    fixture.wait_for_clusters(model, 1).await;
+    let body = r#"{"model":"header-model","input":"hello"}"#;
+    let request = format!(
+        "POST /v1/embeddings HTTP/1.1\r\nHost: {}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\
+         X-Model: {model}\r\nX-Request-Id: header-request\r\nX-Input-Tokens: 1\r\n\
+         Connection:\r\nConnection: X-Request-One, close\r\n\
+         Connection: x-REQUEST-two\r\nX-Request-One: private-one\r\n\
+         X-Request-One: private-two\r\nX-Request-Two: private-three\r\n\
+         X-End-To-End: preserved\r\n\r\n{body}",
+        fixture.http_addr,
+        body.len(),
+    );
+    let mut client = TcpStream::connect(fixture.http_addr).await.unwrap();
+    client.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    tokio::time::timeout(Duration::from_secs(5), client.read_to_string(&mut response))
+        .await
+        .expect("HTTP/1 response should complete")
+        .unwrap();
+    let (request_headers, upstream_body) = upstream_task.await.unwrap();
+    assert_eq!(
+        upstream_body,
+        body.as_bytes(),
+        "{request_headers}\n{response}"
+    );
+    for name in ["x-request-one:", "x-request-two:"] {
+        assert!(!request_headers.contains(name), "{request_headers}");
+    }
+    assert!(request_headers.contains("x-end-to-end: preserved\r\n"));
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let response_headers = response
+        .split_once("\r\n\r\n")
+        .unwrap()
+        .0
+        .to_ascii_lowercase();
+    for name in ["x-response-one:", "x-response-two:"] {
+        assert!(!response_headers.contains(name), "{response}");
+    }
+    assert!(response_headers.contains("x-end-to-end: preserved"));
+    assert!(
+        response.split_once("\r\n\r\n").unwrap().1.contains("{}"),
+        "{response}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoints() {
+    for protocol in [
+        TunnelTransportProtocol::RawQuic,
+        TunnelTransportProtocol::Http3,
+        TunnelTransportProtocol::WebTransport,
+    ] {
+        for reverse in [false, true] {
+            let case = if reverse {
+                TunnelTestCase::reverse(protocol)
+            } else {
+                TunnelTestCase::direct(protocol)
+            };
+            let (mut fixture, _) = ProxyFixture::start_for_tunnel_case("test-overload", case).await;
+            let model = "overload-model";
+            let runtime = active_runtime(model);
+            set_model_queue(&runtime, model, 0);
+            observe_connecting_request(&runtime, model, "existing-work".to_string(), 100);
+            let backend = if reverse {
+                fixture
+                    .add_capturing_reverse_backend("overload-backend", "", protocol, runtime, false)
+                    .await
+            } else {
+                fixture
+                    .add_capturing_direct_backend("overload-backend", "", protocol, runtime, false)
+                    .await
+            };
+            fixture.wait_for_clusters(model, 1).await;
+            for (endpoint, body) in [
+                ("/v1/chat/completions", streaming_chat_body(model)),
+                (
+                    "/v1/responses",
+                    serde_json::json!({"model": model, "input": "hello", "stream": true}),
+                ),
+                (
+                    "/v1/embeddings",
+                    serde_json::json!({"model": model, "input": "hello"}),
+                ),
+            ] {
+                let body = Bytes::from(body.to_string());
+                let request_body = reqwest::Body::wrap_stream(futures::stream::once(async move {
+                    Ok::<_, std::io::Error>(body)
+                }));
+                let response = proxy_request(
+                    &reqwest::Client::new(),
+                    fixture.http_addr,
+                    endpoint,
+                    model,
+                    "overload-request",
+                )
+                .header("content-type", "application/json")
+                .header("x-stargate-max-wait-ms", "0")
+                .body(request_body)
+                .send()
+                .await
+                .expect("send overload request");
+                assert_eq!(
+                    response.status(),
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "{protocol:?}, reverse={reverse}, {endpoint}"
+                );
+                assert_eq!(response.headers()["content-type"], "application/json");
+                assert_eq!(
+                    response.headers()["x-stargate-error-code"],
+                    "overloaded_error"
+                );
+                assert!(
+                    response
+                        .headers()
+                        .keys()
+                        .all(|name| name == "x-stargate-error-code"
+                            || !name.as_str().starts_with("x-stargate-"))
+                );
+                let body: serde_json::Value = response.json().await.expect("read overload body");
+                assert_eq!(
+                    body,
+                    serde_json::json!({"error": {
+                        "code": "overloaded_error",
+                        "message": "Inference capacity is temporarily unavailable.",
+                        "param": "",
+                        "type": "overloaded_error",
+                    }})
+                );
+            }
+            assert_eq!(backend.hits(), 0, "rejections must occur before inference");
+            let metrics = fixture.metrics();
+            assert!(
+                metrics.contains("result=\"upstream_429\""),
+                "Pylon must keep returning 429 internally"
+            );
+            assert!(
+                metrics.contains("status=\"503\""),
+                "Stargate overload responses must be counted as 503"
+            );
+            fixture.shutdown().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn chat_completions_route_proxies_path_query_and_body_through_quic_tunnel() {
     exercise_endpoint_contract(EndpointContract::Chat).await;
 }
@@ -2054,6 +2289,7 @@ async fn transport_local_shared_cluster_failover_stays_within_selected_cluster()
             },
             auth_token_provider: None,
             tls_cert_pem: None,
+            grpc_tls_ca_cert_pem: None,
             quic_insecure: true,
             tunnel_protocol: Default::default(),
         },
@@ -2201,7 +2437,13 @@ async fn retryable_upstream_rejection_retries_alternate_backend() {
     let mut fixture = ProxyFixture::start("test-sg-retryable-rejection").await;
     let reject_runtime = active_runtime("retry-model");
     let reject_backend = fixture
-        .add_capturing_direct_backend("retry-reject", "", reject_runtime.clone(), true)
+        .add_capturing_direct_backend(
+            "retry-reject",
+            "",
+            TunnelTransportProtocol::RawQuic,
+            reject_runtime.clone(),
+            true,
+        )
         .await;
 
     let success_runtime = active_runtime("retry-model");
@@ -2340,6 +2582,7 @@ async fn queue_estimate_mismatch_retries_alternate_backend_before_upstream() {
         .add_capturing_direct_backend(
             "queue-mismatch-reject",
             "",
+            TunnelTransportProtocol::RawQuic,
             reject_runtime_state.clone(),
             false,
         )
@@ -2391,16 +2634,25 @@ async fn queue_estimate_mismatch_retries_alternate_backend_before_upstream() {
             .await
             .expect("budget-limited queue mismatch body should be readable");
         let metrics = fixture.metrics();
-        if status == StatusCode::TOO_MANY_REQUESTS
+        if status == StatusCode::SERVICE_UNAVAILABLE
             && metrics.contains(
                 r#"stargate_proxy_retry_exhausted_total{model="queue-mismatch-model",reason="retry_budget_exhausted",routing_key=""} 1"#,
             )
         {
             assert!(headers.get("x-stargate-retryable").is_none());
-            assert!(
-                response_text.contains("queue_estimate_mismatch"),
-                "final queue mismatch body should preserve the upstream reason: {response_text}"
+            assert_eq!(headers["x-stargate-error-code"], "overloaded_error");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&response_text).unwrap(),
+                serde_json::json!({"error": {
+                    "code": "overloaded_error",
+                    "message": "Inference capacity is temporarily unavailable.",
+                    "param": "",
+                    "type": "overloaded_error",
+                }}),
             );
+            for name in headers.keys() {
+                assert!(name == "x-stargate-error-code" || !name.as_str().starts_with("x-stargate-"));
+            }
             assert_eq!(
                 reject_backend.hits(),
                 0,
@@ -2503,6 +2755,7 @@ async fn queue_estimate_mismatch_retries_sibling_in_selected_shared_cluster() {
         .add_capturing_direct_backend(
             "queue-mismatch-a-reject",
             "queue-mismatch-shared-cluster",
+            TunnelTransportProtocol::RawQuic,
             reject_runtime_state.clone(),
             false,
         )
@@ -2802,6 +3055,150 @@ async fn retryable_single_backend_exhausts_eligible_backends() {
 }
 
 #[tokio::test]
+async fn queue_mismatch_single_backend_returns_overload() {
+    let mut fixture = ProxyFixture::start("test-sg-queue-exhaust").await;
+    let model = "queue-exhaust-model";
+    let runtime = active_runtime(model);
+    set_model_queue(&runtime, model, 0);
+    observe_connecting_request(&runtime, model, "existing-work".to_string(), 100);
+    let backend = fixture
+        .add_capturing_direct_backend(
+            "queue-reject",
+            "",
+            TunnelTransportProtocol::RawQuic,
+            runtime,
+            false,
+        )
+        .await;
+    fixture.wait_for_clusters(model, 1).await;
+
+    let response = fixture
+        .chat_request(model, "queue-exhaust-request")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers()["x-stargate-error-code"],
+        "overloaded_error"
+    );
+    assert!(
+        response.headers().keys().all(
+            |name| name == "x-stargate-error-code" || !name.as_str().starts_with("x-stargate-")
+        )
+    );
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "overloaded_error");
+    assert_eq!(backend.hits(), 0);
+    assert_metric_sample(
+        &fixture.metrics(),
+        r#"stargate_proxy_retry_exhausted_total{model="queue-exhaust-model",reason="no_eligible_backend",routing_key=""} 1"#,
+        true,
+        "queue rejection should exhaust the only destination",
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn retryable_application_errors_preserve_response_after_retries_stop() {
+    for status in [
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::SERVICE_UNAVAILABLE,
+    ] {
+        let expected_body = format!(r#"{{"error":"application rejection {}"}}"#, status.as_u16());
+        let response_body = expected_body.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/v1/chat/completions",
+                post(move || {
+                    let body = response_body.clone();
+                    async move {
+                        Response::builder()
+                            .status(status)
+                            .header("content-type", "application/json")
+                            .header("retry-after", "7")
+                            .header("x-stargate-error-code", "overloaded_error")
+                            .body(Body::from(body))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route("/health", get(|| async { "ok" }));
+        let upstream_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let retry = ProxyRetryConfig {
+            max_request_retries: 1,
+            ..ProxyRetryConfig::default()
+        };
+        let mut fixture = ProxyFixture::start_with_retry("application-retry", retry).await;
+        let model = "application-error-model";
+        for backend_id in ["application-error-a", "application-error-b"] {
+            let mut config = QuicHttpTunnelConfig::new(
+                "127.0.0.1:0".parse().unwrap(),
+                format!("http://{upstream_addr}"),
+            );
+            config.forwarding.retry.require_upstream_retry_header = false;
+            let tunnel = start_quic_http_tunnel(config)
+                .await
+                .expect("start application error tunnel");
+            fixture.register(
+                active_registration_config(
+                    fixture.grpc_addr,
+                    backend_id,
+                    format!("quic://{}", tunnel.listen_addr()),
+                    format!("http://{upstream_addr}"),
+                    model,
+                ),
+                "register application error backend",
+            );
+            fixture.own_tunnel(tunnel);
+        }
+        fixture.wait_for_clusters(model, 2).await;
+
+        for budget in [Some("0"), None] {
+            let before = fixture.metrics();
+            let request = fixture.chat_request(model, "application-retry-request");
+            let request = if let Some(budget) = budget {
+                request.header("x-stargate-max-wait-ms", budget)
+            } else {
+                request
+            };
+            let response = request
+                .send()
+                .await
+                .expect("send application retry request");
+            assert_eq!(response.status(), status, "retry budget: {budget:?}");
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert_eq!(response.headers()["retry-after"], "7");
+            assert!(response.headers().get("x-stargate-retryable").is_none());
+            assert!(response.headers().get("x-stargate-retry-reason").is_none());
+            assert!(response.headers().get("x-stargate-error-code").is_none());
+            assert_eq!(response.text().await.unwrap(), expected_body);
+            let after = fixture.metrics();
+            assert_delta!(
+                &before, &after, "stargate_proxy_retries_total", if budget.is_some() { 0.0 } else { 1.0 };
+                r#"model="application-error-model""#,
+                r#"reason="upstream_admission_rejected""#
+            );
+            let reason = if budget.is_some() {
+                "retry_budget_exhausted"
+            } else {
+                "upstream_admission_rejected"
+            };
+            assert_delta!(
+                &before, &after, "stargate_proxy_retry_exhausted_total", 1.0;
+                r#"model="application-error-model""#,
+                &format!("reason=\"{reason}\"")
+            );
+        }
+        fixture.shutdown().await;
+        upstream_task.abort();
+        let _ = upstream_task.await;
+    }
+}
+
+#[tokio::test]
 async fn request_retry_limit_returns_last_retryable_rejection() {
     let retry = ProxyRetryConfig {
         max_request_retries: 1,
@@ -2816,7 +3213,7 @@ async fn request_retry_limit_returns_last_retryable_rejection() {
         .await;
 
     let response = poll_until(
-        "request retry limit should return the final retryable rejection",
+        "request retry limit should preserve the upstream rejection",
         Duration::from_secs(15),
         || {
             let request = fixture.chat_request("retry-limit-model", "req-retry-limit");
@@ -2828,6 +3225,8 @@ async fn request_retry_limit_returns_last_retryable_rejection() {
     )
     .await;
     assert!(response.headers().get("x-stargate-retryable").is_none());
+    let body: serde_json::Value = response.json().await.expect("read upstream rejection body");
+    assert_eq!(body, serde_json::json!({"error": "queue full"}));
     assert_metric_sample(
         &fixture.metrics(),
         r#"stargate_proxy_retry_exhausted_total{model="retry-limit-model",reason="upstream_admission_rejected",routing_key=""} 1"#,

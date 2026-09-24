@@ -21,6 +21,7 @@ Functions are long-running services that respond to HTTP or gRPC invocations.
 | [Ray Serve Helm Chart](function-samples/helmchart-samples/ray-serve-sample/) | Helm chart that deploys a Ray Serve application as an NVCF function. |
 | [Dynamo Operator Sample](function-samples/helmchart-samples/dynamo-operator-sample/) | Helm chart for a vLLM disaggregated router deployed through NVCF. |
 | [Load Tester Supreme](function-samples/load-tester-supreme/) | HTTP and gRPC echo servers designed for load and throughput testing. |
+| [gRPC Streaming ASR Client](function-samples/grpc-streaming-asr-client/) | Invoke a Nemotron ASR Streaming NIM over the NVCF gRPC gateway using bidirectional streaming. |
 
 ## Task Samples
 
@@ -37,6 +38,14 @@ Tasks are one-shot workloads that run to completion and surface progress and res
 ## Load Tests
 
 k6 load testing scripts for NVCF function and NVCT task endpoints are in the [load-tests/](load-tests/) directory.
+
+## Reference Architectures
+
+Reference architectures combine multiple NVCF workload types in one workflow.
+
+| Sample | Description |
+|--------|-------------|
+| [Model Artifact Inventory Pipeline](reference-architectures/function-task-pipeline/) | Client-orchestrated workflow that admits an artifact request, inventories mounted model and dataset files in a task, and returns result metadata to a function. |
 
 ## Building for Multiple Compute Architectures
 

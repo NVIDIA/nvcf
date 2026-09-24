@@ -75,6 +75,30 @@ func TestCommandRunnerRunWithTTYReadHonorsContext(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerContextCancellationStopsChildProcesses(t *testing.T) {
+	testDir := t.TempDir()
+	markerPath := filepath.Join(testDir, "late-child-write")
+	scriptPath := filepath.Join(testDir, "spawn-child.sh")
+	script := `#!/bin/sh
+nohup sh -c 'sleep 0.4; touch "$1"' sh "$1" >/dev/null 2>&1 &
+wait
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write child process fixture: %v", err)
+	}
+
+	runner := NewCommandRunner(testDir, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if _, err := runner.Run(ctx, scriptPath+" "+markerPath); err == nil {
+		t.Fatal("child-spawning command unexpectedly completed")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("child process survived context cancellation and wrote %s: %v", markerPath, err)
+	}
+}
+
 func TestCommandRunnerNonZeroExit(t *testing.T) {
 	runner := NewCommandRunner(t.TempDir(), "")
 	result, err := runner.Run(context.Background(), "false")
@@ -129,6 +153,40 @@ func TestCommandRunnerWritesLogFiles(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(logDir, "0002"+suffix)); err != nil {
 			t.Fatalf("missing %s: %v", "0002"+suffix, err)
+		}
+	}
+}
+
+func TestCommandRunnerSensitiveStdinIsRedacted(t *testing.T) {
+	logDir := t.TempDir()
+	runner := NewCommandRunner(t.TempDir(), logDir)
+	const secret = "runner-secret-value"
+	command := `sh -c "value=$(cat); printf '%s' \"$value\"; printf '%s' \"$value\" >&2; exit 1"`
+	result, err := runner.RunWithSensitiveStdin(context.Background(), command, secret)
+	if err == nil {
+		t.Fatal("expected command failure")
+	}
+	for label, value := range map[string]string{
+		"stdout": result.Stdout,
+		"stderr": result.Stderr,
+		"error":  err.Error(),
+	} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("%s leaked sensitive stdin: %q", label, value)
+		}
+	}
+	for label, value := range map[string]string{"stdout": result.Stdout, "stderr": result.Stderr} {
+		if !strings.Contains(value, "[REDACTED]") {
+			t.Fatalf("%s did not preserve a redacted diagnostic: %q", label, value)
+		}
+	}
+	for _, suffix := range []string{".cmd", ".stdout", ".stderr"} {
+		body, readErr := os.ReadFile(filepath.Join(logDir, "0001"+suffix))
+		if readErr != nil {
+			t.Fatalf("read log %s: %v", suffix, readErr)
+		}
+		if strings.Contains(string(body), secret) {
+			t.Fatalf("log %s leaked sensitive stdin: %q", suffix, body)
 		}
 	}
 }
