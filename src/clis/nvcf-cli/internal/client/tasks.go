@@ -360,16 +360,17 @@ func (c *Client) ListBasicTaskDetails(ctx context.Context, taskIDs []string) (*L
 	return decodeNVCT[ListBasicTaskDetailsResponse](resp)
 }
 
-// GetTask returns full details for a single task. When includeSecrets is true,
-// secret values are included in the response (subject to API authorization).
+// GetTask returns full details for a single task. includeSecrets controls
+// whether secret names are included in the response.
 func (c *Client) GetTask(ctx context.Context, taskID string, includeSecrets bool) (*TaskResponse, error) {
 	if taskID == "" {
 		return nil, fmt.Errorf("taskId is required")
 	}
-	endpoint := fmt.Sprintf("/v1/nvct/tasks/%s", url.PathEscape(taskID))
-	if includeSecrets {
-		endpoint += "?includeSecrets=true"
-	}
+	endpoint := fmt.Sprintf(
+		"/v1/nvct/tasks/%s?includeSecrets=%t",
+		url.PathEscape(taskID),
+		includeSecrets,
+	)
 
 	resp, err := c.makeNVCTRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
