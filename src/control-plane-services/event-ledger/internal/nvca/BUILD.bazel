@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "nvca",
+    srcs = ["introspect.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/libraries/go/lib/pkg/auth/nvcaintrospect",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":nvca",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "nvca_test",
+    srcs = ["introspect_test.go"],
+    embed = [":nvca"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

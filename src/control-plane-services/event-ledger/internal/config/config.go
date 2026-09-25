@@ -39,6 +39,7 @@ var (
 	ErrMissingPolicyNamespace            = errors.New("policy: namespace is required")
 	ErrMissingPolicyFQDN                 = errors.New("policy: policy-fqdn is required")
 	ErrInvalidPolicyCredsRefreshInterval = errors.New("policy: creds-refresh-interval must be greater than 0")
+	ErrMissingIntrospectionURL           = errors.New("auth: introspection.url is required when introspection is enabled")
 )
 
 // Top-level config
@@ -69,13 +70,38 @@ type PublisherConfig struct {
 
 type AuthConfig struct {
 	Enabled              bool
-	Provider             string       `mapstructure:"provider"`
-	JWKSetUrl            string       `mapstructure:"jwk-set-url"`
-	Issuer               string       `mapstructure:"issuer"`
-	Audience             string       `mapstructure:"audience"`
-	TenantClaim          string       `mapstructure:"tenant-claim"`
-	CacheRefreshInterval int          `mapstructure:"cache-refresh-interval"`
-	Policy               PolicyConfig `mapstructure:"policy"`
+	Provider             string              `mapstructure:"provider"`
+	JWKSetUrl            string              `mapstructure:"jwk-set-url"`
+	Issuer               string              `mapstructure:"issuer"`
+	Audience             string              `mapstructure:"audience"`
+	TenantClaim          string              `mapstructure:"tenant-claim"`
+	CacheRefreshInterval int                 `mapstructure:"cache-refresh-interval"`
+	Policy               PolicyConfig        `mapstructure:"policy"`
+	Introspection        IntrospectionConfig `mapstructure:"introspection"`
+}
+
+// IntrospectionConfig configures the SIS call used to verify NVCA's PSAT for
+// callers that do not hold an OpenBao-issued JWT. It is deliberately separate
+// from stack-level deployment gating (addons.eventLedger.enabled): a stack
+// can enable the Event Ledger release without wiring introspection, and that
+// must fail startup rather than silently accept unverified NVCA callers.
+type IntrospectionConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	URL             string `mapstructure:"url"`
+	TimeoutSeconds  int    `mapstructure:"timeout-seconds"`
+	CacheTTLSeconds int    `mapstructure:"cache-ttl-seconds"`
+}
+
+// WithDefaults fills in the timeout and cache TTL the design calls for: a
+// 10-second SIS call timeout and a 5-minute introspection cache.
+func (i IntrospectionConfig) WithDefaults() IntrospectionConfig {
+	if i.TimeoutSeconds <= 0 {
+		i.TimeoutSeconds = 10
+	}
+	if i.CacheTTLSeconds <= 0 {
+		i.CacheTTLSeconds = 300
+	}
+	return i
 }
 
 type PolicyConfig struct {
@@ -145,6 +171,9 @@ func ValidateAuthConfig(cfg AuthConfig, selfManaged bool) error {
 			if cfg.Policy.CredentialsRefreshInterval <= 0 {
 				return ErrInvalidPolicyCredsRefreshInterval
 			}
+		}
+		if cfg.Introspection.Enabled && cfg.Introspection.URL == "" {
+			return ErrMissingIntrospectionURL
 		}
 	case "":
 		return ErrMissingAuthProvider

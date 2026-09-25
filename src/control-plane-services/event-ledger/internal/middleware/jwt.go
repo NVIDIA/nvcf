@@ -243,7 +243,20 @@ func MaybeRequireScopes(logger *otelzap.Logger, authEnabled bool, requiredScopes
 		if !authEnabled {
 			return next
 		}
-		return requireScopes(requiredScopes, scopeRequirement)(next)
+		return requireScopes(requiredScopes, scopeRequirement, false)(next)
+	}
+}
+
+// MaybeRequireScopesAllowNVCA is MaybeRequireScopes, but also trusts an
+// SIS-introspected NVCA identity for write routes. Use only where the
+// handler also binds the identity to a specific cluster (see
+// bindNVCAClusterID in cmd/api/service/v3.go).
+func MaybeRequireScopesAllowNVCA(logger *otelzap.Logger, authEnabled bool, requiredScopes Scopes, scopeRequirement ScopeRequirement) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if !authEnabled {
+			return next
+		}
+		return requireScopes(requiredScopes, scopeRequirement, true)(next)
 	}
 }
 
@@ -287,7 +300,7 @@ func getScopesFromClaims(claims jwt.MapClaims) ([]string, bool) {
 	return result, len(result) > 0
 }
 
-func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement) func(http.Handler) http.Handler {
+func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement, allowNVCAIdentity bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			parentCtx := r.Context()
@@ -302,6 +315,20 @@ func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement) fun
 				// API keys carry no scopes.
 				if isPDPAuthorized(parentCtx) {
 					next.ServeHTTP(w, r)
+					return
+				}
+				if _, nvcaOK := NVCAIdentityFromContext(parentCtx); nvcaOK {
+					// NVCA's PSAT carries no scopes; only trust it on routes
+					// that opt in and bind it to a specific cluster (see
+					// bindNVCAClusterID in cmd/api/service/v3.go).
+					if allowNVCAIdentity && requiredScopes == WriteScopes {
+						next.ServeHTTP(w, r)
+						return
+					}
+					logger.WarnContext(traceCtx, ErrInsufficientPermissions)
+					status := http.StatusForbidden
+					api_error.GenerateErrorResponse(traceCtx, errType, "Forbidden", r.URL.Path, status, errors.New(ErrInsufficientPermissions), w)
+					logging.LogHTTPResponse(traceCtx, logger, status, w.Header())
 					return
 				}
 				logger.WarnContext(traceCtx, ErrMissingClaims)
@@ -450,7 +477,11 @@ func MaybeRequirePathTenant(enabled bool) mux.MiddlewareFunc {
 	}
 }
 
-func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.ResponseWriter, r *http.Request) (context.Context, error) {
+// processJWTToken parses and validates a JWT from the request's Authorization
+// header. When writeResponse is false, it returns the error without writing
+// an HTTP response, so a caller can fall back to another verification path
+// (e.g. SIS introspection) before deciding what to send the client.
+func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.ResponseWriter, r *http.Request, writeResponse bool) (context.Context, error) {
 	ctx := r.Context()
 	// Safe guard against nil context
 	if ctx == nil {
@@ -467,23 +498,36 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	}
 
 	errType := "Process JWT Token Error"
+
+	respondUnauthorized := func(err error) {
+		if !writeResponse {
+			return
+		}
+		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, http.StatusUnauthorized, err, w)
+		logging.LogHTTPResponse(traceCtx, ctxLogger, http.StatusUnauthorized, w.Header())
+	}
+
+	// writeResponse=false means a caller (the PSAT fallback path) has another
+	// verification method to try before treating this as a real failure, so
+	// log quietly here and let that caller log once both paths are done.
+	logFailure := ctxLogger.WarnContext
+	if !writeResponse {
+		logFailure = ctxLogger.DebugContext
+	}
+
 	if opts.JwksURL == "" {
-		ctxLogger.WarnContext(traceCtx, ErrMissingJWKSURL)
-		status := http.StatusUnauthorized
+		logFailure(traceCtx, ErrMissingJWKSURL)
 		err := errors.New(ErrMissingJWKSURL)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
 	// Get the token from the Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		ctxLogger.WarnContext(traceCtx, ErrMissingAuthHeader)
-		status := http.StatusUnauthorized
+		logFailure(traceCtx, ErrMissingAuthHeader)
 		err := errors.New(ErrMissingAuthHeader)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
@@ -492,35 +536,29 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	if tokenString == authHeader {
-		ctxLogger.WarnContext(traceCtx, ErrInvalidAuthFormat)
-		status := http.StatusUnauthorized
+		logFailure(traceCtx, ErrInvalidAuthFormat)
 		err := errors.New(ErrInvalidAuthFormat)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
 	// Get the key function for token verification
-	keyFunc := newJWKKeyFunc(traceCtx, opts, jwkCache, ctxLogger)
+	keyFunc := newJWKKeyFunc(traceCtx, opts, jwkCache, ctxLogger, !writeResponse)
 
 	// Parse and validate the token
 	claims := jwt.MapClaims{}
 	token, err := parseJWTWithOptions(tokenString, claims, keyFunc, opts)
 	if err != nil {
-		ctxLogger.WarnContext(traceCtx, "invalid token", zap.Error(err))
-		status := http.StatusUnauthorized
+		logFailure(traceCtx, "invalid token", zap.Error(err))
 		err = fmt.Errorf("%s: %v", ErrInvalidToken, err)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
 	if !token.Valid {
-		ctxLogger.WarnContext(traceCtx, ErrInvalidToken)
-		status := http.StatusUnauthorized
+		logFailure(traceCtx, ErrInvalidToken)
 		err = errors.New(ErrInvalidToken)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
@@ -528,11 +566,9 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	if opts.TenantClaim != "" {
 		authorizedTenants := tenantValuesFromClaim(claims[opts.TenantClaim])
 		if len(authorizedTenants) == 0 {
-			ctxLogger.WarnContext(traceCtx, "missing or invalid tenant claim", zap.String("claim", opts.TenantClaim))
-			status := http.StatusUnauthorized
+			logFailure(traceCtx, "missing or invalid tenant claim", zap.String("claim", opts.TenantClaim))
 			err = errors.New(ErrInvalidToken)
-			api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-			logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+			respondUnauthorized(err)
 			return nil, err
 		}
 		newCtx = context.WithValue(newCtx, tenantClaimsContextKey, authorizedTenants)
@@ -548,7 +584,7 @@ func newParseJWTMiddleware(opts JWTParserOptions, jwkCache *jwk.Cache) mux.Middl
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			newContext, err := processJWTToken(opts, jwkCache, w, r)
+			newContext, err := processJWTToken(opts, jwkCache, w, r, true)
 			if err != nil {
 				return
 			}
@@ -558,10 +594,15 @@ func newParseJWTMiddleware(opts JWTParserOptions, jwkCache *jwk.Cache) mux.Middl
 	}
 }
 
-func newJWKKeyFunc(ctx context.Context, opts JWTParserOptions, jwkCache *jwk.Cache, ctxLogger *logging.TraceLogger) jwt.Keyfunc {
+func newJWKKeyFunc(ctx context.Context, opts JWTParserOptions, jwkCache *jwk.Cache, ctxLogger *logging.TraceLogger, quiet bool) jwt.Keyfunc {
 	// Create a safe context if nil
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	logFailure := ctxLogger.ErrorContext
+	if quiet {
+		logFailure = ctxLogger.DebugContext
 	}
 
 	return func(token *jwt.Token) (interface{}, error) {
@@ -571,26 +612,26 @@ func newJWKKeyFunc(ctx context.Context, opts JWTParserOptions, jwkCache *jwk.Cac
 
 		keySet, err := fetchJwk(ctx, opts, jwkCache, ctxLogger)
 		if err != nil {
-			ctxLogger.ErrorContext(ctx, "failed to fetch jwk", zap.Error(err))
+			logFailure(ctx, "failed to fetch jwk", zap.Error(err))
 			return nil, errors.New(ErrFetchingJwk)
 		}
 
 		kid, err := extractKidFromTokenHeaders(token.Header)
 		if err != nil {
-			ctxLogger.ErrorContext(ctx, "failed to extract kid from token headers", zap.Error(err))
+			logFailure(ctx, "failed to extract kid from token headers", zap.Error(err))
 			// this is already assured to be of type nverror
 			return nil, err
 		}
 
 		key, ok := keySet.LookupKeyID(kid)
 		if !ok {
-			ctxLogger.ErrorContext(ctx, "jwk not found for kid", zap.String("kid", kid))
+			logFailure(ctx, "jwk not found for kid", zap.String("kid", kid))
 			return nil, errors.New(ErrMissingJwk)
 		}
 
 		var cryptoKey interface{}
 		if err := key.Raw(&cryptoKey); err != nil {
-			ctxLogger.ErrorContext(ctx, "failed to get raw crypto key", zap.Error(err))
+			logFailure(ctx, "failed to get raw crypto key", zap.Error(err))
 			return nil, fmt.Errorf("failed to get raw crypto key: %w", err)
 		}
 
