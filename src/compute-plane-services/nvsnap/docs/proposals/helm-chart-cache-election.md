@@ -268,3 +268,31 @@ engine phases            cold (leader)   warm (follower)
   init engine total      77 s            22 s
   CUDA graph capture     10 s            10 s    (not cacheable)
 ```
+
+### Qwen3-235B-A22B-Instruct-2507-FP8 TP=8 chart, two nodes, dev1 2026-09-25
+
+Stock chart (`deploy/k8s/charts/vllm-workers`, `--enable-expert-parallel`;
+the FP8 block quantization does not split the MoE intermediate eight ways
+without it), replicas=2, one worker per 8x H100 node, agent v0.2.75-election6,
+NVMesh. Capture 237.0 GB, 2006 files.
+
+```
+first deploy, replicas=2
+  t+0        leader + follower admitted; follower gated, no GPU
+  t+870s     leader Ready (cold: 641 s download+load, 94 s compile, 292 s init, 42 s graphs)
+  t+~1165s   capture committed + promoted, follower released
+  t+1524s    follower Ready (359 s after release), 0 downloads, serves
+             one download of 237 GB instead of two
+uninstall + reinstall, replicas=2, both nodes reading the same rox at once
+  t+367s     both Ready; prewarm init 230 s each (237 GB), engine 17 s load, 15 s compile, 48 s init
+
+engine phases            cold (leader)   warm (follower / reinstall)
+  model load + download  641 s           16-17 s
+  torch.compile          94 s            15 s
+  init engine total      292 s           48 s
+  CUDA graph capture     42 s            28 s
+```
+
+At this size the warm start is the volume read: 230 s of the 367 s is the
+prewarm sweep at ~1 GB/s, shared by two readers. The engine work that the
+cache removes went from 641+94 s to 17+15 s.
