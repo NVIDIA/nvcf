@@ -29,15 +29,23 @@ const hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 func TestLeaseElector_OneLeaderPerHash(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
-	e := &LeaseElector{KubeClient: kc, Namespace: "nvsnap-system", Deadline: 30 * time.Minute, Now: func() time.Time { return now }}
+	ids := []string{"a", "b", "c", "d"}
+	e := &LeaseElector{KubeClient: kc, Namespace: "nvsnap-system", Deadline: 30 * time.Minute,
+		Now: func() time.Time { return now }, NewID: func() string { id := ids[0]; ids = ids[1:]; return id }}
 
 	roles := map[Role]int{}
-	for _, uid := range []string{"a", "b", "c", "d"} {
-		r, err := e.Elect(context.Background(), hash, pod(uid))
+	var leaderID string
+	for range 4 {
+		r, id, err := e.Elect(context.Background(), hash, pod(""))
 		if err != nil {
 			t.Fatal(err)
 		}
 		roles[r]++
+		if r == RoleLeader {
+			leaderID = id
+		} else if id != "" {
+			t.Errorf("follower must not receive an id, got %q", id)
+		}
 	}
 	if roles[RoleLeader] != 1 || roles[RoleFollower] != 3 {
 		t.Fatalf("roles = %v, want 1 leader 3 followers", roles)
@@ -46,8 +54,8 @@ func TestLeaseElector_OneLeaderPerHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *lease.Spec.HolderIdentity != "a" || lease.Annotations[LeaderPodAnnotation] != "a" || lease.Annotations[LeaderNamespaceAnnotation] != "fn" {
-		t.Errorf("lease must record the first admission as leader: %+v", lease.ObjectMeta)
+	if leaderID != "a" || *lease.Spec.HolderIdentity != "a" || lease.Annotations[LeaderIDAnnotation] != "a" || lease.Annotations[LeaderNamespaceAnnotation] != "fn" {
+		t.Errorf("lease must record the first admission's id as leader (got %q): %+v", leaderID, lease.ObjectMeta)
 	}
 	if lease.Annotations[DeadlineAnnotation] != now.Add(30*time.Minute).Format(time.RFC3339) {
 		t.Errorf("deadline = %q, want admission + 30m", lease.Annotations[DeadlineAnnotation])
@@ -57,22 +65,27 @@ func TestLeaseElector_OneLeaderPerHash(t *testing.T) {
 	}
 	// A different hash is a separate election.
 	other := "ffff" + hash[4:]
-	if r, _ := e.Elect(context.Background(), other, pod("z")); r != RoleLeader {
+	ids = []string{"z"}
+	if r, _, _ := e.Elect(context.Background(), other, pod("")); r != RoleLeader {
 		t.Errorf("first admission of another hash must lead, got %s", r)
 	}
 }
 
 func TestLeaseElector_Errors(t *testing.T) {
 	e := &LeaseElector{KubeClient: fake.NewSimpleClientset(), Namespace: "nvsnap-system"}
-	if _, err := e.Elect(context.Background(), hash, pod("")); err == nil {
-		t.Error("a pod without UID cannot hold a lease; want error")
+	if _, _, err := e.Elect(context.Background(), hash, nil); err == nil {
+		t.Error("nil pod; want error")
+	}
+	// Pods have no UID at CREATE admission; the elector must not need one.
+	if r, id, err := e.Elect(context.Background(), hash, pod("")); err != nil || r != RoleLeader || id == "" {
+		t.Errorf("uid-less pod must be electable with a minted id, got role=%s id=%q err=%v", r, id, err)
 	}
 	kc := fake.NewSimpleClientset()
 	kc.PrependReactor("create", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("apiserver unavailable")
 	})
 	e = &LeaseElector{KubeClient: kc, Namespace: "nvsnap-system"}
-	if _, err := e.Elect(context.Background(), hash, pod("a")); err == nil {
+	if _, _, err := e.Elect(context.Background(), hash, pod("a")); err == nil {
 		t.Error("a non-AlreadyExists create error must surface so the webhook fails open")
 	}
 	if (&LeaseElector{Namespace: "x"}).deadline() != DefaultDeadline {
@@ -84,6 +97,9 @@ func TestLeaseElector_Errors(t *testing.T) {
 func TestPodIdentity(t *testing.T) {
 	if got := PodIdentity(pod("u")); got != "fn/w-*(u)" {
 		t.Errorf("generateName pod identity = %q", got)
+	}
+	if got := PodIdentity(pod("")); got != "fn/w-*" {
+		t.Errorf("admission-time pod (no uid) identity = %q", got)
 	}
 	named := pod("u")
 	named.Name = "w-abc"

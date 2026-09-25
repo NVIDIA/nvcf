@@ -70,16 +70,17 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 		return nil, fmt.Errorf("backend stat: %w", statErr)
 	}
 
-	role, err := m.Elector.Elect(ctx, hash, pod)
+	role, id, err := m.Elector.Elect(ctx, hash, pod)
 	if err != nil {
 		return nil, err
 	}
 	switch role {
 	case election.RoleLeader:
 		patches := mp.stamp(hash, election.RoleLeader)
+		patches = append(patches, mp.annotation(election.ElectionIDAnnotation, id)...)
 		patches = append(patches, mp.label(CaptureLabel, "true")...)
 		patches = append(patches, m.cacheDirCapturePatchesFor(pod, true)...)
-		log.Info("election: leader; capture decoration applied")
+		log.WithField("election_id", id).Info("election: leader; capture decoration applied")
 		return patches, nil
 	case election.RoleFollower:
 		pending, ok := m.L2Backend.(checkpointstore.PendingMounter)

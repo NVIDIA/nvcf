@@ -26,10 +26,13 @@ type fakeElector struct {
 	hash   string
 }
 
-func (f *fakeElector) Elect(_ context.Context, hash string, _ *corev1.Pod) (election.Role, error) {
+func (f *fakeElector) Elect(_ context.Context, hash string, _ *corev1.Pod) (election.Role, string, error) {
 	f.called++
 	f.hash = hash
-	return f.role, f.err
+	if f.role == election.RoleLeader {
+		return f.role, "id-1", f.err
+	}
+	return f.role, "", f.err
 }
 
 // pendingStub is an L2 backend that can (or cannot) name the claim ahead
@@ -55,7 +58,7 @@ func (p *pendingStub) PendingMountSpec(hash string, vol checkpointstore.VolumeMe
 // name yet, GPU request, Dynamo list-form args, no nvsnap annotations.
 func dynamoWorker() *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "fn-ns", GenerateName: "dgd-worker-", UID: "uid-1"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fn-ns", GenerateName: "dgd-worker-"},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name: "main", Image: "vllm/vllm-openai:v0.20.0",
 			Command:   []string{"python3", "-m", "dynamo.vllm"},
@@ -168,6 +171,9 @@ func TestElection_LeaderGetsCaptureDecoration(t *testing.T) {
 	}
 	if v.labels[CaptureLabel] != "true" {
 		t.Error("leader must carry the capture label so the watcher captures it")
+	}
+	if v.annotations[election.ElectionIDAnnotation] != "id-1" {
+		t.Errorf("leader must carry the election id the Lease holds, got %q", v.annotations[election.ElectionIDAnnotation])
 	}
 	if !v.cacheEmptyDir || !v.envNames["HF_HOME"] {
 		t.Errorf("leader must get the capture decoration (cache emptyDir + cache env), got emptyDir=%v env=%v", v.cacheEmptyDir, v.envNames)

@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
@@ -64,10 +65,16 @@ const (
 	// server reconciler can list them.
 	LeaseKindLabel = "nvsnap.io/kind"
 	LeaseKindValue = "capture-election"
-	// LeaderNamespaceAnnotation and LeaderPodAnnotation on the Lease name
-	// the leader pod so its liveness can be checked.
+	// ElectionIDAnnotation on the leader pod is the id the webhook minted
+	// at admission and used as the Lease holder. A pod has no UID or name
+	// yet when a mutating webhook sees its CREATE, so the webhook's own id
+	// is the only handle that exists on both the Lease and the pod.
+	ElectionIDAnnotation = "nvsnap.io/election-id"
+	// LeaderNamespaceAnnotation and LeaderIDAnnotation on the Lease name
+	// the leader pod (namespace + election id) so its liveness can be
+	// checked.
 	LeaderNamespaceAnnotation = "nvsnap.io/leader-namespace"
-	LeaderPodAnnotation       = "nvsnap.io/leader-pod"
+	LeaderIDAnnotation        = "nvsnap.io/leader-id"
 	// DeadlineAnnotation is the RFC3339 time after which the reconciler
 	// treats the leader as failed even if its pod is still around.
 	DeadlineAnnotation = "nvsnap.io/deadline"
@@ -91,15 +98,17 @@ const (
 // concurrent admissions of the same hash.
 type Elector interface {
 	// Elect returns RoleLeader for exactly one live election per hash and
-	// RoleFollower for every other caller while that election stands.
-	Elect(ctx context.Context, hash string, pod *corev1.Pod) (Role, error)
+	// RoleFollower for every other caller while that election stands. The
+	// returned id is the Lease holder; the webhook stamps it on the leader
+	// as ElectionIDAnnotation so the server can find the leader later.
+	Elect(ctx context.Context, hash string, pod *corev1.Pod) (Role, string, error)
 }
 
 // LeaseName is the election Lease for a hash.
 func LeaseName(hash string) string { return "nvsnap-capture-" + checkpointstore.ShortHash(hash) }
 
 // PodIdentity names a pod at admission. Deployment and DynamoGraph pods
-// have no name yet (generateName), so the UID is the stable part.
+// have neither name nor UID yet at CREATE, only generateName.
 func PodIdentity(pod *corev1.Pod) string {
 	if pod == nil {
 		return ""
@@ -108,7 +117,10 @@ func PodIdentity(pod *corev1.Pod) string {
 	if name == "" {
 		name = pod.GenerateName + "*"
 	}
-	return fmt.Sprintf("%s/%s(%s)", pod.Namespace, name, pod.UID)
+	if pod.UID != "" {
+		return fmt.Sprintf("%s/%s(%s)", pod.Namespace, name, pod.UID)
+	}
+	return pod.Namespace + "/" + name
 }
 
 // LeaseElector elects through a Lease create in Namespace.
@@ -121,6 +133,15 @@ type LeaseElector struct {
 	Deadline time.Duration
 	// Now is a clock seam for tests.
 	Now func() time.Time
+	// NewID mints the election id; a seam for tests. nil uses a UUID.
+	NewID func() string
+}
+
+func (e *LeaseElector) newID() string {
+	if e.NewID != nil {
+		return e.NewID()
+	}
+	return string(uuid.NewUUID())
 }
 
 func (e *LeaseElector) now() time.Time {
@@ -137,19 +158,19 @@ func (e *LeaseElector) deadline() time.Duration {
 	return e.Deadline
 }
 
-// Elect creates the Lease for hash with the pod as holder. Created means
-// leader; AlreadyExists means follower; anything else is an error the
-// caller fails open on.
-func (e *LeaseElector) Elect(ctx context.Context, hash string, pod *corev1.Pod) (Role, error) {
+// Elect creates the Lease for hash with a freshly minted id as holder.
+// Created means leader; AlreadyExists means follower; anything else is an
+// error the caller fails open on.
+func (e *LeaseElector) Elect(ctx context.Context, hash string, pod *corev1.Pod) (Role, string, error) {
 	if e.KubeClient == nil {
-		return "", fmt.Errorf("election: no kube client")
+		return "", "", fmt.Errorf("election: no kube client")
 	}
-	if pod == nil || pod.UID == "" {
-		return "", fmt.Errorf("election: pod has no UID at admission")
+	if pod == nil {
+		return "", "", fmt.Errorf("election: nil pod")
 	}
 	now := e.now()
 	secs := int32(e.deadline().Seconds())
-	holder := string(pod.UID)
+	holder := e.newID()
 	lease := &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      LeaseName(hash),
@@ -161,7 +182,7 @@ func (e *LeaseElector) Elect(ctx context.Context, hash string, pod *corev1.Pod) 
 			Annotations: map[string]string{
 				HashAnnotation:            hash,
 				LeaderNamespaceAnnotation: pod.Namespace,
-				LeaderPodAnnotation:       holder,
+				LeaderIDAnnotation:        holder,
 				DeadlineAnnotation:        now.Add(e.deadline()).UTC().Format(time.RFC3339),
 			},
 		},
@@ -174,10 +195,10 @@ func (e *LeaseElector) Elect(ctx context.Context, hash string, pod *corev1.Pod) 
 	_, err := e.KubeClient.CoordinationV1().Leases(e.Namespace).Create(ctx, lease, metav1.CreateOptions{})
 	switch {
 	case err == nil:
-		return RoleLeader, nil
+		return RoleLeader, holder, nil
 	case apierrors.IsAlreadyExists(err):
-		return RoleFollower, nil
+		return RoleFollower, "", nil
 	default:
-		return "", fmt.Errorf("election: create lease %s: %w", lease.Name, err)
+		return "", "", fmt.Errorf("election: create lease %s: %w", lease.Name, err)
 	}
 }

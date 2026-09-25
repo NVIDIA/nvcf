@@ -158,15 +158,15 @@ func (r *electionReleaser) reconcile(ctx context.Context) {
 			_, _ = r.evict(ctx, hash, "deadline passed")
 			continue
 		}
-		if !r.leaderAlive(ctx, l.Annotations[election.LeaderNamespaceAnnotation], l.Annotations[election.LeaderPodAnnotation], hash) {
+		if !r.leaderAlive(ctx, l.Annotations[election.LeaderNamespaceAnnotation], l.Annotations[election.LeaderIDAnnotation], hash) {
 			_, _ = r.evict(ctx, hash, "leader pod gone or terminated")
 		}
 	}
 }
 
-// leaderAlive finds the leader by UID among the pods stamped with the
-// hash in its namespace and reports whether it can still capture.
-func (r *electionReleaser) leaderAlive(ctx context.Context, ns, uid, hash string) bool {
+// leaderAlive finds the leader by its election id among the pods stamped
+// with the hash in its namespace and reports whether it can still capture.
+func (r *electionReleaser) leaderAlive(ctx context.Context, ns, id, hash string) bool {
 	pods, err := r.kube.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: election.HashLabel + "=" + checkpointstore.ShortHash(hash),
 	})
@@ -177,7 +177,7 @@ func (r *electionReleaser) leaderAlive(ctx context.Context, ns, uid, hash string
 	}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		if string(p.UID) != uid {
+		if p.Annotations[election.ElectionIDAnnotation] != id {
 			continue
 		}
 		return p.Status.Phase != corev1.PodFailed && p.Status.Phase != corev1.PodSucceeded && p.DeletionTimestamp == nil

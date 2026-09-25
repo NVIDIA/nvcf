@@ -42,10 +42,11 @@ func gatedFollower(name string, owned bool) *corev1.Pod {
 }
 
 func leaderPod(phase corev1.PodPhase) *corev1.Pod {
-	const uid = "L"
+	const id = "L"
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "leader-" + uid, Namespace: "fn", UID: types.UID(uid),
-			Labels: map[string]string{election.HashLabel: checkpointstore.ShortHash(electTestHash)}},
+		ObjectMeta: metav1.ObjectMeta{Name: "leader-" + id, Namespace: "fn", UID: types.UID("uid-" + id),
+			Labels:      map[string]string{election.HashLabel: checkpointstore.ShortHash(electTestHash)},
+			Annotations: map[string]string{election.ElectionIDAnnotation: id}},
 		Status: corev1.PodStatus{Phase: phase},
 	}
 }
@@ -57,7 +58,7 @@ func electionLease(leaderUID string, deadline time.Time) *coordinationv1.Lease {
 		Annotations: map[string]string{
 			election.HashAnnotation:            electTestHash,
 			election.LeaderNamespaceAnnotation: "fn",
-			election.LeaderPodAnnotation:       leaderUID,
+			election.LeaderIDAnnotation:        leaderUID,
 			election.DeadlineAnnotation:        deadline.UTC().Format(time.RFC3339),
 		},
 	}}
