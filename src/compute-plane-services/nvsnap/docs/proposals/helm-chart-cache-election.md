@@ -179,7 +179,9 @@ Unit: classifier matrix, election win/lose/error, follower patch shape
 (gate, claim name, no GPU held), watcher uses the stamped hash, server
 ungate and eviction against a fake clientset.
 
-E2E: the TinyLlama TP=2 chart from the scale-up test, `replicas=1` then
+E2E: `scripts/test-election-e2e.sh` drives `deploy/k8s/charts/vllm-workers`
+(a stock vLLM Deployment with no nvsnap markers; model, TP and replicas are
+values). Historically the TinyLlama TP=2 chart from the scale-up test, `replicas=1` then
 `scale 2`, and `replicas=2` from the start. Expected: one capture, second
 pod `SchedulingGated` until `ready`, then Ready without a download. Then
 `helm uninstall` and reinstall: both pods restore.
