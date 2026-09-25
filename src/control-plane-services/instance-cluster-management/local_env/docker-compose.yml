@@ -70,7 +70,7 @@ services:
       - /populate-data.sh
     restart: "no"
   aws:
-    image: localstack/localstack:4.3
+    image: ministackorg/ministack:1.4.20
     environment:
       - SERVICES=sqs,sns,sts
       - DEFAULT_REGION=us-east-1

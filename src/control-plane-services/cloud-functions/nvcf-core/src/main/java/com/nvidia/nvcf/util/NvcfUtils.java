@@ -71,8 +71,8 @@ public final class NvcfUtils {
             """
                     {
                       "aws": {
-                        "accessKey": "dummy-access-key",
-                        "secretKey": "dummy-secret-key",
+                        "accessKey": "test",
+                        "secretKey": "test",
                         "sessionToken": "dummy-session-token",
                         "arn": "arn:aws:sts::dummy-role"
                       }
