@@ -408,14 +408,6 @@ func TestSetupNVCADeployment(t *testing.T) {
 				},
 			},
 		},
-		{
-			Name: ReValCacheVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{
-					SizeLimit: resource.NewQuantity(50*1<<30, resource.BinarySI),
-				},
-			},
-		},
 	}, gotDep.Spec.Template.Spec.Volumes)
 
 	// Check containers.
@@ -480,10 +472,6 @@ func TestSetupNVCADeployment(t *testing.T) {
 		{
 			Name:      agentConfigVolumeName,
 			MountPath: agentConfigDir,
-		},
-		{
-			Name:      ReValCacheVolumeName,
-			MountPath: ReValCacheDir,
 		},
 	}, nvcaContainer.VolumeMounts)
 
@@ -825,14 +813,6 @@ func TestSetupNVCADeployment_Vault(t *testing.T) {
 			},
 		},
 		{
-			Name: ReValCacheVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{
-					SizeLimit: resource.NewQuantity(50*1<<30, resource.BinarySI),
-				},
-			},
-		},
-		{
 			Name: "token",
 			VolumeSource: corev1.VolumeSource{
 				Projected: &corev1.ProjectedVolumeSource{
@@ -891,10 +871,6 @@ func TestSetupNVCADeployment_Vault(t *testing.T) {
 		{
 			Name:      agentConfigVolumeName,
 			MountPath: agentConfigDir,
-		},
-		{
-			Name:      ReValCacheVolumeName,
-			MountPath: ReValCacheDir,
 		},
 		{
 			Name:      "token",
@@ -1135,14 +1111,6 @@ func TestSetupNVCADeployment_SelfHosted(t *testing.T) {
 			},
 		},
 		{
-			Name: ReValCacheVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{
-					SizeLimit: resource.NewQuantity(50*1<<30, resource.BinarySI),
-				},
-			},
-		},
-		{
 			Name: "token",
 			VolumeSource: corev1.VolumeSource{
 				Projected: &corev1.ProjectedVolumeSource{
@@ -1214,10 +1182,6 @@ func TestSetupNVCADeployment_SelfHosted(t *testing.T) {
 		{
 			Name:      agentConfigVolumeName,
 			MountPath: agentConfigDir,
-		},
-		{
-			Name:      ReValCacheVolumeName,
-			MountPath: ReValCacheDir,
 		},
 		{
 			Name:      "token",
