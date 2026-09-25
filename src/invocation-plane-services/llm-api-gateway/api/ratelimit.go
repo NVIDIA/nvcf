@@ -82,7 +82,10 @@ func (r CallerLimitResolver) ResolveLimits(
 	}
 
 	spec, ok := reqCtx.ModelSpecs[reqCtx.Model]
-	if !ok || spec.TokenRateLimit == "" {
+	if !ok {
+		return nil, nil
+	}
+	if spec.TokenRateLimit == "" {
 		return nil, nil
 	}
 
@@ -104,6 +107,7 @@ func (r CallerLimitResolver) ResolveLimits(
 		TokensPerHour:   parsedTokenLimits.tokensPerHour,
 		TokensPerDay:    parsedTokenLimits.tokensPerDay,
 		TokensPerWeek:   parsedTokenLimits.tokensPerWeek,
+		TokensPerMonth:  parsedTokenLimits.tokensPerMonth,
 	}
 
 	switch {
@@ -120,12 +124,68 @@ func (r CallerLimitResolver) ResolveLimits(
 	}
 }
 
+// AccountLimitResolver applies the account-scoped token rate limit NVCF API resolves by
+// ncaId. The gateway does not know or care whether the value came from a tier, an
+// override, or any other resolution mechanism upstream - it just enforces the rate it
+// was given. Unlike CallerLimitResolver, the bucket is scoped by ncaId alone (no
+// routing_key segment), so it is shared across every function the account invokes rather
+// than reset per function.
+type AccountLimitResolver struct{}
+
+func (r AccountLimitResolver) ResolveLimits(
+	_ context.Context,
+	reqCtx *requestctx.RequestContext,
+	_ string,
+) ([]ratelimit.ResourceLimit, error) {
+	_ = r
+
+	if reqCtx == nil || reqCtx.OrgID == "" {
+		return nil, nil
+	}
+	if reqCtx.AccountInputTokenRateLimit == "" && reqCtx.AccountOutputTokenRateLimit == "" {
+		return nil, nil
+	}
+
+	parsedInputTokenLimits, err := parseTokenRateLimit(reqCtx.AccountInputTokenRateLimit)
+	if err != nil {
+		return nil, fmt.Errorf("parse account input token rate limit: %w", err)
+	}
+	parsedOutputTokenLimits, err := parseTokenRateLimit(reqCtx.AccountOutputTokenRateLimit)
+	if err != nil {
+		return nil, fmt.Errorf("parse account output token rate limit: %w", err)
+	}
+	if parsedInputTokenLimits.empty() && parsedOutputTokenLimits.empty() {
+		return nil, nil
+	}
+
+	return []ratelimit.ResourceLimit{
+		{
+			SubjectKey:            "nvcf:" + reqCtx.OrgID,
+			SubjectRepr:           "account `" + reqCtx.OrgID + "`",
+			Level:                 ratelimit.LevelOrg,
+			InputTokensPerSecond:  parsedInputTokenLimits.tokensPerSecond,
+			InputTokensPerMinute:  parsedInputTokenLimits.tokensPerMinute,
+			InputTokensPerHour:    parsedInputTokenLimits.tokensPerHour,
+			InputTokensPerDay:     parsedInputTokenLimits.tokensPerDay,
+			InputTokensPerWeek:    parsedInputTokenLimits.tokensPerWeek,
+			InputTokensPerMonth:   parsedInputTokenLimits.tokensPerMonth,
+			OutputTokensPerSecond: parsedOutputTokenLimits.tokensPerSecond,
+			OutputTokensPerMinute: parsedOutputTokenLimits.tokensPerMinute,
+			OutputTokensPerHour:   parsedOutputTokenLimits.tokensPerHour,
+			OutputTokensPerDay:    parsedOutputTokenLimits.tokensPerDay,
+			OutputTokensPerWeek:   parsedOutputTokenLimits.tokensPerWeek,
+			OutputTokensPerMonth:  parsedOutputTokenLimits.tokensPerMonth,
+		},
+	}, nil
+}
+
 type parsedTokenRateLimit struct {
 	tokensPerSecond int64
 	tokensPerMinute int64
 	tokensPerHour   int64
 	tokensPerDay    int64
 	tokensPerWeek   int64
+	tokensPerMonth  int64
 }
 
 func (p parsedTokenRateLimit) empty() bool {
@@ -144,6 +204,7 @@ func parseTokenRateLimit(raw string) (parsedTokenRateLimit, error) {
 		sawTokensPerHour   bool
 		sawTokensPerDay    bool
 		sawTokensPerWeek   bool
+		sawTokensPerMonth  bool
 	)
 	for _, fragment := range strings.Split(raw, ",") {
 		fragment = strings.TrimSpace(fragment)
@@ -197,6 +258,12 @@ func parseTokenRateLimit(raw string) (parsedTokenRateLimit, error) {
 			}
 			sawTokensPerWeek = true
 			parsed.tokensPerWeek = value
+		case "MO":
+			if sawTokensPerMonth {
+				return parsedTokenRateLimit{}, fmt.Errorf("duplicate month token rate limit")
+			}
+			sawTokensPerMonth = true
+			parsed.tokensPerMonth = value
 		default:
 			return parsedTokenRateLimit{}, fmt.Errorf("unsupported token rate limit level %q", levelPart)
 		}
@@ -698,6 +765,7 @@ func chooseTokenStats(
 		ratelimit.TokensPerHour,
 		ratelimit.TokensPerDay,
 		ratelimit.TokensPerWeek,
+		ratelimit.TokensPerMonth,
 	} {
 		if result := results[dim]; result != nil {
 			return result.LimitValue(), result.RemainingValue(), result.ResetAfter(), true
@@ -705,28 +773,52 @@ func chooseTokenStats(
 	}
 
 	var (
-		hasLimit   bool
-		limit      int64
-		remaining  int64
-		resetAfter time.Duration
+		chosenLimit      int64
+		chosenRemaining  int64
+		chosenResetAfter time.Duration
+		chosen           bool
 	)
-	for _, dim := range []ratelimit.LimitDimension{
-		ratelimit.InputTokensPerMinute,
-		ratelimit.OutputTokensPerMinute,
+	for _, pair := range [][2]ratelimit.LimitDimension{
+		{ratelimit.InputTokensPerSecond, ratelimit.OutputTokensPerSecond},
+		{ratelimit.InputTokensPerMinute, ratelimit.OutputTokensPerMinute},
+		{ratelimit.InputTokensPerHour, ratelimit.OutputTokensPerHour},
+		{ratelimit.InputTokensPerDay, ratelimit.OutputTokensPerDay},
+		{ratelimit.InputTokensPerWeek, ratelimit.OutputTokensPerWeek},
+		{ratelimit.InputTokensPerMonth, ratelimit.OutputTokensPerMonth},
 	} {
-		result := results[dim]
-		if result == nil {
+		// Input and output are independent buckets, not a combined quota: summing
+		// their limit/remaining would let a healthy output bucket mask an exhausted
+		// input bucket (or vice versa), reporting a positive Remaining-Tokens header
+		// on the same response that a 429 came from. Report the binding sub-dimension
+		// (the one closer to exhausted) on its own instead.
+		var binding *ratelimit.RateLimitResult
+		for _, dim := range pair {
+			result := results[dim]
+			if result == nil {
+				continue
+			}
+			if binding == nil || result.RemainingValue() < binding.RemainingValue() {
+				binding = result
+			}
+		}
+		if binding == nil {
 			continue
 		}
-		hasLimit = true
-		limit += result.LimitValue()
-		remaining += result.RemainingValue()
-		if result.ResetAfter() > resetAfter {
-			resetAfter = result.ResetAfter()
+		// Prefer whichever configured period is closest to being exhausted, so the
+		// header always surfaces the constraint that will actually throttle next
+		// instead of whichever period happens to be checked first.
+		if !chosen || binding.RemainingValue() < chosenRemaining {
+			chosenLimit = binding.LimitValue()
+			chosenRemaining = binding.RemainingValue()
+			chosenResetAfter = binding.ResetAfter()
+			chosen = true
 		}
 	}
+	if chosen {
+		return chosenLimit, chosenRemaining, chosenResetAfter, true
+	}
 
-	return limit, remaining, resetAfter, hasLimit
+	return 0, 0, 0, false
 }
 
 func headerDuration(d time.Duration) time.Duration {

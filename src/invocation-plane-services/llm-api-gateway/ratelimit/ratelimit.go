@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"math/rand/v2"
 	"time"
 
@@ -236,11 +237,15 @@ func (rl *rateLimiter) leakyBucket(
 		}
 		var refill int64
 		if periodMs > 0 {
-			refill = elapsed * rate / periodMs
+			refill = mulDivInt64(elapsed, rate, periodMs)
 		}
-		currentValue := value + refill
-		if currentValue > rate {
+		// value <= rate always holds, so compare before adding rather than
+		// clamping after - value+refill can overflow for a long-idle bucket.
+		var currentValue int64
+		if refill > rate-value {
 			currentValue = rate
+		} else {
+			currentValue = value + refill
 		}
 		allowed := currentValue >= tokensRequested
 
@@ -251,13 +256,7 @@ func (rl *rateLimiter) leakyBucket(
 			return currentValue, true, nil
 		}
 
-		newValue := currentValue - tokensRequested
-		if newValue < 0 {
-			newValue = 0
-		}
-		if newValue > rate {
-			newValue = rate
-		}
+		newValue := saturatingConsume(currentValue, tokensRequested, rate)
 
 		var expected *bucketState
 		if exists {
@@ -276,6 +275,42 @@ func (rl *rateLimiter) leakyBucket(
 		}
 		return currentValue, swapped, nil
 	})
+}
+
+// saturatingConsume computes current-requested, clamped to [0, rate].
+// requested can be negative (a refund), which turns this into an addition;
+// splitting by sign avoids overflowing either direction. current must
+// already be in [0, rate].
+func saturatingConsume(current, requested, rate int64) int64 {
+	switch {
+	case requested >= 0:
+		if requested > current {
+			return 0
+		}
+		return current - requested
+	case requested == math.MinInt64:
+		return rate // negating MinInt64 itself would overflow
+	default:
+		refund := -requested
+		if refund > rate-current {
+			return rate
+		}
+		return current + refund
+	}
+}
+
+// mulDivInt64 computes a*b/c for non-negative a, b, c without a*b
+// overflowing int64, even when the final quotient comfortably fits.
+func mulDivInt64(a, b, c int64) int64 {
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	if hi >= uint64(c) {
+		return math.MaxInt64 // quotient itself would overflow; caller saturates
+	}
+	q, _ := bits.Div64(hi, lo, uint64(c))
+	if q > uint64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(q)
 }
 
 // casRetry drives an optimistic-concurrency closure. attempt returns

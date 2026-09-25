@@ -50,7 +50,9 @@ func (rlr *RateLimitResult) RemainingValue() int64 {
 	if rlr.reverted {
 		return rlr.CurrentValue
 	}
-	return max(rlr.CurrentValue-rlr.Requested, 0)
+	// Requested can be negative (a refund); CurrentValue-Requested is then an
+	// addition that can overflow the same way leakyBucket's own newValue can.
+	return saturatingConsume(rlr.CurrentValue, rlr.Requested, rlr.RateLimit.Limit)
 }
 
 func (rlr *RateLimitResult) LimitValue() int64 {
