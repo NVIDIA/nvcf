@@ -366,3 +366,37 @@ func TestStripRoleFlags(t *testing.T) {
 		t.Errorf("value flag followed by a flag: %v", got)
 	}
 }
+
+// Taken from the pods the Dynamo operator (vllm-runtime 1.1.1) created on
+// dev1 for the NVCF disaggregated sample: prefill also carries
+// --kv-events-config, and the operator injects Grove scheduling env whose
+// values differ per component and per replica.
+func TestCompose_RoleNeutral_LiveDynamoOperatorPods(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 580}
+	worker := func(args []string, pclq string) *corev1.Pod {
+		env := []corev1.EnvVar{
+			{Name: "DYN_COMPONENT", Value: pclq}, {Name: "DYN_NAMESPACE", Value: "myllm"}, {Name: "DYN_SYSTEM_PORT", Value: "9090"},
+			{Name: "GROVE_PCLQ_NAME", Value: pclq}, {Name: "GROVE_PCLQ_POD_INDEX", Value: "0"}, {Name: "GROVE_PCS_NAME", Value: "myllm"},
+			{Name: "NATS_SERVER", Value: "nats://dynamo-operator-nats:4222"},
+			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+			{Name: "NIXL_TELEMETRY_ENABLE", Value: "true"},
+		}
+		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.1",
+			Command: []string{"python3", "-m", "dynamo.vllm"}, Args: args, Env: env,
+		}}}}
+	}
+	prefill := worker([]string{"--model", "Qwen/Qwen3-0.6B", "--disaggregation-mode", "prefill", "--tensor-parallel-size", "1",
+		"--kv-transfer-config", `{"kv_connector":"NixlConnector","kv_role":"kv_both"}`,
+		"--kv-events-config", `{"publisher":"zmq","topic":"kv-events","endpoint":"tcp://*:20080","enable_kv_cache_events":true}`}, "myllm-0-vllmprefillworker")
+	decode := worker([]string{"--model", "Qwen/Qwen3-0.6B", "--disaggregation-mode", "decode", "--tensor-parallel-size", "1"}, "myllm-0-vllmdecodeworker")
+	replica := worker([]string{"--model", "Qwen/Qwen3-0.6B", "--disaggregation-mode", "decode", "--tensor-parallel-size", "1"}, "myllm-0-vllmdecodeworker")
+	replica.Spec.Containers[0].Env[4].Value = "1" // GROVE_PCLQ_POD_INDEX
+	hp, hd, hr := checkpointstore.ComputeHash(c.Compose(prefill, 0)), checkpointstore.ComputeHash(c.Compose(decode, 0)), checkpointstore.ComputeHash(c.Compose(replica, 0))
+	if hp != hd {
+		t.Errorf("live prefill and decode workers must hash the same: %s vs %s", hp[:8], hd[:8])
+	}
+	if hd != hr {
+		t.Errorf("two replicas of one component must hash the same: %s vs %s", hd[:8], hr[:8])
+	}
+}

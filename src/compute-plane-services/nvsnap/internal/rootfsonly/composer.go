@@ -283,15 +283,18 @@ var (
 		"--disaggregation-bootstrap-port":   true,
 		"--disaggregation-transfer-backend": true,
 		"--kv-transfer-config":              true, // vLLM connector JSON, carries kv_role
+		"--kv-events-config":                true, // KV event publishing, prefill side only
 	}
-	roleEnvPrefixes = []string{"DYN_", "DYNAMO_"}
+	// GROVE_*: Grove gang-scheduling env the Dynamo operator injects, with
+	// the component name and the pod index in it.
+	roleEnvPrefixes = []string{"DYN_", "DYNAMO_", "GROVE_"}
 	roleEnvExact    = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL"}
 
 	// roleFlagInString removes the same flags from a shell-script arg (the
 	// bash -lc "vllm serve ..." convention), value quoted or bare.
 	roleFlagInString = regexp.MustCompile(
 		`\s--(?:is-prefill-worker|is-decode-worker)\b` +
-			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
+			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
 )
 
 // stripRoleFlags returns args without the role flags, in both the
