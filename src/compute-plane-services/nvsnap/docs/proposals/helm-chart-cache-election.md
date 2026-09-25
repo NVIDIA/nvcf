@@ -243,3 +243,26 @@ schedule: `kai-scheduler` places the podgang `myllm-0` as a unit and the
 follower is unschedulable until `rox-<hash>` exists, so the leader is held
 with it. See "Grove and the scheduling gate"; the resolution for gang
 scheduling is a design decision recorded in issue #2099.
+
+### Qwen2.5-32B-Instruct TP=4 chart, dev1 2026-09-25
+
+Stock Deployment, vLLM v0.20.0, torch.compile on (no enforce-eager),
+replicas=2 on one node, agent v0.2.75-election6, NVMesh. Capture 65.7 GB,
+805 files.
+
+```
+first deploy, replicas=2
+  t+0        leader + follower admitted (same second); follower gated, no GPU
+  t+325s     leader Ready (cold)
+  t+439s     capture copied + promoted, follower released
+  t+600s     follower Ready (161 s after release), 0 downloads, serves
+             one download of 65.7 GB instead of two
+uninstall + reinstall, replicas=2
+  t+170s     both Ready (prewarm init 83 s each), both role=restore
+
+engine phases            cold (leader)   warm (follower)
+  model load + download  247 s           6.4 s
+  torch.compile          57 s            8.5 s   (graphs loaded from cache, 2.7 s each range)
+  init engine total      77 s            22 s
+  CUDA graph capture     10 s            10 s    (not cacheable)
+```

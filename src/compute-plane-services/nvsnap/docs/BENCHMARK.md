@@ -42,6 +42,8 @@ recompiling.
 
 | Model | Engine | Cold | Restore | Speedup |
 |---|---|---:|---:|---:|
+| Qwen2.5-32B-Instruct (chart, 2 replicas) | vLLM TP=4 | 325 s | 170 s | 1.9x |
+| Llama-3.1-70B-Instruct | vLLM TP=4 | 632 s | 246 s | 2.6x |
 | DeepSeek-V4-Flash | SGLang TP=8 | 1162 s | 289 s | 4.0x |
 | gemma-4-31B-it | SGLang | 492 s | 109 s | 4.5x |
 | gpt-oss-120b | vLLM TP=4 | ~550 s | 171 s | 3.2x |
@@ -50,6 +52,14 @@ recompiling.
 | Qwen-Image-2512 | vLLM | 198 s | 114 s | 1.7x |
 | e5-mistral-7b-instruct | vLLM | 73 s | 90 s | -- |
 | whisper-large-v3 | NIM (Riva) | 72 s | 74 s | -- |
+
+The two rows above the June table are from dev1 (EKS, NVMesh, 2026-09-25);
+the Qwen row is a two-replica Helm chart through the admission election
+(`docs/proposals/helm-chart-cache-election.md`): first deploy pays one cold
+leader plus capture, every later start of the chart is the restore number.
+Phase split for Qwen, cold to warm: model download and load 247 s to 6 s,
+torch.compile 57 s to 8.5 s, init engine 77 s to 22 s, CUDA graph capture
+10 s either way. Llama-70B: model load 481 s to 14 s, compile 65 s to 3 s.
 
 Wins scale with the cold JIT/compile cost; neutral on compile-light and
 framework-bound workloads. Two implementation details enable the cache reuse:
