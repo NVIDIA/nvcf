@@ -19,6 +19,7 @@ package com.nvidia.boot.core.info;
 
 import com.nvidia.boot.core.info.InfoResponseService.InfoResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -27,8 +28,14 @@ import org.springframework.web.bind.annotation.RestController;
  * Shared build-info controller for {@code GET /info}. Returns a flat {service, version, commit}
  * body, matching the equivalent Go services' contract, so build identification is consistent
  * across NVCF control plane services.
+ *
+ * <p>{@code @ConditionalOnProperty} is repeated here (not just on {@link InfoConfiguration})
+ * because {@code @RestController} makes this class classpath-scannable independently of that
+ * configuration's own condition; without this, a consuming app's component scan would still
+ * pick it up even when opted out.
  */
 @RestController
+@ConditionalOnProperty(name = "nv-boot.info.enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class InfoController {
 

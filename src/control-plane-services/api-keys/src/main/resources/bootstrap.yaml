@@ -22,5 +22,7 @@ spring:
       dc: ${AWS_REGION:${spring.application.name}-${random.uuid}-dc}
 
 nv-boot:
+  info:
+    enabled: true
   reloadable-properties:
     file: ${SECRETS_PATH:local_env/vault/secrets.json}

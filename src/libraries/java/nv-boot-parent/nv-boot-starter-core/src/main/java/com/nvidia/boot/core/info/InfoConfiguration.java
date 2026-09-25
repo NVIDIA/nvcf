@@ -17,14 +17,22 @@
 
 package com.nvidia.boot.core.info;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
-/** Auto-configuration for the shared {@code GET /info} endpoint and controller. */
+/**
+ * Auto-configuration for the shared {@code GET /info} endpoint and controller.
+ *
+ * <p>Opt-in only ({@code nv-boot.info.enabled: true}), since consuming apps that already expose
+ * Spring Boot Actuator's own {@code info} endpoint would otherwise get a conflicting handler for
+ * the same {@code GET /info} path.
+ */
 @Configuration
 @ConditionalOnWebApplication
+@ConditionalOnProperty(name = "nv-boot.info.enabled", havingValue = "true")
 public class InfoConfiguration {
 
     @Bean
