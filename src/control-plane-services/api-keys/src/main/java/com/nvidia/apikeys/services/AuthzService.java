@@ -41,6 +41,7 @@ public class AuthzService {
 
         return AuthzResponse.Result.builder()
                 .ncaId(nakProperties.getNcaId())
+                .ownerNcaId(nakProperties.getNcaId())
                 .ownerId(introspectionResponse.getOwnerId())
                 .allowed(true)
                 .policy(getPolicyByAudience(audienceServiceId, introspectionResponse))
