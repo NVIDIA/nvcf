@@ -239,6 +239,13 @@ type Mutator struct {
 	// the agent's --cachedir-env-file flag (a mounted ConfigMap).
 	CacheEnvFile string
 
+	// StorageProfile is the profile resolved for the L2 StorageClass
+	// (nil when L2 is off or nothing matched). The cachedir restore takes
+	// its page-cache prewarm policy from here: whether to add the
+	// nvsnap-prewarm init container and how many readers it runs. A pod's
+	// own NVSNAP_PREWARM=0/1 overrides the profile either way.
+	StorageProfile *checkpointstore.StorageProfile
+
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a
 	// nvsnap-l2-wait init container that polls nvsnap-server's

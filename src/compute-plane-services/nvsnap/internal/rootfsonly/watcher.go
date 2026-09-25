@@ -145,10 +145,13 @@ func (w *Watcher) handlePodEvent(ctx context.Context, obj any) {
 	if !ok || pod == nil {
 		return
 	}
+	plog := w.logger().WithField("pod", pod.Namespace+"/"+pod.Name)
 	if !w.isLabeledForCapture(pod) {
+		plog.Debug("watcher: skipping, not labeled for capture")
 		return
 	}
 	if !IsPodReady(pod) {
+		plog.Debug("watcher: skipping, pod not Ready yet")
 		return
 	}
 	// Rootfs-only capture is the multi-GPU fallback (cuda-checkpoint can't
@@ -165,15 +168,18 @@ func (w *Watcher) handlePodEvent(ctx context.Context, obj any) {
 	// signal (the watch already filters by it at line 130), so we honor it
 	// even for single-GPU pods and let rootfs replace CRIU.
 	gpus := podGPURequest(pod)
-	if gpus < 2 {
-		w.logger().WithFields(logrus.Fields{
-			"pod":  pod.Namespace + "/" + pod.Name,
-			"gpus": gpus,
-		}).Info("rootfs-only watcher capturing single-GPU pod (explicit nvsnap.io/capture=true opt-in)")
-	}
 	if _, alreadyScheduled := w.captured.LoadOrStore(pod.UID, struct{}{}); alreadyScheduled {
+		plog.Debug("watcher: skipping, a capture is already scheduled or committed for this pod UID")
 		return
 	}
+	// Logged for every pod, not only single-GPU ones. This used to fire only
+	// when gpus < 2, so a multi-GPU pod -- the case this path exists to serve
+	// -- produced no output on any branch, and a capture that silently never
+	// happened was indistinguishable from one never triggered.
+	plog.WithFields(logrus.Fields{
+		"gpus":   gpus,
+		"warmup": w.WarmupDelay,
+	}).Info("watcher: scheduling rootfs capture (nvsnap.io/capture=true)")
 	go w.runCapture(ctx, pod.DeepCopy())
 }
 
@@ -228,6 +234,19 @@ func (w *Watcher) refreshPodForCapture(ctx context.Context, pod *corev1.Pod, log
 // retried by re-firing on subsequent Pod Update events (we clear captured
 // on persistent error so the next event re-tries).
 func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
+	// captured marks a pod UID as scheduled, and handlePodEvent treats a
+	// marked UID as nothing-to-do. Only a committed capture may keep the
+	// mark: every other exit here (warmup cancelled, semaphore wait
+	// cancelled, pod refresh failed, capture failed) has to release it or
+	// the pod is never retried and every later event returns silently.
+	// Previously only the capture-error path released it, so an abort left
+	// the UID poisoned for the life of the agent.
+	committed := false
+	defer func() {
+		if !committed {
+			w.captured.Delete(pod.UID)
+		}
+	}()
 	log := w.logger().WithFields(logrus.Fields{
 		"pod":     pod.Namespace + "/" + pod.Name,
 		"pod_uid": string(pod.UID),
@@ -236,6 +255,7 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 		select {
 		case <-time.After(w.WarmupDelay):
 		case <-ctx.Done():
+			log.Debug("watcher: warmup cancelled before capture; releasing the pod for retry")
 			return
 		}
 	}
@@ -243,6 +263,7 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 	case w.sem <- struct{}{}:
 		defer func() { <-w.sem }()
 	case <-ctx.Done():
+		log.Debug("watcher: cancelled waiting for a capture slot; releasing the pod for retry")
 		return
 	}
 
@@ -282,8 +303,7 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 	m, err := w.Capturer.Capture(captureCtx, req)
 	if err != nil {
 		log.WithError(err).Warn("capture failed; will retry on next Update event")
-		// Allow retry on subsequent events.
-		w.captured.Delete(pod.UID)
+		// The deferred release above re-arms the pod; no explicit Delete.
 		return
 	}
 	log.WithFields(logrus.Fields{
@@ -291,6 +311,7 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 		"size_mib": m.TotalSizeBytes / 1024 / 1024,
 		"files":    m.FileCount,
 	}).Info("capture committed for pod")
+	committed = true
 }
 
 func (w *Watcher) isLabeledForCapture(pod *corev1.Pod) bool {

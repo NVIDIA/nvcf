@@ -51,12 +51,16 @@ const storageProfilesConfigMap = "nvsnap-storage-profiles"
 // bad ConfigMap, construct error) — the backend then falls back to its
 // default snapshot-clone ROX promoter. Always logs the resolved strategy
 // (or the reason for fallback) so an operator can see what L2 will do.
-func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic.Interface, scName, namespace string, log logrus.FieldLogger) checkpointstore.Promoter {
+//
+// The resolved profile is returned alongside the promoter because the
+// webhook consumes it too (cachedir prewarm policy); nil when nothing
+// matched, so callers fall back to the profile's zero-value defaults.
+func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic.Interface, scName, namespace string, log logrus.FieldLogger) (checkpointstore.Promoter, *checkpointstore.StorageProfile) {
 	sc, err := kc.StorageV1().StorageClasses().Get(ctx, scName, metav1.GetOptions{})
 	if err != nil {
 		log.WithError(err).WithField("sc", scName).
 			Warn("L2 storage profile: cannot read StorageClass; falling back to default snapshot-clone ROX promoter")
-		return nil
+		return nil, nil
 	}
 	provisioner := sc.Provisioner
 	volType := sc.Parameters["type"] // disambiguates pd.csi (hyperdisk-ml vs pd-ssd)
@@ -76,20 +80,21 @@ func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic
 	if !ok {
 		log.WithFields(logrus.Fields{"sc": scName, "provisioner": provisioner, "type": volType}).
 			Warn("L2 storage profile: no profile for provisioner[/type]; falling back to default snapshot-clone ROX promoter (add an entry to the nvsnap-storage-profiles ConfigMap to support this backend)")
-		return nil
+		return nil, nil
 	}
 	promoter, err := checkpointstore.NewPromoterFromProfile(profile, scName, kc, dyn, log)
 	if err != nil {
 		log.WithError(err).WithField("strategy", profile.Strategy).
 			Warn("L2 storage profile: cannot construct promoter; falling back to default")
-		return nil
+		return nil, &profile
 	}
 	log.WithFields(logrus.Fields{
 		"sc": scName, "provisioner": provisioner, "type": volType,
 		"profile_key": key, "strategy": profile.Strategy,
 		"read_only_many": profile.ReadOnlyMany, "vh_transform": profile.VolumeHandleTransform,
+		"prewarm": profile.PrewarmEnabled(), "prewarm_workers": profile.PrewarmWorkers(),
 	}).Info("L2 storage profile resolved")
-	return promoter
+	return promoter, &profile
 }
 
 // startL2Backend constructs the PerCapturePVCBackend if L2 is enabled
@@ -169,7 +174,8 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	// parameters.type (nvsnap#171). nil ⇒ the backend's applyDefaults
 	// falls back to the snapshot-clone ROX promoter (Hyperdisk-ML
 	// behavior) — back-compat for clusters with no profile match.
-	promoter := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
+	promoter, profile := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
+	a.l2Profile = profile
 
 	// SnapshotClass is only meaningful for the snapshot-clone strategy.
 	// Shared-volume backends (NVMesh/EFS/Filestore) never snapshot — they
