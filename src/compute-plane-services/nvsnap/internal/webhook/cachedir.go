@@ -262,7 +262,6 @@ func (m *Mutator) cacheDirCapturePatches(pod *corev1.Pod) []PatchOp {
 	return patches
 }
 
-
 // tryL2CacheDir injects a cachedir RESTORE: the rox PVC mounted
 // read-only at m.CacheDir directly (no overlayfs), the cache/model env
 // vars set identically to capture, and nvsnap-rootfs-restore as the
@@ -308,12 +307,6 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 		if vm.Name == cacheDirVolumeName || vm.MountPath == m.CacheDir {
 			return nil, nil // already wired
 		}
-	}
-
-
-	root := m.HostBundleRoot
-	if root == "" {
-		root = DefaultHostBundleRoot
 	}
 
 	patches := make([]PatchOp, 0, 11+len(manifest.CacheEnv))
@@ -403,16 +396,20 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	// An init container, not a shim: same node so same page cache, same pod
 	// cgroup so the same memory accounting, and the pod's own command runs
 	// untouched. Best-effort by construction: a read error must never fail a
-	// restore, so the pipeline ends in || true. Six workers, matching the
-	// retired Go prewarmer. NVSNAP_PREWARM=0 on the workload skips it, the
-	// same knob the shim honoured.
-	if !podDisablesPrewarm(main) {
+	// restore, so the pipeline ends in || true.
+	//
+	// Whether the sweep pays off is a property of the volume, not the
+	// model (70B A/B in docs/BENCHMARK.md), so the default and the reader
+	// count come from the L2 StorageClass's StorageProfile, editable per
+	// cluster through the nvsnap-storage-profiles ConfigMap. A pod's own
+	// NVSNAP_PREWARM=0/1 still wins, the same knob the shim honoured.
+	if m.prewarmWanted(main) {
 		prewarmInit := corev1.Container{
 			Name:  "nvsnap-prewarm",
 			Image: main.Image,
 			Command: []string{"sh", "-c", fmt.Sprintf(
-				"find %s -type f -print0 2>/dev/null | xargs -0 -r -P 6 -n 16 cat > /dev/null 2>&1 || true",
-				cacheSeedSrcPath)},
+				"find %s -type f -print0 2>/dev/null | xargs -0 -r -P %d -n 16 cat > /dev/null 2>&1 || true",
+				cacheSeedSrcPath, m.prewarmWorkers())},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: cacheDirVolumeName, MountPath: cacheSeedSrcPath, ReadOnly: true},
 			},
@@ -434,18 +431,16 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	} else {
 		envs = cacheDirEnvVars(m.CacheDir)
 	}
-	envs = append(envs,
-		// NOTE: do NOT set HF_HUB_OFFLINE here. It only suppresses benign HF
-		// negative-cache (.no_exist) warnings, but vLLM's arg_utils keys off
-		// HF_HUB_OFFLINE to rewrite --model from the repo-id to the resolved
-		// local snapshot path (engine/arg_utils.py: "when use hf offline,
-		// replace model ... to local model path"). Capture (cold, online) keeps
-		// the repo-id, so offline-at-restore changes the model string ->
-		// different vLLM torch.compile config_hash -> compile-cache MISS ->
-		// ~20s recompile every restore (gpt-oss-120b, 2026-06-19). The warnings
-		// are harmless; the recompile is not. Leave offline unset so capture and
-		// restore compute the same config_hash and the compile cache is reused.
-	)
+	// NOTE: do NOT set HF_HUB_OFFLINE here. It only suppresses benign HF
+	// negative-cache (.no_exist) warnings, but vLLM's arg_utils keys off
+	// HF_HUB_OFFLINE to rewrite --model from the repo-id to the resolved
+	// local snapshot path (engine/arg_utils.py: "when use hf offline,
+	// replace model ... to local model path"). Capture (cold, online) keeps
+	// the repo-id, so offline-at-restore changes the model string ->
+	// different vLLM torch.compile config_hash -> compile-cache MISS ->
+	// ~20s recompile every restore (gpt-oss-120b, 2026-06-19). The warnings
+	// are harmless; the recompile is not. Leave offline unset so capture and
+	// restore compute the same config_hash and the compile cache is reused.
 	for _, e := range envs {
 		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
@@ -459,13 +454,27 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	return patches, nil
 }
 
-// podDisablesPrewarm honours NVSNAP_PREWARM=0 on the workload container, the
-// same opt-out the retired entrypoint shim read.
-func podDisablesPrewarm(main corev1.Container) bool {
+// prewarmWanted decides whether the cachedir restore gets the nvsnap-prewarm
+// init container. An explicit NVSNAP_PREWARM on the workload container wins
+// ("0" off, anything else on); otherwise the storage profile decides, and
+// with no profile the answer is on.
+func (m *Mutator) prewarmWanted(main corev1.Container) bool {
 	for _, e := range main.Env {
-		if e.Name == "NVSNAP_PREWARM" && e.Value == "0" {
-			return true
+		if e.Name == "NVSNAP_PREWARM" {
+			return e.Value != "0"
 		}
 	}
-	return false
+	if m.StorageProfile == nil {
+		return true
+	}
+	return m.StorageProfile.PrewarmEnabled()
+}
+
+// prewarmWorkers is the sweep's reader count from the storage profile, or
+// the default without one.
+func (m *Mutator) prewarmWorkers() int {
+	if m.StorageProfile == nil {
+		return checkpointstore.DefaultPrewarmParallelism
+	}
+	return m.StorageProfile.PrewarmWorkers()
 }

@@ -215,6 +215,7 @@ data:
       strategy: shared-volume
       volumeHandleTransform: nvmesh
       mountOptions: [ro, norecovery, nouuid]  # xfs RO multi-mount needs nouuid
+      prewarm: false                       # one reader saturates the volume
     efs.csi.aws.com:                       # EFS — shared RWX filesystem
       strategy: shared-volume
       volumeHandleTransform: none
@@ -229,6 +230,20 @@ disables L2.
 
 The built-in table carries these same defaults so a stock install needs no
 ConfigMap; the ConfigMap exists for new/3rd-party backends and overrides.
+
+Two optional keys tune the cachedir restore's page-cache prewarm per storage
+class, because whether the parallel read-ahead helps depends on the volume,
+not the model (see the 70B A/B in `docs/BENCHMARK.md`):
+
+- `prewarm` (default `true`): add the `nvsnap-prewarm` init container that
+  reads the whole rox tree before the engine starts. Set `false` where a
+  single reader already saturates the volume.
+- `prewarmParallelism` (default 6): concurrent readers in the sweep. Raise it
+  on volumes whose throughput scales with parallel readers (Hyperdisk ML).
+
+A pod's own `NVSNAP_PREWARM=0` or `NVSNAP_PREWARM=1` overrides the profile.
+The agent resolves the profile once at startup and hands it to the webhook,
+so a ConfigMap edit takes effect on the next agent restart.
 
 ## What stays put (no change)
 

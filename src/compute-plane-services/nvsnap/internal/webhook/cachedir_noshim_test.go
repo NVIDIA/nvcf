@@ -146,3 +146,66 @@ func TestTryL2CacheDir_PrewarmOptOut(t *testing.T) {
 		}
 	}
 }
+
+// The storage profile of the L2 StorageClass decides the prewarm default
+// and its reader count; the pod's own NVSNAP_PREWARM still overrides it.
+func TestTryL2CacheDir_PrewarmFollowsStorageProfile(t *testing.T) {
+	newMutator := func(p *checkpointstore.StorageProfile) *Mutator {
+		return &Mutator{
+			CacheDir: "/opt/nvsnap", MainContainer: 0, StorageProfile: p,
+			L2Backend: &stubL2Backend{mountResult: checkpointstore.PodMount{
+				Volume:      corev1.Volume{Name: "x", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "rox-abc"}}},
+				VolumeMount: corev1.VolumeMount{Name: "x", MountPath: "/opt/nvsnap"},
+			}},
+		}
+	}
+	newPod := func(env ...corev1.EnvVar) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "reuse", Namespace: "ns"},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name: "vllm", Image: "img", Command: []string{"serve"}, Env: env,
+			}}},
+		}
+	}
+	prewarmCmd := func(t *testing.T, m *Mutator, pod *corev1.Pod) (string, bool) {
+		t.Helper()
+		patches, err := m.tryL2CacheDir(context.Background(), pod, "abc", checkpointstore.Manifest{Hash: "abc", CaptureMethod: "cachedir"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sawSeed bool
+		for _, p := range patches {
+			c, ok := p.Value.(corev1.Container)
+			if !ok {
+				continue
+			}
+			switch c.Name {
+			case "nvsnap-seed-cache":
+				sawSeed = true
+			case "nvsnap-prewarm":
+				return strings.Join(c.Command, " "), true
+			}
+		}
+		if !sawSeed {
+			t.Fatal("the seed init must be present regardless of the prewarm policy")
+		}
+		return "", false
+	}
+	off, on := false, true
+
+	if cmd, ok := prewarmCmd(t, newMutator(nil), newPod()); !ok || !strings.Contains(cmd, "-P 6 ") {
+		t.Errorf("no profile: want the prewarm with the default 6 readers, got ok=%v cmd=%q", ok, cmd)
+	}
+	if cmd, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{PrewarmParallelism: 16}), newPod()); !ok || !strings.Contains(cmd, "-P 16 ") {
+		t.Errorf("profile parallelism 16 not applied, got ok=%v cmd=%q", ok, cmd)
+	}
+	if _, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{Prewarm: &off}), newPod()); ok {
+		t.Error("profile prewarm: false must drop the prewarm init")
+	}
+	if _, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{Prewarm: &off}), newPod(corev1.EnvVar{Name: "NVSNAP_PREWARM", Value: "1"})); !ok {
+		t.Error("NVSNAP_PREWARM=1 on the pod must override a profile that turns the prewarm off")
+	}
+	if _, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{Prewarm: &on}), newPod(corev1.EnvVar{Name: "NVSNAP_PREWARM", Value: "0"})); ok {
+		t.Error("NVSNAP_PREWARM=0 on the pod must override a profile that turns the prewarm on")
+	}
+}

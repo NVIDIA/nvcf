@@ -89,7 +89,10 @@ storage-bound read ahead of the engine instead of overlapping it with process
 bring-up. The prewarm pays off on volumes whose single-stream reads are
 latency-bound but whose aggregate throughput is high (Hyperdisk ML), where the
 engine's per-fault mmap reads leave the volume idle and the parallel sweep does
-not. Treat the prewarm value as a property of the storage class, not the model.
+not. Treat the prewarm value as a property of the storage class, not the model:
+the default and the reader count live in the storage profile (`prewarm`,
+`prewarmParallelism` in the `nvsnap-storage-profiles` ConfigMap), see
+`docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`.
 
 ## Environment
 
