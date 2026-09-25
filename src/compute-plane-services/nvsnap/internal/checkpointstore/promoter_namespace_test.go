@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 const xnsHash = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
@@ -92,6 +93,29 @@ func TestSharedVolume_EnsureClaimMintsNamespaceLocalClaim(t *testing.T) {
 	// The capture namespace already has the promote's own claim: no-op.
 	if err := p.EnsureClaim(ctx, xnsHash, "capture-ns"); err != nil {
 		t.Errorf("capture namespace must be a no-op, got %v", err)
+	}
+}
+
+// Concurrent admissions of one chart all run EnsureClaim; the fake
+// rejects every PV update so the test fails if any step depends on one.
+func TestSharedVolume_EnsureClaimNeedsNoPVUpdate(t *testing.T) {
+	kc := promotedSharedFixture()
+	kc.PrependReactor("update", "persistentvolumes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "persistentvolumes"}, "pv", errors.New("the object has been modified"))
+	})
+	p := sharedPromoter(kc)
+	ctx := context.Background()
+	for range 3 {
+		if err := p.EnsureClaim(ctx, xnsHash, "fn-ns"); err != nil {
+			t.Fatalf("EnsureClaim must not depend on a PV update: %v", err)
+		}
+	}
+	pv, err := kc.CoreV1().PersistentVolumes().Get(ctx, namespacedSecondaryPVName(xnsHash, "fn-ns"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pv.Labels[labelHashShort] != ShortHash(xnsHash) || pv.Labels[labelNamespace] != "fn-ns" {
+		t.Errorf("per-namespace PV must be created already labelled: %v", pv.Labels)
 	}
 }
 

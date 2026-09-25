@@ -192,7 +192,7 @@ func (p *SharedVolumePromoter) Promote(ctx context.Context, in PromoteInput) (Pr
 	return PromoteResult{SharedClaimName: roxName, ReusedWriterVolume: true}, nil
 }
 
-func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string) error {
+func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string, extraLabels ...map[string]string) error {
 	if existing, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secName, metav1.GetOptions{}); err == nil {
 		return p.releaseStaleBinding(ctx, existing, roxName, ns)
 	} else if !apierrors.IsNotFound(err) {
@@ -210,6 +210,11 @@ func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *c
 			"nvsnap.io/per-capture":        "true",
 			"nvsnap.io/role":               "reader-shared",
 		},
+	}
+	for _, extra := range extraLabels {
+		for k, v := range extra {
+			sec.Labels[k] = v
+		}
 	}
 	sec.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 	sec.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
@@ -490,35 +495,15 @@ func (p *SharedVolumePromoter) EnsureClaim(ctx context.Context, hash, ns string)
 	if err != nil {
 		return fmt.Errorf("get primary PV %s: %w", primaryName, err)
 	}
+	// Labels go on at create: N pods of one chart are admitted in the same
+	// second and each runs this, so a create-then-update would race on the
+	// PV's resourceVersion (seen on dev1: "the object has been modified").
+	// Create is idempotent through AlreadyExists; nothing here updates.
 	secName := namespacedSecondaryPVName(hash, ns)
-	if err := p.ensureSecondaryPV(ctx, primary, secName, roxName, ns); err != nil {
-		return err
-	}
-	if err := p.labelNamespaced(ctx, secName, hash, ns); err != nil {
+	if err := p.ensureSecondaryPV(ctx, primary, secName, roxName, ns, map[string]string{labelHashShort: ShortHash(hash), labelNamespace: ns}); err != nil {
 		return err
 	}
 	return p.ensureSharedROXPVC(ctx, ns, hash, roxName, secName, primary)
-}
-
-// labelNamespaced stamps hash and namespace on a per-namespace secondary
-// PV so Delete can list it.
-func (p *SharedVolumePromoter) labelNamespaced(ctx context.Context, pvName, hash, ns string) error {
-	pv, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("get secondary PV %s: %w", pvName, err)
-	}
-	if pv.Labels[labelHashShort] == ShortHash(hash) && pv.Labels[labelNamespace] == ns {
-		return nil
-	}
-	if pv.Labels == nil {
-		pv.Labels = map[string]string{}
-	}
-	pv.Labels[labelHashShort] = ShortHash(hash)
-	pv.Labels[labelNamespace] = ns
-	if _, err := p.KubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("label secondary PV %s: %w", pvName, err)
-	}
-	return nil
 }
 
 // deleteNamespacedClaims removes every rox claim and per-namespace
