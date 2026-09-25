@@ -156,6 +156,13 @@ minted objects carry `nvsnap.io/hash-short` and `nvsnap.io/namespace`;
 
 A restore namespace also needs the agent token Secret and the restore-pod
 NetworkPolicy, both already fanned out by `agent.l2.restoreNamespaces`.
+That policy selects every pod in the namespace and allows egress only to
+nvsnap-server, so in a namespace with no other egress allows it becomes
+default-deny for everything else, DNS included, and a restored vLLM cannot
+resolve huggingface.co (it lists the repo even with a warm cache). NVCF
+function namespaces carry NVCA's egress allows; a bare test namespace does
+not. Seen on dev1 2026-09-25; the chart should allow DNS in that policy or
+document the requirement.
 
 ## Grove and the scheduling gate
 
@@ -207,3 +214,32 @@ Two things the first runs taught:
   the next pod. The election leader landed on such a node once and vLLM
   refused to start. Node hygiene, not an election failure; the run was
   repeated with that node excluded.
+
+### Cross-namespace, dev1 2026-09-25
+
+Capture only in `nvsnap-system` (hash c8bbf555); the same stock chart
+installed in `nvsnap-xns`, replicas=2, admitted in the same second, agent
+v0.2.75-election6, NVMesh shared-volume:
+
+```
+webhook   "L2 claim minted in restore namespace" namespace=nvsnap-xns, then both
+          "election: promoted capture exists; restoring"
+claim     nvsnap-xns/rox-c8bbf555... Bound to nvsnap-ro-pv-c8bbf555...-1cfa3cd7
+PV        handle single-zone-cluster:csi-...:nvsnap-xns, ro, [ro norecovery nouuid]
+mount     /dev/nvmesh/csi-... on /opt/nvsnap type xfs (ro,nouuid,norecovery), 2.1G model tree
+pods      both role=restore, Ready +60s, 0 download lines, serve " Paris."
+```
+
+The first attempt exposed a create-then-label race between the two
+admissions ("the object has been modified"); the per-namespace PV is now
+created already labelled and the fresh concurrent mint passed.
+
+### Dynamo disaggregated, dev1 2026-09-25
+
+NVCF Dynamo sample (vllm-runtime 1.1.1, Qwen3-0.6B, frontend + prefill +
+decode). With the role-neutral hash both workers compose 18313f93: prefill
+elected leader, decode follower, frontend ignored. The gang did not
+schedule: `kai-scheduler` places the podgang `myllm-0` as a unit and the
+follower is unschedulable until `rox-<hash>` exists, so the leader is held
+with it. See "Grove and the scheduling gate"; the resolution for gang
+scheduling is a design decision recorded in issue #2099.
