@@ -104,4 +104,7 @@ public class CreateSpotInstanceLaunchSpecificationApiModel {
     @Schema(hidden = true)
     UUID gpuSpecificationId;
 
+    @Schema(hidden = true)
+    Integer maxRequestConcurrency;
+
 }
