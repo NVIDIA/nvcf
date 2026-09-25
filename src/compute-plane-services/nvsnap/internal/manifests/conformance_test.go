@@ -112,10 +112,26 @@ func TestMultiGPUSourcesAreNotCRIU(t *testing.T) {
 		if p.Metadata.Annotations["nvsnap.io/path"] != "criu" {
 			continue
 		}
+		// Manifests named *-criu are the deliberate multi-GPU criu-v2 workloads.
+		// Multi-GPU CRIU is no longer rejected outright: with every cross-GPU
+		// transport off, criu-v2 captures and restores tensor-parallel workloads
+		// on vLLM and TRT-LLM (see docs/proposals/multi-gpu-criu-v2.md). It is
+		// still off by default and needs NVSNAP_MULTI_GPU_CRIU=1 on the agent,
+		// so it stays opt-in, and the naming is what marks the opt-in.
+		//
+		// The check below still matters for everything else: a multi-GPU manifest
+		// that declares criu WITHOUT being one of these gets a criu-v2 restore
+		// placeholder while its capture goes via cachedir, and then idles until
+		// the readiness timeout. That reads as a restore bug rather than a
+		// mislabelled source, which is exactly how vllm-tp2 once presented.
+		if strings.HasSuffix(base, "-criu.yaml") {
+			continue
+		}
 		for _, c := range p.Spec.Containers {
 			if gpus := c.Resources.Limits["nvidia.com/gpu"]; gpus != "" && gpus != "0" && gpus != "1" {
-				t.Errorf("%s requests %s GPUs but declares nvsnap.io/path: \"criu\"; "+
-					"the agent rejects multi-GPU CRIU, so this must be \"rootfs\"",
+				t.Errorf("%s requests %s GPUs but declares nvsnap.io/path: \"criu\" and is not a "+
+					"*-criu.yaml opt-in workload; the capture will go via cachedir while the "+
+					"generated placeholder waits for an agent-driven restore that never comes",
 					base, gpus)
 			}
 		}
