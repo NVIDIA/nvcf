@@ -20,8 +20,13 @@ package selfhosted
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,12 +36,12 @@ import (
 
 func TestParseImageRef(t *testing.T) {
 	cases := []struct {
-		name    string
-		in      string
-		reg     string
-		repo    string
-		tag     string
-		wantOK  bool
+		name   string
+		in     string
+		reg    string
+		repo   string
+		tag    string
+		wantOK bool
 	}{
 		{"full tag", "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26", "stg.nvcr.io", "nvidia/nvcf-byoc/cluster-validator", "3.0.0-rc.26", true},
 		{"digest", "nvcr.io/foo/bar@sha256:abc", "nvcr.io", "foo/bar", "sha256:abc", true},
@@ -64,8 +69,8 @@ func TestPickBestValidatorTag_StablePreferred(t *testing.T) {
 	tags := []string{
 		"3.0.0-rc.11",
 		"3.0.0-rc.26",
-		"3.0.0",        // stable; should win over any rc
-		"3.1.0-rc.1",   // higher major but pre-release: must lose to 3.0.0
+		"3.0.0",      // stable; should win over any rc
+		"3.1.0-rc.1", // higher major but pre-release: must lose to 3.0.0
 		"sha256-abc.sig",
 		"3.0.0-v50ca53a0", // commit-SHA: filtered out by pattern
 	}
@@ -251,4 +256,247 @@ func TestNGCCredentials_EnvFallback(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "$oauthtoken", user)
 	assert.Equal(t, "from-env", pass)
+}
+
+// -- parseWWWAuthenticate --
+
+func TestParseWWWAuthenticate_Standard(t *testing.T) {
+	header := `Bearer realm="https://auth.docker.io/token",service="registry-1.docker.io",scope="repository:library/ubuntu:pull"`
+	realm, service, scope := parseWWWAuthenticate(header)
+	assert.Equal(t, "https://auth.docker.io/token", realm)
+	assert.Equal(t, "registry-1.docker.io", service)
+	assert.Equal(t, "repository:library/ubuntu:pull", scope)
+}
+
+func TestParseWWWAuthenticate_GHCR(t *testing.T) {
+	header := `Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:owner/image:pull"`
+	realm, service, scope := parseWWWAuthenticate(header)
+	assert.Equal(t, "https://ghcr.io/token", realm)
+	assert.Equal(t, "ghcr.io", service)
+	assert.Equal(t, "repository:owner/image:pull", scope)
+}
+
+func TestParseWWWAuthenticate_NoBearer(t *testing.T) {
+	// Basic auth challenge - should return empty strings.
+	realm, service, scope := parseWWWAuthenticate(`Basic realm="My Registry"`)
+	assert.Empty(t, realm)
+	assert.Empty(t, service)
+	assert.Empty(t, scope)
+}
+
+func TestParseWWWAuthenticate_Empty(t *testing.T) {
+	realm, service, scope := parseWWWAuthenticate("")
+	assert.Empty(t, realm)
+	assert.Empty(t, service)
+	assert.Empty(t, scope)
+}
+
+func TestParseWWWAuthenticate_RealmOnly(t *testing.T) {
+	// Some registries omit service/scope in the initial challenge.
+	realm, service, scope := parseWWWAuthenticate(`Bearer realm="https://example.com/auth"`)
+	assert.Equal(t, "https://example.com/auth", realm)
+	assert.Empty(t, service)
+	assert.Empty(t, scope)
+}
+
+func TestParseWWWAuthenticate_MixedCaseParams(t *testing.T) {
+	// Auth parameter names are parsed with mixed case in the wild.
+	realm, service, scope := parseWWWAuthenticate(`Bearer Realm="https://auth.example.com/token",Service="reg.example.com",Scope="repository:foo:pull"`)
+	assert.Equal(t, "https://auth.example.com/token", realm)
+	assert.Equal(t, "reg.example.com", service)
+	assert.Equal(t, "repository:foo:pull", scope)
+}
+
+func TestParseWWWAuthenticate_CaseInsensitiveBearer(t *testing.T) {
+	// HTTP auth scheme names are case-insensitive (RFC 7235 s2.1).
+	for _, header := range []string{
+		`bearer realm="https://auth.example.com/token",service="reg.example.com"`,
+		`BEARER realm="https://auth.example.com/token",service="reg.example.com"`,
+		`Bearer realm="https://auth.example.com/token",service="reg.example.com"`,
+	} {
+		realm, service, _ := parseWWWAuthenticate(header)
+		assert.Equal(t, "https://auth.example.com/token", realm, "header: %s", header)
+		assert.Equal(t, "reg.example.com", service, "header: %s", header)
+	}
+}
+
+// -- isNGCRegistry --
+
+func TestIsNGCRegistry(t *testing.T) {
+	// Valid NGC registries.
+	assert.True(t, isNGCRegistry("nvcr.io"))
+	assert.True(t, isNGCRegistry("stg.nvcr.io"))
+	assert.True(t, isNGCRegistry("registry.nvidia.com"))
+	assert.True(t, isNGCRegistry("nvcr.io:443"), "port must be stripped before matching")
+
+	// Non-NGC registries must be rejected.
+	assert.False(t, isNGCRegistry("ghcr.io"))
+	assert.False(t, isNGCRegistry("quay.io"))
+	assert.False(t, isNGCRegistry("harbor.company.internal"))
+
+	// Deceptive suffixes must be rejected.
+	assert.False(t, isNGCRegistry("evilnvcr.io"), "suffix match without dot boundary must be rejected")
+	assert.False(t, isNGCRegistry("nvidia.com.invalid"), "deceptive TLD must be rejected")
+	assert.False(t, isNGCRegistry("fakenvidia.com"), "partial host match must be rejected")
+}
+
+// -- exchangeBearerToken realm host authorization --
+
+// recordingTransport records every request it sees and reports whether any
+// carried an Authorization header, so a test can assert that no credential
+// escaped rather than only that an error was returned.
+type recordingTransport struct {
+	mu       sync.Mutex
+	requests []*http.Request
+	withAuth []string
+	inner    http.RoundTripper
+}
+
+func (rt *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.requests = append(rt.requests, r)
+	if r.Header.Get("Authorization") != "" {
+		rt.withAuth = append(rt.withAuth, r.URL.String())
+	}
+	rt.mu.Unlock()
+	if rt.inner == nil {
+		return nil, fmt.Errorf("no inner transport")
+	}
+	return rt.inner.RoundTrip(r)
+}
+
+func TestExchangeBearerToken_RejectsAttackerRealm(t *testing.T) {
+	// A malicious registry returns a realm on an attacker-controlled host. The
+	// realm check must reject it, and crucially must do so before any request
+	// carrying the operator's credentials leaves the process.
+	//
+	// Credentials have to be configured for the assertion to mean anything: if
+	// none were present, no request could carry an Authorization header whether
+	// the control works or not.
+	t.Setenv("NGC_API_KEY", "test-key")
+
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	client := &http.Client{Transport: rec}
+
+	const wwwAuth = `Bearer realm="https://attacker.example.com/token",service="harbor.company.internal"`
+	_, err := exchangeBearerToken(context.Background(), client,
+		"harbor.company.internal", "myrepo/image", wwwAuth)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not authorized for registry")
+	assert.Empty(t, rec.withAuth,
+		"no request carrying an Authorization header may be issued once the realm is rejected")
+	for _, r := range rec.requests {
+		assert.NotContains(t, r.URL.Host, "attacker",
+			"no request at all may reach the attacker host")
+	}
+}
+
+// An empty realm host must fail closed. "https://:443/token" has a non-empty
+// u.Host (":443") so it clears the relative-realm guard, but Hostname() is "",
+// and an empty trustedRealmDelegations lookup would compare equal to it.
+func TestExchangeBearerToken_RejectsEmptyRealmHost(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	client := &http.Client{Transport: rec}
+
+	_, err := exchangeBearerToken(context.Background(), client,
+		"harbor.company.internal", "myrepo/image", `Bearer realm="https://:443/token"`)
+
+	require.Error(t, err)
+	assert.Empty(t, rec.withAuth, "an empty realm host must not receive credentials")
+}
+
+// -- exchangeNGCBearerToken --
+
+// spyTransport is an http.RoundTripper that fails the test if called.
+type spyTransport struct{ t *testing.T }
+
+func (s *spyTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+	s.t.Fatal("HTTP request must not be issued for non-NGC registry")
+	return nil, nil
+}
+
+// roundTripperFunc adapts a function to the http.RoundTripper interface.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestExchangeBearerToken_DockerHubDelegatedRealm(t *testing.T) {
+	// Docker Hub uses registry-1.docker.io as the pull host and auth.docker.io
+	// for token exchange. The realm check must authorize that delegation, so
+	// drive exchangeBearerToken and assert the request actually reached the
+	// auth host rather than comparing the delegation map against itself.
+	t.Setenv("NGC_API_KEY", "test-key")
+
+	rec := &recordingTransport{inner: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "auth.docker.io" {
+			return nil, fmt.Errorf("unexpected host %s", r.URL.Host)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"token":"dockerhub-token"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	client := &http.Client{Transport: rec}
+
+	const wwwAuth = `Bearer realm="https://auth.docker.io/token",service="registry.docker.io",` +
+		`scope="repository:library/ubuntu:pull"`
+	tok, err := exchangeBearerToken(context.Background(), client,
+		"registry-1.docker.io", "library/ubuntu", wwwAuth)
+
+	require.NoError(t, err, "the documented Docker Hub delegation must be authorized")
+	assert.Equal(t, "dockerhub-token", tok)
+	require.NotEmpty(t, rec.requests, "the token exchange must actually be issued")
+	assert.Equal(t, "auth.docker.io", rec.requests[0].URL.Host)
+}
+
+func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
+	// A non-NGC registry must be rejected before any HTTP request is made,
+	// even when NGC credentials are configured. The spy transport fails the
+	// test immediately if RoundTrip is called, ensuring the isNGCRegistry
+	// guard fires before any network activity.
+	t.Setenv("NGC_API_KEY", "test-key") // configure a credential so a missing guard would reach the transport
+	client := &http.Client{Transport: &spyTransport{t: t}}
+	_, err := exchangeNGCBearerToken(context.Background(), client, "harbor.company.internal", "myrepo/image")
+	require.Error(t, err, "non-NGC registry must be rejected without issuing a request")
+	assert.Contains(t, err.Error(), "non-NGC registry")
+}
+
+// The registry string is concatenated into "https://" + registry + "/...", so a
+// suffix match alone is not enough to authorize forwarding the NGC API key:
+// "evil.com/x.nvcr.io" ends with a trusted suffix but parses to host evil.com.
+func TestIsNGCRegistry_RejectsHostConfusion(t *testing.T) {
+	for _, tc := range []struct {
+		registry string
+		want     bool
+		why      string
+	}{
+		{"nvcr.io", true, "the canonical host"},
+		{"stg.nvcr.io", true, "a real subdomain"},
+		{"evil.com/x.nvcr.io", false, "path component: the request host is evil.com"},
+		{"evil.com@nvcr.io", false, "userinfo: not a bare host"},
+		{"nvcr.io?x=.nvcr.io", false, "query truncates the host"},
+		{"nvcr.io#.nvcr.io", false, "fragment truncates the host"},
+		{"nvcr.io.evil.com", false, "deceptive suffix"},
+		{"nvcr.io evil.com", false, "whitespace"},
+	} {
+		assert.Equal(t, tc.want, isNGCRegistry(tc.registry),
+			"isNGCRegistry(%q): %s", tc.registry, tc.why)
+	}
+}
+
+// A non-bare registry must never reach the NGC token exchange, which attaches
+// the API key with basic auth.
+func TestExchangeNGCBearerToken_RejectsHostConfusion(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	client := &http.Client{Transport: rec}
+
+	_, err := exchangeNGCBearerToken(context.Background(), client, "evil.com/x.nvcr.io", "repo/img")
+
+	require.Error(t, err)
+	assert.Empty(t, rec.withAuth, "the NGC API key must not be sent to a confused host")
+	assert.Empty(t, rec.requests, "no request may be issued at all")
 }

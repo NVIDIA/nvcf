@@ -315,10 +315,37 @@ func resolveClusterID(resp *client.RegisterClusterResponse) string {
 // avoid touching a real kubeconfig file.
 var loadKubeConfigFn = loadKubeConfig
 
+var currentKubeContextNameFn = currentKubeContextName
+
+// currentKubeContextName returns the kubeconfig's current-context, or "" when
+// it cannot be read. Used to name the context in remediation hints when the
+// caller did not pass one explicitly. Best-effort by design: a hint without
+// the flag is still correct at the moment it is printed.
+func currentKubeContextName() string {
+	raw, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{},
+	).RawConfig()
+	if err != nil {
+		return ""
+	}
+	return raw.CurrentContext
+}
+
+// effectiveKubeContext resolves the context a probe actually used, so a hint
+// naming it stays correct after the current-context changes.
+func effectiveKubeContext(kctx string) string {
+	if kctx != "" {
+		return kctx
+	}
+	return currentKubeContextNameFn()
+}
+
 // loadKubeConfig builds a *rest.Config for the given kubeconfig context.
 // When kctx is empty the kubeconfig's current-context is used, preserving
 // single-cluster behavior. The loading-rules chain follows the same priority
 // as kubectl: KUBECONFIG env var → ~/.kube/config.
+// currentKubeContextNameFn is a seam: tests must not depend on the developer's
+// kubeconfig, and hint output would otherwise vary by machine.
 func loadKubeConfig(kctx string) (*rest.Config, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}

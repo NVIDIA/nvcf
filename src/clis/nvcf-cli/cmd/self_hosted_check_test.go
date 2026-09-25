@@ -30,6 +30,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nvcf-cli/internal/selfhosted"
+	"nvcf-cli/internal/selfhosted/kubectx"
 	"nvcf-cli/internal/selfhosted/progress"
 )
 
@@ -343,9 +345,205 @@ func TestCheck_SplitClusterMode(t *testing.T) {
 	assert.Contains(t, categories, "compute-plane-cluster", "expected compute-plane-cluster in split mode")
 }
 
-// parseJSONLLines splits s into non-empty lines, skips any non-JSON lines
-// (e.g. cobra error messages written to stderr), and unmarshals each JSON line
-// as an object. Returns them in order.
+// TestComputePlaneIsTargeted tests the predicate that gates the cluster-validator
+// probe. The validator should run when the compute plane is explicitly targeted
+// (--compute-plane, --all) or implicitly targeted by ModeSingle + --pre.
+// It must NOT run for --pre alone in ModeSplit, where the two context flags
+// identify separate clusters and --pre does not constitute targeting the compute plane.
+func TestComputePlaneIsTargeted(t *testing.T) {
+	t.Cleanup(func() {
+		checkPre = false
+		checkComputePlane = false
+		checkAll = false
+	})
+
+	tests := []struct {
+		name string
+		pre  bool
+		cp   bool
+		all  bool
+		mode kubectx.Mode
+		want bool
+	}{
+		{"--compute-plane single", false, true, false, kubectx.ModeSingle, true},
+		{"--compute-plane split", false, true, false, kubectx.ModeSplit, true},
+		{"--all single", false, false, true, kubectx.ModeSingle, true},
+		{"--all split", false, false, true, kubectx.ModeSplit, true},
+		{"--pre single - implicit compute plane", true, false, false, kubectx.ModeSingle, true},
+		{"--pre split - must not target compute plane", true, false, false, kubectx.ModeSplit, false},
+		{"--control-plane only", false, false, false, kubectx.ModeSingle, false},
+		{"no relevant flag", false, false, false, kubectx.ModeSingle, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkPre = tt.pre
+			checkComputePlane = tt.cp
+			checkAll = tt.all
+			assert.Equal(t, tt.want, computePlaneIsTargeted(tt.mode))
+		})
+	}
+}
+
+func TestControlPlaneIsTargeted(t *testing.T) {
+	t.Cleanup(func() {
+		checkPre = false
+		checkControlPlane = false
+		checkAll = false
+	})
+
+	tests := []struct {
+		name string
+		pre  bool
+		cp   bool
+		all  bool
+		mode kubectx.Mode
+		want bool
+	}{
+		{"--control-plane single", false, true, false, kubectx.ModeSingle, true},
+		{"--control-plane split", false, true, false, kubectx.ModeSplit, true},
+		{"--all single", false, false, true, kubectx.ModeSingle, true},
+		{"--all split", false, false, true, kubectx.ModeSplit, true},
+		{"--pre single -- implicit control plane", true, false, false, kubectx.ModeSingle, true},
+		{"--pre split -- must not target control plane", true, false, false, kubectx.ModeSplit, false},
+		{"--compute-plane only", false, false, false, kubectx.ModeSingle, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkPre = tt.pre
+			checkControlPlane = tt.cp
+			checkAll = tt.all
+			assert.Equal(t, tt.want, controlPlaneIsTargeted(tt.mode))
+		})
+	}
+}
+
+// TestCheck_ComputePlaneFlagRunsChecks verifies that --compute-plane alone
+// produces compute-plane-cluster category events. Before the gating fix this
+// flag was a complete no-op and produced no check events at all.
+func TestCheck_ComputePlaneFlagRunsChecks(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkComputePlane = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--compute-plane", "--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "compute-plane-cluster",
+		"--compute-plane must produce compute-plane-cluster events")
+}
+
+// TestCheck_ControlPlaneFlagRunsChecks verifies that --control-plane alone
+// produces control-plane-cluster category events.
+func TestCheck_ControlPlaneFlagRunsChecks(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkControlPlane = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "control-plane-cluster",
+		"--control-plane must produce control-plane-cluster events")
+}
+
+// TestCheck_ValidatorSkipNoteAppearsOnComputePlane verifies that the
+// "cluster-validator skipped" note appears on stderr when --compute-plane is
+// used with --skip-cluster-validation (compute plane is targeted, validator is
+// suppressed).
+func TestCheck_ValidatorSkipNoteAppearsOnComputePlane(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkComputePlane = false
+		checkSkipClusterValidation = false
+	})
+	// --skip-cluster-validation does not gate the inotify prober, which lists
+	// every node and creates a privileged pod on each. Without this the test
+	// writes to whatever cluster is in the developer's current kubecontext.
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{
+		"self-hosted", "check", "--compute-plane",
+		"--skip-cluster-validation", "--json",
+	})
+	_ = rootCmd.Execute()
+
+	assert.Contains(t, stderr.String(), "cluster-validator skipped",
+		"expected skip note when compute plane is targeted and --skip-cluster-validation is set")
+}
+
+// --pre in ModeSplit visits both clusters, so when the validator is skipped the
+// operator must be told why. This previously asserted silence, which is the
+// "no validator row vs validator silently dropped" confusion the note exists
+// to prevent.
+func TestCheck_ValidatorSkipNotePresentForPreInSplitMode(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkPre = false
+		checkSkipClusterValidation = false
+		selfHostedControlPlaneContext = ""
+		selfHostedComputePlaneContext = ""
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{
+		"self-hosted", "check", "--pre",
+		"--skip-cluster-validation", "--json",
+		"--control-plane-context", "admin@cp",
+		"--compute-plane-context", "admin@gpu1",
+	})
+	_ = rootCmd.Execute()
+
+	assert.Contains(t, stderr.String(), "cluster-validator skipped",
+		"--pre in split mode visits both clusters, so an explicit skip must be explained")
+}
+
 func parseJSONLLines(t *testing.T, s string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -362,4 +560,176 @@ func parseJSONLLines(t *testing.T, s string) []map[string]any {
 		out = append(out, m)
 	}
 	return out
+}
+
+// TestPlaneIsVisited covers the dispatch predicates, which are broader than
+// the targeting predicates: --pre in ModeSplit visits both clusters for the
+// shared pre-install checks without targeting either role. Gating the split
+// dispatch on the targeting predicates alone would make --pre a no-op there.
+//
+// The mode column is kept to document that the answer is the same in both
+// modes: the predicate is mode-independent by absorption, so a table that
+// varied only the mode would be asserting a dependence that does not exist.
+func TestPlaneIsVisited(t *testing.T) {
+	t.Cleanup(func() {
+		checkPre = false
+		checkControlPlane = false
+		checkComputePlane = false
+		checkAll = false
+	})
+
+	tests := []struct {
+		name          string
+		pre, cp, gpu  bool
+		all           bool
+		mode          kubectx.Mode
+		wantCP        bool
+		wantComputeGP bool
+	}{
+		{"--pre split visits both", true, false, false, false, kubectx.ModeSplit, true, true},
+		{"--pre single visits both", true, false, false, false, kubectx.ModeSingle, true, true},
+		{"--control-plane split skips compute", false, true, false, false, kubectx.ModeSplit, true, false},
+		{"--compute-plane split skips control", false, false, true, false, kubectx.ModeSplit, false, true},
+		{"--all split visits both", false, false, false, true, kubectx.ModeSplit, true, true},
+		{"--control-plane single skips compute", false, true, false, false, kubectx.ModeSingle, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkPre, checkControlPlane, checkComputePlane, checkAll = tt.pre, tt.cp, tt.gpu, tt.all
+			assert.Equal(t, tt.wantCP, controlPlaneIsVisited())
+			assert.Equal(t, tt.wantComputeGP, computePlaneIsVisited())
+		})
+	}
+}
+
+// TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster is the regression
+// guard for the dispatch gating: in ModeSplit with only --control-plane, the
+// compute cluster must not be contacted at all, so no compute-plane-cluster
+// category is emitted.
+func TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkControlPlane = false
+		selfHostedControlPlaneContext = ""
+		selfHostedComputePlaneContext = ""
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane",
+		"--control-plane-context", "cp-ctx", "--compute-plane-context", "gpu-ctx",
+		"--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "control-plane-cluster")
+	assert.NotContains(t, categories, "compute-plane-cluster",
+		"--control-plane in split mode must not probe the compute cluster")
+}
+
+// TestCheck_HostLocalChecksRunOnce guards against the host-local categories
+// being emitted once per role. Local tool versions and registry credentials
+// are checked on the operator's machine, so running them for both roles
+// repeats the same check IDs in --json and double-counts them in the totals.
+func TestCheck_HostLocalChecksRunOnce(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkAll = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	counts := map[string]int{}
+	for _, l := range lines {
+		if l["event"] != "check_completed" {
+			continue
+		}
+		if id, ok := l["id"].(string); ok && strings.HasPrefix(id, "local-host-tools-") {
+			counts[id]++
+		}
+	}
+	require.NotEmpty(t, counts, "expected local-host-tools checks in the stream")
+	for id, n := range counts {
+		assert.Equal(t, 1, n, "check %s emitted %d times", id, n)
+	}
+}
+
+// The JSON verdict and the exit code must derive from the same predicate. A
+// warning-severity result previously emitted success:false / verdict:failed
+// while the process exited 0, so a CI gate on final.success broke for every
+// user whose registry credentials live in a Docker credential helper.
+func TestEmitCheckFinal_WarningIsNotAFailure(t *testing.T) {
+	results := []selfhosted.CheckResult{
+		{ID: "a", Passed: true, Severity: selfhosted.SeverityInfo},
+		{ID: "b", Passed: false, Severity: selfhosted.SeverityWarning},
+	}
+	assert.False(t, anyFailed(results), "a warning must not set the exit code")
+
+	var buf bytes.Buffer
+	sink := progress.NewJSONLRenderer(&buf)
+	emitCheckFinal(context.Background(), sink, results)
+
+	line := buf.String()
+	assert.Contains(t, line, `"verdict":"warnings"`)
+	assert.Contains(t, line, `"success":true`,
+		"success must agree with the exit code")
+	assert.Contains(t, line, `"failedCount":0`)
+}
+
+func TestEmitCheckFinal_ErrorIsAFailure(t *testing.T) {
+	results := []selfhosted.CheckResult{
+		{ID: "a", Passed: true, Severity: selfhosted.SeverityInfo},
+		{ID: "b", Passed: false, Severity: selfhosted.SeverityError},
+	}
+	assert.True(t, anyFailed(results))
+
+	var buf bytes.Buffer
+	sink := progress.NewJSONLRenderer(&buf)
+	emitCheckFinal(context.Background(), sink, results)
+	assert.Contains(t, buf.String(), `"verdict":"failed"`)
+	assert.Contains(t, buf.String(), `"success":false`)
+}
+
+// Both roles emit a cluster-validator result under the same ID, so stopping at
+// the first drops the other transcript entirely from --all --show-logs.
+func TestMaybeShowClusterValidatorLogs_PrintsBothRoles(t *testing.T) {
+	prev := checkShowLogs
+	checkShowLogs = true
+	t.Cleanup(func() { checkShowLogs = prev })
+
+	var buf bytes.Buffer
+	maybeShowClusterValidatorLogs(&buf, []selfhosted.CheckResult{
+		{ID: "cluster-validator", Logs: "control-plane transcript\n"},
+		{ID: "cluster-validator", Logs: "compute-plane transcript\n"},
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, "control-plane transcript")
+	assert.Contains(t, out, "compute-plane transcript")
+	assert.Equal(t, 2, strings.Count(out, "--- cluster-validator logs ---"))
 }

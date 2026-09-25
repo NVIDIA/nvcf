@@ -32,14 +32,62 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// deleteExactly pins a delete to the object that was inspected. The ownership
+// guards read an object and then delete it by name, and in that window another
+// actor can relabel it, or delete and recreate it under the same name. Without
+// preconditions the delete lands on whatever holds the name by then; with them
+// the apiserver rejects it as a conflict instead.
+func deleteExactly(o metav1.Object) metav1.DeleteOptions {
+	// UID only. UID already pins identity, which is the whole goal: a
+	// delete-and-recreate under the same name changes it. ResourceVersion
+	// additionally pins the object's version, so any concurrent write turns
+	// the delete into a 409 that every sweep then swallows. That bites hardest
+	// on the singleton Job sweep, whose only target is an active Job whose
+	// .status the Job controller mutates continuously.
+	uid := o.GetUID()
+	return metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid},
+	}
+}
+
 const (
 	// Project-specific name so the auto-created / mirrored pull secret
 	// can never collide with the conventional `nvcr-pull-secret` that
 	// operators or the install flow may already manage in 'default'.
 	// Pairs with isManagedByValidatorCLI label guard for defense-in-depth.
+	//
+	// The name is suffixed per role by validatorPullSecretRoleName: ModeSplit
+	// runs both validators concurrently, and the two kubecontexts can resolve
+	// to the same cluster. One shared Secret means the role that finishes first
+	// deletes it while the other Job is still pulling, which the kubelet
+	// reports as FailedToRetrieveImagePullSecret.
 	validatorPullSecretName        = "nvcf-preflight-pull-secret"
 	validatorPullSecretScanTimeout = 10 * time.Second
 )
+
+// validatorPullSecretRoleName returns the managed pull-secret name for a role.
+// A Secret cannot be co-owned, so each role needs its own rather than a shared
+// object with a role label.
+func validatorPullSecretRoleName(role string) string {
+	if role == "" {
+		return validatorPullSecretName
+	}
+	return validatorPullSecretName + "-" + role
+}
+
+// validatorPullSecretRunName is the name this run mints under. It carries the
+// run's unguessable suffix because the managed labels are three public
+// constants: with a predictable name, anyone able to create a Secret in this
+// namespace could pre-create it wearing those labels, pass the ownership check,
+// and have the NGC credential written into an object they control. Same
+// reasoning as the per-run RBAC names.
+func validatorPullSecretRunName(role, runID string) string {
+	base := validatorPullSecretRoleName(role)
+	if runID == "" {
+		return base
+	}
+	return base + "-" + runID
+}
 
 // Mirrors the chain used by ensureLocalImagePullSecrets in cmd/self_hosted_up.go.
 var ngcAPIKeyEnvNames = []string{
@@ -80,7 +128,8 @@ var validatorPullSecretSearchNamespaces = []string{
 func resolveValidatorPullSecret(
 	ctx context.Context,
 	client kubernetes.Interface,
-	provided, image string,
+	provided, image, role, runID string,
+	preserve bool,
 ) (string, error) {
 	if provided != "" {
 		return provided, nil
@@ -93,13 +142,13 @@ func resolveValidatorPullSecret(
 	scanCtx, cancel := context.WithTimeout(ctx, validatorPullSecretScanTimeout)
 	defer cancel()
 
-	if name, err := scanAndMirrorPullSecret(scanCtx, client, registry); err != nil {
+	if name, err := scanAndMirrorPullSecret(scanCtx, client, registry, role, runID, preserve); err != nil {
 		return "", err
 	} else if name != "" {
 		return name, nil
 	}
 
-	if name, err := autoCreatePullSecretFromEnv(scanCtx, client, registry); err != nil {
+	if name, err := autoCreatePullSecretFromEnv(scanCtx, client, registry, role, runID, preserve); err != nil {
 		return "", err
 	} else if name != "" {
 		return name, nil
@@ -131,7 +180,7 @@ func parseRegistryFromImage(image string) string {
 // registry. Mirrors the body into clusterValidatorNamespace when the match
 // lives elsewhere, so the Job can reference the secret without cross-namespace
 // lookups.
-func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, registry string) (string, error) {
+func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, registry, role, runID string, preserve bool) (string, error) {
 	for _, ns := range validatorPullSecretSearchNamespaces {
 		// Filter client-side rather than via FieldSelector: server-side
 		// type= selector on Secrets is only honored from k8s 1.27 onward.
@@ -148,6 +197,17 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 				continue
 			}
 			if s.Namespace == clusterValidatorNamespace {
+				// Adopt an operator-supplied Secret (no managed labels, so no
+				// sweep touches it) or this role's own. Never the other
+				// role's: in ModeSplit both kubecontexts can resolve to one
+				// cluster, and that role's deferred sweep would delete the
+				// Secret while this role's pod is still pulling, which the
+				// kubelet reports as FailedToRetrieveImagePullSecret. That is
+				// the exact failure per-role naming was introduced to prevent.
+				if hasValidatorManagedLabels(s.Labels) &&
+					s.Labels[clusterValidatorRoleLabel] != role {
+					continue
+				}
 				return s.Name, nil
 			}
 			// Mirror under the validator's well-known name rather than the
@@ -156,11 +216,11 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 			// the destination namespace, and writeDockerConfigSecret's
 			// delete-and-recreate path would otherwise destroy that
 			// secret on type mismatch.
-			if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg); err != nil {
+			if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, cfg, preserve); err != nil {
 				return "", fmt.Errorf("mirror pull secret %s/%s to %s/%s: %w",
-					s.Namespace, s.Name, clusterValidatorNamespace, validatorPullSecretName, err)
+					s.Namespace, s.Name, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), err)
 			}
-			return validatorPullSecretName, nil
+			return validatorPullSecretRunName(role, runID), nil
 		}
 	}
 	return "", nil
@@ -177,20 +237,29 @@ func dockerConfigHasRegistry(cfg []byte, registry string) bool {
 	return ok
 }
 
-func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interface, registry string) (string, error) {
+func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interface, registry, role, runID string, preserve bool) (string, error) {
 	apiKey := firstNonEmptyEnv(ngcAPIKeyEnvNames...)
 	if apiKey == "" {
+		return "", nil
+	}
+	// Only ever hand the NGC key to NGC. Without this an operator who mirrors
+	// the validator image to ghcr.io or a corporate Harbor and still exports
+	// NGC_API_KEY gets it written as that registry's password, and the kubelet
+	// then sends the live key to a third party as HTTP Basic auth, where it
+	// lands in their access logs. The local probe already guards this the same
+	// way; the Secret path did not.
+	if !isNGCRegistry(registry) {
 		return "", nil
 	}
 	cfg, err := buildDockerConfigJSON(registry, "$oauthtoken", apiKey)
 	if err != nil {
 		return "", fmt.Errorf("encode dockerconfigjson for %s: %w", registry, err)
 	}
-	if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg); err != nil {
+	if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, cfg, preserve); err != nil {
 		return "", fmt.Errorf("auto-create pull secret %s/%s: %w",
-			clusterValidatorNamespace, validatorPullSecretName, err)
+			clusterValidatorNamespace, validatorPullSecretRunName(role, runID), err)
 	}
-	return validatorPullSecretName, nil
+	return validatorPullSecretRunName(role, runID), nil
 }
 
 // Mirrors cmd/self_hosted_up.go's firstNonEmptyEnv; kept local to avoid an
@@ -218,96 +287,52 @@ func buildDockerConfigJSON(registry, username, password string) ([]byte, error) 
 	})
 }
 
-// Mirrors cmd/self_hosted_up.go's ensureDockerConfigSecret. Attaches the
-// CLI's managed-by labels so a future cleanup path can identify resources
-// to remove.
-func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, namespace, name string, dockerConfig []byte) error {
-	labels := clusterValidatorLabels()
-	secrets := client.CoreV1().Secrets(namespace)
+// writeDockerConfigSecret creates the pull Secret this run will reference.
+//
+// Create-only. The name carries this run's unguessable suffix, so nothing this
+// CLI created can already hold it and any collision is another object.
+// Adopting one would write the NGC credential into something we do not own,
+// which label-based ownership cannot prevent: the managed labels are three
+// public constants anyone can copy onto a Secret they pre-create under a
+// predictable name.
+func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, namespace, name, role string, dockerConfig []byte, preserve bool) error {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    labels,
+			Labels:    clusterValidatorRoleLabelsPreserved(role, preserve),
 		},
 		Type: corev1.SecretTypeDockerConfigJson,
 		Data: map[string][]byte{corev1.DockerConfigJsonKey: dockerConfig},
 	}
-	current, err := secrets.Get(ctx, name, metav1.GetOptions{})
-	switch {
-	case err == nil && current.Type == corev1.SecretTypeDockerConfigJson:
-		if current.Data == nil {
-			current.Data = map[string][]byte{}
-		}
-		current.Data[corev1.DockerConfigJsonKey] = dockerConfig
-		if current.Labels == nil {
-			current.Labels = map[string]string{}
-		}
-		for k, v := range labels {
-			current.Labels[k] = v
-		}
-		if _, err := secrets.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update: %w", err)
-		}
-		return nil
-	case err == nil:
-		// Secret.Type is immutable; can't Update across a type change.
-		// Guard the delete: only replace secrets we previously managed.
-		// Without this, an operator-owned secret with a colliding name
-		// (e.g. an Opaque secret in 'default' sharing the validator's
-		// pull-secret name) would be silently destroyed.
-		if !isManagedByValidatorCLI(current) {
+	if _, err := client.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+		if apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf(
-				"refusing to replace %s/%s (type=%s) which is not managed by nvcf-cli; "+
-					"pass --cluster-validator-pull-secret to choose an explicit secret name",
-				namespace, name, current.Type)
+				"refusing to overwrite existing secret %s/%s: this run generated that name, so "+
+					"another object already holds it; pass --cluster-validator-pull-secret to "+
+					"choose an explicit secret name",
+				namespace, name)
 		}
-		if err := secrets.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete incompatible secret type %s: %w", current.Type, err)
-		}
-	case !apierrors.IsNotFound(err):
-		return fmt.Errorf("get: %w", err)
-	}
-	if _, err := secrets.Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create: %w", err)
-		}
-		// Lost a delete->create race: another actor recreated the secret
-		// in the narrow window between our Delete and Create. Refetch and
-		// overwrite with our content so the caller still gets the
-		// credentials it asked for.
-		current, getErr := secrets.Get(ctx, name, metav1.GetOptions{})
-		if getErr != nil {
-			return fmt.Errorf("get after create race: %w", getErr)
-		}
-		if current.Type != corev1.SecretTypeDockerConfigJson {
-			return fmt.Errorf("create race left secret %s/%s with type %s, want %s",
-				namespace, name, current.Type, corev1.SecretTypeDockerConfigJson)
-		}
-		if current.Data == nil {
-			current.Data = map[string][]byte{}
-		}
-		current.Data[corev1.DockerConfigJsonKey] = dockerConfig
-		if current.Labels == nil {
-			current.Labels = map[string]string{}
-		}
-		for k, v := range labels {
-			current.Labels[k] = v
-		}
-		if _, err := secrets.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update after create race: %w", err)
-		}
+		return fmt.Errorf("create: %w", err)
 	}
 	return nil
 }
 
-// isManagedByValidatorCLI reports whether the secret carries the labels
-// writeDockerConfigSecret stamps on every secret it creates. Used to
-// gate the delete-then-recreate branch so we never destroy an operator-
-// or chart-owned secret that happens to share a name with one of ours.
+// isManagedByValidatorCLI reports whether a Secret carries the labels this CLI
+// stamps on the ones it creates. Necessary but not sufficient for ownership:
+// the labels are three public constants anyone can copy onto a Secret they
+// pre-create, which is why the generated names are run-scoped and the write
+// path is create-only rather than adopt-or-update.
 func isManagedByValidatorCLI(s *corev1.Secret) bool {
+	return hasValidatorManagedLabels(s.Labels)
+}
+
+// hasValidatorManagedLabels reports whether an object carries the labels this
+// CLI stamps on everything it creates. It is the ownership test for every
+// resource the validator writes to or deletes by name, not just Secrets.
+func hasValidatorManagedLabels(labels map[string]string) bool {
 	for k, v := range clusterValidatorLabels() {
-		if s.Labels[k] != v {
+		if labels[k] != v {
 			return false
 		}
 	}

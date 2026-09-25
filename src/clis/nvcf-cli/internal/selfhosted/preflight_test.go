@@ -408,7 +408,10 @@ func TestRunPreflightForRole_LocalOnly(t *testing.T) {
 func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
 	sink := &captureSink{}
 	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
-	res := RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{KubeContext: "admin@cp"}, sink)
+	// No StaleNamespaceProber and no ClusterValidator: the control-plane
+	// category is empty but the category itself still fires (CategoryCompleted
+	// is always emitted).
+	RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{KubeContext: "admin@cp"}, sink)
 
 	seen := map[string]bool{}
 	for _, e := range sink.events {
@@ -417,14 +420,27 @@ func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
 		}
 	}
 	assert.True(t, seen["local-host-tools"], "expected local-host-tools category")
-	assert.True(t, seen["control-plane-cluster"], "expected control-plane-cluster category")
+	assert.True(t, seen["control-plane-cluster"], "expected control-plane-cluster category even with no checks configured")
+}
+
+func TestRunPreflightForRole_ControlPlaneWithValidatorAddsClusterValidatorCheck(t *testing.T) {
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	cv := func(_ context.Context, p ClusterValidatorParams) ClusterValidatorResult {
+		return ClusterValidatorResult{Passed: true}
+	}
+	res := RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{
+		KubeContext:           "admin@cp",
+		ClusterValidator:      cv,
+		ClusterValidatorImage: "nvcf-validator:1.0",
+	}, sink)
 
 	var gotCheckIDs []string
 	for _, r := range res {
 		gotCheckIDs = append(gotCheckIDs, r.ID)
 	}
-	assert.Contains(t, gotCheckIDs, "gateway-api-crds")
-	assert.Contains(t, gotCheckIDs, "default-storageclass")
+	assert.Contains(t, gotCheckIDs, "cluster-validator",
+		"cluster-validator check must appear when ClusterValidator is configured for control-plane role")
 }
 
 func TestRunPreflightForRole_ComputePlaneWithoutSISURL(t *testing.T) {
@@ -653,4 +669,36 @@ func TestParseInotifyOutput(t *testing.T) {
 		_, _, err := parseInotifyOutput("")
 		require.Error(t, err)
 	})
+}
+
+// In ModeSingle one cluster hosts both roles and only one stale-namespace
+// probe runs, so the skipped role's namespaces must be merged in. Dropping
+// them means a kai-scheduler or nvca-operator namespace wedged Terminating is
+// reported as "no stale NVCF namespaces detected".
+func TestStaleNamespaceCheck_MergesTheOtherRolesNamespaces(t *testing.T) {
+	var probed []string
+	prober := func(_ context.Context, _ string, namespaces []string) ([]StaleNamespace, error) {
+		probed = namespaces
+		return nil, nil
+	}
+	rc := RoleConfig{
+		StaleNamespaceProber: prober,
+		ExtraStaleNamespaces: ComputePlaneStaleNamespaces(""),
+	}
+	cat := controlPlaneCheckCategory(rc)
+	require.NotEmpty(t, cat.checks)
+	cat.checks[0].Run(context.Background())
+
+	for _, ns := range []string{"nvcf", "vault-system"} {
+		assert.Contains(t, probed, ns, "the control-plane list must still be covered")
+	}
+	for _, ns := range []string{"nvca-operator", "kai-scheduler"} {
+		assert.Contains(t, probed, ns, "the compute-plane list must be merged in, not dropped")
+	}
+}
+
+func TestMergeNamespaces_DedupesAndKeepsOrder(t *testing.T) {
+	got := mergeNamespaces([]string{"a", "b"}, []string{"b", "c", ""})
+	assert.Equal(t, []string{"a", "b", "c"}, got)
+	assert.Nil(t, mergeNamespaces(nil, nil))
 }

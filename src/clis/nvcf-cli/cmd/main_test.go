@@ -21,14 +21,35 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"nvcf-cli/internal/selfhosted"
 )
 
-// Default-stub out the validator-tag registry probe so cmd tests don't make
-// real network calls or pollute the on-disk cache. Individual tests can
-// reassign the variable if they explicitly want to exercise discovery.
+// Default-stub every seam that would otherwise reach the developer's cluster or
+// the network. Individual tests reassign a variable when they explicitly want
+// to exercise that path.
+//
+// These are not conveniences. Without them `go test ./cmd/` creates a hostPath
+// busybox pod per node in `default` (the inotify probe), lists Secrets across
+// the stack namespaces of whatever kubeconfig happens to be current, and makes
+// an outbound request to nvcr.io per configured registry. That mutates a real
+// cluster from a unit test, and it is why the package took minutes and failed
+// on a proxied kubeconfig rather than seconds and deterministically.
 func TestMain(m *testing.M) {
 	resolveLatestValidatorTagForSelfHosted = func(_ context.Context, _ string) (string, bool) {
 		return "", false
+	}
+	// Nil prober: the inotify check is skipped rather than creating pods.
+	newInotifyProberForSelfHosted = func() selfhosted.NodeInotifyProber { return nil }
+	// No cluster contact, and a clean result so the category still renders.
+	newStaleNamespaceProberForSelfHosted = func() selfhosted.StaleNamespaceProber {
+		return func(context.Context, string, []string) ([]selfhosted.StaleNamespace, error) {
+			return nil, nil
+		}
+	}
+	// No outbound registry request.
+	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
+		return func(context.Context, string, string, bool) error { return nil }
 	}
 	os.Exit(m.Run())
 }
