@@ -190,6 +190,7 @@ java_oci_image(
         "JDK_JAVA_OPTIONS": "",
     },
     workdir = "/home/app",
+    user = "1000:1000",
 )
 
 # The shared guard every Java service uses, so the runtime contract cannot drift
@@ -203,4 +204,5 @@ java_image_contract_test(
         "JDK_JAVA_OPTIONS": "",
     },
     workdir = "/home/app",
+    user = "1000:1000",
 )

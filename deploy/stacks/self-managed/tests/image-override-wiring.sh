@@ -162,6 +162,10 @@ global:
 EOF
 
 render_values "$work_dir/default-values.yaml"
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.runAsUser' "$work_dir/default-values.yaml")" = 1000 ||
+  fail "nats pod user must be non-root in stack values"
+test "$(yq -r '.nats.container.merge.securityContext.runAsNonRoot' "$work_dir/default-values.yaml")" = true ||
+  fail "nats container must run as non-root in stack values"
 assert_absent "$work_dir/default-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \

@@ -116,6 +116,6 @@ COPY --chmod=775 migrations/ /app/migrations/
 COPY --chmod=775 addons/ /app/addons/
 COPY --chmod=775 entrypoint.sh /app/
 
-USER openbao
+USER 100:1000
 
 CMD ["/app/entrypoint.sh"]

@@ -225,6 +225,14 @@ nats:
         {{- end }}
   {{- end }}
   container:
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
@@ -256,18 +264,22 @@ nats:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
-  {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
-  {{- if or $natsNs $natsTol }}
+  {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   podTemplate:
     merge:
       spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
         {{- with $natsNs }}
         {{- . | nindent 8 }}
         {{- end }}
         {{- with $natsTol }}
         {{- . | nindent 8 }}
         {{- end }}
-  {{- end }}
 
   # One merged config: block -- a second config: key under nats: would be
   # silently collapsed. Surfaces server TLS for split-plane workers that reach
@@ -322,6 +334,14 @@ apikeys:
   {{- end }}
   {{- with dig "apikeys" "startupProbe" dict .Values }}
   startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "livenessProbe" dict .Values }}
+  livenessProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "resources" dict .Values }}
+  resources:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- with dig "apikeys" "env" dict .Values }}

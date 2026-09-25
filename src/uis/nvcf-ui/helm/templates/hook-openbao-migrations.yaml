@@ -46,6 +46,10 @@ spec:
       {{- end }}
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
       serviceAccountName: {{ $bao.serviceAccountName }}
       {{- with .Values.nvcfUi.imagePullSecrets }}
       imagePullSecrets:

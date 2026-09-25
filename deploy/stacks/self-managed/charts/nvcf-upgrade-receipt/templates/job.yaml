@@ -25,6 +25,10 @@ spec:
       name: {{ .Release.Name }}
     spec:
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
       serviceAccountName: {{ .Release.Name }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -34,6 +38,13 @@ spec:
         - name: receipt
           image: "{{ with .Values.image.registry }}{{ . }}/{{ end }}{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           env:
             - name: RECEIPT_CONFIGMAP
               value: {{ .Values.configMapName | quote }}

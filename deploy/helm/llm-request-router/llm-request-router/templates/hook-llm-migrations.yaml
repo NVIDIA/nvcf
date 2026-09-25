@@ -44,6 +44,10 @@ spec:
     {{- end }}
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
       serviceAccountName: {{ $pki.serviceAccountName }}
       {{- with $pki.imagePullSecrets }}
       imagePullSecrets:
@@ -53,6 +57,11 @@ spec:
         - name: addons-llm-migrations
           image: "{{ include "llm-request-router.pkiMigrationsImage" . }}"
           imagePullPolicy: {{ $pki.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           env:
             - name: CORE_MIGRATIONS_ENABLED
               value: "false"

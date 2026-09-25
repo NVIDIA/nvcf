@@ -37,6 +37,23 @@ stateMetrics:
       cpu: 500m
       memory: 512Mi
 
+# Give the API Keys JVM enough CPU and startup time on a shared k3d host.
+apikeys:
+  startupProbe:
+    httpGet:
+      path: /admin/health/readiness
+      port: management-port
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 120
+  livenessProbe:
+    timeoutSeconds: 5
+  resources:
+    requests:
+      cpu: 500m
+    limits:
+      cpu: "1"
+
 cassandra:
   replicaCount: 1
   resourcesPreset: "large"
