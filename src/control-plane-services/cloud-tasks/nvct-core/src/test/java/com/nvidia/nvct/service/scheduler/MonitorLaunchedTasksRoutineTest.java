@@ -197,6 +197,33 @@ class MonitorLaunchedTasksRoutineTest {
 
     @Test
     @SneakyThrows
+    void testNoIcmsInstancesFoundRun() {
+        // Empty contexts list makes ICMS's GetInstancesByTaskId return an empty Instances list,
+        // distinct from the NO_CAPACITY terminal-instance-state tests above.
+        MockIcmsServer.start(icmsBaseUrl, jsonMapper, List.of());
+
+        testTaskService.createTask(TEST_NCA_ID, TEST_TASK_ID_1, TEST_ICMS_REQ_ID_1);
+        // make sure current task status is LAUNCHED
+        taskService.updateTask(TEST_TASK_ID_1, LAUNCHED);
+
+        // Fake time for testing purposes so lastUpdatedAt is beyond MAX_DURATION.
+        monitorLaunchedTasksRoutine.runUnchecked(Instant.now().plus(Duration.ofMinutes(100)));
+
+        var updatedTask = taskService.fetchTask(TEST_TASK_ID_1);
+        assertThat(updatedTask.getStatus()).isEqualTo(ERRORED);
+        var healthInfo = taskMapperService.deserializeHealth(updatedTask.getHealth())
+                .orElseThrow();
+        assertThat(healthInfo.error()).contains("capacity exhaustion");
+        assertThat(healthInfo.error()).doesNotContain("ICMS request-id");
+        assertThat(healthInfo.error()).doesNotContain(TEST_ICMS_REQ_ID_1.toString());
+
+        var events = eventService.fetchEvents(TEST_NCA_ID, TEST_TASK_ID_1);
+        assertThat(events).isNotNull();
+        assertThat(events.getLast().message()).contains("capacity exhaustion");
+    }
+
+    @Test
+    @SneakyThrows
     void testHasCapacityRun() {
         MockIcmsServer.start(icmsBaseUrl, jsonMapper);
 
