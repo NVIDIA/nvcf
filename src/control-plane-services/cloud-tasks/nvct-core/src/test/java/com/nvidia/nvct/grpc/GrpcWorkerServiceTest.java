@@ -745,6 +745,24 @@ class GrpcWorkerServiceTest {
         assertThat(status).isEqualTo(expectedStatus);
     }
 
+
+    @Test
+    void testRefreshTokenWithDelegatedTokenIssuesNoReplacement() {
+        MockIcmsServer.stubWorkerTokenIntrospectActive(TEST_NCA_ID, TEST_TASK_ID_1, "inst-refresh");
+        var enc = java.util.Base64.getUrlEncoder().withoutPadding();
+        var payload = ("{\"aud\":[\"nvcf-icms:cl-test\"],\"sub\":\"system:serviceaccount:inst-refresh:nvcf-worker\","
+                       + "\"exp\":%d,\"jti\":\"%s\"}")
+                .formatted(java.time.Instant.now().plusSeconds(600).getEpochSecond(), UUID.randomUUID());
+        var psat = enc.encodeToString("{\"alg\":\"RS256\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                + "." + enc.encodeToString(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)) + ".c2ln";
+        setupGrpc(psat);
+
+        var response = workerBlockingStub.refreshToken(
+                RefreshTokenRequest.newBuilder().setTaskId(TEST_TASK_ID_1.toString()).build());
+
+        assertThat(response.getToken()).isEmpty();
+    }
+
     @Test
     void testRequestSecretCredentials() {
         var token = tokenService.issueWorkerAccessAssertion(TEST_NCA_ID,

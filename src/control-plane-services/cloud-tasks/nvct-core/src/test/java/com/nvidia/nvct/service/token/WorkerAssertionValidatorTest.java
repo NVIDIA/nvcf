@@ -18,6 +18,8 @@ package com.nvidia.nvct.service.token;
 
 import static com.nvidia.nvct.util.TestConstants.TEST_NCA_ID;
 import static com.nvidia.nvct.util.TestConstants.TEST_TASK_ID_1;
+import static com.nvidia.nvct.util.TestConstants.TEST_TASK_ID_2;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
@@ -27,9 +29,14 @@ import com.nimbusds.jwt.PlainJWT;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.nvct.IntegrationTestConfiguration;
 import com.nvidia.nvct.NvctTestApp;
+import com.nvidia.nvct.util.MockIcmsServer;
 import com.nvidia.nvct.util.MockNotaryServer;
 import com.nvidia.nvct.util.MockNvcfServer;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.UUID;
+import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -73,17 +80,25 @@ class WorkerAssertionValidatorTest {
     @Value("${nvct.nvcf.base-url}")
     private URL nvcfBaseUrl;
 
+    @Value("${nvct.icms.base-url}")
+    private URL icmsBaseUrl;
+
+    @Autowired
+    private JsonMapper jsonMapper;
+
     @BeforeAll
     void beforeAll() {
         log.info("{}: Started running tests", this.getClass().getSimpleName());
         MockNvcfServer.start(nvcfBaseUrl);
         MockNotaryServer.start(notaryBaseUrl, notaryClientId);
+        MockIcmsServer.start(icmsBaseUrl, jsonMapper);
     }
 
     @AfterAll
     void cleanup() {
         MockNotaryServer.stop();
         MockNvcfServer.stop();
+        MockIcmsServer.stop();
         log.info("{}: Completed running tests", this.getClass().getSimpleName());
     }
 
@@ -96,8 +111,7 @@ class WorkerAssertionValidatorTest {
     void shouldAcceptValidSignedWorkerAssertion() {
         var token = tokenService.issueWorkerAccessAssertion(TEST_NCA_ID, TEST_TASK_ID_1);
 
-        assertThatCode(() -> workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_1))
-                .doesNotThrowAnyException();
+        assertThat(workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_1)).isFalse();
     }
 
     @Test
@@ -139,5 +153,78 @@ class WorkerAssertionValidatorTest {
         assertThatThrownBy(() -> workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_1))
                 .isInstanceOf(ForbiddenException.class)
                 .hasMessageContaining("Expired");
+    }
+
+    @Test
+    void shouldRejectLegacyTaskMismatchWithoutFallingBackToIntrospection() {
+        var token = tokenService.issueWorkerAccessAssertion(TEST_NCA_ID, TEST_TASK_ID_1);
+        MockIcmsServer.stubWorkerTokenIntrospectActive(TEST_NCA_ID, TEST_TASK_ID_2, "inst-legacy");
+        var callsBefore = MockIcmsServer.workerTokenIntrospectCallCount();
+
+        assertThatThrownBy(() -> workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_2))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("Does not match");
+        assertThat(MockIcmsServer.workerTokenIntrospectCallCount()).isEqualTo(callsBefore);
+    }
+
+    @Test
+    void shouldAcceptDelegatedTokenBoundToRequestedTask() {
+        MockIcmsServer.stubWorkerTokenIntrospectActive(TEST_NCA_ID, TEST_TASK_ID_1, "inst-ok");
+        var token = fakePsat("inst-ok");
+
+        assertThat(workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_1)).isTrue();
+    }
+
+    @Test
+    void shouldRejectDelegatedTokenBoundToOtherTask() {
+        MockIcmsServer.stubWorkerTokenIntrospectActive(TEST_NCA_ID, TEST_TASK_ID_1, "inst-task");
+        var token = fakePsat("inst-task");
+
+        assertThatThrownBy(() -> workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_2))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("not bound to requested task");
+    }
+
+    @Test
+    void shouldRejectDelegatedTokenBoundToOtherNca() {
+        MockIcmsServer.stubWorkerTokenIntrospectActive("other-nca", TEST_TASK_ID_1, "inst-nca");
+        var token = fakePsat("inst-nca");
+
+        assertThatThrownBy(() -> workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_1))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("not bound to requested task");
+    }
+
+    @Test
+    void shouldRejectInactiveDelegatedToken() {
+        MockIcmsServer.stubWorkerTokenIntrospect("{\"active\": false, \"error\": \"JWT verification failed\"}");
+        var token = fakePsat("inst-inactive");
+
+        assertThatThrownBy(() -> workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_1))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("not active");
+    }
+
+    @Test
+    void shouldRejectDelegatedTokenWithoutBindingInResponse() {
+        MockIcmsServer.stubWorkerTokenIntrospect(
+                "{\"active\": true, \"instance_id\": \"inst-unbound\", \"token_type\": \"psat\"}");
+        var token = fakePsat("inst-unbound");
+
+        assertThatThrownBy(() -> workerAssertionValidator.validate(token, TEST_NCA_ID, TEST_TASK_ID_1))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("not active");
+    }
+
+    /** Builds an unsigned compact JWS shaped like a projected ServiceAccount token; signature
+     *  verification is ICMS's job and is mocked. A unique jti keeps introspection results from
+     *  being served across tests from the digest-keyed cache. */
+    private static String fakePsat(String jti) {
+        var enc = Base64.getUrlEncoder().withoutPadding();
+        var payload = ("{\"aud\":[\"nvcf-icms:cl-test\"],\"sub\":\"system:serviceaccount:%s:nvcf-worker\","
+                       + "\"exp\":%d,\"jti\":\"%s\"}")
+                .formatted(jti, Instant.now().plusSeconds(600).getEpochSecond(), UUID.randomUUID());
+        return enc.encodeToString("{\"alg\":\"RS256\",\"kid\":\"k1\"}".getBytes(StandardCharsets.UTF_8))
+                + "." + enc.encodeToString(payload.getBytes(StandardCharsets.UTF_8)) + ".c2ln";
     }
 }
