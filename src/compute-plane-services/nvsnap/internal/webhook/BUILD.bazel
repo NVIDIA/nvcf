@@ -35,7 +35,7 @@ go_test(
     name = "webhook_test",
     srcs = [
         "admission_test.go",
-        "cachedir_entryargv_test.go",
+        "cachedir_noshim_test.go",
         "cachedir_test.go",
         "extract_coalesce_test.go",
         "l2_mount_test.go",

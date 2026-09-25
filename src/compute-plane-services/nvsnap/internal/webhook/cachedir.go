@@ -32,9 +32,9 @@ limitations under the License.
 //   - Restore pod (CaptureMethod=="cachedir"): mount the rox read-only
 //     at m.CacheDir (model stays RO — the big part, never copied), shadow
 //     the cache subtree <CacheDir>/cache with a writable emptyDir seeded
-//     by a nvsnap-seed-cache init container (cp from the rox), then run
-//     nvsnap-rootfs-restore in no-overlay mode to prewarm the tree into
-//     page cache (same cgroup as the engine) and exec the entrypoint.
+//     by a nvsnap-seed-cache init container (cp from the rox), and run the
+//     pod's own command untouched. No shim: a cachedir restore is a warm
+//     cold-start of THIS pod, so its entrypoint runs exactly as authored.
 //
 // Why the writable cache shadow (ember rule #3, verified): engines write
 // JIT/log/lock files into the cache at startup — flashinfer opens
@@ -50,7 +50,6 @@ package webhook
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -262,32 +261,6 @@ func (m *Mutator) cacheDirCapturePatches(pod *corev1.Pod) []PatchOp {
 	return patches
 }
 
-// restoreEntryArgv decides what the prewarm shim execs once the cache is
-// seeded: the restoring pod's OWN command and args, which the webhook is
-// about to overwrite with the shim, falling back to the capture's recorded
-// entry argv only when the pod declares neither and so relies on the image
-// entrypoint.
-//
-// Replaying the captured argv unconditionally was wrong twice over. A fresh
-// pod carries its own manifest command, and a cachedir restore is a warm
-// cold-start of THAT pod, not a resurrection of the captured process. And for
-// the bash-wrapper convention (nohup setsid <engine> & ... while true; do
-// sleep 30; done), the pid resolver landed on the idle sleep, so EntryArgv
-// was recorded as ["sleep","30"]; the restored pod prewarmed 2.2GB perfectly,
-// exec'd sleep 30, exited, and never served (dev1, 2026-09-24).
-func restoreEntryArgv(main corev1.Container, manifest checkpointstore.Manifest) ([]string, error) {
-	own := make([]string, 0, len(main.Command)+len(main.Args))
-	own = append(own, main.Command...)
-	own = append(own, main.Args...)
-	if len(own) > 0 {
-		return own, nil
-	}
-	if len(manifest.EntryArgv) > 0 {
-		return manifest.EntryArgv, nil
-	}
-	return nil, fmt.Errorf("cachedir restore: pod declares no command or args and capture %s has no recorded EntryArgv (re-capture needed)", manifest.Hash)
-}
-
 
 // tryL2CacheDir injects a cachedir RESTORE: the rox PVC mounted
 // read-only at m.CacheDir directly (no overlayfs), the cache/model env
@@ -312,10 +285,6 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	// prewarm. Same rule as the overlay path: never fall back to the
 	// pod's command/args (ENTRYPOINT-only images carry neither). If the
 	// capture predates EntryArgv, fall through to L1.
-	entryArgv, err := restoreEntryArgv(pod.Spec.Containers[m.MainContainer], manifest)
-	if err != nil {
-		return nil, err
-	}
 
 	// Resolve the rox PVC (ErrNotFound = not Bound → caller falls to L1).
 	pm, err := m.L2Backend.Mount(ctx, hash, checkpointstore.VolumeMeta{
@@ -335,22 +304,16 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 
 	main := pod.Spec.Containers[m.MainContainer]
 	for _, vm := range main.VolumeMounts {
-		if vm.Name == cacheDirVolumeName || vm.MountPath == m.CacheDir ||
-			vm.Name == nvsnapToolsVolumeName || vm.MountPath == nvsnapToolsMountPath {
+		if vm.Name == cacheDirVolumeName || vm.MountPath == m.CacheDir {
 			return nil, nil // already wired
 		}
 	}
 
-	argvJSON, err := json.Marshal(entryArgv)
-	if err != nil {
-		return nil, fmt.Errorf("marshal entrypoint argv: %w", err)
-	}
 
 	root := m.HostBundleRoot
 	if root == "" {
 		root = DefaultHostBundleRoot
 	}
-	hostPathDir := corev1.HostPathDirectory
 
 	patches := make([]PatchOp, 0, 11+len(manifest.CacheEnv))
 	if pod.Spec.Volumes == nil {
@@ -373,15 +336,8 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 
 	// Volumes:
 	//   - roxVol: rox PVC (RO) — the captured cache+model tree.
-	//   - toolsVol: hostPath bundle (the nvsnap-rootfs-restore shim binary).
-	//   - cacheRW: writable emptyDir that shadows <CacheDir>/cache so the
-	//     engine's JIT/log/lock writes don't hit EROFS on the RO rox.
-	toolsVol := corev1.Volume{Name: nvsnapToolsVolumeName, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-		Path: root + "/nvsnap",
-		Type: &hostPathDir,
-	}}}
 	cacheRWVol := corev1.Volume{Name: cacheRWVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}
-	vols := []corev1.Volume{roxVol, toolsVol, cacheRWVol}
+	vols := []corev1.Volume{roxVol, cacheRWVol}
 	for i := range vols {
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes/-", Value: vols[i]})
 	}
@@ -393,7 +349,6 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	for _, vm := range []corev1.VolumeMount{
 		{Name: cacheDirVolumeName, MountPath: m.CacheDir, ReadOnly: true},
 		{Name: cacheRWVolumeName, MountPath: cacheSub},
-		{Name: nvsnapToolsVolumeName, MountPath: nvsnapToolsMountPath, ReadOnly: true},
 	} {
 		patches = append(patches, PatchOp{
 			Op:    "add",
@@ -450,11 +405,6 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 		envs = cacheDirEnvVars(m.CacheDir)
 	}
 	envs = append(envs,
-		corev1.EnvVar{Name: "NVSNAP_NO_OVERLAY", Value: "1"},
-		corev1.EnvVar{Name: "NVSNAP_PREWARM_DIR", Value: m.CacheDir},
-		corev1.EnvVar{Name: "NVSNAP_ORIG_COMMAND", Value: string(argvJSON)},
-		corev1.EnvVar{Name: envRuntimeDirs, Value: runtimeDirsJSON(manifest.EntryRuntimeDirs)},
-		corev1.EnvVar{Name: "NVSNAP_ORIG_CWD", Value: manifest.EntryCwd},
 		// NOTE: do NOT set HF_HUB_OFFLINE here. It only suppresses benign HF
 		// negative-cache (.no_exist) warnings, but vLLM's arg_utils keys off
 		// HF_HUB_OFFLINE to rewrite --model from the repo-id to the resolved
@@ -470,27 +420,11 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
 
-	// Override command to the shim; clear args (re-applied from
-	// NVSNAP_ORIG_COMMAND by the shim after prewarm).
-	cmdOp := "replace"
-	if main.Command == nil {
-		cmdOp = "add"
-	}
-	patches = append(patches, PatchOp{
-		Op:    cmdOp,
-		Path:  fmt.Sprintf("/spec/containers/%d/command", m.MainContainer),
-		Value: []string{nvsnapToolsMountPath + "/nvsnap-rootfs-restore"},
-	})
-	if main.Args != nil {
-		patches = append(patches, PatchOp{
-			Op:   "remove",
-			Path: fmt.Sprintf("/spec/containers/%d/args", m.MainContainer),
-		})
-	}
-
-	// NOTE: unlike the overlay path, NO securityContext / SYS_ADMIN /
-	// seccomp-unconfined changes — the no-overlay shim only reads files
-	// (prewarm) and exec's; it issues no mount(2)/pivot_root. Device
-	// isolation and the default profiles stay fully intact.
+	// The command is left exactly as authored. The old shim rewrite exec'd
+	// the CAPTURED pod's argv, which for the bash-wrapper convention was the
+	// idle sleep, so the restored pod seeded 2.2GB and then exited without
+	// serving (dev1, 2026-09-24). Nothing here needs a wrapper.
+	// No securityContext, SYS_ADMIN or seccomp changes: this path only adds
+	// volumes, mounts, env and a copying init container.
 	return patches, nil
 }
