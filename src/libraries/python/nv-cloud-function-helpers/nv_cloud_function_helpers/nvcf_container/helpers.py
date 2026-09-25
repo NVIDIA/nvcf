@@ -169,12 +169,9 @@ def get_config_value(value_name: str, model_config: dict = None) -> str:
     """
     returns a value from Triton's model config or from environment variable with the priority given to the environment
     """
-    if model_config is None:
+    if model_config is None or value_name in os.environ:
         return os.environ[value_name]
-    else:
-        return os.environ.get(
-            value_name, model_config["parameters"][value_name]["string_value"]
-        )
+    return model_config["parameters"][value_name]["string_value"]
 
 
 def load_image(input_str: str, root_dir: str, has_transparency: bool = False):
