@@ -56,7 +56,7 @@ func (c *Client) getMetadataCredentials(ctx context.Context) (token.Token, error
 				NcaId:             c.ncaId,
 				FunctionId:        c.functionId,
 				FunctionVersionId: c.functionVersionId,
-			}, auth.GrpcTokenFromSource(c.NvcfTokenProvider))
+			}, auth.GrpcTokenFromSource(c.NvcfTokenProvider, c.delegatedToken))
 		return err
 	}, backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 10), ctx))
 
