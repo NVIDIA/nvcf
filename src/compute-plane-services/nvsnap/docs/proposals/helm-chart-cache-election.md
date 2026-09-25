@@ -4,7 +4,7 @@ Goal: when a chart deploys N model workers, exactly one downloads and
 initializes; the rest start from its cache. If the cache already exists,
 every worker starts from it. No change to the customer's chart.
 
-Status: proposal, implementation on branch `nvsnap/helm-election`.
+Status: implemented on branch `nvsnap/helm-election`, verified on dev1 2026-09-25 (results below).
 Supersedes the `nvsnap.io/restore-from: "auto"` annotation, which required
 a template opt-in and could not be a capture source (issue #2099).
 
@@ -123,3 +123,34 @@ E2E: the TinyLlama TP=2 chart from the scale-up test, `replicas=1` then
 `scale 2`, and `replicas=2` from the start. Expected: one capture, second
 pod `SchedulingGated` until `ready`, then Ready without a download. Then
 `helm uninstall` and reinstall: both pods restore.
+
+## Results, dev1 2026-09-25
+
+Stock Deployment chart, TinyLlama-1.1B on vLLM v0.20.0 TP=2, no nvsnap
+labels or annotations in the template, agent v0.2.75-election2, server
+v0.0.32-election2, NVMesh shared-volume storage.
+
+```
+helm install replicas=2   14:57:37  webhook (same second): leader + follower, hash c8bbf555
+                                    follower: SchedulingGated, no node, claim rox-c8bbf555...
+leader Ready              +70s
+server: capture promoted; followers released   +124s   (released=1)
+follower Ready            +53s after release, node different from the leader
+                          0 download lines; inits nvsnap-l2-wait, nvsnap-seed-cache, nvsnap-prewarm
+                          serves "The capital of France is" -> " Paris."
+kubectl scale replicas=3  third pod admitted role=restore, no election; Ready +53s
+helm uninstall + install  both pods role=restore; both Ready +50s
+```
+
+Cold start of the same pod on the same node without nvsnap: 94 s.
+
+Two things the first runs taught:
+
+- A pod has no UID and no name when a mutating webhook sees its CREATE.
+  The Lease holder is an id the webhook mints and stamps on the leader as
+  `nvsnap.io/election-id`; the unit fixture had carried a UID and hid this.
+- A privileged test pod without `CUDA_VISIBLE_DEVICES` uses whichever GPUs
+  it likes, so the device plugin hands "free" GPUs that are 70 GiB full to
+  the next pod. The election leader landed on such a node once and vLLM
+  refused to start. Node hygiene, not an election failure; the run was
+  repeated with that node excluded.
