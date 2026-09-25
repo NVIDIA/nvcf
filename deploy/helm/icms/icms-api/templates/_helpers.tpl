@@ -158,6 +158,7 @@ vault.hashicorp.com/agent-inject-template-file-vault-secrets.json: "/vault/confi
 {{/*
 Derive the full image value
 Expects a dictionary with 'image' and 'name' keys
+An optional immutable digest pin takes precedence over tag.
 Usage: {{ include "sis.image.full" (dict "image" .Values.sis.lls.hmacRotation.image "name" "sis.lls.hmacRotation.image") }}
 */}}
 {{- define "sis.image.full" -}}
@@ -165,8 +166,12 @@ Usage: {{ include "sis.image.full" (dict "image" .Values.sis.lls.hmacRotation.im
 {{- $name := .name -}}
 {{- $registry := required (printf "A valid image registry is required for %s.registry" $name) $image.registry -}}
 {{- $repository := required (printf "A valid image repository is required for %s.repository" $name) $image.repository -}}
+{{- if $image.digest -}}
+{{- printf "%s/%s@%s" $registry $repository $image.digest -}}
+{{- else -}}
 {{- $tag := required (printf "A valid image tag is required for %s.tag" $name) $image.tag -}}
 {{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
