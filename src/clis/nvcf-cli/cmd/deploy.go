@@ -176,6 +176,9 @@ type DeployConfig struct {
 	// Helm configuration
 	Configuration map[string]any `json:"configuration,omitempty"`
 
+	// Helm validation policy (Helm-based functions only)
+	HelmValidationPolicy *client.HelmValidationPolicyDto `json:"helmValidationPolicy,omitempty"`
+
 	// Deployment options
 	Timeout int `json:"timeout,omitempty"`
 }
@@ -214,6 +217,9 @@ type DeploymentSpecification struct {
 
 	// Configuration
 	Configuration map[string]any `json:"configuration,omitempty"`
+
+	// Helm validation policy (Helm-based functions only)
+	HelmValidationPolicy *client.HelmValidationPolicyDto `json:"helmValidationPolicy,omitempty"`
 }
 
 // UpdateDeploymentConfig mirrors the new PATCH wire body plus the selectors
@@ -265,6 +271,10 @@ var deployFlags struct {
 
 	// Helm configuration
 	helmConfig map[string]string
+
+	// Helm validation policy
+	validationPolicy    string
+	validationExtraType []string
 
 	// Legacy cluster name (for backward compatibility)
 	clusterName string
@@ -334,6 +344,10 @@ func init() {
 
 	// Legacy compatibility flag
 	deployCreateCmd.Flags().StringVar(&deployFlags.clusterName, "cluster-name", "GFN", "Cluster name (legacy, use --backend instead)")
+
+	// Helm validation policy flags
+	deployCreateCmd.Flags().StringVar(&deployFlags.validationPolicy, flagValidationPolicy, "", "Helm validation policy name (e.g. Default, Unrestricted); Helm-based functions only")
+	deployCreateCmd.Flags().StringArrayVar(&deployFlags.validationExtraType, flagValidationExtraType, nil, "Required extra Kubernetes type as group/version/kind (repeatable)")
 
 	// Deployment management flags
 	deployCreateCmd.Flags().IntVar(&deployFlags.timeout, "timeout", 900, "Deployment timeout in seconds")
@@ -414,6 +428,7 @@ func loadDeployConfig(cmd *cobra.Command) (*DeployConfig, error) {
 		config.SystemMemory = spec.SystemMemory
 		config.GPUMemory = spec.GPUMemory
 		config.Configuration = spec.Configuration
+		config.HelmValidationPolicy = spec.HelmValidationPolicy
 
 		fmt.Printf("Loaded deployment configuration from %s\n", deployFlags.inputFile)
 	}
@@ -485,6 +500,18 @@ func loadDeployConfig(cmd *cobra.Command) (*DeployConfig, error) {
 		config.Backend = deployFlags.clusterName
 	}
 
+	policy, err := buildWorkloadValidationPolicy(
+		config.HelmValidationPolicy,
+		deployFlags.validationPolicy,
+		cmd.Flags().Changed(flagValidationPolicy),
+		deployFlags.validationExtraType,
+		cmd.Flags().Changed(flagValidationExtraType),
+	)
+	if err != nil {
+		return nil, err
+	}
+	config.HelmValidationPolicy = policy
+
 	return config, nil
 }
 
@@ -553,6 +580,9 @@ func runDeployCreate(cmd *cobra.Command, args []string) error {
 
 				// Configuration
 				Configuration: config.Configuration,
+
+				// Helm validation policy
+				HelmValidationPolicy: config.HelmValidationPolicy,
 			},
 		},
 	}

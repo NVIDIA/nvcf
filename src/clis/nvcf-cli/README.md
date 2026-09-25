@@ -1538,6 +1538,8 @@ export NVCF_TOKEN="your-existing-token"
 - All commands now support `--config` for multi-environment
 - `create`, `deploy`, `invoke`, `delete` now use smart context
 - `invoke` now supports `--grpc` for gRPC invocation
+- `function deploy create`, `task create`, and `cluster register` accept
+  `--validation-policy` and `--validation-extra-type` for Helm validation policy
 - All commands have improved output and error messages
 
 ### **Benefits You Get Immediately (No Changes Required)**
@@ -1639,6 +1641,64 @@ Sample configs live under [`examples/`](./examples):
 secret with write privileges to that location. See the
 [OpenAPI specification](../../../docs/overview/api.md#openapi-specification) for
 the full field reference.
+
+---
+
+## Helm Validation Policy
+
+Helm-based functions and tasks can request a cluster validation policy, and
+clusters can be registered with the policy they enforce. Two flags are shared
+by `function deploy create`, `task create`, and `cluster register`:
+
+- `--validation-policy`: policy name, `Default` or `Unrestricted`. `Default`
+  applies the standard chart validation rules. `Unrestricted` skips template
+  validation and checks images only.
+- `--validation-extra-type`: an allowed extra Kubernetes type, repeatable.
+  Workloads (`function deploy create`, `task create`) use `group/version/kind`.
+  Cluster registration uses `group/version/kind/resource`, because the operator
+  needs the resource (plural) name to grant RBAC.
+
+If you pass `--validation-extra-type` without `--validation-policy`, the policy
+name defaults to `Default`. The flags apply to Helm-based workloads only; the
+server rejects them for container-based functions and tasks. Valid policy names
+and the Helm-only rule are enforced server-side.
+
+### Register a cluster with a policy
+
+The cluster form takes four-part `group/version/kind/resource` types:
+
+```bash
+nvcf-cli cluster register \
+  --name edge-1 \
+  --nca-id nca-123 \
+  --validation-policy Unrestricted \
+  --validation-extra-type leaderworkerset.x-k8s.io/v1/LeaderWorkerSet/leaderworkersets
+```
+
+### Deploy a Helm function against a policy
+
+The workload form takes three-part `group/version/kind` types:
+
+```bash
+nvcf-cli function deploy create \
+  --function-id func-12345678-1234-1234-1234-123456789abc \
+  --version-id ver-87654321-4321-4321-4321-123456789abc \
+  --gpu H100 --instance-type ON-PREM.GPU.H100_1x \
+  --validation-policy Unrestricted \
+  --validation-extra-type leaderworkerset.x-k8s.io/v1/LeaderWorkerSet
+```
+
+### Create a Helm task against a policy
+
+```bash
+nvcf-cli task create --input-file examples/create-task-helm.json \
+  --validation-policy Default \
+  --validation-extra-type leaderworkerset.x-k8s.io/v1/LeaderWorkerSet
+```
+
+Both flags combine with `--input-file`: `--validation-policy` overrides the
+policy name from the file, and `--validation-extra-type` flags replace the
+file's extra-type list.
 
 ---
 
