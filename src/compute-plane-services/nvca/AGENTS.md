@@ -534,10 +534,10 @@ For cluster-wide attributes and feature flags documentation, see:
 
 ## NVCF Workspace Routing
 
-- Team: `@NVIDIA/nvcf-dev`.
+- Team: `@dsx-ai-factory/nvcf-dev`.
 - This repo is part of the `self-hosted-nvcf` workspace in `nvcf-agentic-dev`.
 - Manifest tier: `image-source`.
-- Default owner: `@NVIDIA/nvcf-dev`.
+- Default owner: `@dsx-ai-factory/nvcf-dev`.
 - Manifest description: NVCA worker agent application source (owned by EGX intelligent-infra team).
 - Before making cross-repo assumptions, consult `nvcf-agentic-dev` first.
 - Preferred local sibling path: `../nvcf-agentic-dev` if it exists.
