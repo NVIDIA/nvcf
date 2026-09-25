@@ -310,3 +310,59 @@ func TestIsModelWorkload(t *testing.T) {
 		t.Error("out-of-range main container must not classify")
 	}
 }
+
+// Prefill and decode workers of one disaggregated deployment must share a
+// hash: same image, same model, same download. Only the role flags and the
+// Dynamo/etcd/NATS wiring differ, and none of that changes the cache tree.
+func TestCompose_RoleNeutralAcrossPrefillAndDecode(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 580}
+	hashOf := func(cmd, args []string, env ...corev1.EnvVar) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "vllm/vllm-openai:v0.20.0", Command: cmd, Args: args, Env: env,
+		}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	dyn := []string{"python3", "-m", "dynamo.vllm"}
+	prefill := hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--is-prefill-worker"},
+		corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "dgd-a"}, corev1.EnvVar{Name: "ETCD_ENDPOINTS", Value: "etcd-a:2379"})
+	decode := hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--is-decode-worker"},
+		corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "dgd-b"}, corev1.EnvVar{Name: "NATS_SERVER", Value: "nats://x:4222"})
+	if prefill != decode {
+		t.Error("dynamo.vllm prefill and decode workers must hash the same")
+	}
+	sgl := []string{"python3", "-m", "dynamo.sglang"}
+	sp := hashOf(sgl, []string{"--model-path", "google/gemma-4-31B-it", "--disaggregation-mode", "prefill", "--disaggregation-bootstrap-port", "8998"})
+	sd := hashOf(sgl, []string{"--model-path", "google/gemma-4-31B-it", "--disaggregation-mode=decode", "--disaggregation-transfer-backend", "nixl"})
+	if sp != sd {
+		t.Error("dynamo.sglang prefill and decode workers must hash the same")
+	}
+	bash := []string{"/bin/bash", "-lc"}
+	bp := hashOf(bash, []string{`vllm serve --model Qwen/Qwen3-0.6B --is-prefill-worker --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer"}' > /out 2>&1`})
+	bd := hashOf(bash, []string{`vllm serve --model Qwen/Qwen3-0.6B --is-decode-worker --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer"}' > /out 2>&1`})
+	if bp != bd {
+		t.Error("shell-string prefill and decode workers must hash the same")
+	}
+	// What changes the download or the engine still separates hashes.
+	if hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--is-prefill-worker"}) == hashOf(dyn, []string{"--model", "Qwen/Qwen3-1.7B", "--is-prefill-worker"}) {
+		t.Error("different models must hash differently")
+	}
+	if hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--revision", "abc"}) == hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--revision", "def"}) {
+		t.Error("different revisions download different files and must hash differently")
+	}
+	if hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B"}, corev1.EnvVar{Name: "HF_HUB_OFFLINE", Value: "1"}) == hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B"}) {
+		t.Error("cache-relevant env must still participate in the hash")
+	}
+}
+
+func TestStripRoleFlags(t *testing.T) {
+	got := stripRoleFlags([]string{"--model", "m", "--is-decode-worker", "--disaggregation-mode", "decode", "--disaggregation-strategy=prefill_first", "--tp", "2", "--kv-transfer-config"})
+	want := []string{"--model", "m", "--tp", "2"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("stripRoleFlags = %v, want %v", got, want)
+	}
+	// A dangling value-flag at the end must not eat a following flag.
+	got = stripRoleFlags([]string{"--disaggregation-mode", "--port", "8000"})
+	if strings.Join(got, " ") != "--port 8000" {
+		t.Errorf("value flag followed by a flag: %v", got)
+	}
+}

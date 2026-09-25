@@ -113,6 +113,21 @@ capture; the reconciler treats an expired Lease like a failed leader.
 - Helm: `agent.election.enabled` (default false until qualified),
   `agent.election.leaseTimeout`; server RBAC gains `leases` get/list/watch.
 
+## Disaggregated workers share one cache
+
+Dynamo prefill and decode workers run the same image and download the
+same model; they differ only in a role flag (`--is-prefill-worker`,
+`--is-decode-worker`, `--disaggregation-mode`) and in the KV-transfer and
+discovery wiring (`--kv-transfer-config`, `DYN_*`, `ETCD_ENDPOINTS`,
+`NATS_SERVER`). The hash leaves those out (`stripRoleFlags`,
+`internal/rootfsonly/composer.go`), so both roles elect one leader and share
+one rox. The model tree is identical across roles and mounts read-only;
+compile caches live in the per-pod writable shadow, so a role that needs
+different kernels recompiles into it. Flags that change the download
+(`--model`, `--revision`, `--tokenizer`, quantization) stay in the hash,
+because a pod restoring from a tree that lacks its files would fail on the
+read-only mount.
+
 ## Verification
 
 Unit: classifier matrix, election win/lose/error, follower patch shape

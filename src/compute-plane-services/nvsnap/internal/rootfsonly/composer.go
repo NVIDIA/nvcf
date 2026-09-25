@@ -98,7 +98,7 @@ func composeEngineCompatFlags(c corev1.Container) []string {
 	for i, cmd := range c.Command {
 		flags = append(flags, "cmd["+itoa(i)+"]:"+cmd)
 	}
-	for i, a := range c.Args {
+	for i, a := range stripRoleFlags(c.Args) {
 		flags = append(flags, "arg["+itoa(i)+"]:"+a)
 	}
 	for _, e := range cacheRelevantEnv(c.Env) {
@@ -156,7 +156,13 @@ func cacheRelevantEnv(envs []corev1.EnvVar) []corev1.EnvVar {
 		"TORCH_DISTRIBUTED_DEBUG":    {},
 		"VLLM_LOGGING_LEVEL":         {},
 	}
-	skipPrefix := []string{"NVSNAP_"}
+	// Disaggregated-serving wiring (Dynamo runtime env, etcd and NATS
+	// endpoints) says where a worker plugs in, not what it downloads or
+	// compiles; see stripRoleFlags.
+	for _, name := range roleEnvExact {
+		skipExact[name] = struct{}{}
+	}
+	skipPrefix := append([]string{"NVSNAP_"}, roleEnvPrefixes...)
 	out := make([]corev1.EnvVar, 0, len(envs))
 	for _, e := range envs {
 		if _, ok := skipExact[e.Name]; ok {
@@ -254,4 +260,62 @@ func IsModelWorkload(pod *corev1.Pod, mainContainer int) (modelID string, ok boo
 	}
 	modelID = InferModelID(pod.Spec.Containers[mainContainer])
 	return modelID, modelID != ""
+}
+
+// Role flags. In a disaggregated deployment (Dynamo over vLLM, SGLang or
+// TRT-LLM) the prefill and decode workers run the same image, download
+// the same model and differ only in a flag that names their role and in
+// the KV-transfer plumbing between them. Hashing those flags would give
+// each role its own cache and its own download, which is the duplication
+// the election exists to remove. The model tree is identical across roles
+// and mounts read-only; compile caches live in a per-pod writable shadow,
+// so a role that needs different kernels recompiles into it and nothing
+// is corrupted. Flags that change what is downloaded (--model, --revision,
+// --tokenizer, quantization) stay in the hash.
+var (
+	roleFlagsNoValue = map[string]bool{
+		"--is-prefill-worker": true, // dynamo.vllm
+		"--is-decode-worker":  true,
+	}
+	roleFlagsWithValue = map[string]bool{
+		"--disaggregation-mode":             true, // dynamo.sglang, dynamo.trtllm
+		"--disaggregation-strategy":         true,
+		"--disaggregation-bootstrap-port":   true,
+		"--disaggregation-transfer-backend": true,
+		"--kv-transfer-config":              true, // vLLM connector JSON, carries kv_role
+	}
+	roleEnvPrefixes = []string{"DYN_", "DYNAMO_"}
+	roleEnvExact    = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL"}
+
+	// roleFlagInString removes the same flags from a shell-script arg (the
+	// bash -lc "vllm serve ..." convention), value quoted or bare.
+	roleFlagInString = regexp.MustCompile(
+		`\s--(?:is-prefill-worker|is-decode-worker)\b` +
+			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
+)
+
+// stripRoleFlags returns args without the role flags, in both the
+// one-token-per-item form and the single shell-string form.
+func stripRoleFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if roleFlagsNoValue[a] {
+			continue
+		}
+		if roleFlagsWithValue[a] {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
+			continue
+		}
+		if eq := strings.IndexByte(a, '='); eq > 0 && roleFlagsWithValue[a[:eq]] {
+			continue
+		}
+		if strings.ContainsAny(a, " \n\t") {
+			a = roleFlagInString.ReplaceAllString(a, "")
+		}
+		out = append(out, a)
+	}
+	return out
 }
