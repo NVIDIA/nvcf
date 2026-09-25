@@ -128,6 +128,44 @@ different kernels recompiles into it. Flags that change the download
 because a pod restoring from a tree that lacks its files would fail on the
 read-only mount.
 
+## Claims across namespaces
+
+NVCF runs every chart in its own namespace, so the capture and the
+restores usually live apart, and a PVC is namespaced. The promoter grows
+`EnsureClaim(hash, ns)`: make `rox-<hash>` exist in `ns` from the promoted
+artifact. Two strategies, the same shape NVCA uses for one model volume
+across tenant namespaces (`pkg/storage/modelcache.go`):
+
+- shared-volume (NVMesh, EFS, Filestore): one more secondary static PV,
+  `nvsnap-ro-pv-<hash>-<ns8>`, with the CSI handle rewritten for that
+  namespace, pre-bound to a `rox-<hash>` claim there. Zero copy.
+- snapshot-clone with ReadOnlyMany (Hyperdisk ML): a VolumeSnapshot is
+  namespaced and a clone must name one in its own namespace, so the
+  promote's snapshot handle is re-exposed there through a pre-provisioned
+  VolumeSnapshotContent + VolumeSnapshot pair (Retain), then cloned.
+- per-pod clone: no shared claim exists to reproduce; `ErrUnsupported`,
+  the pod starts cold.
+
+Two call sites. `Mount` on a claim miss mints the claim and retries, which
+covers a restore admitted after the promote in any namespace. The promote
+itself, before publishing `ready`, mints the claim in every namespace that
+already holds pods stamped with the hash (gated followers admitted before
+the promote), so they find it bound when the server releases them. All
+minted objects carry `nvsnap.io/hash-short` and `nvsnap.io/namespace`;
+`Delete` lists and reaps them.
+
+A restore namespace also needs the agent token Secret and the restore-pod
+NetworkPolicy, both already fanned out by `agent.l2.restoreNamespaces`.
+
+## Grove and the scheduling gate
+
+Under the Dynamo operator, Grove gang scheduling owns `schedulingGates` and
+rewrote the follower's list at creation (managedFields: `grove-operator`,
+same second), removing `nvsnap.io/wait-for-cache`. The follower then sits
+`Unschedulable` on volume binding instead, because `rox-<hash>` does not
+exist yet; it still holds no node and no GPU, and schedules when the promote
+creates the claim. Same outcome, noisier events. Stock charts keep the gate.
+
 ## Verification
 
 Unit: classifier matrix, election win/lose/error, follower patch shape

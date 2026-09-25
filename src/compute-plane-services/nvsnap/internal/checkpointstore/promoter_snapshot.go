@@ -56,6 +56,15 @@ var volumeSnapshotGVR = schema.GroupVersionResource{
 	Resource: "volumesnapshots",
 }
 
+// volumeSnapshotContentGVR is the cluster-scoped half of a snapshot. A
+// namespace-local snapshot is pre-provisioned from the promote's content
+// handle so a clone can be made in a namespace other than the capture's.
+var volumeSnapshotContentGVR = schema.GroupVersionResource{
+	Group:    "snapshot.storage.k8s.io",
+	Version:  "v1",
+	Resource: "volumesnapshotcontents",
+}
+
 // SnapshotClonePromoter implements Promoter via CSI VolumeSnapshot+clone.
 type SnapshotClonePromoter struct {
 	KubeClient kubernetes.Interface
@@ -375,6 +384,7 @@ func (p *SnapshotClonePromoter) Delete(ctx context.Context, hash, ns string) err
 	if err := p.deleteSnapshot(ctx, ns, snapName); err != nil {
 		errs = append(errs, fmt.Sprintf("snap %s: %v", snapName, err))
 	}
+	errs = append(errs, p.deleteNamespacedClaims(ctx, hash)...)
 	if len(errs) > 0 {
 		return fmt.Errorf("snapshot-clone delete: %s", strings.Join(errs, "; "))
 	}
@@ -395,4 +405,194 @@ func (p *SnapshotClonePromoter) deleteSnapshot(ctx context.Context, ns, name str
 		return err
 	}
 	return nil
+}
+
+// EnsureClaim mints rox-<hash> in ns as a clone of the promoted snapshot.
+// VolumeSnapshots are namespaced and a clone must name a snapshot in its
+// own namespace, so the promote's snapshot handle is re-exposed there
+// through a pre-provisioned VolumeSnapshotContent + VolumeSnapshot pair
+// (both Retain: the CSI snapshot stays owned by the capture namespace).
+// Only the ReadOnlyMany strategy has a shared claim to reproduce.
+func (p *SnapshotClonePromoter) EnsureClaim(ctx context.Context, hash, ns string) error {
+	p.applyDefaults()
+	if !p.ReadOnlyMany {
+		return ErrUnsupported
+	}
+	roxName := "rox-" + ShortHash(hash)
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roxName, metav1.GetOptions{}); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get rox PVC %s/%s: %w", ns, roxName, err)
+	}
+	snapName := "snap-" + ShortHash(hash)
+	src, err := p.findPromotedSnapshot(ctx, snapName)
+	if err != nil {
+		return err
+	}
+	srcNS := src.GetNamespace()
+	if srcNS == ns {
+		return ErrNotFound // promote not finished in the capture namespace
+	}
+	contentName, _, _ := unstructured.NestedString(src.Object, "status", "boundVolumeSnapshotContentName")
+	if contentName == "" {
+		return ErrNotFound
+	}
+	content, err := p.DynClient.Resource(volumeSnapshotContentGVR).Get(ctx, contentName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get VolumeSnapshotContent %s: %w", contentName, err)
+	}
+	handle, _, _ := unstructured.NestedString(content.Object, "status", "snapshotHandle")
+	driver, _, _ := unstructured.NestedString(content.Object, "spec", "driver")
+	if handle == "" || driver == "" {
+		return fmt.Errorf("VolumeSnapshotContent %s has no snapshotHandle/driver yet", contentName)
+	}
+	restoreSize, _, _ := unstructured.NestedString(src.Object, "status", "restoreSize")
+
+	nsContent := contentName + "-" + nsSuffix(ns)
+	pre := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "snapshot.storage.k8s.io/v1",
+		"kind":       "VolumeSnapshotContent",
+		"metadata": map[string]any{
+			"name": nsContent,
+			"labels": map[string]any{
+				"app.kubernetes.io/managed-by": "nvsnap",
+				"nvsnap.io/per-capture":        "true",
+				labelHashShort:                 ShortHash(hash),
+				labelNamespace:                 ns,
+			},
+		},
+		"spec": map[string]any{
+			"deletionPolicy":          "Retain",
+			"driver":                  driver,
+			"volumeSnapshotClassName": p.SnapshotClass,
+			"source":                  map[string]any{"snapshotHandle": handle},
+			"volumeSnapshotRef":       map[string]any{"name": snapName, "namespace": ns},
+		},
+	}}
+	if _, err := p.DynClient.Resource(volumeSnapshotContentGVR).Create(ctx, pre, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create pre-provisioned VolumeSnapshotContent %s: %w", nsContent, err)
+	}
+	snap := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "snapshot.storage.k8s.io/v1",
+		"kind":       "VolumeSnapshot",
+		"metadata": map[string]any{
+			"name":      snapName,
+			"namespace": ns,
+			"labels": map[string]any{
+				"app.kubernetes.io/managed-by": "nvsnap",
+				"nvsnap.io/per-capture":        "true",
+				labelHashShort:                 ShortHash(hash),
+				labelNamespace:                 ns,
+			},
+		},
+		"spec": map[string]any{
+			"source": map[string]any{"volumeSnapshotContentName": nsContent},
+		},
+	}}
+	if _, err := p.DynClient.Resource(volumeSnapshotGVR).Namespace(ns).Create(ctx, snap, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create namespaced VolumeSnapshot %s/%s: %w", ns, snapName, err)
+	}
+	if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, p.SnapshotTimeout, true, func(ctx context.Context) (bool, error) {
+		got, err := p.DynClient.Resource(volumeSnapshotGVR).Namespace(ns).Get(ctx, snapName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		ready, _, _ := unstructured.NestedBool(got.Object, "status", "readyToUse")
+		return ready, nil
+	}); err != nil {
+		return fmt.Errorf("namespaced snapshot %s/%s not ready: %w", ns, snapName, err)
+	}
+	sizeQty := resource.MustParse("1Gi")
+	if restoreSize != "" {
+		if q, perr := resource.ParseQuantity(restoreSize); perr == nil {
+			sizeQty = q
+		}
+	}
+	return p.createROXFromSnapshot(ctx, ns, hash, roxName, snapName, sizeQty)
+}
+
+// findPromotedSnapshot locates snap-<hash> in whichever namespace the
+// capture ran in.
+func (p *SnapshotClonePromoter) findPromotedSnapshot(ctx context.Context, snapName string) (*unstructured.Unstructured, error) {
+	list, err := p.DynClient.Resource(volumeSnapshotGVR).Namespace("").List(ctx, metav1.ListOptions{LabelSelector: "nvsnap.io/per-capture=true"})
+	if err != nil {
+		return nil, fmt.Errorf("list VolumeSnapshots: %w", err)
+	}
+	for i := range list.Items {
+		it := &list.Items[i]
+		if it.GetName() != snapName {
+			continue
+		}
+		if _, isNS := it.GetLabels()[labelNamespace]; isNS {
+			continue // a namespaced copy, not the promote's own
+		}
+		return it, nil
+	}
+	return nil, ErrNotFound
+}
+
+// createROXFromSnapshot is cloneROX with an explicit size, for namespaces
+// that have no writer PVC to size from.
+func (p *SnapshotClonePromoter) createROXFromSnapshot(ctx context.Context, ns, hash, roxName, snapName string, sizeQty resource.Quantity) error {
+	apiGroup := "snapshot.storage.k8s.io"
+	roxPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      roxName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "nvsnap",
+				"nvsnap.io/per-capture":        "true",
+				"nvsnap.io/role":               "reader",
+				labelHashShort:                 ShortHash(hash),
+				labelNamespace:                 ns,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			StorageClassName: &p.StorageClass,
+			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: sizeQty}},
+			DataSource:       &corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: "VolumeSnapshot", Name: snapName},
+		},
+	}
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Create(ctx, roxPVC, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create rox PVC %s/%s: %w", ns, roxName, err)
+	}
+	return nil
+}
+
+// deleteNamespacedClaims removes the claims, snapshots and contents that
+// EnsureClaim minted for hash in other namespaces.
+func (p *SnapshotClonePromoter) deleteNamespacedClaims(ctx context.Context, hash string) []string {
+	var errs []string
+	sel := labelHashShort + "=" + ShortHash(hash) + "," + labelNamespace
+	if pvcs, err := p.KubeClient.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: sel}); err == nil {
+		for i := range pvcs.Items {
+			c := &pvcs.Items[i]
+			if derr := p.KubeClient.CoreV1().PersistentVolumeClaims(c.Namespace).Delete(ctx, c.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				errs = append(errs, fmt.Sprintf("rox %s/%s: %v", c.Namespace, c.Name, derr))
+			}
+		}
+	} else {
+		errs = append(errs, fmt.Sprintf("list rox claims: %v", err))
+	}
+	if snaps, err := p.DynClient.Resource(volumeSnapshotGVR).Namespace("").List(ctx, metav1.ListOptions{LabelSelector: sel}); err == nil {
+		for i := range snaps.Items {
+			it := &snaps.Items[i]
+			if derr := p.DynClient.Resource(volumeSnapshotGVR).Namespace(it.GetNamespace()).Delete(ctx, it.GetName(), metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				errs = append(errs, fmt.Sprintf("snapshot %s/%s: %v", it.GetNamespace(), it.GetName(), derr))
+			}
+		}
+	} else {
+		errs = append(errs, fmt.Sprintf("list namespaced snapshots: %v", err))
+	}
+	if contents, err := p.DynClient.Resource(volumeSnapshotContentGVR).List(ctx, metav1.ListOptions{LabelSelector: sel}); err == nil {
+		for i := range contents.Items {
+			if derr := p.DynClient.Resource(volumeSnapshotContentGVR).Delete(ctx, contents.Items[i].GetName(), metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				errs = append(errs, fmt.Sprintf("content %s: %v", contents.Items[i].GetName(), derr))
+			}
+		}
+	} else {
+		errs = append(errs, fmt.Sprintf("list namespaced contents: %v", err))
+	}
+	return errs
 }

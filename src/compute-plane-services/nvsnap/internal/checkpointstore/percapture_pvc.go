@@ -48,6 +48,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -425,6 +426,9 @@ func (b *PerCapturePVCBackend) Put(ctx context.Context, hash string, sources []C
 	if publishName == "" {
 		publishName = roxName
 	}
+	// Gated followers in other namespaces were admitted against
+	// rox-<hash> in their own namespace; make it exist before ready.
+	b.ensureClaimsForStampedPods(ctx, hash, ns)
 	if err := b.setState(hash, pvcStateReady, publishName); err != nil {
 		return Manifest{}, fmt.Errorf("publish ready: %w", err)
 	}
@@ -897,7 +901,56 @@ func (b *PerCapturePVCBackend) Mount(ctx context.Context, hash string, vol Volum
 	}
 	// Storage-specific: shared-ROX returns the one rox-<hash> claim;
 	// per-pod clones a fresh RWO PVC; shared-volume binds a static PV.
+	pm, err := b.Promoter.MountSpec(ctx, hash, vol)
+	if !errors.Is(err, ErrNotFound) {
+		return pm, err
+	}
+	// No claim in this namespace. NVCF runs each chart in its own
+	// namespace, so a restore usually lands where the capture never was:
+	// mint the namespace-local claim from the promoted artifact and try
+	// again. ErrNotFound from EnsureClaim means nothing is promoted yet;
+	// ErrUnsupported means per-pod-clone storage, which has no shared
+	// claim to bind; both leave the caller on its cold path.
+	if eerr := b.Promoter.EnsureClaim(ctx, hash, vol.Namespace); eerr != nil {
+		if errors.Is(eerr, ErrNotFound) || errors.Is(eerr, ErrUnsupported) {
+			return PodMount{}, ErrNotFound
+		}
+		return PodMount{}, fmt.Errorf("ensure claim in %s: %w", vol.Namespace, eerr)
+	}
+	b.log().WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": vol.Namespace}).
+		Info("L2 claim minted in restore namespace")
 	return b.Promoter.MountSpec(ctx, hash, vol)
+}
+
+// ensureClaimsForStampedPods mints the namespace-local claim in every
+// namespace that already holds pods stamped with hash (election
+// followers waiting on their gate, admitted before the promote existed),
+// so they find rox-<hash> bound when nvsnap-server releases them.
+// Best-effort: a failure is logged, the promote still publishes ready,
+// and the affected pod's own Mount path retries on its next admission.
+func (b *PerCapturePVCBackend) ensureClaimsForStampedPods(ctx context.Context, hash, captureNS string) {
+	pods, err := b.KubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: "nvsnap.io/hash=" + ShortHash(hash)})
+	if err != nil {
+		b.log().WithError(err).WithField("hash", ShortHash(hash)).Warn("list stamped pods for cross-namespace claims failed")
+		return
+	}
+	seen := map[string]bool{captureNS: true}
+	for i := range pods.Items {
+		ns := pods.Items[i].Namespace
+		if seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		if err := b.Promoter.EnsureClaim(ctx, hash, ns); err != nil {
+			if errors.Is(err, ErrUnsupported) {
+				continue
+			}
+			b.log().WithError(err).WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": ns}).
+				Warn("cross-namespace claim for stamped pods failed")
+			continue
+		}
+		b.log().WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": ns}).Info("L2 claim minted for stamped pods")
+	}
 }
 
 // Delete removes the rox PVC + any leftover rwx PVC + snapshot from
@@ -938,3 +991,13 @@ func (b *PerCapturePVCBackend) Delete(ctx context.Context, hash string) error {
 // with any in-flight Jobs from the legacy code path; that subcommand
 // is no longer reachable from production callers and is scheduled
 // for removal in a follow-up cleanup commit.
+
+// log returns the backend logger, or a discard logger when none is set.
+func (b *PerCapturePVCBackend) log() logrus.FieldLogger {
+	if b.Log != nil {
+		return b.Log
+	}
+	l := logrus.New()
+	l.SetOutput(io.Discard)
+	return l
+}

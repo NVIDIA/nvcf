@@ -19,6 +19,7 @@ package checkpointstore
 
 import (
 	"context"
+	"errors"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -84,6 +85,10 @@ type Backend interface {
 	Store
 	Mounter
 }
+
+// ErrUnsupported means the storage strategy cannot provide what was asked
+// (for example a namespace-local shared claim on per-pod-clone storage).
+var ErrUnsupported = errors.New("checkpointstore: unsupported by this storage strategy")
 
 // PendingMounter is implemented by backends that can name the restore
 // claim for a hash before it exists. The election decorates follower pods
