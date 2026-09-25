@@ -20,6 +20,8 @@ package ratelimiter
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -153,6 +155,35 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 	return common.GetContextFromState(now, rate, expiration, int64(value)), nil
 }
 
+// Drain re-writes every entry so it replicates to the current partition owners.
+// Olric only seeds a member on write, so without this a pod that joined while a
+// counter sat idle holds nothing.
+func (store *Store) Drain(ctx context.Context) (drained int, failed int, err error) {
+	iter, err := store.dmap.Scan(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to scan DMap for drain: %w", err)
+	}
+	defer iter.Close()
+
+	for iter.Next() {
+		if ctx.Err() != nil {
+			return drained, failed, ctx.Err()
+		}
+		key := iter.Key()
+		// Zero delta: atomic per key and keeps the TTL.
+		if _, err := store.dmap.Incr(ctx, key, 0); err != nil {
+			if errors.Is(err, olric.ErrKeyNotFound) {
+				continue
+			}
+			failed++
+			zap.L().Warn("Failed to drain key", zap.String("key", redactKey(key)), zap.Error(err))
+			continue
+		}
+		drained++
+	}
+	return drained, failed, nil
+}
+
 // Peek returns the limit for the given identifier, without modification on current values.
 // NOT USED
 func (store *Store) Peek(ctx context.Context, key string, rate limiter.Rate) (limiter.Context, error) {
@@ -171,6 +202,20 @@ func (store *Store) Reset(ctx context.Context, key string, rate limiter.Rate) (l
 	expiration := now.Add(rate.Period)
 
 	return common.GetContextFromState(now, rate, expiration, 0), nil
+}
+
+// redactKey hashes the subject in a per-user counter key. Keys are built as
+// "<prefix>:user:<clientAuthSubject>:<ncaId>:..." for the per-user tier, so the
+// segment after the "user" sentinel is the caller identity.
+func redactKey(key string) string {
+	parts := strings.Split(key, ":")
+	for i, part := range parts {
+		if part == "user" && i+1 < len(parts) {
+			parts[i+1] = redactSubject(parts[i+1])
+			return strings.Join(parts, ":")
+		}
+	}
+	return key
 }
 
 // getCacheKey returns the full path for an identifier.
