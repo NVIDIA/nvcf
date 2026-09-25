@@ -32,8 +32,9 @@ limitations under the License.
 //   - Restore pod (CaptureMethod=="cachedir"): mount the rox read-only
 //     at m.CacheDir (model stays RO — the big part, never copied), shadow
 //     the cache subtree <CacheDir>/cache with a writable emptyDir seeded
-//     by a nvsnap-seed-cache init container (cp from the rox), and run the
-//     pod's own command untouched. No shim: a cachedir restore is a warm
+//     by a nvsnap-seed-cache init container (cp from the rox), prewarm the
+//     rox tree into page cache with a nvsnap-prewarm init container, and run
+//     the pod's own command untouched. No shim: a cachedir restore is a warm
 //     cold-start of THIS pod, so its entrypoint runs exactly as authored.
 //
 // Why the writable cache shadow (ember rule #3, verified): engines write
@@ -391,6 +392,35 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	}
 	patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: seedInit})
 
+	// Page-cache prewarm of the rox tree, model included, AHEAD of the engine.
+	// This is the one thing the retired entrypoint shim did that earns its
+	// keep: on network-attached rox storage (NVMesh, EBS) a large safetensors
+	// set is faulted in by mmap as small random reads, and a parallel
+	// sequential read-ahead beats that badly for large models on vLLM. The
+	// seed init above deliberately does not touch {model}, so without this the
+	// biggest part of the tree starts cold.
+	//
+	// An init container, not a shim: same node so same page cache, same pod
+	// cgroup so the same memory accounting, and the pod's own command runs
+	// untouched. Best-effort by construction: a read error must never fail a
+	// restore, so the pipeline ends in || true. Six workers, matching the
+	// retired Go prewarmer. NVSNAP_PREWARM=0 on the workload skips it, the
+	// same knob the shim honoured.
+	if !podDisablesPrewarm(main) {
+		prewarmInit := corev1.Container{
+			Name:  "nvsnap-prewarm",
+			Image: main.Image,
+			Command: []string{"sh", "-c", fmt.Sprintf(
+				"find %s -type f -print0 2>/dev/null | xargs -0 -r -P 6 -n 16 cat > /dev/null 2>&1 || true",
+				cacheSeedSrcPath)},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: cacheDirVolumeName, MountPath: cacheSeedSrcPath, ReadOnly: true},
+			},
+			SecurityContext: &corev1.SecurityContext{RunAsUser: &seedRoot},
+		}
+		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: prewarmInit})
+	}
+
 	// Cache/model env — REPLAYED from the manifest (the per-checkpoint
 	// single source of truth), verbatim, so the paths match exactly what
 	// the capture pod ran with regardless of any later ConfigMap edit.
@@ -427,4 +457,15 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	// No securityContext, SYS_ADMIN or seccomp changes: this path only adds
 	// volumes, mounts, env and a copying init container.
 	return patches, nil
+}
+
+// podDisablesPrewarm honours NVSNAP_PREWARM=0 on the workload container, the
+// same opt-out the retired entrypoint shim read.
+func podDisablesPrewarm(main corev1.Container) bool {
+	for _, e := range main.Env {
+		if e.Name == "NVSNAP_PREWARM" && e.Value == "0" {
+			return true
+		}
+	}
+	return false
 }

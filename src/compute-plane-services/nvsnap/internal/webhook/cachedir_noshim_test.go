@@ -45,6 +45,7 @@ func TestTryL2CacheDir_NoShim_PodCommandUntouched(t *testing.T) {
 	}
 
 	var sawRoxMount, sawSeedInit, sawCacheEnv bool
+	var inits []corev1.Container
 	for _, p := range patches {
 		// Nothing may touch the entrypoint.
 		if strings.HasSuffix(p.Path, "/command") || strings.HasSuffix(p.Path, "/args") {
@@ -67,6 +68,7 @@ func TestTryL2CacheDir_NoShim_PodCommandUntouched(t *testing.T) {
 				sawRoxMount = true
 			}
 		case corev1.Container:
+			inits = append(inits, v)
 			if v.Name == "nvsnap-seed-cache" {
 				sawSeedInit = true
 			}
@@ -87,5 +89,60 @@ func TestTryL2CacheDir_NoShim_PodCommandUntouched(t *testing.T) {
 	}
 	if !sawCacheEnv {
 		t.Error("expected the cache env (HF_HOME) replayed from the manifest")
+	}
+	// The prewarm must come back as an init container, after the seed, reading
+	// the rox read-only as root, and never as an entrypoint wrapper. It is the
+	// one piece of the retired shim that measurably helps large models.
+	if len(inits) != 2 || inits[0].Name != "nvsnap-seed-cache" || inits[1].Name != "nvsnap-prewarm" {
+		names := []string{}
+		for _, c := range inits {
+			names = append(names, c.Name)
+		}
+		t.Fatalf("want init containers [nvsnap-seed-cache nvsnap-prewarm] in that order, got %v", names)
+	}
+	pw := inits[1]
+	if pw.Image != pod.Spec.Containers[0].Image {
+		t.Errorf("prewarm should reuse the workload image (already pulled), got %q", pw.Image)
+	}
+	if len(pw.VolumeMounts) != 1 || !pw.VolumeMounts[0].ReadOnly || pw.VolumeMounts[0].Name != cacheDirVolumeName {
+		t.Errorf("prewarm must mount only the rox, read-only, got %+v", pw.VolumeMounts)
+	}
+	if pw.SecurityContext == nil || pw.SecurityContext.RunAsUser == nil || *pw.SecurityContext.RunAsUser != 0 {
+		t.Error("prewarm must run as root: the rox files are root-owned")
+	}
+	cmd := strings.Join(pw.Command, " ")
+	if !strings.Contains(cmd, cacheSeedSrcPath) || !strings.Contains(cmd, "|| true") {
+		t.Errorf("prewarm must read the rox tree and be best-effort, got %q", cmd)
+	}
+}
+
+// NVSNAP_PREWARM=0 on the workload skips the prewarm init, matching the knob
+// the retired shim honoured, and touches nothing else.
+func TestTryL2CacheDir_PrewarmOptOut(t *testing.T) {
+	m := &Mutator{
+		CacheDir: "/opt/nvsnap", MainContainer: 0,
+		L2Backend: &stubL2Backend{mountResult: checkpointstore.PodMount{
+			Volume:      corev1.Volume{Name: "x", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "rox-abc"}}},
+			VolumeMount: corev1.VolumeMount{Name: "x", MountPath: "/opt/nvsnap"},
+		}},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "reuse", Namespace: "ns"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "vllm", Image: "img", Command: []string{"serve"},
+			Env: []corev1.EnvVar{{Name: "NVSNAP_PREWARM", Value: "0"}},
+		}}},
+	}
+	patches, err := m.tryL2CacheDir(context.Background(), pod, "abc", checkpointstore.Manifest{Hash: "abc", CaptureMethod: "cachedir"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range patches {
+		if c, ok := p.Value.(corev1.Container); ok && c.Name == "nvsnap-prewarm" {
+			t.Fatal("NVSNAP_PREWARM=0 must skip the prewarm init container")
+		}
+		if strings.HasSuffix(p.Path, "/command") {
+			t.Fatal("opt-out must not rewrite the command either")
+		}
 	}
 }
