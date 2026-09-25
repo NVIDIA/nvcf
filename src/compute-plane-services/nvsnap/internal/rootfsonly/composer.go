@@ -190,23 +190,68 @@ func cacheRelevantEnv(envs []corev1.EnvVar) []corev1.EnvVar {
 // engines that wrap the launch command in /bin/bash -c).
 var modelFlagPattern = regexp.MustCompile(`--model(?:-path)?(?:=|\s+)([^\s\\]+)`)
 
-// inferModelID is a best-effort extractor for the human-readable model
-// identifier. Empty result is fine — ModelID is for display only and
-// doesn't affect hash discrimination (the args themselves are in
-// EngineCompatFlags). Conventions:
+// modelEnvNames are the env vars engines and NIMs read the model identity
+// from when it is not on the command line, in precedence order.
+var modelEnvNames = []string{"HF_MODEL_ID", "MODEL_ID", "NIM_MODEL_NAME"}
+
+// InferModelID is a best-effort extractor for the model identifier the
+// container will download. It looks, in order, at:
 //
-//   - vLLM / SGLang / TRT-LLM: --model or --model-path flag inside an
-//     Args[0] shell script (most nvsnap workloads use this pattern).
-//   - NIM: the model id is encoded in the image name
-//     (nvcr.io/nim/<vendor>/<model>:<tag>).
-func inferModelID(c corev1.Container) string {
+//   - command+args as a token list: "--model X", "--model-path X",
+//     "--model=X". Dynamo workers (python3 -m dynamo.vllm --model X) and
+//     any chart that lists args one per item land here.
+//   - each arg as free text, for the bash -lc "vllm serve --model X ..."
+//     wrapper convention.
+//   - the env vars in modelEnvNames.
+//   - a NIM image, whose identity is the image itself.
+//
+// Empty means no model identity: the pod is not a downloader.
+func InferModelID(c corev1.Container) string {
+	argv := append(append([]string{}, c.Command...), c.Args...)
+	for i, tok := range argv {
+		switch {
+		case tok == "--model" || tok == "--model-path":
+			if i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+				return argv[i+1]
+			}
+		case strings.HasPrefix(tok, "--model=") || strings.HasPrefix(tok, "--model-path="):
+			if v := tok[strings.IndexByte(tok, '=')+1:]; v != "" {
+				return v
+			}
+		}
+	}
 	for _, a := range c.Args {
 		if m := modelFlagPattern.FindStringSubmatch(a); m != nil {
 			return m[1]
+		}
+	}
+	for _, name := range modelEnvNames {
+		for _, e := range c.Env {
+			if e.Name == name && e.Value != "" {
+				return e.Value
+			}
 		}
 	}
 	if IsNIMImage(c.Image) {
 		return c.Image
 	}
 	return ""
+}
+
+// inferModelID keeps the historical unexported name for the composer.
+func inferModelID(c corev1.Container) string { return InferModelID(c) }
+
+// IsModelWorkload reports whether the pod is a model downloader: it asks
+// for a GPU and its main container names a model. Supporting pods in a
+// chart (frontend, router, planner, etcd, nats) fail one or both tests
+// and are left alone by the election.
+func IsModelWorkload(pod *corev1.Pod, mainContainer int) (modelID string, ok bool) {
+	if pod == nil || mainContainer < 0 || mainContainer >= len(pod.Spec.Containers) {
+		return "", false
+	}
+	if podGPURequest(pod) == 0 {
+		return "", false
+	}
+	modelID = InferModelID(pod.Spec.Containers[mainContainer])
+	return modelID, modelID != ""
 }

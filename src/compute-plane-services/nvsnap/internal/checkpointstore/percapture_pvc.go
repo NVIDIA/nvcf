@@ -845,6 +845,32 @@ func (b *PerCapturePVCBackend) Get(ctx context.Context, hash, _ string) (Manifes
 	return b.Stat(ctx, hash)
 }
 
+// PendingMountSpec names the shared ReadOnlyMany claim for hash without
+// requiring it to exist. Only ROX-capable strategies (shared-volume, or
+// snapshot-clone with readOnlyMany) have a single deterministic claim;
+// per-pod clones are minted at mount time and cannot be named early.
+func (b *PerCapturePVCBackend) PendingMountSpec(hash string, vol VolumeMeta) (PodMount, bool) {
+	b.applyDefaults()
+	caps := b.Promoter.Caps()
+	if !caps.ReadOnlyMany && !caps.SharedVolume {
+		return PodMount{}, false
+	}
+	volName := "nvsnap-checkpoint"
+	if vol.Name != "" {
+		volName = vol.Name
+	}
+	claim := "rox-" + ShortHash(hash)
+	return PodMount{
+		Volume: corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim, ReadOnly: true},
+			},
+		},
+		VolumeMount: corev1.VolumeMount{Name: volName, MountPath: vol.MountPath, ReadOnly: true},
+	}, true
+}
+
 // Mount returns the pod-spec fragments needed to mount the rox-<hash>
 // PVC ReadOnly at vol.MountPath. Called by the admission webhook
 // when stamping a restore-from pod.

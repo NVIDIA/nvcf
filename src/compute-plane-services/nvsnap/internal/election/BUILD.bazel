@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "election",
+    srcs = ["election.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "@io_k8s_api//coordination/v1:coordination",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_client_go//kubernetes",
+    ],
+)
+
+go_test(
+    name = "election_test",
+    srcs = ["election_test.go"],
+    embed = [":election"],
+    deps = [
+        "@io_k8s_api//coordination/v1:coordination",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//kubernetes/fake",
+        "@io_k8s_client_go//testing",
+    ],
+)

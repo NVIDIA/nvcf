@@ -38,6 +38,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
@@ -246,6 +247,14 @@ type Mutator struct {
 	// own NVSNAP_PREWARM=0/1 overrides the profile either way.
 	StorageProfile *checkpointstore.StorageProfile
 
+	// Elector, when set, turns on the one-downloader-per-hash election
+	// for model workloads that carry no nvsnap.io/restore-from: the
+	// webhook composes the hash, restores when a promoted capture exists,
+	// otherwise elects a leader to capture and gates the followers'
+	// scheduling until the promote binds. nil keeps the label-driven
+	// capture and explicit-hash restore paths only. See election.go.
+	Elector election.Elector
+
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a
 	// nvsnap-l2-wait init container that polls nvsnap-server's
@@ -427,6 +436,17 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {
+		// One downloader per hash for chart-shaped workloads. Handles the
+		// pod fully (restore, leader or follower) or declines with nil so
+		// the label-driven capture inject below keeps its behaviour. An
+		// error is logged and admits the pod unchanged: the election is
+		// an optimisation, never a gate.
+		if ep, err := m.electionPatches(ctx, pod); err != nil {
+			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
+				Warn("election failed; admitting pod unchanged")
+		} else if ep != nil {
+			return mergePatchPlan(append(injectPatches, ep...)), nil
+		}
 		// No restore-from — this is a CAPTURE/cold pod. In cachedir mode,
 		// inject the cache/model env vars + the /opt/nvsnap emptyDir so the
 		// engine funnels its caches there and the agent captures that dir.

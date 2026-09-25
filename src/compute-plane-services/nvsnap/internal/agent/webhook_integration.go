@@ -152,6 +152,9 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// Storage profile of the L2 StorageClass: the cachedir restore
 		// reads its prewarm policy (on/off, reader count). nil = defaults.
 		StorageProfile: a.l2Profile,
+		// One-downloader election for chart pods; nil when off or L2 is
+		// off (docs/proposals/helm-chart-cache-election.md).
+		Elector: a.elector,
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
 		},

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
@@ -245,5 +246,67 @@ func TestCompose_CommandIncluded(t *testing.T) {
 	flags := strings.Join(in.EngineCompatFlags, "|")
 	if !strings.Contains(flags, "cmd[0]:/bin/bash") || !strings.Contains(flags, "cmd[1]:-lc") {
 		t.Fatalf("Command not included: %v", in.EngineCompatFlags)
+	}
+}
+
+// The model identity is what makes a pod a downloader, and charts spell it
+// several ways: Dynamo lists "--model" and the value as separate items,
+// stock charts wrap "vllm serve --model X" in one bash string, NIMs use
+// env or the image. Frontend pods have none of them.
+func TestInferModelID_Forms(t *testing.T) {
+	cases := map[string]struct {
+		c    corev1.Container
+		want string
+	}{
+		"dynamo list form": {corev1.Container{
+			Command: []string{"python3", "-m", "dynamo.vllm"},
+			Args:    []string{"--model", "Qwen/Qwen3-0.6B", "--is-decode-worker"},
+		}, "Qwen/Qwen3-0.6B"},
+		"sglang list form": {corev1.Container{
+			Command: []string{"python3", "-m", "dynamo.sglang"},
+			Args:    []string{"--model-path", "google/gemma-4-31B-it", "--tp", "2"},
+		}, "google/gemma-4-31B-it"},
+		"equals form": {corev1.Container{Args: []string{"--model=meta-llama/Llama-3.1-8B-Instruct"}}, "meta-llama/Llama-3.1-8B-Instruct"},
+		"bash wrapper": {corev1.Container{
+			Command: []string{"/bin/bash", "-lc"},
+			Args:    []string{"set -e\nnohup setsid vllm serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --tensor-parallel-size 2 &\nwhile true; do sleep 30; done"},
+		}, "TinyLlama/TinyLlama-1.1B-Chat-v1.0"},
+		"env HF_MODEL_ID": {corev1.Container{Env: []corev1.EnvVar{{Name: "HF_MODEL_ID", Value: "openai/whisper-large-v3"}}}, "openai/whisper-large-v3"},
+		"nim image":       {corev1.Container{Image: "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.8.3"}, "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.8.3"},
+		"dangling flag":   {corev1.Container{Args: []string{"--model"}}, ""},
+		"flag then flag":  {corev1.Container{Args: []string{"--model", "--port"}}, ""},
+		"dynamo frontend": {corev1.Container{Command: []string{"python3", "-m", "dynamo.frontend"}, Args: []string{"--router-mode", "kv"}}, ""},
+	}
+	for name, tc := range cases {
+		if got := InferModelID(tc.c); got != tc.want {
+			t.Errorf("%s: InferModelID = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestIsModelWorkload(t *testing.T) {
+	gpu := corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("2")}}
+	worker := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"python3", "-m", "dynamo.vllm"}, Args: []string{"--model", "Qwen/Qwen3-0.6B", "--is-prefill-worker"}, Resources: gpu,
+	}}}}
+	frontend := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"python3", "-m", "dynamo.frontend"},
+	}}}}
+	gpuNoModel := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"python3", "train.py"}, Resources: gpu,
+	}}}}
+	modelNoGPU := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Args: []string{"--model", "Qwen/Qwen3-0.6B"},
+	}}}}
+	if id, ok := IsModelWorkload(worker, 0); !ok || id != "Qwen/Qwen3-0.6B" {
+		t.Errorf("dynamo worker: (%q,%v), want downloader", id, ok)
+	}
+	for name, p := range map[string]*corev1.Pod{"frontend": frontend, "gpu without model": gpuNoModel, "model without gpu": modelNoGPU} {
+		if _, ok := IsModelWorkload(p, 0); ok {
+			t.Errorf("%s must not be classified as a downloader", name)
+		}
+	}
+	if _, ok := IsModelWorkload(worker, 3); ok {
+		t.Error("out-of-range main container must not classify")
 	}
 }

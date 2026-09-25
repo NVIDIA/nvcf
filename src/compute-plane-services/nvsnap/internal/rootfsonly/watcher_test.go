@@ -493,3 +493,33 @@ func TestWatcher_CommittedCaptureStaysDeduped(t *testing.T) {
 		t.Fatal("a committed capture released its dedup mark; the pod would be recaptured on every resync")
 	}
 }
+
+// A pod the election webhook stamped with nvsnap.io/hash is captured under
+// that hash, so the followers decorated against rox-<hash> find it.
+func TestWatcher_CapturesUnderStampedHash(t *testing.T) {
+	env := newWatcherEnv(t)
+	env.addProc(t, env.upperdirMountinfo())
+	env.addUpperdirContent(t)
+	count := &countingBackend{Backend: env.backend}
+	capturer := env.capturer()
+	capturer.Backend = count
+	w := env.watcher()
+	w.Capturer = capturer
+	w.sem = make(chan struct{}, w.concurrency())
+
+	stamped := "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
+	pod := fakePod(types.UID(env.podUID), "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true)
+	pod.Annotations = map[string]string{stampedHashAnnotation: stamped}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	w.HandlePodEvent(ctx, pod)
+	if !waitFor(t, 3*time.Second, func() bool {
+		_, err := count.Stat(ctx, stamped)
+		return err == nil
+	}) {
+		t.Fatalf("capture never landed under the stamped hash")
+	}
+	if _, err := count.Stat(ctx, checkpointstore.ComputeHash(w.Composer.Compose(pod, 0))); err == nil {
+		t.Error("watcher must not recompose the hash when one is stamped")
+	}
+}
