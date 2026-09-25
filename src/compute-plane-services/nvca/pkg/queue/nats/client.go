@@ -68,20 +68,23 @@ type client struct {
 }
 
 // NewClient creates a JetStream-backed queue client.
-func NewClient(ctx context.Context, clusterID string, secretsFetcher auth.NATSSecretsFetcher) (queue.Client, error) {
-	return NewClientWithURL(ctx, "", clusterID, secretsFetcher)
+func NewClient(ctx context.Context, clusterID string, secretsFetcher auth.NATSSecretsFetcher, observer ...ConnectionObserver) (queue.Client, error) {
+	return NewClientWithURL(ctx, "", clusterID, secretsFetcher, observer...)
 }
 
 // NewClientWithURL creates a JetStream-backed queue client for a configured NATS URL.
-func NewClientWithURL(ctx context.Context, natsURL, clusterID string, secretsFetcher auth.NATSSecretsFetcher) (queue.Client, error) {
-	return NewClientWithURLAndHostOverride(ctx, natsURL, "", clusterID, secretsFetcher)
+func NewClientWithURL(ctx context.Context, natsURL, clusterID string, secretsFetcher auth.NATSSecretsFetcher, observer ...ConnectionObserver) (queue.Client, error) {
+	return NewClientWithURLAndHostOverride(ctx, natsURL, "", clusterID, secretsFetcher, observer...)
 }
 
 // NewClientWithURLAndHostOverride creates a JetStream-backed queue client for a configured NATS URL and optional TLS SNI host.
+// The optional observer receives connection lifecycle events; it is variadic so
+// the many existing callers that do not care keep working unchanged.
 func NewClientWithURLAndHostOverride(
 	ctx context.Context,
 	natsURL, natsHostOverride, clusterID string,
 	secretsFetcher auth.NATSSecretsFetcher,
+	observer ...ConnectionObserver,
 ) (queue.Client, error) {
 	secrets, err := secretsFetcher.FetchNATSSecrets(ctx)
 	if err != nil {
@@ -97,29 +100,17 @@ func NewClientWithURLAndHostOverride(
 		return nil, fmt.Errorf("create nkey auth option: %w", err)
 	}
 
-	opts := []nats.Option{
-		nkeyAuthOption,
-		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)),
-	}
-	opts = append(opts, natsHostOverrideOptions(natsURL, natsHostOverride)...)
+	return connect(natsURL, natsHostOverride, clusterID, nkeyAuthOption, firstObserver(observer))
+}
 
-	nc, err := nats.Connect(natsURLOrDefault(natsURL), opts...)
-	if err != nil {
-		return nil, fmt.Errorf("connect to NATS: %w", err)
-	}
-
-	js, err := jetstream.New(nc)
-	if err != nil {
-		_ = nc.Drain()
-		return nil, fmt.Errorf("init jetstream: %w", err)
-	}
-
-	return &client{
-		clusterID: clusterID,
-		nc:        nc,
-		js:        js,
-		consumers: map[string]jetstream.Consumer{},
-	}, nil
+// ConnectionClosed reports whether the NATS connection has been closed for
+// good, as opposed to merely disconnected while the client keeps retrying.
+// nats.go only reaches the closed state once it has given up, and it never
+// reopens a closed connection, so this is the one queue condition a process
+// restart actually fixes. It is consumed through an optional interface rather
+// than queue.Client because SQS has no persistent connection to report on.
+func (c *client) ConnectionClosed() bool {
+	return c.nc.IsClosed()
 }
 
 func natsURLOrDefault(natsURL string) string {
@@ -134,8 +125,7 @@ func (c *client) ReceiveMessage(ctx context.Context, input queue.ReceiveMessageI
 
 	// TODO(mcamp): investigatae specific consumer per GPU type
 	// TODO(mcamp): we should be able to create a consumer up-front so we don't need to fetch it each time
-	// we should make this a reactive check that when the consumer is gone, we recreate it
-	consumer, err := c.ensureConsumer(ctx, input)
+	consumer, durableName, err := c.ensureConsumer(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +145,7 @@ func (c *client) ReceiveMessage(ctx context.Context, input queue.ReceiveMessageI
 		if errors.Is(err, nats.ErrTimeout) {
 			return nil, nil
 		}
+		c.dropConsumer(durableName)
 		return nil, fmt.Errorf("fetch jetstream messages: %w", err)
 	}
 
@@ -173,7 +164,22 @@ func (c *client) ReceiveMessage(ctx context.Context, input queue.ReceiveMessageI
 	}
 
 	if err := batch.Error(); err != nil && !errors.Is(err, nats.ErrTimeout) {
-		log.WithError(err).Warn("nats fetch batch reported error")
+		// Returning nil here made a broken consumer indistinguishable from an
+		// empty queue: the batch error was logged and dropped, so the queue
+		// manager counted every failed poll as a successful empty one and kept
+		// reporting the backend healthy (nvcf#1590). Drop the cached consumer so
+		// the next receive rebuilds it rather than reusing a dead handle.
+		c.dropConsumer(durableName)
+		if len(outputs) == 0 {
+			return nil, fmt.Errorf("fetch jetstream batch: %w", err)
+		}
+		// Messages did arrive despite the error. Hand them to the caller instead
+		// of dropping work already taken off the stream; the next poll reports
+		// the condition if it persists.
+		log.WithError(err).
+			WithField("cluster_id", c.clusterID).
+			WithField("durable_name", durableName).
+			Warn("nats fetch batch reported error with partial results")
 	}
 
 	return outputs, nil
@@ -228,10 +234,23 @@ func (c *client) IsMessageNotFoundError(err error) bool {
 	return errors.Is(err, errReceiptHandleNotFound)
 }
 
-func (c *client) ensureConsumer(ctx context.Context, input queue.ReceiveMessageInput) (jetstream.Consumer, error) {
+// dropConsumer forgets a cached consumer handle so the next receive recreates
+// it. Without this a consumer that disappears server-side leaves a permanently
+// dead handle in the cache, and only restarting the process restores
+// processing, which is the restart described in nvcf#1590.
+func (c *client) dropConsumer(durableName string) {
+	c.consumersMu.Lock()
+	defer c.consumersMu.Unlock()
+	delete(c.consumers, durableName)
+}
+
+// ensureConsumer returns the consumer for the input's queue along with its
+// durable name, so callers can evict it from the cache when a fetch shows it is
+// no longer usable.
+func (c *client) ensureConsumer(ctx context.Context, input queue.ReceiveMessageInput) (jetstream.Consumer, string, error) {
 	streamName, subject, err := c.resolveStreamAndSubject(ctx, input.QueueInfo)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	durableName := fmt.Sprintf("%s-%s", streamName, c.clusterID)
@@ -240,7 +259,7 @@ func (c *client) ensureConsumer(ctx context.Context, input queue.ReceiveMessageI
 	defer c.consumersMu.Unlock()
 
 	if consumer, ok := c.consumers[durableName]; ok {
-		return consumer, nil
+		return consumer, durableName, nil
 	}
 
 	cfg := jetstream.ConsumerConfig{
@@ -256,11 +275,11 @@ func (c *client) ensureConsumer(ctx context.Context, input queue.ReceiveMessageI
 
 	consumer, err := c.js.CreateOrUpdateConsumer(ctx, streamName, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create or update jetstream consumer: %w", err)
+		return nil, "", fmt.Errorf("create or update jetstream consumer: %w", err)
 	}
 
 	c.consumers[durableName] = consumer
-	return consumer, nil
+	return consumer, durableName, nil
 }
 
 // sanitizeMessageIDForK8s converts a MessageID to a K8s-label-compliant value.
