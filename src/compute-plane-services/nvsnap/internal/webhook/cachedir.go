@@ -262,6 +262,33 @@ func (m *Mutator) cacheDirCapturePatches(pod *corev1.Pod) []PatchOp {
 	return patches
 }
 
+// restoreEntryArgv decides what the prewarm shim execs once the cache is
+// seeded: the restoring pod's OWN command and args, which the webhook is
+// about to overwrite with the shim, falling back to the capture's recorded
+// entry argv only when the pod declares neither and so relies on the image
+// entrypoint.
+//
+// Replaying the captured argv unconditionally was wrong twice over. A fresh
+// pod carries its own manifest command, and a cachedir restore is a warm
+// cold-start of THAT pod, not a resurrection of the captured process. And for
+// the bash-wrapper convention (nohup setsid <engine> & ... while true; do
+// sleep 30; done), the pid resolver landed on the idle sleep, so EntryArgv
+// was recorded as ["sleep","30"]; the restored pod prewarmed 2.2GB perfectly,
+// exec'd sleep 30, exited, and never served (dev1, 2026-09-24).
+func restoreEntryArgv(main corev1.Container, manifest checkpointstore.Manifest) ([]string, error) {
+	own := make([]string, 0, len(main.Command)+len(main.Args))
+	own = append(own, main.Command...)
+	own = append(own, main.Args...)
+	if len(own) > 0 {
+		return own, nil
+	}
+	if len(manifest.EntryArgv) > 0 {
+		return manifest.EntryArgv, nil
+	}
+	return nil, fmt.Errorf("cachedir restore: pod declares no command or args and capture %s has no recorded EntryArgv (re-capture needed)", manifest.Hash)
+}
+
+
 // tryL2CacheDir injects a cachedir RESTORE: the rox PVC mounted
 // read-only at m.CacheDir directly (no overlayfs), the cache/model env
 // vars set identically to capture, and nvsnap-rootfs-restore as the
@@ -285,9 +312,9 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	// prewarm. Same rule as the overlay path: never fall back to the
 	// pod's command/args (ENTRYPOINT-only images carry neither). If the
 	// capture predates EntryArgv, fall through to L1.
-	if len(manifest.EntryArgv) == 0 {
-		return nil, fmt.Errorf("cachedir restore: capture %s has no recorded EntryArgv (re-capture needed): %w",
-			checkpointstore.ShortHash(hash), checkpointstore.ErrNotFound)
+	entryArgv, err := restoreEntryArgv(pod.Spec.Containers[m.MainContainer], manifest)
+	if err != nil {
+		return nil, err
 	}
 
 	// Resolve the rox PVC (ErrNotFound = not Bound → caller falls to L1).
@@ -314,7 +341,7 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 		}
 	}
 
-	argvJSON, err := json.Marshal(manifest.EntryArgv)
+	argvJSON, err := json.Marshal(entryArgv)
 	if err != nil {
 		return nil, fmt.Errorf("marshal entrypoint argv: %w", err)
 	}
