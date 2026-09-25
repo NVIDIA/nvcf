@@ -19,6 +19,13 @@ message RateLimitRequest {
   // is enforced on top of the NCA-tier limit. Empty value skips user-tier
   // checks (legacy behavior).
   string clientAuthSubject = 4;
+  // ownerNcaId is the account the invoking key's owner belongs to, as opposed to
+  // ncaId which is the account the request is authorized against. These differ
+  // only for keys whose owner was granted access to another account.
+  // When set, rate limiting uses ownerNcaId in place of ncaId: per-NCA-ID rate
+  // matching, excluded NCA IDs, and counter keys. Empty, as sent by callers that
+  // predate this field, falls back to ncaId.
+  string ownerNcaId = 5;
 }
 
 message RateLimitResponse {

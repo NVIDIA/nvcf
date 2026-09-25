@@ -107,6 +107,7 @@ impl ApiMock {
                 None => client.nca_id.clone(),
                 Some(nca_id) => nca_id,
             },
+            client_owner_nca_id: client.nca_id.clone(),
         }))
     }
 
