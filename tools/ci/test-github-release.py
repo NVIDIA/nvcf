@@ -1792,7 +1792,7 @@ class GithubReleaseTest(unittest.TestCase):
         self.github_release.load_metadata = lambda *_args: self.chart_release_metadata()
         self.github_release.github_release_mode = lambda: (True, False)
         self.github_release.publish_release_chart = (
-            lambda _root, service, version, dry_run: calls.append(
+            lambda _root, service, version, dry_run, app_version=None: calls.append(
                 ("chart", service["id"], version, dry_run)
             )
         )
@@ -2420,15 +2420,29 @@ class MultiPathReleaseTest(unittest.TestCase):
 
     CHART_PATH = "deploy/helm/nvca-operator/nvca-operator"
 
-    def nvca_metadata(self, owns_paths=True):
-        service = {
+    def nvca_service(self):
+        return {
             "id": "nvca",
             "path": "src/compute-plane-services/nvca",
             "service_name": "nvca",
         }
-        if owns_paths:
-            service["owns_paths"] = [{"path": self.CHART_PATH, "packaged": True}]
-        return service
+
+    def metadata(self, version_source=True):
+        """Both services, so ownership is derived rather than declared twice."""
+        chart = {
+            "id": "nvca-operator",
+            "path": "deploy/helm/nvca-operator",
+            "service_name": "helm-nvca-operator",
+            "app_version_source": "nvca",
+        }
+        if version_source:
+            chart["version_source"] = "nvca"
+        return {"services": [self.nvca_service(), chart]}
+
+    def owned(self, root, version_source=True):
+        return self.github_release.owned_release_paths(
+            root, self.nvca_service(), self.metadata(version_source)
+        )
 
     def seed_chart(self, root):
         chart_dir = root / self.CHART_PATH
@@ -2492,7 +2506,8 @@ class MultiPathReleaseTest(unittest.TestCase):
             # enter the published artifact, so it must still ship.
             self.touch(root, f"{self.CHART_PATH}/values.yaml", "chore(chart): retune a default")
             level, reasons = self.github_release.owned_paths_release_level(
-                root, self.nvca_metadata(), "src/compute-plane-services/nvca/v3.12.1"
+                root, self.nvca_service(), self.owned(root),
+                "src/compute-plane-services/nvca/v3.12.1",
             )
             self.assertEqual(level, "patch")
             self.assertEqual(len(reasons), 1)
@@ -2501,11 +2516,11 @@ class MultiPathReleaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.init_multi_path_repo(root)
-            service = self.nvca_metadata()
-            service["owns_paths"] = [{"path": self.CHART_PATH, "packaged": False}]
+            unpackaged = [{"path": self.CHART_PATH, "packaged": False}]
             self.touch(root, f"{self.CHART_PATH}/values.yaml", "chore(chart): retune a default")
             level, _ = self.github_release.owned_paths_release_level(
-                root, service, "src/compute-plane-services/nvca/v3.12.1"
+                root, self.nvca_service(), unpackaged,
+                "src/compute-plane-services/nvca/v3.12.1",
             )
             self.assertIsNone(level)
 
@@ -2515,7 +2530,7 @@ class MultiPathReleaseTest(unittest.TestCase):
             self.init_multi_path_repo(root)
             self.touch(root, f"{self.CHART_PATH}/values.yaml", "feat(chart): expose a setting")
             version, source = self.github_release.multi_path_release_version(
-                root, self.nvca_metadata(), "3.12.2"
+                root, self.nvca_service(), self.owned(root), "3.12.2"
             )
             # semantic-release saw only a patch in the service directory; the
             # chart's feat is the higher level and wins.
@@ -2528,7 +2543,7 @@ class MultiPathReleaseTest(unittest.TestCase):
             self.init_multi_path_repo(root)
             self.touch(root, f"{self.CHART_PATH}/values.yaml", "fix(chart): correct a default")
             version, source = self.github_release.multi_path_release_version(
-                root, self.nvca_metadata(), "3.13.0"
+                root, self.nvca_service(), self.owned(root), "3.13.0"
             )
             self.assertEqual(version, "3.13.0")
             self.assertEqual(source, "semantic-release")
@@ -2539,7 +2554,7 @@ class MultiPathReleaseTest(unittest.TestCase):
             self.init_multi_path_repo(root)
             self.touch(root, f"{self.CHART_PATH}/values.yaml", "feat(chart): expose a setting")
             version, source = self.github_release.multi_path_release_version(
-                root, self.nvca_metadata(owns_paths=False), "3.12.2"
+                root, self.nvca_service(), self.owned(root, version_source=False), "3.12.2"
             )
             self.assertEqual(version, "3.12.2")
             self.assertEqual(source, "semantic-release")
@@ -2554,21 +2569,14 @@ class FollowerReleaseTest(unittest.TestCase):
     commit_all = GithubReleaseTest.commit_all
 
     CHART_PATH = MultiPathReleaseTest.CHART_PATH
-    nvca_metadata = MultiPathReleaseTest.nvca_metadata
+    nvca_service = MultiPathReleaseTest.nvca_service
+    metadata = MultiPathReleaseTest.metadata
     seed_chart = MultiPathReleaseTest.seed_chart
     init_multi_path_repo = MultiPathReleaseTest.init_multi_path_repo
     touch = MultiPathReleaseTest.touch
 
     def follower_metadata(self):
-        return {
-            "id": "nvca-operator",
-            "path": "deploy/helm/nvca-operator",
-            "service_name": "helm-nvca-operator",
-            "version_follows": "nvca",
-        }
-
-    def metadata(self):
-        return {"services": [self.nvca_metadata(), self.follower_metadata()]}
+        return self.metadata()["services"][1]
 
     def test_follower_tags_the_leaders_commit_after_main_advances(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2715,6 +2723,148 @@ class PackagedAppVersionTest(unittest.TestCase):
                 self.chart(tmp), "1.28.4", out
             )
             self.assertEqual(self.packaged_app_version(package), "3.10.0")
+
+
+class DecoupledVersionSourceTest(unittest.TestCase):
+    """Clearing version_source must decouple the version and nothing else.
+
+    The escape hatch is one metadata value. These tests hold it to that: with
+    version_source gone the chart keeps its own version line, nvca stops
+    counting chart commits, and the chart still declares which operator it
+    installs and still releases when that operator moves.
+    """
+
+    setUp = GithubReleaseTest.setUp
+    init_repo = GithubReleaseTest.init_repo
+    seed_nvca_service = GithubReleaseTest.seed_nvca_service
+    commit_all = GithubReleaseTest.commit_all
+
+    CHART_PATH = MultiPathReleaseTest.CHART_PATH
+    nvca_service = MultiPathReleaseTest.nvca_service
+    metadata = MultiPathReleaseTest.metadata
+    seed_chart = MultiPathReleaseTest.seed_chart
+    init_multi_path_repo = MultiPathReleaseTest.init_multi_path_repo
+    touch = MultiPathReleaseTest.touch
+
+    def chart_service(self, version_source=False):
+        return self.metadata(version_source)["services"][1]
+
+    def test_clearing_version_source_drops_the_derived_ownership(self):
+        """owns_paths is not declared separately, so it cannot be left behind."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_multi_path_repo(root)
+            coupled = self.github_release.owned_release_paths(
+                root, self.nvca_service(), self.metadata(version_source=True)
+            )
+            self.assertEqual([entry["path"] for entry in coupled], [self.CHART_PATH])
+            self.assertTrue(coupled[0]["packaged"])
+
+            decoupled = self.github_release.owned_release_paths(
+                root, self.nvca_service(), self.metadata(version_source=False)
+            )
+            self.assertEqual(decoupled, [])
+
+    def test_a_chart_only_change_no_longer_releases_nvca(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_multi_path_repo(root)
+            self.touch(root, f"{self.CHART_PATH}/values.yaml", "feat(chart): expose a setting")
+            owned = self.github_release.owned_release_paths(
+                root, self.nvca_service(), self.metadata(version_source=False)
+            )
+            version, _ = self.github_release.multi_path_release_version(
+                root, self.nvca_service(), owned, ""
+            )
+            # semantic-release saw nothing in the service directory, and the
+            # chart is no longer nvca's to release.
+            self.assertIsNone(version)
+
+    def test_a_moved_leader_refreshes_the_chart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "deploy/helm/nvca-operator/v1.28.5")
+
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "feat(nvca): add a thing")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0")
+
+            self.github_release.publish_app_version_refresh(
+                root, self.chart_service(), self.metadata(version_source=False),
+                dry_run=False, draft=False,
+            )
+
+            # Its own line, not the leader's: a patch on 1.28.5.
+            self.assertTrue(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.28.6").strip()
+            )
+            self.assertFalse(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v3.13.0").strip(),
+                "the chart must not take the leader's version once decoupled",
+            )
+
+    def test_the_charts_own_level_still_decides(self):
+        """Being held back for the leader must not demote the chart's own feat."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "deploy/helm/nvca-operator/v1.28.5")
+            self.touch(root, f"{self.CHART_PATH}/values.yaml", "feat(chart): expose a setting")
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "feat(nvca): add a thing")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0")
+
+            self.github_release.publish_app_version_refresh(
+                root, self.chart_service(), self.metadata(version_source=False),
+                dry_run=False, draft=False,
+            )
+
+            # A minor from its own feat, not the patch the leader move alone
+            # would have earned.
+            self.assertTrue(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.29.0").strip()
+            )
+            self.assertFalse(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.28.6").strip()
+            )
+
+    def test_refresh_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "deploy/helm/nvca-operator/v1.28.5")
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "feat(nvca): add a thing")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0")
+
+            refresh = self.github_release.publish_app_version_refresh
+            refresh(root, self.chart_service(), self.metadata(version_source=False),
+                    dry_run=False, draft=False)
+            refresh(root, self.chart_service(), self.metadata(version_source=False),
+                    dry_run=False, draft=False)
+
+            # The second run sees the leader version it already shipped.
+            self.assertFalse(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.28.7").strip(),
+                "a re-run must not cut a second refresh",
+            )
+
+    def test_no_refresh_when_the_leader_has_not_moved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            # The chart's own release already sits on top of the leader's.
+            git(root, "tag", "deploy/helm/nvca-operator/v1.28.5")
+
+            self.github_release.publish_app_version_refresh(
+                root, self.chart_service(), self.metadata(version_source=False),
+                dry_run=False, draft=False,
+            )
+            self.assertFalse(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.28.6").strip()
+            )
 
 
 if __name__ == "__main__":

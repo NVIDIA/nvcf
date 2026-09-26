@@ -55,7 +55,10 @@
     {
       "id": "nvcf-self-managed-stack",
       "path": "deploy/stacks/self-managed",
-      "migration_paths": ["migrations/cassandra", "migrations/openbao"],
+      "migration_paths": [
+        "migrations/cassandra",
+        "migrations/openbao"
+      ],
       "service_name": "nvcf-self-managed-stack",
       "tag_format": "deploy/stacks/self-managed/v${version}",
       "version_file": "VERSION",
@@ -223,13 +226,7 @@
       "path": "src/compute-plane-services/nvca",
       "service_name": "nvca",
       "legacy_tag_prefix": "nvca-v",
-      "initial_version": "3.3.0",
-      "owns_paths": [
-        {
-          "path": "deploy/helm/nvca-operator/nvca-operator",
-          "packaged": true
-        }
-      ]
+      "initial_version": "3.3.0"
     },
     {
       "id": "container-cache",
@@ -382,7 +379,8 @@
           ]
         }
       ],
-      "version_follows": "nvca"
+      "version_source": "nvca",
+      "app_version_source": "nvca"
     },
     {
       "id": "cassandra-migrations",
