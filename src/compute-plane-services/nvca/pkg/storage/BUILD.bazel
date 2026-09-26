@@ -123,7 +123,7 @@ go_test(
         "storage_resolution_test.go",
     ],
     data = [
-        "//src/compute-plane-services/nvca:storage-capability-catalog",
+        "//:nvca-operator-storage-capability-catalog",
         "//src/compute-plane-services/nvca/internal/envtest:crds",
     ],
     embed = [":storage"],

@@ -23,37 +23,35 @@ Use this skill from `deploy/helm/nvca-operator`.
 
 ## Values Flow
 
+Two install paths, and only one of them renders values from a stack.
+
 ```text
-src/compute-plane-services/nvca/deployments/nvca-operator/   source chart
-  -> scripts/ci_vendor_nvca_operator_chart                   applies self-managed defaults
-  -> nvca-operator/values.yaml                               vendored chart values
-  -> scripts/render_values_from_stack_env.sh                 stack-aware generated values
-  -> make install or make install-from-stack                 optional additional overrides
+nvca-operator/values.yaml                        the chart's own defaults
+  -> make install values=<path>                  the values file, used directly
+
+stack environment
+  -> scripts/render_values_from_stack_env.sh     stack-aware generated values
+  -> make install-from-stack                     the generated values
 ```
+
+Either accepts `additional_values=<path>` for further overrides.
 
 ## Permanent Defaults
 
-For defaults that every self-managed deployment should receive, edit
-`scripts/ci_vendor_nvca_operator_chart` and re-vendor:
+Edit `nvca-operator/values.yaml` directly. There is one chart and no vendoring
+step, so that file is the source of truth.
 
-```bash
-make vendor-chart
-git diff nvca-operator/values.yaml
-```
+Only defaults that suit every consumer belong there. Values tied to one
+deployment are supplied by whoever installs the chart:
 
-The vendoring script already applies defaults such as:
+- the compute-plane stack sets them under
+  `deploy/stacks/nvcf-compute-plane/`, including `nameOverride`,
+  `fullnameOverride` and `selfManaged.nvcaVersion`
+- an ngc-managed install passes `ngcConfig.serviceKey` and the `helmManaged.*`
+  values on the command line
 
-- `ngcConfig.clusterSource = "self-managed"`
-- `ngcConfig.serviceKey = "dummy-api-key"`
-- `image.tag` remains empty so templates use the published chart version
-- `selfManaged.nvcaVersion = "$NVCA_VERSION"`
-- `generateImagePullSecret = false`
-- `selfManaged.sharedStorage.imageTag = "$NVCA_SHARED_STORAGE_IMAGE_TAG"`
-- `nameOverride = "nvca-operator"`
-- `fullnameOverride = "nvca-operator"`
-
-Do not edit `nvca-operator/values.yaml` directly for a permanent default. The
-next vendor run will overwrite it.
+`image.tag` ships empty so templates fall back to `appVersion`, which the
+release stamps at packaging time.
 
 ## Deploy-time Overrides
 
@@ -68,19 +66,6 @@ make install-from-stack \
 
 Use deploy-time overrides for secrets, credentials, cluster-specific IDs, and
 temporary validation changes.
-
-## Adding .env Inputs
-
-For version-like values that the vendoring script needs, add a variable to
-`.env`, require it in `scripts/ci_vendor_nvca_operator_chart`, and re-vendor:
-
-```bash
-MY_NEW_CONFIG=some-value
-```
-
-```bash
-update_yaml_key ".myConfig = \"${MY_NEW_CONFIG:?MY_NEW_CONFIG is not set}\"" "${TARGET_DIR}/values.yaml"
-```
 
 ## Validation
 

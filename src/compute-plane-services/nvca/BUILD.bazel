@@ -15,22 +15,12 @@
 
 load("@gazelle//:def.bzl", "gazelle")
 
-filegroup(
-    name = "storage-capability-catalog",
-    srcs = [
-        "deployments/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json",
-        "deployments/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml",
-    ],
-    visibility = ["//src/compute-plane-services/nvca/pkg/storage:__pkg__"],
-)
-
 # gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/nvca
 # gazelle:proto disable_global
 # gazelle:go_naming_convention import_alias
 
 # Non-Go top-level dirs.
 # gazelle:exclude docker
-# gazelle:exclude deployments
 # gazelle:exclude examples
 # gazelle:exclude scripts
 # gazelle:exclude test

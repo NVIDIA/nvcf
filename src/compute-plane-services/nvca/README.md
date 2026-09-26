@@ -45,7 +45,7 @@ Enable self-hosted on an already running cluster:
 
 ```bash
 helm upgrade nvca-operator -n nvca-operator --create-namespace -i --reset-values \
-  ./deployments/nvca-operator \
+  ../../../deploy/helm/nvca-operator/nvca-operator \
   --set ngcConfig.serviceKey=${NGC_KEY} \
   --set ngcConfig.clusterSource=self-managed \
   --set selfManaged.nvcaVersion=${NVCA_VERSION}

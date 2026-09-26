@@ -55,7 +55,10 @@
     {
       "id": "nvcf-self-managed-stack",
       "path": "deploy/stacks/self-managed",
-      "migration_paths": ["migrations/cassandra", "migrations/openbao"],
+      "migration_paths": [
+        "migrations/cassandra",
+        "migrations/openbao"
+      ],
       "service_name": "nvcf-self-managed-stack",
       "tag_format": "deploy/stacks/self-managed/v${version}",
       "version_file": "VERSION",
@@ -366,7 +369,6 @@
       "service_name": "helm-nvca-operator",
       "legacy_tag_prefix": "helm-nvca-operator-v",
       "deploys": [
-        "nvca",
         {
           "service": "byoo-otel-collector",
           "values_paths": [
@@ -376,7 +378,9 @@
             "selfManaged.otelCollector.imageTag"
           ]
         }
-      ]
+      ],
+      "version_source": "nvca",
+      "app_version_source": "nvca"
     },
     {
       "id": "cassandra-migrations",

@@ -239,8 +239,8 @@ No code change should be needed. If one is, the catalog is missing a fact.
 
 ## Source references
 
-- [Catalog](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/deployments/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml)
-- [Catalog schema](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/deployments/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json)
+- [Catalog](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml)
+- [Catalog schema](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json)
 - [Catalog loader and validator](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/storage_capabilities.go)
 - [Backend selection on main](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/cachebackend.go)
 - [Runtime work](https://github.com/NVIDIA/nvcf/issues/1326)
