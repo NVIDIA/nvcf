@@ -1,143 +1,160 @@
-# Helm functions: one download per model, on the customer's filesystem
+# Helm functions: every expensive artifact produced once per cluster
 
-Goal: a Helm chart with N GPU workers, on any model registry, downloads the
-model once per cluster and reuses compile caches, without a template change
-and without holding any pod back from scheduling.
+Goal: for any Helm chart of GPU model workers, on any registry, any
+deployment shape and any scheduler, the model is downloaded once per cluster
+and the compile artifacts (torch.compile, Triton, FlashInfer, DeepGEMM, CUDA
+JIT) are built once per cluster, and every other pod consumes them. No chart
+change. No pod is ever held back from scheduling.
 
-Status: design, supersedes the gate-and-promote follower path of
-`helm-chart-cache-election.md` for clusters with a distributed filesystem.
-Issue #2099. Decisions taken 2026-09-25 with the product owner are marked
-"decided".
+Status: design, 2026-09-26. Supersedes the gate-and-promote path of
+`helm-chart-cache-election.md` for Helm functions. Issue #2099.
 
 ```mermaid
 sequenceDiagram
-    participant C as chart (LWS / StatefulSet / Deployment)
-    participant WH as webhook (agent)
-    participant L as Lease nvsnap-model-<id>
-    participant V as RWX volume nvsnap-model-<id>
-    participant A as agent (node)
-    C->>WH: create pod-0
-    WH->>WH: identity = hf://org/repo ; landing volume = emptyDir at HF_HOME
-    WH->>L: create (holder = election id)
-    WH-->>C: writer: emptyDir -> claim on V, cache env -> V/cache/<image>
-    C->>WH: create pod-1..N-1 (same second, other nodes, other namespaces)
-    WH->>L: create -> AlreadyExists
-    WH-->>C: reader: same claim, init nvsnap-wait-model (marker or deadline)
-    Note over C: every pod schedules now; nothing is gated
-    C->>V: writer downloads straight into V
-    A->>V: writer Ready -> agent writes V/.nvsnap-complete
-    C->>V: readers' init sees marker, engine starts from V
+    participant P0 as pod-0 (writer)
+    participant P1 as pod-1..N (readers, any node, any namespace)
+    participant WH as webhook
+    participant A as agent
+    participant V as model volume nvsnap-model-<id>
+    WH->>WH: identity, landing path, group; elect writer (Lease)
+    WH-->>P0: init "download" -> V (rw), main mounts V ro
+    WH-->>P1: landing path -> V (DFS) or emptyDir + wait init (NVMesh)
+    Note over P0,P1: all pods schedule immediately
+    P0->>V: download; init exits 0
+    A->>V: complete: marker (DFS) / ro attach + bind into P1 (NVMesh)
+    P1->>P1: wait init sees marker, engine starts
+    Note over P0,P1: engines start together; multi-node groups form as today
 ```
 
-## Four questions, one answer each
+## Two artifacts, two lifecycles
 
-Every deployment pattern in the field (plain Deployment, LWS or StatefulSet
-multi-node, init-container download from NGC, HF or S3, KServe
-`storageUri`, NIM, Dynamo and llm-d disaggregation, Ray Serve) reduces to
-four questions. Scheduling is not one of them: no pod is ever held, because
-multi-node groups and gang schedulers break if one member is.
+| Artifact | Producer | Written when | Consumers may run concurrently with producer? |
+|---|---|---|---|
+| Model tree | one download step | before any engine starts; immutable afterwards | no: it is complete before consumers need it |
+| Compile caches | every rank of every pod | during engine init | yes: ranks of one multi-node instance compile at the same time |
 
-### 1. Identity
+This split is the whole design. The model is a write-once file set, so it
+can be produced by one pod and attached read-only by all others on any
+storage, including block. Compile caches are produced concurrently by
+ranks that cannot wait for each other, so sharing them within one first
+start needs a shared writable filesystem; sharing them across starts does
+not.
 
-Derived at admission from the pod alone, normalized to a URI:
+## The five mechanisms
 
-| Source | Example | URI |
+1. Identity and landing path (webhook). Identity is a URI derived from the
+   pod: `hf://org/repo[@rev]` from `--model`, `--model-path`, `--model=`,
+   positional `vllm serve <x>`, `HF_MODEL_ID`, `MODEL_ID`; `ngc://org/team/
+   model:ver` from an init's `NGC_MODEL_NAME` or `ngc registry model
+   download-version`; `s3://` from `aws s3 sync`; KServe `storageUri`;
+   `nim://image@profile`. Members of a group with no identity of their own
+   (LWS `--headless` workers) inherit from the group's template via owner
+   references (`leaderworkerset.sigs.k8s.io/group-key`, StatefulSet,
+   `grove.io/podgang`). Landing path is where the download writes:
+   `HF_HOME`, `NIM_CACHE_PATH`, the init's dest, `/mnt/models`. If the
+   volume there is already a PVC, hostPath or OCI image, skip the pod.
+   Role flags and wiring env stay out of the hash (`stripRoleFlags`).
+
+2. One download step per identity per cluster (webhook + Lease). If the
+   chart downloads in an init container, that init is the download step.
+   If the engine downloads itself, the webhook injects an init
+   (`huggingface-cli download <repo>` into the landing path) and starts the
+   engine offline. The Lease `nvsnap-model-<id>` elects the writer among
+   concurrent admissions; the writer's init runs the download, its main
+   container mounts the model read-only. Every other pod is a reader and
+   its download init is replaced by a wait.
+
+3. Model volume per identity, immutable after download (agent + storage
+   profile). Distributed filesystem: one RWX volume; writer and readers
+   mount it at admission; completion is a marker file the writer's init
+   writes on exit 0. NVMesh: the writer's PVC is the artifact; on the
+   init's exit 0 the agent creates the read-only static PV and marks it
+   complete; readers attach it read-only. Later deployments, other
+   namespaces (`EnsureClaim`, done) and new versions of the function all
+   attach the same volume. There is no capture copy of the model anymore.
+
+4. Readers never block scheduling (webhook + agent). On a distributed
+   filesystem the RWX claim exists and is bound at admission, so the pod
+   schedules. On NVMesh, before the download is complete, a reader cannot
+   reference a bindable claim, so it gets an emptyDir at the landing path
+   plus `nvsnap-wait-model`; once complete, the agent on the reader's node
+   attaches the read-only volume (mount-holder, existing) and bind-mounts
+   it over the emptyDir, then drops the marker the wait init is polling.
+   After completion, NVMesh readers reference the read-only claim directly.
+   No pod ever needs network access to nvsnap; function namespaces block it.
+
+5. Compile caches (webhook env + agent). All caches are redirected to a
+   cache location keyed by image digest plus identity plus role-neutral
+   args. Distributed filesystem: `<volume>/cache/<key>/`, read-write for
+   every pod; the engines' `filelock` and atomic replace make identical
+   compiles converge; `cacheMode: shadow` in the profile keeps a per-pod
+   writable copy seeded from it where the operator does not trust the
+   filesystem's locks (Lustre needs `-o flock`; the agent checks). NVMesh:
+   each pod compiles into a local emptyDir on the first start; after the
+   writer is Ready the agent captures its cache dir into a read-only cache
+   volume `nvsnap-cache-<key>` (the existing capture path, now caches
+   only, hundreds of MB); every later pod mounts it read-only with a
+   writable shadow (today's seed init).
+
+## Every scenario, same mechanisms
+
+Shapes: D = single-pod Deployment replicas; M = multi-pod instance (LWS,
+StatefulSet, Dynamo podgang, prefill+decode). Storage: DFS, NVMesh. State:
+first = nothing exists; concurrent = download in flight; later = complete.
+
+| Shape / storage / state | Download | Compile | Pods held? |
+|---|---|---|---|
+| D, DFS, first | 1 (writer init); readers wait on marker then start | once, shared cache, engines lock | no |
+| M, DFS, first | 1; readers wait on marker; group forms when all engines start | ranks share cache; duplicates limited to races within one start | no |
+| any, DFS, concurrent or later | 0 | 0 | no |
+| D, NVMesh, first | 1; readers get bind-mounted ro volume on completion | writer compiles; readers compile locally once, then cache volume exists | no |
+| M, NVMesh, first | 1; readers bind-mounted on completion; group forms | each pod compiles once (concurrent ranks, no shared fs) | no |
+| any, NVMesh, later | 0 (ro claim at admission) | 0 (cache volume ro + shadow) | no |
+| any, other namespace, later | 0 (`EnsureClaim`) | 0 | no |
+| neither storage | nvsnap does nothing for Helm | | no |
+
+The one row that does not reach "once per cluster" is M on NVMesh on the
+first start of a model, for compile only: each pod of that instance builds
+its kernels once, because its ranks need the binaries while the other
+pod's ranks are still building them and there is no shared filesystem
+between them. Everything after that first start is a full hit.
+
+## Failure behaviour (decided: always fall back, never deadlock)
+
+| Failure | Effect | Recovery |
 |---|---|---|
-| engine args `--model`, `--model-path`, `--model=`, positional `vllm serve <x>` | `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` | `hf://Qwen/...` (`@rev` when `--revision`) |
-| engine env `HF_MODEL_ID`, `MODEL_ID`, `MODEL_PATH` | `/config/models/nemotron3-ultra-genrm` | resolved through the init that fills that path |
-| init container env or args | `NGC_MODEL_NAME=org/team/model:ver`, `huggingface-cli download <repo>`, `aws s3 sync s3://b/p` | `ngc://org/team/model:ver`, `hf://repo`, `s3://b/p` |
-| KServe `storageUri` annotation | `hf://`, `s3://`, `pvc://` | as given (`pvc://` means skip) |
-| NIM image | `nvcr.io/nim/...:tag` + `NIM_MODEL_PROFILE` | `nim://image@profile` |
-| group member with no identity (LWS `--headless` worker) | | inherited from the group's leader template via owner references |
+| writer dies before complete | readers' wait reaches the Lease deadline | readers download locally (NVMesh) or into the volume (DFS; per-file atomic); Lease expires; next admission elects a new writer |
+| volume full | writer's download fails, init restarts | same as above; retention by last use with a size budget is part of this design's follow-up, since a full volume fails every writer |
+| agent down on a reader node (NVMesh) | no bind arrives | wait deadline, local download |
+| writer pod restarts after complete | volume immutable, unaffected | none needed |
+| identity changes (revision, quantization, image) | different URI or cache key | separate volume; old one ages out |
+| gang scheduler | readers always schedulable (RWX bound, or emptyDir); writer PVC binds in seconds on Immediate storage classes | none needed |
 
-Role flags and wiring env stay out of the identity (`stripRoleFlags`, done).
-Compile caches key on image digest plus identity plus the role-neutral args.
+## What changes in the code
 
-### 2. Landing volume
+Stays: classifier (extended per mechanism 1), role-neutral hash, Lease
+election (elects the writer), `EnsureClaim`, storage profiles, cache env
+injection and seed init, mount-holder and bind injection (L1), the server
+reconciler, `vllm-workers` chart and runner.
 
-The volume mounted at the path the download writes: `HF_HOME` (default
-`/root/.cache/huggingface`), `NIM_CACHE_PATH`, the init's `--dest` /
-`NGC_MODEL_MOUNT`, KServe's `/mnt/models`. Backed by an emptyDir in every
-stock chart. If it is already a PVC, hostPath or an OCI model image, the
-customer solved this themselves: skip.
+New: identity from init containers and group inheritance; download-init
+injection for engine-internal downloads; init wrapping for marker and
+wait; per-identity model volume created at admission from the profile's
+class (RWX on DFS, RWO writer PVC on NVMesh); agent completion handler
+(init exit 0 -> marker / ro PV + bind); cache volume capture (caches only)
+on NVMesh; `cacheMode`; last-use labels.
 
-### 3. Sharing strategy (decided)
+Removed for Helm: `schedulingGates`, promote-to-ROX of the whole tree,
+`nvsnap-l2-wait`, `restore-from`.
 
-Chosen by the storage profile of the cluster.
+## Build order and verification
 
-- shared-fs: the customer has a distributed filesystem (Weka, VAST, Lustre,
-  FSS, EFS, Filestore). One RWX volume per identity per cluster,
-  `nvsnap-model-<id>`, created by the webhook on first sight; a claim per
-  namespace through `EnsureClaim`. The writer downloads straight into it;
-  readers mount the same claim. No copy, no promote, no gate. This is the
-  product path.
-- snapshot: NVMesh only. The existing capture-after-Ready, promote to ROX,
-  restore path, unchanged. A multi-node instance downloads N times on its
-  first deploy and restores on every later one.
-- anything else without a distributed filesystem: nvsnap does nothing for
-  Helm functions.
-
-### 4. Completion signal
-
-- init-container download: the webhook wraps the init. Writer:
-  `<original> && touch <vol>/.nvsnap-complete`. Readers:
-  `nvsnap-wait-model` waits for the marker, then skips the download. Charts
-  that already carry marker logic (the NVCF NGC pattern) see no change in
-  behaviour.
-- engine-internal download: the agent writes the marker when the writer pod
-  turns Ready, through the pod-volume path it already resolves for capture.
-  Readers carry the same wait init before the engine. No pod-to-server
-  network is needed; function namespaces block it.
-- Writer dies before the marker (decided: always fall back): the Lease
-  expires at the deadline, readers stop waiting and download into the same
-  volume themselves. HF and NGC downloads are per-file atomic, so
-  concurrent writers converge; the next deployment finds a complete volume.
-
-## Compile caches (decided: shared, profile can switch to shadow)
-
-All caches (`VLLM_CACHE_ROOT`, `TORCHINDUCTOR_CACHE_DIR`, `TRITON_CACHE_DIR`,
-FlashInfer, DeepGEMM, `CUDA_CACHE_PATH`, `HOME`) point at
-`<vol>/cache/<image-digest>/`, read-write for every pod. Entries are
-content-addressed and written atomically with `flock`, which is how shared
-`HF_HOME` runs in the field, and the mtime-sensitive ninja caches are served
-better by a shared filesystem than by a copy. Measured on 70B: 208 MB of
-caches against 131 GB of model; compile 65 s cold, 3 s from cache.
-
-`cacheMode: shared | shadow` in the storage profile. `shadow` keeps today's
-per-pod writable copy seeded from the writer's cache; default for SMB
-(CIFS lock semantics) and any filesystem the operator does not trust. On
-Lustre `flock` needs the `-o flock` client mount option; the agent checks the
-L2 volume's mount options at startup and logs when `shared` is configured
-without it.
-
-## Namespaces and lifecycle
-
-One volume per identity per cluster; a claim per namespace, minted on
-demand by `EnsureClaim` (done for static PVs and snapshots; shared-fs adds
-the RWX filesystem case, which is a second claim on the same volume).
-Volumes carry identity, image and last-use labels; retention is a later
-change and is not needed for correctness.
-
-## What stays, what goes
-
-Stays: classifier (extended per the identity table), role-neutral hash,
-Lease election (elects the writer), `EnsureClaim`, storage profiles, cache
-env injection, the server reconciler, `vllm-workers` chart and runner.
-
-Goes for shared-fs: `schedulingGates`, promote-to-ROX, `nvsnap-l2-wait`,
-the capture copy, `restore-from`.
-
-## Build order
-
-1. Identity and landing-volume detection for every source in the table,
-   including group inheritance for headless workers. Unit tests from real
-   specs (prd11 function, Dynamo sample, LWS example).
-2. shared-fs substitution: claim creation from the profile's RWX class,
-   emptyDir replacement, cache env, per-namespace claim.
-3. Completion: init wrapping, `nvsnap-wait-model`, agent marker on Ready,
-   deadline fallback.
-4. `cacheMode` in the profile; Lustre mount-option check.
-5. Retire the gate on shared-fs profiles.
-6. dev1 reproduction of the prd11 shape (StatefulSet, init download, two
-   pods per instance) on the SMB class: today, shared-fs, redeploy.
-   Then the same chart in a second namespace.
+1. Identity, landing path, group inheritance; tests from real specs
+   (prd11 NGC function, Dynamo sample, LWS example, plain Deployment).
+2. Model volume and writer path on both storage classes; readers on DFS
+   (marker wait).
+3. NVMesh readers: agent completion, ro attach, bind into emptyDir.
+4. Compile caches: shared on DFS, cache-volume capture on NVMesh.
+5. Retire the gate; e2e on dev1 in all matrix rows that dev1 can host
+   (NVMesh; DFS stands in with an NFS class), each measured cold, first
+   deploy with two pods per instance, redeploy, second namespace.
