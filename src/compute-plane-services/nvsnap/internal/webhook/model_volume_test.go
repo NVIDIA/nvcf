@@ -294,6 +294,46 @@ func TestModelVolume_ReaderBlockPVC_InjectedInitHardened(t *testing.T) {
 	}
 }
 
+// The chart runs its engine as a fixed non-root user with an fsGroup.
+// The download Job and the injected init inherit that posture: the
+// volume is written by the user that reads it, and runAsNonRoot holds.
+func TestModelVolume_InheritsChartUserPosture(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := stockVLLMPod()
+	uid, gid, nonRoot := int64(1000), int64(2000), true
+	pod.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: &gid}
+	pod.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{RunAsNonRoot: &nonRoot, RunAsUser: &uid, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	isc := v.newInits[0].SecurityContext
+	if isc.RunAsNonRoot == nil || !*isc.RunAsNonRoot || isc.RunAsUser == nil || *isc.RunAsUser != uid || isc.SeccompProfile == nil {
+		t.Errorf("injected init inherits the engine's user posture: %+v", isc)
+	}
+	job, err := kc.BatchV1().Jobs(pod.Namespace).Get(context.Background(), modelvolume.JobName("hf://Qwen/Qwen2.5-32B-Instruct"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := job.Spec.Template.Spec
+	jsc := ps.Containers[0].SecurityContext
+	if jsc.RunAsNonRoot == nil || !*jsc.RunAsNonRoot || jsc.RunAsUser == nil || *jsc.RunAsUser != uid {
+		t.Errorf("Job container inherits the engine's user posture: %+v", jsc)
+	}
+	if ps.SecurityContext == nil || ps.SecurityContext.FSGroup == nil || *ps.SecurityContext.FSGroup != gid || ps.SecurityContext.SeccompProfile == nil {
+		t.Errorf("Job pod inherits the pod security context plus seccomp: %+v", ps.SecurityContext)
+	}
+	var drops []corev1.Capability
+	if jsc.Capabilities != nil {
+		drops = jsc.Capabilities.Drop
+	}
+	if len(drops) != 2 || drops[1] != "NET_RAW" {
+		t.Errorf("NET_RAW is dropped by name: %v", drops)
+	}
+}
+
 func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
 	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
 	pv := &corev1.PersistentVolume{

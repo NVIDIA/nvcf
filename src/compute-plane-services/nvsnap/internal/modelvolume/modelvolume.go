@@ -324,6 +324,12 @@ type DownloadStep struct {
 	// Volumes are the other volumes the container mounts (secrets with
 	// registry keys, ConfigMaps with scripts), copied from the pod.
 	Volumes []corev1.Volume
+	// PodSecurityContext is the source pod's, so the Job writes the volume
+	// with the same user, groups and fsGroup the readers will use.
+	PodSecurityContext *corev1.PodSecurityContext
+	// MainSecurityContext is the source pod's engine container posture,
+	// inherited by the download container.
+	MainSecurityContext *corev1.SecurityContext
 }
 
 // EnsureDownloadJob creates the one download Job for uri in ns, writing
@@ -357,7 +363,14 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 			volumes = append(volumes, step.Volumes[i])
 		}
 	}
-	Harden(&c, DownloadResources)
+	Harden(&c, DownloadResources, step.MainSecurityContext)
+	psc := &corev1.PodSecurityContext{}
+	if step.PodSecurityContext != nil {
+		psc = step.PodSecurityContext.DeepCopy()
+	}
+	if psc.SeccompProfile == nil {
+		psc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: map[string]string{IdentityAnnotation: uri}},
 		Spec: batchv1.JobSpec{
@@ -368,7 +381,7 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					AutomountServiceAccountToken: new(bool),
-					SecurityContext:              &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+					SecurityContext:              psc,
 					ImagePullSecrets:             step.ImagePullSecrets,
 					Tolerations:                  step.Tolerations,
 					NodeSelector:                 step.NodeSelector,
@@ -405,10 +418,15 @@ var DownloadResources = corev1.ResourceRequirements{
 
 // Harden gives a container the fields function-namespace baselines
 // require (Kyverno on NVCF clusters: requests and limits on every
-// container, no privilege escalation, dropped capabilities). Fields the
-// chart already set are kept; resources are defaulted only when both
-// requests and limits are absent, so a chart's own sizing wins.
-func Harden(c *corev1.Container, resources corev1.ResourceRequirements) {
+// container, no privilege escalation, dropped capabilities with NET_RAW
+// named because one rule checks for it by name). Fields the chart
+// already set are kept; resources are defaulted only when both requests
+// and limits are absent, so a chart's own sizing wins. The user posture
+// (runAsNonRoot, runAsUser, runAsGroup, seccomp) is inherited from the
+// chart's main container when given: the download runs the same image
+// as the engine and must own what it writes, so it runs as the same
+// user the engine will read as.
+func Harden(c *corev1.Container, resources corev1.ResourceRequirements, from *corev1.SecurityContext) {
 	if c.Resources.Limits == nil && c.Resources.Requests == nil {
 		c.Resources = *resources.DeepCopy()
 	} else if c.Resources.Limits == nil {
@@ -417,10 +435,26 @@ func Harden(c *corev1.Container, resources corev1.ResourceRequirements) {
 	if c.SecurityContext == nil {
 		c.SecurityContext = &corev1.SecurityContext{}
 	}
-	if c.SecurityContext.AllowPrivilegeEscalation == nil {
-		c.SecurityContext.AllowPrivilegeEscalation = new(bool)
+	sc := c.SecurityContext
+	if sc.AllowPrivilegeEscalation == nil {
+		sc.AllowPrivilegeEscalation = new(bool)
 	}
-	if c.SecurityContext.Capabilities == nil {
-		c.SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
+	if sc.Capabilities == nil {
+		sc.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL", "NET_RAW"}}
+	}
+	if from == nil {
+		return
+	}
+	if sc.RunAsNonRoot == nil && from.RunAsNonRoot != nil {
+		sc.RunAsNonRoot = from.RunAsNonRoot
+	}
+	if sc.RunAsUser == nil && from.RunAsUser != nil {
+		sc.RunAsUser = from.RunAsUser
+	}
+	if sc.RunAsGroup == nil && from.RunAsGroup != nil {
+		sc.RunAsGroup = from.RunAsGroup
+	}
+	if sc.SeccompProfile == nil && from.SeccompProfile != nil {
+		sc.SeccompProfile = from.SeccompProfile.DeepCopy()
 	}
 }

@@ -132,7 +132,10 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // download init wrapped to touch the marker, or `hf download` on the
 // engine image when the engine fetches the model itself.
 func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, id modelid.Identity) (modelvolume.DownloadStep, bool) {
-	step := modelvolume.DownloadStep{ImagePullSecrets: pod.Spec.ImagePullSecrets, Tolerations: pod.Spec.Tolerations, NodeSelector: pod.Spec.NodeSelector}
+	step := modelvolume.DownloadStep{
+		ImagePullSecrets: pod.Spec.ImagePullSecrets, Tolerations: pod.Spec.Tolerations, NodeSelector: pod.Spec.NodeSelector,
+		PodSecurityContext: pod.Spec.SecurityContext, MainSecurityContext: main.SecurityContext,
+	}
 	if land.Downloader == modelid.DownloaderInit {
 		for i := range pod.Spec.InitContainers {
 			init := pod.Spec.InitContainers[i]
@@ -344,7 +347,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 	}
 	// The init mostly waits; the fallback download is the one case that
 	// needs real resources, and policy needs limits either way.
-	modelvolume.Harden(&init, modelvolume.DownloadResources)
+	modelvolume.Harden(&init, modelvolume.DownloadResources, main.SecurityContext)
 	// Only a hostPath landing receives a bind from the host after start.
 	var prop *corev1.MountPropagationMode
 	if m.hostPathReaders() {
