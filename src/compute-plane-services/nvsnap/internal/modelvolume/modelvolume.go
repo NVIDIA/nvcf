@@ -201,6 +201,13 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 	}
 	pvc.Labels[CompleteLabel] = "true"
 	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			// Every agent marks completion; whoever lost the race re-reads.
+			again, gerr := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
+			if gerr == nil && again.Labels[CompleteLabel] == "true" {
+				return nil
+			}
+		}
 		return fmt.Errorf("label claim %s/%s complete: %w", ns, name, err)
 	}
 	return nil
@@ -234,6 +241,11 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 		return "", fmt.Errorf("get job %s/%s: %w", ns, name, err)
 	}
 	backoff := int32(6)
+	// A Succeeded pod keeps its volumes attached; on NVMesh that blocks the
+	// read-only attach on every other node (dev1 2026-09-26). The Job and
+	// its pod go away shortly after success; completion state lives on the
+	// claim label, not on the Job.
+	ttl := int32(30)
 	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, IdentityLabel: Key(uri)}
 	c := step.Container
 	c.Name = "download"
@@ -241,7 +253,8 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: map[string]string{IdentityAnnotation: uri}},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoff,
+			BackoffLimit:            &backoff,
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{

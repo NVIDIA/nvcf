@@ -71,7 +71,10 @@ not.
    2026-09-26: `NVMesh Attach Failed` on the read-only PV while the writer
    pod held the primary). The download step has to exit and release the
    volume before readers attach, so it cannot live inside a pod that goes
-   on to serve. A Job also decouples the download from the workload's
+   on to serve. The Job's pod must also be removed after success
+   (`ttlSecondsAfterFinished`): a Succeeded pod keeps its volumes attached,
+   and on dev1 the read-only attach worked on the Job's node but failed on
+   every other node until that pod was deleted. A Job also decouples the download from the workload's
    scheduling: it runs on any node with the image, and the workload pods
    of a multi-node group or a gang all schedule as plain readers.
 

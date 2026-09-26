@@ -89,6 +89,9 @@ func TestProvisioner_DownloadJobIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished > 60 {
+		t.Error("the Job must remove its pod soon after success; a lingering Succeeded pod keeps the volume attached")
+	}
 	ps := job.Spec.Template.Spec
 	if ps.RestartPolicy != corev1.RestartPolicyOnFailure || ps.ImagePullSecrets[0].Name != "pull" || len(ps.Tolerations) != 1 || ps.Volumes[0].PersistentVolumeClaim.ClaimName != ClaimName(uri) || ps.Containers[0].VolumeMounts[0].MountPath != "/m" || job.Annotations[IdentityAnnotation] != uri {
 		t.Errorf("job spec: %+v", ps)
