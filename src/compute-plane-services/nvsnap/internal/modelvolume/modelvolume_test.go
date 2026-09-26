@@ -40,14 +40,22 @@ func TestProvisioner_WriterClaimModes(t *testing.T) {
 	}
 }
 
-func TestProvisioner_LookupAndComplete(t *testing.T) {
+func TestProvisioner_LookupAndComplete_Block(t *testing.T) {
 	ctx := context.Background()
-	kc := fake.NewSimpleClientset()
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-model"}, Spec: corev1.PersistentVolumeSpec{
+		PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+		PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:v:fn-a"}}}}
+	kc := fake.NewSimpleClientset(pv)
 	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc", Size: resource.MustParse("1Gi")}}
 	if st, err := p.Lookup(ctx, uri); err != nil || st.Exists || st.Complete {
 		t.Errorf("nothing yet: %+v %v", st, err)
 	}
 	if _, err := p.EnsureWriterClaim(ctx, uri, "fn-a"); err != nil {
+		t.Fatal(err)
+	}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims("fn-a").Get(ctx, ClaimName(uri), metav1.GetOptions{})
+	pvc.Spec.VolumeName = "pv-model"
+	if _, err := kc.CoreV1().PersistentVolumeClaims("fn-a").Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := p.Lookup(ctx, uri); err != nil || !st.Exists || st.Complete || st.ClaimNamespace != "fn-a" {
@@ -56,18 +64,49 @@ func TestProvisioner_LookupAndComplete(t *testing.T) {
 	if err := p.MarkComplete(ctx, uri, "fn-a"); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := p.Lookup(ctx, uri); !st.Complete {
+	// Block mode: the claim is released so the volume detaches; the retained
+	// PV carries the identity and completion.
+	if _, err := kc.CoreV1().PersistentVolumeClaims("fn-a").Get(ctx, ClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("writer claim must be released after completion on block storage")
+	}
+	got, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pv-model", metav1.GetOptions{})
+	if got.Labels[CompleteLabel] != "true" || got.Labels[IdentityLabel] != Key(uri) || got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain || got.Annotations[IdentityAnnotation] != uri {
+		t.Errorf("primary PV must be labelled complete and retained: %+v", got.ObjectMeta)
+	}
+	st, _ := p.Lookup(ctx, uri)
+	if !st.Complete || st.PrimaryPV != "pv-model" {
 		t.Errorf("after MarkComplete: %+v", st)
 	}
 	if err := p.MarkComplete(ctx, uri, "fn-a"); err != nil {
-		t.Errorf("second MarkComplete must be a no-op: %v", err)
+		t.Errorf("second MarkComplete (claim gone, PV complete) must be a no-op: %v", err)
 	}
-	// Another identity is unaffected.
 	if st, _ := p.Lookup(ctx, "hf://other/model"); st.Exists {
 		t.Error("lookup must be per identity")
 	}
 	if len(Key(uri)) != 16 || ClaimName(uri) != "nvsnap-model-"+Key(uri) || ReadOnlyClaimName(uri) != ClaimName(uri)+"-ro" {
 		t.Errorf("names: %s %s", ClaimName(uri), ReadOnlyClaimName(uri))
+	}
+	if d, _ := p.Detached(ctx, "pv-model"); !d {
+		t.Error("no VolumeAttachment means detached")
+	}
+}
+
+func TestProvisioner_LookupAndComplete_RWX(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeRWX, StorageClass: "sc", Size: resource.MustParse("1Gi")}}
+	if _, err := p.EnsureWriterClaim(ctx, uri, "fn-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.MarkComplete(ctx, uri, "fn-a"); err != nil {
+		t.Fatal(err)
+	}
+	pvc, err := kc.CoreV1().PersistentVolumeClaims("fn-a").Get(ctx, ClaimName(uri), metav1.GetOptions{})
+	if err != nil || pvc.Labels[CompleteLabel] != "true" {
+		t.Errorf("RWX keeps the shared claim and labels it: %v %v", err, pvc.Labels)
+	}
+	if st, _ := p.Lookup(ctx, uri); !st.Complete {
+		t.Errorf("RWX complete: %+v", st)
 	}
 }
 

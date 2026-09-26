@@ -11,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -91,28 +92,17 @@ func TestModelVolumeController_JobCompletionMintsReadOnly(t *testing.T) {
 	}
 	c.HandleJob(ctx, downloadJob(1))
 	st, _ := p.Lookup(ctx, mvURI)
-	if !st.Complete {
-		t.Fatal("a succeeded Job must mark the claim complete")
+	if !st.Complete || st.PrimaryPV != "pvc-abc" {
+		t.Fatalf("a succeeded Job must complete the identity on the retained PV: %+v", st)
 	}
-	ro, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("read-only claim must be minted in the writer namespace: %v", err)
-	}
-	pv, err := kc.CoreV1().PersistentVolumes().Get(ctx, ro.Spec.VolumeName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pv.Spec.CSI.VolumeHandle != "cluster:csi-abc:vol:sr-fn" || !pv.Spec.CSI.ReadOnly || pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
-		t.Errorf("read-only PV: %+v", pv.Spec)
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Error("the download claim must be released so the volume detaches")
 	}
 	primary, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-abc", metav1.GetOptions{})
-	if primary.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
-		t.Error("the writer's PV must be retained; it is the artifact")
+	if primary.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain || primary.Labels[modelvolume.CompleteLabel] != "true" {
+		t.Error("the primary PV must be retained and labelled complete; it is the artifact")
 	}
-	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err != nil {
-		t.Error("the download claim stays: it is the artifact")
-	}
-	c.HandleJob(ctx, downloadJob(1)) // idempotent
+	c.HandleJob(ctx, downloadJob(1)) // idempotent after release
 }
 
 func TestModelVolumeController_PendingReaderBoundOnItsNode(t *testing.T) {
@@ -142,8 +132,13 @@ func TestModelVolumeController_PendingReaderBoundOnItsNode(t *testing.T) {
 	if len(*attached) != 1 || (*attached)[0] != "other-ns/"+modelvolume.ReadOnlyClaimName(mvURI) {
 		t.Errorf("reader's read-only claim in its own namespace must be attached, got %v", *attached)
 	}
-	if _, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{}); err != nil {
-		t.Errorf("read-only claim must be minted in the reader namespace: %v", err)
+	ro, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read-only claim must be minted in the reader namespace from the retained PV: %v", err)
+	}
+	roPV, _ := kc.CoreV1().PersistentVolumes().Get(ctx, ro.Spec.VolumeName, metav1.GetOptions{})
+	if roPV.Spec.CSI.VolumeHandle != "cluster:csi-abc:vol:other-ns" || !roPV.Spec.CSI.ReadOnly {
+		t.Errorf("read-only PV must carry the reader namespace's handle: %+v", roPV.Spec.CSI)
 	}
 	wantDst := filepath.Join(c.HostRoot, modelvolume.Key(mvURI))
 	if len(*bound) != 1 || (*bound)[0][1] != wantDst || (*bound)[0][0] == "" {
@@ -157,5 +152,36 @@ func TestModelVolumeController_PendingReaderBoundOnItsNode(t *testing.T) {
 	c.Handle(ctx, reader)
 	if len(*bound) != 1 {
 		t.Error("the bind is per identity per node, not per pod")
+	}
+}
+
+// While the download's read-write attachment still exists, no read-only
+// claim is minted and nothing is bound: NVMesh would refuse the attach.
+func TestModelVolumeController_WaitsForPrimaryDetach(t *testing.T) {
+	kc, p := writerFixture(t)
+	ctx := context.Background()
+	pvName := "pvc-abc"
+	va := &storagev1.VolumeAttachment{ObjectMeta: metav1.ObjectMeta{Name: "csi-1"}, Spec: storagev1.VolumeAttachmentSpec{
+		Attacher: "nvmesh-csi.excelero.com", NodeName: "node-a", Source: storagev1.VolumeAttachmentSource{PersistentVolumeName: &pvName}}}
+	if _, err := kc.StorageV1().VolumeAttachments().Create(ctx, va, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cw, _, _ := mvController(t, kc, p, "node-a")
+	cw.HandleJob(ctx, downloadJob(1))
+	c, attached, bound := mvController(t, kc, p, "node-b")
+	reader := readerPod("other-ns", "node-b")
+	if _, err := kc.CoreV1().Pods("other-ns").Create(ctx, reader, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, reader)
+	if len(*attached) != 0 || len(*bound) != 0 {
+		t.Fatal("nothing may be attached while the primary is still attached read-write")
+	}
+	if err := kc.StorageV1().VolumeAttachments().Delete(ctx, "csi-1", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, reader)
+	if len(*attached) != 1 || len(*bound) != 1 {
+		t.Errorf("after detach the reader must be served: attached=%v bound=%v", *attached, *bound)
 	}
 }

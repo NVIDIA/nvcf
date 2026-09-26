@@ -255,6 +255,9 @@ agent:
     checkpoints: /var/lib/containerd/nvsnap-checkpoints
     containerdSock: /run/containerd/containerd.sock
     containerdStorage: /var/lib/containerd
+    # Bind root for completed model volumes (agent.modelVolume); Bidirectional
+    # in the agent at the same path.
+    nvsnapModels: /var/lib/containerd/nvsnap-models
     # Cache, staging and overlays sit under the containerd root on purpose.
     # They are the bulk writers -- a 70B cachedir capture is ~132 GB -- and on
     # a typical GPU node /var/lib is the boot volume (network-backed, ~125

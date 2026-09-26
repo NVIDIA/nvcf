@@ -54,7 +54,8 @@ type ModelVolumeController struct {
 	// NodeName is this agent's node; readers elsewhere are ignored.
 	NodeName string
 	// HostRoot is where model volumes are bound for readers: <root>/<key>.
-	// Must be under the agent's Bidirectional overlays mount.
+	// Its own Bidirectional hostPath (not the overlays root, whose sweeper
+	// removes entries it does not own).
 	HostRoot string
 	// HolderNamespaceImage is the image for mount-holder pods (the agent image).
 	HolderImage       string
@@ -161,13 +162,7 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 		log.WithError(err).Warn("model volume: mark complete failed")
 		return
 	}
-	if c.Provisioner.Cfg.Mode == modelvolume.ModeBlock && c.Minter != nil {
-		if err := c.Minter.MintReadOnly(ctx, job.Namespace, modelvolume.ClaimName(uri), modelvolume.ReadOnlyPVName(uri, job.Namespace), modelvolume.ReadOnlyClaimName(uri), job.Namespace, modelvolume.Key(uri)); err != nil {
-			log.WithError(err).Warn("model volume: mint read-only claim failed")
-			return
-		}
-	}
-	log.Info("model volume: download complete; readers may attach")
+	log.Info("model volume: download complete; readers may attach once the volume detaches")
 }
 
 func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *corev1.Pod, uri string) {
@@ -186,7 +181,22 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 	c.mu.Unlock()
 	if !already {
 		if c.Minter != nil {
-			if err := c.Minter.MintReadOnly(ctx, st.ClaimNamespace, modelvolume.ClaimName(uri), modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
+			if st.PrimaryPV == "" {
+				log.Warn("model volume: complete but no primary volume recorded")
+				return
+			}
+			// The read-only attach is refused while the download's
+			// read-write attachment still exists; wait for the detach.
+			detached, err := c.Provisioner.Detached(ctx, st.PrimaryPV)
+			if err != nil {
+				log.WithError(err).Warn("model volume: detach check failed")
+				return
+			}
+			if !detached {
+				log.WithField("pv", st.PrimaryPV).Info("model volume: primary still attached; retrying after detach")
+				return
+			}
+			if err := c.Minter.MintReadOnlyFromPV(ctx, st.PrimaryPV, modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
 				log.WithError(err).Warn("model volume: mint read-only claim in reader namespace failed")
 				return
 			}

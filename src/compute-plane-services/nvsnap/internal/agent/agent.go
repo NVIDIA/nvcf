@@ -234,6 +234,10 @@ type ModelVolumeConfig struct {
 	// WaitDeadline bounds a reader's wait for the marker before it downloads
 	// itself. Zero means one hour.
 	WaitDeadline time.Duration
+	// HostRoot is the host directory, mounted Bidirectional into the agent
+	// at the same path, where completed model volumes are bound for
+	// readers on block storage. Default /var/lib/containerd/nvsnap-models.
+	HostRoot string
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
@@ -668,7 +672,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			Provisioner:       a.modelVolume,
 			Minter:            a.modelMinter,
 			NodeName:          a.config.NodeName,
-			HostRoot:          filepath.Join(a.config.OverlayRoot, "models"),
+			HostRoot:          a.modelHostRoot(),
 			HolderImage:       a.config.L2.WriterImage,
 			HolderPullSecrets: l2PullSecrets(a.config.L2),
 			Log:               a.log.WithField("subsys", "modelvolume"),
@@ -1252,4 +1256,12 @@ func (a *Agent) readCheckpointFileHandler(w http.ResponseWriter, r *http.Request
 	// GET, etc. For peer fanout, Range support is the critical feature —
 	// receivers can pull one large pages-*.img via parallel ranges.
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+// modelHostRoot is the bind root for completed model volumes.
+func (a *Agent) modelHostRoot() string {
+	if a.config.ModelVolume.HostRoot != "" {
+		return a.config.ModelVolume.HostRoot
+	}
+	return "/var/lib/containerd/nvsnap-models"
 }

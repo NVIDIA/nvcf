@@ -553,9 +553,16 @@ func (p *SharedVolumePromoter) MintReadOnly(ctx context.Context, writerNS, write
 	if writer.Spec.VolumeName == "" {
 		return fmt.Errorf("writer claim %s/%s has no bound PV yet", writerNS, writerClaim)
 	}
-	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, writer.Spec.VolumeName, metav1.GetOptions{})
+	return p.MintReadOnlyFromPV(ctx, writer.Spec.VolumeName, roPVName, roClaim, ns, labelKey)
+}
+
+// MintReadOnlyFromPV is MintReadOnly for a retained primary PV whose claim
+// has already been released (the model volume after its download Job).
+func (p *SharedVolumePromoter) MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error {
+	p.applyDefaults()
+	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, primaryPV, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("get primary PV %s: %w", writer.Spec.VolumeName, err)
+		return fmt.Errorf("get primary PV %s: %w", primaryPV, err)
 	}
 	if primary.Spec.CSI == nil || primary.Spec.CSI.VolumeHandle == "" {
 		return fmt.Errorf("primary PV %s has no CSI volumeHandle", primary.Name)

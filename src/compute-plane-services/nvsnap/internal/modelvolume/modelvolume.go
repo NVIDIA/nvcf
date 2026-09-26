@@ -115,8 +115,11 @@ type State struct {
 	Exists bool
 	// Complete: the download finished; readers may attach.
 	Complete bool
-	// ClaimNamespace is where the writer claim lives.
+	// ClaimNamespace is where the writer claim lives (RWX, or in flight).
 	ClaimNamespace string
+	// PrimaryPV is the retained volume holding the model (Block mode,
+	// complete); read-only claims are minted from it.
+	PrimaryPV string
 }
 
 // Provisioner creates and inspects model volumes.
@@ -125,9 +128,10 @@ type Provisioner struct {
 	Cfg  Config
 }
 
-// EnsureWriterClaim creates the claim the writer downloads into, in ns.
+// EnsureWriterClaim creates the claim the download Job writes into, in ns.
 // Idempotent. RWX mode creates a ReadWriteMany claim readers share; Block
-// mode a ReadWriteOnce claim that becomes the read-only artifact.
+// mode a ReadWriteOnce claim that is released after the download, leaving
+// the retained PV as the artifact.
 func (p *Provisioner) EnsureWriterClaim(ctx context.Context, uri, ns string) (string, error) {
 	name := ClaimName(uri)
 	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
@@ -161,14 +165,30 @@ func (p *Provisioner) EnsureWriterClaim(ctx context.Context, uri, ns string) (st
 	return name, nil
 }
 
-// Lookup finds the writer claim for uri anywhere on the cluster and reports
-// whether its download completed.
+// Lookup reports the identity's state. Block mode: a retained PV labelled
+// complete is the artifact (the writer claim is released after the
+// download so the volume detaches); otherwise an in-flight writer claim.
+// RWX mode: the shared claim carries the label.
 func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
+	st := State{}
+	if p.Cfg.Mode == ModeBlock {
+		pvs, err := p.Kube.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: IdentityLabel + "=" + Key(uri) + "," + CompleteLabel + "=true"})
+		if err != nil {
+			return State{}, fmt.Errorf("list volumes for %s: %w", uri, err)
+		}
+		for i := range pvs.Items {
+			pv := &pvs.Items[i]
+			if pv.Labels["nvsnap.io/role"] == "reader-shared" || pv.Spec.CSI == nil || pv.Spec.CSI.ReadOnly {
+				continue
+			}
+			st.Exists, st.Complete, st.PrimaryPV = true, true, pv.Name
+			return st, nil
+		}
+	}
 	list, err := p.Kube.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: IdentityLabel + "=" + Key(uri)})
 	if err != nil {
 		return State{}, fmt.Errorf("list claims for %s: %w", uri, err)
 	}
-	st := State{}
 	for i := range list.Items {
 		c := &list.Items[i]
 		if c.Name != ClaimName(uri) {
@@ -178,20 +198,57 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 		st.ClaimNamespace = c.Namespace
 		if c.Labels[CompleteLabel] == "true" {
 			st.Complete = true
+			st.PrimaryPV = c.Spec.VolumeName
 			return st, nil
 		}
 	}
 	return st, nil
 }
 
-// MarkComplete labels the writer claim complete. The agent calls it when
-// the writer's download step exits 0 (Block mode); in RWX mode the marker
-// file is authoritative and this label is informational.
+// MarkComplete records that the download finished. RWX mode labels the
+// shared claim. Block mode labels the retained PV and deletes the writer
+// claim: a claim still bound keeps the volume attached read-write to the
+// Job's node, and NVMesh refuses read-only attaches elsewhere until that
+// attachment is gone (dev1 2026-09-26). Idempotent.
 func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 	name := ClaimName(uri)
 	pvc, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsNotFound(err) && p.Cfg.Mode == ModeBlock {
+			if st, lerr := p.Lookup(ctx, uri); lerr == nil && st.Complete {
+				return nil // released already
+			}
+		}
 		return fmt.Errorf("get claim %s/%s: %w", ns, name, err)
+	}
+	if p.Cfg.Mode == ModeBlock {
+		if pvc.Spec.VolumeName == "" {
+			return fmt.Errorf("claim %s/%s has no bound volume", ns, name)
+		}
+		pv, err := p.Kube.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get volume %s: %w", pvc.Spec.VolumeName, err)
+		}
+		if pv.Labels[CompleteLabel] != "true" {
+			if pv.Labels == nil {
+				pv.Labels = map[string]string{}
+			}
+			pv.Labels["app.kubernetes.io/managed-by"] = managedBy
+			pv.Labels[IdentityLabel] = Key(uri)
+			pv.Labels[CompleteLabel] = "true"
+			if pv.Annotations == nil {
+				pv.Annotations = map[string]string{}
+			}
+			pv.Annotations[IdentityAnnotation] = uri
+			pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+			if _, err := p.Kube.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
+				return fmt.Errorf("label volume %s complete: %w", pv.Name, err)
+			}
+		}
+		if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("release writer claim %s/%s: %w", ns, name, err)
+		}
+		return nil
 	}
 	if pvc.Labels[CompleteLabel] == "true" {
 		return nil
@@ -202,7 +259,6 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 	pvc.Labels[CompleteLabel] = "true"
 	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
 		if apierrors.IsConflict(err) {
-			// Every agent marks completion; whoever lost the race re-reads.
 			again, gerr := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 			if gerr == nil && again.Labels[CompleteLabel] == "true" {
 				return nil
@@ -211,6 +267,21 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 		return fmt.Errorf("label claim %s/%s complete: %w", ns, name, err)
 	}
 	return nil
+}
+
+// Detached reports whether no VolumeAttachment references pv: the moment
+// a Block-mode volume may be attached read-only on any node.
+func (p *Provisioner) Detached(ctx context.Context, pv string) (bool, error) {
+	vas, err := p.Kube.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("list VolumeAttachments: %w", err)
+	}
+	for i := range vas.Items {
+		if src := vas.Items[i].Spec.Source.PersistentVolumeName; src != nil && *src == pv {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // JobName is the download Job for a model URI.

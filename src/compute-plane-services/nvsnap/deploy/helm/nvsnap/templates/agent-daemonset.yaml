@@ -116,6 +116,7 @@ spec:
             # write-once model volume (values: agent.modelVolume)
             - --model-volume
             - --model-volume-wait-deadline={{ .Values.agent.modelVolume.waitDeadline | default "1h" }}
+            - --model-volume-host-root={{ .Values.agent.hostPaths.nvsnapModels | default "/var/lib/containerd/nvsnap-models" }}
             {{- end }}
             {{- if and .Values.agent.election .Values.agent.election.enabled }}
             # one-downloader election (values: agent.election)
@@ -322,6 +323,15 @@ spec:
             - name: nvsnap-overlays
               mountPath: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
               mountPropagation: Bidirectional
+            {{- if and .Values.agent.modelVolume .Values.agent.modelVolume.enabled }}
+            # Completed model volumes are bound here for readers on block
+            # storage; same path in the agent and on the host, Bidirectional
+            # so the bind reaches kubelet. Not under the overlays root: its
+            # sweeper removes entries it does not own.
+            - name: nvsnap-models
+              mountPath: {{ .Values.agent.hostPaths.nvsnapModels | default "/var/lib/containerd/nvsnap-models" }}
+              mountPropagation: Bidirectional
+            {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: webhook-tls
               mountPath: /etc/nvsnap/webhook
@@ -350,6 +360,12 @@ spec:
           hostPath:
             path: {{ .Values.agent.hostPaths.checkpoints }}
             type: DirectoryOrCreate
+        {{- if and .Values.agent.modelVolume .Values.agent.modelVolume.enabled }}
+        - name: nvsnap-models
+          hostPath:
+            path: {{ .Values.agent.hostPaths.nvsnapModels | default "/var/lib/containerd/nvsnap-models" }}
+            type: DirectoryOrCreate
+        {{- end }}
         {{- if .Values.agent.podCacheDir }}
         - name: cachedir-env
           configMap:

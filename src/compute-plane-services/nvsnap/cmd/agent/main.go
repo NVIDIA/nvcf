@@ -178,6 +178,8 @@ func main() {
 	// (docs/proposals/helm-shared-model-volume.md). Needs L2.
 	flag.BoolVar(&config.ModelVolume.Enabled, "model-volume", false,
 		"Download each model once per cluster into a shared volume and attach it to every other pod that names it (needs L2)")
+	flag.StringVar(&config.ModelVolume.HostRoot, "model-volume-host-root", "",
+		"Host directory (mounted Bidirectional into the agent at the same path) where completed model volumes are bound for readers on block storage (default /var/lib/containerd/nvsnap-models)")
 	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
 		"How long a reader waits for the writer's download before downloading itself (default 1h)")
 

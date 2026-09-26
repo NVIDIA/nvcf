@@ -168,7 +168,7 @@ func TestModelVolume_ReaderBlock_PendingBind(t *testing.T) {
 		t.Errorf("Block reader stamp: %v %v", v.labels, v.annotations)
 	}
 	vol, replaced := v.volumes["ngc-models"]
-	if !replaced || vol.HostPath == nil || vol.HostPath.Path != "/var/lib/containerd/nvsnap-overlays/models/"+modelvolume.Key("ngc://org/team/nemotron3-ultra-genrm:bf16-fixed") || *vol.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+	if !replaced || vol.HostPath == nil || vol.HostPath.Path != "/var/lib/containerd/nvsnap-models/"+modelvolume.Key("ngc://org/team/nemotron3-ultra-genrm:bf16-fixed") || *vol.HostPath.Type != corev1.HostPathDirectoryOrCreate {
 		t.Errorf("Block reader lands on a hostPath under the model host root for the agent to bind into, got %+v", vol)
 	}
 	var propagations int

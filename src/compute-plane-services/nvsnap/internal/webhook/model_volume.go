@@ -224,7 +224,7 @@ func (m *Mutator) substituteLandingVolume(pod *corev1.Pod, main *corev1.Containe
 func (m *Mutator) hostPathLanding(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
 	root := m.ModelHostRoot
 	if root == "" {
-		root = "/var/lib/containerd/nvsnap-overlays/models"
+		root = "/var/lib/containerd/nvsnap-models"
 	}
 	hp := corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: path.Join(root, modelvolume.Key(uri)), Type: hostPathType(corev1.HostPathDirectoryOrCreate)}}
 	prop := corev1.MountPropagationHostToContainer
