@@ -11,7 +11,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
@@ -176,9 +175,6 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 		Args:         []string{writerScript(hfDownloadCommand(id), path.Join(land.Path, modelvolume.MarkerFile))},
 		Env:          append([]corev1.EnvVar{{Name: "HF_HOME", Value: land.Path}}, tokenEnv(main)...),
 		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: land.Path}},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")},
-		},
 	}
 	return step, true
 }
@@ -346,14 +342,22 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 		Args:    []string{script},
 		Env:     append([]corev1.EnvVar{{Name: "HF_HOME", Value: land.Path}}, tokenEnv(main)...),
 	}
-	prop := corev1.MountPropagationHostToContainer
+	// The init mostly waits; the fallback download is the one case that
+	// needs real resources, and policy needs limits either way.
+	modelvolume.Harden(&init, modelvolume.DownloadResources)
+	// Only a hostPath landing receives a bind from the host after start.
+	var prop *corev1.MountPropagationMode
+	if m.hostPathReaders() {
+		p := corev1.MountPropagationHostToContainer
+		prop = &p
+	}
 	for _, vm := range main.VolumeMounts {
 		if vm.Name == land.VolumeName || vm.Name == modelVolumeName {
-			init.VolumeMounts = append(init.VolumeMounts, corev1.VolumeMount{Name: vm.Name, MountPath: vm.MountPath, MountPropagation: &prop})
+			init.VolumeMounts = append(init.VolumeMounts, corev1.VolumeMount{Name: vm.Name, MountPath: vm.MountPath, MountPropagation: prop})
 		}
 	}
 	if len(init.VolumeMounts) == 0 {
-		init.VolumeMounts = []corev1.VolumeMount{{Name: modelVolumeName, MountPath: land.Path, MountPropagation: &prop}}
+		init.VolumeMounts = []corev1.VolumeMount{{Name: modelVolumeName, MountPath: land.Path, MountPropagation: prop}}
 	}
 	patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: init})
 	if id.Scheme == "hf" {
@@ -498,4 +502,10 @@ func hfDownloadCommand(id modelid.Identity) string {
 		args += " --revision " + shellQuote(id.Revision)
 	}
 	return fmt.Sprintf("if command -v hf >/dev/null 2>&1; then hf download %[1]s; else huggingface-cli download %[1]s; fi", args)
+}
+
+// hostPathReaders reports whether Block-mode readers land on a hostPath
+// the agent binds into (as opposed to referencing the read-only claim).
+func (m *Mutator) hostPathReaders() bool {
+	return m.ModelVolume != nil && m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath
 }

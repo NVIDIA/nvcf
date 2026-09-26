@@ -260,6 +260,40 @@ func TestModelVolume_ReaderBlockPVC_ReferencesReadOnlyClaim(t *testing.T) {
 
 // Volume already complete: the webhook mints the read-only claim in the
 // pod namespace itself so the pod binds immediately, and it is not pending.
+// Engine-download chart in PVC mode: the injected init carries no
+// mount propagation (nothing arrives from the host) and satisfies the
+// baselines; the Job container gets requests and limits.
+func TestModelVolume_ReaderBlockPVC_InjectedInitHardened(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := stockVLLMPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if len(v.newInits) != 1 {
+		t.Fatalf("one injected init expected, got %d", len(v.newInits))
+	}
+	init := v.newInits[0]
+	for _, vm := range init.VolumeMounts {
+		if vm.MountPropagation != nil {
+			t.Errorf("no mount propagation in PVC mode: %+v", vm)
+		}
+	}
+	if init.Resources.Limits.Memory().IsZero() || init.SecurityContext == nil || init.SecurityContext.Capabilities == nil {
+		t.Errorf("injected init must carry limits and a security context: %+v %+v", init.Resources, init.SecurityContext)
+	}
+	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	job, err := kc.BatchV1().Jobs(pod.Namespace).Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("download Job: %v", err)
+	}
+	if jc := job.Spec.Template.Spec.Containers[0]; jc.Resources.Limits.Cpu().IsZero() || jc.Resources.Requests.Memory().IsZero() {
+		t.Errorf("engine-download Job container needs requests and limits: %+v", jc.Resources)
+	}
+}
+
 func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
 	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
 	pv := &corev1.PersistentVolume{

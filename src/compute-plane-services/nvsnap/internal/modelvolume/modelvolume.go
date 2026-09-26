@@ -357,24 +357,7 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 			volumes = append(volumes, step.Volumes[i])
 		}
 	}
-	// Function namespaces enforce Kyverno baselines: requests and limits
-	// on every container, no service account token, a seccomp profile and
-	// no added capabilities. Resources are set only when the init had none.
-	if c.Resources.Limits == nil && c.Resources.Requests == nil {
-		c.Resources = corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")},
-			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8"), corev1.ResourceMemory: resource.MustParse("16Gi")},
-		}
-	}
-	if c.SecurityContext == nil {
-		c.SecurityContext = &corev1.SecurityContext{}
-	}
-	if c.SecurityContext.AllowPrivilegeEscalation == nil {
-		c.SecurityContext.AllowPrivilegeEscalation = new(bool)
-	}
-	if c.SecurityContext.Capabilities == nil {
-		c.SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
-	}
+	Harden(&c, DownloadResources)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: map[string]string{IdentityAnnotation: uri}},
 		Spec: batchv1.JobSpec{
@@ -411,4 +394,33 @@ func (p *Provisioner) JobSucceeded(ctx context.Context, uri, ns string) (bool, e
 		return false, err
 	}
 	return job.Status.Succeeded > 0, nil
+}
+
+// DownloadResources are the defaults for a container that downloads a
+// model: enough CPU and memory for a parallel fetch, bounded for policy.
+var DownloadResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")},
+	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8"), corev1.ResourceMemory: resource.MustParse("16Gi")},
+}
+
+// Harden gives a container the fields function-namespace baselines
+// require (Kyverno on NVCF clusters: requests and limits on every
+// container, no privilege escalation, dropped capabilities). Fields the
+// chart already set are kept; resources are defaulted only when both
+// requests and limits are absent, so a chart's own sizing wins.
+func Harden(c *corev1.Container, resources corev1.ResourceRequirements) {
+	if c.Resources.Limits == nil && c.Resources.Requests == nil {
+		c.Resources = *resources.DeepCopy()
+	} else if c.Resources.Limits == nil {
+		c.Resources.Limits = resources.Limits.DeepCopy()
+	}
+	if c.SecurityContext == nil {
+		c.SecurityContext = &corev1.SecurityContext{}
+	}
+	if c.SecurityContext.AllowPrivilegeEscalation == nil {
+		c.SecurityContext.AllowPrivilegeEscalation = new(bool)
+	}
+	if c.SecurityContext.Capabilities == nil {
+		c.SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
+	}
 }
