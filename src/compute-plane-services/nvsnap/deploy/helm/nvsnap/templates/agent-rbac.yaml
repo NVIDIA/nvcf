@@ -65,8 +65,10 @@ rules:
   # nvsnap-system); we keep them ClusterRole for now so the agent can
   # operate in any namespace via flag.
   - apiGroups: [""]
+    # update/patch: the model volume controller labels the writer claim
+    # complete (internal/agent/modelvolume_controller.go).
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
   # persistentvolumes (cluster-scoped): the shared-volume promoter
   # (NVMesh/EFS cachedir + ember path) Gets the writer's bound primary PV,
   # Updates its reclaim policy to Retain, and Creates a secondary
