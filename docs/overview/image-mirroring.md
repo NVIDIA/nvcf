@@ -204,10 +204,12 @@ ngc registry resource download-version \
   "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
 
 # Download a specific compute-plane stack version
-# Publication pending: nvcf-compute-plane-stack 1.0.0 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 
 # Download a specific observability stack version
-# Publication pending: nvcf-observability-stack 1.0.0 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_STACK_VERSION}"
 ```
 
 {/*docs-version-sync:END image-mirroring-resource-examples*/}
@@ -258,7 +260,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-compute-plane-stack 1.0.0 is not yet available for download.
+# Set the version
+export COMPUTE_VERSION="1.0.0"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
+   mkdir -p nvcf-compute-plane-stack && \
+   tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
+   rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
@@ -286,7 +294,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-observability-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-observability-stack 1.0.0 is not yet available for download.
+# Set the version
+export OBSERVABILITY_VERSION="1.0.0"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_VERSION}" && \
+   mkdir -p nvcf-observability-stack && \
+   tar -xzf nvcf-observability-stack_v${OBSERVABILITY_VERSION}/nvcf-observability-stack-${OBSERVABILITY_VERSION}.tar.gz -C nvcf-observability-stack && \
+   rm -rf nvcf-observability-stack_v${OBSERVABILITY_VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-observability-stack-snippet*/}
