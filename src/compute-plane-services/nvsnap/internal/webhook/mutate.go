@@ -268,10 +268,14 @@ type Mutator struct {
 	ModelVolume       *modelvolume.Provisioner
 	Groups            modelid.GroupResolver
 	ModelWaitDeadline time.Duration
-	// ModelHostRoot is the host directory (under the agent's Bidirectional
-	// overlays root) where Block-mode readers get their hostPath and the
-	// agent binds completed model volumes: <root>/<identity key>.
+	// ModelHostRoot is the host directory where hostPath-mode readers get
+	// their landing and the agent binds completed model volumes:
+	// <root>/<identity key>.
 	ModelHostRoot string
+	// ReadOnlyMinter mints the read-only claim for a completed Block-mode
+	// volume in the admitted pod's namespace (PVC reader mode); nil in RWX
+	// mode.
+	ReadOnlyMinter ReadOnlyMinter
 
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a
@@ -1118,4 +1122,10 @@ func (m *Mutator) logger() logrus.FieldLogger {
 		return m.Log
 	}
 	return logrus.NewEntry(logrus.New()).WithField("subsys", "webhook.mutate")
+}
+
+// ReadOnlyMinter exposes a completed model volume as a read-only claim in
+// a namespace (checkpointstore.SharedVolumePromoter implements it).
+type ReadOnlyMinter interface {
+	MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error
 }

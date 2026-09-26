@@ -99,6 +99,10 @@ type ModelVolumeProfile struct {
 	// Size requested per volume (a ceiling; the model size is unknown at
 	// admission). Empty means "512Gi".
 	Size string `json:"size,omitempty"`
+	// ReaderMode for block volumes: "pvc" (default; policy-friendly, pods
+	// wait on volume binding) or "hostPath" (schedules at once, agent binds;
+	// needed under gang schedulers, requires hostPath allowed by policy).
+	ReaderMode string `json:"readerMode,omitempty"`
 }
 
 // DefaultPrewarmParallelism is the reader count when a profile does not set

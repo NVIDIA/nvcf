@@ -93,21 +93,36 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		log.WithFields(logrus.Fields{"claim": claim, "job": job}).Info("model volume: download job ensured")
 	}
 	patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
-	switch m.ModelVolume.Cfg.Mode {
-	case modelvolume.ModeRWX:
+	switch {
+	case m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX:
 		claim, err := m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
 		if err != nil {
 			return nil, err
 		}
 		patches = append(patches, m.substituteLandingVolume(pod, main, land, claim)...)
 		log.WithFields(logrus.Fields{"claim": claim, "complete": st.Complete}).Info("model volume: reader on shared filesystem; waits for the marker")
-	default:
-		// Block mode: hostPath landing; the agent binds the completed
-		// read-only volume over it and the marker inside appears.
+	case m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath:
+		// Block mode, hostPath landing: schedules at once; the agent binds
+		// the completed read-only volume over it and the marker appears.
 		patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
 		patches = append(patches, mp.annotation(modelvolume.LandingAnnotation, landingMount(land))...)
 		patches = append(patches, m.hostPathLanding(pod, main, land, uri)...)
 		log.WithField("complete", st.Complete).Info("model volume: reader on block storage; agent binds the volume after completion")
+	default:
+		// Block mode, PVC reader: the pod references the read-only claim in
+		// its namespace. Complete already: mint it now so the pod binds at
+		// once. Not yet: the pod stays Pending on volume binding until the
+		// agent mints the claim after the download. No hostPath, no bind.
+		if st.Complete && m.ReadOnlyMinter != nil {
+			if err := m.ReadOnlyMinter.MintReadOnlyFromPV(ctx, st.PrimaryPV, modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
+				return nil, fmt.Errorf("mint read-only claim: %w", err)
+			}
+		}
+		if !st.Complete {
+			patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
+		}
+		patches = append(patches, m.substituteLandingVolume(pod, main, land, modelvolume.ReadOnlyClaimName(uri))...)
+		log.WithField("complete", st.Complete).Info("model volume: reader on block storage references the read-only claim")
 	}
 	patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
 	patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
@@ -130,9 +145,23 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 			c := *init.DeepCopy()
 			c.Command = []string{"/bin/sh", "-c"}
 			c.Args = []string{writerScript(orig, path.Join(mount, modelvolume.MarkerFile))}
-			c.VolumeMounts = []corev1.VolumeMount{{Name: landVolumeName(land), MountPath: mount}}
-			step.Container = c
+			// Keep every mount the init had; the landing one is redirected
+			// to the claim by name, the rest (secrets, scripts) come along.
 			step.VolumeName = landVolumeName(land)
+			if land.VolumeName == "" {
+				c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: step.VolumeName, MountPath: mount})
+			}
+			mounted := map[string]bool{}
+			for _, vm := range c.VolumeMounts {
+				mounted[vm.Name] = true
+			}
+			for i := range pod.Spec.Volumes {
+				v := &pod.Spec.Volumes[i]
+				if mounted[v.Name] && v.Name != step.VolumeName {
+					step.Volumes = append(step.Volumes, *v.DeepCopy())
+				}
+			}
+			step.Container = c
 			return step, true
 		}
 		return step, false

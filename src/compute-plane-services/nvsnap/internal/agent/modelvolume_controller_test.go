@@ -36,7 +36,7 @@ func writerFixture(t *testing.T) (*fake.Clientset, *modelvolume.Provisioner) {
 		},
 	}
 	kc := fake.NewSimpleClientset(pv)
-	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock, StorageClass: sc, Size: resource.MustParse("512Gi")}}
+	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock, StorageClass: sc, Size: resource.MustParse("512Gi"), Reader: modelvolume.ReaderHostPath}}
 	if _, err := p.EnsureWriterClaim(context.Background(), mvURI, "sr-fn"); err != nil {
 		t.Fatal(err)
 	}
@@ -247,5 +247,58 @@ func TestModelVolumeController_NoUnpendWithoutAMount(t *testing.T) {
 	got, _ := kc.CoreV1().Pods("other-ns").Get(ctx, "r-1", metav1.GetOptions{})
 	if got.Labels[modelvolume.PendingLabel] != "true" {
 		t.Error("reader must stay pending when nothing is mounted at the bind target")
+	}
+}
+
+// PVC reader mode (the default): the reader references the read-only
+// claim; the agent mints it in the reader's namespace once the primary is
+// detached and un-pends the pod. No bind, no hostPath, any agent serves
+// it because the pod may still be unscheduled.
+func TestModelVolumeController_PVCReaderMintedWithoutBind(t *testing.T) {
+	kc, p := writerFixture(t)
+	p.Cfg.Reader = ""
+	ctx := context.Background()
+	c, attached, bound := mvController(t, kc, p, "node-b")
+	reader := readerPod("other-ns", "")
+	if _, err := kc.CoreV1().Pods("other-ns").Create(ctx, reader, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, reader)
+	if _, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Fatal("no read-only claim before the download completes")
+	}
+	pvAbc := "pvc-abc"
+	va := &storagev1.VolumeAttachment{ObjectMeta: metav1.ObjectMeta{Name: "va-1"}, Spec: storagev1.VolumeAttachmentSpec{Attacher: "nvmesh-csi.excelero.com", NodeName: "node-a", Source: storagev1.VolumeAttachmentSource{PersistentVolumeName: &pvAbc}}}
+	if _, err := kc.StorageV1().VolumeAttachments().Create(ctx, va, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cw, _, _ := mvController(t, kc, p, "node-a")
+	cw.HandleJob(ctx, downloadJob(1))
+	c.Handle(ctx, reader)
+	if _, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Fatal("no read-only claim while the primary is attached read-write")
+	}
+	if err := kc.StorageV1().VolumeAttachments().Delete(ctx, "va-1", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, reader)
+	ro, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read-only claim must be minted in the reader namespace: %v", err)
+	}
+	roPV, _ := kc.CoreV1().PersistentVolumes().Get(ctx, ro.Spec.VolumeName, metav1.GetOptions{})
+	if roPV.Spec.CSI.VolumeHandle != "cluster:csi-abc:vol:other-ns" || !roPV.Spec.CSI.ReadOnly {
+		t.Errorf("read-only PV must carry the reader namespace's handle: %+v", roPV.Spec.CSI)
+	}
+	if len(*attached) != 0 || len(*bound) != 0 {
+		t.Errorf("PVC mode never attaches a holder or binds: attached=%v bound=%v", *attached, *bound)
+	}
+	got, _ := kc.CoreV1().Pods("other-ns").Get(ctx, "r-1", metav1.GetOptions{})
+	if got.Labels[modelvolume.PendingLabel] != "false" {
+		t.Errorf("reader must be un-pended, labels %v", got.Labels)
+	}
+	c.Handle(ctx, reader) // idempotent
+	if len(*attached) != 0 {
+		t.Error("nothing to attach on the second pass either")
 	}
 }

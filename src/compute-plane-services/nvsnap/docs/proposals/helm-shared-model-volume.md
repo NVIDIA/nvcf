@@ -87,15 +87,27 @@ not.
    namespaces (`EnsureClaim`, done) and new versions of the function all
    attach the same volume. There is no capture copy of the model anymore.
 
-4. Readers never block scheduling (webhook + agent). On a distributed
-   filesystem the RWX claim exists and is bound at admission, so the pod
-   schedules. On NVMesh, before the download is complete, a reader cannot
-   reference a bindable claim, so it gets an emptyDir at the landing path
-   plus `nvsnap-wait-model`; once complete, the agent on the reader's node
-   attaches the read-only volume (mount-holder, existing) and bind-mounts
-   it over the emptyDir, then drops the marker the wait init is polling.
-   After completion, NVMesh readers reference the read-only claim directly.
-   No pod ever needs network access to nvsnap; function namespaces block it.
+4. Readers reach the volume without help from inside the pod (webhook +
+   agent). On a distributed filesystem the RWX claim exists and is bound
+   at admission, so the pod schedules. On NVMesh the storage profile picks
+   one of two reader modes (`modelVolume.readerMode`):
+   - `pvc` (default). The reader references the read-only claim
+     `nvsnap-model-<key>-ro` in its own namespace. Complete already: the
+     webhook mints the claim at admission and the pod binds at once. Not
+     yet: the pod stays Pending on volume binding; when the Job succeeds
+     and the primary is detached, any agent mints the claim and kubelet
+     starts the pod. No hostPath, so it passes Kyverno's
+     `disallow-host-path` in NVCF function namespaces (enforced there).
+     A pod Pending on a claim holds a gang scheduler, so this mode is for
+     Deployments, StatefulSets and LWS, which is every NVCF chart today.
+   - `hostPath`. The reader gets a hostPath landing under the agent's
+     model root and schedules at once; the agent on its node attaches the
+     read-only volume (mount-holder) and bind-mounts it over the landing,
+     and the marker the wait init polls appears. For gang-scheduled
+     workloads (Grove, kai-scheduler) where policy allows hostPath.
+   In both modes the init waits for the marker and falls back to its own
+   download at the deadline. No pod ever needs network access to nvsnap;
+   function namespaces block it.
 
 5. Compile caches (webhook env + agent). All caches are redirected to a
    cache location keyed by image digest plus identity plus role-neutral
@@ -142,7 +154,8 @@ between them. Everything after that first start is a full hit.
 | agent down on a reader node (NVMesh) | no bind arrives | wait deadline, local download |
 | writer pod restarts after complete | volume immutable, unaffected | none needed |
 | identity changes (revision, quantization, image) | different URI or cache key | separate volume; old one ages out |
-| gang scheduler | readers always schedulable (RWX bound, or hostPath); download claim binds in seconds on Immediate storage classes | none needed |
+| gang scheduler | readers always schedulable in RWX or hostPath mode; in `pvc` mode readers pend on binding until the download completes, so gang-scheduled charts use `hostPath` | profile `readerMode: hostPath` |
+| function namespace with Kyverno enforced (`disallow-host-path`, requests and limits, no SA token) | `pvc` mode uses no hostPath; the download Job carries every mount the chart's init had (registry key secret, script ConfigMap), default requests and limits, seccomp, dropped capabilities and no token | none needed |
 | identity deleted while a read-only PV is still Terminating (NVMesh) | the read-only PV name is deterministic per identity and namespace, so a re-download of the same identity cannot mint until the old PV finalizes; the attacher's detach timed out for minutes after the volume was gone | retention deletes read-only claims and PVs before the primary, and the controller retries minting; a stale VolumeAttachment on a deleted volume needs the finalizer cleared (seen on dev1 2026-09-26) |
 | last reader of an identity leaves a node (NVMesh) | the agent's bind mount keeps the volume published; kubelet cannot unmount and the attacher's detach times out (seen on dev1 2026-09-26 during cleanup) | the agent must unbind and drop its mount-holder when no pod on the node uses the identity; part of retention (follow-up) |
 

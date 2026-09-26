@@ -8,11 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sirupsen/logrus"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
@@ -20,13 +23,21 @@ import (
 
 func mvMutator(t *testing.T, mode modelvolume.Mode, role election.Role, kc *fake.Clientset) (*Mutator, *fakeElector) {
 	t.Helper()
+	m, el := mvMutatorReader(t, mode, modelvolume.ReaderHostPath, role, kc)
+	return m, el
+}
+
+func mvMutatorReader(t *testing.T, mode modelvolume.Mode, reader modelvolume.ReaderMode, role election.Role, kc *fake.Clientset) (*Mutator, *fakeElector) {
+	t.Helper()
 	el := &fakeElector{role: role}
+	tx, _ := checkpointstore.LookupVolumeHandleTransform("nvmesh")
 	return &Mutator{
-		Backend:     newBackend(t),
-		CacheDir:    "/opt/nvsnap",
-		Composer:    &rootfsonly.HashInputComposer{CUDADriverMajor: 580},
-		Elector:     el,
-		ModelVolume: &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: mode, StorageClass: "sc", Size: resource.MustParse("512Gi")}},
+		Backend:        newBackend(t),
+		CacheDir:       "/opt/nvsnap",
+		Composer:       &rootfsonly.HashInputComposer{CUDADriverMajor: 580},
+		Elector:        el,
+		ModelVolume:    &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: mode, StorageClass: "sc", Size: resource.MustParse("512Gi"), Reader: reader}},
+		ReadOnlyMinter: &checkpointstore.SharedVolumePromoter{KubeClient: kc, StorageClass: "sc", Transform: tx, Log: logrus.New()},
 	}, el
 }
 
@@ -41,7 +52,7 @@ func ngcFunctionPod() *corev1.Pod {
 				Name: "download-ngc-model", Image: "nvcr.io/org/ultra:vllm", Command: []string{"/bin/bash", "-c"},
 				Args:         []string{"set -euo pipefail\nngc registry model download-version --dest \"${NGC_MODEL_MOUNT}\" \"${NGC_MODEL_NAME}\"\n"},
 				Env:          []corev1.EnvVar{{Name: "NGC_MODEL_NAME", Value: "org/team/nemotron3-ultra-genrm:bf16-fixed"}, {Name: "NGC_MODEL_MOUNT", Value: "/config/models"}},
-				VolumeMounts: []corev1.VolumeMount{{Name: "ngc-models", MountPath: "/config/models"}},
+				VolumeMounts: []corev1.VolumeMount{{Name: "ngc-models", MountPath: "/config/models"}, {Name: "secrets", MountPath: "/var/secrets", ReadOnly: true}, {Name: "scripts", MountPath: "/opt/kimi-k3"}},
 			}},
 			Containers: []corev1.Container{{
 				Name: "kimi-k3", Image: "nvcr.io/org/ultra:vllm", Command: []string{"/bin/bash", "/opt/kimi-k3/start.sh"},
@@ -52,6 +63,8 @@ func ngcFunctionPod() *corev1.Pod {
 			Volumes: []corev1.Volume{
 				{Name: "dshm", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 				{Name: "ngc-models", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: "secrets", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "function-secrets"}}},
+				{Name: "scripts", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "kimi-k3-scripts"}}}},
 			},
 		},
 	}
@@ -146,6 +159,24 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 	if len(jc.Env) != 2 || jc.VolumeMounts[0].MountPath != "/config/models" || job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != modelvolume.ClaimName(uri) {
 		t.Errorf("job must carry the init's env and mount the claim at the init's path: env=%v mounts=%v", jc.Env, jc.VolumeMounts)
 	}
+	// The NGC key lives in a secret file and the init's helper scripts in
+	// a ConfigMap; the Job must mount both or the download cannot run.
+	jobVols := map[string]corev1.Volume{}
+	for _, vol := range job.Spec.Template.Spec.Volumes {
+		jobVols[vol.Name] = vol
+	}
+	if len(jc.VolumeMounts) != 3 || jobVols["secrets"].Secret == nil || jobVols["secrets"].Secret.SecretName != "function-secrets" || jobVols["scripts"].ConfigMap == nil {
+		t.Errorf("job must carry every volume the init mounted, only the landing one redirected: mounts=%v volumes=%v", jc.VolumeMounts, jobVols)
+	}
+	if _, dshm := jobVols["dshm"]; dshm || len(jobVols) != 3 {
+		t.Errorf("volumes the init does not mount stay behind: %v", jobVols)
+	}
+	ps := job.Spec.Template.Spec
+	if jc.Resources.Requests.Cpu().IsZero() || jc.Resources.Limits.Memory().IsZero() || ps.SecurityContext == nil || ps.SecurityContext.SeccompProfile == nil ||
+		jc.SecurityContext == nil || jc.SecurityContext.AllowPrivilegeEscalation == nil || *jc.SecurityContext.AllowPrivilegeEscalation || jc.SecurityContext.Capabilities == nil ||
+		ps.AutomountServiceAccountToken == nil || *ps.AutomountServiceAccountToken {
+		t.Errorf("job pod must satisfy the function-namespace baselines (requests/limits, seccomp, no escalation, dropped caps, no SA token): %+v %+v", jc.Resources, ps.SecurityContext)
+	}
 	s := v.initScripts["download-ngc-model"]
 	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
 		t.Errorf("the pod's own init becomes a wait:\n%s", s)
@@ -188,6 +219,79 @@ func TestModelVolume_ReaderBlock_PendingBind(t *testing.T) {
 		if strings.HasPrefix(p.Path, "/spec/schedulingGates") {
 			t.Fatal("no pod is ever gated on the model volume path")
 		}
+	}
+}
+
+// Default reader mode on block storage: no hostPath (Kyverno's
+// disallow-host-path rejects it in function namespaces); the pod
+// references the read-only claim in its namespace and waits on binding.
+func TestModelVolume_ReaderBlockPVC_ReferencesReadOnlyClaim(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
+		t.Errorf("PVC reader is pending until the agent mints its claim: %v", v.labels)
+	}
+	vol, replaced := v.volumes["ngc-models"]
+	if !replaced || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != modelvolume.ReadOnlyClaimName(uri) {
+		t.Errorf("landing volume becomes the read-only claim, got %+v", vol)
+	}
+	for _, p := range patches {
+		if strings.HasSuffix(p.Path, "/mountPropagation") {
+			t.Error("no mount propagation in PVC mode")
+		}
+		if vv, ok := p.Value.(corev1.Volume); ok && vv.HostPath != nil {
+			t.Error("no hostPath in PVC mode")
+		}
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ReadOnlyClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("the read-only claim is minted by the agent after completion, not at admission of an incomplete volume")
+	}
+	if s := v.initScripts["download-ngc-model"]; !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
+		t.Errorf("reader init still waits for the marker on the bound claim:\n%s", s)
+	}
+}
+
+// Volume already complete: the webhook mints the read-only claim in the
+// pod namespace itself so the pod binds immediately, and it is not pending.
+func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("512Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
+		},
+	}
+	kc := fake.NewSimpleClientset(pv)
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if _, pending := v.labels[modelvolume.PendingLabel]; pending {
+		t.Errorf("complete volume: the reader is not pending, labels %v", v.labels)
+	}
+	ro, err := kc.CoreV1().PersistentVolumeClaims("sr-other").Get(context.Background(), modelvolume.ReadOnlyClaimName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read-only claim must be minted in the pod namespace at admission: %v", err)
+	}
+	roPV, _ := kc.CoreV1().PersistentVolumes().Get(context.Background(), ro.Spec.VolumeName, metav1.GetOptions{})
+	if roPV.Spec.CSI.VolumeHandle != "cluster:csi-done:vol:sr-other" {
+		t.Errorf("handle rewritten to the reader namespace: %+v", roPV.Spec.CSI)
+	}
+	if _, err := kc.BatchV1().Jobs("sr-other").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("no download Job for a complete volume")
 	}
 }
 

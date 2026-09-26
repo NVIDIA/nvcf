@@ -119,8 +119,11 @@ agent:
   # once per cluster into a per-identity volume and every other pod that
   # names it attaches that volume; compile caches are shared the same way.
   # Mode comes from the storage profile: block on NVMesh (the L2 class),
-  # rwx when the profile declares a distributed-filesystem class. Needs
-  # agent.l2. Off until qualified.
+  # rwx when the profile declares a distributed-filesystem class. Block
+  # readers reference a read-only claim by default (profile
+  # modelVolume.readerMode: pvc); readerMode: hostPath schedules readers
+  # at once and binds the volume in, for gang-scheduled charts where
+  # policy allows hostPath. Needs agent.l2. Off until qualified.
   modelVolume:
     enabled: false
     # How long a reader waits for the writer's download before it downloads

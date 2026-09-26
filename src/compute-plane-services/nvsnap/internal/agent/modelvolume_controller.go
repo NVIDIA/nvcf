@@ -139,7 +139,13 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	if uri == "" || pod.Labels[modelvolume.RoleLabel] != "reader" {
 		return
 	}
-	if pod.Labels[modelvolume.PendingLabel] == "true" && pod.Spec.NodeName == c.NodeName {
+	if pod.Labels[modelvolume.PendingLabel] != "true" {
+		return
+	}
+	// hostPath readers are served by the agent on their node (it does the
+	// bind); PVC readers may be unscheduled, so every agent serves them and
+	// the idempotent mint converges.
+	if c.Provisioner.Cfg.ReaderMode() == modelvolume.ReaderPVC || pod.Spec.NodeName == c.NodeName {
 		c.handlePendingReader(ctx, pod, uri)
 	}
 }
@@ -180,6 +186,10 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 	}
 	if !st.Complete {
 		return // the wait init keeps waiting; the writer's completion re-triggers via its own event
+	}
+	if c.Provisioner.Cfg.ReaderMode() == modelvolume.ReaderPVC {
+		c.servePVCReader(ctx, pod, uri, st, log)
+		return
 	}
 	dst := filepath.Join(c.HostRoot, modelvolume.Key(uri))
 	// The mount table is the truth, not memory: the agent may have
@@ -337,4 +347,32 @@ func deviceMatchesHandle(device, handle string) bool {
 		return true
 	}
 	return strings.Contains(handle, base)
+}
+
+// servePVCReader mints the read-only claim the pending reader already
+// references, once the primary is detached, and un-pends it. Kubelet
+// binds the claim and starts the pod; no hostPath and no agent bind.
+func (c *ModelVolumeController) servePVCReader(ctx context.Context, pod *corev1.Pod, uri string, st modelvolume.State, log logrus.FieldLogger) {
+	if c.Minter == nil || st.PrimaryPV == "" {
+		return
+	}
+	detached, err := c.Provisioner.Detached(ctx, st.PrimaryPV)
+	if err != nil {
+		log.WithError(err).Warn("model volume: detach check failed")
+		return
+	}
+	if !detached {
+		log.WithField("pv", st.PrimaryPV).Info("model volume: primary still attached; retrying after detach")
+		return
+	}
+	if err := c.Minter.MintReadOnlyFromPV(ctx, st.PrimaryPV, modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
+		log.WithError(err).Warn("model volume: mint read-only claim in reader namespace failed")
+		return
+	}
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]string{modelvolume.PendingLabel: "false"}}})
+	if _, err := c.Kube.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		log.WithError(err).Warn("model volume: un-pend reader failed")
+		return
+	}
+	log.WithField("claim", modelvolume.ReadOnlyClaimName(uri)).Info("model volume: read-only claim minted for reader")
 }

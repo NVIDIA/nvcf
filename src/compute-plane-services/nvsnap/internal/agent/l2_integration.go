@@ -371,6 +371,9 @@ func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageP
 		if mvp.StorageClass != "" {
 			cfg.StorageClass = mvp.StorageClass
 		}
+		if mvp.ReaderMode != "" {
+			cfg.Reader = modelvolume.ReaderMode(mvp.ReaderMode)
+		}
 		if mvp.Size != "" {
 			q, err := resource.ParseQuantity(mvp.Size)
 			if err != nil {

@@ -80,6 +80,20 @@ const (
 	managedBy = "nvsnap"
 )
 
+// ReaderMode is how a Block-mode reader reaches the finished volume.
+type ReaderMode string
+
+// Reader modes. PVC: the pod references the read-only claim in its own
+// namespace and stays Pending on volume binding until the agent mints it;
+// works under Kyverno's disallow-host-path and needs no bind, but a pod
+// pending on a claim holds a gang scheduler. HostPath: the pod schedules
+// at once on a hostPath landing and the agent binds the volume in; needs
+// hostPath allowed by policy. Default PVC.
+const (
+	ReaderPVC      ReaderMode = "pvc"
+	ReaderHostPath ReaderMode = "hostPath"
+)
+
 // Config comes from the storage profile.
 type Config struct {
 	Mode         Mode
@@ -88,6 +102,16 @@ type Config struct {
 	// admission, so this is a ceiling. Thin-provisioned classes make it
 	// cheap.
 	Size resource.Quantity
+	// Reader selects the Block-mode reader mode; empty means ReaderPVC.
+	Reader ReaderMode
+}
+
+// ReaderMode returns the configured reader mode with its default.
+func (c Config) ReaderMode() ReaderMode {
+	if c.Reader == "" {
+		return ReaderPVC
+	}
+	return c.Reader
 }
 
 // Key is the short stable token for a model URI, used in object names
@@ -297,6 +321,9 @@ type DownloadStep struct {
 	NodeSelector     map[string]string
 	// VolumeName is the name the container mounts the claim under.
 	VolumeName string
+	// Volumes are the other volumes the container mounts (secrets with
+	// registry keys, ConfigMaps with scripts), copied from the pod.
+	Volumes []corev1.Volume
 }
 
 // EnsureDownloadJob creates the one download Job for uri in ns, writing
@@ -320,7 +347,34 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, IdentityLabel: Key(uri)}
 	c := step.Container
 	c.Name = "download"
-	c.VolumeMounts = []corev1.VolumeMount{{Name: step.VolumeName, MountPath: mountPathOf(step)}}
+	// The container keeps every mount the chart's init had (registry keys
+	// under /var/secrets, scripts from a ConfigMap); only the landing
+	// volume is redirected to the claim.
+	volumes := []corev1.Volume{{Name: step.VolumeName, VolumeSource: corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}}}
+	for i := range step.Volumes {
+		if step.Volumes[i].Name != step.VolumeName {
+			volumes = append(volumes, step.Volumes[i])
+		}
+	}
+	// Function namespaces enforce Kyverno baselines: requests and limits
+	// on every container, no service account token, a seccomp profile and
+	// no added capabilities. Resources are set only when the init had none.
+	if c.Resources.Limits == nil && c.Resources.Requests == nil {
+		c.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")},
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8"), corev1.ResourceMemory: resource.MustParse("16Gi")},
+		}
+	}
+	if c.SecurityContext == nil {
+		c.SecurityContext = &corev1.SecurityContext{}
+	}
+	if c.SecurityContext.AllowPrivilegeEscalation == nil {
+		c.SecurityContext.AllowPrivilegeEscalation = new(bool)
+	}
+	if c.SecurityContext.Capabilities == nil {
+		c.SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
+	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: map[string]string{IdentityAnnotation: uri}},
 		Spec: batchv1.JobSpec{
@@ -331,12 +385,12 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					AutomountServiceAccountToken: new(bool),
+					SecurityContext:              &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 					ImagePullSecrets:             step.ImagePullSecrets,
 					Tolerations:                  step.Tolerations,
 					NodeSelector:                 step.NodeSelector,
 					Containers:                   []corev1.Container{c},
-					Volumes: []corev1.Volume{{Name: step.VolumeName, VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}}},
+					Volumes:                      volumes,
 				},
 			},
 		},
@@ -345,15 +399,6 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 		return "", fmt.Errorf("create job %s/%s: %w", ns, name, err)
 	}
 	return name, nil
-}
-
-func mountPathOf(step DownloadStep) string {
-	for _, vm := range step.Container.VolumeMounts {
-		if vm.Name == step.VolumeName {
-			return vm.MountPath
-		}
-	}
-	return "/models"
 }
 
 // JobSucceeded reports whether the download Job for uri in ns finished.

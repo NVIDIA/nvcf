@@ -159,6 +159,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		ModelVolume:       a.modelVolume,
 		ModelWaitDeadline: a.config.ModelVolume.WaitDeadline,
 		ModelHostRoot:     a.modelHostRoot(),
+		ReadOnlyMinter:    a.modelReadOnlyMinter(),
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
 		},
@@ -214,4 +215,13 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		}
 	}()
 	return nil
+}
+
+// modelReadOnlyMinter is the webhook's minter for completed Block-mode
+// volumes; nil (a nil interface) when there is none.
+func (a *Agent) modelReadOnlyMinter() webhook.ReadOnlyMinter {
+	if a.modelMinter == nil {
+		return nil
+	}
+	return a.modelMinter
 }

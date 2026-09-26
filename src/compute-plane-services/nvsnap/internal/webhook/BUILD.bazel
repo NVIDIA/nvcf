@@ -59,6 +59,7 @@ go_test(
         "//src/compute-plane-services/nvsnap/internal/election",
         "//src/compute-plane-services/nvsnap/internal/modelvolume",
         "//src/compute-plane-services/nvsnap/internal/rootfsonly",
+        "@com_github_sirupsen_logrus//:logrus",
         "@io_k8s_api//admission/v1:admission",
         "@io_k8s_api//core/v1:core",
         "@io_k8s_apimachinery//pkg/api/resource",
