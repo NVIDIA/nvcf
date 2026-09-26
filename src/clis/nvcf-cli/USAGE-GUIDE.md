@@ -719,6 +719,12 @@ Registry credentials allow NVCF to pull container images from private registries
   --registry "docker.io" \
   --username "myusername" \
   --password "mypassword"
+
+# Add registry credentials securely using a secret file (or '-' for standard input)
+./nvcf-cli registry-credential add \
+  --hostname "docker.io" \
+  --secret-file "/path/to/secret.b64" \
+  --artifact-type CONTAINER
 ```
 
 #### Method C: Using curl directly
