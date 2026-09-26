@@ -142,7 +142,9 @@ between them. Everything after that first start is a full hit.
 | agent down on a reader node (NVMesh) | no bind arrives | wait deadline, local download |
 | writer pod restarts after complete | volume immutable, unaffected | none needed |
 | identity changes (revision, quantization, image) | different URI or cache key | separate volume; old one ages out |
-| gang scheduler | readers always schedulable (RWX bound, or emptyDir); writer PVC binds in seconds on Immediate storage classes | none needed |
+| gang scheduler | readers always schedulable (RWX bound, or hostPath); download claim binds in seconds on Immediate storage classes | none needed |
+| identity deleted while a read-only PV is still Terminating (NVMesh) | the read-only PV name is deterministic per identity and namespace, so a re-download of the same identity cannot mint until the old PV finalizes; the attacher's detach timed out for minutes after the volume was gone | retention deletes read-only claims and PVs before the primary, and the controller retries minting; a stale VolumeAttachment on a deleted volume needs the finalizer cleared (seen on dev1 2026-09-26) |
+| last reader of an identity leaves a node (NVMesh) | the agent's bind mount keeps the volume published; kubelet cannot unmount and the attacher's detach times out (seen on dev1 2026-09-26 during cleanup) | the agent must unbind and drop its mount-holder when no pod on the node uses the identity; part of retention (follow-up) |
 
 ## What changes in the code
 
