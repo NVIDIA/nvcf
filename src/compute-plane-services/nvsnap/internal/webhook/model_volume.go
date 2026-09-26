@@ -36,8 +36,9 @@ import (
 //     for the agent to bind the completed volume in and drop the marker.
 
 const (
-	modelVolumeName    = "nvsnap-model"
-	waitScriptDeadline = 3600 // seconds, when no deadline is configured
+	modelVolumeName      = "nvsnap-model"
+	injectedDownloadInit = "nvsnap-model-download"
+	waitScriptDeadline   = 3600 // seconds, when no deadline is configured
 )
 
 // modelVolumePatches is the Helm-function decision. (nil, nil) means the
@@ -88,6 +89,11 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 			return nil, err
 		}
 		patches = append(patches, mp.label(modelvolume.RoleLabel, "writer")...)
+		if land.Downloader == modelid.DownloaderInit {
+			patches = append(patches, mp.annotation(modelvolume.DownloadInitAnnotation, land.InitContainer)...)
+		} else if res.Identity.Scheme == "hf" {
+			patches = append(patches, mp.annotation(modelvolume.DownloadInitAnnotation, injectedDownloadInit)...)
+		}
 		patches = append(patches, m.substituteLandingVolume(pod, main, land, claim)...)
 		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, true)...)
 		patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
@@ -111,9 +117,7 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
 		patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
 		patches = append(patches, mp.annotation(modelvolume.LandingAnnotation, landingMount(land))...)
-		if land.Kind == modelid.VolumeRootfs {
-			patches = append(patches, m.addLandingEmptyDir(pod, main, land)...)
-		}
+		patches = append(patches, m.hostPathLanding(pod, main, land, uri)...)
 		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
 		patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
 		log.WithField("complete", st.Complete).Info("model volume: reader on block storage; agent binds the volume after completion")
@@ -182,10 +186,40 @@ func (m *Mutator) substituteLandingVolume(pod *corev1.Pod, main *corev1.Containe
 	return patches
 }
 
-// addLandingEmptyDir gives a Block-mode reader whose download wrote to the
-// container filesystem an emptyDir at the landing path, so the agent has a
-// mount point to bind the completed volume over.
-func (m *Mutator) addLandingEmptyDir(pod *corev1.Pod, main *corev1.Container, land modelid.Landing) []PatchOp {
+// hostPathLanding gives a Block-mode reader a hostPath at the landing path
+// under the agent's model host root (the Bidirectional overlays root, so
+// agent mounts reach kubelet). The agent bind-mounts the completed
+// read-only volume there once it exists; HostToContainer propagation lets
+// the already-running wait init and the engine see it appear. The pod
+// schedules immediately: a hostPath never blocks volume binding.
+func (m *Mutator) hostPathLanding(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
+	root := m.ModelHostRoot
+	if root == "" {
+		root = "/var/lib/containerd/nvsnap-overlays/models"
+	}
+	hp := corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: path.Join(root, modelvolume.Key(uri)), Type: hostPathType(corev1.HostPathDirectoryOrCreate)}}
+	prop := corev1.MountPropagationHostToContainer
+	if land.VolumeName != "" {
+		var patches []PatchOp
+		for i := range pod.Spec.Volumes {
+			if pod.Spec.Volumes[i].Name == land.VolumeName {
+				patches = append(patches, PatchOp{Op: "replace", Path: fmt.Sprintf("/spec/volumes/%d", i), Value: corev1.Volume{Name: land.VolumeName, VolumeSource: hp}})
+			}
+		}
+		for j := range main.VolumeMounts {
+			if main.VolumeMounts[j].Name == land.VolumeName {
+				patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts/%d/mountPropagation", m.MainContainer, j), Value: prop})
+			}
+		}
+		for i := range pod.Spec.InitContainers {
+			for j := range pod.Spec.InitContainers[i].VolumeMounts {
+				if pod.Spec.InitContainers[i].VolumeMounts[j].Name == land.VolumeName {
+					patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/initContainers/%d/volumeMounts/%d/mountPropagation", i, j), Value: prop})
+				}
+			}
+		}
+		return patches
+	}
 	patches := []PatchOp{}
 	if pod.Spec.Volumes == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes", Value: []any{}})
@@ -194,10 +228,12 @@ func (m *Mutator) addLandingEmptyDir(pod *corev1.Pod, main *corev1.Container, la
 		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts", m.MainContainer), Value: []any{}})
 	}
 	return append(patches,
-		PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: modelVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
-		PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer), Value: corev1.VolumeMount{Name: modelVolumeName, MountPath: land.Path}},
+		PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: modelVolumeName, VolumeSource: hp}},
+		PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer), Value: corev1.VolumeMount{Name: modelVolumeName, MountPath: land.Path, MountPropagation: &prop}},
 	)
 }
+
+func hostPathType(t corev1.HostPathType) *corev1.HostPathType { return &t }
 
 // downloadStepPatches turns the download into a write-once step. With an
 // init container: the writer's init is wrapped to touch the marker on
@@ -249,19 +285,20 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 		script = writerScript(download, marker)
 	}
 	init := corev1.Container{
-		Name:    "nvsnap-model-download",
+		Name:    injectedDownloadInit,
 		Image:   main.Image,
 		Command: []string{"/bin/sh", "-c"},
 		Args:    []string{script},
 		Env:     append([]corev1.EnvVar{{Name: "HF_HOME", Value: land.Path}}, tokenEnv(main)...),
 	}
+	prop := corev1.MountPropagationHostToContainer
 	for _, vm := range main.VolumeMounts {
 		if vm.Name == land.VolumeName || vm.Name == modelVolumeName {
-			init.VolumeMounts = append(init.VolumeMounts, corev1.VolumeMount{Name: vm.Name, MountPath: vm.MountPath})
+			init.VolumeMounts = append(init.VolumeMounts, corev1.VolumeMount{Name: vm.Name, MountPath: vm.MountPath, MountPropagation: &prop})
 		}
 	}
 	if len(init.VolumeMounts) == 0 {
-		init.VolumeMounts = []corev1.VolumeMount{{Name: modelVolumeName, MountPath: land.Path}}
+		init.VolumeMounts = []corev1.VolumeMount{{Name: modelVolumeName, MountPath: land.Path, MountPropagation: &prop}}
 	}
 	patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: init})
 	if id.Scheme == "hf" {

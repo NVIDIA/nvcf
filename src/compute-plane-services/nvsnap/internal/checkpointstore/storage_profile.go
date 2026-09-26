@@ -81,6 +81,24 @@ type StorageProfile struct {
 	// PrewarmParallelism is the number of concurrent readers in the sweep.
 	// 0 means DefaultPrewarmParallelism.
 	PrewarmParallelism int `json:"prewarmParallelism,omitempty"`
+	// ModelVolume configures the write-once model volume for Helm
+	// functions (docs/proposals/helm-shared-model-volume.md). Mode "block"
+	// is the default for shared-volume strategies (NVMesh): the writer's
+	// claim on the L2 class becomes the read-only artifact. Mode "rwx"
+	// needs a ReadWriteMany class of a distributed filesystem. Empty
+	// mode with no default leaves Helm functions untouched.
+	ModelVolume *ModelVolumeProfile `json:"modelVolume,omitempty"`
+}
+
+// ModelVolumeProfile is the per-storage-class model volume setting.
+type ModelVolumeProfile struct {
+	// Mode is "rwx" or "block".
+	Mode string `json:"mode"`
+	// StorageClass for the volume; empty uses the L2 class.
+	StorageClass string `json:"storageClass,omitempty"`
+	// Size requested per volume (a ceiling; the model size is unknown at
+	// admission). Empty means "512Gi".
+	Size string `json:"size,omitempty"`
 }
 
 // DefaultPrewarmParallelism is the reader count when a profile does not set

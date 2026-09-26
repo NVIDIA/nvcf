@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
@@ -155,6 +156,10 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// One-downloader election for chart pods; nil when off or L2 is
 		// off (docs/proposals/helm-chart-cache-election.md).
 		Elector: a.elector,
+		// Write-once model volume for Helm functions; nil when off.
+		ModelVolume:       a.modelVolume,
+		ModelWaitDeadline: a.config.ModelVolume.WaitDeadline,
+		ModelHostRoot:     filepath.Join(a.config.OverlayRoot, "models"),
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
 		},

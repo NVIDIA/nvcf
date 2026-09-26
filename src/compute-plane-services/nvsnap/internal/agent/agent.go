@@ -45,6 +45,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime/crio" // register CRI-O factory
@@ -164,6 +165,9 @@ type Config struct {
 	// promoted rox); ignored when L2 is off.
 	Election ElectionConfig
 
+	// ModelVolume enables the write-once model volume for Helm functions.
+	ModelVolume ModelVolumeConfig
+
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
 	// Replication.ObjectStore.Provider AND HomeBucket are both non-empty,
@@ -220,6 +224,16 @@ type ElectionConfig struct {
 	// server evicts the gated followers for re-election. Zero means
 	// election.DefaultDeadline.
 	Deadline time.Duration
+}
+
+// ModelVolumeConfig configures docs/proposals/helm-shared-model-volume.md.
+type ModelVolumeConfig struct {
+	// Enabled turns the write-once model volume on. Needs L2 and a storage
+	// profile that resolves a mode (block on NVMesh, rwx when declared).
+	Enabled bool
+	// WaitDeadline bounds a reader's wait for the marker before it downloads
+	// itself. Zero means one hour.
+	WaitDeadline time.Duration
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
@@ -294,6 +308,10 @@ type Agent struct {
 	// elector is the admission election, built with the L2 backend when
 	// Election.Enabled; nil keeps the webhook on its explicit paths.
 	elector election.Elector
+	// modelVolume and modelMinter are built with the L2 backend when
+	// ModelVolume.Enabled; the webhook and the controller share them.
+	modelVolume *modelvolume.Provisioner
+	modelMinter *checkpointstore.SharedVolumePromoter
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path
@@ -641,6 +659,25 @@ func (a *Agent) Run(ctx context.Context) error {
 	// + cache data + injected pod fragments stay consistent.
 	if err := a.startWebhook(ctx, a.config.Webhook, backend); err != nil {
 		a.log.WithError(err).Error("agent admission webhook failed to start; continuing without it")
+	}
+	if a.modelVolume != nil {
+		// Completes writer volumes and binds them into pending readers on
+		// this node (docs/proposals/helm-shared-model-volume.md).
+		mvc := &ModelVolumeController{
+			Kube:              a.kubeClient,
+			Provisioner:       a.modelVolume,
+			Minter:            a.modelMinter,
+			NodeName:          a.config.NodeName,
+			HostRoot:          filepath.Join(a.config.OverlayRoot, "models"),
+			HolderImage:       a.config.L2.WriterImage,
+			HolderPullSecrets: l2PullSecrets(a.config.L2),
+			Log:               a.log.WithField("subsys", "modelvolume"),
+		}
+		go func() {
+			if err := mvc.Run(ctx); err != nil {
+				a.log.WithError(err).Error("model volume controller stopped")
+			}
+		}()
 	}
 
 	// nvsnap#194: OverlayFS cleanup-on-pod-delete + startup sweep. Safe

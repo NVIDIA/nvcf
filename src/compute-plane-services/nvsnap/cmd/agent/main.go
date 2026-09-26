@@ -174,6 +174,13 @@ func main() {
 	flag.DurationVar(&config.Election.Deadline, "election-deadline", 0,
 		"Bound on a leader's cold start plus capture; past it nvsnap-server evicts the gated followers for re-election (default 60m)")
 
+	// Write-once model volume for Helm functions
+	// (docs/proposals/helm-shared-model-volume.md). Needs L2.
+	flag.BoolVar(&config.ModelVolume.Enabled, "model-volume", false,
+		"Download each model once per cluster into a shared volume and attach it to every other pod that names it (needs L2)")
+	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
+		"How long a reader waits for the writer's download before downloading itself (default 1h)")
+
 	flag.StringVar(&config.Webhook.L2WaitImage, "webhook-l2-wait-image", "",
 		"Image ref for the nvsnap-l2-wait init container injected onto restore pods (nvsnap#147)")
 

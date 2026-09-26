@@ -112,6 +112,11 @@ spec:
             # stamped in the manifest.
             - --cachedir-env-file=/etc/nvsnap/cachedir-env/env
             {{- end }}
+            {{- if and .Values.agent.modelVolume .Values.agent.modelVolume.enabled }}
+            # write-once model volume (values: agent.modelVolume)
+            - --model-volume
+            - --model-volume-wait-deadline={{ .Values.agent.modelVolume.waitDeadline | default "1h" }}
+            {{- end }}
             {{- if and .Values.agent.election .Values.agent.election.enabled }}
             # one-downloader election (values: agent.election)
             - --election

@@ -268,6 +268,10 @@ type Mutator struct {
 	ModelVolume       *modelvolume.Provisioner
 	Groups            modelid.GroupResolver
 	ModelWaitDeadline time.Duration
+	// ModelHostRoot is the host directory (under the agent's Bidirectional
+	// overlays root) where Block-mode readers get their hostPath and the
+	// agent binds completed model volumes: <root>/<identity key>.
+	ModelHostRoot string
 
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a

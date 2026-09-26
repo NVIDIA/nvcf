@@ -124,6 +124,9 @@ func TestModelVolume_WriterBlock_NGCInit(t *testing.T) {
 	}
 	v := viewMV(pod, patches)
 	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	if v.annotations[modelvolume.DownloadInitAnnotation] != "download-ngc-model" {
+		t.Errorf("writer must name its download init for the agent, got %q", v.annotations[modelvolume.DownloadInitAnnotation])
+	}
 	if el.called != 1 || v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.RoleLabel] != "writer" {
 		t.Errorf("writer stamp: elected=%d ann=%v labels=%v", el.called, v.annotations, v.labels)
 	}
@@ -161,8 +164,18 @@ func TestModelVolume_ReaderBlock_PendingBind(t *testing.T) {
 	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" || v.annotations[modelvolume.LandingAnnotation] != "/config/models" {
 		t.Errorf("Block reader stamp: %v %v", v.labels, v.annotations)
 	}
-	if _, replaced := v.volumes["ngc-models"]; replaced {
-		t.Error("Block reader keeps its emptyDir; the agent binds the volume over it")
+	vol, replaced := v.volumes["ngc-models"]
+	if !replaced || vol.HostPath == nil || vol.HostPath.Path != "/var/lib/containerd/nvsnap-overlays/models/"+modelvolume.Key("ngc://org/team/nemotron3-ultra-genrm:bf16-fixed") || *vol.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("Block reader lands on a hostPath under the model host root for the agent to bind into, got %+v", vol)
+	}
+	var propagations int
+	for _, p := range patches {
+		if strings.HasSuffix(p.Path, "/mountPropagation") && p.Value == corev1.MountPropagationHostToContainer {
+			propagations++
+		}
+	}
+	if propagations != 2 {
+		t.Errorf("engine and download init mounts must propagate host mounts in, got %d", propagations)
 	}
 	s := v.initScripts["download-ngc-model"]
 	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") || !strings.Contains(s, "ngc registry model download-version") || !strings.Contains(s, "deadline passed") {

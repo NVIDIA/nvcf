@@ -72,6 +72,9 @@ const (
 	LandingAnnotation = "nvsnap.io/model-landing"
 	// MarkerFile at the volume root says the download completed.
 	MarkerFile = ".nvsnap-complete"
+	// DownloadInitAnnotation on a writer names the init container whose
+	// exit 0 means the download completed.
+	DownloadInitAnnotation = "nvsnap.io/model-download-init"
 
 	managedBy = "nvsnap"
 )
@@ -98,6 +101,12 @@ func ClaimName(uri string) string { return "nvsnap-model-" + Key(uri) }
 
 // ReadOnlyClaimName is the Block-mode read-only claim minted after completion.
 func ReadOnlyClaimName(uri string) string { return "nvsnap-model-" + Key(uri) + "-ro" }
+
+// ReadOnlyPVName is the static PV behind ReadOnlyClaimName in ns.
+func ReadOnlyPVName(uri, ns string) string {
+	sum := sha256.Sum256([]byte(ns))
+	return "nvsnap-model-" + Key(uri) + "-ro-" + hex.EncodeToString(sum[:4])
+}
 
 // State of an identity on the cluster, as the webhook needs it.
 type State struct {

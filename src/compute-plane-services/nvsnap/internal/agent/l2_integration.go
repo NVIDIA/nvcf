@@ -32,6 +32,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -39,6 +40,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 )
 
 // storageProfilesConfigMap is the optional per-cluster overlay that
@@ -162,14 +164,7 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 
 	// Default the mount-holder pull secret unless the operator
 	// explicitly cleared it. The "-" sentinel disables (no secret).
-	pullSecret := cfg.WriterPullSecret
-	if pullSecret == "" {
-		pullSecret = DefaultWriterPullSecret
-	}
-	var pullSecrets []string
-	if pullSecret != "" && pullSecret != "-" {
-		pullSecrets = []string{pullSecret}
-	}
+	pullSecrets := l2PullSecrets(cfg)
 
 	// Resolve the storage strategy from the L2 SC's provisioner +
 	// parameters.type (nvsnap#171). nil ⇒ the backend's applyDefaults
@@ -177,9 +172,16 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	// behavior) — back-compat for clusters with no profile match.
 	promoter, profile := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
 	a.l2Profile = profile
-	if a.config.Election.Enabled {
+	if a.config.Election.Enabled || a.config.ModelVolume.Enabled {
 		a.elector = &election.LeaseElector{KubeClient: kc, Namespace: cfg.Namespace, Deadline: a.config.Election.Deadline}
 		log.WithField("deadline", a.config.Election.Deadline).Info("admission election enabled (one downloader per hash)")
+	}
+	if a.config.ModelVolume.Enabled {
+		if mv, minter, err := buildModelVolume(kc, profile, promoter, cfg.StorageClass, log); err != nil {
+			log.WithError(err).Warn("model volume disabled")
+		} else {
+			a.modelVolume, a.modelMinter = mv, minter
+		}
 	}
 
 	// SnapshotClass is only meaningful for the snapshot-clone strategy.
@@ -345,4 +347,59 @@ func vramGBFromGPUType(gpuType string) string {
 		}
 	}
 	return ""
+}
+
+// buildModelVolume derives the write-once model volume setup from the
+// storage profile: "block" on shared-volume strategies (NVMesh), whose
+// promoter mints the read-only claims; "rwx" when the profile declares a
+// distributed-filesystem class. Anything else leaves Helm functions alone.
+func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageProfile, promoter checkpointstore.Promoter, l2Class string, log logrus.FieldLogger) (*modelvolume.Provisioner, *checkpointstore.SharedVolumePromoter, error) {
+	cfg := modelvolume.Config{StorageClass: l2Class, Size: resource.MustParse("512Gi")}
+	var mvp *checkpointstore.ModelVolumeProfile
+	if profile != nil {
+		mvp = profile.ModelVolume
+	}
+	switch {
+	case mvp != nil && mvp.Mode == string(modelvolume.ModeRWX):
+		cfg.Mode = modelvolume.ModeRWX
+	case mvp != nil && mvp.Mode == string(modelvolume.ModeBlock), mvp == nil && profile != nil && profile.Strategy == checkpointstore.StrategySharedVolume:
+		cfg.Mode = modelvolume.ModeBlock
+	default:
+		return nil, nil, errors.New("storage profile resolves no model volume mode (block needs a shared-volume strategy such as NVMesh; rwx must be declared with a distributed filesystem class)")
+	}
+	if mvp != nil {
+		if mvp.StorageClass != "" {
+			cfg.StorageClass = mvp.StorageClass
+		}
+		if mvp.Size != "" {
+			q, err := resource.ParseQuantity(mvp.Size)
+			if err != nil {
+				return nil, nil, fmt.Errorf("modelVolume.size %q: %w", mvp.Size, err)
+			}
+			cfg.Size = q
+		}
+	}
+	var minter *checkpointstore.SharedVolumePromoter
+	if cfg.Mode == modelvolume.ModeBlock {
+		sp, ok := promoter.(*checkpointstore.SharedVolumePromoter)
+		if !ok {
+			return nil, nil, errors.New("block mode needs the shared-volume promoter to mint read-only claims")
+		}
+		minter = sp
+	}
+	log.WithFields(logrus.Fields{"mode": cfg.Mode, "storage_class": cfg.StorageClass, "size": cfg.Size.String()}).Info("model volume enabled (one download per model per cluster)")
+	return &modelvolume.Provisioner{Kube: kc, Cfg: cfg}, minter, nil
+}
+
+// l2PullSecrets resolves the mount-holder / writer pull secret list: the
+// configured secret, the default unless cleared with "-", or none.
+func l2PullSecrets(cfg L2BackendConfig) []string {
+	pullSecret := cfg.WriterPullSecret
+	if pullSecret == "" {
+		pullSecret = DefaultWriterPullSecret
+	}
+	if pullSecret != "" && pullSecret != "-" {
+		return []string{pullSecret}
+	}
+	return nil
 }
