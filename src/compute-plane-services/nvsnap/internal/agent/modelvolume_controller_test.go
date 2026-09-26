@@ -54,12 +54,19 @@ func mvController(t *testing.T, kc *fake.Clientset, p *modelvolume.Provisioner, 
 	minter := &checkpointstore.SharedVolumePromoter{KubeClient: kc, StorageClass: "nvcf-sc", Transform: tx, MountOptions: []string{"ro", "norecovery", "nouuid"}, Log: logrus.New()}
 	att := []string{}
 	bnd := [][2]string{}
+	mounts := map[string]string{} // dst -> device, the fake mount table
 	c = &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: node, HostRoot: filepath.Join(t.TempDir(), "models"), Log: logrus.New()}
 	c.attach = func(_ context.Context, ns, claim string) (string, error) {
 		att = append(att, ns+"/"+claim)
 		return "/host/var/lib/kubelet/pods/h/volumes/kubernetes.io~csi/pv/mount", nil
 	}
-	c.bind = func(src, dst string) error { bnd = append(bnd, [2]string{src, dst}); return nil }
+	c.bind = func(src, dst string) error {
+		bnd = append(bnd, [2]string{src, dst})
+		mounts[dst] = "/dev/nvmesh/csi-abc"
+		return nil
+	}
+	c.unbind = func(dst string) error { delete(mounts, dst); return nil }
+	c.mountedDevice = func(dst string) string { return mounts[dst] }
 	return c, &att, &bnd
 }
 
@@ -183,5 +190,62 @@ func TestModelVolumeController_WaitsForPrimaryDetach(t *testing.T) {
 	c.Handle(ctx, reader)
 	if len(*attached) != 1 || len(*bound) != 1 {
 		t.Errorf("after detach the reader must be served: attached=%v bound=%v", *attached, *bound)
+	}
+}
+
+// Memory is not the truth: with nothing mounted at the target (agent
+// restarted, operator unmounted) the reader is bound again, and a bind that
+// belongs to a replaced volume of the same identity is redone.
+func TestModelVolumeController_RebindsWhenMountIsMissingOrStale(t *testing.T) {
+	kc, p := writerFixture(t)
+	ctx := context.Background()
+	cw, _, _ := mvController(t, kc, p, "node-a")
+	cw.HandleJob(ctx, downloadJob(1))
+	c, _, bound := mvController(t, kc, p, "node-b")
+	reader := readerPod("third-ns", "node-b")
+	if _, err := kc.CoreV1().Pods("third-ns").Create(ctx, reader, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, reader)
+	if len(*bound) != 1 {
+		t.Fatalf("first bind expected, got %v", *bound)
+	}
+	// Someone unmounted it: the next reader event binds again.
+	_ = c.unbind((*bound)[0][1])
+	c.Handle(ctx, reader)
+	if len(*bound) != 2 {
+		t.Errorf("a missing mount must be bound again, got %d binds", len(*bound))
+	}
+	// The identity was re-downloaded onto a new volume: the old bind is
+	// stale and must be replaced.
+	c.mountedDevice = func(string) string { return "/dev/nvmesh/csi-OLD" }
+	unbound := 0
+	c.unbind = func(string) error { unbound++; c.mountedDevice = func(string) string { return "" }; return nil }
+	c.Handle(ctx, reader)
+	if unbound != 1 || len(*bound) != 3 {
+		t.Errorf("stale bind must be unbound and redone: unbound=%d binds=%d", unbound, len(*bound))
+	}
+	if !deviceMatchesHandle("/dev/nvmesh/csi-abc", "cluster:csi-abc:vol:ns") || deviceMatchesHandle("/dev/nvmesh/csi-old", "cluster:csi-abc:vol:ns") || !deviceMatchesHandle("/dev/md127", "anything") {
+		t.Error("deviceMatchesHandle")
+	}
+}
+
+// A bind that leaves nothing mounted must not un-pend the reader; the
+// wait init would otherwise be released against an empty directory.
+func TestModelVolumeController_NoUnpendWithoutAMount(t *testing.T) {
+	kc, p := writerFixture(t)
+	ctx := context.Background()
+	cw, _, _ := mvController(t, kc, p, "node-a")
+	cw.HandleJob(ctx, downloadJob(1))
+	c, _, _ := mvController(t, kc, p, "node-b")
+	c.bind = func(string, string) error { return nil } // reports success, mounts nothing
+	reader := readerPod("other-ns", "node-b")
+	if _, err := kc.CoreV1().Pods("other-ns").Create(ctx, reader, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, reader)
+	got, _ := kc.CoreV1().Pods("other-ns").Get(ctx, "r-1", metav1.GetOptions{})
+	if got.Labels[modelvolume.PendingLabel] != "true" {
+		t.Error("reader must stay pending when nothing is mounted at the bind target")
 	}
 }

@@ -63,12 +63,15 @@ type ModelVolumeController struct {
 	Log               logrus.FieldLogger
 
 	// Seams for tests: attach returns the host path a claim is mounted at
-	// on this node; bind bind-mounts src onto dst read-only.
-	attach func(ctx context.Context, ns, claim string) (string, error)
-	bind   func(src, dst string) error
+	// on this node; bind bind-mounts src onto dst read-only; unbind undoes
+	// it; mountedDevice reports the block device mounted at a path ("" when
+	// nothing is mounted there).
+	attach        func(ctx context.Context, ns, claim string) (string, error)
+	bind          func(src, dst string) error
+	unbind        func(dst string) error
+	mountedDevice func(dst string) string
 
 	mu      sync.Mutex
-	bound   map[string]bool // dst paths already bound
 	holders map[string]*checkpointstore.MountHolder
 }
 
@@ -101,9 +104,6 @@ func (c *ModelVolumeController) Run(ctx context.Context) error {
 }
 
 func (c *ModelVolumeController) init() {
-	if c.bound == nil {
-		c.bound = map[string]bool{}
-	}
 	if c.holders == nil {
 		c.holders = map[string]*checkpointstore.MountHolder{}
 	}
@@ -112,6 +112,12 @@ func (c *ModelVolumeController) init() {
 	}
 	if c.bind == nil {
 		c.bind = bindReadOnly
+	}
+	if c.unbind == nil {
+		c.unbind = func(dst string) error { return syscall.Unmount(dst, syscall.MNT_DETACH) }
+	}
+	if c.mountedDevice == nil {
+		c.mountedDevice = mountedDeviceAt
 	}
 }
 
@@ -176,15 +182,28 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 		return // the wait init keeps waiting; the writer's completion re-triggers via its own event
 	}
 	dst := filepath.Join(c.HostRoot, modelvolume.Key(uri))
-	c.mu.Lock()
-	already := c.bound[dst]
-	c.mu.Unlock()
-	if !already {
+	// The mount table is the truth, not memory: the agent may have
+	// restarted, the volume may have been replaced by a re-download of the
+	// same identity, or an operator may have unmounted by hand. A bind is
+	// current only if the device under dst belongs to this primary PV.
+	primary, err := c.Kube.CoreV1().PersistentVolumes().Get(ctx, st.PrimaryPV, metav1.GetOptions{})
+	if err != nil {
+		log.WithError(err).Warn("model volume: get primary PV failed")
+		return
+	}
+	handle := ""
+	if primary.Spec.CSI != nil {
+		handle = primary.Spec.CSI.VolumeHandle
+	}
+	if dev := c.mountedDevice(dst); dev != "" && !deviceMatchesHandle(dev, handle) {
+		log.WithFields(logrus.Fields{"dst": dst, "device": dev}).Info("model volume: stale bind for a replaced volume; unbinding")
+		if err := c.unbind(dst); err != nil {
+			log.WithError(err).Warn("model volume: unbind stale bind failed")
+			return
+		}
+	}
+	if dev := c.mountedDevice(dst); dev == "" {
 		if c.Minter != nil {
-			if st.PrimaryPV == "" {
-				log.Warn("model volume: complete but no primary volume recorded")
-				return
-			}
 			// The read-only attach is refused while the download's
 			// read-write attachment still exists; wait for the detach.
 			detached, err := c.Provisioner.Detached(ctx, st.PrimaryPV)
@@ -214,9 +233,10 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 			log.WithError(err).Warn("model volume: bind failed")
 			return
 		}
-		c.mu.Lock()
-		c.bound[dst] = true
-		c.mu.Unlock()
+		if dev := c.mountedDevice(dst); dev == "" {
+			log.WithField("dst", dst).Warn("model volume: bind reported success but nothing is mounted at the target; not un-pending")
+			return
+		}
 		log.WithFields(logrus.Fields{"src": src, "dst": dst}).Info("model volume: bound read-only volume for reader")
 	}
 	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]string{modelvolume.PendingLabel: "false"}}})
@@ -276,4 +296,45 @@ func bindReadOnly(src, dst string) error {
 		return fmt.Errorf("remount %s read-only: %w", dst, err)
 	}
 	return nil
+}
+
+// mountedDeviceAt returns the source device of the mount at dst, or ""
+// when dst is not a mount point. Reads the agent's own mount table; dst
+// lives under the Bidirectional model root, so agent and host agree.
+func mountedDeviceAt(dst string) string {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return ""
+	}
+	dst = filepath.Clean(dst)
+	best := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 10 {
+			continue
+		}
+		if f[4] != dst {
+			continue
+		}
+		// fields after the "-" separator: fstype, source, options
+		for i := 6; i < len(f)-2; i++ {
+			if f[i] == "-" {
+				best = f[i+2]
+				break
+			}
+		}
+	}
+	return best
+}
+
+// deviceMatchesHandle reports whether a mounted device belongs to the CSI
+// volume behind handle. NVMesh devices are /dev/nvmesh/<csi-id> and the
+// handle carries the same csi-id segment; other drivers fall back to
+// "something is mounted, trust it".
+func deviceMatchesHandle(device, handle string) bool {
+	base := filepath.Base(device)
+	if !strings.HasPrefix(base, "csi-") || handle == "" {
+		return true
+	}
+	return strings.Contains(handle, base)
 }
