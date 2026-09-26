@@ -43,6 +43,8 @@ package checkpointstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -190,7 +192,7 @@ func (p *SharedVolumePromoter) Promote(ctx context.Context, in PromoteInput) (Pr
 	return PromoteResult{SharedClaimName: roxName, ReusedWriterVolume: true}, nil
 }
 
-func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string) error {
+func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string, extraLabels ...map[string]string) error {
 	if existing, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secName, metav1.GetOptions{}); err == nil {
 		return p.releaseStaleBinding(ctx, existing, roxName, ns)
 	} else if !apierrors.IsNotFound(err) {
@@ -208,6 +210,11 @@ func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *c
 			"nvsnap.io/per-capture":        "true",
 			"nvsnap.io/role":               "reader-shared",
 		},
+	}
+	for _, extra := range extraLabels {
+		for k, v := range extra {
+			sec.Labels[k] = v
+		}
 	}
 	sec.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 	sec.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
@@ -383,6 +390,7 @@ func (p *SharedVolumePromoter) Delete(ctx context.Context, hash, ns string) erro
 			errs = append(errs, fmt.Sprintf("primary PV %s: %v", primaryPVName, err))
 		}
 	}
+	errs = append(errs, p.deleteNamespacedClaims(ctx, hash)...)
 	if len(errs) > 0 {
 		return fmt.Errorf("shared-volume delete: %s", strings.Join(errs, "; "))
 	}
@@ -432,4 +440,98 @@ func (p *SharedVolumePromoter) deletePV(ctx context.Context, name string) error 
 		return err
 	}
 	return nil
+}
+
+// Namespace-local claims. The capture namespace gets nvsnap-ro-pv-<hash>
+// bound to rox-<hash> at promote. Any other namespace gets its own
+// secondary PV, nvsnap-ro-pv-<hash>-<ns8>, with the handle rewritten for
+// that namespace and a rox-<hash> claim bound to it: the same static-PV
+// pattern NVCA uses for one model volume across tenant namespaces. Both
+// carry nvsnap.io/hash-short and nvsnap.io/namespace so Delete can find
+// every one of them.
+
+const (
+	labelHashShort = "nvsnap.io/hash-short"
+	labelNamespace = "nvsnap.io/namespace"
+)
+
+// nsSuffix is a short stable token for a namespace name, safe in an
+// object name regardless of the namespace's length.
+func nsSuffix(ns string) string {
+	sum := sha256.Sum256([]byte(ns))
+	return hex.EncodeToString(sum[:4])
+}
+
+func namespacedSecondaryPVName(hash, ns string) string {
+	return secondaryPVName(hash) + "-" + nsSuffix(ns)
+}
+
+// EnsureClaim mints rox-<hash> in ns from the promoted secondary PV.
+func (p *SharedVolumePromoter) EnsureClaim(ctx context.Context, hash, ns string) error {
+	p.applyDefaults()
+	roxName := sharedROXName(hash)
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roxName, metav1.GetOptions{}); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get rox PVC %s/%s: %w", ns, roxName, err)
+	}
+	// The promote's own secondary PV is the proof the artifact exists and
+	// the source of the CSI handle to rewrite.
+	promoted, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secondaryPVName(hash), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get promoted PV %s: %w", secondaryPVName(hash), err)
+	}
+	if promoted.Spec.CSI == nil || promoted.Spec.CSI.VolumeHandle == "" {
+		return fmt.Errorf("promoted PV %s has no CSI volumeHandle", promoted.Name)
+	}
+	primaryName := p.primaryPVForHandle(ctx, promoted.Spec.CSI.VolumeHandle)
+	if primaryName == "" {
+		return fmt.Errorf("no primary PV found for promoted handle %q", promoted.Spec.CSI.VolumeHandle)
+	}
+	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, primaryName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get primary PV %s: %w", primaryName, err)
+	}
+	// Labels go on at create: N pods of one chart are admitted in the same
+	// second and each runs this, so a create-then-update would race on the
+	// PV's resourceVersion (seen on dev1: "the object has been modified").
+	// Create is idempotent through AlreadyExists; nothing here updates.
+	secName := namespacedSecondaryPVName(hash, ns)
+	if err := p.ensureSecondaryPV(ctx, primary, secName, roxName, ns, map[string]string{labelHashShort: ShortHash(hash), labelNamespace: ns}); err != nil {
+		return err
+	}
+	return p.ensureSharedROXPVC(ctx, ns, hash, roxName, secName, primary)
+}
+
+// deleteNamespacedClaims removes every rox claim and per-namespace
+// secondary PV minted by EnsureClaim for hash.
+func (p *SharedVolumePromoter) deleteNamespacedClaims(ctx context.Context, hash string) []string {
+	var errs []string
+	sel := labelHashShort + "=" + ShortHash(hash)
+	if pvcs, err := p.KubeClient.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: sel}); err == nil {
+		for i := range pvcs.Items {
+			c := &pvcs.Items[i]
+			if c.Name != sharedROXName(hash) {
+				continue
+			}
+			if derr := p.deletePVC(ctx, c.Namespace, c.Name); derr != nil {
+				errs = append(errs, fmt.Sprintf("rox %s/%s: %v", c.Namespace, c.Name, derr))
+			}
+		}
+	} else {
+		errs = append(errs, fmt.Sprintf("list rox claims: %v", err))
+	}
+	if pvs, err := p.KubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: sel}); err == nil {
+		for i := range pvs.Items {
+			if derr := p.deletePV(ctx, pvs.Items[i].Name); derr != nil {
+				errs = append(errs, fmt.Sprintf("secondary PV %s: %v", pvs.Items[i].Name, derr))
+			}
+		}
+	} else {
+		errs = append(errs, fmt.Sprintf("list secondary PVs: %v", err))
+	}
+	return errs
 }

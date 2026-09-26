@@ -40,6 +40,13 @@ import (
 // want nvsnap to fan out across the cluster.
 const DefaultCaptureLabel = "nvsnap.io/capture"
 
+// stampedHashAnnotation is the hash the election webhook composed at
+// admission (election.HashAnnotation; duplicated here so rootfsonly does
+// not import election). When present it overrides the watcher's own
+// composition, which would otherwise differ from admission's by the
+// resolved image digest and the webhook-injected env.
+const stampedHashAnnotation = "nvsnap.io/hash"
+
 // Watcher subscribes to Pod events on the local node, detects warm pods
 // (label + Ready), and triggers Capturer.Capture once per pod UID via the
 // HashInputComposer. Idempotent at every layer: even if multiple events
@@ -279,6 +286,7 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 
 	hashInput := w.Composer.Compose(pod, 0)
 	req := CaptureRequest{
+		Hash:            pod.Annotations[stampedHashAnnotation],
 		PodUID:          string(pod.UID),
 		Namespace:       pod.Namespace,
 		Name:            pod.Name,

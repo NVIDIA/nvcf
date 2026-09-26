@@ -86,6 +86,13 @@ rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # volumesnapshotcontents: a namespace-local restore claim on
+  # snapshot-clone storage is a clone of a pre-provisioned snapshot whose
+  # content points at the promote's CSI snapshot handle
+  # (SnapshotClonePromoter.EnsureClaim).
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   # storageclasses.get: the L2 backend probes the configured SC at
   # startup (internal/agent/l2_integration.go validateL2StorageClass)
   # to verify it exists and log its provisioner. Without this rule

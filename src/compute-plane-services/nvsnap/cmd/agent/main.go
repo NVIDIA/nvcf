@@ -167,6 +167,13 @@ func main() {
 	// Empty disables the inject (back-compat: PVC mount still works
 	// once the rox PVC binds; kubelet may stall in
 	// ContainerCreating in the meantime).
+	// One-downloader-per-hash admission election for chart-shaped model
+	// workloads (docs/proposals/helm-chart-cache-election.md). Needs L2.
+	flag.BoolVar(&config.Election.Enabled, "election", false,
+		"Elect one capture leader per cache hash at admission and gate the other model workers until the capture is promoted (needs L2)")
+	flag.DurationVar(&config.Election.Deadline, "election-deadline", 0,
+		"Bound on a leader's cold start plus capture; past it nvsnap-server evicts the gated followers for re-election (default 60m)")
+
 	flag.StringVar(&config.Webhook.L2WaitImage, "webhook-l2-wait-image", "",
 		"Image ref for the nvsnap-l2-wait init container injected onto restore pods (nvsnap#147)")
 

@@ -64,9 +64,11 @@ rules:
   # Lease ('nvsnap-promote-<short>') to serialize concurrent promote
   # attempts on the same hash. Deleted on hash delete so a future
   # re-capture isn't blocked by a stale lease holder.
+  # get/list/watch: the election reconciler lists nvsnap-capture-<short>
+  # Leases to check leader liveness and deletes them on release.
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
-    verbs: ["delete"]
+    verbs: ["get", "list", "watch", "delete"]
   # services.get: the observability proxy (internal/server/observability_proxy.go)
   # probes whether the grafana / jaeger / prometheus Services exist
   # before rendering the matching UI nav tile. Without this rule the

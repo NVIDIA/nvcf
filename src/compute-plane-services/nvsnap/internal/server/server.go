@@ -352,6 +352,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Namespace:  captureManifestNamespace,
 		Interval:   30 * time.Second,
 		Log:        s.log.WithField("subsys", "reconciler"),
+		Elections:  s.electionReleaser(),
 	}
 	go rec.Run(ctx)
 
@@ -2495,4 +2496,15 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// electionReleaser is the follower release/evict helper for the
+// one-downloader election. nil kube client (tests, offline) yields a
+// releaser whose methods are no-ops.
+func (s *Server) electionReleaser() *electionReleaser {
+	return &electionReleaser{
+		kube:    s.kubeClient,
+		leaseNS: captureManifestNamespace,
+		log:     s.log.WithField("subsys", "election"),
+	}
 }

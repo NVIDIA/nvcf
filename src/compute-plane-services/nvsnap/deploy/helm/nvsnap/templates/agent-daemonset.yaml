@@ -112,6 +112,11 @@ spec:
             # stamped in the manifest.
             - --cachedir-env-file=/etc/nvsnap/cachedir-env/env
             {{- end }}
+            {{- if and .Values.agent.election .Values.agent.election.enabled }}
+            # one-downloader election (values: agent.election)
+            - --election
+            - --election-deadline={{ .Values.agent.election.deadline | default "60m" }}
+            {{- end }}
             - --rootfs-cm-namespace={{ .Release.Namespace }}
             # nvsnap#194: OverlayFS scratch root. MUST match the
             # nvsnap-overlays volumeMount path below and the hostPath

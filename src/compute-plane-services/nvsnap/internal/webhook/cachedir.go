@@ -202,6 +202,13 @@ func sortedEnvVars(env map[string]string) []corev1.EnvVar {
 // whole dir as the rox PVC root. No-op when cachedir mode is off or the
 // main-container index is out of range.
 func (m *Mutator) cacheDirCapturePatches(pod *corev1.Pod) []PatchOp {
+	return m.cacheDirCapturePatchesFor(pod, false)
+}
+
+// cacheDirCapturePatchesFor is cacheDirCapturePatches with the opt-in
+// label check skipped for an elected leader, which is chosen by the
+// election rather than by the chart author.
+func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []PatchOp {
 	if m.CacheDir == "" {
 		return nil
 	}
@@ -209,7 +216,7 @@ func (m *Mutator) cacheDirCapturePatches(pod *corev1.Pod) []PatchOp {
 	// labeled for capture (nvsnap.io/capture: "true"), matching the rootfs
 	// capture watcher. Un-labeled pods (system/infra, helm-chart miniservice,
 	// anything not meant for capture) are left untouched. See CaptureLabel.
-	if pod.Labels[CaptureLabel] != "true" {
+	if !elected && pod.Labels[CaptureLabel] != "true" {
 		return nil
 	}
 	if m.MainContainer < 0 || m.MainContainer >= len(pod.Spec.Containers) {
@@ -287,16 +294,46 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	// capture predates EntryArgv, fall through to L1.
 
 	// Resolve the rox PVC (ErrNotFound = not Bound → caller falls to L1).
-	pm, err := m.L2Backend.Mount(ctx, hash, checkpointstore.VolumeMeta{
-		Name:      cacheDirVolumeName,
-		MountPath: m.CacheDir,
-		Type:      "cachedir",
-		Namespace: pod.Namespace,
-	})
+	pm, err := m.L2Backend.Mount(ctx, hash, cacheDirVolumeMeta(m.CacheDir, pod.Namespace))
 	if err != nil {
 		return nil, err
 	}
-	roxVol := pm.Volume
+	// Cache/model env: REPLAYED from the manifest (the per-checkpoint
+	// single source of truth), verbatim, so the paths match exactly what
+	// the capture pod ran with regardless of any later ConfigMap edit.
+	// Fall back to recomputing from CacheDir for pre-v0.1.0 cachedir
+	// captures that predate the stamped CacheEnv. NOTE: never read the
+	// live ConfigMap here; that would reintroduce the path-drift the
+	// stamp exists to prevent.
+	var envs []corev1.EnvVar
+	if len(manifest.CacheEnv) > 0 {
+		envs = sortedEnvVars(manifest.CacheEnv)
+	} else {
+		envs = cacheDirEnvVars(m.CacheDir)
+	}
+	return m.cacheDirRestorePatches(pod, pm.Volume, envs)
+}
+
+// cacheDirVolumeMeta is the L2 mount request for the cachedir rox.
+func cacheDirVolumeMeta(cacheDir, namespace string) checkpointstore.VolumeMeta {
+	return checkpointstore.VolumeMeta{
+		Name:      cacheDirVolumeName,
+		MountPath: cacheDir,
+		Type:      "cachedir",
+		Namespace: namespace,
+	}
+}
+
+// cacheDirRestorePatches builds the cachedir restore decoration around a
+// rox volume: the rox mounted read-only at m.CacheDir, a writable emptyDir
+// shadowing the cache subtree seeded from the rox, the page-cache prewarm,
+// and the cache env. The volume may name a claim that does not exist yet
+// (an election follower); nothing here checks the cluster.
+func (m *Mutator) cacheDirRestorePatches(pod *corev1.Pod, roxVol corev1.Volume, envs []corev1.EnvVar) ([]PatchOp, error) {
+	if m.MainContainer < 0 || m.MainContainer >= len(pod.Spec.Containers) {
+		return nil, fmt.Errorf("MainContainer index %d out of range (have %d containers)",
+			m.MainContainer, len(pod.Spec.Containers))
+	}
 	roxVol.Name = cacheDirVolumeName
 	if roxVol.PersistentVolumeClaim != nil {
 		roxVol.PersistentVolumeClaim.ReadOnly = true
@@ -309,7 +346,7 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 		}
 	}
 
-	patches := make([]PatchOp, 0, 11+len(manifest.CacheEnv))
+	patches := make([]PatchOp, 0, 11+len(envs))
 	if pod.Spec.Volumes == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes", Value: []any{}})
 	}
@@ -418,19 +455,6 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: prewarmInit})
 	}
 
-	// Cache/model env — REPLAYED from the manifest (the per-checkpoint
-	// single source of truth), verbatim, so the paths match exactly what
-	// the capture pod ran with regardless of any later ConfigMap edit.
-	// Fall back to recomputing from CacheDir for pre-v0.1.0 cachedir
-	// captures that predate the stamped CacheEnv. NOTE: never read the
-	// live ConfigMap here — that would reintroduce the path-drift the
-	// stamp exists to prevent.
-	var envs []corev1.EnvVar
-	if len(manifest.CacheEnv) > 0 {
-		envs = sortedEnvVars(manifest.CacheEnv)
-	} else {
-		envs = cacheDirEnvVars(m.CacheDir)
-	}
 	// NOTE: do NOT set HF_HUB_OFFLINE here. It only suppresses benign HF
 	// negative-cache (.no_exist) warnings, but vLLM's arg_utils keys off
 	// HF_HUB_OFFLINE to rewrite --model from the repo-id to the resolved
