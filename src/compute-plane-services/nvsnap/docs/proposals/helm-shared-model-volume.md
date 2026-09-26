@@ -174,3 +174,39 @@ Removed for Helm: `schedulingGates`, promote-to-ROX of the whole tree,
 5. Retire the gate; e2e on dev1 in all matrix rows that dev1 can host
    (NVMesh; DFS stands in with an NFS class), each measured cold, first
    deploy with two pods per instance, redeploy, second namespace.
+
+## Results, dev1 2026-09-26 (NVMesh, block mode)
+
+Stock `vllm-workers` chart, Qwen2.5-32B-Instruct TP=4, replicas=2 on two
+nodes, no nvsnap markers in the chart, agent v0.2.76-mv5.
+
+```
+first deploy (nothing on the cluster)
+  t+0       both pods admitted as readers (hostPath landing, wait init); one Job created
+  t+354s    Job succeeded: 65 GB via `hf download` into the RWO claim; claim released
+  t+400s    both readers un-pended (read-only PV minted per namespace, attached via
+            mount-holder, bound under /var/lib/containerd/nvsnap-models/<key>)
+  t+591s    both Ready; 0 downloads in either pod; serve " Paris. Correct!"
+uninstall + reinstall
+  t+12s     both un-pended (identity complete: no Job)
+  t+136s    both Ready
+earlier run, identity already complete on the cluster
+  t+205s    both Ready, wait init 10-15 s, engine reads the volume directly
+```
+
+Cold start of the same pod on the same node: 325 s. The reinstall number
+is the engine's own load and compile from a read-only NVMesh mount with no
+prewarm; compile caches on block storage are still the follow-up (step 4).
+
+Findings that changed the design during these runs:
+
+- NVMesh refuses a read-only attach on any node while the volume is
+  attached read-write anywhere, including a Succeeded Job pod that still
+  exists. Hence the download Job, its TTL, releasing the claim on
+  completion, and the detach check before minting.
+- The overlays root is swept by the L1 overlay GC; binds live under their
+  own Bidirectional hostPath.
+- Memory is not a mount table: binds are verified against the mounted
+  device and the volume handle and redone when missing or stale.
+- The agent's binds pin the volume on the node; unbinding when the last
+  reader leaves is part of retention (open).
