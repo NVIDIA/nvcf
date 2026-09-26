@@ -23,11 +23,18 @@ Use this skill from `deploy/helm/nvca-operator`.
 
 ## Values Flow
 
+Two install paths, and only one of them renders values from a stack.
+
 ```text
 nvca-operator/values.yaml                        the chart's own defaults
+  -> make install values=<path>                  the values file, used directly
+
+stack environment
   -> scripts/render_values_from_stack_env.sh     stack-aware generated values
-  -> make install or make install-from-stack     optional additional overrides
+  -> make install-from-stack                     the generated values
 ```
+
+Either accepts `additional_values=<path>` for further overrides.
 
 ## Permanent Defaults
 

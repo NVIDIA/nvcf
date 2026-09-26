@@ -2829,6 +2829,48 @@ class DecoupledVersionSourceTest(unittest.TestCase):
                 git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.28.6").strip()
             )
 
+    def test_publication_stamps_the_leader_as_of_the_chart_tag(self):
+        """Not HEAD: the chart files come from a worktree detached at the tag.
+
+        release-tags.yml packages from `git worktree add --detach <tag>` while
+        the checkout this reads history from stays on the branch tip. By the
+        time publication runs the tip can carry a newer leader release.
+        Stamping that would put appVersion ahead of the chart version the
+        release is named for, and would build a different archive on a re-run
+        of an immutable version.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0")
+            chart_tag = "deploy/helm/nvca-operator/v3.13.0"
+            git(root, "tag", chart_tag)
+
+            # main moves on, and a newer leader lands, before publication runs.
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "feat(nvca): add a thing")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.14.0")
+
+            stamped = []
+            self.github_release.repo_root = lambda: root
+            self.github_release.load_metadata = lambda *_args: self.metadata()
+            self.github_release.github_release_mode = lambda: (True, False)
+            self.github_release.publish_release_chart = (
+                lambda _root, _service, _version, _dry_run, app_version=None:
+                    stamped.append(app_version)
+            )
+            self.github_release.create_release = lambda *_a, **_k: None
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.tag_release(
+                    types.SimpleNamespace(tag=chart_tag, metadata="metadata.json")
+                )
+
+            self.assertEqual(
+                stamped, ["3.13.0"],
+                "the package must declare the leader release this tag shipped, not the tip",
+            )
+
     def test_refresh_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"

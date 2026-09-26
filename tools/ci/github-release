@@ -2342,10 +2342,19 @@ def tag_release(args):
         # so the published appVersion cannot lag the operator it ships. Resolved
         # from app_version_source, not from the chart's own version, so a chart
         # that stops sharing that version line still declares it correctly.
+        #
+        # As of the chart tag's own commit, never HEAD. The chart files come
+        # from a worktree detached at that tag, and the branch tip can carry a
+        # newer leader release by the time this runs. Reading HEAD would stamp a
+        # version the tag never shipped: it would put appVersion ahead of the
+        # chart version this release is named for, and a re-run would build a
+        # different archive for an immutable version.
         app_version = None
         app_version_source = chart_service.get("app_version_source")
         if app_version_source:
-            app_version = leader_release_version(root, metadata, app_version_source) or None
+            app_version = leader_release_version(
+                root, metadata, app_version_source, end=tag_sha(root, tag)
+            ) or None
             if not app_version:
                 print(
                     f"[github-release] {chart_service['id']}: {app_version_source} has no "
