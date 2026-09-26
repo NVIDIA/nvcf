@@ -272,10 +272,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 	}
 	download := ""
 	if id.Scheme == "hf" {
-		download = "huggingface-cli download " + shellQuote(id.Ref)
-		if id.Revision != "" {
-			download += " --revision " + shellQuote(id.Revision)
-		}
+		download = hfDownloadCommand(id)
 	}
 	script := readerScript(download, marker, deadline)
 	if writer {
@@ -431,4 +428,16 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// hfDownloadCommand fetches a Hugging Face repo into HF_HOME. huggingface_hub
+// 1.x renamed the CLI to `hf` and made `huggingface-cli` a stub that only
+// prints a deprecation notice (seen in vllm/vllm-openai:v0.20.0), so prefer
+// `hf` and fall back for older images.
+func hfDownloadCommand(id modelid.Identity) string {
+	args := shellQuote(id.Ref)
+	if id.Revision != "" {
+		args += " --revision " + shellQuote(id.Revision)
+	}
+	return fmt.Sprintf("if command -v hf >/dev/null 2>&1; then hf download %[1]s; else huggingface-cli download %[1]s; fi", args)
 }

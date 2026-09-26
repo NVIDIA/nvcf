@@ -230,7 +230,7 @@ func TestModelVolume_EngineDownload_InjectedInit(t *testing.T) {
 	}
 	init := v.newInits[0]
 	s := init.Args[0]
-	if !strings.Contains(s, "huggingface-cli download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "touch /root/.cache/huggingface/.nvsnap-complete") {
+	if !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "huggingface-cli download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "touch /root/.cache/huggingface/.nvsnap-complete") {
 		t.Errorf("injected init script:\n%s", s)
 	}
 	if init.Image != pod.Spec.Containers[0].Image || len(init.VolumeMounts) != 1 || init.VolumeMounts[0].MountPath != "/root/.cache/huggingface" {
