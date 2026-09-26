@@ -207,6 +207,28 @@ earlier run, identity already complete on the cluster
   t+205s    both Ready, wait init 10-15 s, engine reads the volume directly
 ```
 
+PVC reader mode (the default since the function-namespace fixes), same
+chart, Qwen2.5-14B-Instruct TP=4, replicas=2, agent v0.2.76-mv6:
+
+```
+first deploy (fresh identity)
+  t+0       both pods admitted as readers referencing nvsnap-model-<key>-ro; Pending on
+            "persistentvolumeclaim not found"; one Job created (2 CPU / 4 Gi requests,
+            no SA token, seccomp, dropped capabilities)
+  t+135s    Job succeeded: 28 GB via `hf download`
+  t+195s    read-only PV and claim minted in the pod namespace after the primary
+            detached; both readers un-pended and scheduled; init found the marker
+  t+344s    both Ready; 0 downloads; /root/.cache/huggingface is the NVMesh volume
+            mounted ro,norecovery,nouuid; serve " Paris. The capital"
+uninstall + reinstall
+  t+118s    both Ready (claim minted at admission, no pending phase)
+```
+
+No hostPath and no agent bind in this mode. Kyverno on dev1 is Audit, so
+the remaining warnings were the stock chart's own containers plus, until
+v0.2.76-mv8, the injected init (no resources, capabilities not dropped,
+no runAsNonRoot); the enforced rejection itself is not testable on dev1.
+
 Cold start of the same pod on the same node: 325 s. The reinstall number
 is the engine's own load and compile from a read-only NVMesh mount with no
 prewarm; compile caches on block storage are still the follow-up (step 4).
