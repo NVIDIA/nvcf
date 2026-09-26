@@ -5,14 +5,13 @@ package webhook
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"path"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
@@ -45,7 +44,7 @@ const (
 // pod is not a downloader or the feature is off, and Mutate continues
 // with the older paths.
 func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error) {
-	if m.ModelVolume == nil || m.Elector == nil {
+	if m.ModelVolume == nil {
 		return nil, nil
 	}
 	if gpuRequest(pod) == 0 {
@@ -74,62 +73,92 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 	if err != nil {
 		return nil, err
 	}
-	role := election.RoleFollower
 	if !st.Complete {
-		r, _, err := m.Elector.Elect(ctx, leaseHash(uri), pod)
+		// The download step is a Job, created once per identity; create is
+		// atomic so concurrent admissions converge without an election.
+		// The claim lives where the Job runs, the pod's namespace.
+		claim, err := m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
 		if err != nil {
 			return nil, err
 		}
-		role = r
+		step, ok := m.downloadStep(pod, main, land, res.Identity)
+		if !ok {
+			log.Info("model volume: no download step can be derived (engine downloads a non-HF model); leaving pod alone")
+			return nil, nil
+		}
+		job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, claim, step)
+		if err != nil {
+			return nil, err
+		}
+		log.WithFields(logrus.Fields{"claim": claim, "job": job}).Info("model volume: download job ensured")
 	}
-	switch {
-	case role == election.RoleLeader:
+	patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
+	switch m.ModelVolume.Cfg.Mode {
+	case modelvolume.ModeRWX:
 		claim, err := m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
 		if err != nil {
 			return nil, err
 		}
-		patches = append(patches, mp.label(modelvolume.RoleLabel, "writer")...)
-		if land.Downloader == modelid.DownloaderInit {
-			patches = append(patches, mp.annotation(modelvolume.DownloadInitAnnotation, land.InitContainer)...)
-		} else if res.Identity.Scheme == "hf" {
-			patches = append(patches, mp.annotation(modelvolume.DownloadInitAnnotation, injectedDownloadInit)...)
-		}
 		patches = append(patches, m.substituteLandingVolume(pod, main, land, claim)...)
-		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, true)...)
-		patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
-		log.WithField("claim", claim).Info("model volume: writer; download lands in the shared volume")
-	case m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX:
-		// Readers share the claim in the writer's namespace when it is
-		// ours, else get one minted in theirs (EnsureClaim, cross
-		// namespace, is the same volume on a distributed filesystem).
-		claim, err := m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
-		if err != nil {
-			return nil, err
-		}
-		patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
-		patches = append(patches, m.substituteLandingVolume(pod, main, land, claim)...)
-		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
-		patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
 		log.WithFields(logrus.Fields{"claim": claim, "complete": st.Complete}).Info("model volume: reader on shared filesystem; waits for the marker")
 	default:
-		// Block mode reader: the emptyDir stays; the agent binds the
-		// completed read-only volume over it and drops the marker.
-		patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
+		// Block mode: hostPath landing; the agent binds the completed
+		// read-only volume over it and the marker inside appears.
 		patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
 		patches = append(patches, mp.annotation(modelvolume.LandingAnnotation, landingMount(land))...)
 		patches = append(patches, m.hostPathLanding(pod, main, land, uri)...)
-		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
-		patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
 		log.WithField("complete", st.Complete).Info("model volume: reader on block storage; agent binds the volume after completion")
 	}
+	patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
+	patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
 	return patches, nil
 }
 
-// leaseHash keys the writer election by model identity, in the 64-hex form
-// the Lease naming expects.
-func leaseHash(uri string) string {
-	sum := sha256.Sum256([]byte("model:" + uri))
-	return hex.EncodeToString(sum[:])
+// downloadStep derives the Job's container from the pod: the chart's own
+// download init wrapped to touch the marker, or `hf download` on the
+// engine image when the engine fetches the model itself.
+func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, id modelid.Identity) (modelvolume.DownloadStep, bool) {
+	step := modelvolume.DownloadStep{ImagePullSecrets: pod.Spec.ImagePullSecrets, Tolerations: pod.Spec.Tolerations, NodeSelector: pod.Spec.NodeSelector}
+	if land.Downloader == modelid.DownloaderInit {
+		for i := range pod.Spec.InitContainers {
+			init := pod.Spec.InitContainers[i]
+			if init.Name != land.InitContainer {
+				continue
+			}
+			mount := initMountFor(&init, land)
+			orig := shellJoin(append(append([]string{}, init.Command...), init.Args...))
+			c := *init.DeepCopy()
+			c.Command = []string{"/bin/sh", "-c"}
+			c.Args = []string{writerScript(orig, path.Join(mount, modelvolume.MarkerFile))}
+			c.VolumeMounts = []corev1.VolumeMount{{Name: landVolumeName(land), MountPath: mount}}
+			step.Container = c
+			step.VolumeName = landVolumeName(land)
+			return step, true
+		}
+		return step, false
+	}
+	if id.Scheme != "hf" {
+		return step, false
+	}
+	step.VolumeName = landVolumeName(land)
+	step.Container = corev1.Container{
+		Image:        main.Image,
+		Command:      []string{"/bin/sh", "-c"},
+		Args:         []string{writerScript(hfDownloadCommand(id), path.Join(land.Path, modelvolume.MarkerFile))},
+		Env:          append([]corev1.EnvVar{{Name: "HF_HOME", Value: land.Path}}, tokenEnv(main)...),
+		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: land.Path}},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")},
+		},
+	}
+	return step, true
+}
+
+func landVolumeName(land modelid.Landing) string {
+	if land.VolumeName != "" {
+		return land.VolumeName
+	}
+	return modelVolumeName
 }
 
 func gpuRequest(pod *corev1.Pod) int64 {

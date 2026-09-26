@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sirupsen/logrus"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,17 +62,13 @@ func mvController(t *testing.T, kc *fake.Clientset, p *modelvolume.Provisioner, 
 	return c, &att, &bnd
 }
 
-func writerPod(exit *int32) *corev1.Pod {
-	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "w-0", Namespace: "sr-fn",
-			Labels:      map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "writer"},
-			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI, modelvolume.DownloadInitAnnotation: "download-ngc-model"}},
-		Spec: corev1.PodSpec{NodeName: "node-a"},
+func downloadJob(succeeded int32) *batchv1.Job {
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI), Namespace: "sr-fn",
+			Labels:      map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI)},
+			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI}},
+		Status: batchv1.JobStatus{Succeeded: succeeded},
 	}
-	if exit != nil {
-		p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "download-ngc-model", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: *exit}}}}
-	}
-	return p
 }
 
 func readerPod(ns, node string) *corev1.Pod {
@@ -83,25 +80,19 @@ func readerPod(ns, node string) *corev1.Pod {
 	}
 }
 
-func TestModelVolumeController_WriterCompletionMintsReadOnly(t *testing.T) {
+func TestModelVolumeController_JobCompletionMintsReadOnly(t *testing.T) {
 	kc, p := writerFixture(t)
 	c, _, _ := mvController(t, kc, p, "node-a")
 	ctx := context.Background()
 
-	c.Handle(ctx, writerPod(nil)) // init still running
+	c.HandleJob(ctx, downloadJob(0)) // still running
 	if st, _ := p.Lookup(ctx, mvURI); st.Complete {
-		t.Fatal("no completion before the download init exits")
+		t.Fatal("no completion before the Job succeeds")
 	}
-	one := int32(1)
-	c.Handle(ctx, writerPod(&one)) // init failed
-	if st, _ := p.Lookup(ctx, mvURI); st.Complete {
-		t.Fatal("a failed download must not complete the volume")
-	}
-	zero := int32(0)
-	c.Handle(ctx, writerPod(&zero))
+	c.HandleJob(ctx, downloadJob(1))
 	st, _ := p.Lookup(ctx, mvURI)
 	if !st.Complete {
-		t.Fatal("exit 0 must mark the claim complete")
+		t.Fatal("a succeeded Job must mark the claim complete")
 	}
 	ro, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{})
 	if err != nil {
@@ -119,9 +110,9 @@ func TestModelVolumeController_WriterCompletionMintsReadOnly(t *testing.T) {
 		t.Error("the writer's PV must be retained; it is the artifact")
 	}
 	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err != nil {
-		t.Error("the writer claim stays: the writer is still running on it")
+		t.Error("the download claim stays: it is the artifact")
 	}
-	c.Handle(ctx, writerPod(&zero)) // idempotent
+	c.HandleJob(ctx, downloadJob(1)) // idempotent
 }
 
 func TestModelVolumeController_PendingReaderBoundOnItsNode(t *testing.T) {
@@ -137,9 +128,8 @@ func TestModelVolumeController_PendingReaderBoundOnItsNode(t *testing.T) {
 	if len(*attached) != 0 || len(*bound) != 0 {
 		t.Fatal("nothing may be attached before the download completes")
 	}
-	zero := int32(0)
 	cw, _, _ := mvController(t, kc, p, "node-a")
-	cw.Handle(ctx, writerPod(&zero))
+	cw.HandleJob(ctx, downloadJob(1))
 
 	// Readers on other nodes are not this agent's business, even before
 	// anything is bound here.

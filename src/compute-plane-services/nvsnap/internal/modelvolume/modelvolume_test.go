@@ -70,3 +70,40 @@ func TestProvisioner_LookupAndComplete(t *testing.T) {
 		t.Errorf("names: %s %s", ClaimName(uri), ReadOnlyClaimName(uri))
 	}
 }
+
+func TestProvisioner_DownloadJobIdempotent(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc", Size: resource.MustParse("1Gi")}}
+	step := DownloadStep{
+		Container:        corev1.Container{Image: "vllm/vllm-openai", Command: []string{"/bin/sh", "-c"}, Args: []string{"hf download x && touch /m/.nvsnap-complete"}, VolumeMounts: []corev1.VolumeMount{{Name: "models", MountPath: "/m"}}},
+		ImagePullSecrets: []corev1.LocalObjectReference{{Name: "pull"}},
+		Tolerations:      []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists}},
+		VolumeName:       "models",
+	}
+	name, err := p.EnsureDownloadJob(ctx, uri, "fn", ClaimName(uri), step)
+	if err != nil || name != JobName(uri) {
+		t.Fatalf("%v %q", err, name)
+	}
+	job, err := kc.BatchV1().Jobs("fn").Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := job.Spec.Template.Spec
+	if ps.RestartPolicy != corev1.RestartPolicyOnFailure || ps.ImagePullSecrets[0].Name != "pull" || len(ps.Tolerations) != 1 || ps.Volumes[0].PersistentVolumeClaim.ClaimName != ClaimName(uri) || ps.Containers[0].VolumeMounts[0].MountPath != "/m" || job.Annotations[IdentityAnnotation] != uri {
+		t.Errorf("job spec: %+v", ps)
+	}
+	if _, err := p.EnsureDownloadJob(ctx, uri, "fn", ClaimName(uri), step); err != nil {
+		t.Errorf("second EnsureDownloadJob must be a no-op: %v", err)
+	}
+	if ok, _ := p.JobSucceeded(ctx, uri, "fn"); ok {
+		t.Error("job has not succeeded yet")
+	}
+	job.Status.Succeeded = 1
+	if _, err := kc.BatchV1().Jobs("fn").UpdateStatus(ctx, job, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := p.JobSucceeded(ctx, uri, "fn"); !ok {
+		t.Error("succeeded job must report true")
+	}
+}

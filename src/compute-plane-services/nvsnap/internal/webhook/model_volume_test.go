@@ -114,7 +114,7 @@ func atoi(s string) int {
 	return n
 }
 
-func TestModelVolume_WriterBlock_NGCInit(t *testing.T) {
+func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	m, el := mvMutator(t, modelvolume.ModeBlock, election.RoleLeader, kc)
 	pod := ngcFunctionPod()
@@ -124,31 +124,34 @@ func TestModelVolume_WriterBlock_NGCInit(t *testing.T) {
 	}
 	v := viewMV(pod, patches)
 	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
-	if v.annotations[modelvolume.DownloadInitAnnotation] != "download-ngc-model" {
-		t.Errorf("writer must name its download init for the agent, got %q", v.annotations[modelvolume.DownloadInitAnnotation])
+	if el.called != 0 {
+		t.Error("the download step is a Job; no election runs")
 	}
-	if el.called != 1 || v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.RoleLabel] != "writer" {
-		t.Errorf("writer stamp: elected=%d ann=%v labels=%v", el.called, v.annotations, v.labels)
+	if v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
+		t.Errorf("every pod is a reader: ann=%v labels=%v", v.annotations, v.labels)
 	}
-	vol, ok := v.volumes["ngc-models"]
-	if !ok || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != modelvolume.ClaimName(uri) {
-		t.Errorf("landing emptyDir must be replaced by the writer claim, got %+v", vol)
+	pvc, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ClaimName(uri), metav1.GetOptions{})
+	if err != nil || pvc.Spec.AccessModes[0] != corev1.ReadWriteOnce {
+		t.Errorf("download claim must exist RWO in the pod namespace: %v", err)
 	}
-	if pvc, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ClaimName(uri), metav1.GetOptions{}); err != nil || pvc.Spec.AccessModes[0] != corev1.ReadWriteOnce {
-		t.Errorf("writer claim must exist RWO in the pod namespace: %v", err)
+	job, err := kc.BatchV1().Jobs("sr-fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("download Job must be created: %v", err)
 	}
-	if len(v.roMounts) != 1 || !strings.Contains(v.roMounts[0], "/spec/containers/0/volumeMounts/1/") {
-		t.Errorf("engine's model mount must become read-only, got %v", v.roMounts)
+	jc := job.Spec.Template.Spec.Containers[0]
+	script := jc.Args[0]
+	if jc.Image != "nvcr.io/org/ultra:vllm" || !strings.Contains(script, "ngc registry model download-version") || !strings.Contains(script, "touch /config/models/.nvsnap-complete") {
+		t.Errorf("job must run the chart's own download then touch the marker:\n%s", script)
+	}
+	if len(jc.Env) != 2 || jc.VolumeMounts[0].MountPath != "/config/models" || job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != modelvolume.ClaimName(uri) {
+		t.Errorf("job must carry the init's env and mount the claim at the init's path: env=%v mounts=%v", jc.Env, jc.VolumeMounts)
 	}
 	s := v.initScripts["download-ngc-model"]
-	if !strings.Contains(s, "ngc registry model download-version") || !strings.Contains(s, "touch /config/models/.nvsnap-complete") || !strings.Contains(s, "already complete") {
-		t.Errorf("writer init must run the original download then touch the marker:\n%s", s)
+	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
+		t.Errorf("the pod's own init becomes a wait:\n%s", s)
 	}
-	if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" || v.env["HF_HOME"] != "" || v.env["NIM_CACHE_PATH"] != "" {
+	if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" || v.env["HF_HOME"] != "" {
 		t.Errorf("Block mode: compile caches to the local cachedir, model env untouched: %v", v.env)
-	}
-	if _, ok := v.volumes[cacheDirVolumeName]; !ok {
-		t.Error("Block mode must add the local cachedir emptyDir for the compile caches")
 	}
 }
 
@@ -186,9 +189,6 @@ func TestModelVolume_ReaderBlock_PendingBind(t *testing.T) {
 			t.Fatal("no pod is ever gated on the model volume path")
 		}
 	}
-	if pvcs, _ := kc.CoreV1().PersistentVolumeClaims("").List(context.Background(), metav1.ListOptions{}); len(pvcs.Items) != 0 {
-		t.Error("a Block reader must not create claims")
-	}
 }
 
 func TestModelVolume_ReaderRWX_SharesClaim(t *testing.T) {
@@ -216,7 +216,7 @@ func TestModelVolume_ReaderRWX_SharesClaim(t *testing.T) {
 	}
 }
 
-func TestModelVolume_EngineDownload_InjectedInit(t *testing.T) {
+func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	m, _ := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
 	pod := stockVLLMPod()
@@ -225,36 +225,38 @@ func TestModelVolume_EngineDownload_InjectedInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	if len(v.newInits) != 1 || v.newInits[0].Name != "nvsnap-model-download" {
-		t.Fatalf("engine-download writer needs an injected download init, got %v", v.newInits)
+	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	job, err := kc.BatchV1().Jobs("fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("engine-download needs a download Job: %v", err)
 	}
-	init := v.newInits[0]
-	s := init.Args[0]
-	if !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "huggingface-cli download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "touch /root/.cache/huggingface/.nvsnap-complete") {
-		t.Errorf("injected init script:\n%s", s)
-	}
-	if init.Image != pod.Spec.Containers[0].Image || len(init.VolumeMounts) != 1 || init.VolumeMounts[0].MountPath != "/root/.cache/huggingface" {
-		t.Errorf("init must reuse the engine image and mount the model volume at HF_HOME: %+v", init)
+	jc := job.Spec.Template.Spec.Containers[0]
+	s := jc.Args[0]
+	if jc.Image != pod.Spec.Containers[0].Image || !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "touch /root/.cache/huggingface/.nvsnap-complete") || jc.VolumeMounts[0].MountPath != "/root/.cache/huggingface" {
+		t.Errorf("job must run hf download on the engine image into HF_HOME: image=%s mounts=%v\n%s", jc.Image, jc.VolumeMounts, s)
 	}
 	var sawToken bool
-	for _, e := range init.Env {
+	for _, e := range jc.Env {
 		if e.Name == "HF_TOKEN" && e.ValueFrom != nil {
 			sawToken = true
 		}
 	}
 	if !sawToken {
-		t.Error("registry credentials must be forwarded to the download init")
+		t.Error("registry credentials must be forwarded to the download Job")
+	}
+	if len(v.newInits) != 1 || v.newInits[0].Name != "nvsnap-model-download" || !strings.Contains(v.newInits[0].Args[0], "while [ ! -f") {
+		t.Errorf("the pod gets a wait init, got %v", v.newInits)
 	}
 	if v.env["HF_HUB_OFFLINE"] != "1" {
 		t.Error("engine must start offline and read the volume")
 	}
 	vol, ok := v.volumes[modelVolumeName]
 	if !ok || vol.PersistentVolumeClaim == nil {
-		t.Errorf("rootfs landing gets a new claim volume: %+v", vol)
+		t.Errorf("RWX mode: rootfs landing gets the claim volume: %+v", vol)
 	}
 }
 
-func TestModelVolume_CompleteSkipsElection(t *testing.T) {
+func TestModelVolume_CompleteCreatesNoJob(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	m, el := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
 	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
@@ -270,7 +272,10 @@ func TestModelVolume_CompleteSkipsElection(t *testing.T) {
 	}
 	v := viewMV(stockVLLMPod(), patches)
 	if el.called != 0 || v.labels[modelvolume.RoleLabel] != "reader" {
-		t.Errorf("complete volume: no election, reader role; elected=%d labels=%v", el.called, v.labels)
+		t.Errorf("complete volume: reader role; labels=%v", v.labels)
+	}
+	if _, err := kc.BatchV1().Jobs("fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("a complete volume needs no download Job")
 	}
 }
 

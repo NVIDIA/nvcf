@@ -38,6 +38,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -203,4 +204,82 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 		return fmt.Errorf("label claim %s/%s complete: %w", ns, name, err)
 	}
 	return nil
+}
+
+// JobName is the download Job for a model URI.
+func JobName(uri string) string { return "nvsnap-model-dl-" + Key(uri) }
+
+// DownloadStep is the container that fetches the model into the claim,
+// derived by the webhook from the chart's own download init (or from the
+// engine image plus `hf download`), already wrapped to touch the marker.
+type DownloadStep struct {
+	Container        corev1.Container
+	ImagePullSecrets []corev1.LocalObjectReference
+	Tolerations      []corev1.Toleration
+	NodeSelector     map[string]string
+	// VolumeName is the name the container mounts the claim under.
+	VolumeName string
+}
+
+// EnsureDownloadJob creates the one download Job for uri in ns, writing
+// into claim. Create is atomic, so N concurrent admissions produce one
+// Job and need no election. On NVMesh the Job's exit is what releases the
+// volume for read-only attaches elsewhere; a download inside a serving
+// pod would hold it forever.
+func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim string, step DownloadStep) (string, error) {
+	name := JobName(uri)
+	if _, err := p.Kube.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		return name, nil
+	} else if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("get job %s/%s: %w", ns, name, err)
+	}
+	backoff := int32(6)
+	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, IdentityLabel: Key(uri)}
+	c := step.Container
+	c.Name = "download"
+	c.VolumeMounts = []corev1.VolumeMount{{Name: step.VolumeName, MountPath: mountPathOf(step)}}
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: map[string]string{IdentityAnnotation: uri}},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: &backoff,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: new(bool),
+					ImagePullSecrets:             step.ImagePullSecrets,
+					Tolerations:                  step.Tolerations,
+					NodeSelector:                 step.NodeSelector,
+					Containers:                   []corev1.Container{c},
+					Volumes: []corev1.Volume{{Name: step.VolumeName, VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}}},
+				},
+			},
+		},
+	}
+	if _, err := p.Kube.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return "", fmt.Errorf("create job %s/%s: %w", ns, name, err)
+	}
+	return name, nil
+}
+
+func mountPathOf(step DownloadStep) string {
+	for _, vm := range step.Container.VolumeMounts {
+		if vm.Name == step.VolumeName {
+			return vm.MountPath
+		}
+	}
+	return "/models"
+}
+
+// JobSucceeded reports whether the download Job for uri in ns finished.
+func (p *Provisioner) JobSucceeded(ctx context.Context, uri, ns string) (bool, error) {
+	job, err := p.Kube.BatchV1().Jobs(ns).Get(ctx, JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return job.Status.Succeeded > 0, nil
 }

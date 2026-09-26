@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,18 +30,20 @@ import (
 // ModelVolumeController is the agent half of
 // docs/proposals/helm-shared-model-volume.md.
 //
-//   - Writers (any node): when the download init named on the pod exits
-//     0, the writer claim is labelled complete and, on block storage, the
-//     read-only claim is minted in the writer's namespace.
+//   - Download Jobs (any node): when the Job for an identity succeeds, the
+//     claim is labelled complete and, on block storage, the read-only
+//     claim is minted in the Job's namespace. The Job's exit is what
+//     released the volume; NVMesh refuses a read-only attach while a
+//     running pod holds it read-write.
 //   - Pending readers on this node (block storage): once the identity is
 //     complete, the read-only claim is minted in the reader's namespace,
 //     attached to this node through a mount-holder, bind-mounted read-only
 //     onto the reader's hostPath landing (under the Bidirectional overlays
-//     root, so kubelet's mount sees it), and the pod is un-pended. The
-//     writer touched the marker inside the volume, so the reader's wait
-//     init sees it as soon as the bind lands.
+//     root, so kubelet's mount sees it), and the pod is un-pended. The Job
+//     touched the marker inside the volume, so the reader's wait init sees
+//     it as soon as the bind lands.
 //
-// Every agent watches writers; marking and minting are idempotent, so the
+// Every agent watches Jobs; marking and minting are idempotent, so the
 // race between agents is harmless. Only the agent on the reader's node
 // binds for it.
 type ModelVolumeController struct {
@@ -73,16 +76,23 @@ func (c *ModelVolumeController) Run(ctx context.Context) error {
 	c.init()
 	factory := informers.NewSharedInformerFactoryWithOptions(c.Kube, 30*time.Second,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) { o.LabelSelector = modelvolume.IdentityLabel }))
-	informer := factory.Core().V1().Pods().Informer()
-	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	pods := factory.Core().V1().Pods().Informer()
+	if _, err := pods.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { c.handle(ctx, obj) },
 		UpdateFunc: func(_, obj any) { c.handle(ctx, obj) },
 	}); err != nil {
-		return fmt.Errorf("AddEventHandler: %w", err)
+		return fmt.Errorf("AddEventHandler pods: %w", err)
+	}
+	jobs := factory.Batch().V1().Jobs().Informer()
+	if _, err := jobs.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj any) { c.handleJob(ctx, obj) },
+		UpdateFunc: func(_, obj any) { c.handleJob(ctx, obj) },
+	}); err != nil {
+		return fmt.Errorf("AddEventHandler jobs: %w", err)
 	}
 	factory.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		return fmt.Errorf("model volume informer did not sync")
+	if !cache.WaitForCacheSync(ctx.Done(), pods.HasSynced, jobs.HasSynced) {
+		return fmt.Errorf("model volume informers did not sync")
 	}
 	c.log().WithFields(logrus.Fields{"node": c.NodeName, "mode": c.Provisioner.Cfg.Mode, "host_root": c.HostRoot}).Info("model volume controller started")
 	<-ctx.Done()
@@ -111,7 +121,7 @@ func (c *ModelVolumeController) log() logrus.FieldLogger {
 	return logrus.NewEntry(logrus.New()).WithField("subsys", "modelvolume")
 }
 
-// handle dispatches one pod event; exported for tests as Handle.
+// handle dispatches one pod event: pending readers on this node.
 func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok || pod == nil {
@@ -119,49 +129,45 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	}
 	c.init()
 	uri := pod.Annotations[modelvolume.IdentityAnnotation]
-	if uri == "" {
+	if uri == "" || pod.Labels[modelvolume.RoleLabel] != "reader" {
 		return
 	}
-	switch pod.Labels[modelvolume.RoleLabel] {
-	case "writer":
-		c.handleWriter(ctx, pod, uri)
-	case "reader":
-		if pod.Labels[modelvolume.PendingLabel] == "true" && pod.Spec.NodeName == c.NodeName {
-			c.handlePendingReader(ctx, pod, uri)
-		}
+	if pod.Labels[modelvolume.PendingLabel] == "true" && pod.Spec.NodeName == c.NodeName {
+		c.handlePendingReader(ctx, pod, uri)
 	}
 }
 
 // Handle is the test entry point for one pod event.
 func (c *ModelVolumeController) Handle(ctx context.Context, pod *corev1.Pod) { c.handle(ctx, pod) }
 
-func (c *ModelVolumeController) handleWriter(ctx context.Context, pod *corev1.Pod, uri string) {
-	initName := pod.Annotations[modelvolume.DownloadInitAnnotation]
-	if initName == "" || !initExitedZero(pod, initName) {
+// HandleJob is the test entry point for one Job event.
+func (c *ModelVolumeController) HandleJob(ctx context.Context, job *batchv1.Job) {
+	c.handleJob(ctx, job)
+}
+
+// handleJob completes the identity when its download Job succeeded.
+func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
+	job, ok := obj.(*batchv1.Job)
+	if !ok || job == nil {
 		return
 	}
-	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri})
-	if err := c.Provisioner.MarkComplete(ctx, uri, pod.Namespace); err != nil {
+	c.init()
+	uri := job.Annotations[modelvolume.IdentityAnnotation]
+	if uri == "" || job.Status.Succeeded == 0 {
+		return
+	}
+	log := c.log().WithFields(logrus.Fields{"job": job.Namespace + "/" + job.Name, "model": uri})
+	if err := c.Provisioner.MarkComplete(ctx, uri, job.Namespace); err != nil {
 		log.WithError(err).Warn("model volume: mark complete failed")
 		return
 	}
 	if c.Provisioner.Cfg.Mode == modelvolume.ModeBlock && c.Minter != nil {
-		if err := c.Minter.MintReadOnly(ctx, pod.Namespace, modelvolume.ClaimName(uri), modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
+		if err := c.Minter.MintReadOnly(ctx, job.Namespace, modelvolume.ClaimName(uri), modelvolume.ReadOnlyPVName(uri, job.Namespace), modelvolume.ReadOnlyClaimName(uri), job.Namespace, modelvolume.Key(uri)); err != nil {
 			log.WithError(err).Warn("model volume: mint read-only claim failed")
 			return
 		}
 	}
 	log.Info("model volume: download complete; readers may attach")
-}
-
-func initExitedZero(pod *corev1.Pod, name string) bool {
-	for i := range pod.Status.InitContainerStatuses {
-		s := &pod.Status.InitContainerStatuses[i]
-		if s.Name == name {
-			return s.State.Terminated != nil && s.State.Terminated.ExitCode == 0
-		}
-	}
-	return false
 }
 
 func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *corev1.Pod, uri string) {
