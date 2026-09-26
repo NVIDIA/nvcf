@@ -41,6 +41,8 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
+    # patch: the model volume controller un-pends readers once their
+    # volume is bound (internal/agent/modelvolume_controller.go).
     # v0.0.51: create+delete needed for the mount-holder pod in the
     # source workload's namespace (see
     # internal/checkpointstore/mount_holder.go +
@@ -48,7 +50,7 @@ rules:
     # compliant pause pod owned by the rwx PVC; the agent creates it
     # to trigger kubelet to mount the PVC, then deletes it after the
     # in-process file-tree copy finishes.
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
@@ -63,8 +65,10 @@ rules:
   # nvsnap-system); we keep them ClusterRole for now so the agent can
   # operate in any namespace via flag.
   - apiGroups: [""]
+    # update/patch: the model volume controller labels the writer claim
+    # complete (internal/agent/modelvolume_controller.go).
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
   # persistentvolumes (cluster-scoped): the shared-volume promoter
   # (NVMesh/EFS cachedir + ember path) Gets the writer's bound primary PV,
   # Updates its reclaim policy to Retain, and Creates a secondary

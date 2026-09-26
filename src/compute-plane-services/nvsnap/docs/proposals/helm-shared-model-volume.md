@@ -11,19 +11,19 @@ Status: design, 2026-09-26. Supersedes the gate-and-promote path of
 
 ```mermaid
 sequenceDiagram
-    participant P0 as pod-0 (writer)
-    participant P1 as pod-1..N (readers, any node, any namespace)
+    participant J as Job nvsnap-model-dl-<key>
+    participant P as pods 0..N (readers, any node, any namespace)
     participant WH as webhook
     participant A as agent
-    participant V as model volume nvsnap-model-<id>
-    WH->>WH: identity, landing path, group; elect writer (Lease)
-    WH-->>P0: init "download" -> V (rw), main mounts V ro
-    WH-->>P1: landing path -> V (DFS) or emptyDir + wait init (NVMesh)
-    Note over P0,P1: all pods schedule immediately
-    P0->>V: download; init exits 0
-    A->>V: complete: marker (DFS) / ro attach + bind into P1 (NVMesh)
-    P1->>P1: wait init sees marker, engine starts
-    Note over P0,P1: engines start together; multi-node groups form as today
+    participant V as model volume nvsnap-model-<key>
+    WH->>WH: identity, landing path, group
+    WH->>J: create (idempotent): the chart's download step, into V
+    WH-->>P: landing path -> V (DFS) or hostPath + wait init (NVMesh)
+    Note over P: all pods schedule immediately
+    J->>V: download; touch .nvsnap-complete; exit 0, volume released
+    A->>V: complete: label claim; NVMesh: ro PV + bind into P's hostPath
+    P->>P: wait init sees marker, engine starts
+    Note over P: engines start together; multi-node groups form as today
 ```
 
 ## Two artifacts, two lifecycles
@@ -55,14 +55,28 @@ not.
    volume there is already a PVC, hostPath or OCI image, skip the pod.
    Role flags and wiring env stay out of the hash (`stripRoleFlags`).
 
-2. One download step per identity per cluster (webhook + Lease). If the
-   chart downloads in an init container, that init is the download step.
-   If the engine downloads itself, the webhook injects an init
-   (`huggingface-cli download <repo>` into the landing path) and starts the
-   engine offline. The Lease `nvsnap-model-<id>` elects the writer among
-   concurrent admissions; the writer's init runs the download, its main
-   container mounts the model read-only. Every other pod is a reader and
-   its download init is replaced by a wait.
+2. One download step per identity per cluster, as a Job (webhook). The
+   webhook creates Job `nvsnap-model-dl-<key>` in the pod's namespace on
+   first sight; create is idempotent, so concurrent admissions need no
+   election. The Job's pod is the chart's own download init (image,
+   command, env, secrets, pull secrets, tolerations copied from the
+   admitted pod) wrapped to touch `<volume>/.nvsnap-complete` on success;
+   when the engine downloads itself the Job runs `hf download <repo>`
+   with the engine image and credentials. Every workload pod is a reader:
+   its download init becomes a wait for the marker, and an engine that
+   downloaded itself is started offline.
+
+   Why a Job and not the first pod: on NVMesh a volume attached read-write
+   by a running pod cannot be attached read-only anywhere else (dev1,
+   2026-09-26: `NVMesh Attach Failed` on the read-only PV while the writer
+   pod held the primary). The download step has to exit and release the
+   volume before readers attach, so it cannot live inside a pod that goes
+   on to serve. The Job's pod must also be removed after success
+   (`ttlSecondsAfterFinished`): a Succeeded pod keeps its volumes attached,
+   and on dev1 the read-only attach worked on the Job's node but failed on
+   every other node until that pod was deleted. A Job also decouples the download from the workload's
+   scheduling: it runs on any node with the image, and the workload pods
+   of a multi-node group or a gang all schedule as plain readers.
 
 3. Model volume per identity, immutable after download (agent + storage
    profile). Distributed filesystem: one RWX volume; writer and readers
@@ -123,23 +137,25 @@ between them. Everything after that first start is a full hit.
 
 | Failure | Effect | Recovery |
 |---|---|---|
-| writer dies before complete | readers' wait reaches the Lease deadline | readers download locally (NVMesh) or into the volume (DFS; per-file atomic); Lease expires; next admission elects a new writer |
+| download Job fails or never completes | Job retries with backoff; readers' wait reaches the deadline | readers download locally (NVMesh) or into the volume (DFS; per-file atomic); the next admission recreates a missing Job |
 | volume full | writer's download fails, init restarts | same as above; retention by last use with a size budget is part of this design's follow-up, since a full volume fails every writer |
 | agent down on a reader node (NVMesh) | no bind arrives | wait deadline, local download |
 | writer pod restarts after complete | volume immutable, unaffected | none needed |
 | identity changes (revision, quantization, image) | different URI or cache key | separate volume; old one ages out |
-| gang scheduler | readers always schedulable (RWX bound, or emptyDir); writer PVC binds in seconds on Immediate storage classes | none needed |
+| gang scheduler | readers always schedulable (RWX bound, or hostPath); download claim binds in seconds on Immediate storage classes | none needed |
+| identity deleted while a read-only PV is still Terminating (NVMesh) | the read-only PV name is deterministic per identity and namespace, so a re-download of the same identity cannot mint until the old PV finalizes; the attacher's detach timed out for minutes after the volume was gone | retention deletes read-only claims and PVs before the primary, and the controller retries minting; a stale VolumeAttachment on a deleted volume needs the finalizer cleared (seen on dev1 2026-09-26) |
+| last reader of an identity leaves a node (NVMesh) | the agent's bind mount keeps the volume published; kubelet cannot unmount and the attacher's detach times out (seen on dev1 2026-09-26 during cleanup) | the agent must unbind and drop its mount-holder when no pod on the node uses the identity; part of retention (follow-up) |
 
 ## What changes in the code
 
-Stays: classifier (extended per mechanism 1), role-neutral hash, Lease
-election (elects the writer), `EnsureClaim`, storage profiles, cache env
+Stays: classifier (extended per mechanism 1), role-neutral hash,
+`EnsureClaim`, storage profiles, cache env
 injection and seed init, mount-holder and bind injection (L1), the server
 reconciler, `vllm-workers` chart and runner.
 
-New: identity from init containers and group inheritance; download-init
-injection for engine-internal downloads; init wrapping for marker and
-wait; per-identity model volume created at admission from the profile's
+New: identity from init containers and group inheritance; the download
+Job derived from the chart's init or from `hf download`; init wrapping
+for the wait; per-identity model volume created at admission from the profile's
 class (RWX on DFS, RWO writer PVC on NVMesh); agent completion handler
 (init exit 0 -> marker / ro PV + bind); cache volume capture (caches only)
 on NVMesh; `cacheMode`; last-use labels.
@@ -158,3 +174,39 @@ Removed for Helm: `schedulingGates`, promote-to-ROX of the whole tree,
 5. Retire the gate; e2e on dev1 in all matrix rows that dev1 can host
    (NVMesh; DFS stands in with an NFS class), each measured cold, first
    deploy with two pods per instance, redeploy, second namespace.
+
+## Results, dev1 2026-09-26 (NVMesh, block mode)
+
+Stock `vllm-workers` chart, Qwen2.5-32B-Instruct TP=4, replicas=2 on two
+nodes, no nvsnap markers in the chart, agent v0.2.76-mv5.
+
+```
+first deploy (nothing on the cluster)
+  t+0       both pods admitted as readers (hostPath landing, wait init); one Job created
+  t+354s    Job succeeded: 65 GB via `hf download` into the RWO claim; claim released
+  t+400s    both readers un-pended (read-only PV minted per namespace, attached via
+            mount-holder, bound under /var/lib/containerd/nvsnap-models/<key>)
+  t+591s    both Ready; 0 downloads in either pod; serve " Paris. Correct!"
+uninstall + reinstall
+  t+12s     both un-pended (identity complete: no Job)
+  t+136s    both Ready
+earlier run, identity already complete on the cluster
+  t+205s    both Ready, wait init 10-15 s, engine reads the volume directly
+```
+
+Cold start of the same pod on the same node: 325 s. The reinstall number
+is the engine's own load and compile from a read-only NVMesh mount with no
+prewarm; compile caches on block storage are still the follow-up (step 4).
+
+Findings that changed the design during these runs:
+
+- NVMesh refuses a read-only attach on any node while the volume is
+  attached read-write anywhere, including a Succeeded Job pod that still
+  exists. Hence the download Job, its TTL, releasing the claim on
+  completion, and the detach check before minting.
+- The overlays root is swept by the L1 overlay GC; binds live under their
+  own Bidirectional hostPath.
+- Memory is not a mount table: binds are verified against the mounted
+  device and the volume handle and redone when missing or stale.
+- The agent's binds pin the volume on the node; unbinding when the last
+  reader leaves is part of retention (open).

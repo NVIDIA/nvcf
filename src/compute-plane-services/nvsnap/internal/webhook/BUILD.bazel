@@ -10,6 +10,7 @@ go_library(
         "election.go",
         "extract_coalesce.go",
         "l2_mount.go",
+        "model_volume.go",
         "mount_prep_init.go",
         "mutate.go",
         "restore_entrypoint.go",
@@ -22,6 +23,8 @@ go_library(
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/election",
+        "//src/compute-plane-services/nvsnap/internal/modelid",
+        "//src/compute-plane-services/nvsnap/internal/modelvolume",
         "//src/compute-plane-services/nvsnap/internal/rootfsonly",
         "//src/compute-plane-services/nvsnap/internal/tracing",
         "@com_github_sirupsen_logrus//:logrus",
@@ -43,6 +46,7 @@ go_test(
         "extract_coalesce_test.go",
         "l2_mount_test.go",
         "mergeplan_test.go",
+        "model_volume_test.go",
         "mutate_test.go",
         "restore_entrypoint_test.go",
         "rootfs_l2_mount_test.go",
@@ -53,6 +57,7 @@ go_test(
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/election",
+        "//src/compute-plane-services/nvsnap/internal/modelvolume",
         "//src/compute-plane-services/nvsnap/internal/rootfsonly",
         "@io_k8s_api//admission/v1:admission",
         "@io_k8s_api//core/v1:core",
@@ -60,5 +65,6 @@ go_test(
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/runtime",
         "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//kubernetes/fake",
     ],
 )

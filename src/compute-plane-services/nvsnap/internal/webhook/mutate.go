@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
@@ -39,6 +40,8 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
@@ -255,6 +258,21 @@ type Mutator struct {
 	// capture and explicit-hash restore paths only. See election.go.
 	Elector election.Elector
 
+	// ModelVolume, when set, turns on the write-once model volume for
+	// Helm-function pods (docs/proposals/helm-shared-model-volume.md):
+	// the download lands in a per-identity shared volume, one writer,
+	// readers wait for the completion marker. Takes precedence over the
+	// gate-and-promote election above. Groups resolves identity for
+	// group members that name no model (LWS workers); may be nil.
+	// ModelWaitDeadline bounds a reader's wait before it downloads itself.
+	ModelVolume       *modelvolume.Provisioner
+	Groups            modelid.GroupResolver
+	ModelWaitDeadline time.Duration
+	// ModelHostRoot is the host directory (under the agent's Bidirectional
+	// overlays root) where Block-mode readers get their hostPath and the
+	// agent binds completed model volumes: <root>/<identity key>.
+	ModelHostRoot string
+
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a
 	// nvsnap-l2-wait init container that polls nvsnap-server's
@@ -441,6 +459,12 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		// the label-driven capture inject below keeps its behaviour. An
 		// error is logged and admits the pod unchanged: the election is
 		// an optimisation, never a gate.
+		if vp, err := m.modelVolumePatches(ctx, pod); err != nil {
+			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
+				Warn("model volume decision failed; admitting pod unchanged")
+		} else if vp != nil {
+			return mergePatchPlan(append(injectPatches, vp...)), nil
+		}
 		if ep, err := m.electionPatches(ctx, pod); err != nil {
 			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
 				Warn("election failed; admitting pod unchanged")

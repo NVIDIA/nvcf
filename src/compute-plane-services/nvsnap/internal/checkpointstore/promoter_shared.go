@@ -535,3 +535,71 @@ func (p *SharedVolumePromoter) deleteNamespacedClaims(ctx context.Context, hash 
 	}
 	return errs
 }
+
+// MintReadOnly exposes the write-once model volume (a writer claim that
+// has finished downloading) as a read-only claim in ns, for
+// docs/proposals/helm-shared-model-volume.md on block storage. Same
+// mechanics as the promote: the primary PV is kept (Retain), a secondary
+// static PV with the namespace-rewritten handle is pre-bound to roClaim
+// in ns. Unlike the promote the writer claim is kept: the writer pod is
+// still running on it and later writers of the same identity must find
+// it complete. Idempotent.
+func (p *SharedVolumePromoter) MintReadOnly(ctx context.Context, writerNS, writerClaim, roPVName, roClaim, ns, labelKey string) error {
+	p.applyDefaults()
+	writer, err := p.KubeClient.CoreV1().PersistentVolumeClaims(writerNS).Get(ctx, writerClaim, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get writer claim %s/%s: %w", writerNS, writerClaim, err)
+	}
+	if writer.Spec.VolumeName == "" {
+		return fmt.Errorf("writer claim %s/%s has no bound PV yet", writerNS, writerClaim)
+	}
+	return p.MintReadOnlyFromPV(ctx, writer.Spec.VolumeName, roPVName, roClaim, ns, labelKey)
+}
+
+// MintReadOnlyFromPV is MintReadOnly for a retained primary PV whose claim
+// has already been released (the model volume after its download Job).
+func (p *SharedVolumePromoter) MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error {
+	p.applyDefaults()
+	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, primaryPV, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get primary PV %s: %w", primaryPV, err)
+	}
+	if primary.Spec.CSI == nil || primary.Spec.CSI.VolumeHandle == "" {
+		return fmt.Errorf("primary PV %s has no CSI volumeHandle", primary.Name)
+	}
+	if primary.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		primary.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		if _, err := p.KubeClient.CoreV1().PersistentVolumes().Update(ctx, primary, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
+			return fmt.Errorf("set primary PV %s reclaim=Retain: %w", primary.Name, err)
+		}
+	}
+	labels := map[string]string{labelNamespace: ns}
+	if labelKey != "" {
+		labels["nvsnap.io/model"] = labelKey
+	}
+	if err := p.ensureSecondaryPV(ctx, primary, roPVName, roClaim, ns, labels); err != nil {
+		return err
+	}
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roClaim, metav1.GetOptions{}); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get ro claim %s/%s: %w", ns, roClaim, err)
+	}
+	sc := p.StorageClass
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: roClaim, Namespace: ns,
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": "reader", labelNamespace: ns, "nvsnap.io/model": labelKey},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			VolumeName:       roPVName,
+			StorageClassName: &sc,
+			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: primary.Spec.Capacity[corev1.ResourceStorage]}},
+		},
+	}
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create ro claim %s/%s: %w", ns, roClaim, err)
+	}
+	return nil
+}

@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "modelvolume",
+    srcs = ["modelvolume.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = [
+        "@io_k8s_api//batch/v1:batch",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/api/resource",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_client_go//kubernetes",
+    ],
+)
+
+go_test(
+    name = "modelvolume_test",
+    srcs = ["modelvolume_test.go"],
+    embed = [":modelvolume"],
+    deps = [
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/resource",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_client_go//kubernetes/fake",
+    ],
+)

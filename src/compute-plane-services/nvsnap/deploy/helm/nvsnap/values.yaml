@@ -114,6 +114,19 @@ agent:
   # pod is elected to capture and the rest are held by a scheduling gate
   # (no node, no GPU) until nvsnap-server sees the promote and releases
   # them. Needs agent.l2. Off until qualified on a cluster.
+  # Write-once model volume for Helm functions
+  # (docs/proposals/helm-shared-model-volume.md): the model is downloaded
+  # once per cluster into a per-identity volume and every other pod that
+  # names it attaches that volume; compile caches are shared the same way.
+  # Mode comes from the storage profile: block on NVMesh (the L2 class),
+  # rwx when the profile declares a distributed-filesystem class. Needs
+  # agent.l2. Off until qualified.
+  modelVolume:
+    enabled: false
+    # How long a reader waits for the writer's download before it downloads
+    # itself. Never a deadlock: past this, every pod is self-sufficient.
+    waitDeadline: 1h
+
   election:
     enabled: false
     # Bound on the leader's cold start plus capture. Past it the server
@@ -242,6 +255,9 @@ agent:
     checkpoints: /var/lib/containerd/nvsnap-checkpoints
     containerdSock: /run/containerd/containerd.sock
     containerdStorage: /var/lib/containerd
+    # Bind root for completed model volumes (agent.modelVolume); Bidirectional
+    # in the agent at the same path.
+    nvsnapModels: /var/lib/containerd/nvsnap-models
     # Cache, staging and overlays sit under the containerd root on purpose.
     # They are the bulk writers -- a 70B cachedir capture is ~132 GB -- and on
     # a typical GPU node /var/lib is the boot volume (network-backed, ~125
