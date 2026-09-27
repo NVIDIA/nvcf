@@ -224,6 +224,36 @@ uninstall + reinstall
   t+118s    both Ready (claim minted at admission, no pending phase)
 ```
 
+Real NVCF Helm function, 2026-09-27 (dev1 through the staging control
+plane, QA org; stock `kimi-k3` 0.2.3 chart copied from the prod org with
+values only: init-container NGC download into an emptyDir, two
+StatefulSet replicas, Qwen2.5-0.5B-Instruct hosted on prod NGC, agent
+v0.2.76-mv8, PVC reader mode). No chart change and no nvsnap marker.
+
+```
+first deploy (fresh identity, function namespace sr-848a0bc4-...)
+  t+0       both mini-service pods admitted as readers referencing the ro claim; one Job;
+            NVCA's own webhook mutated the Job pod too, so /var/secrets/secrets.json with
+            the NGC key was present and the chart's download script ran unchanged
+  t+150s    Job succeeded (NGC CLI download); claim released
+  t+152s    ro claim minted in the function namespace; both readers scheduled; all three
+            inits (two NVCA cert inits, the wrapped download-ngc-model) exited 0
+  engine crashed on my override (TP=4 does not divide the model's 14 heads); NVCF
+  marked the function ERROR and deleted the namespace; the primary volume stayed
+redeploy (fixed override; identity already complete on the cluster)
+  t+51s     namespace sr-4d3e0de5-... created; both readers admitted complete=true, ro claim
+            minted at admission (no Job)
+  t+153s    both Ready; init logs "model complete, skipping download"; 0 NGC downloads;
+            /config/models is the NVMesh volume (ro,norecovery,nouuid); chat completion
+            answered; function ACTIVE
+```
+
+Kyverno on dev1 is Audit; the audit failures on the function pods belong to
+the chart (IPC_LOCK add, no capability drop, root) and to NVCA's cert inits,
+not to the containers nvsnap creates. The namespace deletion left the first
+run's read-only PV Released: retention must also cover PVs whose claim
+namespace is gone.
+
 No hostPath and no agent bind in this mode. Kyverno on dev1 is Audit, so
 the remaining warnings were the stock chart's own containers plus, until
 v0.2.76-mv8, the injected init (no resources, capabilities not dropped,
