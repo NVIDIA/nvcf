@@ -148,9 +148,9 @@ type ChatToolCall struct {
 
 type ChatFunctionSpec struct {
 	Name        string          `json:"name"`
-	Description *string         `json:"description"`
-	Parameters  *map[string]any `json:"parameters"`
-	Strict      *bool           `json:"strict"`
+	Description *string         `json:"description,omitempty"`
+	Parameters  *map[string]any `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 type ChatTool struct {
@@ -302,37 +302,37 @@ type ChatCompletionRequest struct {
 	Model               string                            `json:"model"`
 	Debug               bool                              `json:"-"`
 	ServiceTier         servicetier.Tier                  `json:"service_tier"`
-	FrequencyPenalty    *float32                          `json:"frequency_penalty"`
-	IncludeReasoning    *bool                             `json:"include_reasoning"`
-	LogitBias           *map[string]int                   `json:"logit_bias"`
-	Logprobs            *bool                             `json:"logprobs"`
-	TopLogprobs         *uint32                           `json:"top_logprobs"`
-	MaxTokens           *uint32                           `json:"max_tokens"`
-	MaxCompletionTokens *uint32                           `json:"max_completion_tokens"`
-	N                   *uint32                           `json:"n"`
-	PresencePenalty     *float32                          `json:"presence_penalty"`
-	ResponseFormat      *ChatResponseFormat               `json:"response_format"`
-	Seed                *int64                            `json:"seed"`
-	Stop                ChatCompletionStopField           `json:"stop"`
-	Stream              *bool                             `json:"stream"`
-	Temperature         *float32                          `json:"temperature"`
-	TopP                *float32                          `json:"top_p"`
-	Tools               *[]ChatTool                       `json:"tools"`
-	Functions           *[]ChatFunctionSpec               `json:"functions"`
+	FrequencyPenalty    *float32                          `json:"frequency_penalty,omitempty"`
+	IncludeReasoning    *bool                             `json:"include_reasoning,omitempty"`
+	LogitBias           *map[string]int                   `json:"logit_bias,omitempty"`
+	Logprobs            *bool                             `json:"logprobs,omitempty"`
+	TopLogprobs         *uint32                           `json:"top_logprobs,omitempty"`
+	MaxTokens           *uint32                           `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *uint32                           `json:"max_completion_tokens,omitempty"`
+	N                   *uint32                           `json:"n,omitempty"`
+	PresencePenalty     *float32                          `json:"presence_penalty,omitempty"`
+	ResponseFormat      *ChatResponseFormat               `json:"response_format,omitempty"`
+	Seed                *int64                            `json:"seed,omitempty"`
+	Stop                ChatCompletionStopField           `json:"stop,omitempty"`
+	Stream              *bool                             `json:"stream,omitempty"`
+	Temperature         *float32                          `json:"temperature,omitempty"`
+	TopP                *float32                          `json:"top_p,omitempty"`
+	Tools               *[]ChatTool                       `json:"tools,omitempty"`
+	Functions           *[]ChatFunctionSpec               `json:"functions,omitempty"`
 	ToolChoice          ChatCompletionToolChoiceField     `json:"tool_choice,omitzero"`
 	FunctionChoice      ChatCompletionFunctionChoiceField `json:"function_call,omitzero"`
-	ParallelToolCalls   *bool                             `json:"parallel_tool_calls"`
-	PromptCacheKey      *string                           `json:"prompt_cache_key"`
-	User                *string                           `json:"user"`
-	ReasoningFormat     *string                           `json:"reasoning_format"`
-	ReasoningEffort     *string                           `json:"reasoning_effort"`
-	StreamOptions       *ChatCompletionStreamOptions      `json:"stream_options"`
-	Metadata            *map[string]string                `json:"metadata"`
-	Store               *bool                             `json:"store"`
+	ParallelToolCalls   *bool                             `json:"parallel_tool_calls,omitempty"`
+	PromptCacheKey      *string                           `json:"prompt_cache_key,omitempty"`
+	User                *string                           `json:"user,omitempty"`
+	ReasoningFormat     *string                           `json:"reasoning_format,omitempty"`
+	ReasoningEffort     *string                           `json:"reasoning_effort,omitempty"`
+	StreamOptions       *ChatCompletionStreamOptions      `json:"stream_options,omitempty"`
+	Metadata            *map[string]string                `json:"metadata,omitempty"`
+	Store               *bool                             `json:"store,omitempty"`
 }
 
 type ChatCompletionStreamOptions struct {
-	IncludeUsage *bool `json:"include_usage"`
+	IncludeUsage *bool `json:"include_usage,omitempty"`
 }
 
 type ChatCompletionFunctionCall struct {
