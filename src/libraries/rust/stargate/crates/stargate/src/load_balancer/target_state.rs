@@ -66,7 +66,7 @@ impl LoadBalancerDefinition {
 /// Load balancers owned by one routing-target generation; replacement resets target-local counters and caches.
 #[derive(Default)]
 pub struct LoadBalancerTargetState {
-    pub(crate) instances: SccHashMap<LoadBalancerDefinition, Arc<dyn LoadBalancer>>,
+    instances: SccHashMap<LoadBalancerDefinition, Arc<dyn LoadBalancer>>,
 }
 
 impl LoadBalancerTargetState {
@@ -99,6 +99,15 @@ impl LoadBalancerTargetState {
             self.instances.remove_sync(definition);
         }
         lb
+    }
+
+    pub(crate) fn forget(&self, definition: &LoadBalancerDefinition) {
+        self.instances.remove_sync(definition);
+    }
+
+    #[cfg(test)]
+    pub(super) fn contains(&self, definition: &LoadBalancerDefinition) -> bool {
+        self.instances.contains_sync(definition)
     }
 
     #[cfg(test)]

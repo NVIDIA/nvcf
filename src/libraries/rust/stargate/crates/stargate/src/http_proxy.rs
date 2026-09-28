@@ -248,32 +248,18 @@ fn prepare_proxy_request(
             requested_algorithm: Some(raw.clone()),
         }
     } else {
-        let mut resolution = app
-            .lb_router
+        app.lb_router
             .resolve_algorithm_override(
                 model_id,
                 request_inputs.routing_algorithm_override.as_ref(),
             )
             .map_err(|error| {
-                let requested = parts
-                    .headers
-                    .get(HEADER_ROUTING_METHOD)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or(error.requested_algorithm())
-                    .to_owned();
+                let requested = error.requested_algorithm().to_owned();
                 reject_invalid_routing_algorithm(
                     target,
                     &RejectionError::algorithm(error, &requested),
                 )
-            })?;
-        if let Some(raw) = parts
-            .headers
-            .get(HEADER_ROUTING_METHOD)
-            .and_then(|value| value.to_str().ok())
-        {
-            resolution.requested_algorithm = Some(raw.to_owned());
-        }
-        resolution
+            })?
     };
     validate_load_balancer_request_requirements(lb_resolution.config(), &request_inputs)?;
     let retry_deadline = retry_budget_deadline(&parts.headers, &app.retry, request_start)?;
@@ -338,7 +324,7 @@ mod test_support {
         ProxyAppState {
             dynamic_config: Arc::new(super::DynamicConfigCache::new(
                 state.clone(),
-                Duration::from_secs(15 * 60),
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
             )),
             state,
             quic_proxy: Arc::new(
@@ -372,29 +358,36 @@ mod test_support {
         }
     }
 
+    fn prepare_with_routing_method(
+        app: &ProxyAppState,
+        header: &str,
+    ) -> super::PreparedProxyRequest {
+        let request = axum::http::Request::builder()
+            .uri("/v1/chat/completions")
+            .header("x-model", "model")
+            .header("x-request-id", "routing-method")
+            .header("x-input-tokens", "1")
+            .header("x-routing-method", header)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let (parts, body) = request.into_parts();
+        super::prepare_proxy_request(
+            app,
+            parts,
+            body,
+            super::OpenAiProxyEndpoint::CHAT_COMPLETIONS,
+            std::time::Instant::now(),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn method_only_requests_use_static_definitions_without_caching() {
         use crate::load_balancer::LoadBalancerAlgorithmOverride;
 
         let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
         for header in ["round-robin", " RANDOM ", "PULSAR_WAIT_AND_WIDEN"] {
-            let request = axum::http::Request::builder()
-                .uri("/v1/chat/completions")
-                .header("x-model", "model")
-                .header("x-request-id", "method-only")
-                .header("x-input-tokens", "1")
-                .header("x-routing-method", header)
-                .body(axum::body::Body::empty())
-                .unwrap();
-            let (parts, body) = request.into_parts();
-            let prepared = super::prepare_proxy_request(
-                &app,
-                parts,
-                body,
-                super::OpenAiProxyEndpoint::CHAT_COMPLETIONS,
-                std::time::Instant::now(),
-            )
-            .unwrap();
+            let prepared = prepare_with_routing_method(&app, header);
             let expected = app
                 .lb_router
                 .resolve_algorithm_override(
@@ -408,7 +401,8 @@ mod test_support {
             );
             assert_eq!(
                 prepared.lb_resolution.requested_algorithm.as_deref(),
-                Some(header)
+                Some(header.trim()),
+                "{header}"
             );
             let marker = super::RejectionError::new("invalid_value", "cache miss", header);
             assert_eq!(
@@ -420,6 +414,25 @@ mod test_support {
                 "method-only header populated the cache: {header}",
             );
         }
+    }
+
+    #[tokio::test]
+    async fn expression_updates_apply_on_next_request_without_reload() {
+        let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
+        let prepare = |header: &str| prepare_with_routing_method(&app, header).lb_resolution;
+
+        let first = prepare("round-robin;max_input_work_seconds=1");
+        assert_eq!(first.config().max_input_work_seconds, Some(1.0));
+        let reused = prepare("round-robin;max_input_work_seconds=1");
+        assert_eq!(reused.definition, first.definition);
+
+        let updated = prepare("round-robin;max_input_work_seconds=2");
+        assert_eq!(updated.config().max_input_work_seconds, Some(2.0));
+        assert_ne!(updated.definition, first.definition);
+        assert_eq!(
+            updated.requested_algorithm.as_deref(),
+            Some("round-robin;max_input_work_seconds=2")
+        );
     }
 
     #[tokio::test]

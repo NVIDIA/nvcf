@@ -334,8 +334,9 @@ mod tests {
             error,
             ProxyRequestError::Routing(RejectionError {
                 class: "unknown_method",
+                ref message,
                 ..
-            })
+            }) if message == "unknown routing method 'sticky'"
         ));
     }
 

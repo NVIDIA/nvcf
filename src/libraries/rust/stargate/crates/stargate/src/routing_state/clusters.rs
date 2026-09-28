@@ -24,7 +24,7 @@ use super::*;
 
 #[derive(Debug, Default)]
 pub(super) struct RoutingLifecycle {
-    pub(super) targets: SccHashMap<RoutingTargetKey, Arc<RoutingTargetState>>,
+    targets: SccHashMap<RoutingTargetKey, Arc<RoutingTargetState>>,
     metrics: Option<Arc<StargateMetrics>>,
 }
 
@@ -168,6 +168,16 @@ impl RoutingLifecycle {
             metrics,
             ..Self::default()
         }
+    }
+
+    pub(super) fn forget_load_balancer_instance(
+        &self,
+        target: &RoutingTargetKey,
+        definition: &crate::load_balancer::LoadBalancerDefinition,
+    ) {
+        self.targets.read_sync(target, |_key, state| {
+            state.load_balancers.forget(definition);
+        });
     }
 
     pub(super) async fn target_state(

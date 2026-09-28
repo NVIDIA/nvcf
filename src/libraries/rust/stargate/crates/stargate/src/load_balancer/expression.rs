@@ -31,9 +31,11 @@ impl RejectionError {
 
     pub(crate) fn algorithm(error: LoadBalancerRoutingAlgorithmError, requested: &str) -> Self {
         match error {
-            LoadBalancerRoutingAlgorithmError::Unknown { .. } => {
-                Self::new("unknown_method", "unknown routing method", requested)
-            }
+            LoadBalancerRoutingAlgorithmError::Unknown { raw } => Self::new(
+                "unknown_method",
+                format!("unknown routing method '{raw}'"),
+                requested,
+            ),
             LoadBalancerRoutingAlgorithmError::Unavailable { algorithm, .. } => Self::new(
                 "unavailable",
                 format!("routing method {algorithm} is not configured for this model"),
@@ -195,7 +197,9 @@ impl RoutingExpression {
                         "sample_count" => {
                             let value = parameter.unsigned()?;
                             if !(1..=MAX_POWER_OF_N_SAMPLE_COUNT).contains(&value) {
-                                return Err(parameter.invalid("must be between 1 and 64"));
+                                return Err(parameter.invalid(format!(
+                                    "must be between 1 and {MAX_POWER_OF_N_SAMPLE_COUNT}"
+                                )));
                             }
                             settings.sample_count = value;
                         }
@@ -291,7 +295,12 @@ impl RoutingExpression {
             | "cache_affinity_backend_selection_count"
             | "cache_affinity_input_tokens_scale"
             | "cache_affinity_wait_ms" => algorithm == WaitAndWiden,
-            _ => return Err(self.reject("unknown_parameter", format!("unknown parameter {key}"))),
+            _ => {
+                return Err(self.reject(
+                    "unknown_parameter",
+                    format!("unknown parameter '{key}' for algorithm {algorithm}"),
+                ));
+            }
         };
         if applicable {
             Ok(())
@@ -664,6 +673,24 @@ mod tests {
                 .class,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn test_compile_rejection_messages_name_the_offending_input() {
+        let router =
+            LoadBalancerRouter::from_config(&LoadBalancerConfig::permissive_default()).unwrap();
+        for (raw, message) in [
+            ("fastest;seed=x", "unknown routing method 'fastest'"),
+            (
+                "pulsar;widen=2",
+                "unknown parameter 'widen' for algorithm pulsar",
+            ),
+        ] {
+            let error = RoutingExpression::parse(raw)
+                .and_then(|expression| expression.compile(&router, "model"))
+                .expect_err(raw);
+            assert_eq!(error.message, message, "{raw}");
+        }
     }
 
     #[test]

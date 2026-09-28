@@ -56,9 +56,8 @@ impl StargateState {
         target: &RoutingTargetKey,
         definition: &crate::load_balancer::LoadBalancerDefinition,
     ) {
-        self.routing.targets.read_sync(target, |_, state| {
-            state.load_balancers.instances.remove_sync(definition);
-        });
+        self.routing
+            .forget_load_balancer_instance(target, definition);
     }
 
     pub fn new() -> Self {

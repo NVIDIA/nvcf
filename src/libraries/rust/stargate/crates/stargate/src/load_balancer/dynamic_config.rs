@@ -34,6 +34,8 @@ impl Outcome {
     }
 }
 
+pub(crate) const DYNAMIC_CONFIG_IDLE_EXPIRY: Duration = Duration::from_secs(15 * 60);
+
 pub(crate) struct DynamicConfigCache {
     entries: Cache<RoutingTargetKey, Arc<DynamicConfigEntry>>,
 }
@@ -59,6 +61,12 @@ impl DynamicConfigCache {
         header: &str,
         build: impl FnOnce() -> Result<LoadBalancerDefinition, RejectionError>,
     ) -> Result<(LoadBalancerDefinition, Outcome), RejectionError> {
+        // Hits skip the per-key compute lock so they never wait behind a rebuild.
+        if let Some(entry) = self.entries.get(target)
+            && entry.expression == header
+        {
+            return Ok((entry.definition.clone(), Outcome::Hit));
+        }
         let mut resolved = None;
         self.entries
             .entry_by_ref(target)
@@ -90,9 +98,8 @@ impl DynamicConfigCache {
         })
     }
 
-    // Idle maintenance is exposed for explicit callers; requests do not force it.
-    #[allow(dead_code)]
-    pub(crate) fn run_pending_tasks(&self) {
+    #[cfg(test)]
+    fn run_pending_tasks(&self) {
         self.entries.run_pending_tasks();
     }
 }
@@ -212,7 +219,7 @@ mod tests {
         // A request paused after resolution must not reinsert an evicted definition.
         let _in_flight = snapshot.load_balancers().load_balancer(&first);
         assert_eq!(snapshot.load_balancers().instance_count(), 2);
-        assert!(!snapshot.load_balancers().instances.contains_sync(&first));
+        assert!(!snapshot.load_balancers().contains(&first));
     }
 
     #[test]
@@ -265,7 +272,7 @@ mod tests {
                 let _in_flight = selection.join().unwrap();
                 next
             });
-            assert!(!snapshot.load_balancers().instances.contains_sync(&current));
+            assert!(!snapshot.load_balancers().contains(&current));
             assert_eq!(snapshot.load_balancers().instance_count(), 0);
             current = next;
         }
@@ -293,6 +300,53 @@ mod tests {
         assert_ne!(first, second);
         let _in_flight = snapshot.load_balancers().load_balancer(&first);
         assert_eq!(snapshot.load_balancers().instance_count(), 0);
+    }
+
+    #[test]
+    fn test_hit_does_not_wait_for_concurrent_rebuild() {
+        let cache =
+            DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_secs(60));
+        let target = RoutingTargetKey::new(None, "model");
+        let (current, _) = cache
+            .resolve(&target, EXPRESSION, || compile(EXPRESSION))
+            .unwrap();
+        let changed = "round-robin;require_input_tokens=true";
+        let (hit_done, hit_observed) = std::sync::mpsc::channel();
+        let (build_started, build_running) = std::sync::mpsc::channel();
+        let (cache, target) = (&cache, &target);
+        std::thread::scope(|scope| {
+            let rebuild = scope.spawn(move || {
+                cache.resolve(target, changed, || {
+                    build_started.send(()).unwrap();
+                    // The hit below must finish while this rebuild is still running.
+                    let is_hit_done = hit_observed.recv_timeout(Duration::from_secs(5)).is_ok();
+                    assert!(is_hit_done, "hit waited for the rebuild");
+                    compile(changed)
+                })
+            });
+            build_running.recv().unwrap();
+            let hit = cache.resolve(target, EXPRESSION, || panic!("hit rebuilt"));
+            hit_done.send(()).unwrap();
+            assert_eq!(hit, Ok((current.clone(), Outcome::Hit)));
+            assert_eq!(rebuild.join().unwrap().unwrap().1, Outcome::Rebuild);
+        });
+    }
+
+    #[test]
+    fn test_hits_keep_entry_alive_past_idle_window() {
+        let cache =
+            DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_millis(200));
+        let target = RoutingTargetKey::new(None, "model");
+        let (first, _) = cache
+            .resolve(&target, EXPRESSION, || compile(EXPRESSION))
+            .unwrap();
+        for _ in 0..6 {
+            std::thread::sleep(Duration::from_millis(80));
+            let (again, outcome) = cache
+                .resolve(&target, EXPRESSION, || panic!("entry expired while in use"))
+                .unwrap();
+            assert_eq!((again, outcome), (first.clone(), Outcome::Hit));
+        }
     }
 
     #[test]

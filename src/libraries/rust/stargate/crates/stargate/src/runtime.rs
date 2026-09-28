@@ -368,7 +368,7 @@ impl StargateRuntime {
             dynamic_config: Arc::new(
                 crate::load_balancer::dynamic_config::DynamicConfigCache::new(
                     service.state(),
-                    Duration::from_secs(15 * 60),
+                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
                 ),
             ),
             state: service.state(),
