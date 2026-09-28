@@ -57,17 +57,23 @@ func (h *OpenAIChatHandlers) RegisterRoutes(group *echo.Group) {
 func (h *OpenAIChatHandlers) CreateChatCompletion(ec echo.Context) error {
 	c := must.As[*GatewayContext](ec)
 
+	rawBody, err := captureRequestBody(c.Request())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
 	var request models.ChatCompletionRequest
 	if err := c.Bind(&request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	return h.handleChatCompletionRequest(c, &request, nil, nil)
+	return h.handleChatCompletionRequest(c, &request, rawBody, nil, nil)
 }
 
 func (h *OpenAIChatHandlers) handleChatCompletionRequest(
 	c *GatewayContext,
 	request *models.ChatCompletionRequest,
+	rawBody []byte,
 	overrideUnaryResponseSender UnaryResponseSender,
 	overrideStreamResponseSender StreamResponseSender,
 ) error {
@@ -79,6 +85,7 @@ func (h *OpenAIChatHandlers) handleChatCompletionRequest(
 	if err != nil {
 		return err
 	}
+	normalized.RawBody = rawBody
 
 	if ptr.Deref(request.Stream) {
 		return h.streamChatCompletionWithSender(c, normalized, responseModel, overrideStreamResponseSender)
@@ -189,9 +196,9 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 			continue
 		}
 
-		payload, err := json.Marshal(event.Chunk)
+		payload, err := clientChatChunkPayload(event, responseModel)
 		if err != nil {
-			return fmt.Errorf("marshal chat chunk: %w", err)
+			return err
 		}
 
 		if _, err := c.Response().Write([]byte("data: ")); err != nil {
@@ -335,6 +342,38 @@ func (h *OpenAIChatHandlers) observeStreamEvent(obs streamObservation, event pro
 		obs.state,
 	)
 	return streamStatus, hasStatus
+}
+
+// clientChatChunkPayload relays the upstream chunk bytes so fields the gateway
+// does not model reach the client. Only model is rewritten, matching
+// setChunkResponseModel.
+func clientChatChunkPayload(event provider.StreamEvent, responseModel string) ([]byte, error) {
+	if len(event.Raw) == 0 {
+		payload, err := json.Marshal(event.Chunk)
+		if err != nil {
+			return nil, fmt.Errorf("marshal chat chunk: %w", err)
+		}
+		return payload, nil
+	}
+	if responseModel == "" {
+		return event.Raw, nil
+	}
+
+	var chunk map[string]json.RawMessage
+	if err := json.Unmarshal(event.Raw, &chunk); err != nil {
+		return nil, fmt.Errorf("decode chat chunk: %w", err)
+	}
+	model, err := json.Marshal(responseModel)
+	if err != nil {
+		return nil, fmt.Errorf("marshal chat chunk model: %w", err)
+	}
+	chunk["model"] = model
+
+	payload, err := json.Marshal(chunk)
+	if err != nil {
+		return nil, fmt.Errorf("marshal chat chunk: %w", err)
+	}
+	return payload, nil
 }
 
 func setChunkResponseModel(chunk *models.ChatCompletionChunk, responseModel string) {

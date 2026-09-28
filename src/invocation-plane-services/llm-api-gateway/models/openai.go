@@ -354,21 +354,24 @@ type ChatCompletionToolCallChunk struct {
 }
 
 type ChatCompletionMessage struct {
-	Role         string                      `json:"role"`
-	Content      *string                     `json:"content,omitempty"`
-	Reasoning    *string                     `json:"reasoning,omitempty"`
-	ToolCalls    *[]ChatCompletionToolCall   `json:"tool_calls,omitempty"`
-	FunctionCall *ChatCompletionFunctionCall `json:"function_call,omitempty"`
+	Role      string  `json:"role"`
+	Content   *string `json:"content,omitempty"`
+	Reasoning *string `json:"reasoning,omitempty"`
+	// ReasoningContent is the field name vLLM-compatible reasoning parsers use.
+	ReasoningContent *string                     `json:"reasoning_content,omitempty"`
+	ToolCalls        *[]ChatCompletionToolCall   `json:"tool_calls,omitempty"`
+	FunctionCall     *ChatCompletionFunctionCall `json:"function_call,omitempty"`
 }
 
 type ChatCompletionChunkDelta struct {
-	Role           *string                        `json:"role,omitempty"`
-	Content        *string                        `json:"content,omitempty"`
-	Reasoning      *string                        `json:"reasoning,omitempty"`
-	SendNilContent bool                           `json:"-"`
-	ToolCalls      *[]ChatCompletionToolCallChunk `json:"tool_calls,omitempty"`
-	FunctionCall   *ChatCompletionFunctionCall    `json:"function_call,omitempty"`
-	Channel        string                         `json:"channel,omitempty"`
+	Role             *string                        `json:"role,omitempty"`
+	Content          *string                        `json:"content,omitempty"`
+	Reasoning        *string                        `json:"reasoning,omitempty"`
+	ReasoningContent *string                        `json:"reasoning_content,omitempty"`
+	SendNilContent   bool                           `json:"-"`
+	ToolCalls        *[]ChatCompletionToolCallChunk `json:"tool_calls,omitempty"`
+	FunctionCall     *ChatCompletionFunctionCall    `json:"function_call,omitempty"`
+	Channel          string                         `json:"channel,omitempty"`
 }
 
 func (ccd *ChatCompletionChunkDelta) MarshalJSON() ([]byte, error) {
@@ -389,15 +392,24 @@ func (ccd *ChatCompletionChunkDelta) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// ChatCompletionLogprobs keeps token entries as raw JSON so backend-specific
+// members survive stream aggregation.
+type ChatCompletionLogprobs struct {
+	Content []json.RawMessage `json:"content"`
+	Refusal []json.RawMessage `json:"refusal,omitempty"`
+}
+
 type ChatCompletionChoice struct {
-	Index        uint32                `json:"index"`
-	Message      ChatCompletionMessage `json:"message"`
-	FinishReason string                `json:"finish_reason"`
+	Index        uint32                  `json:"index"`
+	Message      ChatCompletionMessage   `json:"message"`
+	Logprobs     *ChatCompletionLogprobs `json:"logprobs,omitempty"`
+	FinishReason string                  `json:"finish_reason"`
 }
 
 type ChatCompletionChunkChoice struct {
 	Index        uint32                   `json:"index"`
 	Delta        ChatCompletionChunkDelta `json:"delta"`
+	Logprobs     *ChatCompletionLogprobs  `json:"logprobs,omitempty"`
 	FinishReason *string                  `json:"finish_reason"`
 }
 
