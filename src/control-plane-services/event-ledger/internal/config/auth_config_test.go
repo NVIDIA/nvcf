@@ -92,6 +92,19 @@ func TestValidateAuthConfig_JWTProvider(t *testing.T) {
 			},
 			expectedErr: ErrMissingJWTTenantClaim,
 		},
+		{
+			name: "jwt with introspection enabled fails startup",
+			cfg: AuthConfig{
+				Enabled:       true,
+				Provider:      "jwt",
+				JWKSetUrl:     "https://example.com/.well-known/jwks.json",
+				Issuer:        "https://issuer.example.com",
+				Audience:      "event-ledger",
+				TenantClaim:   "tenant_id",
+				Introspection: IntrospectionConfig{Enabled: true, URL: "https://sis.example.com/v1/nvca/tokens/introspect"},
+			},
+			expectedErr: ErrIntrospectionRequiresPolicyProvider,
+		},
 	}
 
 	for _, tt := range tests {

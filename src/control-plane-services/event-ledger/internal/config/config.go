@@ -26,21 +26,22 @@ import (
 )
 
 var (
-	ErrMissingAuthProvider               = errors.New("auth: provider is required when auth is enabled")
-	ErrInvalidAuthProvider               = errors.New("auth: invalid provider specified")
-	ErrMissingJWKSetURL                  = errors.New("auth: jwk-set-url is required")
-	ErrMissingJWTIssuer                  = errors.New("auth: issuer is required for the jwt provider")
-	ErrMissingJWTAudience                = errors.New("auth: audience is required for the jwt provider")
-	ErrMissingJWTTenantClaim             = errors.New("auth: tenant-claim is required for the jwt provider")
-	ErrJWTLegacyEndpointsUnsupported     = errors.New("auth: jwt provider requires deprecate-endpoints to disable legacy routes without tenant partition keys")
-	ErrMissingPolicyCredsFile            = errors.New("policy: creds-file is required for hot-reload support")
-	ErrMissingPolicyTokenIssuerAddr      = errors.New("policy: token-issuer-addr is required")
-	ErrMissingPolicyEvaluatorAddr        = errors.New("policy: policy-evaluator-addr is required")
-	ErrMissingPolicyNamespace            = errors.New("policy: namespace is required")
-	ErrMissingPolicyFQDN                 = errors.New("policy: policy-fqdn is required")
-	ErrInvalidPolicyCredsRefreshInterval = errors.New("policy: creds-refresh-interval must be greater than 0")
-	ErrMissingIntrospectionURL           = errors.New("auth: introspection.url is required when introspection is enabled")
-	ErrIntrospectionRequiresSelfManaged  = errors.New("auth: introspection is only supported in self-managed deployments")
+	ErrMissingAuthProvider                 = errors.New("auth: provider is required when auth is enabled")
+	ErrInvalidAuthProvider                 = errors.New("auth: invalid provider specified")
+	ErrMissingJWKSetURL                    = errors.New("auth: jwk-set-url is required")
+	ErrMissingJWTIssuer                    = errors.New("auth: issuer is required for the jwt provider")
+	ErrMissingJWTAudience                  = errors.New("auth: audience is required for the jwt provider")
+	ErrMissingJWTTenantClaim               = errors.New("auth: tenant-claim is required for the jwt provider")
+	ErrJWTLegacyEndpointsUnsupported       = errors.New("auth: jwt provider requires deprecate-endpoints to disable legacy routes without tenant partition keys")
+	ErrMissingPolicyCredsFile              = errors.New("policy: creds-file is required for hot-reload support")
+	ErrMissingPolicyTokenIssuerAddr        = errors.New("policy: token-issuer-addr is required")
+	ErrMissingPolicyEvaluatorAddr          = errors.New("policy: policy-evaluator-addr is required")
+	ErrMissingPolicyNamespace              = errors.New("policy: namespace is required")
+	ErrMissingPolicyFQDN                   = errors.New("policy: policy-fqdn is required")
+	ErrInvalidPolicyCredsRefreshInterval   = errors.New("policy: creds-refresh-interval must be greater than 0")
+	ErrMissingIntrospectionURL             = errors.New("auth: introspection.url is required when introspection is enabled")
+	ErrIntrospectionRequiresSelfManaged    = errors.New("auth: introspection is only supported in self-managed deployments")
+	ErrIntrospectionRequiresPolicyProvider = errors.New("auth: introspection is only supported with the policy provider")
 )
 
 // Top-level config
@@ -148,6 +149,9 @@ func ValidateAuthConfig(cfg AuthConfig, selfManaged bool) error {
 		}
 		if cfg.TenantClaim == "" {
 			return ErrMissingJWTTenantClaim
+		}
+		if cfg.Introspection.Enabled {
+			return ErrIntrospectionRequiresPolicyProvider
 		}
 	case "policy":
 		if cfg.JWKSetUrl == "" {
