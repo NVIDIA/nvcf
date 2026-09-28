@@ -123,10 +123,19 @@ func runL2PromoteAsync(backend checkpointstore.Backend, log *logrus.Entry, in l2
 			SrcPath:    in.HostDumpDir,
 			DstSubpath: "",
 		}
+		// Size the volume from what the dump wrote. A whole-container dump
+		// carries the rootfs diff (the model, for a NIM) beside the CRIU
+		// images, so the vRAM estimate undershoots: a 107 GB NIM capture
+		// was copied into the 96 GiB the estimate provisioned and failed
+		// with ENOSPC (dev1 2026-09-28). Best-effort: an unreadable tree
+		// leaves TotalSizeBytes 0 and the estimate applies.
+		measured := dirSizeBytes(in.HostDumpDir)
 		manifest := checkpointstore.Manifest{
-			Hash:          in.Hash,
-			CapturedAt:    in.CapturedAt,
-			SourcePodMeta: in.PodMeta,
+			Hash:           in.Hash,
+			CapturedAt:     in.CapturedAt,
+			SourcePodMeta:  in.PodMeta,
+			CaptureMethod:  CapturePathCRIUV2,
+			TotalSizeBytes: measured,
 		}
 
 		start := time.Now()

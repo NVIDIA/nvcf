@@ -161,6 +161,15 @@ func (w *Watcher) handlePodEvent(ctx context.Context, obj any) {
 		plog.Debug("watcher: skipping, pod not Ready yet")
 		return
 	}
+	// NVSNAP_CACHEDIR=0 on the main container means the webhook injected
+	// no cachedir volume and the pod is meant for the criu-v2 engine,
+	// which is driven by the checkpoint request (NVCA) rather than by this
+	// watcher. Scheduling a rootfs capture here would only fail on the
+	// missing volume and retry on every update.
+	if optedOutOfCacheDir(pod) {
+		plog.Info("watcher: skipping, pod opted out of cachedir capture (NVSNAP_CACHEDIR=0)")
+		return
+	}
 	// Rootfs-only capture is the multi-GPU fallback (cuda-checkpoint can't
 	// handle multi-GPU; libcudart wall is upstream-blocked). Single-GPU
 	// workloads usually have a working CRIU + cuda-checkpoint path that
@@ -447,4 +456,18 @@ func mainContainerID(pod *corev1.Pod, idx int) string {
 		return cs.ContainerID
 	}
 	return ""
+}
+
+// optedOutOfCacheDir reports whether the pod's first container carries
+// NVSNAP_CACHEDIR=0, the per-pod switch the webhook honours as well.
+func optedOutOfCacheDir(pod *corev1.Pod) bool {
+	if len(pod.Spec.Containers) == 0 {
+		return false
+	}
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == "NVSNAP_CACHEDIR" && e.Value == "0" {
+			return true
+		}
+	}
+	return false
 }

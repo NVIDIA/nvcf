@@ -258,7 +258,11 @@ func defaultL2Size(_ string, m checkpointstore.Manifest) int64 {
 	// 350x. The 1.2x multiplier already covers fs overhead and the L2
 	// StorageClasses set allowVolumeExpansion, so sizing tight costs
 	// nothing.
-	if (m.CaptureMethod == "rootfs" || m.CaptureMethod == "cachedir") && m.TotalSizeBytes > 0 {
+	// A measured size wins for every capture method. A criu-v2 dump of a
+	// pid-1 container carries the rootfs diff beside the images, and the
+	// vRAM estimate below knows nothing about it (107 GB NIM capture into
+	// 96 GiB, ENOSPC, dev1 2026-09-28).
+	if m.TotalSizeBytes > 0 {
 		const floor = 2 * oneGiB
 		return max(m.TotalSizeBytes*12/10, floor)
 	}

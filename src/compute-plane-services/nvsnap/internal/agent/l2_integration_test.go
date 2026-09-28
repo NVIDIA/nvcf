@@ -278,3 +278,14 @@ func TestDefaultL2Size_CacheDirUsesTotalSize(t *testing.T) {
 			got/oneGiB)
 	}
 }
+
+// A criu-v2 capture that measured its dump is sized from that, not from
+// the vRAM estimate: a pid-1 dump carries the rootfs diff (the model)
+// beside the CRIU images.
+func TestDefaultL2Size_CRIUUsesMeasuredSize(t *testing.T) {
+	const oneGiB int64 = 1 << 30
+	m := checkpointstore.Manifest{CaptureMethod: CapturePathCRIUV2, TotalSizeBytes: 107 * oneGiB}
+	if got, want := defaultL2Size("hash", m), 107*oneGiB*12/10; got != want {
+		t.Errorf("criu-v2 107 GB dump -> %d GiB, want %d GiB", got/oneGiB, want/oneGiB)
+	}
+}

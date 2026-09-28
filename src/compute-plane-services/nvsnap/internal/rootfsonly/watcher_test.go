@@ -523,3 +523,18 @@ func TestWatcher_CapturesUnderStampedHash(t *testing.T) {
 		t.Error("watcher must not recompose the hash when one is stamped")
 	}
 }
+
+func TestOptedOutOfCacheDir(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "w"}}}}
+	if optedOutOfCacheDir(pod) {
+		t.Error("no env: not opted out")
+	}
+	pod.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "NVSNAP_CACHEDIR", Value: "0"}}
+	if !optedOutOfCacheDir(pod) {
+		t.Error("NVSNAP_CACHEDIR=0 must opt out")
+	}
+	pod.Spec.Containers[0].Env[0].Value = "1"
+	if optedOutOfCacheDir(pod) {
+		t.Error("NVSNAP_CACHEDIR=1 must not opt out")
+	}
+}
