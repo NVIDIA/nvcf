@@ -44,9 +44,11 @@ import static com.nvidia.nvcf.util.TestConstants.TEST_PUBLIC_FUNCTION_VERSION_ID
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_1;
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_2;
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_3;
+import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_5;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nvidia.nvcf.persistence.function.entity.FunctionType;
 import com.nvidia.nvcf.persistence.function.entity.RateLimitUdt;
 import com.nvidia.nvcf.proto.ClientInvokeRequest;
 import com.nvidia.nvcf.proto.ClientInvokeResponse;
@@ -1086,6 +1088,113 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
                 });
 
         channel.shutdownNow();
+    }
+
+    Stream<Arguments> llmFunctionVersionArgs() {
+        return Stream.of(
+                Arguments.of(TEST_VERSION_ID_1.toString()),
+                Arguments.of((String) null));
+    }
+
+    /**
+     * LLM workers do not consume the request queues used by classic invocation, so the auth
+     * call must reject LLM functions up front instead of letting the request time out.
+     */
+    @ParameterizedTest
+    @MethodSource("llmFunctionVersionArgs")
+    void rejectsLlmFunctionForClassicInvocation(@Nullable String versionId) {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        var clientAuth = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                         List.of(SCOPE_INVOKE_FUNCTION), 100);
+        var ncaIdKey = Metadata.Key.of(TAG_NCA_ID, Metadata.ASCII_STRING_MARSHALLER);
+
+        assertThatThrownBy(() -> functionAuth(clientAuth, TEST_FUNCTION_ID.toString(), versionId))
+                .isInstanceOf(StatusRuntimeException.class)
+                .satisfies(thrown -> {
+                    var exception = (StatusRuntimeException) thrown;
+                    assertThat(exception.getStatus().getCode())
+                            .isEqualTo(Status.NOT_FOUND.getCode());
+                    assertThat(exception.getStatus().getDescription())
+                            .contains(TEST_FUNCTION_ID.toString())
+                            .contains("LLM functions cannot be invoked through this endpoint");
+                    assertThat(exception.getTrailers()).isNotNull();
+                    assertThat(exception.getTrailers().get(ncaIdKey)).isEqualTo(TEST_NCA_ID);
+                });
+    }
+
+    @Test
+    void rejectsLlmFunctionForClassicAdminInvocation() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        var adminAuth = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
+                                                        List.of(ADMIN_SCOPE_INVOKE_FUNCTION), 100);
+
+        assertThatThrownBy(() -> functionAdminAuth(adminAuth, TEST_FUNCTION_ID.toString(),
+                                                   TEST_VERSION_ID_1.toString()))
+                .isInstanceOf(StatusRuntimeException.class)
+                .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
+                .isEqualTo(Status.NOT_FOUND.getCode());
+    }
+
+    @Test
+    void llmFunctionWithoutAccessStillReturnsNotFound() {
+        // TEST_FUNCTION_ID_2 belongs to another account. Access checks must run first so the
+        // function type of an inaccessible function is not revealed.
+        setFunctionActive(TEST_FUNCTION_ID_2, TEST_VERSION_ID_2);
+        setFunctionType(TEST_FUNCTION_ID_2, TEST_VERSION_ID_2, FunctionType.LLM);
+        var clientAuth = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                         List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        assertThatThrownBy(() -> functionAuth(clientAuth, TEST_FUNCTION_ID_2.toString(),
+                                              TEST_VERSION_ID_2.toString()))
+                .isInstanceOf(StatusRuntimeException.class)
+                .satisfies(thrown -> {
+                    var status = ((StatusRuntimeException) thrown).getStatus();
+                    assertThat(status.getCode()).isEqualTo(Status.NOT_FOUND.getCode());
+                    assertThat(status.getDescription()).doesNotContain("LLM");
+                });
+    }
+
+    /**
+     * Families created before type uniformity was enforced may mix LLM and classic versions.
+     * A versionless classic request must still route to the classic versions.
+     */
+    @Test
+    void mixedFamilyReturnsOnlyClassicVersions() {
+        createFunctionVersion(TEST_FUNCTION_ID, TEST_VERSION_ID_5);
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_5);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_5, FunctionType.LLM);
+        var clientAuth = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                         List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var clientInvokeResponse = functionAuth(clientAuth, TEST_FUNCTION_ID.toString(), null);
+        assertThat(clientInvokeResponse.getFunctionVersionsList())
+                .extracting(FunctionVersion::getFunctionVersionId)
+                .containsExactly(TEST_VERSION_ID_1.toString());
+
+        // explicitly targeting the LLM version is still rejected
+        assertThatThrownBy(() -> functionAuth(clientAuth, TEST_FUNCTION_ID.toString(),
+                                              TEST_VERSION_ID_5.toString()))
+                .isInstanceOf(StatusRuntimeException.class)
+                .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
+                .isEqualTo(Status.NOT_FOUND.getCode());
+    }
+
+    @Test
+    void allowsStreamingFunctionForClassicInvocation() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.STREAMING);
+        var clientAuth = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                         List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var clientInvokeResponse = functionAuth(
+                clientAuth, TEST_FUNCTION_ID.toString(), TEST_VERSION_ID_1.toString());
+
+        assertThat(clientInvokeResponse.getFunctionVersionsList())
+                .extracting(FunctionVersion::getFunctionVersionId)
+                .containsExactly(TEST_VERSION_ID_1.toString());
     }
 
 }
