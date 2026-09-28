@@ -22,8 +22,9 @@ navigation:
         path: ../../docs/overview/compatibility-matrix.md
       - page: "1.0.1 Release Notes"
         path: ../../docs/overview/release-notes/1.0.1.md
-      - page: "0.6.1 to 1.0.0 Upgrade"
-        path: ../../docs/overview/release-notes/0.6.1-to-1.0.0-upgrade.md
+      - page: "0.6.1 to 1.0.1 Upgrade"
+        path: ../../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
+        slug: 0-6-1-to-1-0-1-upgrade
       - page: "(Legacy) 0.6.1 Release Notes"
         path: ../../docs/overview/release-notes/0.6.1.md
       - page: "(Legacy) 0.6.0 to 0.6.1 Upgrade"
