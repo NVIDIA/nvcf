@@ -146,6 +146,9 @@ Useful overrides:
   413 (default `0`, no limit)
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
+- `INFERENCE_WRITE_TIMEOUT` to cap how long one response write may stall on
+  a client that stopped reading (default `60s`, `0s` disables). It is reset
+  before every write, so long streams and generations are not cut off.
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth
 - `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
   fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for

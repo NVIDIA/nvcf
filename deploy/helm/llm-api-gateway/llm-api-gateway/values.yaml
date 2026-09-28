@@ -66,6 +66,10 @@ llmApiGateway:
     requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
+    # Longest a single response write may stall on a client that stopped
+    # reading. Reset before every write, so it does not cap total response
+    # time for streams or long generations. 0s disables the bound.
+    inferenceWriteTimeout: 60s
     nvcfGrpcAddr: "api.nvcf.svc.cluster.local:9090"
     nvcfGrpcInsecure: false
     nvcfGrpcTimeout: 2s

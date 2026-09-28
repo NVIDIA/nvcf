@@ -44,6 +44,22 @@ func TestDefaultSetsExpectedDefaults(t *testing.T) {
 	if cfg.DefaultRPM != 0 {
 		t.Fatalf("default rpm = %d, want 0", cfg.DefaultRPM)
 	}
+	if cfg.Server.InferenceWriteTimeout <= 0 {
+		t.Fatalf("inference write timeout = %s, want a positive stall bound", cfg.Server.InferenceWriteTimeout)
+	}
+}
+
+func TestLoadFromEnvReadsInferenceWriteTimeout(t *testing.T) {
+	t.Setenv("INFERENCE_WRITE_TIMEOUT", "0s")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if cfg.Server.InferenceWriteTimeout != 0 {
+		t.Fatalf("inference write timeout = %s, want 0s", cfg.Server.InferenceWriteTimeout)
+	}
 }
 
 func TestLoadFromEnvReadsMetricsPort(t *testing.T) {

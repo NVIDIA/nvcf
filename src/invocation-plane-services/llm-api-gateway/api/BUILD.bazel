@@ -40,6 +40,7 @@ go_library(
         "routes.go",
         "session_affinity.go",
         "token_count.go",
+        "write_deadline.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api",
     visibility = ["//visibility:public"],
