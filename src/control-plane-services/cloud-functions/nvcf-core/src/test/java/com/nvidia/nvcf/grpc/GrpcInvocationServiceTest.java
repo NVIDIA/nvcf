@@ -44,6 +44,7 @@ import static com.nvidia.nvcf.util.TestConstants.TEST_PUBLIC_FUNCTION_VERSION_ID
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_1;
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_2;
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_3;
+import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_5;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -1153,6 +1154,32 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
                     assertThat(status.getCode()).isEqualTo(Status.NOT_FOUND.getCode());
                     assertThat(status.getDescription()).doesNotContain("LLM");
                 });
+    }
+
+    /**
+     * Families created before type uniformity was enforced may mix LLM and classic versions.
+     * A versionless classic request must still route to the classic versions.
+     */
+    @Test
+    void mixedFamilyReturnsOnlyClassicVersions() {
+        createFunctionVersion(TEST_FUNCTION_ID, TEST_VERSION_ID_5);
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_5);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_5, FunctionType.LLM);
+        var clientAuth = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                         List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var clientInvokeResponse = functionAuth(clientAuth, TEST_FUNCTION_ID.toString(), null);
+        assertThat(clientInvokeResponse.getFunctionVersionsList())
+                .extracting(FunctionVersion::getFunctionVersionId)
+                .containsExactly(TEST_VERSION_ID_1.toString());
+
+        // explicitly targeting the LLM version is still rejected
+        assertThatThrownBy(() -> functionAuth(clientAuth, TEST_FUNCTION_ID.toString(),
+                                              TEST_VERSION_ID_5.toString()))
+                .isInstanceOf(StatusRuntimeException.class)
+                .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
+                .isEqualTo(Status.NOT_FOUND.getCode());
     }
 
     @Test

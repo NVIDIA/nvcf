@@ -70,13 +70,14 @@ public class GrpcInvocationService extends InvocationImplBase {
                 UUID.fromString(request.getFunctionVersionId()) : null;
         var ncaId = request.hasTargetNcaId() ? request.getTargetNcaId()
                 : accountService.getNcaId(authentication);
-        var functions = lookupAndValidateAccess(authentication,
-                ncaId,
-                functionId,
-                functionVersionId);
         // LLM workers do not consume the request queues this path publishes to, so a request
-        // would wait out the poll window and time out. Fail fast instead.
-        rejectLlmFunctions(ncaId, functionId, functions);
+        // would wait out the poll window and time out. Only return versions that can serve it.
+        var functions = withoutLlmVersions(ncaId,
+                functionId,
+                lookupAndValidateAccess(authentication,
+                        ncaId,
+                        functionId,
+                        functionVersionId));
 
         // picking the first function version for function level info.
         // all function versions will be of the same function.
@@ -163,19 +164,20 @@ public class GrpcInvocationService extends InvocationImplBase {
         }
     }
 
-    private static void rejectLlmFunctions(
+    private static List<FunctionContext> withoutLlmVersions(
             String ncaId,
             UUID functionId,
             List<FunctionContext> functions) {
-        var hasLlmVersion = functions.stream()
-                .map(FunctionContext::targetFunction)
-                .anyMatch(function -> function.getFunctionType() == FunctionType.LLM);
-        if (hasLlmVersion) {
+        var invocable = functions.stream()
+                .filter(context -> context.targetFunction().getFunctionType() != FunctionType.LLM)
+                .toList();
+        if (invocable.isEmpty()) {
             var mesg = MESG_LLM_FUNCTION_NOT_INVOCABLE.formatted(functionId);
             log.warn("Rejecting classic invocation of LLM function: ncaId={}, functionId={}",
                      ncaId, functionId);
             throw new InvalidInvocationException(ncaId, new NotFoundException(mesg));
         }
+        return invocable;
     }
 
 }
