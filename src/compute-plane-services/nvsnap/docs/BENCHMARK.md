@@ -107,6 +107,17 @@ the sweep reads files in 256 MiB ranges so a few large weights files still use e
 `prewarmParallelism` in the `nvsnap-storage-profiles` ConfigMap), see
 `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`.
 
+Measured on an NVCF container function (NIM Llama-3.1-8B, vLLM profile,
+1x H100, NVMesh, 2026-09-28), health ready from pod creation: cold about
+197 s; cachedir restore with the old per-file sweep 206 s (the sweep ran
+one reader for 67 s); with prewarm off 180 s (the engine's own load read
+15 GB single-stream in 33 s); with the range-parallel sweep 140 s
+(weights 1.6 s; the sweep itself hit page cache from the previous run on
+the same node, a cold sweep at 2 GB/s adds about 8 s). Of the remaining
+140 s, 27 s are the function's own init containers, 80 s are Python
+imports across the API server and engine processes, 25 s are CUDA graph
+capture; cachedir restore does not touch those, only the CRIU path does.
+
 Prewarm file selection, a documented heuristic. The sweep follows
 symlinks and skips two path patterns: `*/original/*` and `*/blobs/*`.
 Both come from the Hugging Face hub cache layout that `huggingface_hub`
