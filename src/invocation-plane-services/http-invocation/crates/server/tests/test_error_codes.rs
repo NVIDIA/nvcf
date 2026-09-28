@@ -16,6 +16,7 @@
 mod mocks;
 
 use crate::mocks::nvcf_worker_mock::PublishMode;
+use async_nats::jetstream::{context::GetStreamErrorKind, ErrorCode};
 use axum::{
     body::Body,
     http::{self, header, HeaderValue, Method, StatusCode},
@@ -429,14 +430,14 @@ async fn test_llm_function_rejected_without_publishing() -> anyhow::Result<()> {
     )
     .await?;
     let stream_name = nats_service.request_stream_name(LLM_VERSION_ID);
-    assert!(
-        nats_service
-            .jetstream()
-            .get_stream(&stream_name)
-            .await
-            .is_err(),
-        "no request stream should exist for the rejected LLM function"
-    );
+    match nats_service.jetstream().get_stream(&stream_name).await {
+        Ok(_) => panic!("no request stream should exist for the rejected LLM function"),
+        Err(err) => match err.kind() {
+            GetStreamErrorKind::JetStream(js_err)
+                if js_err.error_code() == ErrorCode::STREAM_NOT_FOUND => {}
+            _ => return Err(err.into()),
+        },
+    }
 
     Ok(())
 }
