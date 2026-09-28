@@ -322,16 +322,29 @@ publications:
     type: resource
     version: 1.0.1
     registry: public-resources
+  - name: helm-nvcf-state-metrics
+    type: chart
+    version: 1.0.2
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-state-metrics-service
+    type: image
+    version: 1.23.7
+    registry: public-images
+  - name: nvcf-compute-plane-stack
+    type: resource
+    version: 1.0.0
+    registry: public-resources
+  - name: nvcf-observability-stack
+    type: resource
+    version: 1.0.0
+    registry: public-resources
 version_overrides:
   - name: nvcf-cli
     type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
-publication_pending:
-  - helm-nvcf-state-metrics
-  - nvcf-compute-plane-stack
-  - nvcf-observability-stack
-  - nvcf-state-metrics-service
+publication_pending: []
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys

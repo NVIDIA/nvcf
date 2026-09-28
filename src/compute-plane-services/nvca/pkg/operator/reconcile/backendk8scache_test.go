@@ -2056,6 +2056,59 @@ func TestSyncNVCFBackendHealth(t *testing.T) {
 	lastStatus = gotNB.Status.LastUpdatedAgentStatus
 }
 
+func TestSyncNVCFBackendHealthRejectsStaticCapacityOnDynamicBackend(t *testing.T) {
+	ctx := newTestContext()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
+			Status: nvidiaiov1.AgentStatusHealthy,
+		}))
+	}))
+	t.Cleanup(server.Close)
+	previousHealthzURL := makeNVCAHealthzURL
+	makeNVCAHealthzURL = func(*nvidiaiov1.NVCFBackend) (string, error) {
+		return server.URL, nil
+	}
+	t.Cleanup(func() { makeNVCAHealthzURL = previousHealthzURL })
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	nb.Name = "dynamic-backend"
+	nb.Namespace = NVCAOperatorNamespace
+	nb.Spec.ClusterConfig.GPUDiscovery.Dynamic = &nvidiaiov1.DynamicGPUDiscoveryConfig{}
+	nb.Status.AgentStatus = nvidiaiov1.AgentStatusUnhealthy
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: nvcaoptypes.NVCAModuleName, Namespace: getSystemNamespace(nb),
+	}}
+	dep.Status.ReadyReplicas = 1
+	mergeCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName, Namespace: NVCAOperatorNamespace},
+		Data:       map[string]string{agentConfigFile: "agent:\n  staticGPUCapacity: 5\n"},
+	}
+	recorder := record.NewFakeRecorder(0)
+	recorder.Events = nil
+	bc := &BackendK8sCache{
+		clients: &kubeclients.KubeClients{
+			NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+			K8s:    fakek8sclient.NewSimpleClientset(dep, mergeCM),
+		},
+		httpClient:        server.Client(),
+		operatorNamespace: NVCAOperatorNamespace,
+		eventRecorder:     recorder,
+	}
+
+	require.NoError(t, bc.SyncNVCFBackendHealth(ctx, nb))
+	got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+
+	mergeCM.Data[agentConfigFile] = "agent:\n  logLevel: info\n"
+	_, err = bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, mergeCM, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	require.NoError(t, bc.SyncNVCFBackendHealth(ctx, got))
+	got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+}
+
 type PatchedOSExit struct {
 	Called     bool
 	CalledWith int

@@ -5474,6 +5474,38 @@ func ngcManagedBackendWithAgentConfig(agentConfig nvidiaiov1.AgentConfig) *nvidi
 	}
 }
 
+func TestNewAgentConfigConfigMapRejectsStaticGPUCapacityOnDynamicBackend(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{agentConfigFile: "agent:\n  staticGPUCapacity: 5\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	nb.Spec.ClusterConfig.GPUDiscovery.Dynamic = &nvidiaiov1.DynamicGPUDiscoveryConfig{}
+	_, err = bc.newAgentConfigConfigMap(ctx, nb)
+	require.Error(t, err)
+	assert.True(t, isInvalidAgentConfigError(err))
+	assert.ErrorContains(t, err, "worker.staticGPUCapacity requires static GPU discovery")
+
+	nb.Spec.ClusterConfig.GPUDiscovery.Dynamic = nil
+	nb.Spec.ClusterConfig.GPUDiscovery.Static = &nvidiaiov1.StaticGPUDiscoveryConfig{
+		AllocatedGPUCapacity: 5,
+	}
+	_, err = bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+}
+
 func TestGetEffectiveOTelCollectorConfig(t *testing.T) {
 	tests := []struct {
 		name       string

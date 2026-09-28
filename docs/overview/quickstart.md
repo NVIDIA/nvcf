@@ -31,7 +31,7 @@ Before you start, install and prepare:
 - `helm` >= 3.14
 - `helmfile` >= 1.0. Use `helmfile` >= 1.5.0 with Helm 4.
 - `helm-diff` plugin
-- `nvcf-cli` on your `PATH`. See [Installation](/nvcf/self-managed/cli#installation) to
+- `nvcf-cli` on your `PATH`. See [Installation](/nvcf/overview/cli#installation) to
   build it from the repository or download it from NGC.
 - An NGC API key with access to the NVCF chart and image registry
 - The NGC organization and team slugs for that registry access
@@ -101,7 +101,7 @@ export PATH="${HOME}/.local/bin:${PATH}"
 nvcf-cli version
 ```
 
-For the packaged CLI release, see [Installation](/nvcf/self-managed/cli#download-from-ngc).
+For the packaged CLI release, see [Installation](/nvcf/overview/cli#download-from-ngc).
 </Accordion>
 
 `self-hosted up` defaults to `--env local` and supports only the single local
