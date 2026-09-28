@@ -28,10 +28,12 @@ topology while degrading gracefully on a constrained cluster. Move to
 `enforced` once you have confirmed your node pools have capacity in every AZ
 and you want hard placement guarantees.
 
-`preferred` guarantees continuity after a single **pod** failure but provides
-only best-effort node/zone separation — under capacity pressure, replicas can
-still end up co-located. `enforced` guarantees continuity after a single pod
-**or node** failure when the prerequisites below are met. Neither mode alone
+For the replicated services, `preferred` guarantees continuity after a single
+**pod** failure but provides only best-effort node/zone separation — under
+capacity pressure, replicas can still end up co-located. `enforced` guarantees
+continuity after a single pod **or node** failure when the prerequisites below
+are met. `invocation-service` and `grpc-proxy` are still single-replica in both
+modes, so they are briefly unavailable while their Pod is rescheduled. Neither mode alone
 claims arbitrary availability-zone or site-loss tolerance; see
 [Zone spread for the quorum services](#zone-spread-for-the-quorum-services)
 and [Recovery objectives](#recovery-objectives-and-failure-behavior) for what
@@ -191,7 +193,8 @@ below.
   soft/hard-by-mode convention. See the next section for what it takes for
   this to actually protect against an AZ loss.
 - **PodDisruptionBudgets** sized to tolerate exactly one voluntary disruption
-  (`minAvailable: 2` of 3, or OpenBao's equivalent `maxUnavailable: 1`).
+  (`maxUnavailable: 1`), so a drain takes down at most one member even when
+  you run more than three replicas.
 
 #### Zone spread for the quorum services
 
@@ -250,14 +253,16 @@ Beyond placement, HA also raises the data-durability settings:
 
 #### NATS JetStream replica factor
 
-Streams default to a single replica. Under HA the stack sets the JetStream
-replica factor (RF) to **3** (`highAvailability.nats.jetstream.replicaFactor`)
-on the two services that create streams — `nvcf-api` (via `NVCF_NATS_REPLICAS`)
-and `invocation-service` (via `NATS_PROPERTIES__REPLICAS`). JetStream streams
-use Raft quorum: RF=3 tolerates the loss of one replica, matching the
-3-member NATS cluster. **RF=2 is not sufficient** — a 2-member Raft group
-loses quorum the moment either replica is unavailable, so it provides no
-resilience benefit over RF=1.
+Streams default to a single replica. When NATS runs more than one server, the
+stack derives the JetStream replica factor (RF) from the server count, capped
+at **3** as the NATS documentation recommends, so the HA cluster of 3 servers
+gets RF=3. It is set on the two services that create streams: `nvcf-api` (via
+`NVCF_NATS_REPLICAS`) and `invocation-service` (via `NATS_PROPERTIES__REPLICAS`).
+To override it for one service, set that variable in `api.env` or
+`invocation.env`. JetStream streams use Raft quorum: RF=3 tolerates the loss of
+one replica. **RF=2 is not sufficient** — a 2-member Raft group loses quorum
+the moment either replica is unavailable, so it provides no resilience benefit
+over RF=1.
 
 RF applies when a stream is **created**. Streams already created at RF=1 are not
 rewritten by changing this value — after enabling HA, recreate or edit those
@@ -340,10 +345,11 @@ kubectl -n vault-system get pods -o wide
 Confirm the replica-safe Deployments scaled and spread:
 
 ```bash
-kubectl -n nvcf get deploy nvcf-api admin-token-issuer-proxy -o wide
-kubectl -n nvcf get pods -o wide -l app.kubernetes.io/instance=nvcf-api
+kubectl -n nvcf get deploy nvcf-api -o wide
+kubectl -n nvcf get pods -o wide -l app.kubernetes.io/instance=api
+kubectl -n api-keys get deploy admin-token-issuer-proxy -o wide
 # invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy)
-kubectl -n nvcf get deploy invocation-service grpc-proxy -o wide
+kubectl -n nvcf get deploy invocation-service grpc-proxy-deployment -o wide
 # ess-api scales to 2 (its scheduled crypto jobs run only in a separate worker, not in-stack)
 kubectl -n ess get deploy ess-api-deployment -o wide
 ```

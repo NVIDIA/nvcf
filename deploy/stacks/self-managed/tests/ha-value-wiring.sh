@@ -174,6 +174,14 @@ grep -q "podAntiAffinity:" "$work_dir/nats-on.yaml" ||
   fail "nats: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
 awk '/^nats:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/nats-on.yaml" | grep -q "topology.kubernetes.io/zone" ||
   fail "nats: expected Tier-2 zone spread when highAvailability.mode=preferred"
+# The upstream NATS PDB hard-codes maxUnavailable; the HA layer must override that
+# field, never add minAvailable (the API server rejects a PDB with both).
+nats_pdb="$(awk '/^nats:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/nats-on.yaml" | grep -A4 "^  podDisruptionBudget:")"
+grep -q "maxUnavailable: 1" <<<"$nats_pdb" ||
+  fail "nats: expected podDisruptionBudget.merge.spec.maxUnavailable 1 when highAvailability.mode=preferred"
+if grep -q "minAvailable" <<<"$nats_pdb"; then
+  fail "nats: podDisruptionBudget must not set minAvailable; upstream already sets maxUnavailable"
+fi
 
 # rateLimiter + nats-auth-callout scale to 2 replicas.
 render_chart_values ratelimiter "$work_dir/ratelimiter-on.yaml" "$core" --state-values-set rateLimiter.enabled=true ||
@@ -336,13 +344,54 @@ cassandra:
   replicaCount: 5
 api:
   replicaCount: 4
+nats:
+  config:
+    cluster:
+      replicas: 5
+ess:
+  autoscaling:
+    maxReplicas: 1
+reval:
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 1
 EOF
 render_chart_values cassandra "$work_dir/cassandra-floor.yaml" "$deps" || fail "render cassandra (floor)"
 grep -E "replicaCount:[[:space:]]*5" "$work_dir/cassandra-floor.yaml" >/dev/null ||
   fail "cassandra: HA must floor (not replace) a higher configured replicaCount (expected 5)"
+# A quorum PDB must still allow only one disruption above 3 replicas.
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-floor.yaml" | grep -A3 "^  podDisruptionBudget:" | grep -q "maxUnavailable: 1" ||
+  fail "cassandra: expected podDisruptionBudget maxUnavailable 1 at 5 replicas"
 render_chart_values api "$work_dir/api-floor.yaml" "$core" || fail "render api (floor)"
 awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-floor.yaml" | grep -E "replicaCount:[[:space:]]*4" >/dev/null ||
   fail "api: HA must floor (not replace) a higher configured replicaCount (expected 4)"
+# JetStream RF follows the NATS server count, capped at 3.
+grep -q 'NVCF_NATS_REPLICAS: "3"' "$work_dir/api-floor.yaml" ||
+  fail "api: expected JetStream RF capped at 3 with 5 NATS servers"
+# HPA bounds stay valid when HA raises the minimum above a configured maximum.
+render_chart_values ess-api "$work_dir/ess-floor.yaml" "$core" || fail "render ess (floor)"
+awk '/^ess:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/ess-floor.yaml" | grep -A3 "^  autoscaling:" | grep -E "maxReplicas:[[:space:]]*2" >/dev/null ||
+  fail "ess: expected autoscaling.maxReplicas raised to the HA minimum of 2"
+render_chart_values reval "$work_dir/reval-floor.yaml" "$core" || fail "render reval (floor)"
+reval_hpa="$(awk '/^reval:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/reval-floor.yaml" | grep -A3 "^  autoscaling:")"
+grep -Eq "minReplicas:[[:space:]]*2" <<<"$reval_hpa" ||
+  fail "reval: expected autoscaling.minReplicas floored at 2 when highAvailability.mode=preferred"
+grep -Eq "maxReplicas:[[:space:]]*2" <<<"$reval_hpa" ||
+  fail "reval: expected autoscaling.maxReplicas raised to the HA minimum of 2"
+
+echo "== JetStream RF follows the NATS server count, not the HA mode =="
+write_env <<'EOF'
+highAvailability:
+  mode: none
+nats:
+  config:
+    cluster:
+      enabled: true
+      replicas: 3
+EOF
+render_chart_values api "$work_dir/api-rf.yaml" "$core" || fail "render api (rf)"
+grep -q 'NVCF_NATS_REPLICAS: "3"' "$work_dir/api-rf.yaml" ||
+  fail "api: expected JetStream RF 3 for a 3-server NATS cluster with highAvailability.mode=none"
 
 echo "== highAvailability invalid mode fails render =="
 write_env <<'EOF'

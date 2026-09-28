@@ -45,8 +45,7 @@ with minAvailable 1. invocation-service and grpc-proxy stay single-replica for
 now (placement still applied, no-op at 1 replica, no PDB).
 
 Quorum services (Cassandra, NATS, OpenBao) get 3 replicas, anti-affinity, zone
-spread, and a PDB tolerating one disruption. NATS JetStream RF is applied to the
-stream creators (nvcf-api, invocation) via env.
+spread, and a PDB tolerating one disruption at any replica count.
 
 Charts must expose the matching value hooks.
 */}}
@@ -79,25 +78,40 @@ minAvailable: {{ .minAvailable }}
 {{- include "nvcf.ha._podDisruptionBudget" (dict "haMode" (dig "highAvailability" "mode" "none" . | toString) "minAvailable" 1) -}}
 {{- end -}}
 
-{{/* PDB for a 3-member quorum service: minAvailable 2 of 3. */}}
+{{/* PDB for a quorum StatefulSet: maxUnavailable 1, so a drain removes at most one
+     member whatever the replica count. A fixed minAvailable would allow more
+     evictions as replicas grow above 3. */}}
 {{- define "nvcf.ha.quorumPodDisruptionBudget" -}}
-{{- include "nvcf.ha._podDisruptionBudget" (dict "haMode" (dig "highAvailability" "mode" "none" . | toString) "minAvailable" 2) -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
+enabled: true
+maxUnavailable: 1
+{{- end -}}
 {{- end -}}
 
-{{/* PDB for the NATS quorum, in the NATS chart's merge.spec shape: minAvailable 2 of 3. */}}
+{{/* PDB for the NATS quorum, in the NATS chart's merge.spec shape: maxUnavailable 1.
+     The upstream PDB already sets maxUnavailable, and merging in minAvailable would
+     produce a spec the API server rejects. */}}
 {{- define "nvcf.ha.natsQuorumPodDisruptionBudget" -}}
 {{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
 enabled: true
 merge:
   spec:
-    minAvailable: 2
+    maxUnavailable: 1
 {{- end -}}
 {{- end -}}
 
-{{/* JetStream replica factor, applied to the stream creators (nvcf-api,
-     invocation) via env. Defaults to 3: RF=2 loses quorum on one node loss. */}}
-{{- define "nvcf.ha.natsStreamReplicas" -}}
-{{- dig "highAvailability" "nats" "jetstream" "replicaFactor" 3 . -}}
+{{/* JetStream stream replicas for the stream creators (nvcf-api, invocation),
+     derived from the NATS server count and capped at 3 as NATS recommends. Empty
+     for a single server so the services keep their own default. Override per
+     service with api.env.NVCF_NATS_REPLICAS or invocation.env.NATS_PROPERTIES__REPLICAS. */}}
+{{- define "nvcf.natsStreamReplicas" -}}
+{{- $servers := 1 -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
+{{- $servers = max 3 (dig "nats" "config" "cluster" "replicas" 3 . | int) -}}
+{{- else if dig "nats" "config" "cluster" "enabled" false . -}}
+{{- $servers = dig "nats" "config" "cluster" "replicas" 1 . | int -}}
+{{- end -}}
+{{- if gt $servers 1 }}{{ min $servers 3 }}{{ end -}}
 {{- end -}}
 
 {{/* Hostname anti-affinity body: hard under enforced, soft under preferred. */}}
@@ -912,9 +926,8 @@ api:
   {{- if .Values.global.observability.tracing.enabled }}
   {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
   {{- end }}
-  {{- if $haEnabled }}
-  {{- /* JetStream RF (NVCF_NATS_REPLICAS). */}}
-  {{- $_ := set $apiEnv "NVCF_NATS_REPLICAS" (include "nvcf.ha.natsStreamReplicas" .Values) }}
+  {{- with include "nvcf.natsStreamReplicas" .Values }}
+  {{- $_ := set $apiEnv "NVCF_NATS_REPLICAS" . }}
   {{- end }}
   {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
@@ -939,9 +952,8 @@ invocation:
   {{- with $invocationWorkerBaseURL }}
   {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
   {{- end }}
-  {{- if $haEnabled }}
-  {{- /* JetStream RF (NATS_PROPERTIES__REPLICAS). */}}
-  {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" (include "nvcf.ha.natsStreamReplicas" .Values) }}
+  {{- with include "nvcf.natsStreamReplicas" .Values }}
+  {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" . }}
   {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
@@ -1153,8 +1165,10 @@ ess:
   fullnameOverride: ess-api
   {{- if $haEnabled }}
   replicaCount: {{ max 2 (dig "ess" "replicaCount" 1 .Values | int) }}
+  {{- $essMinReplicas := max 2 (dig "ess" "autoscaling" "minReplicas" 1 .Values | int) }}
   autoscaling:
-    minReplicas: {{ max 2 (dig "ess" "autoscaling" "minReplicas" 1 .Values | int) }}
+    minReplicas: {{ $essMinReplicas }}
+    maxReplicas: {{ max $essMinReplicas (dig "ess" "autoscaling" "maxReplicas" 12 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
@@ -1436,6 +1450,10 @@ reval:
   fullnameOverride: reval
   {{- if $haEnabled }}
   replicaCount: {{ max 2 (dig "reval" "replicaCount" 1 .Values | int) }}
+  {{- $revalMinReplicas := max 2 (dig "reval" "autoscaling" "minReplicas" 1 .Values | int) }}
+  autoscaling:
+    minReplicas: {{ $revalMinReplicas }}
+    maxReplicas: {{ max $revalMinReplicas (dig "reval" "autoscaling" "maxReplicas" 100 .Values | int) }}
   {{- end }}
   {{- with include "nvcf.ha.updateStrategy" .Values }}
   strategy:
