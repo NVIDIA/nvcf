@@ -19,6 +19,7 @@ go_library(
     name = "api",
     srcs = [
         "auth_middleware.go",
+        "body_limit.go",
         "chat_handler.go",
         "context.go",
         "handlers.go",
@@ -82,6 +83,7 @@ go_test(
     name = "api_test",
     srcs = [
         "auth_middleware_test.go",
+        "body_limit_test.go",
         "embeddings_handler_test.go",
         "info_test.go",
         "middleware_telemetry_test.go",
@@ -92,6 +94,7 @@ go_test(
         "overload_test.go",
         "passthrough_test.go",
         "priority_guard_test.go",
+        "proxy_body_test.go",
         "rate_limit_accounting_test.go",
         "responses_handler_test.go",
         "routing_key_case_test.go",

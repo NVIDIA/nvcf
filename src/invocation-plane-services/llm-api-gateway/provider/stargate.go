@@ -601,6 +601,10 @@ type chatCompletionChoiceAccumulator struct {
 	finishReason     string
 	functionCall     *models.ChatCompletionFunctionCall
 	toolCalls        map[uint32]*chatCompletionToolCallAccumulator
+	extensions       map[string]json.RawMessage
+	logprobsMembers  map[string]json.RawMessage
+	deltaText        map[string]*strings.Builder
+	deltaValues      map[string]json.RawMessage
 }
 
 type chatCompletionToolCallAccumulator struct {
@@ -617,6 +621,7 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 	}
 	choices := map[uint32]*chatCompletionChoiceAccumulator{}
 	var choiceIndexes []uint32
+	var usageRaw json.RawMessage
 	seenChunk := false
 
 	for event := range events {
@@ -652,7 +657,9 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 			}
 			acc.merge(choice)
 		}
+		mergeUnmodeledChunkMembers(event.Raw, response, choices, &usageRaw)
 	}
+	response.Usage.Raw = usageRaw
 
 	if !seenChunk {
 		return nil, errors.New("stargate stream ended without chat completion chunks")
@@ -669,6 +676,125 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 	}
 
 	return response, nil
+}
+
+// mergeUnmodeledChunkMembers carries upstream members the typed chunk structs
+// do not declare (for example nvext, choices[].stop_reason, or delta.refusal)
+// into the unary response, so unary clients see what streaming clients see.
+// The last upstream usage object is kept whole.
+func mergeUnmodeledChunkMembers(
+	raw json.RawMessage,
+	response *models.ChatCompletionResponse,
+	choices map[uint32]*chatCompletionChoiceAccumulator,
+	usageRaw *json.RawMessage,
+) {
+	if len(raw) == 0 {
+		return
+	}
+	response.Extensions = mergeLatestMembers(
+		response.Extensions,
+		models.UnmodeledMembers(raw, models.ChatCompletionChunk{}),
+	)
+
+	var chunk struct {
+		Choices []json.RawMessage `json:"choices"`
+		Usage   json.RawMessage   `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &chunk); err != nil {
+		return
+	}
+	if usage := bytes.TrimSpace(chunk.Usage); len(usage) > 0 && usage[0] == '{' {
+		*usageRaw = chunk.Usage
+	}
+	for _, rawChoice := range chunk.Choices {
+		var choice struct {
+			Index    uint32          `json:"index"`
+			Delta    json.RawMessage `json:"delta"`
+			Logprobs json.RawMessage `json:"logprobs"`
+		}
+		if err := json.Unmarshal(rawChoice, &choice); err != nil {
+			continue
+		}
+		acc, ok := choices[choice.Index]
+		if !ok {
+			continue
+		}
+		acc.extensions = mergeLatestMembers(
+			acc.extensions,
+			models.UnmodeledMembers(rawChoice, models.ChatCompletionChunkChoice{}),
+		)
+		acc.logprobsMembers = mergeLatestMembers(
+			acc.logprobsMembers,
+			models.UnmodeledMembers(choice.Logprobs, models.ChatCompletionLogprobs{}),
+		)
+		acc.mergeDeltaMembers(models.UnmodeledMembers(choice.Delta, models.ChatCompletionChunkDelta{}))
+	}
+}
+
+// mergeDeltaMembers applies the streaming merge rule to delta members the
+// typed delta does not declare: string values are concatenated in arrival
+// order like content, and any other value replaces the previous one. A null
+// does not erase an earlier value.
+func (a *chatCompletionChoiceAccumulator) mergeDeltaMembers(members map[string]json.RawMessage) {
+	for key, value := range members {
+		trimmed := bytes.TrimSpace(value)
+		if len(trimmed) > 0 && trimmed[0] == '"' {
+			var text string
+			if err := json.Unmarshal(trimmed, &text); err == nil {
+				if a.deltaText == nil {
+					a.deltaText = map[string]*strings.Builder{}
+				}
+				builder, ok := a.deltaText[key]
+				if !ok {
+					builder = &strings.Builder{}
+					a.deltaText[key] = builder
+				}
+				builder.WriteString(text)
+				delete(a.deltaValues, key)
+				continue
+			}
+		}
+		if string(trimmed) == "null" {
+			if _, ok := a.deltaText[key]; ok {
+				continue
+			}
+		}
+		a.deltaValues = mergeLatestMembers(a.deltaValues, map[string]json.RawMessage{key: value})
+		delete(a.deltaText, key)
+	}
+}
+
+func (a *chatCompletionChoiceAccumulator) messageExtensions() map[string]json.RawMessage {
+	if len(a.deltaText) == 0 && len(a.deltaValues) == 0 {
+		return nil
+	}
+	extensions := make(map[string]json.RawMessage, len(a.deltaText)+len(a.deltaValues))
+	for key, value := range a.deltaValues {
+		extensions[key] = value
+	}
+	for key, builder := range a.deltaText {
+		encoded, err := json.Marshal(builder.String())
+		if err != nil {
+			continue
+		}
+		extensions[key] = encoded
+	}
+	return extensions
+}
+
+// mergeLatestMembers keeps the latest value per member, except that a later
+// null does not erase an earlier value.
+func mergeLatestMembers(dst, src map[string]json.RawMessage) map[string]json.RawMessage {
+	for key, value := range src {
+		if _, ok := dst[key]; ok && string(bytes.TrimSpace(value)) == "null" {
+			continue
+		}
+		if dst == nil {
+			dst = make(map[string]json.RawMessage)
+		}
+		dst[key] = value
+	}
+	return dst
 }
 
 func (a *chatCompletionChoiceAccumulator) merge(choice models.ChatCompletionChunkChoice) {
@@ -740,7 +866,8 @@ func (a *chatCompletionChoiceAccumulator) buildChoice() models.ChatCompletionCho
 	}
 
 	message := models.ChatCompletionMessage{
-		Role: role,
+		Role:       role,
+		Extensions: a.messageExtensions(),
 	}
 	if a.content.Len() > 0 {
 		message.Content = ptr.To(a.content.String())
@@ -754,6 +881,9 @@ func (a *chatCompletionChoiceAccumulator) buildChoice() models.ChatCompletionCho
 	if a.functionCall != nil {
 		message.FunctionCall = a.functionCall
 	}
+	if a.logprobs != nil {
+		a.logprobs.Extensions = a.logprobsMembers
+	}
 	if len(a.toolCalls) > 0 {
 		message.ToolCalls = ptr.To(a.buildToolCalls())
 	}
@@ -763,6 +893,7 @@ func (a *chatCompletionChoiceAccumulator) buildChoice() models.ChatCompletionCho
 		Message:      message,
 		Logprobs:     a.logprobs,
 		FinishReason: a.finishReason,
+		Extensions:   a.extensions,
 	}
 }
 

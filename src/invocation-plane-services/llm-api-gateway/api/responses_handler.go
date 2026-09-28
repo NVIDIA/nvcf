@@ -66,6 +66,9 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := rejectAmbiguousMembers(body, openairesponses.CreateRequest{}); err != nil {
+		return err
+	}
 
 	var request openairesponses.CreateRequest
 	if err := c.Bind(&request); err != nil {

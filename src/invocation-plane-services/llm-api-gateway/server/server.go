@@ -48,6 +48,7 @@ func New(
 	e.HideBanner = true
 	e.HidePort = true
 	e.Use(echoMiddleware.Recover())
+	e.Use(api.NewRequestBodyLimitMiddleware(cfg.Server.MaxRequestBodyBytes))
 	e.Use(api.NewContextMiddleware(cfg))
 	e.Use(api.NewNVCFAuthMiddleware(authClient))
 

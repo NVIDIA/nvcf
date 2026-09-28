@@ -328,3 +328,95 @@ func TestStargateProviderStreamCarriesRawUpstreamChunks(t *testing.T) {
 	require.JSONEq(t, `{"enable_thinking":false}`, string(outbound["chat_template_kwargs"]))
 	require.NotContains(t, outbound, "stream_options")
 }
+
+func TestStargateProviderCompleteCarriesUnmodeledChunkMembers(t *testing.T) {
+	t.Parallel()
+
+	upstream := `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"o"},"finish_reason":null,"stop_reason":null}],"nvext":{"worker_id":"w-1"},"kv_transfer_params":{"remote":"a"}}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"k"},"finish_reason":"stop","stop_reason":42}],"kv_transfer_params":null}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9,"num_cached_tokens":4}}
+
+data: [DONE]
+
+`
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{headerContentType: []string{contentTypeSSE}},
+			Body:       io.NopCloser(strings.NewReader(upstream)),
+		}, nil
+	})}
+
+	response, err := provider.Complete(
+		context.Background(),
+		&requestctx.RequestContext{RequestID: "req-1"},
+		normalizedChatRequestFromBody(t, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	require.NoError(t, err)
+
+	encoded, err := json.Marshal(response)
+	require.NoError(t, err)
+	got := decodeJSONObject(t, encoded)
+
+	require.JSONEq(t, `{"worker_id":"w-1"}`, string(got["nvext"]))
+	require.JSONEq(t, `{"remote":"a"}`, string(got["kv_transfer_params"]),
+		"a later null does not erase an earlier value")
+	require.JSONEq(t, `"chat.completion"`, string(got["object"]),
+		"typed members are not overridden by chunk members")
+
+	var choices []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(got["choices"], &choices))
+	require.Len(t, choices, 1)
+	require.JSONEq(t, `42`, string(choices[0]["stop_reason"]))
+	require.JSONEq(t, `{"role":"assistant","content":"ok"}`, string(choices[0]["message"]))
+
+	usage := decodeJSONObject(t, got["usage"])
+	require.JSONEq(t, `4`, string(usage["num_cached_tokens"]))
+	require.JSONEq(t, `7`, string(usage["prompt_tokens"]))
+}
+
+func TestStargateProviderCompleteMergesUnmodeledDeltaAndLogprobsMembers(t *testing.T) {
+	t.Parallel()
+
+	upstream := `data: {"id":"c","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I can","audio":{"id":"a1"}},"logprobs":{"content":[],"vendor_rank":1},"finish_reason":null}]}
+
+data: {"id":"c","choices":[{"index":0,"delta":{"refusal":"not help","audio":null},"logprobs":{"content":[],"vendor_rank":null},"finish_reason":null}]}
+
+data: {"id":"c","choices":[{"index":0,"delta":{"refusal":".","audio":{"id":"a2"}},"logprobs":{"content":[],"vendor_rank":2},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{headerContentType: []string{contentTypeSSE}},
+			Body:       io.NopCloser(strings.NewReader(upstream)),
+		}, nil
+	})}
+
+	response, err := provider.Complete(
+		context.Background(),
+		&requestctx.RequestContext{RequestID: "req-1"},
+		normalizedChatRequestFromBody(t, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	require.NoError(t, err)
+
+	encoded, err := json.Marshal(response.Choices[0])
+	require.NoError(t, err)
+	choice := decodeJSONObject(t, encoded)
+
+	message := decodeJSONObject(t, choice["message"])
+	require.JSONEq(t, `"I cannot help."`, string(message["refusal"]), "string delta members concatenate")
+	require.JSONEq(t, `{"id":"a2"}`, string(message["audio"]), "other delta members keep the latest non-null value")
+	require.JSONEq(t, `"assistant"`, string(message["role"]))
+
+	logprobs := decodeJSONObject(t, choice["logprobs"])
+	require.JSONEq(t, `2`, string(logprobs["vendor_rank"]))
+}

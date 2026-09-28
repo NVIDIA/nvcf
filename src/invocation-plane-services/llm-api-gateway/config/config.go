@@ -56,6 +56,9 @@ type ServerConfig struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	Region            string
+	// MaxRequestBodyBytes rejects larger request bodies with 413. Zero disables
+	// the limit.
+	MaxRequestBodyBytes int64
 }
 
 type TelemetryConfig struct {
@@ -290,6 +293,14 @@ func applyServerTelemetryEnv(cfg *Config, errs *envErrs) {
 
 	if addr := os.Getenv("NVCF_GATEWAY_ADDR"); addr != "" {
 		cfg.Server.Addr = addr
+	}
+
+	if limit, ok := errs.integer64("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES"); ok {
+		if limit < 0 {
+			errs.add("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", strconv.FormatInt(limit, 10), errors.New("must be >= 0"))
+		} else {
+			cfg.Server.MaxRequestBodyBytes = limit
+		}
 	}
 
 	if serviceName := os.Getenv("OTEL_SERVICE_NAME"); serviceName != "" {

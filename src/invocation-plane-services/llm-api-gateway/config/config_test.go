@@ -258,3 +258,41 @@ func TestLoadFromEnvFailsOnInvalidJSON(t *testing.T) {
 		t.Fatalf("error %q does not mention the offending key", err.Error())
 	}
 }
+
+func TestLoadFromEnvReadsMaxRequestBodyBytes(t *testing.T) {
+	t.Setenv("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", "1048576")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.MaxRequestBodyBytes != 1048576 {
+		t.Fatalf("max request body bytes = %d, want 1048576", cfg.Server.MaxRequestBodyBytes)
+	}
+}
+
+func TestLoadFromEnvDefaultsMaxRequestBodyBytesToUnlimited(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.MaxRequestBodyBytes != 0 {
+		t.Fatalf("max request body bytes = %d, want 0", cfg.Server.MaxRequestBodyBytes)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidMaxRequestBodyBytes(t *testing.T) {
+	for _, value := range []string{"-1", "10MB"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES") {
+				t.Fatalf("error %q does not mention NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", err.Error())
+			}
+		})
+	}
+}

@@ -361,6 +361,17 @@ type ChatCompletionMessage struct {
 	ReasoningContent *string                     `json:"reasoning_content,omitempty"`
 	ToolCalls        *[]ChatCompletionToolCall   `json:"tool_calls,omitempty"`
 	FunctionCall     *ChatCompletionFunctionCall `json:"function_call,omitempty"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (m ChatCompletionMessage) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionMessage
+	encoded, err := json.Marshal((*alias)(&m))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, m.Extensions)
 }
 
 type ChatCompletionChunkDelta struct {
@@ -397,6 +408,17 @@ func (ccd *ChatCompletionChunkDelta) MarshalJSON() ([]byte, error) {
 type ChatCompletionLogprobs struct {
 	Content []json.RawMessage `json:"content"`
 	Refusal []json.RawMessage `json:"refusal,omitempty"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (l ChatCompletionLogprobs) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionLogprobs
+	encoded, err := json.Marshal((*alias)(&l))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, l.Extensions)
 }
 
 type ChatCompletionChoice struct {
@@ -404,6 +426,17 @@ type ChatCompletionChoice struct {
 	Message      ChatCompletionMessage   `json:"message"`
 	Logprobs     *ChatCompletionLogprobs `json:"logprobs,omitempty"`
 	FinishReason string                  `json:"finish_reason"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (c ChatCompletionChoice) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionChoice
+	encoded, err := json.Marshal((*alias)(&c))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, c.Extensions)
 }
 
 type ChatCompletionChunkChoice struct {
@@ -431,6 +464,17 @@ type ChatCompletionUsage struct {
 	TotalTime               float64                  `json:"total_time"`
 	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	// Raw is the upstream usage object. When set it is written as is, so
+	// members this struct does not declare, including nested ones, survive.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (u ChatCompletionUsage) MarshalJSON() ([]byte, error) {
+	if len(u.Raw) > 0 {
+		return u.Raw, nil
+	}
+	type alias ChatCompletionUsage
+	return json.Marshal((*alias)(&u))
 }
 
 type ChatCompletionResponse struct {
@@ -442,6 +486,17 @@ type ChatCompletionResponse struct {
 	Usage             ChatCompletionUsage    `json:"usage"`
 	SystemFingerprint *string                `json:"system_fingerprint,omitempty"`
 	ServiceTier       servicetier.Tier       `json:"service_tier,omitempty"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (c ChatCompletionResponse) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionResponse
+	encoded, err := json.Marshal((*alias)(&c))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, c.Extensions)
 }
 
 func (c *ChatCompletionResponse) FirstFinishReason() string {

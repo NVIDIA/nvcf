@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,14 +48,15 @@ data: [DONE]
 `
 
 type passthroughUpstream struct {
-	server   *httptest.Server
-	requests chan []byte
+	server      *httptest.Server
+	requests    chan []byte
+	inputTokens chan string
 }
 
 func newPassthroughUpstream(t *testing.T, contentType string, responseBody string) *passthroughUpstream {
 	t.Helper()
 
-	upstream := &passthroughUpstream{requests: make(chan []byte, 1)}
+	upstream := &passthroughUpstream{requests: make(chan []byte, 1), inputTokens: make(chan string, 1)}
 	upstream.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		body, err := io.ReadAll(r.Body)
@@ -62,6 +64,7 @@ func newPassthroughUpstream(t *testing.T, contentType string, responseBody strin
 			t.Errorf("read upstream request: %v", err)
 		}
 		upstream.requests <- body
+		upstream.inputTokens <- r.Header.Get("X-Input-Tokens")
 		w.Header().Set(echo.HeaderContentType, contentType)
 		_, _ = io.WriteString(w, responseBody)
 	}))
@@ -169,6 +172,54 @@ func TestChatCompletionsUnaryReturnsReasoningContentAndLogprobs(t *testing.T) {
 	require.Equal(t, "thinking", response.Choices[0].Message.ReasoningContent)
 	require.Equal(t, "stop", response.Choices[0].FinishReason)
 	require.Len(t, response.Choices[0].Logprobs.Content, 2)
+
+	body := jsonObject(t, rec.Body.Bytes())
+	require.JSONEq(t, `{"worker_id":"w-1"}`, string(body["nvext"]))
+	var choices []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(body["choices"], &choices))
+	require.Contains(t, choices[0], "stop_reason")
+}
+
+func TestChatCompletionsAdmissionEstimateCountsUnmodeledPromptFields(t *testing.T) {
+	t.Parallel()
+
+	base := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hi"}]}`
+	padding := strings.Repeat("a", 4000)
+	withExtensions := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"assistant","content":"x","reasoning_content":"` + padding + `"},{"role":"user","content":"hi"}],"chat_template_kwargs":{"documents":["` + padding + `"]}}`
+
+	inputTokens := func(body string) int {
+		t.Helper()
+
+		upstream := newPassthroughUpstream(t, "text/event-stream", passthroughChatUpstreamSSE)
+		e := newPassthroughAPI(t, upstream.server.URL)
+		rec := servePassthroughRequest(t, e, "/v1/chat/completions", body)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		<-upstream.requests
+		tokens, err := strconv.Atoi(<-upstream.inputTokens)
+		require.NoError(t, err)
+		return tokens
+	}
+
+	baseTokens := inputTokens(base)
+	extendedTokens := inputTokens(withExtensions)
+	// Each 4000-byte field adds at least 1000 estimated tokens.
+	require.GreaterOrEqual(t, extendedTokens-baseTokens, 2000)
+}
+
+func TestEstimatedTokenCountForUnmodeledChatFields(t *testing.T) {
+	t.Parallel()
+
+	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(nil))
+	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(
+		[]byte(`{"model":"m","messages":[{"role":"user","content":"hi","name":"n"}],"temperature":0.1}`),
+	))
+	require.Equal(
+		t,
+		estimatedTokenCountForText(`{"enable_thinking":false}`)+estimatedTokenCountForText(`"why"`),
+		estimatedTokenCountForUnmodeledChatFields(
+			[]byte(`{"model":"m","messages":[{"role":"assistant","content":"x","reasoning_content":"why"}],"chat_template_kwargs":{"enable_thinking":false}}`),
+		),
+	)
 }
 
 func TestChatCompletionsStreamRelaysUpstreamChunksVerbatim(t *testing.T) {
@@ -310,4 +361,54 @@ func TestEmbeddingsForwardsExtensionFieldsAndResponseUnchanged(t *testing.T) {
 	require.JSONEq(t, `"company-name/model-name"`, string(outbound["model"]))
 
 	require.Equal(t, upstreamResponse, rec.Body.String())
+}
+
+func TestEndpointsRejectFieldsSentWithDifferentLetterCase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		body     string
+		wantPath string
+	}{
+		{
+			name:     "chat top level",
+			path:     "/v1/chat/completions",
+			body:     `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"long prompt"}],"MESSAGES":[{"role":"user","content":"hi"}]}`,
+			wantPath: "messages",
+		},
+		{
+			name:     "chat message member",
+			path:     "/v1/chat/completions",
+			body:     `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"long prompt","CONTENT":"hi"}]}`,
+			wantPath: "messages[0].content",
+		},
+		{
+			name:     "responses",
+			path:     "/v1/responses",
+			body:     `{"model":"fn-alpha/company-name/model-name","input":"long prompt","Input":"hi"}`,
+			wantPath: "input",
+		},
+		{
+			name:     "embeddings",
+			path:     "/v1/embeddings",
+			body:     `{"model":"fn-alpha/company-name/model-name","input":"long prompt","INPUT":"hi"}`,
+			wantPath: "input",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			upstream := newPassthroughUpstream(t, echo.MIMEApplicationJSON, `{}`)
+			e := newPassthroughAPI(t, upstream.server.URL)
+
+			rec := servePassthroughRequest(t, e, tt.path, tt.body)
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), tt.wantPath)
+			require.Empty(t, upstream.requests, "request must not reach the backend")
+		})
+	}
 }

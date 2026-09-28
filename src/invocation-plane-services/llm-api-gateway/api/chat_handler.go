@@ -61,6 +61,9 @@ func (h *OpenAIChatHandlers) CreateChatCompletion(ec echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := rejectAmbiguousMembers(rawBody, models.ChatCompletionRequest{}); err != nil {
+		return err
+	}
 
 	var request models.ChatCompletionRequest
 	if err := c.Bind(&request); err != nil {
@@ -81,11 +84,10 @@ func (h *OpenAIChatHandlers) handleChatCompletionRequest(
 	if err := applyChatSessionAffinity(c, request); err != nil {
 		return err
 	}
-	normalized, err := h.handlers.normalizeChatRequest(c, request)
+	normalized, err := h.handlers.normalizeChatRequest(c, request, rawBody)
 	if err != nil {
 		return err
 	}
-	normalized.RawBody = rawBody
 
 	if ptr.Deref(request.Stream) {
 		return h.streamChatCompletionWithSender(c, normalized, responseModel, overrideStreamResponseSender)
