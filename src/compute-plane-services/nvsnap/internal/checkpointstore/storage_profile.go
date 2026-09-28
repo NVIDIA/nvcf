@@ -133,11 +133,11 @@ var builtinProfiles = map[string]StorageProfile{
 	// AWS EBS — RWO only ⇒ per-pod clone.
 	"ebs.csi.aws.com": {Strategy: StrategySnapshotClone, SnapshotClass: "ebs-snapshot-class", ReadOnlyMany: false},
 	// Zero-copy shared-volume backends.
-	// Prewarm off: a single reader already saturates an NVMesh volume
-	// (70B TP=4: 247 s with, 257 s without), and the sweep reads the whole
-	// tree, unused files included (NIM Llama-3.1-8B restore on dev1,
-	// 2026-09-28: 67 s to read 30 GB so a 15 GB weights load took 2 s).
-	"nvmesh-csi.excelero.com":      {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", MountOptions: []string{"ro", "norecovery", "nouuid"}, Prewarm: ptrBool(false)},
+	// Prewarm on with eight readers: an NVMesh volume reads 270 MB/s per
+	// stream and scales to 2.1 GB/s at eight (dev1 2026-09-28), while the
+	// engine's mmap load is a single stream (15 GB in 33 s). The sweep
+	// must split files into ranges to use that; see webhook prewarmCommand.
+	"nvmesh-csi.excelero.com":      {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", MountOptions: []string{"ro", "norecovery", "nouuid"}, PrewarmParallelism: 8},
 	"efs.csi.aws.com":              {Strategy: StrategySharedVolume, VolumeHandleTransform: "none"},
 	"filestore.csi.storage.gke.io": {Strategy: StrategySharedVolume, VolumeHandleTransform: "none"},
 }
@@ -208,5 +208,3 @@ func NewPromoterFromProfile(p StorageProfile, sc string, kc kubernetes.Interface
 		return nil, fmt.Errorf("unknown storage profile strategy %q", p.Strategy)
 	}
 }
-
-func ptrBool(b bool) *bool { return &b }

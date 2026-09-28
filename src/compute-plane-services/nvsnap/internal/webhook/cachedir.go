@@ -484,11 +484,9 @@ func (m *Mutator) cacheDirRestorePatches(pod *corev1.Pod, roxVol corev1.Volume, 
 	// NVSNAP_PREWARM=0/1 still wins, the same knob the shim honoured.
 	if m.prewarmWanted(main) {
 		prewarmInit := corev1.Container{
-			Name:  "nvsnap-prewarm",
-			Image: main.Image,
-			Command: []string{"sh", "-c", fmt.Sprintf(
-				"find %s -type f -print0 2>/dev/null | xargs -0 -r -P %d -n 16 cat > /dev/null 2>&1 || true",
-				cacheSeedSrcPath, m.prewarmWorkers())},
+			Name:    "nvsnap-prewarm",
+			Image:   main.Image,
+			Command: []string{"sh", "-c", prewarmCommand(cacheSeedSrcPath, m.prewarmWorkers())},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: cacheDirVolumeName, MountPath: cacheSeedSrcPath, ReadOnly: true},
 			},
@@ -543,4 +541,24 @@ func (m *Mutator) prewarmWorkers() int {
 		return checkpointstore.DefaultPrewarmParallelism
 	}
 	return m.StorageProfile.PrewarmWorkers()
+}
+
+// prewarmChunkBytes is the read unit of the sweep: 256 MiB, 16 dd blocks
+// of 16 MiB, so a handful of multi-gigabyte safetensors still spread over
+// every reader.
+const prewarmChunkBytes = 256 << 20
+
+// prewarmCommand is the sweep. Parallelism must come from byte ranges,
+// not files: a checkpoint tree is a dozen files, four of them the
+// weights, so a per-file fan-out collapses to one reader. Measured on an
+// NVMesh volume (dev1 2026-09-28): one stream 270 MB/s, four 1.0 GB/s,
+// eight 2.1 GB/s; the old file-batched sweep read 30 GB serially in 67 s.
+// Large files are split into prewarmChunkBytes ranges read with dd; small
+// files are batched through cat. Symlinks are followed so a Hugging Face
+// snapshot is read through its entry names, which lets the sweep skip
+// original/ (the PyTorch .pth copy nothing opens) and avoid the blobs
+// directory, where the same bytes would be read a second time.
+// Best-effort: every failure is swallowed, a restore never fails here.
+func prewarmCommand(root string, workers int) string {
+	return fmt.Sprintf(`{ find -L %[1]s -type f -size +64M ! -path '*/original/*' ! -path '*/blobs/*' -printf '%%s|%%p\n' 2>/dev/null | awk -F'|' -v c=%[2]d '{ n=int(($1+c-1)/c); for (i=0;i<n;i++) printf "%%d|%%s\n", i, $2 }' | xargs -d '\n' -r -P %[3]d -n 1 sh -c 'i=${0%%%%|*}; f=${0#*|}; dd if="$f" of=/dev/null bs=16M skip=$((i*16)) count=16 2>/dev/null'; find -L %[1]s -type f ! -size +64M ! -path '*/original/*' ! -path '*/blobs/*' -print0 2>/dev/null | xargs -0 -r -P %[3]d -n 16 cat > /dev/null 2>&1; } || true`, root, prewarmChunkBytes, workers)
 }

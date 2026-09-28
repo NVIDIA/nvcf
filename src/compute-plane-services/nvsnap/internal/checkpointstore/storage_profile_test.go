@@ -123,23 +123,22 @@ func TestNewPromoterFromProfile(t *testing.T) {
 	}
 }
 
-// Built-in defaults: prewarm off on NVMesh (a single reader saturates the
-// volume and the sweep reads unused files), on for Hyperdisk ML (the
-// engine's page-fault reads leave the volume idle).
+// Built-in defaults: prewarm on everywhere; NVMesh uses eight readers
+// because its throughput scales with parallel streams.
 func TestStorageProfile_BuiltinPrewarmDefaults(t *testing.T) {
 	nv, _, ok := ResolveStorageProfile("nvmesh-csi.excelero.com", "", nil)
-	if !ok || nv.PrewarmEnabled() {
-		t.Errorf("NVMesh built-in must have prewarm off: ok=%v enabled=%v", ok, nv.PrewarmEnabled())
+	if !ok || !nv.PrewarmEnabled() || nv.PrewarmWorkers() != 8 {
+		t.Errorf("NVMesh built-in must prewarm with 8 readers: ok=%v enabled=%v workers=%d", ok, nv.PrewarmEnabled(), nv.PrewarmWorkers())
 	}
 	hd, _, ok := ResolveStorageProfile("pd.csi.storage.gke.io", "hyperdisk-ml", nil)
 	if !ok || !hd.PrewarmEnabled() {
 		t.Errorf("Hyperdisk ML built-in must keep prewarm on: ok=%v enabled=%v", ok, hd.PrewarmEnabled())
 	}
 	// An overlay entry still wins either way.
-	on := true
-	ov := map[string]StorageProfile{"nvmesh-csi.excelero.com": {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", Prewarm: &on}}
-	if p, _, _ := ResolveStorageProfile("nvmesh-csi.excelero.com", "", ov); !p.PrewarmEnabled() {
-		t.Error("overlay prewarm: true must re-enable it on NVMesh")
+	off := false
+	ov := map[string]StorageProfile{"nvmesh-csi.excelero.com": {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", Prewarm: &off}}
+	if p, _, _ := ResolveStorageProfile("nvmesh-csi.excelero.com", "", ov); p.PrewarmEnabled() {
+		t.Error("overlay prewarm: false must disable it on NVMesh")
 	}
 }
 
@@ -186,12 +185,9 @@ pd.csi.storage.gke.io/hyperdisk-ml:
 	if !hd.PrewarmEnabled() || hd.PrewarmWorkers() != 16 {
 		t.Errorf("hyperdisk entry: enabled=%v workers=%d, want on/16", hd.PrewarmEnabled(), hd.PrewarmWorkers())
 	}
-	// Built-ins ship with the prewarm on except NVMesh, where it was
-	// measured neutral to negative (see TestStorageProfile_BuiltinPrewarmDefaults).
+	// Every built-in ships with the prewarm on; only the reader count
+	// differs per volume type.
 	for k, p := range builtinProfiles {
-		if k == "nvmesh-csi.excelero.com" {
-			continue
-		}
 		if !p.PrewarmEnabled() {
 			t.Errorf("built-in %s ships with prewarm off", k)
 		}

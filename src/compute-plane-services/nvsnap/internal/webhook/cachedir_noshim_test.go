@@ -209,3 +209,26 @@ func TestTryL2CacheDir_PrewarmFollowsStorageProfile(t *testing.T) {
 		t.Error("NVSNAP_PREWARM=0 on the pod must override a profile that turns the prewarm on")
 	}
 }
+
+// The sweep gets its parallelism from byte ranges, not files: a checkpoint
+// tree is a dozen files, so a per-file fan-out collapses to one reader.
+// It follows symlinks so a Hugging Face snapshot is read by entry name,
+// skips original/ (the .pth copy nothing opens) and the blobs directory
+// (the same bytes again), and never fails the restore.
+func TestPrewarmCommand_RangeParallelAndSelective(t *testing.T) {
+	cmd := prewarmCommand("/nvsnap-cachedir-src", 8)
+	for _, want := range []string{
+		"find -L /nvsnap-cachedir-src -type f -size +64M",
+		"! -path '*/original/*'", "! -path '*/blobs/*'",
+		"-v c=268435456", "xargs -d '\\n' -r -P 8 -n 1",
+		"dd if=\"$f\" of=/dev/null bs=16M skip=$((i*16)) count=16",
+		"! -size +64M", "xargs -0 -r -P 8 -n 16 cat", "|| true",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("prewarm command lacks %q:\n%s", want, cmd)
+		}
+	}
+	if strings.Contains(prewarmCommand("/x", 3), "-P 8") {
+		t.Error("reader count must come from the argument")
+	}
+}
