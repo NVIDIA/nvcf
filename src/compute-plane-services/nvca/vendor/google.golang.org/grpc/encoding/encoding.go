@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  *
  * Copyright 2017 gRPC authors.
@@ -69,6 +66,9 @@ type Compressor interface {
 	// Decompress reads data from r, decompresses it, and provides the
 	// uncompressed data via the returned io.Reader.  If an error occurs while
 	// initializing the decompressor, that error is returned instead.
+	//
+	// The returned io.Reader may optionally implement io.ReadCloser, and if it
+	// does, gRPC will call Close() exactly once.
 	Decompress(r io.Reader) (io.Reader, error)
 	// Name is the name of the compression codec and is used to set the content
 	// coding header.  The result must be static; the result cannot change

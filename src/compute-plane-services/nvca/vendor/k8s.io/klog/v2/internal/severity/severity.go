@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2013 Google Inc. All Rights Reserved.
 // Copyright 2022 The Kubernetes Authors.
 //
