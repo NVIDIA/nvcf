@@ -17,7 +17,6 @@
 package com.nvidia.nvcf;
 
 import lombok.extern.slf4j.Slf4j;
-import net.devh.boot.grpc.server.autoconfigure.GrpcAdviceAutoConfiguration;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.micrometer.tracing.autoconfigure.prometheus.PrometheusExemplarsAutoConfiguration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -26,8 +25,7 @@ import org.springframework.boot.security.autoconfigure.ReactiveUserDetailsServic
 @Slf4j
 @SpringBootApplication(exclude = {
         ReactiveUserDetailsServiceAutoConfiguration.class,
-        PrometheusExemplarsAutoConfiguration.class,
-        GrpcAdviceAutoConfiguration.class})
+        PrometheusExemplarsAutoConfiguration.class})
 public class App {
 
     public static void main(String[] args) {

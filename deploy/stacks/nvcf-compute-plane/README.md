@@ -171,11 +171,11 @@ Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
 adds the matching NVCA feature gate. Enabling KAI, Grove, or Dynamo permits
 their workload resource types in the NVCA validation policy.
 
-See [Gang Scheduling](../../../docs/user/cluster-management/gang-scheduling.md)
+See [Gang Scheduling](../../../docs/compute-plane/cluster-management/gang-scheduling.md)
 for atomic workload placement and
-[Topology-Aware Scheduling](../../../docs/user/cluster-management/topology-aware-scheduling.md)
+[Topology-Aware Scheduling](../../../docs/compute-plane/cluster-management/topology-aware-scheduling.md)
 for GPU clique placement. See
-[KAI Scheduler](../../../docs/user/cluster-management/kai-scheduler.md) for
+[KAI Scheduler](../../../docs/compute-plane/cluster-management/kai-scheduler.md) for
 queue configuration and standalone installation.
 
 ## Multi-Cluster Example

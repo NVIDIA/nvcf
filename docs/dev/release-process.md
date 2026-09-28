@@ -519,4 +519,6 @@ and we accept its outcome silently.
 - `deploy/stacks/self-managed/`: the self-managed stack publishes a
   helmfile-based bundle rather than an individual chart, so its
   packaging differs from a service release. Its version comes from the
-  same semantic-release driver as every other subproject.
+  stack's `VERSION` file and is cut on its release branch, not from
+  semantic-release on the default branch; see
+  `docs/dev/github-release-process.md`.

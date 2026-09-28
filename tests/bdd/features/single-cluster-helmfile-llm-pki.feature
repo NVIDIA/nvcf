@@ -71,10 +71,11 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | name: ADDONS_LLM_ENABLED                           |
         | value: "true"                                     |
         | llm-request-router.nvcf.svc.cluster.local          |
+        | worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071 |
         | name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS              |
         | value: "nvcf.svc.cluster.local"                   |
         | nvcf-openbao-migrations:                            |
-      # A colocated worker uses the in-cluster h2c Service directly. The
+      # A colocated worker uses the in-cluster backend-router Service directly. The
       # dedicated HTTPS identity and route belong only to an explicitly
       # enabled remote-worker ingress.
       And the rendered manifests in "deploy/stacks/self-managed/out" should not contain:
@@ -113,7 +114,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
 
       When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
-      And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
+      And the command output should contain "worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071"
       And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
 
       Then these Kubernetes resources should not exist in namespace "envoy-gateway-system" using context "k3d-ncp-local":

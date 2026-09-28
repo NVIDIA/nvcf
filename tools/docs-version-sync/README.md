@@ -1,30 +1,70 @@
 # Documentation Version Sync
 
 This tool keeps top-of-tree documentation aligned with three released stack
-inventories. It also promotes an exact QA-qualified three-stack release set to
-versioned documentation.
+inventories. It renders the cross-stack compatibility matrix and writes the
+catalog snapshot that freezes one stack's exact documentation version.
 
 ## Release and documentation flow
 
 ```text
-merge release-worthy stack change to main
-  -> release automation creates the owning stack tag and GitHub Release
+merge stack change to main
+  -> a maintainer cuts or updates release-deploy/stacks/<stack>/vX.Y
+  -> a push to that branch creates the stack tag and GitHub Release
   -> the tag workflow attaches that stack's inventory JSON
   -> a maintainer runs docs-version-sync
   -> the catalog records public locations or Publication pending
-  -> generated blocks under docs/user/ are updated in a Pull Request
+  -> generated blocks under the documentation product trees are updated
 ```
 
-The stack release is automatic. A merge to `main` runs
+Stacks release only from release branches. `main` never cuts a stack version.
+A push to `release-deploy/stacks/<stack>/vX.Y` runs
 [`release-tags.yml`](../../.github/workflows/release-tags.yml), which invokes
-`tools/ci/github-release auto` for every registered subproject. A `feat:`,
-`fix:`, or `perf:` commit that changes a stack creates that stack's next tag
-and GitHub Release. Chart pin and Helmfile changes should use a release-worthy
-commit type. No maintainer normally creates the stack tag by hand.
+`tools/ci/github-release auto` and cuts the next `X.Y.Z` tag when the push
+changes something the stack ships. `deploy/stacks/<stack>/VERSION` names the
+next train. See [`RELEASE.md`](../../RELEASE.md) for branch cutting.
 
 The tag workflow renders only the states owned by the tagged stack. It attaches
 the resolved chart and image inventory before publishing the GitHub Release.
-Public artifact publishing is a separate process and can happen later after QA.
+Release attachment is keyed by tag, not by branch. Public artifact publishing
+is a separate process and can happen later after QA.
+
+## Documentation product trees
+
+Documentation is split into one Fern product per stack plus a shared overview:
+
+| Tree | Product | Versioned |
+| --- | --- | --- |
+| `docs/overview/` | Overview (matrix, quickstart, manifest, image mirroring) | No |
+| `docs/self-managed/` | Self-Managed Stack (control plane) | Yes |
+| `docs/compute-plane/` | Compute Plane Stack | Yes |
+| `docs/observability/` | Observability Stack | Yes |
+
+Generated blocks live only in these four trees. Frozen copies
+(`docs/<stack>-<version>/`) are never regenerated; the catalog rejects output
+paths that point at them.
+
+## Compatibility matrix
+
+`docs/overview/compatibility-matrix.md` carries the `compatibility-matrix`
+generated block. It renders the current release of each stack from
+`release_set.stacks` and the declared `compatibility` entries:
+
+```yaml
+compatibility:
+  - stack: observability
+    version: "1.1.3"
+    compatible_with:
+      control-plane: "1.0.0+"
+      compute-plane: "1.0.0+"
+```
+
+Each entry names one stack release and the minimum release of the other two
+stacks it works with: `X.Y.Z+` means that release or later, and `X.Y.Z` means
+that release only. The example renders as "Observability 1.1.3 works with
+Self-managed 1.0.0 or later, Compute plane 1.0.0 or later". Stack names use the `release_set` keys
+(`control-plane`, `compute-plane`, `observability`). Add an entry when a stack
+release changes compatibility, and raise a minimum when a release stops working
+with an older release of another stack. Then regenerate the documentation.
 
 Each registered stack publishes its own inventory:
 
@@ -44,10 +84,10 @@ go run -C tools/docs-version-sync . --target main --update-catalog
 ```
 
 The command selects the latest stable release for all three stacks and records
-a development release set. It updates:
+each stack as development documentation. It updates:
 
 - `docs/version-catalog/main.yaml`
-- Generated blocks configured by the catalog under `docs/user/`
+- Generated blocks configured by the catalog under the product trees
 - The self-managed, compute-plane, and observability bundle versions
 - The exact source tag, commit, and inventory asset for all three stacks
 
@@ -100,28 +140,36 @@ go run -C tools/docs-version-sync . --target main
 
 A publication-only update does not require a new stack release.
 
-## Promote a QA-qualified release set
+## Freeze a stack documentation version
 
-After QA approves the three stack versions and all artifacts are published,
-run the catalog update with all three exact versions:
+Each stack freezes documentation on its own schedule. No joint qualification
+of all three stacks is required. After QA approves stack release `X.Y.Z` and
+its artifacts are published:
 
 ```bash
-go run -C tools/docs-version-sync . \
-  --target main \
-  --update-catalog \
-  --qualification-version cp-A.B.C-compute-D.E.F-obs-G.H.I \
-  --stack-version A.B.C \
-  --compute-stack-version D.E.F \
-  --observability-stack-version G.H.I
+git fetch --tags origin
+go run -C tools/docs-version-sync . --target main --update-catalog
 go run -C tools/docs-version-sync . --target main
-./tools/scripts/cut-docs-version.sh cp-A.B.C-compute-D.E.F-obs-G.H.I
+./tools/scripts/cut-docs-version.sh --stack observability --version X.Y.Z
 ```
 
-The qualification command does not select latest versions. The docs snapshot
-fails unless the catalog is qualified and its documentation version matches the
-requested version. The documentation version identifies all three stack
-versions in `cp-X.Y.Z-compute-X.Y.Z-obs-X.Y.Z` format. The version dropdown
-also labels each stack version.
+The cut script runs `--freeze-stack <release_set stack> --freeze-version X.Y.Z`,
+which checks that the stack's current release in `release_set.stacks` is
+`X.Y.Z`, warns when `publication_pending` is non-empty (the frozen
+manifest keeps the pending markers), and writes
+`docs/version-catalog/<stack>-X.Y.Z.yaml` with that one stack marked
+`qualified`. `main.yaml` stays in development state. The script then copies
+`docs/<stack>/` to `docs/<stack>-X.Y.Z/`, generates
+`fern/products/<stack>/X.Y.Z.yml`, and prints the `versions:` entry to add to
+`fern/docs.yml`.
+
+Stack names for `--freeze-stack` are `control-plane`, `compute-plane`, and
+`observability`. The script accepts the product slugs `self-managed`,
+`compute-plane`, and `observability` and maps them. Overview documentation is
+unversioned and is never cut.
+
+Add or adjust `compatibility` entries for the new release before regenerating so
+the matrix reflects the qualified combination.
 
 ## Add an artifact to the stack inventory
 
@@ -141,8 +189,8 @@ For a chart or image deployed by any stack:
    - If an independently released chart must be rendered from its immutable
      GitHub tag, add it to
      owning `release-inventory.yaml`.
-3. Merge the release-worthy change to `main`. Release automation creates the
-   owning stack release.
+3. Merge the change to `main`, then land it on the owning stack's release
+   branch. A push to the release branch creates the stack release.
 4. Run the documentation sync after all selected stack releases have inventory
    assets.
 5. Add a `manifest.entries` record for the new artifact description and source.

@@ -28,7 +28,7 @@ func updateCatalogFromGitHub(repoRoot, sourceRef string, base *Catalog) (*Catalo
 	return buildCatalogFromResolvedStackInventory(inventory, snapshot, base)
 }
 
-func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, qualificationVersion string, base *Catalog) (*Catalog, error) {
+func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, base *Catalog) (*Catalog, error) {
 	client := newGitHubClientFromEnvironment()
 	inventories := make(map[string]resolvedStackInventory, len(stackInventorySpecs))
 	for _, spec := range stackInventorySpecs {
@@ -63,19 +63,14 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	if err != nil {
 		return nil, err
 	}
-	status := ReleaseSetDevelopment
-	documentationVersion := "dev"
-	if qualificationVersion != "" {
-		status = ReleaseSetQualified
-		documentationVersion = qualificationVersion
-	}
-	releaseSet, err := releaseSetFromInventories(inventories, documentationVersion, status)
+	releaseSet, err := releaseSetFromInventories(inventories)
 	if err != nil {
 		return nil, err
 	}
-	if qualificationVersion == "" && base != nil && base.ReleaseSet.Status == ReleaseSetQualified && releaseSet.sameStackReleases(base.ReleaseSet) {
-		releaseSet.DocumentationVersion = base.ReleaseSet.DocumentationVersion
-		releaseSet.Status = base.ReleaseSet.Status
+	if base != nil {
+		if err := preserveQualifiedDocumentation(&releaseSet, base.ReleaseSet); err != nil {
+			return nil, err
+		}
 	}
 	catalog.ReleaseSet = releaseSet
 	for _, spec := range stackInventorySpecs[1:] {
@@ -96,9 +91,6 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	catalog.pruneUnusedRegistries()
-	if qualificationVersion != "" && len(catalog.PublicationPending) > 0 {
-		return nil, fmt.Errorf("qualified release set has unpublished artifacts: %s", strings.Join(catalog.PublicationPending, ", "))
-	}
 	if err := ValidateCatalog(catalog); err != nil {
 		return nil, err
 	}

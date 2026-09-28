@@ -4083,6 +4083,18 @@ func TestGetCurrentK8sVersion(t *testing.T) {
 	}
 }
 
+func TestResolveK8sVersion(t *testing.T) {
+	client := &fakeServerVersionClient{serverVersion: &version.Info{GitVersion: "v1.34.0"}}
+
+	discovered, err := resolveK8sVersion(context.Background(), "", client)
+	require.NoError(t, err)
+	assert.Equal(t, "v1.34.0", discovered)
+
+	override, err := resolveK8sVersion(context.Background(), "v1.32.1", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "v1.32.1", override)
+}
+
 type fakeServerVersionClient struct {
 	serverVersion *version.Info
 }

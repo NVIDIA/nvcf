@@ -254,6 +254,7 @@ func setResponsesProxyContextHeaders(headers http.Header, reqCtx *requestctx.Req
 	if reqCtx.RoutingKey != "" {
 		headers.Set(headerResponsesRouting, reqCtx.RoutingKey)
 	}
+	headers.Del(headerResponsesMethod)
 	if reqCtx.RoutingMethod != "" {
 		headers.Set(headerResponsesMethod, reqCtx.RoutingMethod)
 	}

@@ -362,7 +362,13 @@ natsAuthCalloutService:
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
+{{- $backendRouterGrpcPort := dig "addons" "llm" "requestRouter" "backendRouter" "service" "grpcPort" 50071 .Values }}
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
 {{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- if $backendRouterEnabled }}
+{{- $llmRequestRouterDefaultAddress = printf "llm-request-router-backend-router.nvcf.svc.cluster.local:%v" $backendRouterGrpcPort }}
+{{- end }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
@@ -371,7 +377,6 @@ natsAuthCalloutService:
 {{- else if hasPrefix "http://" $llmRequestRouterWorkerAuthority }}
 {{- $llmRequestRouterWorkerAuthority = trimPrefix "http://" $llmRequestRouterWorkerAuthority }}
 {{- end }}
-{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- if $llmEnabled }}
 {{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
 {{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
@@ -1045,7 +1050,6 @@ llmApiGateway:
 
 {{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
 {{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
-{{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
 {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
 {{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
 {{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}
@@ -1129,6 +1133,8 @@ llmRequestRouter:
   */}}
   backendRouter:
     enabled: {{ $backendRouterEnabled }}
+    service:
+      grpcPort: {{ $backendRouterGrpcPort }}
     {{- $backendRouterValues := dig "addons" "llm" "requestRouter" "backendRouter" dict .Values }}
     {{- if hasKey $backendRouterValues "replicaCount" }}
     replicaCount: {{ index $backendRouterValues "replicaCount" }}

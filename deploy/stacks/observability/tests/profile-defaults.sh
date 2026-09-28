@@ -438,6 +438,39 @@ assert_yaml_value "$work_dir/compute-monitor-values.yaml" \
   '.computePlane.worker.port' worker-metrics \
   'compute worker metrics Helmfile value'
 
+# Autoscaler queries require these Pod labels on the scraped worker series.
+# PodMonitor converts the hyphens in their names to underscores.
+worker_identity_labels='function-id,function-version-id,nca-id'
+assert_yaml_value "$worker_monitor_manifest" \
+  '.spec.podTargetLabels | sort | join(",")' "$worker_identity_labels" \
+  'worker metric identity labels in chart defaults'
+for profile in compute all; do
+  assert_yaml_value "$work_dir/$profile-monitor-values.yaml" \
+    '.computePlane.worker.podTargetLabels | sort | join(",")' \
+    "$worker_identity_labels" "$profile worker identity labels in Helmfile values"
+done
+yq -e 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-dcgm") |
+  .spec | has("podTargetLabels") == false' \
+  "$work_dir/chart-compute/manifests.yaml" >/dev/null ||
+  fail 'worker identity labels must not change DCGM metrics'
+
+# Explicit label overrides, including an empty list, must remain authoritative.
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set computePlane.enabled=true \
+  --set 'computePlane.worker.podTargetLabels={function-id}' \
+  >"$work_dir/worker-label-override.yaml"
+assert_yaml_value "$work_dir/worker-label-override.yaml" \
+  'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-worker") |
+   .spec.podTargetLabels | join(",")' function-id 'worker identity label override'
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set computePlane.enabled=true \
+  --set-json 'computePlane.worker.podTargetLabels=[]' \
+  >"$work_dir/worker-labels-disabled.yaml"
+yq -e 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-worker") |
+  .spec | has("podTargetLabels") == false' \
+  "$work_dir/worker-labels-disabled.yaml" >/dev/null ||
+  fail 'empty worker identity labels must omit podTargetLabels'
+
 # The application chart owns its Service labels. Compare them with the shared
 # ServiceMonitor selector so an application label change cannot silently break
 # discovery.

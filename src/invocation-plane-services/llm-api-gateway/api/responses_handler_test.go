@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +98,62 @@ func TestCreateResponseAggregatesNativeResponsesThroughProxy(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"hello from gateway"`) {
 		t.Fatalf("response body missing assistant text: %s", rec.Body.String())
+	}
+}
+
+func TestCreateResponseUsesOnlyMetadataRoutingMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		metadata string
+		want     []string
+	}{
+		{"unset", "", nil},
+		{"blank", "   ", nil},
+		{"metadata", " pulsar;seed=a ", []string{"pulsar;seed=a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			proxyProvider := &stubResponsesProvider{}
+			authClient := &stubInvocationAuthClient{
+				authResponse: &nvcf.InvocationAuthResponse{
+					RoutingKey:   "fn-chat",
+					ClientAuthID: "subject-123",
+					RateLimitKey: "nca-456",
+					ModelSpecs: map[string]nvcf.ModelSpec{
+						"company-name/model-name": {RoutingMethod: tt.metadata},
+					},
+				},
+			}
+			cfg := config.Default()
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(NewNVCFAuthMiddleware(authClient))
+			RegisterRoutes(e, NewHandlers(cfg, proxyProvider, nil))
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses",
+				strings.NewReader(`{"model":"fn-chat/company-name/model-name","input":"hello"}`))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+			req.Header[headerResponsesMethod] = []string{"client-method", "another-client-method"}
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			calls := proxyProvider.proxyRequestCalls()
+			if len(calls) != 1 {
+				t.Fatalf("proxy calls = %d, want 1", len(calls))
+			}
+			if got := calls[0].Header.Values(headerResponsesMethod); !slices.Equal(got, tt.want) {
+				t.Fatalf("routing method = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
