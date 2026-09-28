@@ -40,6 +40,7 @@ var (
 	ErrMissingPolicyFQDN                 = errors.New("policy: policy-fqdn is required")
 	ErrInvalidPolicyCredsRefreshInterval = errors.New("policy: creds-refresh-interval must be greater than 0")
 	ErrMissingIntrospectionURL           = errors.New("auth: introspection.url is required when introspection is enabled")
+	ErrIntrospectionRequiresSelfManaged  = errors.New("auth: introspection is only supported in self-managed deployments")
 )
 
 // Top-level config
@@ -172,8 +173,13 @@ func ValidateAuthConfig(cfg AuthConfig, selfManaged bool) error {
 				return ErrInvalidPolicyCredsRefreshInterval
 			}
 		}
-		if cfg.Introspection.Enabled && cfg.Introspection.URL == "" {
-			return ErrMissingIntrospectionURL
+		if cfg.Introspection.Enabled {
+			if !selfManaged {
+				return ErrIntrospectionRequiresSelfManaged
+			}
+			if cfg.Introspection.URL == "" {
+				return ErrMissingIntrospectionURL
+			}
 		}
 	case "":
 		return ErrMissingAuthProvider

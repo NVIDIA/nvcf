@@ -404,6 +404,18 @@ func TestValidateAuthConfig_PolicyProviderIntrospection(t *testing.T) {
 		cfg.Introspection.URL = "https://sis.example.com/v1/nvca/tokens/introspect"
 		assert.NoError(t, ValidateAuthConfig(cfg, true))
 	})
+
+	t.Run("introspection enabled in managed deployment fails startup", func(t *testing.T) {
+		cfg := baseCfg()
+		cfg.Policy.CredsFile = "/vault/secrets/creds.json"
+		cfg.Policy.TokenIssuerAddr = "https://issuer.example.com"
+		cfg.Policy.CredentialsRefreshInterval = 300
+		cfg.Introspection.Enabled = true
+		cfg.Introspection.URL = "https://sis.example.com/v1/nvca/tokens/introspect"
+		err := ValidateAuthConfig(cfg, false)
+		require.Error(t, err)
+		assert.Equal(t, ErrIntrospectionRequiresSelfManaged, err)
+	})
 }
 
 func TestIntrospectionConfigWithDefaults(t *testing.T) {
