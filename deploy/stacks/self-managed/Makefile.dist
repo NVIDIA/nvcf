@@ -53,7 +53,7 @@ INSTALL_PRE_HOOKS ?=
 APPLY_PRE_HOOKS ?=
 
 # --- Targets ---
-.PHONY: check-versions template install sync apply destroy clean help
+.PHONY: check-versions template install sync apply destroy clean help apply-hostname-policy
 .DEFAULT_GOAL := help
 
 # --- Prerequisite Checks ---
@@ -178,6 +178,20 @@ apply: check-versions $(APPLY_PRE_HOOKS)
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
 
 	@echo ">>> Helmfile apply complete."
+
+# One-time step when upgrading from a stack whose nvcf-gateway-routes chart
+# reserved a hostname for a single route. That policy denies the
+# admin-token-issuer-proxy HTTPRoute patch, and admin-issuer-proxy syncs in an
+# earlier helmfile DAG layer than ingress, so the corrected policy has to be
+# installed first. Not a prerequisite of apply.
+apply-hostname-policy: check-versions
+	@echo ">>> Applying the ingress release only, to refresh the hostname conflict policy..."
+	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
+
+	HELMFILE_ENV="$(HELMFILE_ENV)" \
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) --selector release-group=ingress apply --skip-needs
+
+	@echo ">>> Hostname conflict policy refreshed. Run 'make apply' next."
 
 destroy: check-versions
 	@echo ">>> Destroying Helmfile releases..."

@@ -1726,3 +1726,7 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "ess" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
   podMonitors:
     enabled: {{ .Values.global.observability.metrics.enabled }}
+  {{- with dig "ingress" "gatewayApi" "hostnameConflictPolicy" dict .Values }}
+  hostnameConflictPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
