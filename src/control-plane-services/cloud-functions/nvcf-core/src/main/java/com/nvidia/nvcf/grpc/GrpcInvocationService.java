@@ -20,8 +20,10 @@ import static com.nvidia.nvcf.util.NvcfConstants.ADMIN_SCOPE_INVOKE_FUNCTION;
 import static com.nvidia.nvcf.util.NvcfConstants.SCOPE_INVOKE_FUNCTION;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.nvcf.configuration.exceptions.InvalidInvocationException;
+import com.nvidia.nvcf.persistence.function.entity.FunctionType;
 import com.nvidia.nvcf.proto.ClientInvokeRequest;
 import com.nvidia.nvcf.proto.ClientInvokeResponse;
 import com.nvidia.nvcf.proto.ClientInvokeResponse.FunctionVersion;
@@ -46,6 +48,10 @@ import org.springframework.web.ErrorResponseException;
 @RequiredArgsConstructor
 public class GrpcInvocationService extends InvocationImplBase {
 
+    private static final String MESG_LLM_FUNCTION_NOT_INVOCABLE =
+            "Function id '%s': LLM functions cannot be invoked through this endpoint. "
+                    + "Use the LLM API instead.";
+
     private final GrpcAuthService grpcAuthService;
     private final AccountService accountService;
     private final FunctionInvocationValidationService functionInvocationValidationService;
@@ -68,6 +74,9 @@ public class GrpcInvocationService extends InvocationImplBase {
                 ncaId,
                 functionId,
                 functionVersionId);
+        // LLM workers do not consume the request queues this path publishes to, so a request
+        // would wait out the poll window and time out. Fail fast instead.
+        rejectLlmFunctions(ncaId, functionId, functions);
 
         // picking the first function version for function level info.
         // all function versions will be of the same function.
@@ -151,6 +160,21 @@ public class GrpcInvocationService extends InvocationImplBase {
             log.error("Failed to lookup and validate access for ncaId={}, functionId={}, " +
                             "functionVersionId={}", ncaId, functionId, functionVersionId);
             throw new InvalidInvocationException(ncaId, e);
+        }
+    }
+
+    private static void rejectLlmFunctions(
+            String ncaId,
+            UUID functionId,
+            List<FunctionContext> functions) {
+        var hasLlmVersion = functions.stream()
+                .map(FunctionContext::targetFunction)
+                .anyMatch(function -> function.getFunctionType() == FunctionType.LLM);
+        if (hasLlmVersion) {
+            var mesg = MESG_LLM_FUNCTION_NOT_INVOCABLE.formatted(functionId);
+            log.warn("Rejecting classic invocation of LLM function: ncaId={}, functionId={}",
+                     ncaId, functionId);
+            throw new InvalidInvocationException(ncaId, new BadRequestException(mesg));
         }
     }
 
