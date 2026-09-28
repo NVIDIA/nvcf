@@ -231,3 +231,18 @@ func TestCacheDirCapturePatches_Idempotent(t *testing.T) {
 		t.Errorf("expected no re-inject when cache mount present, got %d patches", len(p))
 	}
 }
+
+// NVSNAP_CACHEDIR=0 on the workload keeps cachedir mode off for that pod
+// (its caches stay in the rootfs, which a CRIU capture can carry).
+func TestCacheDirCapturePatches_PodOptOut(t *testing.T) {
+	m := &Mutator{CacheDir: "/opt/nvsnap", MainContainer: 0}
+	pod := cacheDirPod()
+	pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "NVSNAP_CACHEDIR", Value: "0"})
+	if p := m.cacheDirCapturePatches(pod); p != nil {
+		t.Fatalf("NVSNAP_CACHEDIR=0 must skip cachedir capture decoration, got %d patches", len(p))
+	}
+	pod.Spec.Containers[0].Env[len(pod.Spec.Containers[0].Env)-1].Value = "1"
+	if p := m.cacheDirCapturePatches(pod); len(p) == 0 {
+		t.Fatal("NVSNAP_CACHEDIR=1 must not opt out")
+	}
+}

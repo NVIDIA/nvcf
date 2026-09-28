@@ -226,6 +226,17 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 	}
 	main := pod.Spec.Containers[m.MainContainer]
 
+	// Per-pod opt-out: NVSNAP_CACHEDIR=0 on the main container keeps the
+	// engine's caches and model inside the container rootfs, which is what
+	// a CRIU capture needs (a criu image cannot carry an emptyDir). The
+	// agent-side engine choice (NVSNAP_DEFAULT_CAPTURE_PATH) is separate;
+	// this only decides where the workload writes.
+	for _, e := range main.Env {
+		if e.Name == "NVSNAP_CACHEDIR" && e.Value == "0" {
+			return nil
+		}
+	}
+
 	// Idempotency: if the cache volume/mount is already present (re-admit,
 	// or the workload pre-wired it), don't double-inject.
 	for _, vm := range main.VolumeMounts {
