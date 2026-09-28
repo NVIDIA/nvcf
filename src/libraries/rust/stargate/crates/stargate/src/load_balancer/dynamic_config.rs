@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use moka::ops::compute::Op;
+use moka::ops::compute::{CompResult, Op};
 use moka::sync::Cache;
 
 use crate::routing_state::{RoutingTargetKey, StargateState};
@@ -67,35 +67,31 @@ impl DynamicConfigCache {
         {
             return Ok((entry.definition.clone(), Outcome::Hit));
         }
-        let mut resolved = None;
-        self.entries
+        let result = self
+            .entries
             .entry_by_ref(target)
             .and_try_compute_with(|current| {
-                if let Some(entry) = &current
-                    && entry.value().expression == header
+                if current
+                    .as_ref()
+                    .is_some_and(|entry| entry.value().expression == header)
                 {
-                    resolved = Some((entry.value().definition.clone(), Outcome::Hit));
                     return Ok(Op::Nop);
                 }
-                let definition = build()?;
-                let outcome = if current.is_some() {
-                    Outcome::Rebuild
-                } else {
-                    Outcome::Build
-                };
-                resolved = Some((definition.clone(), outcome));
                 Ok(Op::Put(Arc::new(DynamicConfigEntry {
                     expression: header.to_owned(),
-                    definition,
+                    definition: build()?,
                 })))
             })?;
-        resolved.ok_or_else(|| {
-            RejectionError::new(
-                "invalid_value",
-                "routing expression computation returned no definition",
-                header,
-            )
-        })
+        let (entry, outcome) = match result {
+            CompResult::Unchanged(entry) => (entry, Outcome::Hit),
+            CompResult::Inserted(entry) => (entry, Outcome::Build),
+            CompResult::ReplacedWith(entry) => (entry, Outcome::Rebuild),
+            // The closure returns Nop only for an existing entry and never returns Remove.
+            CompResult::StillNone(_) | CompResult::Removed(_) => {
+                unreachable!("dynamic config compute returned no entry")
+            }
+        };
+        Ok((entry.into_value().definition.clone(), outcome))
     }
 
     #[cfg(test)]
@@ -220,6 +216,30 @@ mod tests {
         let _in_flight = snapshot.load_balancers().load_balancer(&first);
         assert_eq!(snapshot.load_balancers().instance_count(), 2);
         assert!(!snapshot.load_balancers().contains(&first));
+    }
+
+    #[tokio::test]
+    async fn test_forget_instance_removes_only_the_named_definition() {
+        let state = StargateState::new();
+        let target = RoutingTargetKey::new(None, "model");
+        let snapshot = register_target(&state, &target).await;
+        let kept = compile(EXPRESSION).unwrap();
+        let forgotten = compile(EXPRESSION).unwrap();
+        let never_used = compile(EXPRESSION).unwrap();
+        let kept_instance = snapshot.load_balancers().load_balancer(&kept);
+        snapshot.load_balancers().load_balancer(&forgotten);
+
+        state.forget_load_balancer_instance(&RoutingTargetKey::new(None, "absent"), &kept);
+        state.forget_load_balancer_instance(&target, &never_used);
+        assert_eq!(snapshot.load_balancers().instance_count(), 2);
+
+        state.forget_load_balancer_instance(&target, &forgotten);
+        assert_eq!(snapshot.load_balancers().instance_count(), 1);
+        assert!(!snapshot.load_balancers().contains(&forgotten));
+        assert!(Arc::ptr_eq(
+            &kept_instance,
+            &snapshot.load_balancers().load_balancer(&kept)
+        ));
     }
 
     #[test]
