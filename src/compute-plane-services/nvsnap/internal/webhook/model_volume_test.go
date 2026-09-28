@@ -272,10 +272,15 @@ func TestModelVolume_ReaderBlockPVC_InjectedInitHardened(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	if len(v.newInits) != 1 {
-		t.Fatalf("one injected init expected, got %d", len(v.newInits))
+	var init corev1.Container
+	for _, c := range v.newInits {
+		if c.Name == injectedDownloadInit {
+			init = c
+		}
 	}
-	init := v.newInits[0]
+	if init.Name == "" {
+		t.Fatalf("injected download init expected, got %v", v.newInits)
+	}
 	for _, vm := range init.VolumeMounts {
 		if vm.MountPropagation != nil {
 			t.Errorf("no mount propagation in PVC mode: %+v", vm)

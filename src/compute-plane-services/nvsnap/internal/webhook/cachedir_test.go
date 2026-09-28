@@ -166,6 +166,32 @@ func TestCacheDirCapturePatches(t *testing.T) {
 	if !sawHome {
 		t.Error("missing HOME=/opt/nvsnap/cache env")
 	}
+	// The emptyDir starts empty; NIM refuses to start when NIM_CACHE_PATH
+	// does not exist, so an init creates both subtrees before the engine.
+	var init *corev1.Container
+	for _, p := range patches {
+		if c, ok := p.Value.(corev1.Container); ok && c.Name == cacheDirInitName {
+			cc := c
+			init = &cc
+		}
+	}
+	if init == nil {
+		t.Fatal("missing nvsnap-cachedir-init")
+	}
+	if init.Image != cacheDirPod().Spec.Containers[0].Image || !strings.Contains(init.Args[0], "mkdir -p /opt/nvsnap/cache /opt/nvsnap/model") || !strings.Contains(init.Args[0], "chmod 1777") {
+		t.Errorf("init must mkdir cache and model on the workload image: %s %q", init.Image, init.Args)
+	}
+	if len(init.VolumeMounts) != 1 || init.VolumeMounts[0].MountPath != "/opt/nvsnap" || init.Resources.Limits.Memory().IsZero() || init.SecurityContext == nil || init.SecurityContext.Capabilities == nil {
+		t.Errorf("init mounts the cachedir and is hardened: %+v %+v", init.VolumeMounts, init.Resources)
+	}
+	// Re-admission with the init already present adds nothing.
+	pod := cacheDirPod()
+	pod.Spec.InitContainers = []corev1.Container{*init}
+	for _, p := range m.cacheDirCapturePatches(pod) {
+		if c, ok := p.Value.(corev1.Container); ok && c.Name == cacheDirInitName {
+			t.Error("cachedir init injected twice")
+		}
+	}
 }
 
 // Off by default: no CacheDir → no patches (standard rootfs path).

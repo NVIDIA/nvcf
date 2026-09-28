@@ -470,10 +470,11 @@ func (m *Mutator) cacheDirVolumeOnly(pod *corev1.Pod, main *corev1.Container) []
 	if main.VolumeMounts == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts", m.MainContainer), Value: []any{}})
 	}
-	return append(patches,
+	patches = append(patches,
 		PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: cacheDirVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
 		PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer), Value: corev1.VolumeMount{Name: cacheDirVolumeName, MountPath: m.CacheDir}},
 	)
+	return append(patches, m.cacheDirInitPatches(pod, main)...)
 }
 
 // shellJoin renders an exec argv as one shell command line.

@@ -58,10 +58,12 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
@@ -266,7 +268,47 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 	for _, e := range m.cacheEnvVars(m.CacheDir) {
 		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
+	patches = append(patches, m.cacheDirInitPatches(pod, &main)...)
 	return patches
+}
+
+// cacheDirInitName is the init container that creates the cache and model
+// subdirectories of a fresh cachedir emptyDir.
+const cacheDirInitName = "nvsnap-cachedir-init"
+
+// cacheDirInitPatches injects an init that creates <CacheDir>/cache and
+// <CacheDir>/model, world-writable with the sticky bit. An emptyDir starts
+// empty; engines that create their own cache tree (vLLM, HF) never noticed,
+// but NIM refuses to start when NIM_CACHE_PATH does not exist ("Unable to
+// read from NIM_CACHE_PATH", dev1 2026-09-28). The init runs the workload's
+// own image so no extra pull is needed, inherits its user posture and is
+// hardened for enforced function namespaces.
+func (m *Mutator) cacheDirInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == cacheDirInitName {
+			return nil
+		}
+	}
+	cache, model := filepath.Join(m.CacheDir, "cache"), filepath.Join(m.CacheDir, "model")
+	init := corev1.Container{
+		Name:         cacheDirInitName,
+		Image:        main.Image,
+		Command:      []string{"/bin/sh", "-c"},
+		Args:         []string{fmt.Sprintf("mkdir -p %s %s && chmod 1777 %s %s", cache, model, cache, model)},
+		VolumeMounts: []corev1.VolumeMount{{Name: cacheDirVolumeName, MountPath: m.CacheDir}},
+	}
+	modelvolume.Harden(&init, cacheDirInitResources, main.SecurityContext)
+	var patches []PatchOp
+	if pod.Spec.InitContainers == nil {
+		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
+	}
+	return append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: init})
+}
+
+// cacheDirInitResources: two mkdirs.
+var cacheDirInitResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
+	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
 }
 
 // tryL2CacheDir injects a cachedir RESTORE: the rox PVC mounted
