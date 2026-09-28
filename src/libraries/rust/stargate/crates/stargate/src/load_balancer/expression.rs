@@ -124,6 +124,11 @@ impl RoutingExpression {
             return Err(malformed(format!("P10: invalid algorithm token {token:?}")));
         }
         for (key, value) in &item.params {
+            if matches!(value, BareItem::Boolean(_)) {
+                return Err(malformed(format!(
+                    "P4: {key} takes true or false, not ?1 or ?0"
+                )));
+            }
             if !matches!(
                 value,
                 BareItem::Integer(_)
@@ -186,7 +191,7 @@ impl RoutingExpression {
                 }
                 "max_input_work_seconds" => {
                     let value = parameter.decimal()?;
-                    parameter.positive(value > 0.0)?;
+                    parameter.require_positive(value > 0.0)?;
                     config.max_input_work_seconds = Some(value);
                 }
                 "seed" => config
@@ -381,7 +386,7 @@ impl Parameter<'_> {
         }
     }
 
-    fn positive(&self, is_positive: bool) -> Result<(), RejectionError> {
+    fn require_positive(&self, is_positive: bool) -> Result<(), RejectionError> {
         if is_positive {
             Ok(())
         } else {
@@ -396,7 +401,7 @@ impl Parameter<'_> {
         T: TryFrom<i64> + std::str::FromStr + Default + PartialOrd,
     {
         let value = self.unsigned()?;
-        self.positive(value > T::default())?;
+        self.require_positive(value > T::default())?;
         Ok(value)
     }
 }
@@ -492,6 +497,18 @@ mod tests {
                 RoutingExpression::parse(&raw).unwrap_err().class,
                 "malformed_expression"
             );
+        }
+    }
+
+    #[test]
+    fn test_parse_profile_rejection_names_the_rule() {
+        for (raw, rule) in [
+            ("pulsar;require_input_tokens=?1", "P4:"),
+            ("pulsar;require_input_tokens=?0", "P4:"),
+            ("pulsar;seed=:eA==:", "P2:"),
+        ] {
+            let error = RoutingExpression::parse(raw).expect_err(raw);
+            assert!(error.message.starts_with(rule), "{raw}: {}", error.message);
         }
     }
 
