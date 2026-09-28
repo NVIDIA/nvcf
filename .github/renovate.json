@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "prHourlyLimit": 10,
+  "prConcurrentLimit": 10,
+  "dependencyDashboard": false,
+  "extends": [
+    "config:recommended",
+    ":disableDependencyDashboard",
+    "group:allNonMajor"
+  ],
+  "baseBranches": ["main"],
+  "enabledManagers": ["gomod"],
+  "ignorePaths": [
+    "**/vendor/**",
+    "src/compute-plane-services/ess-agent/**",
+    "infra/openbao/plugins/vault-plugin-secrets-jwt/**",
+    "src/compute-plane-services/image-credential-helper/**",
+    "src/libraries/go/lib/**"
+  ],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "commitMessagePrefix": "chore(deps):",
+      "groupName": "go dependencies (non-major)",
+      "matchUpdateTypes": ["minor", "patch", "digest"]
+    }
+  ]
+}
