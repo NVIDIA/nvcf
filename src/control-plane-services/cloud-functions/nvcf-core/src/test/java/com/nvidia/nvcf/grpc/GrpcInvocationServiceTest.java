@@ -1113,7 +1113,7 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
                 .satisfies(thrown -> {
                     var exception = (StatusRuntimeException) thrown;
                     assertThat(exception.getStatus().getCode())
-                            .isEqualTo(Status.INVALID_ARGUMENT.getCode());
+                            .isEqualTo(Status.NOT_FOUND.getCode());
                     assertThat(exception.getStatus().getDescription())
                             .contains(TEST_FUNCTION_ID.toString())
                             .contains("LLM functions cannot be invoked through this endpoint");
@@ -1133,7 +1133,7 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
                                                    TEST_VERSION_ID_1.toString()))
                 .isInstanceOf(StatusRuntimeException.class)
                 .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
-                .isEqualTo(Status.INVALID_ARGUMENT.getCode());
+                .isEqualTo(Status.NOT_FOUND.getCode());
     }
 
     @Test
@@ -1148,8 +1148,11 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
         assertThatThrownBy(() -> functionAuth(clientAuth, TEST_FUNCTION_ID_2.toString(),
                                               TEST_VERSION_ID_2.toString()))
                 .isInstanceOf(StatusRuntimeException.class)
-                .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
-                .isEqualTo(Status.NOT_FOUND.getCode());
+                .satisfies(thrown -> {
+                    var status = ((StatusRuntimeException) thrown).getStatus();
+                    assertThat(status.getCode()).isEqualTo(Status.NOT_FOUND.getCode());
+                    assertThat(status.getDescription()).doesNotContain("LLM");
+                });
     }
 
     @Test

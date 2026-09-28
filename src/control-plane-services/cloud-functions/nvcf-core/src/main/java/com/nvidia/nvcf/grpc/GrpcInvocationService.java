@@ -20,7 +20,7 @@ import static com.nvidia.nvcf.util.NvcfConstants.ADMIN_SCOPE_INVOKE_FUNCTION;
 import static com.nvidia.nvcf.util.NvcfConstants.SCOPE_INVOKE_FUNCTION;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.nvidia.boot.exceptions.BadRequestException;
+import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.nvcf.configuration.exceptions.InvalidInvocationException;
 import com.nvidia.nvcf.persistence.function.entity.FunctionType;
@@ -174,7 +174,7 @@ public class GrpcInvocationService extends InvocationImplBase {
             var mesg = MESG_LLM_FUNCTION_NOT_INVOCABLE.formatted(functionId);
             log.warn("Rejecting classic invocation of LLM function: ncaId={}, functionId={}",
                      ncaId, functionId);
-            throw new InvalidInvocationException(ncaId, new BadRequestException(mesg));
+            throw new InvalidInvocationException(ncaId, new NotFoundException(mesg));
         }
     }
 

@@ -347,7 +347,7 @@ async fn test_delayed_worker_start() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// LLM functions are rejected by the auth call, so classic invocation must fail fast with a 400
+/// LLM functions are rejected by the auth call, so classic invocation must fail fast with a 404
 /// on every entry point and must not publish a request that no worker will consume.
 #[tokio::test]
 async fn test_llm_function_rejected_without_publishing() -> anyhow::Result<()> {
@@ -398,7 +398,7 @@ async fn test_llm_function_rejected_without_publishing() -> anyhow::Result<()> {
             "{uri}: took {:?}",
             start.elapsed()
         );
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE),
             Some(&HeaderValue::from_static("application/problem+json")),
@@ -408,7 +408,7 @@ async fn test_llm_function_rejected_without_publishing() -> anyhow::Result<()> {
         let problem: ProblemDetails = serde_json::from_slice(&body)?;
         assert_eq!(
             problem.status,
-            Some(StatusCode::BAD_REQUEST),
+            Some(StatusCode::NOT_FOUND),
             "{uri}: {problem:?}"
         );
         assert!(

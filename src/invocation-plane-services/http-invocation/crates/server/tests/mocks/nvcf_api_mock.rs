@@ -86,7 +86,7 @@ impl ApiMock {
         })?;
         if function_metadata.is_llm {
             return Err(Self::status_with_nca_id(
-                tonic::Code::InvalidArgument,
+                tonic::Code::NotFound,
                 &format!(
                     "Function id '{function_id}': LLM functions cannot be invoked through this endpoint. Use the LLM API instead."
                 ),
