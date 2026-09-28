@@ -77,8 +77,8 @@ func (t ChatResponseFormatType) String() string {
 type JSONSchema struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
-	Schema      map[string]any `json:"schema"`
-	Strict      bool           `json:"strict"`
+	Schema      map[string]any `json:"schema,omitzero"`
+	Strict      *bool          `json:"strict,omitempty"`
 }
 
 const (
@@ -281,7 +281,7 @@ type ChatMessage struct {
 }
 
 type ChatResponseFormat struct {
-	Type       *ChatResponseFormatType `json:"type"`
+	Type       *ChatResponseFormatType `json:"type,omitempty"`
 	JSONSchema *JSONSchema             `json:"json_schema,omitempty"`
 }
 

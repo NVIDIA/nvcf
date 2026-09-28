@@ -1117,6 +1117,20 @@ func TestStargateProviderNewOutboundRequestOmitsFieldsTheClientDidNotSend(t *tes
 			wantValues: map[string]string{"temperature": `0`, "seed": `0`, "parallel_tool_calls": `false`, "logit_bias": `{}`},
 		},
 		{
+			name:       "json schema without optional members",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s"}}}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s"}}`},
+		},
+		{
+			name:       "json schema with explicit strict false and empty schema",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}`},
+		},
+		{
 			name:       "tool without optional members",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}]}`,
 			stream:     false,
