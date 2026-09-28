@@ -354,14 +354,14 @@ mod tests {
 
     #[test]
     fn test_hits_keep_entry_alive_past_idle_window() {
-        let cache =
-            DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_millis(200));
+        let cache = DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_secs(1));
         let target = RoutingTargetKey::new(None, "model");
         let (first, _) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
-        for _ in 0..6 {
-            std::thread::sleep(Duration::from_millis(80));
+        // The hits span longer than the idle window; each gap leaves wide margin for slow CI.
+        for _ in 0..5 {
+            std::thread::sleep(Duration::from_millis(300));
             let (again, outcome) = cache
                 .resolve(&target, EXPRESSION, || panic!("entry expired while in use"))
                 .unwrap();
