@@ -124,7 +124,7 @@ utils:
 ## @param storage.sharedStorage.taskData.mountOptions Mount options for the provisioned task data PV.
 ## @param storage.sharedStorage.taskData.storageCapacity Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.
 ## @param storage.internalPersistentStorage.storageClassName Storage class for the Internal Persistent Storage (IPS) PVC.
-## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).
+## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC. Set requests.storage; it defaults to 500Gi when omitted.
 storage:
   sharedStorage:
     server:
@@ -403,7 +403,7 @@ helmManaged:
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: "3.10.0"
+  nvcaVersion: "3.12.7"
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.

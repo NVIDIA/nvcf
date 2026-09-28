@@ -325,7 +325,12 @@ func Apply(root string, chart Entry, version string, p Plan) error {
 // those paths and appVersion is required and all of them move together.
 func PlanForValuesPaths(root string, chart Entry, version string, paths []string, files []ValuesFile, ownsAppVersion bool) (Plan, error) {
 	chartYAML, valuesYAML := ChartFiles(root, chart.Path)
-	if chartYAML == "" {
+	// Only the chart's own values.yaml and its appVersion need a Chart.yaml.
+	// A target that names its files explicitly does not: stacks pin the same
+	// images charts do, from helmfile trees that have no chart of their own.
+	// Skipping those outright is why a stack pin could sit still while the chart
+	// beside it auto-bumped every release.
+	if chartYAML == "" && (ownsAppVersion || len(paths) > 0) {
 		return Plan{Action: ActionSkip, Detail: fmt.Sprintf("no Chart.yaml under %s", chart.Path)}, nil
 	}
 	specs, err := declaredValuesSpecs(root, chart, valuesYAML, paths, files)

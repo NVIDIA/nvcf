@@ -18,7 +18,9 @@ limitations under the License.
 package storage
 
 import (
+	"context"
 	"encoding/json"
+	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,9 +95,6 @@ func TestLoadStorageCapabilityCatalogStrict(t *testing.T) {
 }
 
 func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
-	missingConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: testCatalogNamespace},
-	}
 	missingData := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: testCatalogNamespace},
 	}
@@ -117,10 +116,6 @@ func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
 		{
 			name: "empty namespace", namespace: "",
 			configMap: capabilityCatalogConfigMap(validCatalog), want: "namespace is empty",
-		},
-		{
-			name: "missing ConfigMap", namespace: testCatalogNamespace,
-			configMap: missingConfigMap, want: "get storage capability ConfigMap",
 		},
 		{
 			name: "missing data key", namespace: testCatalogNamespace,
@@ -363,11 +358,20 @@ func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
 	require.NoError(t, validateStorageCapabilityCatalog(catalog))
 }
 
-func TestShippedStorageCapabilityCatalog(t *testing.T) {
+// shippedChartDir locates the operator chart: Bazel runs the test from the
+// runfiles root with the storage-capability-catalog data dependency, go test
+// runs it from the package directory.
+func shippedChartDir(t *testing.T) string {
+	t.Helper()
 	chartDir := filepath.Join("src", "compute-plane-services", "nvca", "deployments", "nvca-operator")
 	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
 		chartDir = filepath.Join("..", "..", "deployments", "nvca-operator")
 	}
+	return chartDir
+}
+
+func TestShippedStorageCapabilityCatalog(t *testing.T) {
+	chartDir := shippedChartDir(t)
 	raw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
 	require.NoError(t, err)
 	c := capabilityClient(t, capabilityCatalogConfigMap(string(raw))).Build()
@@ -380,17 +384,26 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NotNil(t, nvmesh.ReaderMountOptions)
 	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 
-	// Weka, FSS and Lustre are recorded but not qualified for a cache workflow,
-	// so they carry no access modes and caching stays off for them. Enabling
-	// one is an edit to its accessModes, backed by a qualification run.
-	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "lustre.csi.oraclecloud.com"} {
+	// Weka and OCI FSS are shared filesystems enabled on the ReadWriteMany
+	// shape: one shared claim, readers mount it read-only, no derived reader
+	// PV and therefore no reader mount options.
+	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
 		require.NotNil(t, driver.AccessModes, provisioner)
-		assert.Empty(t, *driver.AccessModes, provisioner)
+		assert.Equal(t, []string{"ReadWriteMany"}, *driver.AccessModes, provisioner)
 		require.NotNil(t, driver.ReaderMountOptions, provisioner)
 		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
 	}
+
+	// Lustre is recorded but not enabled for a cache workflow, so it carries
+	// no access modes and caching stays off for it.
+	lustre, ok := catalog.Drivers["lustre.csi.oraclecloud.com"]
+	require.True(t, ok)
+	require.NotNil(t, lustre.AccessModes)
+	assert.Empty(t, *lustre.AccessModes)
+	require.NotNil(t, lustre.ReaderMountOptions)
+	assert.Empty(t, *lustre.ReaderMountOptions)
 
 	schemaRaw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.schema.json"))
 	require.NoError(t, err)
@@ -544,4 +557,56 @@ func TestStorageCapabilityCatalogEncryptionSupported(t *testing.T) {
 		digestDriverProfile(NVMeshStorageClassProvisioner, nvmesh, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
 		digestDriverProfile(NVMeshStorageClassProvisioner, without, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
 		"encryption support is part of the driver profile digest")
+}
+
+func TestResolveModelCacheStorageWithClientsetMissingCatalogUsesBuiltin(t *testing.T) {
+	sc := testModelCacheStorageClass()
+	k8s := fakek8sclient.NewSimpleClientset(sc)
+
+	selection, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err, "an absent catalog ConfigMap must resolve against the built-in catalog")
+	assert.True(t, selection.CatalogBuiltin)
+	assert.Equal(t, ModelCacheProviderNVMesh, selection.Provider)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, selection.Transition)
+	assert.Equal(t, digestCatalogPayload(builtinStorageCapabilityCatalogYAML), selection.CatalogRevision)
+
+	// With the ConfigMap present the selection is identical except for the flag.
+	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: "nvca-system"},
+		Data:       map[string]string{StorageCapabilityConfigMapKey: builtinStorageCapabilityCatalogYAML},
+	})
+	fromConfigMap, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.False(t, fromConfigMap.CatalogBuiltin)
+	fromConfigMap.CatalogBuiltin = true
+	assert.Equal(t, selection, fromConfigMap)
+
+	// A present but empty catalog is a configuration error, not absence.
+	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: "nvca-system"},
+	})
+	_, err = ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.ErrorContains(t, err, "has no")
+}
+
+// The built-in catalog must be the one the chart installs, or an agent ahead
+// of its chart would resolve differently from a converged install.
+func TestBuiltinCatalogMatchesChart(t *testing.T) {
+	chartCopy, err := os.ReadFile(filepath.Join(shippedChartDir(t), "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
+	require.NoError(t, err, "the chart catalog must be readable; the built-in copy is checked against it")
+	assert.Equal(t, string(chartCopy), builtinStorageCapabilityCatalogYAML)
+	_, _, err = builtinStorageCapabilityCatalog()
+	require.NoError(t, err)
+}
+
+func TestLoadStorageCapabilityCatalogMissingConfigMapUsesBuiltin(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	catalog, digest, builtin, err := loadStorageCapabilityCatalogSnapshot(t.Context(), c, testCatalogNamespace)
+	require.NoError(t, err)
+	assert.True(t, builtin)
+	assert.Equal(t, digestCatalogPayload(builtinStorageCapabilityCatalogYAML), digest)
+	_, ok := catalog.Drivers[NVMeshStorageClassProvisioner]
+	assert.True(t, ok, "the built-in catalog must qualify NVMesh")
 }

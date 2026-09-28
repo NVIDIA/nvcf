@@ -289,6 +289,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 	}
+	r.emitConditionEvents(ms, ms.Status.Conditions, msCopy.Status.Conditions)
+
 	if phaseChanged {
 		fromPhase := normalizeMiniServicePhase(ms.Status.Phase)
 		toPhase := normalizeMiniServicePhase(msCopy.Status.Phase)
@@ -298,12 +300,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		if ms.Status.Phase == "" {
 			log.Info("MiniService changed phase", "new_status", msCopy.Status.Phase)
-			r.eventRecorder.Eventf(ms, "Normal", "PhaseChange", "phase changed to %s",
+			r.recordEvent(ms, corev1.EventTypeNormal, "PhaseChange", "phase changed to %s",
 				msCopy.Status.Phase)
 		} else {
 			log.Info("MiniService changed phase", "prev_status", ms.Status.Phase,
 				"new_status", msCopy.Status.Phase)
-			r.eventRecorder.Eventf(ms, "Normal", "PhaseChange", "phase changed from %s to %s",
+			r.recordEvent(ms, corev1.EventTypeNormal, "PhaseChange", "phase changed from %s to %s",
 				ms.Status.Phase, msCopy.Status.Phase)
 		}
 	}
@@ -629,6 +631,12 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
 		return reconcile.Result{}, err
 	}
+	// Carry the decoded workload feature flags through to the admission webhook via the
+	// miniservice metadata ConfigMap, so it can read them at Pod admission time. Only the
+	// feature flags are carried, not the rest of WorkloadConfig, which the webhook has no use for.
+	if workloadConfig != nil {
+		metaInput.WorkloadFeatureFlags = workloadConfig.FeatureFlags
+	}
 	// Update the resources status in the MiniService status.
 	updateResourcesStatus(ms, resources)
 	// ReVal may render filtered workload pull secrets, which should be used if possible.
@@ -845,7 +853,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 
 	infraObjs = append(infraObjs, utilsPod)
 
-	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
+	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) &&
+		!workloadConfig.IsFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain) {
 		infraObjs = append(infraObjs, nvcfdra.NewSingleChannelComputeDomain())
 	}
 

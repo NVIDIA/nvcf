@@ -165,14 +165,22 @@ type ChartDeploy struct {
 func (m *Metadata) ChartsDeploying(serviceID string) []ChartDeploy {
 	var out []ChartDeploy
 	for _, e := range m.Services {
-		if !strings.HasPrefix(e.Path, ChartPrefix) {
-			continue
-		}
 		for _, d := range e.Deploys {
-			if d.Service == serviceID {
-				out = append(out, ChartDeploy{Entry: e, ValuesPaths: d.ValuesPaths, ValuesFiles: d.ValuesFiles, AppVersion: d.AppVersion})
+			if d.Service != serviceID {
+				continue
+			}
+			// Charts live under deploy/helm/, and everything outside it is a
+			// service whose own release moves its version. The exception is a
+			// target that names the files it pins: a stack is a helmfile tree
+			// with no chart of its own, so it can never be found by the chart
+			// lookup, yet it repeats the same image pins. Excluding those
+			// outright is what let a stack pin sit still for release after
+			// release while the chart beside it bumped itself.
+			if !strings.HasPrefix(e.Path, ChartPrefix) && len(d.ValuesFiles) == 0 {
 				break
 			}
+			out = append(out, ChartDeploy{Entry: e, ValuesPaths: d.ValuesPaths, ValuesFiles: d.ValuesFiles, AppVersion: d.AppVersion})
+			break
 		}
 	}
 	return out

@@ -201,4 +201,9 @@ defaultMonitors:
       interval: 30s
       path: /metrics
       port: worker-metrics
+      # Keep aligned with the worker defaults in nvcf-default-monitors.
+      podTargetLabels:
+        - function-id
+        - function-version-id
+        - nca-id
       labels: {}

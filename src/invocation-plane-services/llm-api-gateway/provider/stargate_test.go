@@ -132,6 +132,68 @@ func metricHasFunctionID(data metricdata.Aggregation, want string) bool {
 	return false
 }
 
+func TestOverloadTranslationKeepsUpstreamMetricsAt503(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"complete", "stream", "proxy"} {
+		t.Run(method, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+			meter := meterProvider.Meter("overload-translation")
+			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+			require.NoError(t, err)
+			p.upstreamRequestsTotal, err = meter.Int64Counter("upstream_requests")
+			require.NoError(t, err)
+			p.upstreamRequestDuration, err = meter.Float64Histogram("upstream_duration")
+			require.NoError(t, err)
+			var upstream *http.Response
+			p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				upstream = &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Header:     http.Header{headerStargateErrorCode: []string{overloadErrorCode}},
+					Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"overloaded_error","message":"Inference capacity is temporarily unavailable.","param":"","type":"overloaded_error"}}`)),
+					Request:    r,
+				}
+				return upstream, nil
+			})}
+			request := &NormalizedRequest{ChatRequest: &models.ChatCompletionRequest{Model: "model-a"}}
+			reqCtx := &requestctx.RequestContext{RequestID: "request-a", Model: "model-a"}
+			switch method {
+			case "complete":
+				_, err = p.Complete(context.Background(), reqCtx, request)
+				require.Error(t, err)
+			case "stream":
+				_, err = p.Stream(context.Background(), reqCtx, request)
+				require.Error(t, err)
+			case "proxy":
+				response, err := p.Proxy(context.Background(), reqCtx, &ProxyRequest{Method: http.MethodPost, Path: "/v1/embeddings"})
+				require.NoError(t, err)
+				require.Equal(t, statusOverloaded, response.StatusCode)
+				require.NoError(t, response.Body.Close())
+			}
+			require.Equal(t, http.StatusServiceUnavailable, upstream.StatusCode)
+			var metrics metricdata.ResourceMetrics
+			require.NoError(t, reader.Collect(context.Background(), &metrics))
+			found := false
+			for _, scope := range metrics.ScopeMetrics {
+				for _, metric := range scope.Metrics {
+					if metric.Name != "upstream_requests" {
+						continue
+					}
+					count, ok := metric.Data.(metricdata.Sum[int64])
+					require.True(t, ok)
+					require.Len(t, count.DataPoints, 1)
+					status, ok := count.DataPoints[0].Attributes.Value(attribute.Key("status"))
+					require.True(t, ok)
+					require.Equal(t, "503", status.AsString())
+					found = true
+				}
+			}
+			require.True(t, found, "upstream request metric was not recorded")
+		})
+	}
+}
+
 func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -915,6 +977,77 @@ func TestStargateProviderProxyForwardsRoutingMethod(t *testing.T) {
 	defer response.Body.Close()
 
 	require.Equal(t, http.StatusOK, response.StatusCode)
+}
+
+func TestStargateProviderProxyUsesOnlyContextRoutingMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		reqCtx *requestctx.RequestContext
+		want   []string
+	}{
+		{"unset", &requestctx.RequestContext{}, nil},
+		{"metadata", &requestctx.RequestContext{RoutingMethod: "pulsar;seed=a"}, []string{"pulsar;seed=a"}},
+		{"nil context", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := &ProxyRequest{
+				Method: http.MethodPost,
+				Path:   "/v1/embeddings",
+				Header: http.Header{headerRoutingMethod: []string{"client-method", "another-client-method"}},
+				Body:   io.NopCloser(strings.NewReader(`{"model":"proxy-model","input":"hello"}`)),
+			}
+			provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+			require.NoError(t, err)
+			provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, tt.want, r.Header.Values(headerRoutingMethod))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
+				}, nil
+			})}
+
+			response, err := provider.Proxy(context.Background(), tt.reqCtx, request)
+			require.NoError(t, err)
+			defer response.Body.Close()
+			require.Equal(t, http.StatusOK, response.StatusCode)
+		})
+	}
+}
+
+func TestStargateProviderNewOutboundRequestUsesOnlyContextRoutingMethod(t *testing.T) {
+	t.Parallel()
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	request := &NormalizedRequest{ChatRequest: &models.ChatCompletionRequest{Model: "upstream-model"}}
+	tests := []struct {
+		name          string
+		stream        bool
+		routingMethod string
+		want          []string
+	}{
+		{"chat unset", false, "", nil},
+		{"chat metadata", false, "pulsar;seed=a", []string{"pulsar;seed=a"}},
+		{"stream unset", true, "", nil},
+		{"stream metadata", true, "pulsar;seed=a", []string{"pulsar;seed=a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			outbound, err := provider.newOutboundRequest(
+				&requestctx.RequestContext{RoutingMethod: tt.routingMethod}, request, tt.stream,
+			)
+			require.NoError(t, err)
+			defer outbound.Body.Close()
+			require.Equal(t, tt.want, outbound.Header.Values(headerRoutingMethod))
+		})
+	}
 }
 
 func TestStargateProviderNewOutboundRequestForwardsPriority(t *testing.T) {

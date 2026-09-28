@@ -16,7 +16,6 @@
  */
 package com.nvidia.nvcf;
 
-import net.devh.boot.grpc.server.autoconfigure.GrpcAdviceAutoConfiguration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.micrometer.tracing.autoconfigure.prometheus.PrometheusExemplarsAutoConfiguration;
 import org.springframework.boot.security.autoconfigure.ReactiveUserDetailsServiceAutoConfiguration;
@@ -27,7 +26,6 @@ import org.springframework.boot.security.autoconfigure.ReactiveUserDetailsServic
  */
 @SpringBootApplication(exclude = {
         ReactiveUserDetailsServiceAutoConfiguration.class,
-        PrometheusExemplarsAutoConfiguration.class,
-        GrpcAdviceAutoConfiguration.class})
+        PrometheusExemplarsAutoConfiguration.class})
 public class NvcfTestApp {
 }

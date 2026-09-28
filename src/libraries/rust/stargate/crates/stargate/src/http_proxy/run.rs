@@ -64,6 +64,7 @@ pub(super) struct ProxyRequestRun<'a> {
     pub(super) failed_backend_ids: HashSet<String>,
     failed_cluster_ids: HashSet<String>,
     pub(super) attempt_counters: ProxyAttemptCounters,
+    pub(super) last_attempt_capacity_rejected: bool,
 }
 
 impl<'a> ProxyRequestRun<'a> {
@@ -79,6 +80,7 @@ impl<'a> ProxyRequestRun<'a> {
             failed_backend_ids: HashSet::new(),
             failed_cluster_ids: HashSet::new(),
             attempt_counters: ProxyAttemptCounters::default(),
+            last_attempt_capacity_rejected: false,
         }
     }
 
@@ -268,6 +270,7 @@ impl<'a> ProxyRequestRun<'a> {
                     failed_backend_count: self.failed_backend_ids.len(),
                     failed_cluster_count: self.failed_cluster_ids.len(),
                     routing_retry_attempts: self.routing_retry_attempts,
+                    capacity_rejected: self.last_attempt_capacity_rejected,
                 }))
             }
         }
