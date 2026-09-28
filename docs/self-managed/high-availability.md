@@ -236,13 +236,16 @@ override to just NATS via a component-shaped value instead if you need to
 disable spread for NATS specifically without affecting the rest of
 `controlplane`.)
 
-**Cassandra needs one more thing: rack = AZ.** Spreading the *pods* across zones
-does not by itself make the *data* zone-diverse. `NetworkTopologyStrategy`
-replicates by **rack**, and Cassandra's rack is assigned by the image entrypoint,
-not by the pod's Kubernetes zone. Unless each pod's Cassandra rack is set to its
-AZ, RF=3 can still place all three data replicas in one rack. Map rack to AZ on
-the Cassandra nodes to get true cross-AZ data placement; NATS and OpenBao (Raft)
-replicate per member and need only the pod spread.
+**Cassandra places data by rack, not by zone.** Spreading the *pods* across
+zones does not by itself make the *data* zone-diverse. `NetworkTopologyStrategy`
+puts each replica on a different **rack**, and the Cassandra image assigns the
+rack from the pod ordinal (`r1`, `r2`, `r3` for ordinals 0, 1, 2, repeating as
+ordinal mod 3), not from the node's zone. With exactly three pods spread one
+per zone, the three racks land in three zones, so RF=3 keeps one copy of each
+row in every zone. With more than three pods, pods that share a rack can sit in
+different zones, so replica placement is not zone-aware; zone-aware rack
+assignment is not implemented yet. NATS and OpenBao (Raft) replicate per member
+and need only the pod spread.
 
 Once a quorum pod's PV is created in a zone it is pinned there for the life of
 that StatefulSet ordinal — steady-state placement stays spread, but a pod whose
@@ -270,21 +273,24 @@ streams (for example `nats stream edit`) to raise their replica factor.
 
 #### Cassandra replication and consistency
 
-The Cassandra keyspaces are created with `NetworkTopologyStrategy` and a
-replication factor of 3 under HA, and the control-plane services read/write
-at `LOCAL_QUORUM`. This is the correct configuration for both single-DC and
-multi-AZ deployments:
+The application keyspaces use `NetworkTopologyStrategy` in the `ncp`
+datacenter. Their replication factor is set once, when a keyspace is **first
+created**, from the Cassandra replica count, so a **fresh** HA install creates
+them at RF=3. An existing install keeps the replication factor it was created
+with (RF=1 for a single-node install) until you raise it; see
+[Upgrading an existing install](#upgrading-an-existing-install).
 
-- **Single datacenter:** RF=3 with `LOCAL_QUORUM` tolerates the loss of one
-  replica for reads and writes.
-- **Multi-AZ:** because replicas are placed with `NetworkTopologyStrategy`,
-  labelling nodes by rack/AZ makes Cassandra distribute the 3 replicas across
-  AZs automatically; `LOCAL_QUORUM` then keeps the cluster available through the
-  loss of a single AZ.
+The control-plane services default to `LOCAL_QUORUM` consistency, and some
+`nvcf-api` read paths use `LOCAL_ONE`. With RF=3:
 
-No stack change is required to select the strategy — it is
-`NetworkTopologyStrategy` in all cases. To get true cross-AZ placement, ensure
-the Cassandra nodes carry AZ labels (see the prerequisites above).
+- **Single datacenter:** `LOCAL_QUORUM` tolerates the loss of one replica for
+  reads and writes. `LOCAL_ONE` reads stay available too, but can briefly
+  return data that has not reached every replica yet.
+- **Multi-AZ:** with exactly three pods spread one per zone, the rack mapping
+  above puts one replica in each zone, so `LOCAL_QUORUM` keeps reads and
+  writes available through the loss of one zone. This needs three zones (see
+  [Zone spread for the quorum services](#zone-spread-for-the-quorum-services))
+  and does not hold above three pods.
 
 ## Tuning scheduling policy (`global.affinity` / `global.topologySpreadConstraints`)
 
@@ -364,9 +370,15 @@ kubectl -n nats-system exec -it nats-0 -- nats stream info <stream-name>
 Confirm Cassandra keyspace replication:
 
 ```bash
-kubectl -n cassandra-system exec -it cassandra-0 -- \
-  cqlsh -e "SELECT keyspace_name, replication FROM system_schema.keyspaces;"
+read -rs -p "Cassandra administrator password: " CASSANDRA_PASSWORD; echo
+kubectl -n cassandra-system exec cassandra-0 -- \
+  cqlsh -u cassandra -p "$CASSANDRA_PASSWORD" \
+  -e "SELECT keyspace_name, replication FROM system_schema.keyspaces;"
 ```
+
+The application keyspaces should report `'ncp': '3'`. On an install that
+predates HA they keep their original value until you follow step 5 of
+[Upgrading an existing install](#upgrading-an-existing-install).
 
 If any pod is stuck `Pending` under `enforced`, it usually means a node pool
 lacks capacity in a second node/AZ. Add capacity, or drop to `preferred` to
@@ -386,6 +398,9 @@ With HA enabled and capacity in at least two AZs:
   unavailable while the scheduler restarts the pod on another node. Quorum
   services (Cassandra RF=3/`LOCAL_QUORUM`, NATS RF=3, OpenBao 3-node Raft)
   retain quorum with 2 of 3 members and continue serving reads and writes.
+  For Cassandra this assumes the keyspaces are at RF=3, which an upgraded
+  install reaches only after
+  [step 5 of the upgrade](#upgrading-an-existing-install).
 - **Single AZ loss:** Only if zone spread actually took effect — see
   [Zone spread for the quorum services](#zone-spread-for-the-quorum-services)
   for its prerequisites (3-AZ capacity, `WaitForFirstConsumer` storage). With
@@ -425,8 +440,30 @@ in this order:
 4. **Apply.** `HELMFILE_ENV=<environment-name> helmfile sync`. Replica-safe
    Deployments roll with `maxUnavailable: 0` / `maxSurge: 1` (needs headroom for
    one surge pod); quorum services roll one member at a time and keep quorum.
-5. **Verify.** Confirm the [Validation](#validation) checks — replica counts
-   (2 or 3), PodDisruptionBudgets, and zone spread.
+5. **Raise Cassandra keyspace replication.** The sync scales Cassandra to three
+   members, but the application keyspaces keep the replication factor they were
+   created with, so a single Cassandra node loss can still make data
+   unavailable. Once all three Cassandra pods are Ready, raise each application
+   keyspace to RF=3, then run a full repair on every member so the new replicas
+   receive the existing data. Skip any keyspace your install does not have
+   (the query in [Validation](#validation) lists them):
+
+   ```bash
+   read -rs -p "Cassandra administrator password: " CASSANDRA_PASSWORD; echo
+   for ks in nvcf_api nvct_api ess_api api_keys_api sis_api event_ledger nvcf_autoscaler; do
+     kubectl -n cassandra-system exec cassandra-0 -- \
+       cqlsh -u cassandra -p "$CASSANDRA_PASSWORD" \
+       -e "ALTER KEYSPACE $ks WITH replication = {'class': 'NetworkTopologyStrategy', 'ncp': '3'};"
+   done
+   for pod in cassandra-0 cassandra-1 cassandra-2; do
+     kubectl -n cassandra-system exec "$pod" -- nodetool repair --full
+   done
+   ```
+
+   Run the repairs one member at a time. Until they finish, reads at
+   `LOCAL_ONE` can miss rows that exist only on the original replica.
+6. **Verify.** Confirm the [Validation](#validation) checks — replica counts
+   (2 or 3), PodDisruptionBudgets, zone spread, and keyspace replication.
 
 > Because `preferred` is the default, upgrading with an environment file that
 > does not pin `highAvailability.mode` will scale services up (2/3 replicas,
