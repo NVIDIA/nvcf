@@ -208,6 +208,15 @@ pub(super) fn routing_retry_deadline(
     })
 }
 
+/// Deadline for timed load-balancer waits. Unlike generic routing retries,
+/// bucket waits do not require `x-max-wait-ms`, but they stay bounded.
+pub(super) fn routing_wait_deadline(request_start: Instant, max_wait_ms: Option<u64>) -> Instant {
+    let wait_ms = max_wait_ms.map_or(ROUTING_RETRY_MAX_WAIT_MS, |wait_ms| {
+        wait_ms.min(ROUTING_RETRY_MAX_WAIT_MS)
+    });
+    request_start + Duration::from_millis(wait_ms)
+}
+
 pub(super) fn routing_wait_delay(
     remaining: Duration,
     deadline: Option<Instant>,
@@ -459,6 +468,43 @@ mod tests {
             eligible_cluster_candidate_count(&candidates, Some(&excluded)),
             1
         );
+    }
+
+    #[test]
+    fn routing_wait_deadline_is_bounded_without_max_wait_header() {
+        let request_start = Instant::now();
+        let cap = request_start + Duration::from_millis(ROUTING_RETRY_MAX_WAIT_MS);
+        assert_eq!(routing_wait_deadline(request_start, None), cap);
+        assert_eq!(routing_wait_deadline(request_start, Some(u64::MAX)), cap);
+        assert_eq!(
+            routing_wait_deadline(request_start, Some(250)),
+            request_start + Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn routing_wait_stops_at_default_deadline_without_max_wait_header() {
+        let request_start = Instant::now();
+        let deadline = routing_wait_deadline(request_start, None);
+        let one_hour = Duration::from_secs(3600);
+        assert_eq!(
+            routing_wait_delay(one_hour, Some(deadline), request_start),
+            Some(Duration::from_millis(25))
+        );
+        assert_eq!(
+            routing_wait_delay(
+                one_hour,
+                Some(deadline),
+                deadline - Duration::from_millis(5)
+            ),
+            Some(Duration::from_millis(5))
+        );
+        assert_eq!(routing_wait_delay(one_hour, Some(deadline), deadline), None);
+        // Generic capacity retries still require an explicit header budget.
+        assert!(!should_retry_routing(routing_retry_deadline(
+            request_start,
+            None
+        )));
     }
 
     #[test]
