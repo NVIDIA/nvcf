@@ -403,7 +403,7 @@ helmManaged:
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: "3.12.7"
+  nvcaVersion: "3.12.13"
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.
