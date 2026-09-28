@@ -313,7 +313,7 @@ type ChatCompletionRequest struct {
 	PresencePenalty     *float32                          `json:"presence_penalty,omitempty"`
 	ResponseFormat      *ChatResponseFormat               `json:"response_format,omitempty"`
 	Seed                *int64                            `json:"seed,omitempty"`
-	Stop                ChatCompletionStopField           `json:"stop,omitempty"`
+	Stop                ChatCompletionStopField           `json:"stop,omitzero"`
 	Stream              *bool                             `json:"stream,omitempty"`
 	Temperature         *float32                          `json:"temperature,omitempty"`
 	TopP                *float32                          `json:"top_p,omitempty"`

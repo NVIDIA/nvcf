@@ -1063,6 +1063,7 @@ func TestStargateProviderNewOutboundRequestOmitsFieldsTheClientDidNotSend(t *tes
 		body       string
 		stream     bool
 		wantFields []string
+		wantValues map[string]string
 	}{
 		{
 			name:       "unary chat",
@@ -1095,6 +1096,27 @@ func TestStargateProviderNewOutboundRequestOmitsFieldsTheClientDidNotSend(t *tes
 			wantFields: []string{"messages", "model", "service_tier", "stream"},
 		},
 		{
+			name:       "explicit empty stop list",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":[]}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantValues: map[string]string{"stop": `[]`},
+		},
+		{
+			name:       "stop string",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":"END"}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantValues: map[string]string{"stop": `["END"]`},
+		},
+		{
+			name:       "explicit zero and false values",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0,"seed":0,"parallel_tool_calls":false,"logit_bias":{}}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "temperature", "seed", "parallel_tool_calls", "logit_bias", "service_tier", "stream"},
+			wantValues: map[string]string{"temperature": `0`, "seed": `0`, "parallel_tool_calls": `false`, "logit_bias": `{}`},
+		},
+		{
 			name:       "tool without optional members",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}]}`,
 			stream:     false,
@@ -1123,6 +1145,9 @@ func TestStargateProviderNewOutboundRequestOmitsFieldsTheClientDidNotSend(t *tes
 				gotFields = append(gotFields, field)
 			}
 			require.ElementsMatch(t, tt.wantFields, gotFields)
+			for field, want := range tt.wantValues {
+				require.JSONEq(t, want, string(payload[field]), field)
+			}
 
 			if tools, ok := payload["tools"]; ok {
 				require.JSONEq(t, `[{"type":"function","function":{"name":"f"}}]`, string(tools))
