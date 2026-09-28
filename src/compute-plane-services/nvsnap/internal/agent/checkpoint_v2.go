@@ -64,6 +64,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu"
 )
 
 // CapturePathCRIUV2 is the request value selecting the in-namespace CRIU
@@ -140,7 +141,17 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 
 // dumpV2 stages the bundle and runs CRIU dump inside the container's
 // namespaces. On success the image files have been moved into checkpointDir.
-func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) error {
+// v2DumpInfo is what a criu-v2 dump reports back for the checkpoint metadata.
+// Restore needs every field: criu requires external resources and the tcp
+// choice to be declared identically at both ends, and it cannot infer any of
+// them from the images.
+type v2DumpInfo struct {
+	MountPoints   []string // mounts declared external, for rebuilding ExtMnt
+	TCPClose      bool     // dump used --tcp-close, so restore must too
+	UnixExternals []string // unix[ino] declared external, restore must repeat
+}
+
+func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) (info v2DumpInfo, err error) {
 	hostPID := int(containerInfo.PID)
 	procBase := "/proc"
 	if _, err := os.Stat("/host/proc"); err == nil {
@@ -150,20 +161,20 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 
 	// 1. Stage the bundle into the container rootfs.
 	if err := a.stageV2Bundle(root, log); err != nil {
-		return err
+		return info, err
 	}
 
 	// 2. Fresh in-container images dir.
 	imgsDir := filepath.Join(root, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
 	_ = os.RemoveAll(imgsDir)
 	if err := os.MkdirAll(imgsDir, 0o755); err != nil {
-		return fmt.Errorf("images dir: %w", err)
+		return info, fmt.Errorf("images dir: %w", err)
 	}
 
 	// 3. NVIDIA device externals from the container's /dev view.
 	externals, err := nvidiaDevExternals(filepath.Join(root, "dev"))
 	if err != nil {
-		return fmt.Errorf("device externals: %w", err)
+		return info, fmt.Errorf("device externals: %w", err)
 	}
 
 	// 4. Dump target: CRIU's -t is resolved in the entered pid namespace.
@@ -194,7 +205,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	nsPID, err := nsPidOf(procBase, targetHostPID)
 	if err != nil {
-		return fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
+		return info, fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
 	}
 	log.WithFields(logrus.Fields{
 		"targetHostPID": targetHostPID,
@@ -212,6 +223,36 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
+	// A workload that runs as pid 1 -- the ordinary case for a Kubernetes
+	// container, and what Dynamo does -- cannot be dumped this way. criu only
+	// records a pid namespace when it is not itself a member of it, and the
+	// nsenter below joins the target's. Without that record, restore refuses:
+	//
+	//	Error (criu/cr-restore.c:2092): This process tree can only be restored
+	//	in a new pid namespace.
+	//
+	// So for pid 1 run criu from the agent's own namespaces instead, reaching
+	// the container through --root, which is the shape runc checkpoint uses.
+	// Measured on a Dynamo vLLM worker: criu then logs "Will take pid namespace
+	// in the image" and the dump completes.
+	//
+	// Two things follow from being outside the container:
+	//
+	//   - Mounts no longer resolve implicitly, so every mountpoint must be
+	//     declared external. buildDumpExtMnt derives that list from the
+	//     target's own mountinfo; the same list goes into the metadata so
+	//     restore can rebuild the mappings.
+	//   - criu would record the net namespace and try to recreate eth0 on
+	//     restore, whose veth peer lives on the host ("Unknown peer net
+	//     namespace"). Kubernetes owns the pod network via CNI, so do not
+	//     record it. runc does the same for CNI-managed containers.
+	//
+	// Gated on nsPID: a workload launched under our setsid convention is a
+	// session leader, never pid 1, and keeps the in-namespace path unchanged.
+	if nsPID == 1 {
+		return a.dumpV2NamespaceRoot(ctx, containerInfo, checkpointDir, sourceUpperdir, hostPID, externals, leaveRunning, log)
+	}
+
 	args := []string{
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "dump",
@@ -348,16 +389,16 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			// Join rather than format moveErr with %v: a caller inspecting
 			// this with errors.Is/As needs to reach both the dump failure and
 			// the harvest failure, not just the first one.
-			return fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
+			return info, fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
 				strings.TrimSpace(string(out)), tail, errors.Join(runErr, moveErr))
 		}
-		return fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
+		return info, fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
 	if moveErr != nil {
-		return fmt.Errorf("criu-v2: move images: %w", moveErr)
+		return info, fmt.Errorf("criu-v2: move images: %w", moveErr)
 	}
 	log.Info("criu-v2: dump complete, images moved to checkpoint dir")
-	return nil
+	return info, nil
 }
 
 // gpuDevPatterns are the character devices a GPU workload may hold open that
@@ -502,4 +543,225 @@ func tailOfFile(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
+}
+
+// dumpV2NamespaceRoot dumps a container whose workload is pid 1.
+//
+// The counterpart of the in-namespace path in dumpV2, and the difference is
+// where criu runs. Here it stays in the agent's namespaces and reaches the
+// container through --root, so it is not a member of the pid namespace it has
+// to record. That is what makes the capture restorable at all: a tree
+// containing pid 1 can only be restored into a fresh namespace, and criu
+// cannot describe a namespace it is inside.
+//
+// Returns the mountpoints declared external, which the caller stores in the
+// checkpoint metadata. Restore rebuilds its ExtMnt mappings from that list;
+// without it the mappings are derived from whatever pod the restore lands in,
+// whose mount set does not match the source's.
+func (a *Agent) dumpV2NamespaceRoot(
+	ctx context.Context,
+	containerInfo *containerd.ContainerInfo,
+	checkpointDir, sourceUpperdir string,
+	hostPID int,
+	externals []string,
+	leaveRunning bool,
+	log *logrus.Entry,
+) (v2DumpInfo, error) {
+	procBase := "/proc"
+	if _, err := os.Stat("/host/proc"); err == nil {
+		procBase = "/host/proc"
+	}
+
+	extMnt, mountPoints, skipMounts, rootForDump, err := a.buildDumpExtMnt(hostPID, containerInfo.RootFS)
+	if err != nil {
+		return v2DumpInfo{}, fmt.Errorf("criu-v2 pid1: build external mounts: %w", err)
+	}
+	if rootForDump == "" {
+		// /proc/<pid>/root is a magic symlink. criu resolves it for a dump,
+		// but a restore cannot bind-mount it, so prefer a real path when
+		// buildDumpExtMnt found one.
+		rootForDump = filepath.Join(procBase, strconv.Itoa(hostPID), "root")
+	}
+
+	imgsDir := filepath.Join(checkpointDir, "imgs")
+	if err := os.MkdirAll(imgsDir, 0o755); err != nil {
+		return v2DumpInfo{}, fmt.Errorf("criu-v2 pid1: images dir: %w", err)
+	}
+
+	unixExt, uerr := listeningUnixSocketExternals(procBase, hostPID)
+	if uerr != nil {
+		log.WithError(uerr).Warn("criu-v2 pid1: could not enumerate listening unix sockets; restore may fail on setns")
+	}
+
+	args := namespaceRootDumpArgs(hostPID, rootForDump, imgsDir,
+		resolveCRIUPluginDir(a.config.CRIUPath, log), extMnt, skipMounts,
+		append(append([]string{}, externals...), unixExtValues(unixExt)...), leaveRunning)
+
+	log.WithFields(logrus.Fields{
+		"hostPID":    hostPID,
+		"root":       rootForDump,
+		"extMounts":  len(extMnt),
+		"dumpTarget": "namespace-root",
+	}).Info("criu-v2: dumping pid-1 workload from the agent's namespaces")
+
+	// The exact argv is the first thing needed to reproduce a dump failure by
+	// hand, and it is otherwise unrecoverable after the fact. The in-namespace
+	// path logs it for the same reason; omitting it here meant debugging a
+	// missing --external flag with no way to see whether it was ever passed.
+	log.WithField("argv", strings.Join(args, " ")).Info("criu-v2 pid1: dump argv")
+
+	cmd := exec.CommandContext(ctx, a.config.CRIUPath, args...)
+	cmd.Env = []string{
+		"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=/root",
+	}
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		tail := tailOfFile(filepath.Join(imgsDir, "dump.log"), 8)
+		return v2DumpInfo{}, fmt.Errorf("criu-v2 pid1 dump: %w (output: %s; dump.log tail: %s)",
+			runErr, strings.TrimSpace(string(out)), tail)
+	}
+
+	// The artifact contract is that images sit directly in checkpointDir; the
+	// validator looks for inventory.img and friends there, and the in-namespace
+	// path moves them for the same reason. Writing to a subdirectory and
+	// leaving them makes a successful dump fail validation with
+	// "missing required checkpoint files".
+	if moveErr := moveDirContents(imgsDir, checkpointDir); moveErr != nil {
+		return v2DumpInfo{}, fmt.Errorf("criu-v2 pid1: move images into %s: %w", checkpointDir, moveErr)
+	}
+	_ = os.RemoveAll(imgsDir)
+
+	return v2DumpInfo{
+		MountPoints:   mountPoints,
+		TCPClose:      true,
+		UnixExternals: unixExtValues(unixExt),
+	}, nil
+}
+
+// namespaceRootDumpArgs builds the criu argv for dumping a pid-1 workload from
+// outside the container's namespaces.
+//
+// Split out from dumpV2NamespaceRoot so the argument contract can be tested
+// without a live container. Three details in here are load-bearing and were
+// each established by a failed dump:
+//
+//   - no nsenter and no -p: criu must not be a member of the pid namespace it
+//     records, or it never writes one and restore refuses the tree
+//   - --empty-ns net: otherwise restore tries to recreate eth0 whose veth peer
+//     is on the host
+//   - the external mount cookie is the mountpoint itself, because restore
+//     rebuilds mappings keyed by mountpoint; a mangled cookie never resolves
+//   - device externals are bare values and each needs its own --external flag
+//   - mounts buildDumpExtMnt declines to externalise must be passed as
+//     --skip-mnt, not silently dropped
+//   - --tcp-close pairs with --empty-ns net; --tcp-established cannot, because
+//     an empty net namespace has nothing to reconnect through
+//   - the mount engine is a RESTORE-only choice; criu rejects
+//     --mntns-compat-mode on dump ("only valid on restore")
+func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt []criu.ExtMountMap, skipMounts, deviceExternals []string, leaveRunning bool) []string {
+	args := []string{
+		"dump",
+		"-t", strconv.Itoa(hostPID),
+		"--root", root,
+		"-D", imgsDir,
+		"-o", "dump.log", "-v4",
+		"--empty-ns", "net",
+		// --tcp-close, not --tcp-established. Restoring live TCP connections
+		// requires a reachable network, and --empty-ns net deliberately gives
+		// the restored tree an empty one, so the two contradict:
+		//
+		//	Error (soccr/soccr.c:529): Can't connect inet socket back:
+		//	Network is unreachable
+		//
+		// Dropping the connections is also what the workload expects. The agent
+		// already destroys external TCP before a capture (nvsnap#187), and
+		// Dynamo's discovery is readiness-driven, so a worker that comes back
+		// with closed sockets re-registers rather than resuming mid-connection.
+		"--tcp-close",
+		"--shell-job", "--ext-unix-sk",
+		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
+		"--libdir", pluginDir,
+		"--skip-in-flight",
+		"--manage-cgroups=ignore",
+		"--file-locks",
+		"--timeout", "1200",
+	}
+	if leaveRunning {
+		args = append(args, "--leave-running")
+	}
+	for _, m := range extMnt {
+		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", m.Key, m.Val))
+	}
+	// buildDumpExtMnt deliberately does not externalise every mount. Some are
+	// re-injected by nvidia-CDI on the restore side, so the recorded mount is
+	// obsolete by then (different driver version, different firmware
+	// subdirectory). Those must be skipped rather than declared, or the dump
+	// fails with "<mount> doesn't have a proper root mount".
+	for _, mp := range skipMounts {
+		args = append(args, "--skip-mnt", mp)
+	}
+	// deviceExternals are bare values ("dev[195/0]:nvidia0"), matching what
+	// nvidiaDevExternals returns; each needs its own --external flag. Appending
+	// them raw makes criu see positional arguments and refuse the whole command
+	// with "excessive parameters for command dump".
+	for _, e := range deviceExternals {
+		args = append(args, "--external", e)
+	}
+	return args
+}
+
+// listeningUnixSocketExternals returns criu --external arguments for the
+// container's listening unix sockets that are bound to a filesystem path.
+//
+// criu recreates such a socket by entering the mount namespace its path lives
+// in. That works when criu runs inside the container, which is what the
+// in-namespace path does and why it needs none of this. Dumping a pid-1
+// workload from outside, criu cannot make that transition and the restore dies:
+//
+//	unix: Opening standalone (stage 0 id 0x205 ino 719101449 peer 0)
+//	Error (criu/namespaces.c:260): Can't setns 46/mnt: Invalid argument
+//
+// Only listening sockets are affected, and only those with a real path.
+// Abstract sockets (leading @, such as the CUDA driver's uvmfd socket) have no
+// filesystem presence and restore without entering a namespace. Connected
+// sockets are left alone deliberately: they carry worker IPC that the workload
+// depends on, which is why the legacy path sets SkipUnixSockets false.
+func listeningUnixSocketExternals(procBase string, hostPID int) ([]string, error) {
+	path := filepath.Join(procBase, strconv.Itoa(hostPID), "net", "unix")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	var ext []string
+	for i, line := range strings.Split(string(data), "\n") {
+		if i == 0 || strings.TrimSpace(line) == "" {
+			continue // header or trailing blank
+		}
+		f := strings.Fields(line)
+		// Num RefCount Protocol Flags Type St Inode Path
+		if len(f) < 8 {
+			continue // no path: abstract or unnamed, nothing to enter a namespace for
+		}
+		const listening = "00010000"
+		if f[3] != listening {
+			continue
+		}
+		if strings.HasPrefix(f[7], "@") {
+			continue // abstract namespace, no filesystem path
+		}
+		ext = append(ext, "--external", fmt.Sprintf("unix[%s]", f[6]))
+	}
+	return ext, nil
+}
+
+// unixExtValues strips the --external flags from listeningUnixSocketExternals,
+// because namespaceRootDumpArgs adds one per value itself.
+func unixExtValues(flagged []string) []string {
+	out := make([]string, 0, len(flagged)/2)
+	for i := 0; i+1 < len(flagged); i += 2 {
+		out = append(out, flagged[i+1])
+	}
+	return out
 }

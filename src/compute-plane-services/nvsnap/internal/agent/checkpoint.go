@@ -1689,12 +1689,17 @@ type CUDACheckpointInfo struct {
 
 // CRIUOptionsUsed tracks which CRIU options were used during dump
 type CRIUOptionsUsed struct {
-	SkipUnixSockets bool     `json:"skipUnixSockets"`
-	SkipInFlight    bool     `json:"skipInFlight"`
-	SkipFsnotify    bool     `json:"skipFsnotify"`
-	LeaveRunning    bool     `json:"leaveRunning"`
-	TCPEstablished  bool     `json:"tcpEstablished"`
-	External        []string `json:"external,omitempty"` // External resources marked during dump
+	SkipUnixSockets bool `json:"skipUnixSockets"`
+	SkipInFlight    bool `json:"skipInFlight"`
+	SkipFsnotify    bool `json:"skipFsnotify"`
+	LeaveRunning    bool `json:"leaveRunning"`
+	TCPEstablished  bool `json:"tcpEstablished"`
+	// TCPClose records that the dump used --tcp-close. criu requires the same
+	// option at restore and refuses otherwise ("Need to set the --tcp-close
+	// options"), so this cannot be inferred -- TCPEstablished is false both for
+	// a tcp-close dump and for a path that simply never set it.
+	TCPClose bool     `json:"tcpClose,omitempty"`
+	External []string `json:"external,omitempty"` // External resources marked during dump
 }
 
 // RestoreHints provides guidance to the restore process
@@ -2398,6 +2403,8 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	var captureResult <-chan streamer.CaptureResult
 	var criuOpts criu.DumpOptions // populated by the legacy path; zero for criu-v2 (flags recorded in dump.log)
 	var dumpMountPoints []string  // legacy Plan-A mountpoints; empty for criu-v2 (in-ns restore needs no ExtMnt)
+	var v2TCPClose bool           // true when the pid-1 path dumped with --tcp-close
+	var v2UnixExternals []string  // unix[ino] the pid-1 path declared external
 	if isCRIUV2(req.CapturePath) {
 		// criu-v2: in-namespace dump (bundle staged into the container,
 		// criu exec'd via nsenter). See checkpoint_v2.go. Post-dump steps
@@ -2405,7 +2412,15 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		// legacy path — the artifact contract is identical.
 		_, criuSpan := tracing.Tracer().Start(ctx, "checkpoint.criu_dump")
 		criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
-		if err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log); err != nil {
+		v2Info, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log)
+		v2TCPClose = v2Info.TCPClose
+		v2UnixExternals = v2Info.UnixExternals
+		v2MountPoints := v2Info.MountPoints
+		// Non-empty only for a pid-1 workload, where the dump runs outside the
+		// container's pid namespace and declares mounts external. Restore then
+		// needs the same list to rebuild ExtMnt mappings.
+		dumpMountPoints = v2MountPoints
+		if err != nil {
 			criuSpan.RecordError(err)
 			criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
 			criuSpan.End()
@@ -2720,7 +2735,12 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 			SkipFsnotify:    criuOpts.SkipFsnotify,
 			LeaveRunning:    criuOpts.LeaveRunning,
 			TCPEstablished:  criuOpts.TCPEstab,
-			External:        criuOpts.External,
+			TCPClose:        v2TCPClose,
+			// criu needs external resources declared identically at restore.
+			// The legacy path records its own; the pid-1 path adds the unix
+			// sockets it externalised, which restore must repeat or criu tries
+			// to recreate them and fails entering their mount namespace.
+			External: append(append([]string{}, criuOpts.External...), v2UnixExternals...),
 		},
 		Hints:           restoreHints,
 		DumpMountPoints: dumpMountPoints,

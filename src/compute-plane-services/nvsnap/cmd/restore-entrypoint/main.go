@@ -136,12 +136,21 @@ type CUDACheckpointInfo struct {
 
 // CRIUOptionsUsed tracks which CRIU options were used during dump
 type CRIUOptionsUsed struct {
+	// External is what the dump declared external. criu requires the same
+	// declarations at restore; without them it tries to recreate the resource
+	// and fails. For a pid-1 capture that means listening unix sockets, which
+	// criu can only recreate from inside their mount namespace.
 	External        []string `json:"external,omitempty"`
 	SkipUnixSockets bool     `json:"skipUnixSockets"`
 	SkipInFlight    bool     `json:"skipInFlight"`
 	SkipFsnotify    bool     `json:"skipFsnotify"`
 	LeaveRunning    bool     `json:"leaveRunning"`
 	TCPEstablished  bool     `json:"tcpEstablished"`
+	// TCPClose mirrors the agent's marker. criu demands the same choice at
+	// restore as at dump and refuses otherwise ("Need to set the --tcp-close
+	// options"). It cannot be inferred from TCPEstablished, which is false both
+	// for a tcp-close dump and for a path that never set the option.
+	TCPClose bool `json:"tcpClose,omitempty"`
 }
 
 // RestoreHints provides guidance to the restore process
@@ -1026,6 +1035,25 @@ timeout 120
 	}
 	fmt.Printf("CRIU WorkDir: %s (fd=%d) — restore.log + IPC will land here\n", criuRestoreWorkDir, workDirFile.Fd())
 
+	// criu demands the same TCP choice at restore as at dump. A capture taken
+	// with --tcp-close cannot be restored with tcp-established:
+	//
+	//	Error (criu/image.c:110): Need to set the --tcp-close options.
+	//
+	// The pid-1 capture path uses --tcp-close because it pairs with
+	// --empty-ns net, so read the marker rather than assuming either way.
+	tcpClose := meta != nil && meta.CRIUOptions != nil && meta.CRIUOptions.TCPClose
+	var dumpExternals []string
+	if meta != nil && meta.CRIUOptions != nil {
+		dumpExternals = meta.CRIUOptions.External
+	}
+	if len(dumpExternals) > 0 {
+		fmt.Printf("Repeating %d external declaration(s) from the dump: %v\n", len(dumpExternals), dumpExternals)
+	}
+	if tcpClose {
+		fmt.Println("Checkpoint was taken with --tcp-close; restoring connections as closed")
+	}
+
 	criuOpts := &criurpc.CriuOpts{
 		ImagesDirFd: proto.Int32(int32(imageDir.Fd())),
 		WorkDirFd:   proto.Int32(int32(workDirFile.Fd())),
@@ -1041,7 +1069,12 @@ timeout 120
 		RstSibling: proto.Bool(true),
 
 		// Mount namespace compatibility mode for cross-container restore
-		MntnsCompatMode: proto.Bool(true),
+		// The compatibility mount engine suits legacy captures, which record
+		// no mount namespace of their own. A pid-1 capture records a full one,
+		// and rebuilding it under the compat engine left criu unable to enter
+		// it ("Can't setns <n>/mnt: Invalid argument") while restoring a
+		// listening unix socket bound to a path inside. Use mount-v2 there.
+		MntnsCompatMode: proto.Bool(!tcpClose),
 
 		// Network namespace handling:
 		// InheritFd maps dump-time external netns to this pod's netns (key=extNetNs).
@@ -1052,8 +1085,8 @@ timeout 120
 		// - TcpEstablished=true: Required when checkpoint was made with tcp-established
 		// - TcpClose=false: Preserve established connections - the loopback alias for old
 		//   pod IP allows intra-process connections (e.g., vLLM TCPStore) to continue working
-		TcpEstablished: proto.Bool(true),
-		TcpClose:       proto.Bool(false),
+		TcpEstablished: proto.Bool(!tcpClose),
+		TcpClose:       proto.Bool(tcpClose),
 
 		// External Unix socket handling
 		ExtUnixSk: proto.Bool(true),
@@ -1088,7 +1121,13 @@ timeout 120
 		InheritFd: inheritFds,
 
 		// External mounts - auto-detected NVIDIA paths
-		External: discoverExternalMounts(),
+		// discoverExternalMounts covers mounts. Append whatever the dump
+		// declared external -- for a pid-1 capture, the listening unix sockets
+		// it could not record from outside the container. criu accepts the
+		// declaration at dump but still writes the socket into the image, so
+		// omitting it here makes restore attempt the recreate and fail with
+		// "Can't setns <n>/mnt: Invalid argument".
+		External: append(discoverExternalMounts(), dumpExternals...),
 	}
 
 	// Enable config file (like k8s-runc-bypass)
