@@ -103,9 +103,25 @@ bring-up. The prewarm pays off on volumes whose single-stream reads are
 latency-bound but whose aggregate throughput is high (Hyperdisk ML), where the
 engine's per-fault mmap reads leave the volume idle and the parallel sweep does
 not. Treat the prewarm value as a property of the storage class, not the model:
-the sweep reads files in 256 MiB ranges so a few large weights files still use every reader (an NVMesh volume on dev1 read 270 MB/s per stream and 2.1 GB/s at eight, 2026-09-28), skips Hugging Face `original/` copies, and its switch and reader count live in the storage profile (`prewarm`,
+the sweep reads files in 256 MiB ranges so a few large weights files still use every reader (an NVMesh volume on dev1 read 270 MB/s per stream and 2.1 GB/s at eight, 2026-09-28), and its switch and reader count live in the storage profile (`prewarm`,
 `prewarmParallelism` in the `nvsnap-storage-profiles` ConfigMap), see
 `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`.
+
+Prewarm file selection, a documented heuristic. The sweep follows
+symlinks and skips two path patterns: `*/original/*` and `*/blobs/*`.
+Both come from the Hugging Face hub cache layout that `huggingface_hub`
+produces for every engine that downloads through it (vLLM, SGLang, NIM,
+TGI): `snapshots/<rev>/` holds entry names that are symlinks into
+`blobs/`, and repos such as Llama and Mistral ship the original PyTorch
+checkpoint under `original/` next to the safetensors. Reading by entry
+name and skipping `blobs/` avoids reading the same bytes twice; skipping
+`original/` avoids a file no engine opens (16 GB of the 30 GB Llama-3.1-8B
+tree). On a tree without that layout the filters match nothing and the
+sweep reads everything. The general replacement is a list of the files
+the engine opened during capture, recorded in the manifest and replayed
+by the sweep; until that exists this heuristic is the only model-shaped
+knowledge in the restore path, and this paragraph is where it is
+recorded.
 
 ## Environment
 
