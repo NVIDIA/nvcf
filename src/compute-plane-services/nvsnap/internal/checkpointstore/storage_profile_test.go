@@ -123,6 +123,26 @@ func TestNewPromoterFromProfile(t *testing.T) {
 	}
 }
 
+// Built-in defaults: prewarm off on NVMesh (a single reader saturates the
+// volume and the sweep reads unused files), on for Hyperdisk ML (the
+// engine's page-fault reads leave the volume idle).
+func TestStorageProfile_BuiltinPrewarmDefaults(t *testing.T) {
+	nv, _, ok := ResolveStorageProfile("nvmesh-csi.excelero.com", "", nil)
+	if !ok || nv.PrewarmEnabled() {
+		t.Errorf("NVMesh built-in must have prewarm off: ok=%v enabled=%v", ok, nv.PrewarmEnabled())
+	}
+	hd, _, ok := ResolveStorageProfile("pd.csi.storage.gke.io", "hyperdisk-ml", nil)
+	if !ok || !hd.PrewarmEnabled() {
+		t.Errorf("Hyperdisk ML built-in must keep prewarm on: ok=%v enabled=%v", ok, hd.PrewarmEnabled())
+	}
+	// An overlay entry still wins either way.
+	on := true
+	ov := map[string]StorageProfile{"nvmesh-csi.excelero.com": {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", Prewarm: &on}}
+	if p, _, _ := ResolveStorageProfile("nvmesh-csi.excelero.com", "", ov); !p.PrewarmEnabled() {
+		t.Error("overlay prewarm: true must re-enable it on NVMesh")
+	}
+}
+
 // The prewarm policy defaults to on with six readers when a profile says
 // nothing, and a ConfigMap entry can turn it off or resize it.
 func TestStorageProfile_PrewarmPolicy(t *testing.T) {
@@ -166,9 +186,12 @@ pd.csi.storage.gke.io/hyperdisk-ml:
 	if !hd.PrewarmEnabled() || hd.PrewarmWorkers() != 16 {
 		t.Errorf("hyperdisk entry: enabled=%v workers=%d, want on/16", hd.PrewarmEnabled(), hd.PrewarmWorkers())
 	}
-	// Every built-in ships with the prewarm on: nothing measured so far
-	// justifies turning it off by default anywhere.
+	// Built-ins ship with the prewarm on except NVMesh, where it was
+	// measured neutral to negative (see TestStorageProfile_BuiltinPrewarmDefaults).
 	for k, p := range builtinProfiles {
+		if k == "nvmesh-csi.excelero.com" {
+			continue
+		}
 		if !p.PrewarmEnabled() {
 			t.Errorf("built-in %s ships with prewarm off", k)
 		}

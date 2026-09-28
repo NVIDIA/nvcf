@@ -103,7 +103,7 @@ bring-up. The prewarm pays off on volumes whose single-stream reads are
 latency-bound but whose aggregate throughput is high (Hyperdisk ML), where the
 engine's per-fault mmap reads leave the volume idle and the parallel sweep does
 not. Treat the prewarm value as a property of the storage class, not the model:
-the default and the reader count live in the storage profile (`prewarm`,
+the default is per storage profile: on for Hyperdisk ML, off for NVMesh since 2026-09-28 (a NIM Llama-3.1-8B restore on dev1 spent 67 s reading a 30 GB tree to save a 2 s weights load); the switch and the reader count live in the storage profile (`prewarm`,
 `prewarmParallelism` in the `nvsnap-storage-profiles` ConfigMap), see
 `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`.
 
