@@ -104,7 +104,7 @@ struct Args {
     /// Output-token estimate calibration. single-pylon asserts one active Pylon per cluster ID
     #[arg(long, value_enum, default_value = "off", value_name = "MODE")]
     output_token_calibration: OutputTokenCalibrationMode,
-    /// Interval between active canary requests in milliseconds. `0` disables active canaries
+    /// Interval between active canary requests in milliseconds. Models with request progress within the interval skip the canary. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
     /// Treat canary responses that generate this many tokens as runaway generation
@@ -119,7 +119,7 @@ struct Args {
     /// Maximum concurrent requests used during calibration
     #[arg(long, default_value_t = 4, value_name = "N")]
     calibration_max_concurrency: usize,
-    /// Timeout for canary requests in milliseconds
+    /// Timeout for canary requests in milliseconds. An active canary that times out while the upstream completes other requests does not mark the model unavailable
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     bringup_canary_timeout_ms: u64,
     /// Timeout for calibration requests in milliseconds
