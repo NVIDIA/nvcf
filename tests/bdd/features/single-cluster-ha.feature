@@ -7,7 +7,9 @@ Feature: Install a local single-cluster NVCF stack with high availability enable
   # Runtime check of the HA value layer on the ncp-local topology. The
   # render-level wiring is covered by deploy/stacks/self-managed/tests; this
   # feature proves the installed objects and the scheduler agree. nvcf-api is
-  # the representative replica-safe Deployment. Draining nodes to prove the PDB
+  # the representative replica-safe Deployment. The strategy and PDB assertions
+  # need a pinned helm-nvcf-api chart that carries the HA hooks; older published
+  # charts ignore those values. Draining nodes to prove the PDB
   # blocks the last eviction is intentionally out of scope here because it
   # would disrupt the shared stack.
 
@@ -67,8 +69,10 @@ Feature: Install a local single-cluster NVCF stack with high availability enable
       """
 
     # Soft hostname anti-affinity must still land each replica on its own node.
+    # The chart is named helm-nvcf-api; !component excludes the account-bootstrap
+    # job Pod, which shares the release labels.
     When I successfully run command:
       """
-      /bin/bash -c 'kubectl --context k3d-ncp-local get pods --namespace nvcf -l app.kubernetes.io/instance=api,app.kubernetes.io/name=nvcf-api -o json | bash tests/bdd/scripts/assert-ha-placement.sh 2'
+      /bin/bash -c 'kubectl --context k3d-ncp-local get pods --namespace nvcf -l app.kubernetes.io/instance=api,app.kubernetes.io/name=helm-nvcf-api,!app.kubernetes.io/component -o json | bash tests/bdd/scripts/assert-ha-placement.sh 2'
       """
     Then the command output should contain "ha-placement=ok replicas=2 nodes=2"

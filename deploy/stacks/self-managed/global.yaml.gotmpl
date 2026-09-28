@@ -596,24 +596,29 @@ apikeys:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+{{- /* The nats-auth-callout chart reads flat, top-level values, so its HA keys are
+       emitted at the top level for that release only. */}}
+{{- if eq .Release.Name "nats-auth-callout-service" }}
+{{- if $haEnabled }}
+replicaCount: {{ max 2 (dig "natsAuthCalloutService" "replicaCount" 1 .Values | int) }}
+{{- end }}
+{{- with include "nvcf.ha.updateStrategy" .Values }}
+strategy:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+podDisruptionBudget:
+  {{- . | nindent 2 }}
+{{- end }}
+{{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
+{{- . | nindent 0 }}
+{{- end }}
+{{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
+{{- . | nindent 0 }}
+{{- end }}
+{{- end }}
+
 natsAuthCalloutService:
-  {{- if $haEnabled }}
-  replicaCount: {{ max 2 (dig "natsAuthCalloutService" "replicaCount" 1 .Values | int) }}
-  {{- end }}
-  {{- with include "nvcf.ha.updateStrategy" .Values }}
-  strategy:
-  {{- . | nindent 4 }}
-  {{- end }}
-  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
-  podDisruptionBudget:
-    {{- . | nindent 4 }}
-  {{- end }}
-  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
-  {{- . | nindent 2 }}
-  {{- end }}
-  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
-  {{- . | nindent 2 }}
-  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}

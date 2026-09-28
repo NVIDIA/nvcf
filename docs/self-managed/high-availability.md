@@ -352,7 +352,7 @@ Confirm the replica-safe Deployments scaled and spread:
 
 ```bash
 kubectl -n nvcf get deploy nvcf-api -o wide
-kubectl -n nvcf get pods -o wide -l app.kubernetes.io/instance=api
+kubectl -n nvcf get pods -o wide -l 'app.kubernetes.io/instance=api,!app.kubernetes.io/component'
 kubectl -n api-keys get deploy admin-token-issuer-proxy -o wide
 # invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy)
 kubectl -n nvcf get deploy invocation-service grpc-proxy-deployment -o wide

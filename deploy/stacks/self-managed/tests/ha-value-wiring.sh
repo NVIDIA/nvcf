@@ -195,12 +195,28 @@ awk '/^rateLimiter:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/ratelimiter-on.yam
 
 render_chart_values nats-auth-callout-service "$work_dir/natsauth-on.yaml" "$core" ||
   fail "render nats-auth-callout (preferred)"
-awk '/^natsAuthCalloutService:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/natsauth-on.yaml" | grep -E "replicaCount:[[:space:]]*2" >/dev/null ||
-  fail "nats-auth-callout: expected replicaCount 2 when highAvailability.mode=preferred"
-awk '/^natsAuthCalloutService:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/natsauth-on.yaml" | grep -q "podDisruptionBudget:" ||
-  fail "nats-auth-callout: expected podDisruptionBudget when highAvailability.mode=preferred"
-awk '/^natsAuthCalloutService:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/natsauth-on.yaml" | grep -q "topologySpreadConstraints:" ||
-  fail "nats-auth-callout: expected zone topology spread when highAvailability.mode=preferred"
+# The nats-auth-callout chart reads flat, top-level values; check those keys and
+# render the chart with the emitted values so a nesting mismatch cannot pass.
+grep -E "^replicaCount:[[:space:]]*2" "$work_dir/natsauth-on.yaml" >/dev/null ||
+  fail "nats-auth-callout: expected top-level replicaCount 2 when highAvailability.mode=preferred"
+for key in strategy podDisruptionBudget affinity topologySpreadConstraints; do
+  grep -q "^$key:" "$work_dir/natsauth-on.yaml" ||
+    fail "nats-auth-callout: expected top-level $key when highAvailability.mode=preferred"
+done
+natsauth_chart="$stack_dir/../../helm/nats-auth-callout"
+helm template nats-auth-callout-service "$natsauth_chart" -f "$work_dir/natsauth-on.yaml" \
+  --set image.repository=example/nats-auth-callout >"$work_dir/natsauth-rendered.yaml" ||
+  fail "helm template nats-auth-callout with the stack values"
+grep -E "^  replicas:[[:space:]]*2" "$work_dir/natsauth-rendered.yaml" >/dev/null ||
+  fail "nats-auth-callout: rendered Deployment must have 2 replicas"
+grep -q "^kind: PodDisruptionBudget" "$work_dir/natsauth-rendered.yaml" ||
+  fail "nats-auth-callout: rendered chart must include a PodDisruptionBudget"
+grep -q "topologyKey: topology.kubernetes.io/zone" "$work_dir/natsauth-rendered.yaml" ||
+  fail "nats-auth-callout: rendered Deployment must include zone topology spread"
+# The top-level keys must not leak into other releases.
+if grep -qE "^(replicaCount|strategy|podDisruptionBudget|affinity|topologySpreadConstraints):" "$work_dir/api-on.yaml"; then
+  fail "api: nats-auth-callout top-level HA keys leaked into another release"
+fi
 
 # llm-api-gateway: anti-affinity when the LLM addon is on.
 render_chart_values llm-api-gateway "$work_dir/llmgw-on.yaml" "$core" --state-values-set addons.llm.enabled=true ||

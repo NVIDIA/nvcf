@@ -650,7 +650,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 func TestSingleClusterHAFeatureFileWiresToSteps(t *testing.T) {
 	const installCommand = "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-ha"
 	const placementCommand = "/bin/bash -c 'kubectl --context k3d-ncp-local get pods --namespace nvcf" +
-		" -l app.kubernetes.io/instance=api,app.kubernetes.io/name=nvcf-api -o json" +
+		" -l app.kubernetes.io/instance=api,app.kubernetes.io/name=helm-nvcf-api,!app.kubernetes.io/component -o json" +
 		" | bash tests/bdd/scripts/assert-ha-placement.sh 2'"
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("NGC_API_KEY", "test-key")
