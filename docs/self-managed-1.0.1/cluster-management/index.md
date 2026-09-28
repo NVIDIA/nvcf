@@ -2,7 +2,7 @@
 
 The NVIDIA Cluster Agent (NVCA) connects GPU clusters to the NVCF control plane, enabling them to act as deployment targets for Cloud Functions. NVCA is a function deployment orchestrator that registers a cluster's GPU resources, communicates with the control plane, and manages the lifecycle of function deployments on GPU nodes.
 
-For a fresh install, use the [Quickstart](../quickstart.md). The one-click CLI flow can register a GPU cluster as part of the install. Use this section for manual cluster registration, standalone NVCA installation, and day-two cluster configuration.
+For a fresh install, use the [Quickstart](/nvcf/overview/quickstart). The one-click CLI flow can register a GPU cluster as part of the install. Use this section for manual cluster registration, standalone NVCA installation, and day-two cluster configuration.
 
 <Warning>
 If you pin NVCA separately from the recommended compute-plane stack, check the

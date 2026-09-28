@@ -4,7 +4,7 @@
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
 
-- [Quickstart](./quickstart.md)
+- [Quickstart](/nvcf/overview/quickstart)
   : Install the control plane, register a GPU cluster, and validate the deployment with the one-click CLI flow.
 - [Deployment](./installation.md)
   : Compare the one-click and Helmfile installation paths.
