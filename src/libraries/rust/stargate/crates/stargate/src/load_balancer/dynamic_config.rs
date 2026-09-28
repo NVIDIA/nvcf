@@ -35,15 +35,18 @@ impl Outcome {
 }
 
 pub(crate) const DYNAMIC_CONFIG_IDLE_EXPIRY: Duration = Duration::from_secs(15 * 60);
+// A memory backstop well above the deployed (function, model) pairs one router serves.
+pub(crate) const DYNAMIC_CONFIG_MAX_ENTRIES: u64 = 16_384;
 
 pub(crate) struct DynamicConfigCache {
     entries: Cache<RoutingTargetKey, Arc<DynamicConfigEntry>>,
 }
 
 impl DynamicConfigCache {
-    pub(crate) fn new(state: Arc<StargateState>, idle: Duration) -> Self {
+    pub(crate) fn new(state: Arc<StargateState>, idle: Duration, max_entries: u64) -> Self {
         Self {
             entries: Cache::builder()
+                .max_capacity(max_entries)
                 .time_to_idle(idle)
                 .eviction_listener(
                     move |target: Arc<RoutingTargetKey>, entry: Arc<DynamicConfigEntry>, _| {
@@ -102,7 +105,6 @@ impl DynamicConfigCache {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -128,6 +130,17 @@ mod tests {
         state: &StargateState,
         target: &RoutingTargetKey,
     ) -> RoutingTargetSnapshot {
+        register_targets(state, std::slice::from_ref(target))
+            .await
+            .remove(0)
+    }
+
+    // All targets share one backend, so they must share one routing key.
+    async fn register_targets(
+        state: &StargateState,
+        targets: &[RoutingTargetKey],
+    ) -> Vec<RoutingTargetSnapshot> {
+        let target = &targets[0];
         let running = state
             .begin_registration(&RegistrationIdentity {
                 inference_server_id: "backend".to_owned(),
@@ -144,20 +157,29 @@ mod tests {
                     inference_server_id: "backend".to_owned(),
                     cluster_id: "cluster".to_owned(),
                     inference_server_url: "quic://127.0.0.1:5000".to_owned(),
-                    models: HashMap::from([(
-                        target.model_id.clone(),
-                        InferenceServerModelRegistration {
-                            stats: Some(ModelStats::default()),
-                            status: InferenceServerStatus::Active as i32,
-                        },
-                    )]),
+                    models: targets
+                        .iter()
+                        .map(|target| {
+                            (
+                                target.model_id.clone(),
+                                InferenceServerModelRegistration {
+                                    stats: Some(ModelStats::default()),
+                                    status: InferenceServerStatus::Active as i32,
+                                },
+                            )
+                        })
+                        .collect(),
                     reverse_tunnel: false,
                 },
                 false,
                 Some(Duration::from_millis(1)),
             )
             .await;
-        state.routing_target_snapshot(target).await.unwrap()
+        let mut snapshots = Vec::with_capacity(targets.len());
+        for target in targets {
+            snapshots.push(state.routing_target_snapshot(target).await.unwrap());
+        }
+        snapshots
     }
 
     #[tokio::test]
@@ -165,7 +187,8 @@ mod tests {
         let state = Arc::new(StargateState::new());
         let target = RoutingTargetKey::new(None, "model");
         let snapshot = register_target(&state, &target).await;
-        let cache = DynamicConfigCache::new(state, Duration::from_secs(60));
+        let cache =
+            DynamicConfigCache::new(state, Duration::from_secs(60), DYNAMIC_CONFIG_MAX_ENTRIES);
         let (first, outcome) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
@@ -188,7 +211,8 @@ mod tests {
         let state = Arc::new(StargateState::new());
         let target = RoutingTargetKey::new(None, "model");
         let snapshot = register_target(&state, &target).await;
-        let cache = DynamicConfigCache::new(state, Duration::from_secs(60));
+        let cache =
+            DynamicConfigCache::new(state, Duration::from_secs(60), DYNAMIC_CONFIG_MAX_ENTRIES);
         let static_definition = compile(EXPRESSION).unwrap();
         let static_instance = snapshot.load_balancers().load_balancer(&static_definition);
         let (first, _) = cache
@@ -242,10 +266,40 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn test_capacity_evictions_forget_instances() {
+        let state = Arc::new(StargateState::new());
+        let targets = (0..6)
+            .map(|index| RoutingTargetKey::new(None, format!("model-{index}")))
+            .collect::<Vec<_>>();
+        let snapshots = register_targets(&state, &targets).await;
+        let cache = DynamicConfigCache::new(state, Duration::from_secs(60), 2);
+        for (target, snapshot) in targets.iter().zip(&snapshots) {
+            let (definition, _) = cache
+                .resolve(target, EXPRESSION, || compile(EXPRESSION))
+                .unwrap();
+            snapshot.load_balancers().load_balancer(&definition);
+        }
+        cache.run_pending_tasks();
+
+        assert!(cache.entries.entry_count() <= 2);
+        for (target, snapshot) in targets.iter().zip(&snapshots) {
+            let expected = usize::from(cache.entries.contains_key(target));
+            assert_eq!(
+                snapshot.load_balancers().instance_count(),
+                expected,
+                "{target:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_resolve_targets_have_independent_entries() {
-        let cache =
-            DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_secs(60));
+        let cache = DynamicConfigCache::new(
+            Arc::new(StargateState::new()),
+            Duration::from_secs(60),
+            DYNAMIC_CONFIG_MAX_ENTRIES,
+        );
         let first_target = RoutingTargetKey::new(Some("tenant-a".to_owned()), "model-a");
         let (first, _) = cache
             .resolve(&first_target, EXPRESSION, || compile(EXPRESSION))
@@ -272,7 +326,8 @@ mod tests {
         let state = Arc::new(StargateState::new());
         let target = RoutingTargetKey::new(None, "model");
         let snapshot = register_target(&state, &target).await;
-        let cache = DynamicConfigCache::new(state, Duration::from_secs(60));
+        let cache =
+            DynamicConfigCache::new(state, Duration::from_secs(60), DYNAMIC_CONFIG_MAX_ENTRIES);
         let (mut current, _) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
@@ -303,7 +358,8 @@ mod tests {
         let state = Arc::new(StargateState::new());
         let target = RoutingTargetKey::new(None, "model");
         let snapshot = register_target(&state, &target).await;
-        let cache = DynamicConfigCache::new(state, Duration::from_millis(50));
+        let cache =
+            DynamicConfigCache::new(state, Duration::from_millis(50), DYNAMIC_CONFIG_MAX_ENTRIES);
         let (first, _) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
@@ -324,8 +380,11 @@ mod tests {
 
     #[test]
     fn test_hit_does_not_wait_for_concurrent_rebuild() {
-        let cache =
-            DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_secs(60));
+        let cache = DynamicConfigCache::new(
+            Arc::new(StargateState::new()),
+            Duration::from_secs(60),
+            DYNAMIC_CONFIG_MAX_ENTRIES,
+        );
         let target = RoutingTargetKey::new(None, "model");
         let (current, _) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
@@ -354,7 +413,11 @@ mod tests {
 
     #[test]
     fn test_hits_keep_entry_alive_past_idle_window() {
-        let cache = DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_secs(1));
+        let cache = DynamicConfigCache::new(
+            Arc::new(StargateState::new()),
+            Duration::from_secs(1),
+            DYNAMIC_CONFIG_MAX_ENTRIES,
+        );
         let target = RoutingTargetKey::new(None, "model");
         let (first, _) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
@@ -372,8 +435,11 @@ mod tests {
     #[test]
     fn test_failed_build_preserves_cache_contents() {
         for has_entry in [false, true] {
-            let cache =
-                DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_secs(60));
+            let cache = DynamicConfigCache::new(
+                Arc::new(StargateState::new()),
+                Duration::from_secs(60),
+                DYNAMIC_CONFIG_MAX_ENTRIES,
+            );
             let target = RoutingTargetKey::new(None, "model");
             let before = has_entry.then(|| {
                 cache
@@ -398,8 +464,11 @@ mod tests {
 
     #[test]
     fn test_concurrent_resolve_builds_once_and_reuses_instance() {
-        let cache =
-            DynamicConfigCache::new(Arc::new(StargateState::new()), Duration::from_secs(60));
+        let cache = DynamicConfigCache::new(
+            Arc::new(StargateState::new()),
+            Duration::from_secs(60),
+            DYNAMIC_CONFIG_MAX_ENTRIES,
+        );
         let target = RoutingTargetKey::new(None, "model");
         let instances = LoadBalancerTargetState::default();
         let builds = AtomicUsize::new(0);

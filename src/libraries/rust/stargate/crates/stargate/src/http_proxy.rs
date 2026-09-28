@@ -325,6 +325,7 @@ mod test_support {
             dynamic_config: Arc::new(super::DynamicConfigCache::new(
                 state.clone(),
                 crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
             )),
             state,
             quic_proxy: Arc::new(

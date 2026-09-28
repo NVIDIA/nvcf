@@ -450,7 +450,9 @@ configuration. Static configuration behavior is unchanged.
 
 Unchanged expression bytes reuse the configuration and load balancer for the same
 routing key and model. Changed bytes replace that entry. Entries expire after
-15 minutes without access; cleanup occurs during cache operations.
+15 minutes without access; cleanup occurs during cache operations. Each router
+process keeps at most 16384 entries. Past that limit, a request for an uncached
+target still routes, but its configuration is rebuilt for each request.
 
 Invalid routing headers return HTTP `400` before backend selection, with
 `content-type: application/json`, `x-stargate-error-code: <class>`, and body

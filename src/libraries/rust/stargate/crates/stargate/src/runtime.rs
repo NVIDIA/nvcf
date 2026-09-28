@@ -369,6 +369,7 @@ impl StargateRuntime {
                 crate::load_balancer::dynamic_config::DynamicConfigCache::new(
                     service.state(),
                     crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
+                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
                 ),
             ),
             state: service.state(),
