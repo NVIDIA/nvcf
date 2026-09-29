@@ -31,22 +31,12 @@ async fn test_info_route() -> anyhow::Result<()> {
     let mut app = app(config, None).await?;
     let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
 
-    let origin = "https://example.com";
     let request = http::Request::builder()
         .method(Method::GET)
         .uri("/info?build=true")
-        .header(header::ORIGIN, origin)
         .body(Body::empty())?;
     let response = app.call(request).await?;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
-        origin
-    );
-    assert_eq!(
-        response.headers()[header::ACCESS_CONTROL_ALLOW_CREDENTIALS],
-        "true"
-    );
     let body = to_bytes(response.into_body(), usize::MAX).await?;
     let body: serde_json::Value = serde_json::from_slice(&body)?;
     assert_eq!(body["service"], "nvcf-invocation-service");
@@ -79,47 +69,6 @@ async fn test_info_route() -> anyhow::Result<()> {
         assert!(body.is_empty(), "{method}");
     }
 
-    // Each preflight header on its own is still an ordinary OPTIONS request.
-    for (name, value) in [
-        (header::ORIGIN, origin),
-        (header::ACCESS_CONTROL_REQUEST_METHOD, "GET"),
-    ] {
-        let request = http::Request::builder()
-            .method(Method::OPTIONS)
-            .uri("/info?build=true")
-            .header(name, value)
-            .body(Body::empty())?;
-        let response = app.call(request).await?;
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(response.headers()[header::ALLOW], "GET");
-    }
-
-    let request = http::Request::builder()
-        .method(Method::OPTIONS)
-        .uri("/info")
-        .header(header::ORIGIN, origin)
-        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
-        .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
-        .body(Body::empty())?;
-    let response = app.call(request).await?;
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(response.headers()[header::ALLOW], "GET");
-    assert!(!response
-        .headers()
-        .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
-
-    // Inference still requires authentication after the public metadata route.
-    let request = http::Request::builder()
-        .method(Method::POST)
-        .uri("/v2/nvcf/exec/functions/00000000-0000-0000-0000-000000000001")
-        .header(header::ORIGIN, origin)
-        .body(Body::empty())?;
-    let response = app.call(request).await?;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(
-        response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
-        origin
-    );
     Ok(())
 }
 

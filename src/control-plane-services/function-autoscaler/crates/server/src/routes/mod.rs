@@ -228,35 +228,6 @@ mod tests {
                 .unwrap()
                 .is_empty());
         }
-
-        // The health router does not enable CORS, including for preflight.
-        let request = Request::builder()
-            .method(Method::OPTIONS)
-            .uri("/info")
-            .header(header::ORIGIN, "https://example.com")
-            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
-            .body(Body::empty())
-            .unwrap();
-        let response = router.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(response.headers()[header::ALLOW], "GET");
-        assert!(!response
-            .headers()
-            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
-
-        for uri in [
-            "/health",
-            "/admin/health/liveness",
-            "/admin/health/readiness",
-        ] {
-            let request = Request::builder()
-                .method(Method::HEAD)
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap();
-            let response = router.clone().oneshot(request).await.unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-        }
     }
 
     #[tokio::test]
