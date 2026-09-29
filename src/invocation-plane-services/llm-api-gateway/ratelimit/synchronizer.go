@@ -17,7 +17,14 @@ limitations under the License.
 
 package ratelimit
 
-import "context"
+import (
+	"context"
+	"errors"
+	"sync"
+)
+
+// ErrSynchronizerStopped is returned by Send after the synchronizer stopped.
+var ErrSynchronizerStopped = errors.New("rate limit synchronizer is stopped")
 
 type RateLimitEvent struct {
 	Key         string
@@ -45,3 +52,55 @@ func (s nopSynchronizer) Send(context.Context, *RateLimitEvent) error { return n
 func (s nopSynchronizer) Start() {}
 
 func (s nopSynchronizer) Stop() {}
+
+// eventQueue buffers rate-limit events between Send and a synchronizer's
+// publish processors. Requests still finishing during shutdown can call Send
+// after Stop, so a send after close returns ErrSynchronizerStopped instead of
+// panicking on the closed channel.
+type eventQueue struct {
+	mu     sync.RWMutex
+	ch     chan *RateLimitEventWireFormat
+	closed bool
+}
+
+// open creates the channel the publish processors read from.
+func (q *eventQueue) open(size int) <-chan *RateLimitEventWireFormat {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.ch = make(chan *RateLimitEventWireFormat, size)
+	return q.ch
+}
+
+func (q *eventQueue) send(event *RateLimitEventWireFormat) error {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	if q.ch == nil || q.closed {
+		return ErrSynchronizerStopped
+	}
+	q.ch <- event
+	return nil
+}
+
+// close stops accepting events and reports whether the queue was open, so the
+// caller knows to wait for its processors.
+func (q *eventQueue) close() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.ch == nil || q.closed {
+		q.closed = true
+		return false
+	}
+	q.closed = true
+	close(q.ch)
+	return true
+}
+
+// length reports the queued events, or -1 before the queue is opened.
+func (q *eventQueue) length() int64 {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	if q.ch == nil {
+		return -1
+	}
+	return int64(len(q.ch))
+}

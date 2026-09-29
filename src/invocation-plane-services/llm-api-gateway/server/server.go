@@ -47,6 +47,7 @@ func New(
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+	teardown := newTeardown(e)
 	e.Use(echoMiddleware.Recover())
 	e.Use(api.NewContextMiddleware(cfg))
 	e.Use(api.NewNVCFAuthMiddleware(authClient))
@@ -57,7 +58,7 @@ func New(
 	e.Server.IdleTimeout = cfg.Server.IdleTimeout
 
 	if closer, ok := authClient.(io.Closer); ok {
-		e.Server.RegisterOnShutdown(func() {
+		teardown.add(func() {
 			_ = closer.Close()
 		})
 	}
@@ -130,7 +131,7 @@ func newRateLimiter(cfg *config.Config, e *echo.Echo) (ratelimit.RateLimiter, er
 		return nil, err
 	}
 
-	e.Server.RegisterOnShutdown(func() {
+	teardownOf(e).add(func() {
 		olricCollector.Stop()
 
 		// The sync synchronizer's Stop() blocks on the publisher loop draining

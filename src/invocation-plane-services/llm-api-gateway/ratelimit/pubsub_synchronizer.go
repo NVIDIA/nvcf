@@ -51,12 +51,7 @@ func NewPubSubSynchronizer(
 		clusterName: clusterName,
 	}
 
-	telemetry.RegisterRateLimitSynchronizerQueueLength(func() int64 {
-		if p.resultChan == nil {
-			return -1
-		}
-		return int64(len(p.resultChan))
-	})
+	telemetry.RegisterRateLimitSynchronizerQueueLength(p.events.length)
 
 	return p
 }
@@ -66,7 +61,7 @@ type pubSubSynchronizer struct {
 	publisher   orionpubsub.Publisher
 	clusterName string
 	wg          sync.WaitGroup
-	resultChan  chan *RateLimitEventWireFormat
+	events      eventQueue
 }
 
 func (s *pubSubSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) error {
@@ -85,7 +80,9 @@ func (s *pubSubSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) erro
 	)
 
 	queueStart := time.Now()
-	s.resultChan <- &data
+	if err := s.events.send(&data); err != nil {
+		return err
+	}
 	telemetry.Record(
 		telemetry.RateLimitSynchronizerQueueWait(),
 		time.Since(queueStart).Seconds(),
@@ -95,27 +92,26 @@ func (s *pubSubSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) erro
 }
 
 func (s *pubSubSynchronizer) Start() {
-	s.resultChan = make(chan *RateLimitEventWireFormat, publishResultBufferSize)
+	events := s.events.open(publishResultBufferSize)
 	for i := range numPublishResultProcessors {
 		s.wg.Go(func() {
-			s.processor(i)
+			s.processor(i, events)
 		})
 	}
 }
 
 func (s *pubSubSynchronizer) Stop() {
 	zlog.Info().Msg("PubSubSynchronizer stopping")
-	if s.resultChan != nil {
-		close(s.resultChan)
+	if s.events.close() {
 		s.wg.Wait()
 	}
 	s.client.Close()
 }
 
-func (s *pubSubSynchronizer) processor(i int) {
+func (s *pubSubSynchronizer) processor(i int, events <-chan *RateLimitEventWireFormat) {
 	for {
-		// This will block until there is something on the resultChan to pick up.
-		data, ok := <-s.resultChan
+		// This will block until there is something on the queue to pick up.
+		data, ok := <-events
 
 		if !ok {
 			// Channel closed. Stop this goroutine

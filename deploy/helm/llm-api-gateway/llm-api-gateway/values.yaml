@@ -16,8 +16,9 @@
 llmApiGateway:
   replicaCount: 3
 
-  # Seconds Kubernetes waits after SIGTERM before killing the pod. Keep it
-  # above config.shutdownTimeout so in-flight requests can finish draining.
+  # Seconds Kubernetes waits after SIGTERM before killing the pod. Keep it at
+  # least 10s above config.shutdownTimeout: the drain and dependency teardown
+  # share that timeout, and the final telemetry flush can take up to 5s more.
   terminationGracePeriodSeconds: 75
 
   podDisruptionBudget:

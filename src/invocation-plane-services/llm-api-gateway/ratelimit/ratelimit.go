@@ -164,7 +164,9 @@ func (rl *rateLimiter) checkLimit(
 			RequestID:   requestID,
 			MustConsume: mustConsume,
 		}
-		if err := rl.synchronizer.Send(ctx, rle); err != nil {
+		if err := rl.synchronizer.Send(ctx, rle); errors.Is(err, ErrSynchronizerStopped) {
+			log.Warn().Str("request_id", requestID).Msg("dropped rate limit event: synchronizer stopped during shutdown")
+		} else if err != nil {
 			log.Error().Interface("rate limit event", rle).Msg("failed to send rate limit event")
 		}
 	}
