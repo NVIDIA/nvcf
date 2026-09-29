@@ -27,7 +27,7 @@ pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
     Json(nvcf_info::info_response!("nvcf-invocation-service"))
 }
 
-// This runs outside CorsLayer so OPTIONS reaches the /info method check.
+/// Rejects non-GET `/info` requests before CorsLayer can handle OPTIONS.
 pub async fn info_method_guard(request: Request, next: Next) -> Response {
     if request.uri().path() == "/info" && request.method() != Method::GET {
         (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "GET")]).into_response()

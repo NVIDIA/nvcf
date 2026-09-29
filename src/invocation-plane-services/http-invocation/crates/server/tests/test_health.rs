@@ -54,10 +54,13 @@ async fn test_info_route() -> anyhow::Result<()> {
         Method::CONNECT,
         Method::from_bytes(b"CUSTOM")?,
     ] {
-        let request = http::Request::builder()
-            .method(method.clone())
-            .uri("/info")
-            .body(Body::empty())?;
+        let mut request = http::Request::builder().method(method.clone()).uri("/info");
+        if method == Method::OPTIONS {
+            request = request
+                .header(header::ORIGIN, "http://localhost")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, Method::GET.as_str());
+        }
+        let request = request.body(Body::empty())?;
         let response = app.call(request).await?;
         assert_eq!(
             response.status(),

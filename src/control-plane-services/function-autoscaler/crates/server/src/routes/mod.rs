@@ -63,6 +63,7 @@ pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
     Json(nvcf_info::info_response!("nvcf-function-autoscaler"))
 }
 
+/// Serves build metadata for GET and rejects other methods.
 async fn info(method: Method) -> Response {
     if method == Method::GET {
         get_info().await.into_response()
