@@ -113,10 +113,29 @@ Each dedicated pool must span the availability zones — that is, have **capacit
 in every AZ you want to spread across** (both zones in a 2-AZ cluster, all three
 in a 3-AZ cluster). A 3-node Cassandra pool concentrated in one AZ cannot spread
 across zones no matter what the stack requests, and with `enabled: false` the
-pods fall back to default scheduling regardless of your labels. If you run a
-single shared pool instead, set `global.nodeSelectors.enabled: true` with
-`global.nodeSelectors.all` and size it to hold every replica on distinct
-nodes/AZs.
+pods fall back to default scheduling regardless of your labels.
+
+`global.nodeSelectors.all` is a fallback, not an override: it only applies to a
+class (`controlplane`/`cassandra`/`vault`/`worker`) whose own selector is unset.
+The stack's `base.yaml` ships `controlplane`/`cassandra`/`vault` already set to
+their own dedicated-pool values, so setting `all` alone has no effect on them.
+To run a single shared pool instead, set `global.nodeSelectors.enabled: true`,
+set `global.nodeSelectors.all`, and also null out the per-class selectors you
+want to fall back to it:
+
+```yaml
+global:
+  nodeSelectors:
+    enabled: true
+    all:
+      key: nvcf.nvidia.com/workload
+      value: system
+    controlplane: null
+    cassandra: null
+    vault: null
+```
+
+Size the shared pool to hold every replica on distinct nodes/AZs.
 
 ## Enabling HA
 
