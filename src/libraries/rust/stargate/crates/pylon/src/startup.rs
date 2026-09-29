@@ -16,6 +16,7 @@
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,9 +28,9 @@ use pylon_lib::{
     InferenceServerRegistrationConfig, MetricsServerHandle, ModelDiscoveryConfig,
     ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource, PylonMetrics,
     PylonQueueMismatchRetryConfig, PylonRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig,
-    QuicHttpTunnelHandle, RequestQualityMonitorConfig, StatsCollectorConfig, StatsCollectorHandle,
-    TunnelForwardingConfig, UpstreamBackend, UpstreamHealthPaths, start_engine_stats_stream,
-    start_metrics_server, start_model_lifecycle, start_quic_http_tunnel,
+    QuicHttpTunnelHandle, RequestQualityMonitorConfig, StartupHealthWait, StatsCollectorConfig,
+    StatsCollectorHandle, TunnelForwardingConfig, UpstreamBackend, UpstreamHealthPaths,
+    start_engine_stats_stream, start_metrics_server, start_model_lifecycle, start_quic_http_tunnel,
     start_stats_collector_with_engine_stats, stats_aggregator_update_channel,
 };
 use reqwest::header::HeaderName;
@@ -51,7 +52,16 @@ pub(super) async fn run(args: Args) -> Result<()> {
         "pylon_upstream_http_request",
         None,
     )?;
-    let runtime = start_pylon_runtime(&args, &plan).await?;
+    // Handle SIGTERM and SIGINT before startup begins. With --wait-for-upstream
+    // startup can wait indefinitely, and as PID 1 in a container Pylon would
+    // otherwise ignore SIGTERM until the kubelet escalates to SIGKILL.
+    let termination = wait_for_termination_signal();
+    tokio::pin!(termination);
+    let Some(runtime) =
+        unless_terminated(start_pylon_runtime(&args, &plan), termination.as_mut()).await?
+    else {
+        return Ok(());
+    };
 
     log_startup_complete(
         &args.stargate_address,
@@ -61,9 +71,30 @@ pub(super) async fn run(args: Args) -> Result<()> {
         &runtime.initial_model_ids,
     );
     info!("pylon running");
-    runtime
-        .run_until_shutdown(wait_for_termination_signal())
-        .await
+    runtime.run_until_shutdown(termination).await
+}
+
+/// Runs a startup phase unless SIGTERM or SIGINT arrives first. The signal
+/// future is polled before the phase, so its handlers are installed before any
+/// wait starts. An interrupted phase is dropped, which aborts the tasks it has
+/// started, and the result is `Ok(None)`: nothing has registered yet, so there
+/// is nothing to drain.
+async fn unless_terminated<T, S>(
+    phase: impl Future<Output = Result<T>>,
+    signal: Pin<&mut S>,
+) -> Result<Option<T>>
+where
+    S: Future<Output = std::io::Result<&'static str>>,
+{
+    tokio::select! {
+        biased;
+        result = signal => {
+            let signal = result.context("failed to receive pylon termination signal")?;
+            info!(signal, "received shutdown signal before pylon startup completed; exiting");
+            Ok(None)
+        }
+        result = phase => result.map(Some),
+    }
 }
 
 fn log_startup_complete(
@@ -115,7 +146,8 @@ pub(crate) struct PylonStartupPlan {
     force_chat_completions_include_usage: bool,
     output_token_calibration: OutputTokenCalibrationMode,
     health_paths: UpstreamHealthPaths,
-    startup_health_wait: Duration,
+    startup_health_wait: StartupHealthWait,
+    registration_reconnect_max_backoff: Duration,
     metrics_addr: SocketAddr,
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
@@ -151,6 +183,7 @@ impl BackendTunnelStartup {
 
 impl PylonStartupPlan {
     pub(crate) fn from_args(args: &Args) -> Result<Self> {
+        validate_grpc_tls_ca_requires_https(args)?;
         let model_initialization = model_initialization_from_args(args)?;
         let model_source = model_source_from_args(args)?;
         Ok(Self {
@@ -174,7 +207,8 @@ impl PylonStartupPlan {
             force_chat_completions_include_usage: args.force_chat_completions_include_usage,
             output_token_calibration: args.output_token_calibration,
             health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
-            startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
+            startup_health_wait: startup_health_wait_from_args(args),
+            registration_reconnect_max_backoff: registration_reconnect_max_backoff_from_args(args)?,
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
@@ -192,6 +226,41 @@ impl PylonStartupPlan {
             ModelSource::Static(model_ids) => Some(model_ids),
             ModelSource::Discovered(_) => None,
         }
+    }
+}
+
+/// A custom gRPC CA only applies to HTTPS, so a plaintext --stargate-address
+/// with one configured can never connect. Reject it before contacting anything
+/// instead of retrying the registration stream forever.
+fn validate_grpc_tls_ca_requires_https(args: &Args) -> Result<()> {
+    let Some(path) = args.grpc_tls_ca_cert_path.as_deref() else {
+        return Ok(());
+    };
+    ensure!(
+        args.stargate_address.trim().starts_with("https://"),
+        "--grpc-tls-ca-cert-path (STARGATE_GRPC_TLS_CA_CERT_PATH) is set to {path} but \
+         --stargate-address {:?} is not an https:// URL; a custom gRPC CA only applies to \
+         HTTPS, so use an https:// Stargate address or unset the CA",
+        args.stargate_address
+    );
+    Ok(())
+}
+
+fn registration_reconnect_max_backoff_from_args(args: &Args) -> Result<Duration> {
+    ensure!(
+        args.registration_reconnect_max_backoff_ms > 0,
+        "--registration-reconnect-max-backoff-ms must be greater than zero"
+    );
+    Ok(Duration::from_millis(
+        args.registration_reconnect_max_backoff_ms,
+    ))
+}
+
+fn startup_health_wait_from_args(args: &Args) -> StartupHealthWait {
+    if args.wait_for_upstream {
+        StartupHealthWait::Forever
+    } else {
+        StartupHealthWait::Deadline(Duration::from_millis(args.upstream_health_wait_ms))
     }
 }
 
@@ -556,6 +625,7 @@ fn registration_config_from_plan(
         cluster_id: plan.cluster_id.clone(),
         inference_server_url,
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
+        reconnect_max_backoff: plan.registration_reconnect_max_backoff,
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
         grpc_tls_ca_cert_pem,
@@ -751,7 +821,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     use axum::extract::State;
@@ -1150,7 +1220,7 @@ mod tests {
                     ..BringupConfig::default()
                 },
                 health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::ZERO,
+                startup_health_wait: StartupHealthWait::Deadline(Duration::ZERO),
             },
             PylonRuntimeState::default(),
             &stats_collector,
@@ -1313,7 +1383,10 @@ mod tests {
                 .probe_path(),
             "/health"
         );
-        assert_eq!(default_plan.startup_health_wait, Duration::from_secs(60));
+        assert_eq!(
+            default_plan.startup_health_wait,
+            StartupHealthWait::Deadline(Duration::from_secs(60))
+        );
 
         let (_, configured_plan) = startup(&[
             "--upstream-health-path",
@@ -1329,8 +1402,98 @@ mod tests {
         );
         assert_eq!(
             configured_plan.startup_health_wait,
-            Duration::from_millis(5000)
+            StartupHealthWait::Deadline(Duration::from_millis(5000))
         );
+
+        let (_, forever_plan) =
+            startup(&["--upstream-health-wait-ms", "5000", "--wait-for-upstream"]);
+        assert_eq!(forever_plan.startup_health_wait, StartupHealthWait::Forever);
+    }
+
+    #[tokio::test]
+    async fn startup_phase_runs_after_the_termination_signal_is_installed() {
+        let signal_polled = Arc::new(AtomicBool::new(false));
+        let polled = signal_polled.clone();
+        let signal = async move {
+            polled.store(true, Ordering::SeqCst);
+            std::future::pending::<std::io::Result<&'static str>>().await
+        };
+        tokio::pin!(signal);
+
+        let phase_saw_signal = unless_terminated(
+            async { Ok(signal_polled.load(Ordering::SeqCst)) },
+            signal.as_mut(),
+        )
+        .await
+        .expect("a successful phase should return its value");
+        assert_eq!(phase_saw_signal, Some(true));
+
+        let error = unless_terminated(
+            async { Err::<(), _>(anyhow::anyhow!("startup failed")) },
+            signal.as_mut(),
+        )
+        .await
+        .expect_err("a failed phase should return its error");
+        assert_eq!(error.to_string(), "startup failed");
+    }
+
+    #[tokio::test]
+    async fn termination_signal_interrupts_a_forever_upstream_wait_before_any_stargate_rpc() {
+        let control_plane = TestControlPlane::spawn().await;
+        let stargate_address = format!("http://{}", control_plane.addr);
+        let args = Args::try_parse_from([
+            "pylon",
+            "--upstream-http-base-url",
+            "http://127.0.0.1:1",
+            "--stargate-address",
+            stargate_address.as_str(),
+            "--quic-listen-addr",
+            "127.0.0.1:0",
+            "--metrics-host",
+            "127.0.0.1",
+            "--metrics-port",
+            "0",
+            "--engine-stats-stream",
+            "off",
+            "--model-name",
+            "model-a",
+            "--initial-input-tps",
+            "100",
+            "--active-canary-interval-ms",
+            "0",
+            "--upstream-health-wait-ms",
+            "0",
+            "--wait-for-upstream",
+        ])
+        .expect("args should parse");
+        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let signal_after = Duration::from_millis(1200);
+        let signal = async move {
+            tokio::time::sleep(signal_after).await;
+            Ok("SIGTERM")
+        };
+        tokio::pin!(signal);
+
+        let started = tokio::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            unless_terminated(start_pylon_runtime(&args, &plan), signal.as_mut()),
+        )
+        .await
+        .expect("a termination signal should interrupt startup promptly")
+        .expect("an interrupted startup is a clean exit");
+
+        assert!(
+            outcome.is_none(),
+            "an unhealthy upstream must not finish startup"
+        );
+        assert!(
+            started.elapsed() >= signal_after,
+            "--wait-for-upstream should outlast --upstream-health-wait-ms 0"
+        );
+        assert!(started.elapsed() < signal_after + Duration::from_secs(1));
+        control_plane.assert_no_calls();
+        control_plane.shutdown().await;
     }
 
     #[test]
@@ -1503,7 +1666,12 @@ mod tests {
             .into_bytes();
         std::fs::write(&path, &pem).expect("test CA should write");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+        let (args, _) = startup(&[
+            "--stargate-address",
+            "https://stargate.example.test:50071",
+            "--grpc-tls-ca-cert-path",
+            &path,
+        ]);
 
         assert_eq!(
             load_grpc_tls_ca_cert(&args)
@@ -1593,6 +1761,8 @@ mod tests {
         let (args, _) = startup(&[
             "--backend-connectivity",
             "reverse",
+            "--stargate-address",
+            "https://stargate.example.test:50071",
             "--tls-cert-path",
             &shared_path,
             "--grpc-tls-ca-cert-path",
@@ -1635,7 +1805,12 @@ mod tests {
             let path = root.path().join(format!("{name}-grpc-ca.pem"));
             std::fs::write(&path, pem).expect("test CA should write");
             let path = path.to_string_lossy().into_owned();
-            let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+            let (args, _) = startup(&[
+                "--stargate-address",
+                "https://stargate.example.test:50071",
+                "--grpc-tls-ca-cert-path",
+                &path,
+            ]);
 
             let error = load_grpc_tls_ca_cert(&args).expect_err("invalid gRPC CA should fail");
             let message = format!("{error:#}");
@@ -1662,7 +1837,12 @@ mod tests {
         );
         std::fs::write(&path, pem).expect("test CA should write");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+        let (args, _) = startup(&[
+            "--stargate-address",
+            "https://stargate.example.test:50071",
+            "--grpc-tls-ca-cert-path",
+            &path,
+        ]);
 
         let error = load_grpc_tls_ca_cert(&args)
             .expect_err("a bundle with an ignored certificate should fail");
@@ -1677,13 +1857,146 @@ mod tests {
         let root = tempfile::tempdir().expect("test directory should create");
         let path = root.path().join("missing-grpc-ca.pem");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+        let (args, _) = startup(&[
+            "--stargate-address",
+            "https://stargate.example.test:50071",
+            "--grpc-tls-ca-cert-path",
+            &path,
+        ]);
 
         let error = load_grpc_tls_ca_cert(&args).expect_err("missing gRPC CA should fail");
         let message = format!("{error:#}");
 
         assert!(message.contains("load gRPC TLS CA certificate"));
         assert!(message.contains(&path));
+    }
+
+    fn startup_plan_error(extra: &[&str]) -> String {
+        let mut argv = vec![
+            "pylon",
+            "--upstream-http-base-url",
+            "http://127.0.0.1:8090/",
+            "--initial-input-tps",
+            "100",
+        ];
+        argv.extend_from_slice(extra);
+        let args = <Args as Parser>::try_parse_from(argv).expect("args should parse");
+        match PylonStartupPlan::from_args(&args) {
+            Ok(_) => panic!("startup plan should fail for {extra:?}"),
+            Err(error) => format!("{error:#}"),
+        }
+    }
+
+    #[test]
+    fn custom_grpc_ca_requires_an_https_stargate_address() {
+        for address in [
+            "127.0.0.1:50071",
+            "http://stargate.example.test:50071",
+            "stargate.example.test:443",
+        ] {
+            let message = startup_plan_error(&[
+                "--stargate-address",
+                address,
+                "--grpc-tls-ca-cert-path",
+                "/etc/pylon/grpc-ca.pem",
+            ]);
+
+            assert!(message.contains("--grpc-tls-ca-cert-path"), "{message}");
+            assert!(message.contains("/etc/pylon/grpc-ca.pem"), "{message}");
+            assert!(message.contains(address), "{message}");
+            assert!(message.contains("https://"), "{message}");
+        }
+
+        // Without a custom CA a plaintext address is valid, and with an HTTPS
+        // address the CA check passes before the bundle is read.
+        startup(&["--stargate-address", "http://stargate.example.test:50071"]);
+        startup(&[
+            "--stargate-address",
+            " https://stargate.example.test:50071",
+            "--grpc-tls-ca-cert-path",
+            "/etc/pylon/grpc-ca.pem",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn custom_grpc_ca_with_plaintext_stargate_address_exits_before_any_stargate_rpc() {
+        let control_plane = TestControlPlane::spawn().await;
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("grpc-ca.pem");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem();
+        std::fs::write(&path, pem).expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let stargate_address = format!("http://{}", control_plane.addr);
+        let args = Args::try_parse_from([
+            "pylon",
+            "--upstream-http-base-url",
+            "http://127.0.0.1:1",
+            "--stargate-address",
+            stargate_address.as_str(),
+            "--grpc-tls-ca-cert-path",
+            path.as_str(),
+            "--metrics-host",
+            "127.0.0.1",
+            "--metrics-port",
+            "0",
+            "--model-name",
+            "model-a",
+            "--initial-input-tps",
+            "100",
+        ])
+        .expect("args should parse");
+
+        let error = tokio::time::timeout(Duration::from_secs(5), run(args))
+            .await
+            .expect("a custom gRPC CA with a plaintext address should fail fast")
+            .expect_err("a custom gRPC CA with a plaintext address should exit with an error");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("--grpc-tls-ca-cert-path"), "{message}");
+        assert!(message.contains(&stargate_address), "{message}");
+        control_plane.assert_no_calls();
+        control_plane.shutdown().await;
+    }
+
+    #[test]
+    fn registration_reconnect_max_backoff_defaults_to_thirty_seconds_and_reaches_registration() {
+        for (extra, expected) in [
+            (&[][..], Duration::from_secs(30)),
+            (
+                &["--registration-reconnect-max-backoff-ms", "2500"][..],
+                Duration::from_millis(2500),
+            ),
+        ] {
+            let (args, plan) = startup(extra);
+            let config = registration_config_from_plan(
+                &args,
+                &plan,
+                test_forwarding(&plan),
+                "quic://127.0.0.1:4567".to_string(),
+                None,
+                None,
+            );
+
+            assert_eq!(config.reconnect_max_backoff, expected, "{extra:?}");
+        }
+        assert_eq!(
+            pylon_lib::DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF,
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn zero_registration_reconnect_max_backoff_fails_the_startup_plan() {
+        assert_eq!(
+            startup_plan_error(&["--registration-reconnect-max-backoff-ms", "0"]),
+            "--registration-reconnect-max-backoff-ms must be greater than zero"
+        );
     }
 
     #[test]
@@ -1731,7 +2044,7 @@ mod tests {
                     ..BringupConfig::default()
                 },
                 health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::ZERO,
+                startup_health_wait: StartupHealthWait::Deadline(Duration::ZERO),
             },
             runtime_state.clone(),
             &stats_collector,

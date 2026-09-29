@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use tonic::Status;
 use tracing::warn;
 
+use crate::auth::RegistrationAuthFailure;
 use crate::metrics::StargateMetrics;
 use stargate_proto::pb::{InferenceServerRegistration, InferenceServerStatus, ModelStats};
 
@@ -32,8 +33,8 @@ mod reservations;
 mod snapshots;
 
 pub use keys::RoutingTargetKey;
+pub(crate) use snapshots::{ActiveModelServer, RoutingTargetSnapshot, SelectedRoutedCluster};
 pub use snapshots::{RoutedClusterSnapshot, RoutedInferenceServerSnapshot};
-pub(crate) use snapshots::{RoutingTargetSnapshot, SelectedRoutedCluster};
 
 pub(crate) use keys::RegistrationIdentity;
 #[cfg(test)]
@@ -67,6 +68,13 @@ impl StargateState {
         identity: &RegistrationIdentity,
     ) -> Result<RunningRegistration, Status> {
         self.registrations.begin_registration(identity)
+    }
+
+    /// Counts a registration stream rejected by authentication.
+    pub(crate) fn record_registration_auth_failure(&self, reason: RegistrationAuthFailure) {
+        if let Some(metrics) = self.routing.metrics() {
+            metrics.registration_auth_failures_total(reason).inc();
+        }
     }
 
     /// Ends `running` and removes its routes. Returns the model ids that were
@@ -202,6 +210,21 @@ impl StargateState {
     ) -> Vec<String> {
         self.routing
             .list_active_models(routing_key, model_ids)
+            .await
+    }
+
+    /// Returns one entry per active inference server of each routable target
+    /// for `routing_key`, optionally restricted to `model_ids`, sorted by model
+    /// id, then inference server id. Only backends the proxy can route to are
+    /// listed: inactive models and active models without a connection RTT are
+    /// never published to the routing state.
+    pub(crate) async fn list_active_model_servers(
+        &self,
+        routing_key: Option<&str>,
+        model_ids: &[String],
+    ) -> Vec<ActiveModelServer> {
+        self.routing
+            .list_active_model_servers(routing_key, model_ids)
             .await
     }
 

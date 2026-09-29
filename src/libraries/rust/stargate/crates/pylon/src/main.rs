@@ -56,7 +56,7 @@ struct Args {
     /// Timeout for one model-discovery request in milliseconds
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     model_discovery_request_timeout_ms: u64,
-    /// Stargate gRPC address for registration
+    /// Stargate gRPC address for registration. Must be https:// when a custom gRPC CA is configured
     #[arg(long, default_value = "127.0.0.1:50071", value_name = "ADDR")]
     stargate_address: String,
     /// Inference server id for registration
@@ -92,6 +92,9 @@ struct Args {
     /// How long startup retries the upstream health probe before exiting. `0` probes once
     #[arg(long, default_value_t = 60000, value_name = "MS")]
     upstream_health_wait_ms: u64,
+    /// Retry the startup upstream health probe until it succeeds, ignoring --upstream-health-wait-ms
+    #[arg(long, default_value_t = false, env = "PYLON_WAIT_FOR_UPSTREAM")]
+    wait_for_upstream: bool,
     /// Run local input-TPS calibration before contacting Stargate. Use only when this is the cluster's sole Pylon
     #[arg(long, default_value_t = false)]
     do_calibration: bool,
@@ -140,6 +143,14 @@ struct Args {
     /// Minimum interval between registration/stat updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
+    /// Cap for the exponential delay between registration stream reconnects to one router
+    #[arg(
+        long,
+        default_value_t = 30000,
+        env = "PYLON_REGISTRATION_RECONNECT_MAX_BACKOFF_MS",
+        value_name = "MS"
+    )]
+    registration_reconnect_max_backoff_ms: u64,
     /// Static auth token for registration and reverse tunnel handshake
     #[arg(long, env = "STARGATE_AUTH_TOKEN", value_name = "TOKEN")]
     auth_token: Option<String>,
@@ -380,6 +391,23 @@ mod tests {
             argument.get_env(),
             Some(std::ffi::OsStr::new("STARGATE_GRPC_TLS_CA_CERT_PATH"))
         );
+    }
+
+    #[test]
+    fn registration_reconnect_max_backoff_declares_environment_binding() {
+        let command = <Args as clap::CommandFactory>::command();
+        let argument = command
+            .get_arguments()
+            .find(|argument| argument.get_id() == "registration_reconnect_max_backoff_ms")
+            .expect("registration reconnect backoff argument should exist");
+
+        assert_eq!(
+            argument.get_env(),
+            Some(std::ffi::OsStr::new(
+                "PYLON_REGISTRATION_RECONNECT_MAX_BACKOFF_MS"
+            ))
+        );
+        assert_eq!(parse_args("").registration_reconnect_max_backoff_ms, 30000);
     }
 
     #[test]
@@ -771,5 +799,21 @@ mod tests {
         assert_eq!(config.output_repetition_2gram_threshold_min, Some(0.8));
         assert_eq!(config.output_repetition_3gram_threshold_min, Some(0.9));
         assert_eq!(config.median_logprob_threshold_max, Some(-6.5));
+    }
+
+    #[test]
+    fn wait_for_upstream_defaults_off_and_declares_environment_binding() {
+        assert!(!parse_args("").wait_for_upstream);
+        assert!(parse_args("--wait-for-upstream").wait_for_upstream);
+
+        let command = <Args as clap::CommandFactory>::command();
+        let argument = command
+            .get_arguments()
+            .find(|argument| argument.get_id() == "wait_for_upstream")
+            .expect("wait-for-upstream argument should exist");
+        assert_eq!(
+            argument.get_env(),
+            Some(std::ffi::OsStr::new("PYLON_WAIT_FOR_UPSTREAM"))
+        );
     }
 }

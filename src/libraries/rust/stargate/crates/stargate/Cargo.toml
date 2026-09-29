@@ -37,6 +37,7 @@ stargate-tls = { workspace = true }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -66,13 +67,14 @@ http = { workspace = true }
 async-trait = { workspace = true }
 tokio-stream = { workspace = true }
 xxhash-rust = { workspace = true }
+sha2 = "=0.10.9"
+subtle = "=2.6.1"
 
 [dev-dependencies]
 hyper-util = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 prost = { workspace = true }
 reqwest = { workspace = true }
-serde_yaml_ng = { workspace = true }
 pylon-lib = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 

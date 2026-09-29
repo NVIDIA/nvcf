@@ -115,6 +115,19 @@ pub(super) async fn handle_reverse_webtransport_connect(
         bail!("QUIC routing_key does not match gRPC registration: {inference_server_id}");
     }
 
+    if let Some(cluster_id) = result.cluster_id.as_deref()
+        && cluster_id != registration.cluster_id()
+    {
+        warn!(
+            inference_server_id = %inference_server_id,
+            authenticated_cluster_id = %cluster_id,
+            registered_cluster_id = %registration.cluster_id(),
+            "reverse WebTransport rejected: cluster id mismatch"
+        );
+        send_webtransport_connect_response(&mut stream, StatusCode::FORBIDDEN).await?;
+        bail!("WebTransport cluster id mismatch with gRPC registration: {inference_server_id}");
+    }
+
     let Some(install) = registration.begin_reverse_connection_install() else {
         send_webtransport_connect_response(&mut stream, StatusCode::CONFLICT).await?;
         bail!("pending duplicate reverse WebTransport connection for: {inference_server_id}");

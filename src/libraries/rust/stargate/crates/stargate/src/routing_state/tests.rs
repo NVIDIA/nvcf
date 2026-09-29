@@ -111,6 +111,18 @@ impl RegistrationScenario {
             .unwrap()
     }
 
+    fn start_in_cluster(&self, id: &str, cluster_id: &str, port: u16) -> RunningRegistration {
+        self.state
+            .begin_registration(&RegistrationIdentity {
+                inference_server_id: id.to_string(),
+                cluster_id: cluster_id.to_string(),
+                inference_server_url: format!("quic://127.0.0.1:{port}"),
+                routing_key: self.routing_key.clone(),
+                reverse_tunnel: false,
+            })
+            .unwrap()
+    }
+
     fn update(
         &self,
         running: &RunningRegistration,
@@ -1145,6 +1157,147 @@ async fn list_active_models_ignores_empty_target_generations() {
     assert!(
         listed.is_empty(),
         "ListModels must not advertise targets without routable cluster generations: {listed:?}"
+    );
+}
+
+type ListedServer = (String, String, String);
+
+fn listed_servers(servers: Vec<ActiveModelServer>) -> Vec<ListedServer> {
+    servers
+        .into_iter()
+        .map(|server| {
+            (
+                server.model_id,
+                server.registration.inference_server_id().to_string(),
+                server.registration.cluster_id().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn listed(model_id: &str, inference_server_id: &str, cluster_id: &str) -> ListedServer {
+    (
+        model_id.to_string(),
+        inference_server_id.to_string(),
+        cluster_id.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn list_active_model_servers_lists_only_routable_backends() {
+    let scenario = RegistrationScenario::new(Some("rk-entries"));
+    let spark_b = scenario.start_in_cluster("spark-b", "cluster-spark", 1111);
+    let spark_a = scenario.start_in_cluster("spark-a", "cluster-spark", 2222);
+    let station = scenario.start_in_cluster("station", "station", 3333);
+    let without_rtt = scenario.start_in_cluster("no-rtt", "no-rtt", 4444);
+    let inactive = scenario.start_in_cluster("inactive", "inactive", 5555);
+    let other_key = scenario.start_keyed("other-key", 6666, "rk-other");
+
+    scenario.activate(&spark_b, "model-b").await;
+    let mut spark_a_update = scenario.update_default_stats(&spark_a, "model-b", Active);
+    spark_a_update.models.insert(
+        "model-a".to_string(),
+        InferenceServerModelRegistration {
+            stats: Some(ModelStats::default()),
+            status: Active as i32,
+        },
+    );
+    scenario.publish_connected(&spark_a, &spark_a_update).await;
+    scenario.activate(&station, "model-a").await;
+    scenario
+        .publish_default_stats(&without_rtt, "model-a", Active, None)
+        .await;
+    let mut inactive_update = scenario.update_default_stats(&inactive, "model-a", Inactive);
+    inactive_update.models.insert(
+        "model-inactive-only".to_string(),
+        InferenceServerModelRegistration {
+            stats: Some(ModelStats::default()),
+            status: Inactive as i32,
+        },
+    );
+    scenario
+        .publish_connected(&inactive, &inactive_update)
+        .await;
+    scenario.activate(&other_key, "model-a").await;
+
+    let servers = scenario
+        .state
+        .list_active_model_servers(Some("rk-entries"), &[])
+        .await;
+    assert!(
+        servers
+            .iter()
+            .filter(|server| server.registration.inference_server_id() == "spark-a")
+            .all(|server| Arc::ptr_eq(&server.registration, &spark_a.generation())),
+        "entries must carry the exact registration generation that published the route"
+    );
+    assert_eq!(
+        listed_servers(servers),
+        vec![
+            listed("model-a", "spark-a", "cluster-spark"),
+            listed("model-a", "station", "station"),
+            listed("model-b", "spark-a", "cluster-spark"),
+            listed("model-b", "spark-b", "cluster-spark"),
+        ]
+    );
+    assert_eq!(
+        scenario
+            .state
+            .list_active_models(Some("rk-entries"), &[])
+            .await,
+        vec!["model-a", "model-b"],
+        "entries and model ids must describe the same routable targets"
+    );
+
+    let filtered = scenario
+        .state
+        .list_active_model_servers(
+            Some("rk-entries"),
+            &[
+                "model-b".to_string(),
+                "model-inactive-only".to_string(),
+                "model-b".to_string(),
+            ],
+        )
+        .await;
+    assert_eq!(
+        listed_servers(filtered),
+        vec![
+            listed("model-b", "spark-a", "cluster-spark"),
+            listed("model-b", "spark-b", "cluster-spark"),
+        ]
+    );
+    assert_eq!(
+        listed_servers(
+            scenario
+                .state
+                .list_active_model_servers(Some("rk-other"), &[])
+                .await
+        ),
+        vec![listed("model-a", "other-key", "other-key")]
+    );
+    assert!(
+        scenario
+            .state
+            .list_active_model_servers(None, &[])
+            .await
+            .is_empty(),
+        "unscoped listing must not include keyed registrations"
+    );
+
+    scenario
+        .publish_default_stats(&station, "model-a", Inactive, Some(5))
+        .await;
+    scenario.state.end_registration(spark_a).await;
+    assert_eq!(
+        listed_servers(
+            scenario
+                .state
+                .list_active_model_servers(Some("rk-entries"), &[])
+                .await
+        ),
+        vec![listed("model-b", "spark-b", "cluster-spark")],
+        "deactivated and ended backends must leave the listing"
     );
 }
 

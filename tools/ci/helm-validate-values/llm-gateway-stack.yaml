@@ -1,0 +1,23 @@
+# CI-only values for helm lint/template validation.
+clusterId: spark-ci
+
+clusterCredential:
+  # sha256 of the string ci-cluster-token
+  sha256: 5356546b447b581ee913282599d420f878791053e8333798c3d14041f2eaa0c8
+
+apiKeys:
+  # sha256 of the string ci-api-key
+  - id: ci
+    sha256: d2fe0c05ae3d01b051d343a9a4ec2be26b4bf12e6438425c42d8c318795095b5
+
+llm-request-router:
+  llmRequestRouter:
+    image:
+      registry: example.com
+      repository: foo/bar/stargate
+
+llm-api-gateway:
+  llmApiGateway:
+    image:
+      registry: example.com
+      repository: foo/bar/lpu-nvcf-gateway

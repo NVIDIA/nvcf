@@ -30,6 +30,7 @@ use tracing::warn;
 use super::grpc_endpoint::{
     StargateGrpcEndpoint, log_stargate_grpc_certificate_failure, log_stargate_grpc_connect_attempt,
 };
+use super::reconnect::StreamOpenFailureLog;
 use super::topology::{RegistrationRouterTopology, publish_registration_router_topology};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -52,6 +53,8 @@ pub(super) struct WatchedEndpoint {
 }
 
 const INITIAL_WATCH_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Delay before reopening a WatchStargates stream after it fails or ends.
+pub(super) const WATCH_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 pub(super) async fn run_watch_stargate_discovery(
     seeds: Vec<String>,
@@ -160,6 +163,7 @@ async fn watch_stargate_endpoint(
     let target = StargateGrpcEndpoint::new(watch_url.clone(), "")
         .expect("normalized watch URL should be non-empty");
     let mut last_certificate_failure = None;
+    let mut open_failures = StreamOpenFailureLog::new("watch_stargates");
     loop {
         if stop.is_cancelled() {
             return;
@@ -174,6 +178,7 @@ async fn watch_stargate_endpoint(
                         match response {
                             Ok(response) => {
                                 last_certificate_failure = None;
+                                open_failures.record_opened();
                                 Some(response.into_inner())
                             }
                             Err(error) => {
@@ -182,6 +187,11 @@ async fn watch_stargate_endpoint(
                                     "watch_stargates",
                                     &error,
                                     last_certificate_failure,
+                                );
+                                open_failures.record(
+                                    target.authority_addr(),
+                                    &error,
+                                    WATCH_RECONNECT_DELAY,
                                 );
                                 None
                             }
@@ -196,6 +206,11 @@ async fn watch_stargate_endpoint(
                     "watch_stargates",
                     error.as_ref(),
                     last_certificate_failure,
+                );
+                open_failures.record(
+                    target.authority_addr(),
+                    error.as_ref(),
+                    WATCH_RECONNECT_DELAY,
                 );
                 None
             }
@@ -241,7 +256,7 @@ async fn watch_stargate_endpoint(
         }
 
         if stop
-            .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+            .run_until_cancelled(tokio::time::sleep(WATCH_RECONNECT_DELAY))
             .await
             .is_none()
         {

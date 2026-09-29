@@ -22,9 +22,11 @@ import (
 )
 
 type RequestContext struct {
-	RequestID        string
-	APIKeyID         string // client auth subject; reserved for attribution, auditing, or future API-key policy hooks
-	OrgID            string // auth-derived rate limit key; currently used to scope rate limiting
+	RequestID string
+	APIKeyID  string // client auth subject; reserved for attribution, auditing, or future API-key policy hooks
+	// RateLimitKey is the auth-derived rate-limit subject: the NCA id in NVCF
+	// mode, the API key id in static key mode.
+	RateLimitKey     string
 	ProjectID        string // used to further scope rate limiting when auth provides a project ID
 	BearerToken      string
 	RoutingKey       string

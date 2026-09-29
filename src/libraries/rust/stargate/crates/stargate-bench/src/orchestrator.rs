@@ -228,6 +228,8 @@ fn build_compose_spec(
                 "--reverse-tunnel-listen-addr" => "0.0.0.0:50072",
                 "--advertised-hostname-template" => "stargate",
                 "--tunnel-protocol" => config.tunnel_protocol.to_string(),
+                // Benchmark pylons register without credentials.
+                "--allow-open-worker-auth",
             ]),
             ports: vec![
                 format!("{stargate_grpc_host_port}:{STARGATE_GRPC_PORT}"),
@@ -499,6 +501,21 @@ algorithms:
                 .iter()
                 .any(|arg| arg.starts_with("--pylon-queue-mismatch-")),
             "unconfigured algorithms should preserve pylon queue admission defaults"
+        );
+    }
+
+    #[test]
+    fn compose_stargate_explicitly_allows_unauthenticated_benchmark_pylons() {
+        let config = config();
+        let compose = compose(&config);
+        let stargate = service(&compose, "stargate");
+
+        assert!(
+            stargate
+                .command
+                .iter()
+                .any(|arg| arg == "--allow-open-worker-auth"),
+            "benchmark stargate has no worker authenticator and must opt into open worker auth"
         );
     }
 

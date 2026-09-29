@@ -56,6 +56,8 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 		maxRequestBodyBytes = cfg.Server.MaxRequestBodyBytes
 	}
 
+	bareModelIDs := cfg.StaticAuthMode()
+
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec echo.Context) error {
 			gc := NewGatewayContext(ec)
@@ -78,13 +80,20 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			// buffers the body, including the routing-key lookup. A rejected
 			// request still gets the span, metrics, and completion log.
 			bodyErr := bufferRequestBody(gc.Request(), maxRequestBodyBytes)
-			routingKey := ""
+			routingKey, model := "", ""
 			if bodyErr == nil {
-				routingKey = requestRoutingKey(gc.Request())
+				routingKey, model = requestTarget(gc.Request(), bareModelIDs)
 			}
 			targetRegion := targetRegionHeader(gc.Request().Header)
 			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
-			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
+			storeRequestContext(gc, requestContextInput{
+				requestID:    requestID,
+				bearerToken:  bearerToken,
+				routingKey:   routingKey,
+				model:        model,
+				targetRegion: targetRegion,
+				always:       bareModelIDs,
+			})
 
 			span.SetAttributes(
 				attribute.String("http.request.method", gc.Request().Method),
@@ -153,21 +162,28 @@ func requestIDHeader(headers http.Header) string {
 	return uuid.NewString()
 }
 
-func storeRequestContext(
-	gc *GatewayContext,
-	requestID string,
-	bearerToken string,
-	routingKey string,
-	targetRegion string,
-) {
-	if routingKey == "" {
+type requestContextInput struct {
+	requestID    string
+	bearerToken  string
+	routingKey   string
+	model        string
+	targetRegion string
+	// always stores a RequestContext even without a routing key. Static key
+	// mode sets it: there the routing key is always empty and every request
+	// must still reach the auth middleware with a context to enrich.
+	always bool
+}
+
+func storeRequestContext(gc *GatewayContext, in requestContextInput) {
+	if in.routingKey == "" && !in.always {
 		return
 	}
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:    requestID,
-		BearerToken:  bearerToken,
-		RoutingKey:   routingKey,
-		TargetRegion: targetRegion,
+		RequestID:    in.requestID,
+		BearerToken:  in.bearerToken,
+		RoutingKey:   in.routingKey,
+		Model:        in.model,
+		TargetRegion: in.targetRegion,
 	})
 }
 
@@ -198,7 +214,7 @@ func logCompletedHTTPRequest(ctx context.Context, gc *GatewayContext, requestSta
 	if reqCtx := gc.RequestContext(); reqCtx != nil {
 		log = log.
 			Str("project_id", reqCtx.ProjectID).
-			Str("rate_limit_key", reqCtx.OrgID).
+			Str("rate_limit_key", reqCtx.RateLimitKey).
 			Str("routing_key", reqCtx.RoutingKey).
 			Str("target_region", reqCtx.TargetRegion)
 	}

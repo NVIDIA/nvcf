@@ -47,6 +47,11 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 		return c.NoContent(http.StatusMethodNotAllowed)
 	})
 
+	// The discovery reads forward no caller header and stream nothing, so they
+	// sit outside the LLM route group, its X-Priority guard and its inference
+	// write deadline.
+	handlers.AsModelRegistryHandlers().RegisterRoutes(e.Group(""))
+
 	group := e.Group(
 		"",
 		rejectClientSuppliedPriority,

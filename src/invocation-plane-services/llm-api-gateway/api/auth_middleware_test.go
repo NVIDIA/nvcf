@@ -96,8 +96,8 @@ func TestNVCFAuthMiddlewareEnrichesRequestContext(t *testing.T) {
 		if reqCtx.APIKeyID != "subject-123" {
 			t.Fatalf("api key id = %q, want subject-123", reqCtx.APIKeyID)
 		}
-		if reqCtx.OrgID != "nca-456" {
-			t.Fatalf("org id = %q, want nca-456", reqCtx.OrgID)
+		if reqCtx.RateLimitKey != "nca-456" {
+			t.Fatalf("rate limit key = %q, want nca-456", reqCtx.RateLimitKey)
 		}
 		if reqCtx.BearerToken != "sk-live" {
 			t.Fatalf("bearer token = %q, want sk-live", reqCtx.BearerToken)
@@ -410,6 +410,7 @@ func TestNVCFAuthMiddlewareUsesProjectScopedRateLimitKeyWhenPresent(t *testing.T
 
 type stubInvocationAuthClient struct {
 	authResponse        *nvcf.InvocationAuthResponse
+	authErr             error
 	authorizeCalls      int
 	authorizeToken      string
 	authorizeRoutingKey string
@@ -423,6 +424,9 @@ func (s *stubInvocationAuthClient) AuthorizeInvocation(
 	s.authorizeCalls++
 	s.authorizeToken = clientAuthorizationToken
 	s.authorizeRoutingKey = routingKey
+	if s.authErr != nil {
+		return nil, s.authErr
+	}
 	return s.authResponse, nil
 }
 

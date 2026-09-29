@@ -51,6 +51,27 @@ pub enum ModelInitialization {
     Uncalibrated,
 }
 
+/// How long startup keeps retrying the upstream health probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StartupHealthWait {
+    /// Retry until the duration elapses, then fail startup. Zero probes once
+    /// and leaves recovery to the container restart.
+    Deadline(Duration),
+    /// Retry until the upstream answers, however long that takes. Callers
+    /// stop the wait by dropping the startup future, as Pylon does on
+    /// SIGTERM or SIGINT.
+    Forever,
+}
+
+impl StartupHealthWait {
+    fn deadline_from(self, start: Instant) -> Option<Instant> {
+        match self {
+            Self::Deadline(wait) => Some(start + wait),
+            Self::Forever => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ModelLifecycleConfig {
     pub upstream_http_base_url: String,
@@ -58,9 +79,8 @@ pub struct ModelLifecycleConfig {
     pub initialization: ModelInitialization,
     pub bringup: BringupConfig,
     pub health_paths: UpstreamHealthPaths,
-    /// How long startup retries the upstream health probe before failing. Zero
-    /// probes once and leaves recovery to the container restart.
-    pub startup_health_wait: Duration,
+    /// How long startup retries the upstream health probe before failing.
+    pub startup_health_wait: StartupHealthWait,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -645,6 +665,9 @@ fn health_probe_timeout(config: &ModelLifecycleConfig) -> Option<Duration> {
     }
 }
 
+/// Probes the upstream every 500 ms until it answers or the configured wait
+/// ends. The loop holds nothing but the in-flight probe, so dropping the future
+/// stops it at once; [`StartupHealthWait::Forever`] relies on that.
 async fn wait_for_upstream_health(
     http_client: &reqwest::Client,
     config: &ModelLifecycleConfig,
@@ -652,7 +675,7 @@ async fn wait_for_upstream_health(
     let Some(health_timeout) = health_probe_timeout(config) else {
         return Ok(());
     };
-    let deadline = Instant::now() + config.startup_health_wait;
+    let deadline = config.startup_health_wait.deadline_from(Instant::now());
     let mut reported = false;
     loop {
         if check_upstream_health(
@@ -665,7 +688,7 @@ async fn wait_for_upstream_health(
         {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Err(BringupError::UnhealthyUpstream.into());
         }
         if reported {
@@ -678,6 +701,7 @@ async fn wait_for_upstream_health(
             tracing::warn!(
                 upstream = %config.upstream_http_base_url,
                 paths = ?config.health_paths.probe_order(),
+                wait = ?config.startup_health_wait,
                 "waiting for the upstream to answer a health probe"
             );
         }
@@ -729,7 +753,7 @@ mod tests {
 
     use super::{
         LiveModelGeneration, ModelInitialization, ModelLifecycleConfig, ModelLifecycleError,
-        ModelLifecycleSupervisor, ModelSource, start_model_lifecycle,
+        ModelLifecycleSupervisor, ModelSource, StartupHealthWait, start_model_lifecycle,
     };
     use crate::generated_request_id::generated_request_generation;
     use crate::runtime_state::ModelGeneration;
@@ -738,7 +762,7 @@ mod tests {
     use crate::{
         BringupConfig, BringupError, CalibrationConfig, ModelDiscoveryConfig,
         ModelDiscoveryProvider, PylonMetrics, PylonRuntimeState, StatsCollectorConfig,
-        start_stats_collector,
+        StatsCollectorHandle, start_stats_collector,
     };
 
     #[derive(Clone)]
@@ -1019,7 +1043,7 @@ mod tests {
                 ..BringupConfig::default()
             },
             health_paths: UpstreamHealthPaths::default(),
-            startup_health_wait: Duration::ZERO,
+            startup_health_wait: StartupHealthWait::Deadline(Duration::ZERO),
         }
     }
 
@@ -1137,7 +1161,7 @@ mod tests {
                     ..BringupConfig::default()
                 },
                 health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::ZERO,
+                startup_health_wait: StartupHealthWait::Deadline(Duration::ZERO),
             },
             runtime_state.clone(),
             &stats,
@@ -1162,25 +1186,46 @@ mod tests {
         stats.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn startup_waits_for_an_upstream_that_is_not_healthy_yet() {
-        let unhealthy_probes = Arc::new(AtomicUsize::new(2));
-        let server_unhealthy_probes = unhealthy_probes.clone();
+    /// Serves `/health` as 503 for the first `unhealthy_probes` requests and
+    /// 200 afterwards. The counter records every `/health` request served.
+    async fn health_upstream_after(unhealthy_probes: usize) -> (TestHttpServer, Arc<AtomicUsize>) {
+        let probes = Arc::new(AtomicUsize::new(0));
+        let server_probes = probes.clone();
         let upstream = TestHttpServer::spawn(Router::new().route(
             "/health",
             get(move || {
-                let remaining = server_unhealthy_probes.clone();
+                let probes = server_probes.clone();
                 async move {
-                    if remaining.load(Ordering::SeqCst) > 0 {
-                        remaining.fetch_sub(1, Ordering::SeqCst);
-                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    if probes.fetch_add(1, Ordering::SeqCst) < unhealthy_probes {
+                        StatusCode::SERVICE_UNAVAILABLE
                     } else {
-                        axum::http::StatusCode::OK
+                        StatusCode::OK
                     }
                 }
             }),
         ))
         .await;
+        (upstream, probes)
+    }
+
+    fn health_wait_config(
+        upstream_http_base_url: &str,
+        startup_health_wait: StartupHealthWait,
+    ) -> ModelLifecycleConfig {
+        ModelLifecycleConfig {
+            upstream_http_base_url: upstream_http_base_url.to_string(),
+            source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
+            initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
+            bringup: BringupConfig {
+                active_canary_interval: Duration::ZERO,
+                ..BringupConfig::default()
+            },
+            health_paths: UpstreamHealthPaths::default(),
+            startup_health_wait,
+        }
+    }
+
+    fn start_test_stats() -> (PylonRuntimeState, StatsCollectorHandle) {
         let stats_config = StatsCollectorConfig::default();
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
@@ -1189,19 +1234,20 @@ mod tests {
             None,
         );
         let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
+        (runtime_state, stats)
+    }
 
+    #[tokio::test]
+    async fn startup_waits_for_an_upstream_that_is_not_healthy_yet() {
+        let (upstream, probes) = health_upstream_after(2).await;
+        let (runtime_state, stats) = start_test_stats();
+
+        let started = tokio::time::Instant::now();
         let lifecycle = start_model_lifecycle(
-            ModelLifecycleConfig {
-                upstream_http_base_url: upstream.to_string(),
-                source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
-                bringup: BringupConfig {
-                    active_canary_interval: Duration::ZERO,
-                    ..BringupConfig::default()
-                },
-                health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::from_secs(10),
-            },
+            health_wait_config(
+                upstream.as_str(),
+                StartupHealthWait::Deadline(Duration::from_secs(10)),
+            ),
             runtime_state.clone(),
             &stats,
             None,
@@ -1209,7 +1255,10 @@ mod tests {
         .await
         .expect("startup should wait for the upstream to become healthy");
 
-        assert_eq!(unhealthy_probes.load(Ordering::SeqCst), 0);
+        // Two failed probes, then the healthy one, each 500 ms apart. Model
+        // initialization may probe again after the wait.
+        assert!(probes.load(Ordering::SeqCst) >= 3);
+        assert!(started.elapsed() >= 2 * super::STARTUP_HEALTH_RETRY_INTERVAL);
         assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
 
         lifecycle.shutdown().await;
@@ -1219,27 +1268,15 @@ mod tests {
 
     #[tokio::test]
     async fn startup_fails_fast_when_no_health_wait_is_configured() {
-        let stats_config = StatsCollectorConfig::default();
-        let (runtime_state, observations) = PylonRuntimeState::observed(
-            InferenceServerStatus::Active,
-            &[],
-            stats_config.observation_channel_capacity,
-            None,
-        );
-        let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
+        let (upstream, probes) = health_upstream_after(usize::MAX).await;
+        let (runtime_state, stats) = start_test_stats();
 
+        let started = tokio::time::Instant::now();
         let result = start_model_lifecycle(
-            ModelLifecycleConfig {
-                upstream_http_base_url: "http://127.0.0.1:1".to_string(),
-                source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
-                bringup: BringupConfig {
-                    active_canary_interval: Duration::ZERO,
-                    ..BringupConfig::default()
-                },
-                health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::ZERO,
-            },
+            health_wait_config(
+                upstream.as_str(),
+                StartupHealthWait::Deadline(Duration::ZERO),
+            ),
             runtime_state.clone(),
             &stats,
             None,
@@ -1247,14 +1284,111 @@ mod tests {
         .await;
 
         let Err(error) = result else {
-            panic!("startup should not wait for an unreachable upstream");
+            panic!("startup should not wait for an unhealthy upstream");
         };
         assert!(matches!(
             error,
             ModelLifecycleError::Bringup(BringupError::UnhealthyUpstream)
         ));
+        assert_eq!(probes.load(Ordering::SeqCst), 1, "a zero wait probes once");
+        assert!(started.elapsed() < super::STARTUP_HEALTH_RETRY_INTERVAL);
+        assert!(runtime_state.advertised_model_ids().is_empty());
 
         stats.shutdown().await;
+        upstream.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn forever_startup_wait_polls_past_a_deadline_until_the_upstream_turns_healthy() {
+        // A deadline shorter than the unhealthy phase fails startup.
+        let (bounded_upstream, bounded_probes) = health_upstream_after(4).await;
+        let (bounded_state, bounded_stats) = start_test_stats();
+        let bounded = start_model_lifecycle(
+            health_wait_config(
+                bounded_upstream.as_str(),
+                StartupHealthWait::Deadline(Duration::from_millis(700)),
+            ),
+            bounded_state.clone(),
+            &bounded_stats,
+            None,
+        )
+        .await;
+        assert!(matches!(
+            bounded,
+            Err(ModelLifecycleError::Bringup(
+                BringupError::UnhealthyUpstream
+            ))
+        ));
+        assert!(bounded_probes.load(Ordering::SeqCst) < 4);
+        bounded_stats.shutdown().await;
+        bounded_upstream.shutdown().await;
+
+        // The same upstream behavior with no deadline keeps polling and proceeds.
+        let (upstream, probes) = health_upstream_after(4).await;
+        let (runtime_state, stats) = start_test_stats();
+        let started = tokio::time::Instant::now();
+        let lifecycle = start_model_lifecycle(
+            health_wait_config(upstream.as_str(), StartupHealthWait::Forever),
+            runtime_state.clone(),
+            &stats,
+            None,
+        )
+        .await
+        .expect("forever mode should proceed once the upstream turns healthy");
+
+        assert!(probes.load(Ordering::SeqCst) >= 5);
+        assert!(started.elapsed() >= 4 * super::STARTUP_HEALTH_RETRY_INTERVAL);
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+
+        lifecycle.shutdown().await;
+        stats.shutdown().await;
+        upstream.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn forever_startup_wait_returns_promptly_on_cancellation() {
+        let (upstream, probes) = health_upstream_after(usize::MAX).await;
+        let (runtime_state, stats) = start_test_stats();
+        let cancel = CancellationToken::new();
+        let canceller = cancel.clone();
+        let cancel_probes = probes.clone();
+        tokio::spawn(async move {
+            while cancel_probes.load(Ordering::SeqCst) < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            canceller.cancel();
+        });
+
+        let startup = start_model_lifecycle(
+            health_wait_config(upstream.as_str(), StartupHealthWait::Forever),
+            runtime_state.clone(),
+            &stats,
+            None,
+        );
+        let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = startup => Some(result.map(|_| ())),
+                () = cancel.cancelled() => None,
+            }
+        })
+        .await
+        .expect("a cancelled forever wait should return promptly");
+
+        assert!(
+            outcome.is_none(),
+            "an unhealthy upstream must not finish startup"
+        );
+        let probes_at_cancel = probes.load(Ordering::SeqCst);
+        tokio::time::sleep(3 * super::STARTUP_HEALTH_RETRY_INTERVAL).await;
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            probes_at_cancel,
+            "a dropped startup wait must not keep probing"
+        );
+        assert!(runtime_state.advertised_model_ids().is_empty());
+
+        stats.shutdown().await;
+        upstream.shutdown().await;
     }
 
     #[tokio::test]
@@ -1310,7 +1444,7 @@ mod tests {
                     ..BringupConfig::default()
                 },
                 health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::ZERO,
+                startup_health_wait: StartupHealthWait::Deadline(Duration::ZERO),
             },
             runtime_state: runtime_state.clone(),
             stats: stats.control(),
@@ -1398,7 +1532,7 @@ mod tests {
                         ..BringupConfig::default()
                     },
                     health_paths: UpstreamHealthPaths::default(),
-                    startup_health_wait: Duration::ZERO,
+                    startup_health_wait: StartupHealthWait::Deadline(Duration::ZERO),
                 },
                 runtime_state.clone(),
                 &stats,
@@ -1502,7 +1636,7 @@ mod tests {
                     ..BringupConfig::default()
                 },
                 health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::ZERO,
+                startup_health_wait: StartupHealthWait::Deadline(Duration::ZERO),
             },
             runtime_state.clone(),
             &stats,

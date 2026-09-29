@@ -388,6 +388,7 @@ mod tests {
         watch_hits: Arc<AtomicUsize>,
         register_hits: Arc<AtomicUsize>,
         metadata: MetadataRecords,
+        registrations: Arc<Mutex<Vec<InferenceServerRegistration>>>,
         registration_errors: Arc<Mutex<Vec<(tonic::Code, String)>>>,
     }
 
@@ -499,7 +500,12 @@ mod tests {
             let stream = async_stream::stream! {
                 while let Some(message) = inbound.next().await {
                     match message {
-                        Ok(_registration) => {
+                        Ok(registration) => {
+                            recorder
+                                .registrations
+                                .lock()
+                                .expect("registrations lock poisoned")
+                                .push(registration);
                             yield Ok(InferenceServerAck {
                                 reverse_tunnel_target: stargate_id.clone(),
                                 reverse_tunnel_pylon_dial_addr: String::new(),
@@ -843,6 +849,31 @@ mod tests {
                 .expect("metadata lock poisoned")
                 .as_slice(),
             &[(Some("Bearer token".to_string()), Some("1000".to_string()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn registration_forwarding_preserves_message() {
+        let recorder = Recorder::default();
+        let fake = start_fake_stargate("stargate-1", recorder.clone()).await;
+        let router = start_router(snapshot(&[("stargate-1", fake.addr)])).await;
+        let mut registration = registration();
+        registration.cluster_id = "cluster-a".to_string();
+
+        let mut client = router.client("stargate-1.stargate.external");
+        let response = client
+            .register_inference_server(Request::new(tokio_stream::iter([registration.clone()])))
+            .await
+            .expect("registration should route");
+        first_message(response).await;
+
+        assert_eq!(
+            recorder
+                .registrations
+                .lock()
+                .expect("registrations lock poisoned")
+                .as_slice(),
+            [registration]
         );
     }
 

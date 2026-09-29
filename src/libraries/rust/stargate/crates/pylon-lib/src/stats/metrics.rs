@@ -128,6 +128,7 @@ metrics! {
         plain_gauge target_info("target_info", "Target metadata", ["service_version", "service_name", "commit"]);
         gauge registration_stream_connected("registration_stream_connected", "Binary gauge: 1 when a stargate registration stream is connected", ["router"]);
         gauge reverse_tunnel_connected("reverse_tunnel_connected", "Binary gauge: 1 when a reverse QUIC tunnel is connected to a stargate router", ["router"]);
+        counter registration_stream_closures_total("registration_stream_closures_total", "Registration streams to a stargate router that closed or failed to open, by reason", ["router", "reason"]);
         counter tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
         gauge tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
@@ -477,6 +478,26 @@ impl PylonMetrics {
         router_addr: &str, connected: bool
     ) => reverse_tunnel_connected[router_addr], connected);
 
+    /// Publishes every closure reason for `router_addr` at zero so rate and
+    /// increase queries see the first closure.
+    pub(crate) fn init_registration_stream_closures(&self, router_addr: &str) {
+        for reason in RegistrationStreamClosure::ALL {
+            self.registration_stream_closures_total
+                .with_label_values(&[router_addr, reason.as_str()])
+                .inc_by(0);
+        }
+    }
+
+    pub(crate) fn observe_registration_stream_closure(
+        &self,
+        router_addr: &str,
+        reason: RegistrationStreamClosure,
+    ) {
+        self.registration_stream_closures_total
+            .with_label_values(&[router_addr, reason.as_str()])
+            .inc();
+    }
+
     #[inline]
     pub fn retryable_responses_total(
         &self,
@@ -676,6 +697,55 @@ impl CanaryResult {
     }
 }
 
+/// Why a registration stream to one router closed or failed to open; the
+/// `reason` label of `pylon_registration_stream_closures_total`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RegistrationStreamClosure {
+    /// The router rejected the credential (`UNAUTHENTICATED`).
+    Unauthenticated,
+    /// The router rejected the registration message (`INVALID_ARGUMENT`), for
+    /// example a `cluster_id` that does not match the credential.
+    InvalidArgument,
+    /// The router refused the caller (`PERMISSION_DENIED`).
+    PermissionDenied,
+    /// The router or its target was unavailable (`UNAVAILABLE`).
+    Unavailable,
+    /// The router ended the acknowledgement stream without a status.
+    EndOfStream,
+    /// Sending a registration message failed because the stream was gone.
+    Io,
+    /// The gRPC connection to the router could not be established.
+    Connect,
+    /// Any other status code or local failure.
+    Other,
+}
+
+impl RegistrationStreamClosure {
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Unauthenticated,
+        Self::InvalidArgument,
+        Self::PermissionDenied,
+        Self::Unavailable,
+        Self::EndOfStream,
+        Self::Io,
+        Self::Connect,
+        Self::Other,
+    ];
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "unauthenticated",
+            Self::InvalidArgument => "invalid_argument",
+            Self::PermissionDenied => "permission_denied",
+            Self::Unavailable => "unavailable",
+            Self::EndOfStream => "end_of_stream",
+            Self::Io => "io",
+            Self::Connect => "connect",
+            Self::Other => "other",
+        }
+    }
+}
+
 const QUEUE_ADMISSION_BUCKETS: &[f64] = &[
     0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0,
     30_000.0, 60_000.0,
@@ -746,7 +816,7 @@ mod tests {
 
     use stargate_proto::pb::InferenceServerStatus;
 
-    use super::{CalibrationOutcome, CanaryPhase, CanaryResult};
+    use super::{CalibrationOutcome, CanaryPhase, CanaryResult, RegistrationStreamClosure};
 
     use crate::{
         CurrentModelStats, PylonMetrics, PylonRuntimeState, RequestObservation,
@@ -855,6 +925,42 @@ mod tests {
                 r#"pylon_registration_stream_connected{router="router-a"} 1"#,
                 r#"pylon_reverse_tunnel_connected{router="router-a"} 1"#,
             ],
+        );
+    }
+
+    #[test]
+    fn registration_stream_closures_start_at_zero_and_count_by_router_and_reason() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+
+        metrics.init_registration_stream_closures("router-a");
+        metrics.init_registration_stream_closures("router-a");
+        metrics.observe_registration_stream_closure(
+            "router-a",
+            RegistrationStreamClosure::Unauthenticated,
+        );
+        metrics.observe_registration_stream_closure(
+            "router-a",
+            RegistrationStreamClosure::Unauthenticated,
+        );
+        metrics.observe_registration_stream_closure("router-b", RegistrationStreamClosure::Io);
+
+        let body = assert_metrics(
+            &metrics,
+            &[
+                r#"pylon_registration_stream_closures_total{reason="unauthenticated",router="router-a"} 2"#,
+                r#"pylon_registration_stream_closures_total{reason="invalid_argument",router="router-a"} 0"#,
+                r#"pylon_registration_stream_closures_total{reason="permission_denied",router="router-a"} 0"#,
+                r#"pylon_registration_stream_closures_total{reason="unavailable",router="router-a"} 0"#,
+                r#"pylon_registration_stream_closures_total{reason="end_of_stream",router="router-a"} 0"#,
+                r#"pylon_registration_stream_closures_total{reason="io",router="router-a"} 0"#,
+                r#"pylon_registration_stream_closures_total{reason="connect",router="router-a"} 0"#,
+                r#"pylon_registration_stream_closures_total{reason="other",router="router-a"} 0"#,
+                r#"pylon_registration_stream_closures_total{reason="io",router="router-b"} 1"#,
+            ],
+        );
+        assert!(
+            !body.contains(r#"reason="connect",router="router-b""#),
+            "only routers that were initialized publish zero series"
         );
     }
 

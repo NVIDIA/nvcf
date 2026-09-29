@@ -1,0 +1,13 @@
+# CI-only values for helm lint/template validation.
+image:
+  repository: example.com/nvcf/pylon-operator
+
+clusterId: spark-ci
+
+router:
+  grpcAddress: llm-request-router.nvcf.svc.cluster.local:50071
+
+pylon:
+  image:
+    repository: example.com/nvcf/pylon
+    tag: "0.15.0"
