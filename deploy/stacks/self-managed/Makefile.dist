@@ -185,6 +185,16 @@ apply: check-versions $(APPLY_PRE_HOOKS)
 # earlier helmfile DAG layer than ingress, so the corrected policy has to be
 # installed first. Not a prerequisite of apply.
 apply-hostname-policy: check-versions
+	@echo ">>> Checking the pinned gateway-routes chart carries the corrected policy..."
+	@HELMFILE_ENV="$(HELMFILE_ENV)" \
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) --selector release-group=ingress template --skip-needs 2>/dev/null \
+	  | grep -q tiesRootMatch || { \
+	    echo "ERROR: the pinned nvcf-gateway-routes chart still reserves hostnames outright." >&2; \
+	    echo "       Applying it would reinstall the policy this step exists to replace." >&2; \
+	    echo "       Bump the ingress release pin to a chart version that carries the fix," >&2; \
+	    echo "       or set ingress.gatewayApi.chartPath to a local chart that does." >&2; \
+	    exit 1; }
+
 	@echo ">>> Applying the ingress release only, to refresh the hostname conflict policy..."
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 
