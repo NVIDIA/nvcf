@@ -796,6 +796,8 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 	}
 }
 
+// mergeNamespaces returns the union of two namespace lists, order-stable and
+// de-duplicated.
 func mergeNamespaces(base, extra []string) []string {
 	if len(extra) == 0 {
 		return base
@@ -817,8 +819,6 @@ func mergeNamespaces(base, extra []string) []string {
 // staleNamespaceCheck detects NVCF namespaces stuck Terminating or left as
 // empty shells after a partial teardown. Severity is error; prober errors
 // degrade to warning so transient kubeconfig issues don't falsely fail.
-// mergeNamespaces returns the union of two namespace lists, order-stable and
-// de-duplicated.
 func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namespaces []string) binaryCheckSpec {
 	const id = "stale-namespaces"
 	return binaryCheckSpec{
@@ -863,25 +863,30 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 			kctl := "kubectl" + kubectlContextArg(probedContext)
 			var hints []string
 			if len(terminating) > 0 {
+				// Inspect first, force last. A namespace usually stays
+				// Terminating because an object inside it still has a
+				// finalizer; clearing the namespace's own finalizers skips that
+				// object's cleanup and can orphan what it manages, such as a
+				// cloud load balancer or volume.
+				// One command per namespace with the real name substituted. A
+				// `<ns>` placeholder is not pasteable: the shell reads `<` and
+				// `>` as redirection, so the command fails before kubectl runs.
+				for _, ns := range terminating {
+					hints = append(hints, fmt.Sprintf(
+						"find what is holding %s in Terminating: "+
+							"%s api-resources --verbs=list --namespaced -o name | "+
+							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
+						ns, kctl, kctl, ns))
+				}
 				// spec.finalizers is writable only through the /finalize
 				// subresource: a plain patch or update is silently reverted by
 				// the apiserver's namespace strategy, so `kubectl patch ...
 				// --type=merge` prints "patched" and changes nothing.
 				for _, ns := range terminating {
 					hints = append(hints, fmt.Sprintf(
-						"clear namespace finalizers on %s: %s get ns %s -o json | "+
+						"only if nothing inside %s can be cleaned up, force-clear its finalizers: %s get ns %s -o json | "+
 							"jq '.spec.finalizers=[]' | %s replace --raw /api/v1/namespaces/%s/finalize -f -",
 						ns, kctl, ns, kctl, ns))
-				}
-				// One command per namespace with the real name substituted. A
-				// `<ns>` placeholder is not pasteable: the shell reads `<` and
-				// `>` as redirection, so the command fails before kubectl runs.
-				for _, ns := range terminating {
-					hints = append(hints, fmt.Sprintf(
-						"if %s stays Terminating, the deadlock is on objects inside it: "+
-							"%s api-resources --verbs=list --namespaced -o name | "+
-							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
-						ns, kctl, kctl, ns))
 				}
 			}
 			if len(emptyShell) > 0 {

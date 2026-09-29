@@ -225,6 +225,10 @@ func TestStaleNamespaceCheck_StaleIsError(t *testing.T) {
 	assert.Contains(t, r.Message, "nvcf")
 	assert.Contains(t, r.Message, "/api/v1/namespaces/nvcf/finalize",
 		"the remediation must use the finalize subresource; a plain patch is silently reverted")
+	inspect := strings.Index(r.Message, "xargs -n1 kubectl get -n nvcf")
+	force := strings.Index(r.Message, "/finalize")
+	require.GreaterOrEqual(t, inspect, 0)
+	assert.Less(t, inspect, force, "inspecting the namespace comes before force-clearing its finalizers")
 }
 
 func TestStaleNamespaceCheck_CleanPasses(t *testing.T) {

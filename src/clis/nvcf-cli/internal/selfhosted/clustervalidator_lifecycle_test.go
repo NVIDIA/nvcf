@@ -159,6 +159,22 @@ func TestRunClusterValidator_FailedBootstrapLeavesNothingBehind(t *testing.T) {
 	assert.Empty(t, sas.Items, "the ServiceAccount created before the failure must be removed")
 }
 
+// Under --no-cleanup a failed bootstrap keeps what it created, so the result
+// still carries the run ID the removal command selects on.
+func TestRunClusterValidator_NoCleanupFailedBootstrapReportsTheRun(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "clusterroles", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: rbacv1.GroupName, Resource: "clusterroles"}, "", nil)
+	})
+
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", true, clusterValidatorComputePlaneRole, nil, nil)
+	require.Error(t, res.Err)
+	require.NotEmpty(t, res.RunID)
+	assert.Len(t, leftovers(t, client, res.RunID)["ServiceAccount"], 1)
+}
+
 // A pull failure means the container never started, so nothing uses the RBAC,
 // the NGC pull secret or the ConfigMap: the Job is deleted and all of them go
 // now, instead of waiting 30 minutes for another run's orphan sweep.
@@ -431,4 +447,23 @@ func TestEnsureClusterValidatorRBAC_LeastPrivilege(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Only the control-plane Job reads a network-check ConfigMap. The compute-plane
+// Job gets a non-empty name that resolves to nothing: an empty value would let
+// the validator fall back to its default name and pick up control-plane config.
+func TestBuildClusterValidatorJob_ConfigNamePerRole(t *testing.T) {
+	configName := func(role string) string {
+		job := buildClusterValidatorJob("j", "img:1", "", role, "runid", false, nil)
+		for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "VALIDATOR_CONFIG_NAME" {
+				return e.Value
+			}
+		}
+		return ""
+	}
+	assert.Equal(t, clusterValidatorConfigRunName("runid"), configName(clusterValidatorControlPlaneRole))
+	cp := configName(clusterValidatorComputePlaneRole)
+	assert.Equal(t, clusterValidatorNoConfigName, cp)
+	assert.NotEqual(t, clusterValidatorConfigName, cp, "must not be the validator's default name")
 }

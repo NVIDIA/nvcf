@@ -207,6 +207,11 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// validator row" with "validator silently dropped". Print at most one
 	// reason; --skip-cluster-validation takes precedence over missing
 	// config since it's the explicit operator choice.
+	// --local-only overrides the required scope flag, so say which checks
+	// that drops rather than print a clean host-only result for --all.
+	if localOnly {
+		fmt.Fprintln(c.ErrOrStderr(), "note: --local-only runs the local host checks only; cluster checks for the requested scope are skipped")
+	}
 	if !localOnly && (computePlaneIsVisited() || controlPlaneIsVisited()) {
 		switch {
 		case skipClusterValidation:
@@ -740,15 +745,26 @@ func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 }
 
 // configValue reads a setting the way the CLI's cluster configuration does
-// (environment, then the nvcf-cli config file).
+// (environment, then the nvcf-cli config file). A YAML list in the config
+// file is joined with commas, the form the validator's list settings parse;
+// GetString alone returns "" for a list and would drop it silently.
 func configValue(key string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
 	}
-	if viper.IsSet(key) {
-		return strings.TrimSpace(viper.GetString(key))
+	if !viper.IsSet(key) {
+		return ""
 	}
-	return ""
+	if _, isList := viper.Get(key).([]any); isList {
+		var items []string
+		for _, item := range viper.GetStringSlice(key) {
+			if item = strings.TrimSpace(item); item != "" {
+				items = append(items, item)
+			}
+		}
+		return strings.Join(items, ",")
+	}
+	return strings.TrimSpace(viper.GetString(key))
 }
 
 // resolveClusterValidatorImage resolves the validator image from flag > env >

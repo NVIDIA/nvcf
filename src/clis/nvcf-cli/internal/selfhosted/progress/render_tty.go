@@ -1763,13 +1763,16 @@ func humanCategoryName(raw string) string {
 
 // checkGlyph returns the bracketed glyph for a check row. Matches install-mode
 // convention: bracket + unicode, unchanged in ASCII-only mode (AsciiOnly only
-// strips ANSI color codes, not unicode characters).
+// strips ANSI color codes, not unicode characters). A miss below error
+// severity is a warning, tallied and exited on as one, so it gets its own mark.
 func checkGlyph(row checkRow) string {
 	switch {
 	case row.finished && row.passed:
 		return "[✓]"
-	case row.finished && !row.passed:
+	case row.finished && row.severity == "error":
 		return "[✘]"
+	case row.finished:
+		return "[!]"
 	case row.started && !row.finished:
 		return "[▶]"
 	default:

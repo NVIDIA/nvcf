@@ -93,3 +93,16 @@ func TestCheck_SISReachabilityScope(t *testing.T) {
 	_, hits = runCheckRecording(t, "--control-plane")
 	assert.Zero(t, hits, "SIS is a compute-plane check")
 }
+
+// --local-only overrides the required scope flag; the run says so on stderr.
+func TestCheck_LocalOnlyNotesSkippedClusterChecks(t *testing.T) {
+	resetCheckFlags(t)
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	t.Cleanup(func() { rootCmd.SetErr(nil); rootCmd.SetOut(nil) })
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--local-only", "--json"})
+	_ = rootCmd.Execute()
+	assert.Contains(t, stderr.String(), "--local-only runs the local host checks only")
+}

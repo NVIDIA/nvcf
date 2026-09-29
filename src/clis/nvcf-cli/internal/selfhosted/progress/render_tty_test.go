@@ -568,6 +568,13 @@ func TestCheckOneShotRenderer_FlushesFailedSummaryOnFinal(t *testing.T) {
 	assert.Contains(t, out, "Status: ✘ failed  (1/2 passed, 1 failed)")
 }
 
+// A warning row is not marked as a failure: it does not fail the run.
+func TestCheckGlyph_WarningIsNotAFailure(t *testing.T) {
+	assert.Equal(t, "[✓]", checkGlyph(checkRow{finished: true, passed: true}))
+	assert.Equal(t, "[✘]", checkGlyph(checkRow{finished: true, severity: "error"}))
+	assert.Equal(t, "[!]", checkGlyph(checkRow{finished: true, severity: "warning"}))
+}
+
 func TestCheckOneShotRenderer_UsesFinalTallyForStatus(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 

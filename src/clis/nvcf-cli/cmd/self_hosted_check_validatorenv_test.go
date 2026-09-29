@@ -97,3 +97,52 @@ func TestCheck_ControlPlaneValidatorGetsRegistriesAndEnv(t *testing.T) {
 	assert.Contains(t, regs, "nvcr.io", "the enumerated registries must reach the validator")
 	assert.Equal(t, "true", cp.Env["VALIDATOR_POST_INSTALL"])
 }
+
+// NVCF_GATEWAY_NAMES written as a YAML list in the config file reaches the Job
+// in the comma form the validator parses, not as an empty string.
+func TestClusterValidatorJobEnv_GatewayNamesYAMLList(t *testing.T) {
+	t.Setenv("NVCF_GATEWAY_NAMES", "")
+	viper.Set("NVCF_GATEWAY_NAMES", []any{"gateway/nvcf-gw", " edge/shared ", ""})
+	t.Cleanup(func() { viper.Set("NVCF_GATEWAY_NAMES", nil) })
+
+	env := clusterValidatorJobEnv(selfhosted.StackValues{})
+	assert.Equal(t, "gateway/nvcf-gw,edge/shared", env["NVCF_GATEWAY_NAMES"])
+}
+
+// --pre in split mode visits both clusters, so each gets its own validator
+// role against its own context, both marked pre-install.
+func TestCheck_PreSplitRunsBothValidatorRoles(t *testing.T) {
+	resetCheckFlags(t)
+	var mu sync.Mutex
+	got := map[string]selfhosted.ClusterValidatorParams{}
+	prev := newClusterValidatorForSelfHosted
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			mu.Lock()
+			defer mu.Unlock()
+			got[p.Role] = p
+			return selfhosted.ClusterValidatorResult{Passed: true}
+		}
+	}
+	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+
+	var errBuf bytes.Buffer
+	rootCmd.SetErr(&errBuf)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json",
+		"--control-plane-context", "cp-ctx", "--compute-plane-context", "gpu-ctx",
+		"--icms-url", "https://sis.example.invalid",
+		"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"})
+	_ = rootCmd.Execute()
+
+	mu.Lock()
+	defer mu.Unlock()
+	cp, ok := got["control-plane"]
+	require.True(t, ok, "the control-plane validator must run; output: %s", errBuf.String())
+	gpu, ok := got["compute-plane"]
+	require.True(t, ok, "the compute-plane validator must run; output: %s", errBuf.String())
+	assert.Equal(t, "cp-ctx", cp.KubeContext)
+	assert.Equal(t, "gpu-ctx", gpu.KubeContext)
+	assert.NotContains(t, cp.Env, "VALIDATOR_POST_INSTALL", "--pre is pre-install")
+}

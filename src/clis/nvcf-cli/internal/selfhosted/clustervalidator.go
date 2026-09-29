@@ -208,7 +208,9 @@ func runClusterValidator(
 		}
 	}()
 	if err := ensureClusterValidatorRBAC(vctx, client, role, runID, noCleanup); err != nil {
-		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
+		// RunID lets --no-cleanup print the command that removes whatever the
+		// failed bootstrap and the pull-secret step already created.
+		return ClusterValidatorResult{RunID: runID, Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
 	}
 
 	// For the control-plane role, create a ConfigMap with reachability
@@ -246,9 +248,10 @@ func runClusterValidator(
 	}
 	podMayBeRunning = true
 
-	// The Job owns this run's pull secret and ConfigMap, so they go when its
-	// TTL (or, for --no-cleanup, the preserved-object sweep) removes it, even
-	// on paths where the deferred sweeps are suppressed. The ServiceAccount is
+	// The Job owns this run's pull secret and ConfigMap, so they go when the
+	// Job goes, even on paths where the deferred sweeps are suppressed: its
+	// TTL removes it, or for --no-cleanup a later check's orphan sweep once
+	// preservedValidatorTTL has passed. The ServiceAccount is
 	// deliberately not owned: the ClusterRole and binding are cluster-scoped
 	// and cannot be, and deleting the account alone would leave a binding
 	// that anyone able to recreate that ServiceAccount name could inherit.
@@ -395,9 +398,9 @@ func (e *validatorImagePullError) Error() string {
 	return fmt.Sprintf("validator pod cannot pull image (%s): %s", e.reason, e.message)
 }
 
-// Creates the SA/ClusterRole/ClusterRoleBinding the validator pod runs under,
-// idempotent via AlreadyExists tolerance. ClusterRole uses update-or-create so
-// newer CLI versions replace stale rules without the operator needing to delete.
+// ensureClusterValidatorRBAC creates this run's ServiceAccount, ClusterRole and
+// ClusterRoleBinding for the validator pod. Create only: the names are unique
+// per run, so an object that already exists was not made by this run.
 func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role, runID string, preserve bool) error {
 	roleLabels := clusterValidatorRunLabels(role, runID, preserve)
 	name := clusterValidatorRBACName(role, runID)
@@ -481,10 +484,9 @@ func clusterValidatorLabels() map[string]string {
 	}
 }
 
-// clusterValidatorRoleLabels adds the role so the prior-run sweep only matches
-// Jobs from the same role. Without it, a ModeSingle run deletes the other
-// role's Job mid-command, including under --no-cleanup, which makes the
-// printed `kubectl logs job/...` hint 404.
+// clusterValidatorRoleLabels are the managed labels plus the role, with no run
+// ID. validatorRoleSelector matches on them, so a lookup for one role never
+// returns the other role's objects in a ModeSingle run.
 func clusterValidatorRoleLabels(role string) map[string]string {
 	return clusterValidatorRunLabels(role, "", false)
 }
@@ -675,10 +677,11 @@ func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface,
 	}
 }
 
-// sweepManagedPullSecrets removes any docker-registry secrets in
-// clusterValidatorNamespace that we previously created (mirrored from
-// another namespace or minted from NGC_API_KEY). Called after the Job
-// terminates so NGC credentials don't persist across preflight runs.
+// sweepManagedPullSecrets removes this run's docker-registry secret in
+// clusterValidatorNamespace (mirrored from another namespace or minted from
+// NGC_API_KEY). Called after the Job terminates so NGC credentials don't
+// persist across preflight runs. Other runs' secrets are left to their own
+// sweeps or to sweepOrphanClusterValidatorRBAC.
 //
 // Operator-supplied secrets via --cluster-validator-pull-secret aren't
 // labeled by us and are skipped by the selector. Errors are swallowed:
@@ -787,7 +790,7 @@ const controlPlaneValidatorEnforcementConfig = `enforcement:
   critical: false
 `
 
-// ensureClusterValidatorConfig creates or updates the network-check ConfigMap.
+// ensureClusterValidatorConfig creates this run's network-check ConfigMap.
 // Best-effort: the validator skips configurable checks when it is absent.
 func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interface, registries []RegistryEntry, runID string, preserve bool) error {
 	content := buildControlPlaneValidatorConfig(registries)
@@ -811,8 +814,9 @@ func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interfa
 		return nil
 	}
 
-	// Always update so a newer CLI version's config (or new registries) replaces
-	// stale content, but never overwrite a ConfigMap we do not own.
+	// The name is per run, so an existing object was not created by this run.
+	// Replace the content only when it carries our labels; never overwrite a
+	// ConfigMap we do not own.
 	if !hasValidatorManagedLabels(existing.Labels) {
 		return fmt.Errorf(
 			"refusing to overwrite ConfigMap %s/%s which is not managed by nvcf-cli",
@@ -967,7 +971,8 @@ func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCle
 		// the deferred sweeps, or to a later run's orphan sweep. Sized above
 		// the runner's own budget so it never truncates a wait that is still
 		// making progress. A --no-cleanup Job gets neither, so the pod and its
-		// logs survive for debugging until the preserved-object sweep.
+		// logs survive for debugging until the operator removes them or a
+		// later check's orphan sweep runs after preservedValidatorTTL.
 		activeDeadline := int64(clusterValidatorTimeout/time.Second) + 60
 		job.Spec.ActiveDeadlineSeconds = &activeDeadline
 		ttl := clusterValidatorTTLSeconds
