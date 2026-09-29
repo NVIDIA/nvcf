@@ -42,8 +42,7 @@ func deleteExactly(o metav1.Object) metav1.DeleteOptions {
 	// delete-and-recreate under the same name changes it. ResourceVersion
 	// additionally pins the object's version, so any concurrent write turns
 	// the delete into a 409 that every sweep then swallows. That bites hardest
-	// on the singleton Job sweep, whose only target is an active Job whose
-	// .status the Job controller mutates continuously.
+	// on a Job, whose .status the Job controller mutates continuously.
 	uid := o.GetUID()
 	return metav1.DeleteOptions{
 		Preconditions: &metav1.Preconditions{UID: &uid},
