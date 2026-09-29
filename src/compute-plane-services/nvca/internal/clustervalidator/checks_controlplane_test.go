@@ -621,18 +621,18 @@ func TestCheckTier1Deployments_MixedRollingAndUnderReplicated(t *testing.T) {
 
 func TestCheckTier1Deployments_PreInstallPassesTrivially(t *testing.T) {
 	client := fake.NewSimpleClientset() // no namespaces, no deployments
-	state := &ValidationState{Log: testLog(), Preflight: true}
+	state := &ValidationState{Log: testLog()}
 	checkTier1Deployments(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK, "pre-install (no deployments) must pass trivially")
 }
 
-// Outside preflight the control plane is installed, so finding no Deployment
-// in any of its namespaces is a failure: a relocated release or an unset
-// override, not a pre-install cluster.
+// When the launcher says the control plane is installed, finding no
+// Deployment in any of its namespaces is a failure: a relocated release or an
+// unset override, not a pre-install cluster.
 func TestCheckTier1Deployments_NoDeploymentsAfterInstallFails(t *testing.T) {
-	state := &ValidationState{Log: testLog()}
+	state := &ValidationState{Log: testLog(), PostInstall: true}
 	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(), nil, state)
 
 	require.NotNil(t, state.Tier1DeploymentsOK)
@@ -2091,14 +2091,15 @@ func TestCheckExternalLoadBalancer_DiscoveryFailureIsNotAPass(t *testing.T) {
 	assert.Nil(t, state.ExternalLBOK)
 	assert.Contains(t, strings.Join(state.Recommendations, "; "), "httproutes")
 
+	// Nothing addressed is unknown too: the pending Service may be another
+	// team's, and NVCF's proxies may live in a namespace that was not listed.
 	client = routeDiscoveryClient()
 	addServices(t, client,
 		gatewayLBService(envoyNS, "envoy-a", "x", "a", corev1.ServiceTypeLoadBalancer, ""))
 	state = &ValidationState{Log: testLog()}
 	checkExternalLoadBalancer(context.Background(), client, denied(), state)
-	require.NotNil(t, state.ExternalLBOK)
-	assert.False(t, *state.ExternalLBOK, "nothing addressed fails whoever owns it")
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "envoy-a", "name the Service still pending")
+	assert.Nil(t, state.ExternalLBOK, "a foreign pending Service must not fail the NVCF row")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "1 pending")
 }
 
 // Without a client to list served route kinds, ownership is unknown, not empty.
@@ -2503,4 +2504,28 @@ func TestCheckNodeToNode_KubeletRejectedCheckerIsUnknown(t *testing.T) {
 	assert.Nil(t, state.NodeToNodeOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "OutOfcpu")
 	assert.Empty(t, state.Recommendations, "no firewall advice for a pod that never ran")
+}
+
+// With no NVCF routes, proxies cannot be attributed, so they are skipped with a
+// warning rather than silently.
+func TestCheckTier1Deployments_UnattributedProxiesAreReported(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	two := int32(2)
+	proxy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-x", Namespace: envoyGatewayNamespace, Generation: 1,
+			Labels: map[string]string{owningGatewayNameLabel: "x-gw", owningGatewayNamespaceLabel: "x"}},
+		Spec:   appsv1.DeploymentSpec{Replicas: &two},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 1},
+	}
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(proxy), nil, state)
+
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "no NVCF routes found")
+}
+
+func TestPostInstallMode(t *testing.T) {
+	for v, want := range map[string]bool{"true": true, " TRUE ": true, "1": true, "": false, "no": false} {
+		assert.Equal(t, want, postInstallMode(v), v)
+	}
 }

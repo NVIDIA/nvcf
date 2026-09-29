@@ -295,6 +295,10 @@ assert_cluster_validator_role() {
     "${chart_label} init container skips the summary under a mixed-case control-plane role"
   assert_eq "Control-Plane" "$(yq "${cron_env} | select(.name == \"VALIDATOR_ROLE\") | .value" "${rendered}")" \
     "${chart_label} CronJob receives the configured role"
+  assert_eq "true" "$(yq "${cron_env} | select(.name == \"VALIDATOR_POST_INSTALL\") | .value" "${rendered}")" \
+    "${chart_label} CronJob declares the control plane installed"
+  assert_eq "" "$(yq "${init_env} | select(.name == \"VALIDATOR_POST_INSTALL\") | .value" "${rendered}")" \
+    "${chart_label} init container leaves the post-install signal unset"
 
   helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
     --set clusterValidator.enabled=true >"${rendered}"

@@ -20,6 +20,8 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
@@ -40,10 +42,12 @@ const (
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
 	Log *logrus.Entry
-	// Preflight is set for a one-shot run before the stack is installed (no
-	// summary write). Checks use it to tell "nothing installed yet" from
-	// "installed control plane is missing".
-	Preflight bool
+	// PostInstall is set when the launcher asserts the control plane is
+	// already installed (VALIDATOR_POST_INSTALL), so an empty control plane is
+	// a failure rather than a pre-install state. It is separate from
+	// VALIDATOR_PREFLIGHT, which only suppresses the summary write and is set
+	// by post-install CLI runs too.
+	PostInstall bool
 	// NodeToNodeNotApplicable holds the reason the overlay probe could not
 	// apply (for example a single schedulable node). Non-empty means the check
 	// is reported as Not Applicable rather than Verified or Unknown, and is
@@ -104,8 +108,8 @@ type ValidationState struct {
 	// role. true = overlay verified, false = failed.
 	NodeToNodeOK *bool
 	// Tier1DeploymentsOK is nil when the check did not run (compute-plane role)
-	// or nothing could be assessed. Finding no Deployments is true in preflight
-	// and false otherwise.
+	// or nothing could be assessed. Finding no Deployments is false when
+	// PostInstall is set and true otherwise.
 	Tier1DeploymentsOK *bool
 	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role)
 	// or when a StatefulSet list call fails. No quorum StatefulSets found
@@ -141,6 +145,20 @@ type NetpolPairResult struct {
 	Directions map[string]DirectionStatus
 }
 
+// PostInstallEnv tells the validator the control plane is already installed.
+const PostInstallEnv = "VALIDATOR_POST_INSTALL"
+
+// postInstallMode parses PostInstallEnv. Unset or unrecognized keeps the
+// lenient pre-install reading.
+func postInstallMode(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 // Run executes all cluster validation checks and returns a non-nil error when
 // the cluster is not ready. role selects the check set; configNamespace/configName
 // identify the optional ConfigMap; emitMetrics gates the summary write. routes
@@ -167,7 +185,7 @@ func Run(
 		Log:                 log,
 		Role:                role,
 		ControlPlaneHealthy: true,
-		Preflight:           !emitMetrics,
+		PostInstall:         postInstallMode(os.Getenv(PostInstallEnv)),
 		NodesAllReady:       true,
 	}
 

@@ -1315,10 +1315,12 @@ func judgeNVCFGatewayServices(log *logrus.Entry, state *ValidationState, gateway
 }
 
 // judgeUnattributedServices is the fallback when the NVCF Gateways are not
-// known, so no pending Service can be attributed to NVCF. Nothing with an
-// address fails regardless of ownership. Otherwise a known-empty route set
-// (typically before nvcf-cli up) passes with a warning, and a failed discovery
-// stays unknown: an address on some Service proves nothing about NVCF's.
+// known. A failed discovery is unknown whatever the Services show: NVCF's own
+// proxies may sit in a Gateway namespace that was not listed, or not use a
+// LoadBalancer at all, so neither a foreign address nor a foreign pending
+// Service says anything about NVCF's. With a known-empty route set (typically
+// before nvcf-cli up), nothing addressed fails and a pending Service beside an
+// addressed one only warns.
 func judgeUnattributedServices(
 	log *logrus.Entry, state *ValidationState, services []corev1.Service, discoveryErr error,
 ) {
@@ -1334,6 +1336,18 @@ func judgeUnattributedServices(
 		} else {
 			pending = append(pending, svc.Namespace+"/"+svc.Name)
 		}
+	}
+
+	if discoveryErr != nil {
+		msg := fmt.Sprintf("could not determine which Gateways belong to NVCF (%v), so %d addressed and "+
+			"%d pending LoadBalancer Service(s) cannot be attributed", discoveryErr, len(found), len(pending))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+		state.Recommendations = append(state.Recommendations,
+			"Grant the cluster-validator ServiceAccount get and list on gateway.networking.k8s.io "+
+				"httproutes, grpcroutes, tcproutes and udproutes, or set clusterValidator.gatewayNames "+
+				"(env "+nvcfGatewayNamesEnv+").")
+		return
 	}
 
 	if len(found) == 0 && len(pending) > 0 {
@@ -1355,18 +1369,6 @@ func judgeUnattributedServices(
 				"Verify a load balancer controller is installed.")
 		ok := false
 		state.ExternalLBOK = &ok
-		return
-	}
-
-	if discoveryErr != nil {
-		msg := fmt.Sprintf("could not determine which Gateways belong to NVCF (%v), "+
-			"so the %d addressed LoadBalancer Service(s) cannot be attributed", discoveryErr, len(found))
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
-		state.Recommendations = append(state.Recommendations,
-			"Grant the cluster-validator ServiceAccount get and list on gateway.networking.k8s.io "+
-				"httproutes, grpcroutes, tcproutes and udproutes, or set clusterValidator.gatewayNames "+
-				"(env "+nvcfGatewayNamesEnv+").")
 		return
 	}
 
@@ -2551,9 +2553,20 @@ func checkTier1Deployments(
 		}
 	}
 
-	if skippedProxies > 0 && gatewayErr != nil {
+	// Skipped proxies are reported rather than silently dropped. This stays a
+	// warning, not UNKNOWN: the Envoy and LoadBalancer rows cover the
+	// Gateway data plane, and blocking this critical row on route RBAC would
+	// fail every run from a launcher that has not been granted it yet.
+	switch {
+	case skippedProxies > 0 && gatewayErr != nil:
 		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: could not determine the NVCF Gateways (%v)",
 			skippedProxies, envoyNS, gatewayErr)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
+	case skippedProxies > 0 && len(gateways) == 0:
+		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: no NVCF routes found to identify "+
+			"the NVCF Gateways; set clusterValidator.gatewayNames (env %s) if they exist", skippedProxies, envoyNS,
+			nvcfGatewayNamesEnv)
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
 	}
@@ -2589,13 +2602,13 @@ func checkTier1Deployments(
 			state.Tier1DeploymentsOK = &ok
 			return
 		}
-		if state.Preflight {
+		if !state.PostInstall {
 			printInfo(log, "  No Deployments found in control-plane namespaces (pre-install state)")
 			ok := true
 			state.Tier1DeploymentsOK = &ok
 			return
 		}
-		// Outside preflight the control plane is installed, so finding
+		// The launcher says the control plane is installed, so finding
 		// nothing means the namespace list does not match the install (a
 		// relocated release, an override left unset) or the services are gone.
 		printError(log, "No Deployments found in any control-plane namespace")

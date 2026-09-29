@@ -86,6 +86,10 @@ spec:
                 # control-plane checks are unreachable from the chart.
                 - name: VALIDATOR_ROLE
                   value: {{ $cv.role | quote }}
+                # The CronJob runs beside an installed stack, so an empty
+                # control plane is a failure here rather than pre-install.
+                - name: VALIDATOR_POST_INSTALL
+                  value: "true"
                 {{- if $cv.openBaoNamespace }}
                 # Relocated OpenBao: without this the Tier-2 quorum check
                 # silently skips its StatefulSet.
