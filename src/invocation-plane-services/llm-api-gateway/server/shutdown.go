@@ -24,12 +24,20 @@ import (
 	"time"
 
 	echo "github.com/labstack/echo/v4"
+
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-// canceledRequestGrace bounds how long Shutdown waits, after a timed-out
-// drain closes the remaining connections, for their canceled handlers to
-// return before stopping dependencies.
-const canceledRequestGrace = 5 * time.Second
+const (
+	// canceledRequestGrace bounds how long Shutdown waits, after a timed-out
+	// drain closes the remaining connections, for their canceled handlers to
+	// return before stopping dependencies.
+	canceledRequestGrace = 5 * time.Second
+	// teardownTimeout bounds dependency teardown as a whole, so a stalled step
+	// cannot keep the process from exiting before its termination grace
+	// period ends.
+	teardownTimeout = 10 * time.Second
+)
 
 // teardowns maps each Echo instance built by New to its teardown.
 var teardowns sync.Map
@@ -82,13 +90,28 @@ func (t *teardown) add(step func()) {
 	t.steps = append(t.steps, step)
 }
 
-func (t *teardown) run() {
+// run executes the steps once. It returns after they finish or after
+// timeout, leaving any stalled step running until the process exits.
+func (t *teardown) run(timeout time.Duration) {
 	t.once.Do(func() {
 		t.mu.Lock()
 		steps := t.steps
 		t.mu.Unlock()
-		for _, step := range steps {
-			step()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for _, step := range steps {
+				step()
+			}
+		}()
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			telemetry.Logger(context.Background()).
+				Warn().
+				Dur("timeout", timeout).
+				Msg("dependency teardown did not finish within its timeout")
 		}
 	})
 }
@@ -109,7 +132,8 @@ func Shutdown(ctx context.Context, e *echo.Echo) error {
 		}
 	}
 	if tracked {
-		v.(*teardown).run()
+		v.(*teardown).run(teardownTimeout)
+		teardowns.Delete(e)
 	}
 	return err
 }

@@ -65,6 +65,7 @@ func New(
 
 	limiter, err := newRateLimiter(cfg, e)
 	if err != nil {
+		teardowns.Delete(e)
 		return nil, err
 	}
 

@@ -125,6 +125,27 @@ func TestShutdownStopsDependenciesAfterDrain(t *testing.T) {
 	}
 }
 
+func TestTeardownGivesUpOnStalledStep(t *testing.T) {
+	t.Parallel()
+
+	teardown := newTeardown(echo.New())
+	stall := make(chan struct{})
+	t.Cleanup(func() { close(stall) })
+	var after atomic.Bool
+	teardown.add(func() { <-stall })
+	teardown.add(func() { after.Store(true) })
+
+	returned := make(chan struct{})
+	go func() {
+		teardown.run(200 * time.Millisecond)
+		close(returned)
+	}()
+	waitFor(t, returned, "teardown to give up on the stalled step")
+	if after.Load() {
+		t.Fatal("step after the stalled one ran before it finished")
+	}
+}
+
 type closingAuthClient struct {
 	closed atomic.Bool
 }
@@ -165,6 +186,9 @@ func TestShutdownClosesAuthClient(t *testing.T) {
 	}
 	if !auth.closed.Load() {
 		t.Fatal("auth client was not closed")
+	}
+	if _, ok := teardowns.Load(e); ok {
+		t.Fatal("teardown registry still holds the shut-down server")
 	}
 }
 
