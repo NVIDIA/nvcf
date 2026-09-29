@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"k8s.io/client-go/dynamic"
 
 	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
@@ -39,9 +40,14 @@ func main() {
 	log := core.GetLogger(ctx)
 	log.Logger.SetFormatter(&clustervalidator.CLIFormatter{})
 
-	client, _, err := internalutil.NewK8sClient(ctx, "")
+	client, restCfg, err := internalutil.NewK8sClient(ctx, "")
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create Kubernetes client")
+	}
+	// Gateway API routes are CRDs, so listing them needs the dynamic client.
+	routes, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create Kubernetes dynamic client")
 	}
 
 	configNS := os.Getenv("VALIDATOR_CONFIG_NAMESPACE")
@@ -81,7 +87,7 @@ func main() {
 		log.Warnf("VALIDATOR_ROLE=%q is not recognized; defaulting to compute-plane", roleEnv)
 	}
 
-	if err := clustervalidator.Run(ctx, client, configNS, configName, summaryNS, emitMetrics, role); err != nil {
+	if err := clustervalidator.Run(ctx, client, routes, configNS, configName, summaryNS, emitMetrics, role); err != nil {
 		log.WithError(err).Fatal("Cluster validation failed")
 	}
 }

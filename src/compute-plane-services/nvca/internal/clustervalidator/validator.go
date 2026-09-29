@@ -24,6 +24,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -137,10 +138,13 @@ type NetpolPairResult struct {
 
 // Run executes all cluster validation checks and returns a non-nil error when
 // the cluster is not ready. role selects the check set; configNamespace/configName
-// identify the optional ConfigMap; emitMetrics gates the summary write.
+// identify the optional ConfigMap; emitMetrics gates the summary write. routes
+// lists Gateway API routes to identify the NVCF Gateways; nil leaves that
+// ownership undetermined.
 func Run(
 	ctx context.Context,
 	client kubernetes.Interface,
+	routes dynamic.Interface,
 	configNamespace, configName, summaryNamespace string,
 	emitMetrics bool,
 	role Role,
@@ -198,7 +202,7 @@ func Run(
 		checkGatewayAPICRDs(ctx, client, state)
 		checkEnvoyGateway(ctx, client, state)
 		checkGatewayRoutes(ctx, client, state)
-		checkExternalLoadBalancer(ctx, client, state)
+		checkExternalLoadBalancer(ctx, client, routes, state)
 		checkNodeToNode(ctx, client, state, nodeToNodeProbeImage(netCfg))
 		checkTier1Deployments(ctx, client, state)
 		checkTier2StatefulSets(ctx, client, state)

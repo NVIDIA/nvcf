@@ -99,7 +99,7 @@ spec:
                   value: {{ $cv.envoyGatewayNamespace | quote }}
                 {{- end }}
                 {{- with $cv.gatewayNames }}
-                # Limits the LoadBalancer check to NVCF's Gateway proxies.
+                # Replaces route-based discovery of the NVCF Gateways.
                 - name: NVCF_GATEWAY_NAMES
                   value: {{ join "," . | quote }}
                 {{- end }}

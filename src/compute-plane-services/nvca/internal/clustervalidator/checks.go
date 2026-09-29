@@ -33,8 +33,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -1166,75 +1169,167 @@ func checkGatewayRoutes(_ context.Context, client kubernetes.Interface, state *V
 	state.GatewayRoutesOK = &ok
 }
 
-// checkExternalLoadBalancer performs a passive check: it lists Services of type
-// LoadBalancer in the gateway namespace and looks for one with a populated
-// .status.loadBalancer.ingress. A populated ingress means a load balancer
-// controller (cloud LB, MetalLB, etc.) is active and assigned an IP or hostname.
+// checkExternalLoadBalancer performs a passive check that the NVCF Gateways'
+// proxy Services have an external address from a load balancer controller
+// (cloud LB, MetalLB, etc.).
+//
+// Envoy Gateway puts every Gateway's proxy Service in its own namespace by
+// default, including other teams', so the check first decides which Gateways
+// are NVCF's (resolveNVCFGateways) and judges only their Services. When that
+// cannot be decided it falls back to the whole namespace and says so.
 //
 // Non-critical: the passive form only detects an existing LB service; it does
 // not create a probe service, so absence means either no LB service exists yet
 // or no LB controller is installed.
-func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+func checkExternalLoadBalancer(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, state *ValidationState,
+) {
 	log := state.Log
 	printHeader(log, "External Load Balancer")
 
-	// Scope to the gateway namespace. An unscoped list is satisfied by any
-	// LoadBalancer anywhere (ingress-nginx, a demo app), which masks the NVCF
-	// gateway's own Service sitting at <pending> on an exhausted address pool.
 	envoyNS := envoyGatewayNamespaceName()
-	gateways := nvcfGatewayNames()
-	services, err := client.CoreV1().Services(envoyNS).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		// Leave the pointer nil: a List failure is not evidence that no
-		// LoadBalancer has an address.
-		printWarning(log, fmt.Sprintf("Could not list services in %s: %v", envoyNS, err))
-		state.Warnings = append(state.Warnings,
-			"External Load Balancer: status unknown (Service listing failed)")
+	gateways, source, discoveryErr := resolveNVCFGateways(ctx, client, routes)
+	switch {
+	case discoveryErr != nil:
+		printWarning(log, fmt.Sprintf("Could not determine which Gateways belong to NVCF: %v", discoveryErr))
+	case len(gateways) > 0:
+		printInfo(log, fmt.Sprintf("  NVCF Gateways (%s): %s", source, gateways))
+	}
+
+	// Default Envoy Gateway mode puts the proxy Services in the controller
+	// namespace; GatewayNamespace mode puts them beside each Gateway. Search
+	// both so either mode is covered once the Gateway namespaces are known.
+	namespaces := append([]string{envoyNS}, gateways.namespaces(envoyNS)...)
+	var services []corev1.Service
+	for _, ns := range namespaces {
+		list, err := client.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			// Leave the pointer nil: a List failure is not evidence that no
+			// LoadBalancer has an address.
+			printWarning(log, fmt.Sprintf("Could not list services in %s: %v", ns, err))
+			state.Warnings = append(state.Warnings,
+				"External Load Balancer: status unknown (Service listing failed)")
+			return
+		}
+		services = append(services, list.Items...)
+	}
+
+	if len(gateways) > 0 {
+		judgeNVCFGatewayServices(log, state, gateways, services)
+		return
+	}
+	judgeUnattributedServices(log, state, services, discoveryErr)
+}
+
+// lbResult is one LoadBalancer Service with its assigned address.
+type lbResult struct {
+	name      string
+	namespace string
+	addr      string
+}
+
+// lbAddress returns the first IP or hostname the LB controller assigned.
+func lbAddress(svc *corev1.Service) string {
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.IP != "" {
+			return ing.IP
+		}
+		if ing.Hostname != "" {
+			return ing.Hostname
+		}
+	}
+	return ""
+}
+
+// judgeNVCFGatewayServices is the strict path: every NVCF Gateway must have a
+// proxy Service, and every one exposed through a LoadBalancer must have an
+// address. Other Gateways' Services are ignored.
+func judgeNVCFGatewayServices(log *logrus.Entry, state *ValidationState, gateways gatewaySet, services []corev1.Service) {
+	var found []lbResult
+	var pending []string
+	seen := map[string]bool{}
+	for i := range services {
+		svc := &services[i]
+		entry := gateways.entryFor(svc)
+		if entry == "" {
+			continue
+		}
+		seen[entry] = true
+		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+			// An EnvoyProxy can expose a Gateway as NodePort or ClusterIP on
+			// purpose; that Gateway has no external LB to check.
+			printInfo(log, fmt.Sprintf("  %s/%s (Gateway %s) is %s, not a LoadBalancer",
+				svc.Namespace, svc.Name, entry, svc.Spec.Type))
+			continue
+		}
+		if addr := lbAddress(svc); addr != "" {
+			found = append(found, lbResult{svc.Name, svc.Namespace, addr})
+		} else {
+			pending = append(pending, svc.Namespace+"/"+svc.Name)
+		}
+	}
+	var missing []string
+	for _, entry := range gateways.sorted() {
+		if !seen[entry] {
+			missing = append(missing, entry)
+		}
+	}
+
+	if len(missing) > 0 || len(pending) > 0 {
+		var problems []string
+		if len(missing) > 0 {
+			problems = append(problems, fmt.Sprintf("no proxy Service found for Gateway(s) %s; "+
+				"check the Gateway exists and Envoy Gateway provisioned it", strings.Join(missing, ", ")))
+		}
+		if len(pending) > 0 {
+			problems = append(problems, strings.Join(pending, ", ")+
+				" have no external address; check the load balancer controller and its address pool")
+		}
+		msg := strings.Join(problems, ". ")
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "External Load Balancer: "+msg+".")
+		ok := false
+		state.ExternalLBOK = &ok
 		return
 	}
 
-	type lbResult struct {
-		name      string
-		namespace string
-		addr      string
+	if len(found) == 0 {
+		// Every NVCF Gateway is exposed some other way, so there is no LB to
+		// verify. Unknown rather than a failure or a pass.
+		msg := "no NVCF Gateway is exposed through a LoadBalancer Service"
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+		return
 	}
+
+	printLBSuccess(log, found)
+	ok := true
+	state.ExternalLBOK = &ok
+}
+
+// judgeUnattributedServices is the fallback when the NVCF Gateways are not
+// known, so no pending Service can be attributed to NVCF. Nothing with an
+// address fails regardless of ownership. Otherwise a known-empty route set
+// (typically before nvcf-cli up) passes with a warning, and a failed discovery
+// stays unknown: an address on some Service proves nothing about NVCF's.
+func judgeUnattributedServices(
+	log *logrus.Entry, state *ValidationState, services []corev1.Service, discoveryErr error,
+) {
 	var found []lbResult
-	// Envoy Gateway provisions one proxy Service per Gateway, and the stack
-	// defines several. Tracking the unassigned ones stops a partially
-	// satisfied address pool from passing on the strength of its siblings.
 	var pending []string
-	for i := range services.Items {
-		svc := &services.Items[i]
+	for i := range services {
+		svc := &services[i]
 		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
 			continue
 		}
-		// In its default mode Envoy Gateway puts every Gateway's proxy Service
-		// here, including other teams'. A foreign Service at <pending> says
-		// nothing about NVCF's address pool.
-		if len(gateways) > 0 && !gateways.owns(svc) {
-			continue
-		}
-		addr := ""
-		for _, ing := range svc.Status.LoadBalancer.Ingress {
-			if addr = ing.IP; addr == "" {
-				addr = ing.Hostname
-			}
-			if addr != "" {
-				break
-			}
-		}
-		if addr == "" {
+		if addr := lbAddress(svc); addr != "" {
+			found = append(found, lbResult{svc.Name, svc.Namespace, addr})
+		} else {
 			pending = append(pending, svc.Namespace+"/"+svc.Name)
-			continue
 		}
-		found = append(found, lbResult{svc.Name, svc.Namespace, addr})
 	}
 
-	// With the NVCF Gateways named, any of theirs still pending fails: a
-	// partially satisfied pool must not pass on the strength of its siblings.
-	// Without names we cannot tell whose Service is pending, so it only fails
-	// when nothing in the namespace has an address.
-	if len(pending) > 0 && (len(gateways) > 0 || len(found) == 0) {
+	if len(found) == 0 && len(pending) > 0 {
 		printWarning(log, fmt.Sprintf("LoadBalancer Service(s) awaiting an external address: %s",
 			strings.Join(pending, ", ")))
 		state.Warnings = append(state.Warnings,
@@ -1244,25 +1339,6 @@ func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface,
 		state.ExternalLBOK = &ok
 		return
 	}
-	if len(pending) > 0 {
-		printWarning(log, fmt.Sprintf("LoadBalancer Service(s) awaiting an external address: %s",
-			strings.Join(pending, ", ")))
-		state.Warnings = append(state.Warnings,
-			"External Load Balancer: "+strings.Join(pending, ", ")+" have no external address. "+
-				"Set clusterValidator.gatewayNames (env "+nvcfGatewayNamesEnv+") to the NVCF Gateways "+
-				"so this check can tell whether they belong to NVCF.")
-	}
-
-	if len(found) == 0 && len(gateways) > 0 {
-		msg := fmt.Sprintf("No LoadBalancer Service found in %s for Gateway(s) %s", envoyNS, gateways)
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "External Load Balancer: "+msg+
-			". Check the Gateway names and that Envoy Gateway provisioned their proxies.")
-		ok := false
-		state.ExternalLBOK = &ok
-		return
-	}
-
 	if len(found) == 0 {
 		printWarning(log, "No LoadBalancer Services with an assigned external address found")
 		printInfo(log, "  This may indicate: no LB controller is installed (MetalLB, cloud LB), "+
@@ -1275,12 +1351,36 @@ func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface,
 		return
 	}
 
+	if discoveryErr != nil {
+		msg := fmt.Sprintf("could not determine which Gateways belong to NVCF (%v), "+
+			"so the %d addressed LoadBalancer Service(s) cannot be attributed", discoveryErr, len(found))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+		state.Recommendations = append(state.Recommendations,
+			"Grant the cluster-validator ServiceAccount get and list on gateway.networking.k8s.io "+
+				"httproutes, grpcroutes, tcproutes and udproutes, or set clusterValidator.gatewayNames "+
+				"(env "+nvcfGatewayNamesEnv+").")
+		return
+	}
+
+	if len(pending) > 0 {
+		printWarning(log, fmt.Sprintf("LoadBalancer Service(s) awaiting an external address: %s",
+			strings.Join(pending, ", ")))
+		state.Warnings = append(state.Warnings,
+			"External Load Balancer: "+strings.Join(pending, ", ")+" have no external address. "+
+				"No NVCF routes were found to tell whether they belong to NVCF; set "+
+				"clusterValidator.gatewayNames (env "+nvcfGatewayNamesEnv+") to check the NVCF Gateways.")
+	}
+	printLBSuccess(log, found)
+	ok := true
+	state.ExternalLBOK = &ok
+}
+
+func printLBSuccess(log *logrus.Entry, found []lbResult) {
 	printSuccess(log, fmt.Sprintf("%d LoadBalancer Service(s) with external address:", len(found)))
 	for _, svc := range found {
 		printInfo(log, fmt.Sprintf("  %s/%s → %s", svc.namespace, svc.name, svc.addr))
 	}
-	ok := true
-	state.ExternalLBOK = &ok
 }
 
 const (
@@ -2003,7 +2103,9 @@ func controlPlaneNamespaceSet() []string {
 
 // envoyGatewayNamespaceName is where the Envoy Gateway controller and its
 // provisioned proxy Services live.
-// gatewaySet holds the configured NVCF Gateways as "name" or "namespace/name".
+// gatewaySet holds NVCF Gateways as "name" or "namespace/name". Discovered
+// entries are always "namespace/name"; a configured bare name matches that
+// Gateway in any namespace.
 type gatewaySet map[string]bool
 
 // nvcfGatewayNames parses NVCF_GATEWAY_NAMES. Empty means unconfigured.
@@ -2017,23 +2119,168 @@ func nvcfGatewayNames() gatewaySet {
 	return set
 }
 
-// owns reports whether svc is the proxy Service of a configured Gateway.
-func (g gatewaySet) owns(svc *corev1.Service) bool {
+// entryFor returns the entry whose Gateway owns svc, or "" when none does.
+func (g gatewaySet) entryFor(svc *corev1.Service) string {
 	name := svc.Labels[owningGatewayNameLabel]
 	if name == "" {
-		return false
+		return ""
 	}
-	return g[name] || g[svc.Labels[owningGatewayNamespaceLabel]+"/"+name]
+	if qualified := svc.Labels[owningGatewayNamespaceLabel] + "/" + name; g[qualified] {
+		return qualified
+	}
+	if g[name] {
+		return name
+	}
+	return ""
 }
 
-// String renders the set in a stable order for messages.
-func (g gatewaySet) String() string {
+// namespaces returns the distinct Gateway namespaces in the set, excluding
+// skip, so the caller can search them for proxy Services.
+func (g gatewaySet) namespaces(skip string) []string {
+	uniq := map[string]bool{}
+	for entry := range g {
+		if ns, _, ok := strings.Cut(entry, "/"); ok && ns != "" && ns != skip {
+			uniq[ns] = true
+		}
+	}
+	out := make([]string, 0, len(uniq))
+	for ns := range uniq {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (g gatewaySet) sorted() []string {
 	names := make([]string, 0, len(g))
 	for n := range g {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	return strings.Join(names, ", ")
+	return names
+}
+
+// String renders the set in a stable order for messages.
+func (g gatewaySet) String() string { return strings.Join(g.sorted(), ", ") }
+
+const (
+	// nvcfRoutesChartPrefix prefixes the helm.sh/chart label on every route the
+	// nvcf-gateway-routes chart renders. That label is built from the chart
+	// name, which nameOverride does not change, unlike app.kubernetes.io/name.
+	nvcfRoutesChartPrefix = "nvcf-gateway-routes-"
+	helmChartLabel        = "helm.sh/chart"
+)
+
+// gatewayRouteResources are the route kinds whose parentRefs attach NVCF
+// traffic to a Gateway.
+var gatewayRouteResources = []string{"httproutes", "grpcroutes", "tcproutes", "udproutes"}
+
+// gatewayAPIVersionPreference picks one served version per route kind. The
+// kinds do not share a version (TCPRoute and UDPRoute are v1alpha2 only), and
+// any served version lists every object, so this only makes the choice stable.
+var gatewayAPIVersionPreference = []string{"v1", "v1beta1", "v1alpha2"}
+
+func (s gatewayAPISurface) servedVersion(resource string) string {
+	for _, v := range gatewayAPIVersionPreference {
+		if s.hasPair(gatewayAPIGroup+"/"+v, resource) {
+			return v
+		}
+	}
+	return ""
+}
+
+// resolveNVCFGateways returns the NVCF Gateways and where they came from. A
+// configured list replaces discovery, since it is set precisely when discovery
+// does not describe the install. An empty set with a nil error means no NVCF
+// route exists yet; an error means ownership is unknown and must not be read
+// as an empty set.
+func resolveNVCFGateways(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
+) (gatewaySet, string, error) {
+	if configured := nvcfGatewayNames(); len(configured) > 0 {
+		return configured, nvcfGatewayNamesEnv, nil
+	}
+	discovered, err := discoverNVCFGateways(ctx, client, routes)
+	if err != nil {
+		return gatewaySet{}, "", err
+	}
+	return discovered, "from NVCF routes", nil
+}
+
+// discoverNVCFGateways collects the Gateways that routes rendered by the
+// nvcf-gateway-routes chart attach to. Route kinds the cluster does not serve
+// are skipped; an error listing a served kind is returned, not treated as
+// absence.
+func discoverNVCFGateways(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
+) (gatewaySet, error) {
+	surface, err := discoverGatewayAPIResources(client)
+	if err != nil {
+		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
+	}
+	set := gatewaySet{}
+	for _, resource := range gatewayRouteResources {
+		version := surface.servedVersion(resource)
+		if version == "" {
+			continue
+		}
+		if routes == nil {
+			return nil, fmt.Errorf("no client available to list %s", resource)
+		}
+		gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: resource}
+		// Filter server-side on the label's presence; its value is a
+		// chart-plus-version string, so the prefix is matched client-side.
+		list, err := routes.Resource(gvr).List(ctx, metav1.ListOptions{LabelSelector: helmChartLabel})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				// The CRD went away between discovery and the list.
+				continue
+			}
+			return nil, fmt.Errorf("listing %s: %w", resource, err)
+		}
+		for i := range list.Items {
+			route := &list.Items[i]
+			if !strings.HasPrefix(route.GetLabels()[helmChartLabel], nvcfRoutesChartPrefix) {
+				continue
+			}
+			for _, ref := range gatewayParentRefs(route) {
+				set[ref] = true
+			}
+		}
+	}
+	return set, nil
+}
+
+// gatewayParentRefs returns a route's Gateway parents as "namespace/name",
+// applying the Gateway API defaults: group gateway.networking.k8s.io, kind
+// Gateway, and the route's own namespace. Parents of other kinds are skipped.
+// The CRD schema requires a non-empty name, so an empty one is only skipped
+// defensively.
+func gatewayParentRefs(route *unstructured.Unstructured) []string {
+	refs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	var out []string
+	for _, raw := range refs {
+		ref, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if group, set := ref["group"]; set && group != gatewayAPIGroup {
+			continue
+		}
+		if kind, set := ref["kind"]; set && kind != "Gateway" {
+			continue
+		}
+		name, _ := ref["name"].(string)
+		if name == "" {
+			continue
+		}
+		ns, _ := ref["namespace"].(string)
+		if ns == "" {
+			ns = route.GetNamespace()
+		}
+		out = append(out, ns+"/"+name)
+	}
+	return out
 }
 
 func envoyGatewayNamespaceName() string {

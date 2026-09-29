@@ -31,10 +31,12 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -225,7 +227,7 @@ func TestCheckExternalLoadBalancer_ServiceWithIP(t *testing.T) {
 		},
 	})
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.True(t, *state.ExternalLBOK, "a LB service with an assigned IP must set ExternalLBOK=true")
@@ -242,7 +244,7 @@ func TestCheckExternalLoadBalancer_ServiceWithHostname(t *testing.T) {
 		},
 	})
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.True(t, *state.ExternalLBOK, "a LB service with a hostname must set ExternalLBOK=true")
@@ -254,7 +256,7 @@ func TestCheckExternalLoadBalancer_NoLBServices(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
 	})
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.False(t, *state.ExternalLBOK, "no LB service must set ExternalLBOK=false")
@@ -269,7 +271,7 @@ func TestCheckExternalLoadBalancer_LBServicePendingNoIP(t *testing.T) {
 		// No Status.LoadBalancer.Ingress
 	})
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.False(t, *state.ExternalLBOK, "LB service with no assigned IP must set ExternalLBOK=false")
@@ -1211,7 +1213,7 @@ func TestCheckExternalLoadBalancer_PendingServiceIsNotAPass(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset(assigned, pending)
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.False(t, *state.ExternalLBOK,
@@ -1245,7 +1247,7 @@ func TestCheckExternalLoadBalancer_ForeignPendingGatewayIgnored(t *testing.T) {
 		lbService("envoy-other-shared", "shared-gw", "other", ""),
 	)
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.True(t, *state.ExternalLBOK)
@@ -1258,7 +1260,7 @@ func TestCheckExternalLoadBalancer_NamedGatewayMissing(t *testing.T) {
 	t.Setenv(nvcfGatewayNamesEnv, "shared-gw")
 	client := fake.NewSimpleClientset(lbService("envoy-team-b", "team-b-gw", "team-b", "203.0.113.9"))
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.False(t, *state.ExternalLBOK)
@@ -1274,7 +1276,7 @@ func TestCheckExternalLoadBalancer_UnnamedPendingOnlyWarns(t *testing.T) {
 		lbService("envoy-team-b", "team-b-gw", "team-b", ""),
 	)
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, state)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
 	require.NotNil(t, state.ExternalLBOK)
 	assert.True(t, *state.ExternalLBOK)
@@ -1827,4 +1829,263 @@ func TestCheckTier2StatefulSets_OnDeleteAtFullReadyIsClean(t *testing.T) {
 	assert.True(t, *state.Tier2StatefulSetsOK)
 	assert.NotContains(t, strings.Join(state.Warnings, "; "), "rolling update in progress",
 		"an OnDelete mismatch is the steady state, not an in-flight rollout")
+}
+
+// -- NVCF Gateway discovery --
+
+var routeVersions = map[string]string{
+	"HTTPRoute": "v1", "GRPCRoute": "v1", "TCPRoute": "v1alpha2", "UDPRoute": "v1alpha2",
+}
+
+func parentRef(kv ...string) map[string]interface{} {
+	ref := map[string]interface{}{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		ref[kv[i]] = kv[i+1]
+	}
+	return ref
+}
+
+func route(kind, ns, name, chart string, parents ...map[string]interface{}) *unstructured.Unstructured {
+	refs := make([]interface{}, len(parents))
+	for i, p := range parents {
+		refs[i] = p
+	}
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": gatewayAPIGroup + "/" + routeVersions[kind],
+		"kind":       kind,
+		"metadata":   map[string]interface{}{"name": name, "namespace": ns},
+		"spec":       map[string]interface{}{"parentRefs": refs},
+	}}
+	if chart != "" {
+		u.SetLabels(map[string]string{helmChartLabel: chart})
+	}
+	return u
+}
+
+func routeClient(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	kinds := map[schema.GroupVersionResource]string{}
+	for kind, v := range routeVersions {
+		kinds[schema.GroupVersionResource{
+			Group: gatewayAPIGroup, Version: v, Resource: strings.ToLower(kind) + "s",
+		}] = kind + "List"
+	}
+	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, objs...)
+}
+
+// Every served route kind the NVCF stack renders, at its served version.
+func routeDiscoveryClient() *fake.Clientset {
+	return gatewayDiscoveryClient(
+		gatewayAPIGroup+"/v1/httproutes",
+		gatewayAPIGroup+"/v1/grpcroutes",
+		gatewayAPIGroup+"/v1alpha2/tcproutes",
+	)
+}
+
+func gatewayLBService(ns, name, gwNS, gw string, typ corev1.ServiceType, ip string) *corev1.Service {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{
+			owningGatewayNameLabel: gw, owningGatewayNamespaceLabel: gwNS,
+		}},
+		Spec: corev1.ServiceSpec{Type: typ},
+	}
+	if ip != "" {
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip}}
+	}
+	return svc
+}
+
+func addServices(t *testing.T, client *fake.Clientset, svcs ...*corev1.Service) {
+	t.Helper()
+	for _, svc := range svcs {
+		_, err := client.CoreV1().Services(svc.Namespace).Create(context.Background(), svc, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+}
+
+// parentRefs defaults come from the Gateway API spec. An omitted namespace is
+// the route's own, so "shared-gw" on a route in nvcf is nvcf/shared-gw, not
+// "/shared-gw", which would match nothing.
+func TestGatewayParentRefs_AppliesSpecDefaults(t *testing.T) {
+	r := route("HTTPRoute", "nvcf", "r", "nvcf-gateway-routes-1.0.0",
+		parentRef("name", "shared-gw"),
+		parentRef("name", "grpc-gw", "namespace", "gw"),
+		parentRef("name", "eg", "namespace", "gw", "group", gatewayAPIGroup, "kind", "Gateway"),
+		parentRef("name", "svc", "group", "", "kind", "Service"),
+		parentRef("name", "mesh", "group", "example.com", "kind", "Gateway"),
+		parentRef("name", "listener-set", "kind", "ListenerSet"),
+		parentRef("name", ""),
+	)
+	assert.Equal(t, []string{"nvcf/shared-gw", "gw/grpc-gw", "gw/eg"}, gatewayParentRefs(r))
+}
+
+// Only routes from the NVCF routes chart count, matched on helm.sh/chart so a
+// nameOverride (which rewrites app.kubernetes.io/name) does not hide them.
+// Unserved kinds are skipped, and duplicate parents collapse.
+func TestDiscoverNVCFGateways_OwnedRoutesOnly(t *testing.T) {
+	overridden := route("HTTPRoute", "nvcf", "api", "nvcf-gateway-routes-1.18.2", parentRef("name", "shared-gw"))
+	overridden.SetLabels(map[string]string{
+		helmChartLabel: "nvcf-gateway-routes-1.18.2", "app.kubernetes.io/name": "custom-name",
+	})
+	dyn := routeClient(
+		overridden,
+		route("HTTPRoute", "nvcf", "ess", "nvcf-gateway-routes-1.18.2", parentRef("name", "shared-gw")),
+		route("TCPRoute", "nvcf", "grpc", "nvcf-gateway-routes-1.18.2",
+			parentRef("name", "grpc-gw", "namespace", "gw")),
+		route("HTTPRoute", "team-b", "b", "team-b-routes-1.0.0", parentRef("name", "b-gw")),
+		route("HTTPRoute", "team-c", "c", "", parentRef("name", "c-gw")),
+	)
+	// UDPRoute is not served here, so it must not even be listed.
+	listed := map[string]bool{}
+	dyn.PrependReactor("list", "*", func(a ktesting.Action) (bool, runtime.Object, error) {
+		listed[a.GetResource().Resource] = true
+		return false, nil, nil
+	})
+
+	got, err := discoverNVCFGateways(context.Background(), routeDiscoveryClient(), dyn)
+	require.NoError(t, err)
+	assert.Equal(t, gatewaySet{"nvcf/shared-gw": true, "gw/grpc-gw": true}, got)
+	assert.False(t, listed["udproutes"], "an unserved route kind must be skipped, not listed")
+}
+
+// A denied list is not the same answer as an empty one. Reading it as "no NVCF
+// routes" would quietly drop to the lenient pre-install rule.
+func TestDiscoverNVCFGateways_ListErrorIsNotEmpty(t *testing.T) {
+	dyn := routeClient()
+	dyn.PrependReactor("list", "httproutes", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: gatewayAPIGroup, Resource: "httproutes"}, "", fmt.Errorf("denied"))
+	})
+	_, err := discoverNVCFGateways(context.Background(), routeDiscoveryClient(), dyn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "listing httproutes")
+
+	empty, err := discoverNVCFGateways(context.Background(), routeDiscoveryClient(), routeClient())
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+// The configured list replaces discovery outright.
+func TestResolveNVCFGateways_ConfiguredSkipsDiscovery(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw")
+	dyn := routeClient(route("HTTPRoute", "nvcf", "r", "nvcf-gateway-routes-1.0.0", parentRef("name", "other")))
+	got, _, err := resolveNVCFGateways(context.Background(), routeDiscoveryClient(), dyn)
+	require.NoError(t, err)
+	assert.Equal(t, gatewaySet{"gw/shared-gw": true}, got)
+	assert.Empty(t, dyn.Actions(), "a configured list must not trigger route discovery")
+}
+
+func discoveredStack() *dynamicfake.FakeDynamicClient {
+	return routeClient(
+		route("HTTPRoute", "nvcf", "api", "nvcf-gateway-routes-1.18.2", parentRef("name", "shared-gw")),
+		route("TCPRoute", "nvcf", "nats", "nvcf-gateway-routes-1.18.2", parentRef("name", "nats-gw")),
+	)
+}
+
+// Discovered Gateways are checked strictly, in both Envoy modes: shared-gw's
+// proxy sits in the controller namespace, nats-gw's beside its Gateway. The
+// foreign pending Service is ignored either way.
+func TestCheckExternalLoadBalancer_DiscoveredGatewaysAreStrict(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	envoyNS := envoyGatewayNamespaceName()
+	foreign := gatewayLBService(envoyNS, "envoy-team-b", "team-b", "b-gw", corev1.ServiceTypeLoadBalancer, "")
+
+	t.Run("NVCF Gateway pending fails", func(t *testing.T) {
+		client := routeDiscoveryClient()
+		addServices(t, client,
+			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
+			gatewayLBService("nvcf", "envoy-nats", "nvcf", "nats-gw", corev1.ServiceTypeLoadBalancer, ""),
+			foreign.DeepCopy(),
+		)
+		state := &ValidationState{Log: testLog()}
+		checkExternalLoadBalancer(context.Background(), client, discoveredStack(), state)
+
+		require.NotNil(t, state.ExternalLBOK)
+		assert.False(t, *state.ExternalLBOK)
+		warnings := strings.Join(state.Warnings, "; ")
+		assert.Contains(t, warnings, "nvcf/envoy-nats", "the Gateway-namespace proxy must be found")
+		assert.NotContains(t, warnings, "envoy-team-b")
+	})
+
+	t.Run("all NVCF Gateways addressed passes despite a foreign pending", func(t *testing.T) {
+		client := routeDiscoveryClient()
+		addServices(t, client,
+			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
+			gatewayLBService("nvcf", "envoy-nats", "nvcf", "nats-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.2"),
+			foreign.DeepCopy(),
+		)
+		state := &ValidationState{Log: testLog()}
+		checkExternalLoadBalancer(context.Background(), client, discoveredStack(), state)
+
+		require.NotNil(t, state.ExternalLBOK)
+		assert.True(t, *state.ExternalLBOK)
+		assert.NotContains(t, strings.Join(state.Warnings, "; "), "envoy-team-b")
+	})
+
+	t.Run("route points at a Gateway with no proxy Service", func(t *testing.T) {
+		client := routeDiscoveryClient()
+		addServices(t, client,
+			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
+		)
+		state := &ValidationState{Log: testLog()}
+		checkExternalLoadBalancer(context.Background(), client, discoveredStack(), state)
+
+		require.NotNil(t, state.ExternalLBOK)
+		assert.False(t, *state.ExternalLBOK)
+		assert.Contains(t, strings.Join(state.Warnings, "; "), "no proxy Service found for Gateway(s) nvcf/nats-gw")
+	})
+
+	t.Run("Gateways exposed without a LoadBalancer are not failed", func(t *testing.T) {
+		client := routeDiscoveryClient()
+		addServices(t, client,
+			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw", corev1.ServiceTypeNodePort, ""),
+			gatewayLBService(envoyNS, "envoy-nats", "nvcf", "nats-gw", corev1.ServiceTypeNodePort, ""),
+		)
+		state := &ValidationState{Log: testLog()}
+		checkExternalLoadBalancer(context.Background(), client, discoveredStack(), state)
+
+		assert.Nil(t, state.ExternalLBOK, "no NVCF Gateway uses an LB, so there is nothing to verify")
+	})
+}
+
+// When ownership could not be determined, nothing addressed is still a
+// failure, but an address on some Service is not a pass.
+func TestCheckExternalLoadBalancer_DiscoveryFailureIsNotAPass(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	envoyNS := envoyGatewayNamespaceName()
+	denied := func() *dynamicfake.FakeDynamicClient {
+		dyn := routeClient()
+		dyn.PrependReactor("list", "*", func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: gatewayAPIGroup, Resource: "httproutes"}, "", fmt.Errorf("denied"))
+		})
+		return dyn
+	}
+
+	client := routeDiscoveryClient()
+	addServices(t, client,
+		gatewayLBService(envoyNS, "envoy-a", "x", "a", corev1.ServiceTypeLoadBalancer, "203.0.113.1"))
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, denied(), state)
+	assert.Nil(t, state.ExternalLBOK)
+	assert.Contains(t, strings.Join(state.Recommendations, "; "), "httproutes")
+
+	client = routeDiscoveryClient()
+	addServices(t, client,
+		gatewayLBService(envoyNS, "envoy-a", "x", "a", corev1.ServiceTypeLoadBalancer, ""))
+	state = &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, denied(), state)
+	require.NotNil(t, state.ExternalLBOK)
+	assert.False(t, *state.ExternalLBOK, "nothing addressed fails whoever owns it")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "envoy-a", "name the Service still pending")
+}
+
+// Without a client to list served route kinds, ownership is unknown, not empty.
+func TestDiscoverNVCFGateways_NoClientIsAnError(t *testing.T) {
+	_, err := discoverNVCFGateways(context.Background(), routeDiscoveryClient(), nil)
+	require.Error(t, err)
+
+	// Nothing served means no route can exist, so no client is needed.
+	got, err := discoverNVCFGateways(context.Background(), fake.NewSimpleClientset(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }
