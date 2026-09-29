@@ -518,12 +518,13 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
 	}
 
-	// SIS reachability is a compute-plane concern, and it is skipped pre-install
-	// because SIS is not up yet. The previous `!checkPre` form was also true
-	// whenever --control-plane was passed, so a control-plane run fired an HTTP
-	// request at SIS that the operator never asked for.
+	// SIS reachability is a compute-plane concern. A bare --pre skips it
+	// because SIS is not up before install, but an explicit --all or
+	// --compute-plane still asks for it, as it always has. Requiring the
+	// compute plane to be targeted stops a --control-plane run from probing
+	// SIS, which the older `|| !checkPre` form did.
 	icmsURL := ""
-	if computePlaneIsTargeted(mode) && !checkPre {
+	if computePlaneIsTargeted(mode) && (checkAll || checkComputePlane || !checkPre) {
 		icmsURL = resolveICMSURL(selfHostedICMSURL)
 	}
 
@@ -642,17 +643,20 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		// Without that, a kai-scheduler or nvca-operator namespace wedged
 		// Terminating by a failed teardown reports "no stale NVCF namespaces
 		// detected" and the next install fails into it.
+		// Merged only when both roles run: a --control-plane run must not
+		// report a stuck kai-scheduler namespace, nor --compute-plane a stuck
+		// vault-system, which is the rule ModeSplit already follows.
 		staleForControlPlane := staleNSProber
 		staleForComputePlane := staleNSProber
-		var cpExtraNamespaces, gpuExtraNamespaces []string
+		var cpExtraNamespaces []string
 		if runControlPlane {
 			staleForComputePlane = nil
-			cpExtraNamespaces = selfhosted.ComputePlaneStaleNamespaces(
-				localStackDir(selfHostedComputePlaneStack))
+			if runComputePlane {
+				cpExtraNamespaces = selfhosted.ComputePlaneStaleNamespaces(
+					localStackDir(selfHostedComputePlaneStack))
+			}
 		} else {
 			staleForControlPlane = nil
-			gpuExtraNamespaces = selfhosted.ControlPlaneStaleNamespaces(
-				localStackDir(selfHostedControlPlaneStack))
 		}
 
 		if runControlPlane {
@@ -682,7 +686,6 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorEnv:        validatorEnv,
 				StaleNamespaceProber:       staleForComputePlane,
 				StackDir:                   localStackDir(selfHostedComputePlaneStack),
-				ExtraStaleNamespaces:       gpuExtraNamespaces,
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
@@ -763,17 +766,7 @@ func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []self
 	// process exited 0, so a CI gate on final.success broke for anyone whose
 	// registry credentials live in a Docker credential helper. "warnings" is
 	// already part of the documented Verdict vocabulary; it was never emitted.
-	var passed, failed, warned int
-	for _, r := range results {
-		switch {
-		case r.Passed:
-			passed++
-		case isBlockingFailure(r):
-			failed++
-		default:
-			warned++
-		}
-	}
+	passed, failed, warned := selfhosted.CountResults(results)
 	verdict := "ok"
 	switch {
 	case failed > 0:
@@ -791,7 +784,7 @@ func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []self
 }
 
 func isBlockingFailure(r selfhosted.CheckResult) bool {
-	return !r.Passed && r.Severity == selfhosted.SeverityError
+	return r.IsBlockingFailure()
 }
 
 // anyFailed returns true if any check failed at error severity. Warnings do

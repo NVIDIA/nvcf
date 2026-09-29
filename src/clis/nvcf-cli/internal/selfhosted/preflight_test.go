@@ -702,3 +702,17 @@ func TestMergeNamespaces_DedupesAndKeepsOrder(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c"}, got)
 	assert.Nil(t, mergeNamespaces(nil, nil))
 }
+
+// Every count derives from one rule: only an error-severity miss fails; any
+// other miss is a warning.
+func TestCountResults_OneRule(t *testing.T) {
+	p, f, w := CountResults([]CheckResult{
+		{Passed: true, Severity: SeverityInfo},
+		{Passed: false, Severity: SeverityError},
+		{Passed: false, Severity: SeverityWarning},
+		{Passed: false, Severity: SeverityInfo},
+	})
+	assert.Equal(t, 1, p)
+	assert.Equal(t, 1, f)
+	assert.Equal(t, 2, w)
+}

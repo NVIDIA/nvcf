@@ -547,12 +547,13 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 		}
 	case CategoryCompleted:
 		return wireCategoryCompleted{
-			Event:       "category_completed",
-			TS:          ts,
-			Category:    ev.Category,
-			PassedCount: ev.PassedCount,
-			FailedCount: ev.FailedCount,
-			DurationSec: ev.DurationSec,
+			Event:        "category_completed",
+			TS:           ts,
+			Category:     ev.Category,
+			PassedCount:  ev.PassedCount,
+			FailedCount:  ev.FailedCount,
+			WarningCount: ev.WarningCount,
+			DurationSec:  ev.DurationSec,
 		}
 	}
 	return nil
@@ -750,12 +751,13 @@ type wireCheckCompleted struct {
 }
 
 type wireCategoryCompleted struct {
-	Event       string  `json:"event"`
-	TS          string  `json:"ts"`
-	Category    string  `json:"category"`
-	PassedCount int     `json:"passedCount"`
-	FailedCount int     `json:"failedCount"`
-	DurationSec float64 `json:"durationSec"`
+	Event        string  `json:"event"`
+	TS           string  `json:"ts"`
+	Category     string  `json:"category"`
+	PassedCount  int     `json:"passedCount"`
+	FailedCount  int     `json:"failedCount"`
+	WarningCount int     `json:"warningCount"`
+	DurationSec  float64 `json:"durationSec"`
 }
 
 // Wire structs for composed status snapshot (Plan Deviation #19 / §6.5.4).

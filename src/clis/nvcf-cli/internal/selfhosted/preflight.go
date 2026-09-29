@@ -54,6 +54,33 @@ const (
 	SeverityError   = "error"
 )
 
+// IsBlockingFailure reports whether the result fails the run: a miss at error
+// severity. The exit code, the final event, the category counts and the
+// summaries all derive from this one rule so they cannot disagree.
+func (r CheckResult) IsBlockingFailure() bool {
+	return !r.Passed && r.Severity == SeverityError
+}
+
+// IsWarning reports a miss that does not fail the run.
+func (r CheckResult) IsWarning() bool {
+	return !r.Passed && !r.IsBlockingFailure()
+}
+
+// CountResults tallies results by the one rule every count uses.
+func CountResults(results []CheckResult) (passed, failed, warned int) {
+	for _, r := range results {
+		switch {
+		case r.Passed:
+			passed++
+		case r.IsBlockingFailure():
+			failed++
+		default:
+			warned++
+		}
+	}
+	return passed, failed, warned
+}
+
 // One row in the linkerd-style output. Logs is internal-only and is not
 // forwarded into the CheckCompleted JSONL wire event, so it never leaks
 // into the stable JSON contract.
@@ -85,7 +112,7 @@ func checkBinary(ctx context.Context, s BinarySpec) CheckResult {
 	r := CheckResult{
 		ID:       "local-host-tools-" + s.Name,
 		Category: "local-host-tools",
-		Severity: "error",
+		Severity: SeverityError,
 		HintURL:  s.HintURL,
 	}
 	path, err := s.LookPath(s.Name)
@@ -533,18 +560,18 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{
 				ID:       id,
-				Severity: "error",
+				Severity: SeverityError,
 				HintURL:  inotifyHintURL,
 			}
 			limits, err := prober(ctx, kubeContext)
 			if err != nil {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Message = "node inotify probe failed: " + err.Error()
 				r.Err = err
 				return r
 			}
 			if len(limits) == 0 {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Passed = true
 				r.Message = "no nodes returned by inotify probe; skipping"
 				return r
@@ -581,7 +608,7 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 				return r
 			}
 			if len(probeErrs) > 0 {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Message = fmt.Sprintf(
 					"could not probe inotify limits on %d node(s): %s",
 					len(probeErrs), strings.Join(probeErrs, "; "),
@@ -629,18 +656,18 @@ func clusterValidatorCheck(
 			}
 
 			if result.Err != nil {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Message = "cluster-validator did not complete: " + result.Err.Error()
 				r.Err = result.Err
 				return r
 			}
 			r.Passed = result.Passed
 			if result.Passed {
-				r.Severity = "info"
+				r.Severity = SeverityInfo
 				r.Message = "cluster passed cluster-validator built-in checks"
 				return r
 			}
-			r.Severity = "error"
+			r.Severity = SeverityError
 			r.Message = fmt.Sprintf("cluster-validator reported failures (exit code %d)", result.ExitCode)
 			return r
 		},
@@ -711,11 +738,11 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 				switch {
 				case errors.As(err, &skipped):
 					r.Passed = true
-					r.Severity = "info"
+					r.Severity = SeverityInfo
 					r.Message = entry.Registry + ": skipped (" + skipped.reason + ")"
 					return r
 				case errors.As(err, &unverified):
-					r.Severity = "warning"
+					r.Severity = SeverityWarning
 					r.Message = entry.Registry + ": " + err.Error()
 					r.Err = err
 					return r
@@ -725,7 +752,7 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 				return r
 			}
 			r.Passed = true
-			r.Severity = "info"
+			r.Severity = SeverityInfo
 			r.Message = entry.Registry + ": credentials valid"
 			return r
 		},
@@ -761,7 +788,7 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 		ID:         id,
 		HumanLabel: "checking for stale NVCF namespaces...",
 		Run: func(ctx context.Context) CheckResult {
-			r := CheckResult{ID: id, Severity: "error"}
+			r := CheckResult{ID: id, Severity: SeverityError}
 			// Resolve the context before probing, then probe that exact name.
 			// Resolving afterwards leaves a window where the current-context
 			// changes in between, which would have the hints delete namespaces
@@ -769,13 +796,13 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 			probedContext := effectiveKubeContext(kubeContext)
 			stale, err := prober(ctx, probedContext, namespaces)
 			if err != nil {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Message = "stale namespace probe failed: " + err.Error()
 				r.Err = err
 				return r
 			}
 			if len(stale) == 0 {
-				r.Severity = "info"
+				r.Severity = SeverityInfo
 				r.Passed = true
 				r.Message = "no stale NVCF namespaces detected"
 				return r
@@ -833,10 +860,16 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				// produces a command that silently inspects only the last one
 				// and reports the rest as empty, which is the opposite of what
 				// an operator deciding whether to delete them needs.
+				// Enumerate every namespaced kind, not `get all`: that omits
+				// PVCs, Secrets, ConfigMaps and custom resources, so after a
+				// partial teardown it reports "No resources found" over the
+				// Cassandra volumes and the OpenBao unseal Secret.
 				for _, ns := range emptyShell {
 					hints = append(hints, fmt.Sprintf(
-						"inspect %s and remove it only after confirming it is unused: %s get all -n %s",
-						ns, kctl, ns))
+						"inspect %s and remove it only after confirming it is unused: "+
+							"%s api-resources --verbs=list --namespaced -o name | "+
+							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
+						ns, kctl, kctl, ns))
 				}
 			}
 			// Only a namespace stuck Terminating blocks the run. "No Helm
@@ -890,7 +923,7 @@ func placeholderCheck(id, label, message string) binaryCheckSpec {
 		Run: func(_ context.Context) CheckResult {
 			return CheckResult{
 				ID:       id,
-				Severity: "info",
+				Severity: SeverityInfo,
 				Passed:   true,
 				Message:  message,
 			}
@@ -909,7 +942,7 @@ func sisReachabilityCheck(sisURL string) binaryCheckSpec {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(sisURL, "/")+"/v1/health", nil)
 			if err != nil {
 				return CheckResult{
-					ID: "sis-reachability", Severity: "error", Passed: false,
+					ID: "sis-reachability", Severity: SeverityError, Passed: false,
 					Message: "SIS request build failed: " + err.Error(),
 					HintURL: "https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#sis-reachability",
 				}
@@ -917,7 +950,7 @@ func sisReachabilityCheck(sisURL string) binaryCheckSpec {
 			resp, err := cli.Do(req)
 			if err != nil {
 				return CheckResult{
-					ID: "sis-reachability", Severity: "error", Passed: false,
+					ID: "sis-reachability", Severity: SeverityError, Passed: false,
 					Message: "SIS unreachable: " + err.Error(),
 					HintURL: "https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#sis-reachability",
 				}
@@ -925,13 +958,13 @@ func sisReachabilityCheck(sisURL string) binaryCheckSpec {
 			defer resp.Body.Close()
 			if resp.StatusCode >= 500 {
 				return CheckResult{
-					ID: "sis-reachability", Severity: "error", Passed: false,
+					ID: "sis-reachability", Severity: SeverityError, Passed: false,
 					Message: fmt.Sprintf("SIS returned %d", resp.StatusCode),
 					HintURL: "https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#sis-reachability",
 				}
 			}
 			return CheckResult{
-				ID: "sis-reachability", Severity: "info", Passed: true,
+				ID: "sis-reachability", Severity: SeverityInfo, Passed: true,
 				Message: fmt.Sprintf("SIS reachable (%d)", resp.StatusCode),
 			}
 		},
@@ -961,7 +994,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 	categories := buildCategories(cfg, role, rc)
 	for _, cat := range categories {
 		catStart := time.Now()
-		var passed, failed int
+		var catResults []CheckResult
 		for _, spec := range cat.checks {
 			if ctx.Err() != nil {
 				return all
@@ -983,17 +1016,15 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 				Detail:   res.Detail,
 				HintURL:  res.HintURL,
 			})
-			if res.Passed {
-				passed++
-			} else {
-				failed++
-			}
+			catResults = append(catResults, res)
 		}
+		passed, failed, warned := CountResults(catResults)
 		_ = sink.Emit(ctx, progress.CategoryCompleted{
-			Category:    cat.name,
-			PassedCount: passed,
-			FailedCount: failed,
-			DurationSec: time.Since(catStart).Seconds(),
+			Category:     cat.name,
+			PassedCount:  passed,
+			FailedCount:  failed,
+			WarningCount: warned,
+			DurationSec:  time.Since(catStart).Seconds(),
 		})
 	}
 	return all

@@ -1819,7 +1819,7 @@ func (m Model) viewCheck(now time.Time) string {
 	}
 
 	// ── status line ───────────────────────────────────────────────────────────
-	passed, failed, total := m.checkTally()
+	passed, failed, warned, total := m.checkTally()
 	if m.finished && m.checkFinalTotal > 0 {
 		passed = m.checkFinalPassed
 		failed = m.checkFinalFailed
@@ -1843,16 +1843,22 @@ func (m Model) viewCheck(now time.Time) string {
 	}
 
 	allFinished := !anyInFlight && m.finished
+	tally := fmt.Sprintf("%d/%d passed, %d failed", passed, total, failed)
+	if warned > 0 {
+		tally += fmt.Sprintf(", %d warning(s)", warned)
+	}
 	var statusLine string
 	switch {
 	case anyInFlight || (!m.finished && len(m.checkCategories) > 0 && !allFinished):
-		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, 0 failed)", passed, total)
+		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
 	case m.finished && failed > 0:
-		statusLine = fmt.Sprintf("Status: ✘ failed  (%d/%d passed, %d failed)", passed, total, failed)
-	case m.finished && failed == 0:
-		statusLine = fmt.Sprintf("Status: ✓ ok  (%d/%d passed, 0 failed)", passed, total)
+		statusLine = fmt.Sprintf("Status: ✘ failed  (%s)", tally)
+	case m.finished && warned > 0:
+		statusLine = fmt.Sprintf("Status: ✓ ok with warnings  (%s)", tally)
+	case m.finished:
+		statusLine = fmt.Sprintf("Status: ✓ ok  (%s)", tally)
 	default:
-		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, 0 failed)", passed, total)
+		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
 	}
 
 	b.WriteString("\n")
@@ -1863,20 +1869,26 @@ func (m Model) viewCheck(now time.Time) string {
 }
 
 // checkTally returns (passed, failed, total) counts from all accumulated check rows.
-func (m Model) checkTally() (passed, failed, total int) {
+// checkTally counts finished rows by the same rule as the final event: only an
+// error-severity miss is a failure, any other miss is a warning.
+func (m Model) checkTally() (passed, failed, warned, total int) {
 	for _, cat := range m.checkCategories {
 		for _, row := range cat.checks {
 			total++
-			if row.finished {
-				if row.passed {
-					passed++
-				} else {
-					failed++
-				}
+			if !row.finished {
+				continue
+			}
+			switch {
+			case row.passed:
+				passed++
+			case row.severity == "error":
+				failed++
+			default:
+				warned++
 			}
 		}
 	}
-	return passed, failed, total
+	return passed, failed, warned, total
 }
 
 // ─── style helpers ────────────────────────────────────────────────────────────

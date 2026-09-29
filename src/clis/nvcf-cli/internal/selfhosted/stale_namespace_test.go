@@ -251,7 +251,8 @@ func TestStaleNamespaceCheck_MessageNamesAllStaleNamespaces(t *testing.T) {
 	assert.Contains(t, r.Message, "api-keys")
 	assert.Contains(t, r.Message, "/api/v1/namespaces/nvcf/finalize",
 		"the remediation must use the finalize subresource; a plain patch is silently reverted")
-	assert.Contains(t, r.Message, "kubectl get all -n api-keys")
+	assert.Contains(t, r.Message, "xargs -n1 kubectl get -n api-keys --show-kind --ignore-not-found")
+	assert.NotContains(t, r.Message, "get all", "get all omits PVCs, Secrets and custom resources")
 }
 
 // A namespace on a real install holds many non-Helm Secrets (ServiceAccount
@@ -325,7 +326,7 @@ func TestStaleNamespaceCheck_HintsPinTheProbedContext(t *testing.T) {
 		assert.True(t, strings.HasPrefix(cmd, "--context cp-ctx "),
 			"unpinned kubectl invocation in hint: kubectl %s", cmd)
 	}
-	assert.Contains(t, r.Message, "kubectl --context cp-ctx get all -n api-keys")
+	assert.Contains(t, r.Message, "xargs -n1 kubectl --context cp-ctx get -n api-keys")
 }
 
 func TestStaleNamespaceCheck_HintsQuoteTheContext(t *testing.T) {
@@ -334,7 +335,7 @@ func TestStaleNamespaceCheck_HintsQuoteTheContext(t *testing.T) {
 		return []StaleNamespace{{Name: "nvcf", Reason: "no Helm release"}}, nil
 	}
 	r := staleNamespaceCheck(prober, "my ctx", []string{"nvcf"}).Run(context.Background())
-	assert.Contains(t, r.Message, "--context 'my ctx' get all -n nvcf",
+	assert.Contains(t, r.Message, "--context 'my ctx' get -n nvcf",
 		"a context name with a space must be quoted so the pasted command does not split it")
 }
 
@@ -367,7 +368,7 @@ func TestStaleNamespaceCheck_HintsNameTheCurrentContext(t *testing.T) {
 		return []StaleNamespace{{Name: "nvcf", Reason: "no Helm release"}}, nil
 	}
 	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
-	assert.Contains(t, r.Message, "kubectl --context k3d-local get all -n nvcf")
+	assert.Contains(t, r.Message, "xargs -n1 kubectl --context k3d-local get -n nvcf")
 }
 
 // An unreadable kubeconfig must not break the hint; it degrades to no flag.
@@ -377,7 +378,7 @@ func TestStaleNamespaceCheck_HintsOmitUnknownContext(t *testing.T) {
 		return []StaleNamespace{{Name: "nvcf", Reason: "no Helm release"}}, nil
 	}
 	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
-	assert.Contains(t, r.Message, "kubectl get all -n nvcf")
+	assert.Contains(t, r.Message, "xargs -n1 kubectl get -n nvcf")
 }
 
 // The probe must run against the same context the hints name. Resolving the
@@ -395,18 +396,31 @@ func TestStaleNamespaceCheck_ProbesTheResolvedContext(t *testing.T) {
 		"the probe must target the resolved context, not whatever is current when it runs")
 }
 
-// HELM_DRIVER=sql keeps release state in a database, so a healthy production
-// install has no owner=helm object anywhere. Without a gate every stack
-// namespace reports stale at error severity with a delete remediation.
-func TestProbeStaleNamespaces_NoHelmObjectsAnywhereReportsNothing(t *testing.T) {
+// `down` destroys every release but keeps the namespaces and their PVCs, so no
+// owner=helm object exists anywhere. With the default driver that is exactly
+// the stale state to report; a reinstall would silently reattach the old
+// Cassandra and OpenBao volumes.
+func TestProbeStaleNamespaces_AfterDownReportsEveryNamespace(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "")
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sis"}},
 	)
 	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf", "sis"})
 	require.NoError(t, err)
-	assert.Empty(t, got,
-		"with no in-cluster Helm state at all the signal is unusable, not evidence of staleness")
+	assert.Len(t, got, 2)
+}
+
+// HELM_DRIVER=sql keeps release state in a database, so the absence of an
+// in-cluster release object says nothing and must not be reported.
+func TestProbeStaleNamespaces_SQLDriverSkipsTheNoReleaseSignal(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "sql")
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}},
+	)
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }
 
 // A namespace stuck Terminating is still reported even when no Helm release
@@ -465,6 +479,6 @@ func TestStaleNamespaceCheck_HintsOneCommandPerNamespace(t *testing.T) {
 
 	assert.NotContains(t, r.Message, "-n api-keys -n ess",
 		"a joined namespace list silently inspects only the last one")
-	assert.Contains(t, r.Message, "get all -n api-keys")
-	assert.Contains(t, r.Message, "get all -n ess")
+	assert.Contains(t, r.Message, "get -n api-keys --show-kind")
+	assert.Contains(t, r.Message, "get -n ess --show-kind")
 }

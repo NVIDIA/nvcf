@@ -77,7 +77,7 @@ func mark(r CheckResult) string {
 	switch {
 	case r.Passed:
 		return "✓"
-	case r.Severity == "warning":
+	case r.Severity == SeverityWarning:
 		return "‼"
 	default:
 		return "×"
@@ -98,10 +98,10 @@ func statusGlyph(status string) string {
 func overallStatus(results []CheckResult) string {
 	hasWarn := false
 	for _, r := range results {
-		if !r.Passed && r.Severity == "error" {
-			return "error"
+		if r.IsBlockingFailure() {
+			return SeverityError
 		}
-		if !r.Passed && r.Severity == "warning" {
+		if r.IsWarning() {
 			hasWarn = true
 		}
 	}

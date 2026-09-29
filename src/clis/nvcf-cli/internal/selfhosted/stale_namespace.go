@@ -20,6 +20,8 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -136,12 +138,17 @@ func helmReleaseExists(
 	return false, fmt.Errorf("gave up after %d pages scanning for Helm releases", helmReleaseListMaxPages)
 }
 
+// helmReleasesAreInCluster reports whether Helm stores release state as
+// in-cluster Secrets or ConfigMaps, the drivers this probe can see.
+func helmReleasesAreInCluster() bool {
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("HELM_DRIVER")), "sql")
+}
+
 func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, namespaces []string) ([]StaleNamespace, error) {
 	var stale []StaleNamespace
 	// noRelease is held back until we know the Helm storage driver keeps its
 	// state in-cluster at all; see the gate below.
 	var noRelease []string
-	anyHelmReleaseSeen := false
 	for _, name := range namespaces {
 		ns, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -171,7 +178,6 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 			return stale, fmt.Errorf("list Helm secrets in %s: %w", name, err)
 		}
 		if found {
-			anyHelmReleaseSeen = true
 			continue // healthy: active Helm release found via the secret driver
 		}
 		found, err = helmReleaseExists(
@@ -186,17 +192,17 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 			return stale, fmt.Errorf("list Helm configmaps in %s: %w", name, err)
 		}
 		if found {
-			anyHelmReleaseSeen = true
 			continue
 		}
 		noRelease = append(noRelease, name)
 	}
 
-	// Only trust the "no Helm release" signal when at least one owner=helm
-	// object was seen somewhere. HELM_DRIVER=sql keeps release state in a
-	// database with no in-cluster object at all, so without this every
-	// namespace of a healthy production install reports stale.
-	if anyHelmReleaseSeen {
+	// Trust the "no Helm release" signal unless Helm keeps its release state
+	// outside the cluster. HELM_DRIVER=sql stores it in a database, so every
+	// namespace of a healthy install would look stale. Inferring the driver
+	// from "no owner=helm object anywhere" hid exactly the state `down`
+	// leaves behind: every release destroyed, every namespace and PVC kept.
+	if helmReleasesAreInCluster() {
 		for _, name := range noRelease {
 			stale = append(stale, StaleNamespace{Name: name, Reason: "no Helm release"})
 		}

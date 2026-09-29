@@ -99,7 +99,7 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	// identify itself as an OCI registry so a captive portal or TLS-intercepting
 	// proxy answering 200 HTML is not read as success.
 	isOCI := resp.Header.Get("Docker-Distribution-Api-Version") != "" ||
-		strings.Contains(resp.Header.Get("Www-Authenticate"), "realm")
+		strings.Contains(strings.Join(resp.Header.Values("Www-Authenticate"), ","), "realm")
 
 	switch resp.StatusCode {
 	case http.StatusOK:
@@ -132,7 +132,7 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	// from the configured image (repoHint). Using a fake repo name causes
 	// org-level 403s from NGC and GHCR for non-existent orgs, which is
 	// indistinguishable from bad credentials.
-	wwwAuth := resp.Header.Get("Www-Authenticate")
+	wwwAuth := selectAuthChallenge(resp.Header.Values("Www-Authenticate"))
 	resp.Body.Close()
 
 	// Only the Bearer flow is implemented. Self-hosted Harbor and htpasswd
@@ -152,8 +152,9 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		// rejected" when the real diagnosis is "no credentials configured."
 		if _, _, hasCreds := credentialsForRegistry(registry); !hasCreds {
 			// Same situation as the critical path below, so the same verdict:
-			// no readable local credential is not proof that none exists, since
-			// a credential helper is invisible here.
+			// no readable local credential is not proof that none exists (a
+			// helper binary may be missing from PATH, or the login may live
+			// outside the docker config entirely).
 			return errRegistryCredentialsUnverified{registry: registry}
 		}
 		return fmt.Errorf("credentials rejected by %s: %w", registry, err)
@@ -172,6 +173,22 @@ type errRegistryProbeSkipped struct{ reason string }
 
 func (e errRegistryProbeSkipped) Error() string { return e.reason }
 
+// selectAuthChallenge picks the challenge to answer when a registry offers
+// several, as it may in separate WWW-Authenticate headers: the Bearer one if
+// present, otherwise the first. Reading only the first header reported a
+// registry answering "Negotiate" then "Bearer" as a clean skip.
+func selectAuthChallenge(challenges []string) string {
+	for _, c := range challenges {
+		if strings.EqualFold(authChallengeScheme(c), "Bearer") {
+			return c
+		}
+	}
+	if len(challenges) > 0 {
+		return challenges[0]
+	}
+	return ""
+}
+
 // authChallengeScheme returns the auth scheme named by a WWW-Authenticate
 // header, or "" when the header is absent or malformed.
 func authChallengeScheme(header string) string {
@@ -189,10 +206,10 @@ func authChallengeScheme(header string) string {
 // for the registry.
 //
 // A missing credential is a warning, not a hard failure: credsFromDockerConfig
-// reads only inline auth entries, so a workstation using a credential helper
-// (credsStore on Docker Desktop, docker-credential-pass on Linux) has a working
-// docker login that is invisible here. The install path also mints or mirrors a
-// pull secret of its own, so preflight must not be the thing that blocks.
+// reads inline auth entries and asks credsStore / credHelpers helpers, but a
+// helper binary can be absent from PATH or refuse to answer non-interactively.
+// The install path also mints or mirrors a pull secret of its own, so preflight
+// must not be the thing that blocks.
 func requireConfiguredCredentials(registry string) error {
 	if _, _, ok := credentialsForRegistry(registry); ok {
 		return nil

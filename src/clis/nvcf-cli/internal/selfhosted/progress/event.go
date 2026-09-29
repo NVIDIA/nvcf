@@ -288,8 +288,11 @@ func (CheckCompleted) kind() eventKind { return "check_completed" }
 type CategoryCompleted struct {
 	Category    string
 	PassedCount int
-	FailedCount int
-	DurationSec float64
+	// FailedCount counts error-severity failures only, the ones that fail the
+	// run; WarningCount counts the non-passing rest.
+	FailedCount  int
+	WarningCount int
+	DurationSec  float64
 }
 
 func (CategoryCompleted) kind() eventKind { return "category_completed" }

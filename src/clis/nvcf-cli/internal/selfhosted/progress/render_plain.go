@@ -239,8 +239,8 @@ func (r *PlainRenderer) Emit(_ context.Context, e Event) error {
 		}
 		return r.writef("\n")
 	case CategoryCompleted:
-		return r.writef("%s [pre] category_completed   %-25spassed=%d failed=%d duration=%gs\n",
-			ts, ev.Category, ev.PassedCount, ev.FailedCount, ev.DurationSec)
+		return r.writef("%s [pre] category_completed   %-25spassed=%d failed=%d warnings=%d duration=%gs\n",
+			ts, ev.Category, ev.PassedCount, ev.FailedCount, ev.WarningCount, ev.DurationSec)
 	case DrainProgress:
 		return r.writef("%s [%02d/%d] drain-active: %s → %s\n",
 			ts, ev.Num, r.effectiveTotalPhases(), ev.Deployment, ev.State)

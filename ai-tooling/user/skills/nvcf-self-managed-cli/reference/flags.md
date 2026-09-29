@@ -33,10 +33,10 @@ required. Each selects a role; only the selected roles contact a cluster.
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--pre` | Pre-flight: local-host tools plus cluster readiness | `false` |
+| `--pre` | Pre-flight: local-host tools plus cluster readiness. Skips SIS reachability, since SIS is not installed yet, unless `--all` or `--compute-plane` is also passed | `false` |
 | `--control-plane` | Control-plane checks | `false` |
 | `--compute-plane` | Compute-plane checks | `false` |
-| `--all` | Every category | `false` |
+| `--all` | Every category, including SIS reachability when combined with `--pre` | `false` |
 | `--cluster-name NAME` | Cluster name for compute-plane checks | - |
 | `--skip-inotify-check` | Skip the per-node inotify-limits probe. Needed when the kubeconfig user cannot create pods in `default`. Env: `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY` | `false` |
 

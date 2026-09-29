@@ -881,3 +881,26 @@ func TestTTY_StatusWatchTickResetsBetweenSnapshots(t *testing.T) {
 	assert.Equal(t, 1, sisCount,
 		"rendered View should show SIS exactly once after 5 watch ticks, not %d times", sisCount)
 }
+
+// A finished run with a warning says so and accounts for it, rather than
+// printing "ok (2/3 passed, 0 failed)" with one check unexplained.
+func TestTTY_CheckCompleteWithWarning(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	m := NewModel(ModelOpts{Mode: ModeCheck, AsciiOnly: true, TotalChecks: 3,
+		NowFunc: func() time.Time { return ts("2026-04-29T03:45:12Z") }})
+	m.SetSize(120, 40)
+	events := []Event{
+		CheckStarted{Category: "local-host-tools", ID: "a"},
+		CheckCompleted{Category: "local-host-tools", ID: "a", Passed: true, Severity: "info", Message: "a"},
+		CheckStarted{Category: "local-host-tools", ID: "b"},
+		CheckCompleted{Category: "local-host-tools", ID: "b", Passed: true, Severity: "info", Message: "b"},
+		CheckStarted{Category: "registry-credentials", ID: "c"},
+		CheckCompleted{Category: "registry-credentials", ID: "c", Passed: false, Severity: "warning", Message: "c"},
+		Final{Success: true, TotalChecks: 3, PassedCount: 2, FailedCount: 0},
+	}
+	var model tea.Model = m
+	for _, e := range events {
+		model, _ = model.(Model).applyCheckEvent(e)
+	}
+	assert.Contains(t, model.(Model).View(), "ok with warnings  (2/3 passed, 0 failed, 1 warning(s))")
+}

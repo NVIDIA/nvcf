@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -155,7 +156,7 @@ func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte
 		return nil, fmt.Errorf("registry returned %s", resp.Status)
 	}
 	// Capture the auth challenge before closing.
-	wwwAuth := resp.Header.Get("Www-Authenticate")
+	wwwAuth := selectAuthChallenge(resp.Header.Values("Www-Authenticate"))
 	resp.Body.Close()
 
 	// Generic OCI Bearer-token exchange: uses the realm/service/scope from
@@ -536,12 +537,24 @@ func credsFromDockerConfig(registry string) (string, string, bool) {
 			Username string `json:"username"`
 			Password string `json:"password"`
 		} `json:"auths"`
+		CredsStore  string            `json:"credsStore"`
+		CredHelpers map[string]string `json:"credHelpers"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return "", "", false
 	}
+	// A per-registry helper wins over the global store, as in docker itself.
+	// Docker Desktop keeps every login in credsStore and leaves only an empty
+	// auths entry, so without this a working `docker login` is invisible.
+	helper := doc.CredHelpers[registry]
+	if helper == "" {
+		helper = doc.CredsStore
+	}
 	entry, ok := doc.Auths[registry]
-	if !ok {
+	if !ok || (entry.Auth == "" && entry.Username == "") {
+		if helper != "" {
+			return credsFromHelper(helper, registry)
+		}
 		return "", "", false
 	}
 	if entry.Username != "" && entry.Password != "" {
@@ -559,6 +572,40 @@ func credsFromDockerConfig(registry string) (string, string, bool) {
 		return string(raw[:colon]), string(raw[colon+1:]), true
 	}
 	return "", "", false
+}
+
+// credentialHelperName matches the docker-credential-<name> suffixes docker
+// accepts. Anything else is refused rather than put on an exec path.
+var credentialHelperName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// credentialHelperTimeout bounds one helper call; a helper waiting on a
+// keychain prompt must not stall preflight. A var so tests can allow for a
+// loaded machine starting a freshly written helper script.
+var credentialHelperTimeout = 5 * time.Second
+
+// credsFromHelper asks docker-credential-<helper> for registry's credential
+// using the credential-helper protocol docker uses: "get" with the server URL
+// on stdin, JSON {"Username","Secret"} on stdout.
+func credsFromHelper(helper, registry string) (string, string, bool) {
+	if !credentialHelperName.MatchString(helper) {
+		return "", "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), credentialHelperTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker-credential-"+helper, "get")
+	cmd.Stdin = strings.NewReader(registry)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", false
+	}
+	var cred struct {
+		Username string `json:"Username"`
+		Secret   string `json:"Secret"`
+	}
+	if err := json.Unmarshal(out, &cred); err != nil || cred.Secret == "" {
+		return "", "", false
+	}
+	return cred.Username, cred.Secret, true
 }
 
 // pickBestValidatorTag filters to recognized validator tags and returns
