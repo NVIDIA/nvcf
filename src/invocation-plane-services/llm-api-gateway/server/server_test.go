@@ -312,6 +312,25 @@ func TestInferenceWriteTimeoutStopsStalledClient(t *testing.T) {
 	}
 }
 
+func TestNewWrapsEchoWithFinalWriteDeadline(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig("http://127.0.0.1:1")
+	inferenceProvider, err := provider.NewStargateProvider(cfg.Stargate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := New(cfg, inferenceProvider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// e.Start would reset the handler to e and drop the final write
+	// deadline; main serves through Start, which keeps it.
+	if e.Server.Handler == http.Handler(e) {
+		t.Fatal("server handler is the bare Echo instance")
+	}
+}
+
 func testConfig(upstreamURL string) *config.Config {
 	cfg := config.Default()
 	cfg.Server.WriteTimeout = testWriteTimeout

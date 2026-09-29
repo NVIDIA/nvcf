@@ -59,33 +59,19 @@ func newInferenceWriteDeadlineMiddleware(timeout time.Duration) echo.MiddlewareF
 	}
 }
 
-// installWriteDeadlineFinalizer arms the write deadline one last time when
-// Echo is done with a request, so the flush net/http performs after the
-// handler returns is bounded. On success that is when the outermost (pre)
-// middleware returns; on error it is after HTTPErrorHandler has written the
-// error response. Arming any earlier would let the deadline run while outer
-// middleware or the error handler is still working.
-func installWriteDeadlineFinalizer(e *echo.Echo) {
-	e.Pre(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			err := next(c)
-			if err == nil {
-				finishWriteDeadline(c)
-			}
-			return err
+// WithFinalWriteDeadline arms the write deadline once next has returned, so
+// the flush net/http performs after the handler (the rest of the buffered
+// body, the chunked terminator, or the HTTP/2 end of stream) cannot block
+// forever on a client that stopped reading. Wrap the whole Echo instance so
+// the deadline starts only after every middleware and the error handler are
+// done. A timeout <= 0 leaves the deadline as the handler set it.
+func WithFinalWriteDeadline(next http.Handler, timeout time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		if timeout > 0 {
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout))
 		}
 	})
-	handleError := e.HTTPErrorHandler
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
-		handleError(err, c)
-		finishWriteDeadline(c)
-	}
-}
-
-func finishWriteDeadline(c echo.Context) {
-	if w, ok := c.Response().Writer.(*deadlineWriter); ok {
-		w.finish()
-	}
 }
 
 func (h *Handlers) inferenceWriteTimeout() time.Duration {
@@ -104,7 +90,6 @@ type deadlineWriter struct {
 	timeout    time.Duration
 	ctx        context.Context
 	gc         *GatewayContext
-	finished   bool
 	logged     bool
 }
 
@@ -124,11 +109,6 @@ func (w *deadlineWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-func (w *deadlineWriter) finish() {
-	w.finished = true
-	w.armDeadline()
-}
-
 func (w *deadlineWriter) armDeadline() {
 	if w.timeout <= 0 {
 		return
@@ -145,9 +125,7 @@ func (w *deadlineWriter) afterWrite(err error) {
 		w.logTimeout(err)
 		return
 	}
-	if !w.finished {
-		w.clearDeadline()
-	}
+	w.clearDeadline()
 }
 
 func (w *deadlineWriter) setDeadline(deadline time.Time) {

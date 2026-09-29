@@ -69,11 +69,14 @@ func serveWithWriteDeadline(
 	recorder *deadlineRecorder,
 	logs *bytes.Buffer,
 	handler echo.HandlerFunc,
+	configure ...func(*echo.Echo),
 ) {
 	t.Helper()
 
 	e := echo.New()
-	installWriteDeadlineFinalizer(e)
+	for _, fn := range configure {
+		fn(e)
+	}
 	withRequestContext := func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			gc := NewGatewayContext(c)
@@ -89,7 +92,7 @@ func serveWithWriteDeadline(
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	req = req.WithContext(zerolog.New(logs).WithContext(req.Context()))
-	e.ServeHTTP(recorder, req)
+	WithFinalWriteDeadline(e, timeout).ServeHTTP(recorder, req)
 }
 
 func TestInferenceWriteDeadlineArmsOnlyDuringWrites(t *testing.T) {
@@ -134,6 +137,59 @@ func TestInferenceWriteDeadlineBoundsErrorResponse(t *testing.T) {
 	// handler writing; the final arm comes only after the error response.
 	if got, want := strings.Join(recorder.events, " "), "clear arm write clear arm"; got != want {
 		t.Fatalf("deadline events = %s, want %s", got, want)
+	}
+}
+
+func TestFinalWriteDeadlineArmsAfterAllEchoWork(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		handler   echo.HandlerFunc
+		configure func(*echo.Echo, *deadlineRecorder)
+		want      string
+	}{
+		{
+			name: "pre middleware works after the handler",
+			handler: func(c echo.Context) error {
+				return c.String(http.StatusOK, "ok")
+			},
+			configure: func(e *echo.Echo, recorder *deadlineRecorder) {
+				e.Pre(func(next echo.HandlerFunc) echo.HandlerFunc {
+					return func(c echo.Context) error {
+						err := next(c)
+						recorder.events = append(recorder.events, "pre-done")
+						return err
+					}
+				})
+			},
+			want: "clear arm write clear pre-done arm",
+		},
+		{
+			name: "custom error handler",
+			handler: func(echo.Context) error {
+				return echo.NewHTTPError(http.StatusBadGateway, "upstream failed")
+			},
+			configure: func(e *echo.Echo, recorder *deadlineRecorder) {
+				e.HTTPErrorHandler = func(err error, c echo.Context) {
+					_ = c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+					recorder.events = append(recorder.events, "error-handled")
+				}
+			},
+			want: "clear arm write clear error-handled arm",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+			serveWithWriteDeadline(t, time.Second, recorder, &bytes.Buffer{}, tc.handler, func(e *echo.Echo) {
+				tc.configure(e, recorder)
+			})
+			if got := strings.Join(recorder.events, " "); got != tc.want {
+				t.Fatalf("deadline events = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
