@@ -26,9 +26,12 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 // ---------------------------------------------------------------------------
@@ -250,6 +253,36 @@ func TestWaitForPodDone_Timeout(t *testing.T) {
 	_, err := waitForPodDone(context.Background(), client, "ns", "p", 100*time.Millisecond)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "did not complete")
+}
+
+// A single 429 must not decide the result: the Get is retried in the deadline.
+func TestWaitForPodDone_RetriesTransientErrors(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	client := fake.NewSimpleClientset(pod)
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	ok, err := waitForPodDone(context.Background(), client, "ns", "p", 10*time.Second)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Greater(t, calls, 1)
+}
+
+// A missing pod cannot reappear, so it returns at once instead of waiting out
+// the deadline.
+func TestWaitForPodDone_NotFoundIsTerminal(t *testing.T) {
+	start := time.Now()
+	_, err := waitForPodDone(context.Background(), fake.NewSimpleClientset(), "ns", "p", 30*time.Second)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second)
 }
 
 // ---------------------------------------------------------------------------

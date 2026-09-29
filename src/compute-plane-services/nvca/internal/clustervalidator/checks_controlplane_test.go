@@ -370,12 +370,14 @@ func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
 		}}, nil
 	})
 
-	// Fail checker pod creation so the test exits quickly without needing to
-	// simulate full pod lifecycle (no Get/poll needed).
+	// Deny checker pod creation so the test exits quickly without needing to
+	// simulate full pod lifecycle (no Get/poll needed). A 403 here is also the
+	// checker-side admission guard: it must stay UNKNOWN, not fail the overlay.
 	var checkerPodCreateCalled bool
 	client.PrependReactor("create", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
 		checkerPodCreateCalled = true
-		return true, nil, fmt.Errorf("no pods scheduled")
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("exceeded quota"))
 	})
 
 	state := &ValidationState{Log: testLog()}
@@ -386,25 +388,36 @@ func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
 	// would have timed out before reaching pod creation and this flag would
 	// stay false, catching the regression.
 	require.True(t, checkerPodCreateCalled, "check must reach checker pod creation step")
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.False(t, *state.NodeToNodeOK, "NodeToNodeOK false because checker pod creation failed")
+	assert.Nil(t, state.NodeToNodeOK, "a checker that was never admitted is not evidence about the overlay")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "checker pod was not admitted")
 }
 
-func TestCheckNodeToNode_DaemonSetCreateFailure(t *testing.T) {
-	// Two schedulable nodes, but DaemonSet creation fails.
-	client := fake.NewSimpleClientset(
-		makeNode("node-1", true, 0),
-		makeNode("node-2", true, 0),
-	)
-	client.PrependReactor("create", "daemonsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, fmt.Errorf("quota exceeded")
-	})
+// Any rejection of the probe DaemonSet means the probe never ran. Classifying
+// by 403 alone reported a Kyverno, ValidatingAdmissionPolicy or fail-closed
+// webhook denial as a broken overlay, while a quota 403 read as RBAC.
+func TestCheckNodeToNode_DaemonSetCreateRejectionIsUnknown(t *testing.T) {
+	gr := schema.GroupResource{Group: "apps", Resource: "daemonsets"}
+	cases := map[string]error{
+		"quota 403":      apierrors.NewForbidden(gr, "", fmt.Errorf("exceeded quota")),
+		"kyverno 400":    apierrors.NewBadRequest("image busybox:1.36 is not allowed"),
+		"vap 422":        apierrors.NewInvalid(schema.GroupKind{Group: "apps", Kind: "DaemonSet"}, "x", nil),
+		"webhook 500":    apierrors.NewInternalError(fmt.Errorf("failed calling webhook")),
+		"webhook 503":    apierrors.NewServiceUnavailable("webhook timed out"),
+		"transport fail": fmt.Errorf("connection reset by peer"),
+	}
+	for name, createErr := range cases {
+		t.Run(name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(makeNode("node-1", true, 0), makeNode("node-2", true, 0))
+			client.PrependReactor("create", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, createErr
+			})
+			state := &ValidationState{Log: testLog()}
+			checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
 
-	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
-
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.False(t, *state.NodeToNodeOK, "DaemonSet create failure must set NodeToNodeOK=false")
+			assert.Nil(t, state.NodeToNodeOK, "a probe that was never admitted must not fail the overlay")
+			assert.Contains(t, strings.Join(state.Warnings, "; "), "probe DaemonSet was not admitted")
+		})
+	}
 }
 
 // The probe creates a namespace, a DaemonSet, and a pod on every node. If the
@@ -1178,16 +1191,23 @@ func TestCheckEnvoyGateway_NotFoundStillFails(t *testing.T) {
 // several, so a partially satisfied address pool must not pass on the strength
 // of its assigned siblings.
 func TestCheckExternalLoadBalancer_PendingServiceIsNotAPass(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "shared-gw,nats-gw")
 	assigned := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway-lb", Namespace: envoyGatewayNamespaceName()},
-		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "envoy-gateway-lb", Namespace: envoyGatewayNamespaceName(),
+			Labels: map[string]string{owningGatewayNameLabel: "shared-gw"},
+		},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 		Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
 			Ingress: []corev1.LoadBalancerIngress{{IP: "10.0.0.1"}},
 		}},
 	}
 	pending := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "envoy-nats-gateway-lb", Namespace: envoyGatewayNamespaceName()},
-		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "envoy-nats-gateway-lb", Namespace: envoyGatewayNamespaceName(),
+			Labels: map[string]string{owningGatewayNameLabel: "nats-gw"},
+		},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 	}
 	client := fake.NewSimpleClientset(assigned, pending)
 	state := &ValidationState{Log: testLog()}
@@ -1197,6 +1217,79 @@ func TestCheckExternalLoadBalancer_PendingServiceIsNotAPass(t *testing.T) {
 	assert.False(t, *state.ExternalLBOK,
 		"a Gateway still waiting on an address is the failure this check exists to catch")
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "envoy-nats-gateway-lb")
+}
+
+func lbService(name string, gateway, gatewayNS, ip string) *corev1.Service {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: envoyGatewayNamespaceName(), Labels: map[string]string{}},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+	}
+	if gateway != "" {
+		svc.Labels[owningGatewayNameLabel] = gateway
+		svc.Labels[owningGatewayNamespaceLabel] = gatewayNS
+	}
+	if ip != "" {
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip}}
+	}
+	return svc
+}
+
+// Envoy Gateway puts every Gateway's proxy Service in its namespace, so another
+// team's Service at <pending> must not fail a healthy NVCF gateway.
+func TestCheckExternalLoadBalancer_ForeignPendingGatewayIgnored(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "gateway/shared-gw")
+	client := fake.NewSimpleClientset(
+		lbService("envoy-nvcf", "shared-gw", "gateway", "203.0.113.1"),
+		lbService("envoy-team-b", "team-b-gw", "team-b", ""),
+		// Same Gateway name in another namespace: the namespace/name entry excludes it.
+		lbService("envoy-other-shared", "shared-gw", "other", ""),
+	)
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, state)
+
+	require.NotNil(t, state.ExternalLBOK)
+	assert.True(t, *state.ExternalLBOK)
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "envoy-team-b")
+}
+
+// Named Gateways with no proxy Service at all is a failure, not a pass on
+// whatever else happens to hold an address.
+func TestCheckExternalLoadBalancer_NamedGatewayMissing(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "shared-gw")
+	client := fake.NewSimpleClientset(lbService("envoy-team-b", "team-b-gw", "team-b", "203.0.113.9"))
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, state)
+
+	require.NotNil(t, state.ExternalLBOK)
+	assert.False(t, *state.ExternalLBOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "shared-gw")
+}
+
+// Without Gateway names the check cannot attribute a pending Service, so it
+// warns and points at the setting instead of failing on a foreign Service.
+func TestCheckExternalLoadBalancer_UnnamedPendingOnlyWarns(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	client := fake.NewSimpleClientset(
+		lbService("envoy-nvcf", "shared-gw", "gateway", "203.0.113.1"),
+		lbService("envoy-team-b", "team-b-gw", "team-b", ""),
+	)
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, state)
+
+	require.NotNil(t, state.ExternalLBOK)
+	assert.True(t, *state.ExternalLBOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), nvcfGatewayNamesEnv)
+}
+
+// The install hint must name the namespace the check actually looked in.
+func TestCheckEnvoyGateway_RemediationUsesConfiguredNamespace(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "gateway")
+	state := &ValidationState{Log: testLog()}
+	checkEnvoyGateway(context.Background(), fake.NewSimpleClientset(), state)
+
+	joined := strings.Join(state.Recommendations, "; ")
+	assert.Contains(t, joined, "-n gateway ")
+	assert.NotContains(t, joined, "envoy-gateway-system")
 }
 
 // The stack exposes controllerNamespace with no default, so an install can
@@ -1373,8 +1466,11 @@ func TestWaitForDaemonSetPods_RequiresEveryScheduledPod(t *testing.T) {
 			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0." + node[len(node)-1:]},
 		}
 	}
-	// Three scheduled, two Running: the third node's CNI never gave it an IP.
-	client := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"))
+	// Three scheduled, two Running: the third node's CNI never gave it an IP,
+	// so its pod sits in ContainerCreating.
+	stuck := probePod("node-3", "Pending", "", "ContainerCreating")
+	stuck.ObjectMeta = metav1.ObjectMeta{Name: "c", Namespace: "probe", Labels: labels}
+	client := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"), &stuck)
 	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
 
 	_, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 3, time.Second)
@@ -1416,6 +1512,19 @@ func TestWaitForDaemonSetPods_RetriesTransientErrors(t *testing.T) {
 	require.NoError(t, err, "a single 429 must not abort a 30s wait")
 	assert.Len(t, pods, 2)
 	assert.Greater(t, calls, 1, "the loop must have retried")
+}
+
+// A pod list that keeps failing until the deadline observed nothing, so it
+// must not read as pods that failed to come up.
+func TestWaitForDaemonSetPods_UnreadableListIsNotObserved(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewTooManyRequestsError("slow down")
+	})
+	_, err := waitForDaemonSetPods(context.Background(), client, "probe", "app=n2n", 2, time.Second)
+	var unobserved *probeNotObservedError
+	require.ErrorAs(t, err, &unobserved)
+	assert.Contains(t, unobserved.reason, "listing DaemonSet pods")
 }
 
 // A permission error is terminal: retrying it just burns the deadline.
@@ -1483,7 +1592,138 @@ func TestCheckNodeToNode_DaemonSetDenialStaysUnknown(t *testing.T) {
 
 	assert.Nil(t, state.NodeToNodeOK,
 		"a denial is not evidence the overlay works, so it must not pass")
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "RBAC denied")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "not admitted")
+}
+
+// A checker whose status cannot be read produced no result, so the overlay
+// stays unobserved rather than failing on the first Get error.
+func TestCheckNodeToNode_UnreadableCheckerIsUnknown(t *testing.T) {
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0), makeNode("node-2", true, 0))
+	var dsLabels map[string]string
+	var dsName, dsNS string
+	client.PrependReactor("create", "daemonsets", func(action ktesting.Action) (bool, runtime.Object, error) {
+		ds := action.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
+		dsLabels, dsName, dsNS = ds.Labels, ds.Name, ds.Namespace
+		return true, ds, nil
+	})
+	client.PrependReactor("get", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: dsName, Namespace: dsNS, Generation: 1},
+			Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 2, ObservedGeneration: 1},
+		}, nil
+	})
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "s-1", Namespace: dsNS, Labels: dsLabels},
+				Spec:       corev1.PodSpec{NodeName: "node-1"},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "s-2", Namespace: dsNS, Labels: dsLabels},
+				Spec:       corev1.PodSpec{NodeName: "node-2"},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
+			},
+		}}, nil
+	})
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("denied"))
+	})
+
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
+
+	assert.Nil(t, state.NodeToNodeOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "checker pod did not report a result")
+}
+
+func probePod(node, phase string, ip string, waiting string) corev1.Pod {
+	p := corev1.Pod{
+		Spec:   corev1.PodSpec{NodeName: node},
+		Status: corev1.PodStatus{Phase: corev1.PodPhase(phase), PodIP: ip},
+	}
+	if waiting != "" {
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: waiting}},
+		}}
+	}
+	return p
+}
+
+// Only a pod the node could not network is evidence about the overlay. A pod
+// that could not pull its image, start its container, be scheduled, or be
+// created at all says nothing about it.
+func TestClassifyUnstartedProbePods(t *testing.T) {
+	running := probePod("node-1", "Running", "10.0.0.1", "")
+	cases := []struct {
+		name       string
+		pods       []corev1.Pod
+		want       int
+		unobserved bool
+		recommend  bool
+	}{
+		{"pods never created", []corev1.Pod{running}, 3, true, false},
+		{"image pull backoff", []corev1.Pod{running, probePod("node-2", "Pending", "", "ImagePullBackOff")}, 2, true, true},
+		{"first pull error", []corev1.Pod{running, probePod("node-2", "Pending", "", "ErrImagePull")}, 2, true, true},
+		{"container cannot start", []corev1.Pod{running, probePod("node-2", "Running", "", "CrashLoopBackOff")}, 2, true, false},
+		{"cni never gave an IP", []corev1.Pod{running, probePod("node-2", "Pending", "", "ContainerCreating")}, 2, false, false},
+		{"running without IP", []corev1.Pod{running, probePod("node-2", "Running", "", "")}, 2, false, false},
+		{
+			"network fault beside a pull fault still fails",
+			[]corev1.Pod{
+				running,
+				probePod("node-2", "Pending", "", "ImagePullBackOff"),
+				probePod("node-3", "Pending", "", "ContainerCreating"),
+			},
+			3, false, false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyUnstartedProbePods(tc.pods, tc.want)
+			if !tc.unobserved {
+				assert.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			assert.Equal(t, tc.recommend, got.recommendation != "")
+		})
+	}
+
+	unschedulable := probePod("node-2", "Pending", "", "")
+	unschedulable.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}
+	got := classifyUnstartedProbePods([]corev1.Pod{running, unschedulable}, 2)
+	require.NotNil(t, got, "a pod the scheduler could not place never ran")
+	assert.Contains(t, got.reason, "node-2: Unschedulable")
+}
+
+// A probe stuck in ImagePullBackOff is reported as not observed, with advice
+// naming the dedicated image setting, instead of "got 0 on 0 node(s)".
+func TestWaitForDaemonSetPods_ImagePullIsNotObserved(t *testing.T) {
+	labels := map[string]string{"app": "n2n"}
+	mk := func(name, node string) *corev1.Pod {
+		p := probePod(node, "Pending", "", "ImagePullBackOff")
+		p.ObjectMeta = metav1.ObjectMeta{Name: name, Namespace: "probe", Labels: labels}
+		return &p
+	}
+	client := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"))
+	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
+
+	_, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 2, time.Second)
+	var unobserved *probeNotObservedError
+	require.ErrorAs(t, err, &unobserved)
+	assert.Contains(t, unobserved.recommendation, nodeToNodeImageEnv)
+}
+
+func TestNodeToNodeProbeImage_DedicatedOverrideWins(t *testing.T) {
+	cfg := &NetworkCheckConfig{Enforcement: &EnforcementConfig{TestImage: "mirror/enforce:1"}}
+
+	t.Setenv(nodeToNodeImageEnv, "")
+	assert.Equal(t, enforcementDefaultImg, nodeToNodeProbeImage(nil))
+	assert.Equal(t, "mirror/enforce:1", nodeToNodeProbeImage(cfg))
+
+	t.Setenv(nodeToNodeImageEnv, " mirror/busybox:1.36 ")
+	assert.Equal(t, "mirror/busybox:1.36", nodeToNodeProbeImage(cfg))
 }
 
 // A relocated component's namespace REPLACES the default. Appending left the

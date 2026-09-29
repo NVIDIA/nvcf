@@ -531,6 +531,8 @@ networkPolicy:
 ## @param clusterValidator.role Check set to run: "control-plane" for gateway, storage, overlay and HA checks; any other value (including "") runs the compute-plane GPU checks
 ## @param clusterValidator.openBaoNamespace Namespace holding OpenBao, when it is not vault-system; without it the Tier-2 quorum check skips its StatefulSet
 ## @param clusterValidator.envoyGatewayNamespace Namespace holding Envoy Gateway, when it is not envoy-gateway-system
+## @param clusterValidator.gatewayNames NVCF Gateways as "name" or "namespace/name"; limits the LoadBalancer check to their proxy Services
+## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc. Defaults to busybox:1.36 from Docker Hub
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
 ## @param clusterValidator.configMapName ConfigMap name for user-defined network checks (reachability + network policy validation)
 ## @param clusterValidator.resources.limits.cpu CPU limit for the cluster-validator container
@@ -548,6 +550,13 @@ clusterValidator:
   # namespaces, so the control-plane checks look in the right place.
   openBaoNamespace: ""
   envoyGatewayNamespace: ""
+  # Envoy Gateway puts every Gateway's proxy Service in its own namespace, so
+  # name the NVCF Gateways here (the stack's ingress.gatewayApi.gateways) to
+  # keep another team's pending LoadBalancer from failing the check.
+  gatewayNames: []
+  # Set for air-gapped or registry-mirrored clusters. Without it every probe
+  # pod pulls busybox from Docker Hub and the overlay row reports UNKNOWN.
+  nodeToNodeProbeImage: ""
   image:
     repository: ""
     tag: ""  # defaults to .Chart.AppVersion (same as nvca-operator)

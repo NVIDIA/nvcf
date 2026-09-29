@@ -907,6 +907,14 @@ const (
 	// Without it, both Envoy checks probe a namespace that does not exist and
 	// report a live gateway as missing.
 	envoyGatewayNamespaceEnv = "NVCF_ENVOY_GATEWAY_NAMESPACE"
+	// nvcfGatewayNamesEnv lists the NVCF Gateways, comma-separated, as "name"
+	// or "namespace/name". Envoy Gateway puts every Gateway's proxy Service in
+	// its own namespace by default, so without this the LoadBalancer check
+	// cannot tell NVCF's Services from another team's.
+	nvcfGatewayNamesEnv = "NVCF_GATEWAY_NAMES"
+	// Labels Envoy Gateway stamps on each proxy Service to name its Gateway.
+	owningGatewayNameLabel      = "gateway.envoyproxy.io/owning-gateway-name"
+	owningGatewayNamespaceLabel = "gateway.envoyproxy.io/owning-gateway-namespace"
 	// envoyGatewayControllerSelector matches the controller Deployment's pods
 	// only, excluding the data-plane proxies and certgen Job in the same namespace.
 	envoyGatewayControllerSelector = "control-plane=envoy-gateway"
@@ -1038,7 +1046,7 @@ func checkGatewayAPICRDs(_ context.Context, client kubernetes.Interface, state *
 }
 
 // checkEnvoyGateway verifies the Envoy Gateway controller is installed and has
-// at least one running pod in the envoy-gateway-system namespace. Without a
+// at least one running pod in its namespace (envoyGatewayNamespaceName). Without a
 // running gateway controller, Gateway and HTTPRoute objects are never reconciled
 // and no traffic reaches NVCF services.
 func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
@@ -1060,7 +1068,7 @@ func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *
 		printError(log, fmt.Sprintf("Envoy Gateway namespace %s not found", envoyNS))
 		state.Recommendations = append(state.Recommendations,
 			"Install Envoy Gateway via the NVCF self-managed stack (nvcf-cli up) or "+
-				"helm install eg oci://docker.io/envoyproxy/gateway-helm -n envoy-gateway-system --create-namespace")
+				"helm install eg oci://docker.io/envoyproxy/gateway-helm -n "+envoyNS+" --create-namespace")
 		ok := false
 		state.EnvoyGatewayOK = &ok
 		return
@@ -1174,6 +1182,7 @@ func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface,
 	// LoadBalancer anywhere (ingress-nginx, a demo app), which masks the NVCF
 	// gateway's own Service sitting at <pending> on an exhausted address pool.
 	envoyNS := envoyGatewayNamespaceName()
+	gateways := nvcfGatewayNames()
 	services, err := client.CoreV1().Services(envoyNS).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		// Leave the pointer nil: a List failure is not evidence that no
@@ -1199,6 +1208,12 @@ func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface,
 		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
 			continue
 		}
+		// In its default mode Envoy Gateway puts every Gateway's proxy Service
+		// here, including other teams'. A foreign Service at <pending> says
+		// nothing about NVCF's address pool.
+		if len(gateways) > 0 && !gateways.owns(svc) {
+			continue
+		}
 		addr := ""
 		for _, ing := range svc.Status.LoadBalancer.Ingress {
 			if addr = ing.IP; addr == "" {
@@ -1215,12 +1230,34 @@ func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface,
 		found = append(found, lbResult{svc.Name, svc.Namespace, addr})
 	}
 
-	if len(pending) > 0 {
+	// With the NVCF Gateways named, any of theirs still pending fails: a
+	// partially satisfied pool must not pass on the strength of its siblings.
+	// Without names we cannot tell whose Service is pending, so it only fails
+	// when nothing in the namespace has an address.
+	if len(pending) > 0 && (len(gateways) > 0 || len(found) == 0) {
 		printWarning(log, fmt.Sprintf("LoadBalancer Service(s) awaiting an external address: %s",
 			strings.Join(pending, ", ")))
 		state.Warnings = append(state.Warnings,
 			"External Load Balancer: "+strings.Join(pending, ", ")+
 				" have no external address. Check the load balancer controller and its address pool.")
+		ok := false
+		state.ExternalLBOK = &ok
+		return
+	}
+	if len(pending) > 0 {
+		printWarning(log, fmt.Sprintf("LoadBalancer Service(s) awaiting an external address: %s",
+			strings.Join(pending, ", ")))
+		state.Warnings = append(state.Warnings,
+			"External Load Balancer: "+strings.Join(pending, ", ")+" have no external address. "+
+				"Set clusterValidator.gatewayNames (env "+nvcfGatewayNamesEnv+") to the NVCF Gateways "+
+				"so this check can tell whether they belong to NVCF.")
+	}
+
+	if len(found) == 0 && len(gateways) > 0 {
+		msg := fmt.Sprintf("No LoadBalancer Service found in %s for Gateway(s) %s", envoyNS, gateways)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "External Load Balancer: "+msg+
+			". Check the Gateway names and that Envoy Gateway provisioned their proxies.")
 		ok := false
 		state.ExternalLBOK = &ok
 		return
@@ -1260,17 +1297,25 @@ const (
 	nodeToNodeDSTimeout      = 2 * time.Minute
 	nodeToNodeStatusTimeout  = 30 * time.Second
 	nodeToNodeCheckerTimeout = 90 * time.Second
+	// nodeToNodeImageEnv is the dedicated probe image override. An operator
+	// debugging the node-to-node row has no reason to look under an
+	// enforcement-test setting, so this one is named for the check it serves.
+	nodeToNodeImageEnv = "NVCF_N2N_PROBE_IMAGE"
 	// orphanN2NNamespaceTTL is the minimum age before a leftover
 	// nvcf-n2n-validation-* namespace is swept. Must exceed the sum of the
 	// DaemonSet and checker timeouts to avoid racing a concurrent run.
 	orphanN2NNamespaceTTL = 10 * time.Minute
 )
 
-// nodeToNodeProbeImage resolves the probe image, honouring the same
-// enforcement.testImage override the sibling NetworkPolicy probe uses. Without
-// it, an air-gapped or registry-mirrored cluster ImagePullBackOffs on every
-// DaemonSet pod and the timeout is reported as an overlay fault.
+// nodeToNodeProbeImage resolves the probe image. The dedicated
+// NVCF_N2N_PROBE_IMAGE override wins, then the enforcement.testImage the
+// sibling NetworkPolicy probe uses, then the public busybox default. Without an
+// override, an air-gapped or registry-mirrored cluster ImagePullBackOffs on
+// every DaemonSet pod.
 func nodeToNodeProbeImage(cfg *NetworkCheckConfig) string {
+	if img := strings.TrimSpace(os.Getenv(nodeToNodeImageEnv)); img != "" {
+		return img
+	}
 	if cfg != nil && cfg.Enforcement != nil && cfg.Enforcement.TestImage != "" {
 		return cfg.Enforcement.TestImage
 	}
@@ -1408,15 +1453,27 @@ func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kub
 // does not probe the reverse direction back toward node[0].
 //
 // This check creates a namespace, a DaemonSet, and a pod, so the ServiceAccount
-// must hold create/delete on all three. A denial on any of them leaves the
-// result unknown rather than failing the overlay, because a missing grant is
-// not evidence that node-to-node traffic is broken.
+// must hold create/delete on all three. Any rejection of those creates, and a
+// probe pod that cannot pull its image or start its container, leaves the
+// result unknown rather than failing the overlay: none of them is evidence that
+// node-to-node traffic is broken. Only a checker that ran and could not
+// connect, or a probe pod the node could not network, fails the check.
 //
 // Critical: broken overlay means NVCF services on different nodes cannot
 // communicate, causing cascade failures across every API call.
 func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *ValidationState, image string) {
 	log := state.Log
 	printHeader(log, "Node-to-Node Communication")
+
+	// notObserved leaves the pointer nil: only a probe that ran, or a probe pod
+	// the pod network could not bring up, is evidence about the overlay.
+	notObserved := func(msg, recommendation string) {
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Node-to-Node: status unknown ("+msg+")")
+		if recommendation != "" {
+			state.Recommendations = append(state.Recommendations, recommendation)
+		}
+	}
 
 	// Reclaim DaemonSets orphaned by prior runs killed before their deferred
 	// cleanup fired (SIGKILL, OOM, node failure).
@@ -1495,19 +1552,12 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		ctx, buildNodeToNodeDaemonSet(dsName, ns, dsLabels, image), metav1.CreateOptions{},
 	)
 	if err != nil {
-		// A denial means we could not run the probe, not that the overlay is
-		// broken. Without this an operator chart missing the daemonsets
-		// create verb reports NVCF-Not-Ready on every CronJob tick of a
-		// healthy cluster.
-		if apierrors.IsForbidden(err) {
-			msg := fmt.Sprintf("RBAC denied creating the probe DaemonSet in %s: %v", ns, err)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Node-to-Node: status unknown ("+msg+")")
-			return
-		}
-		printError(log, fmt.Sprintf("Failed to create server DaemonSet: %v", err))
-		ok := false
-		state.NodeToNodeOK = &ok
+		// Any create error means the probe was never admitted, which says
+		// nothing about the overlay. Classifying by status code split one
+		// cause across two verdicts: RBAC, a ResourceQuota and Gatekeeper
+		// return 403, Kyverno 400, a ValidatingAdmissionPolicy 422 and a
+		// fail-closed webhook 500 or 503.
+		notObserved(fmt.Sprintf("probe DaemonSet was not admitted in %s: %v", ns, err), "")
 		return
 	}
 
@@ -1542,6 +1592,15 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: dsLabels})
 	serverPods, err := waitForDaemonSetPods(ctx, client, ns, selector, wantPods, nodeToNodeDSTimeout)
 	if err != nil {
+		var unobserved *probeNotObservedError
+		switch {
+		case errors.As(err, &unobserved):
+			notObserved("probe pods did not start: "+unobserved.reason, unobserved.recommendation)
+			return
+		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || ctx.Err() != nil:
+			notObserved(fmt.Sprintf("could not read probe pod status: %v", err), "")
+			return
+		}
 		printError(log, fmt.Sprintf("Server DaemonSet pods did not become ready: %v", err))
 		ok := false
 		state.NodeToNodeOK = &ok
@@ -1572,23 +1631,16 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		ctx, buildNodeToNodeCheckerPod(checkerName, ns, checkerNode, targetIPs, image), metav1.CreateOptions{},
 	); err != nil {
 		// Same reasoning as the DaemonSet create above.
-		if apierrors.IsForbidden(err) {
-			msg := fmt.Sprintf("RBAC denied creating the checker pod in %s: %v", ns, err)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Node-to-Node: status unknown ("+msg+")")
-			return
-		}
-		printError(log, fmt.Sprintf("Failed to create checker pod: %v", err))
-		ok := false
-		state.NodeToNodeOK = &ok
+		notObserved(fmt.Sprintf("checker pod was not admitted in %s: %v", ns, err), "")
 		return
 	}
 
+	// An error here means no result was read: the checker never finished, or
+	// its status could not be fetched. A connection failure is reported as a
+	// Failed phase, not an error.
 	succeeded, err := waitForPodDone(ctx, client, ns, checkerName, nodeToNodeCheckerTimeout)
 	if err != nil {
-		printError(log, fmt.Sprintf("Checker pod error: %v", err))
-		ok := false
-		state.NodeToNodeOK = &ok
+		notObserved(fmt.Sprintf("checker pod did not report a result: %v", err), "")
 		return
 	}
 
@@ -1665,6 +1717,7 @@ func waitForDaemonSetPods(
 ) ([]corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
+	var lastPods []corev1.Pod
 	for {
 		pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 		if err != nil {
@@ -1678,6 +1731,7 @@ func waitForDaemonSetPods(
 		var running []corev1.Pod
 		if err == nil {
 			lastErr = nil
+			lastPods = pods.Items
 			for i := range pods.Items {
 				if pods.Items[i].Status.Phase == corev1.PodRunning && pods.Items[i].Status.PodIP != "" {
 					running = append(running, pods.Items[i])
@@ -1689,7 +1743,10 @@ func waitForDaemonSetPods(
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil {
-				return nil, fmt.Errorf("listing DaemonSet pods: %w", lastErr)
+				return nil, &probeNotObservedError{reason: fmt.Sprintf("listing DaemonSet pods: %v", lastErr)}
+			}
+			if unobserved := classifyUnstartedProbePods(lastPods, wantCount); unobserved != nil {
+				return nil, unobserved
 			}
 			// Every scheduled pod must come up. Returning a partial set here
 			// reported the overlay as Verified while a Ready node's pod sat in
@@ -1705,6 +1762,97 @@ func waitForDaemonSetPods(
 		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+// probeNotObservedError reports a probe that never produced evidence about the
+// overlay: its pods were not admitted, could not pull their image, or could not
+// start their container.
+type probeNotObservedError struct {
+	reason         string
+	recommendation string
+}
+
+func (e *probeNotObservedError) Error() string { return e.reason }
+
+// probeImagePullReasons are the kubelet waiting reasons for an image the node
+// could not fetch. The first attempt reports ErrImagePull before the backoff
+// starts, and a malformed override reports InvalidImageName.
+var probeImagePullReasons = map[string]bool{
+	"ErrImagePull":      true,
+	"ImagePullBackOff":  true,
+	"InvalidImageName":  true,
+	"ErrImageNeverPull": true,
+}
+
+// probeContainerStartReasons are waiting reasons for a pulled probe container
+// that could not run. None involves the pod network: a CNI fault leaves the pod
+// in ContainerCreating with no sandbox, which stays a failure.
+var probeContainerStartReasons = map[string]bool{
+	"CreateContainerConfigError": true,
+	"CreateContainerError":       true,
+	"RunContainerError":          true,
+	"CrashLoopBackOff":           true,
+}
+
+const nodeToNodeImageRecommendation = "Node-to-node probe image could not be pulled. Set " +
+	"clusterValidator.nodeToNodeProbeImage (env " + nodeToNodeImageEnv + ") to a busybox-compatible " +
+	"image the nodes can pull, for example a copy in your registry mirror."
+
+// classifyUnstartedProbePods decides whether a probe DaemonSet that did not
+// fully come up says anything about the overlay. It returns nil when at least
+// one pod is stuck for a reason only the node or pod network explains, such as
+// ContainerCreating with no IP. It returns a probeNotObservedError when every
+// straggler is explained by the probe itself.
+func classifyUnstartedProbePods(pods []corev1.Pod, wantCount int) *probeNotObservedError {
+	if len(pods) < wantCount {
+		// The DaemonSet controller could not create the pods. Pod Security
+		// Admission, a pod quota or an admission webhook rejecting them all
+		// look like this; the FailedCreate event on the DaemonSet has the cause.
+		return &probeNotObservedError{reason: fmt.Sprintf(
+			"the DaemonSet created %d of %d probe pods; see the FailedCreate events on the DaemonSet",
+			len(pods), wantCount)}
+	}
+	var blocked []string
+	pullFailed := false
+	for i := range pods {
+		p := &pods[i]
+		if p.Status.Phase == corev1.PodRunning && p.Status.PodIP != "" {
+			continue
+		}
+		reason := probePodBlocker(p)
+		if reason == "" {
+			return nil
+		}
+		if probeImagePullReasons[reason] {
+			pullFailed = true
+		}
+		blocked = append(blocked, p.Spec.NodeName+": "+reason)
+	}
+	if len(blocked) == 0 {
+		return nil
+	}
+	e := &probeNotObservedError{reason: strings.Join(blocked, ", ")}
+	if pullFailed {
+		e.recommendation = nodeToNodeImageRecommendation
+	}
+	return e
+}
+
+// probePodBlocker returns why a probe pod is stuck when the cause is the probe
+// itself rather than the network, or "" when it is not.
+func probePodBlocker(p *corev1.Pod) string {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			return "Unschedulable"
+		}
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if w := cs.State.Waiting; w != nil &&
+			(probeImagePullReasons[w.Reason] || probeContainerStartReasons[w.Reason]) {
+			return w.Reason
+		}
+	}
+	return ""
 }
 
 // distinctNodeCount counts how many different nodes a pod set covers.
@@ -1855,6 +2003,39 @@ func controlPlaneNamespaceSet() []string {
 
 // envoyGatewayNamespaceName is where the Envoy Gateway controller and its
 // provisioned proxy Services live.
+// gatewaySet holds the configured NVCF Gateways as "name" or "namespace/name".
+type gatewaySet map[string]bool
+
+// nvcfGatewayNames parses NVCF_GATEWAY_NAMES. Empty means unconfigured.
+func nvcfGatewayNames() gatewaySet {
+	set := gatewaySet{}
+	for _, entry := range strings.Split(os.Getenv(nvcfGatewayNamesEnv), ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			set[entry] = true
+		}
+	}
+	return set
+}
+
+// owns reports whether svc is the proxy Service of a configured Gateway.
+func (g gatewaySet) owns(svc *corev1.Service) bool {
+	name := svc.Labels[owningGatewayNameLabel]
+	if name == "" {
+		return false
+	}
+	return g[name] || g[svc.Labels[owningGatewayNamespaceLabel]+"/"+name]
+}
+
+// String renders the set in a stable order for messages.
+func (g gatewaySet) String() string {
+	names := make([]string, 0, len(g))
+	for n := range g {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
 func envoyGatewayNamespaceName() string {
 	if ns := strings.TrimSpace(os.Getenv(envoyGatewayNamespaceEnv)); ns != "" {
 		return ns

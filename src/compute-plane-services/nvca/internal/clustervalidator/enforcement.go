@@ -564,21 +564,33 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 // Returns true for Succeeded, false for Failed.
 func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for {
 		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return false, fmt.Errorf("pod %s/%s did not complete within %v (last error: %w)",
+					ns, name, timeout, lastErr)
+			}
 			return false, fmt.Errorf("pod %s/%s did not complete within %v", ns, name, timeout)
 		}
 
 		pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
+		switch {
+		case err == nil:
+			lastErr = nil
+			switch pod.Status.Phase {
+			case corev1.PodSucceeded:
+				return true, nil
+			case corev1.PodFailed:
+				return false, nil
+			}
+		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsNotFound(err):
+			// Answers that cannot change inside the deadline.
 			return false, fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
-		}
-
-		switch pod.Status.Phase {
-		case corev1.PodSucceeded:
-			return true, nil
-		case corev1.PodFailed:
-			return false, nil
+		default:
+			// A 429 or apiserver blip is not the pod's result, so retry it
+			// rather than spend one Get on the whole verdict.
+			lastErr = err
 		}
 
 		select {
