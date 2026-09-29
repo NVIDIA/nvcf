@@ -164,11 +164,25 @@ build_base() {
     # (the wrapper that the CRIU plugin actually invokes via PATH).
     cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/cuda-checkpoint-wrapper.sh"
 
-    docker build \
-        $cache_flag \
-        --platform linux/amd64 \
-        -t "${BASE_IMAGE}" \
-        "${BUILD_CTX}"
+    # PLATFORMS with a comma builds a multi-arch manifest with buildx and
+    # pushes it straight to the registry (multi-platform images cannot be
+    # loaded into the local daemon); the CRIU verification below then runs
+    # against the amd64 slice pulled back.
+    if [[ "${PLATFORMS:-linux/amd64}" == *,* ]]; then
+        docker buildx build ${BUILDX_BUILDER:+--builder "$BUILDX_BUILDER"} \
+            $cache_flag \
+            --platform "${PLATFORMS}" \
+            --push \
+            -t "${BASE_IMAGE}" \
+            "${BUILD_CTX}"
+        docker pull --platform linux/amd64 "${BASE_IMAGE}"
+    else
+        docker build \
+            $cache_flag \
+            --platform "${PLATFORMS:-linux/amd64}" \
+            -t "${BASE_IMAGE}" \
+            "${BUILD_CTX}"
+    fi
 
     # Verify the CRIU binary has expected PIE restorer strings
     echo ""
@@ -277,15 +291,29 @@ build_app() {
         echo "Building with --no-cache (forced rebuild)"
     fi
 
-    docker build \
-        $cache_flag \
-        --platform linux/amd64 \
-        --build-arg BASE_IMAGE="${BASE_IMAGE}" \
-        --build-arg UVLOOP_IMAGE="${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}" \
-        --build-arg LIBUV_IMAGE="${REGISTRY}/libuv-builder:${NVSNAP_LIBUV_VERSION}" \
-        --build-arg LIBZMQ_IMAGE="${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}" \
-        -t "${APP_IMAGE}" \
-        "${BUILD_CTX}"
+    if [[ "${PLATFORMS:-linux/amd64}" == *,* ]]; then
+        docker buildx build ${BUILDX_BUILDER:+--builder "$BUILDX_BUILDER"} \
+            $cache_flag \
+            --platform "${PLATFORMS}" \
+            --push \
+            --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+            --build-arg UVLOOP_IMAGE="${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}" \
+            --build-arg LIBUV_IMAGE="${REGISTRY}/libuv-builder:${NVSNAP_LIBUV_VERSION}" \
+            --build-arg LIBZMQ_IMAGE="${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}" \
+            -t "${APP_IMAGE}" \
+            "${BUILD_CTX}"
+        docker pull --platform linux/amd64 "${APP_IMAGE}"
+    else
+        docker build \
+            $cache_flag \
+            --platform "${PLATFORMS:-linux/amd64}" \
+            --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+            --build-arg UVLOOP_IMAGE="${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}" \
+            --build-arg LIBUV_IMAGE="${REGISTRY}/libuv-builder:${NVSNAP_LIBUV_VERSION}" \
+            --build-arg LIBZMQ_IMAGE="${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}" \
+            -t "${APP_IMAGE}" \
+            "${BUILD_CTX}"
+    fi
 
     # Verify final app image CRIU binary
     echo ""
