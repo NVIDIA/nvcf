@@ -48,6 +48,7 @@ go_library(
         "@io_k8s_apimachinery//pkg/api/resource",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/labels",
+        "@io_k8s_apimachinery//pkg/types",
         "@io_k8s_client_go//kubernetes",
         "@io_k8s_client_go//rest",
         "@io_k8s_client_go//tools/clientcmd",
@@ -59,7 +60,9 @@ go_library(
 go_test(
     name = "selfhosted_test",
     srcs = [
+        "clustervalidator_lifecycle_test.go",
         "clustervalidator_test.go",
+        "credhelper_test.go",
         "inotify_probe_test.go",
         "orchestrator_errors_test.go",
         "output_test.go",
@@ -88,6 +91,7 @@ go_test(
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/runtime",
         "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_apimachinery//pkg/types",
         "@io_k8s_client_go//kubernetes/fake",
         "@io_k8s_client_go//rest",
         "@io_k8s_client_go//testing",
