@@ -359,3 +359,25 @@ func TestClusterValidatorCheck_PassesRegistriesAndEnv(t *testing.T) {
 	assert.Equal(t, regs, got.Registries)
 	assert.Equal(t, env, got.Env)
 }
+
+// An image that predates validator roles runs the GPU checks on the control
+// plane and fails. Without the role line in its transcript that is the image
+// being too old, not the cluster failing, so it is a warning.
+func TestClusterValidatorCheck_PreRoleImageIsAWarning(t *testing.T) {
+	run := func(logs string, passed bool) CheckResult {
+		cv := func(context.Context, ClusterValidatorParams) ClusterValidatorResult {
+			return ClusterValidatorResult{Passed: passed, ExitCode: 1, Logs: logs}
+		}
+		return clusterValidatorCheck(cv, "", "img:1", "", false, validatorRoleControlPlane, nil, nil).Run(context.Background())
+	}
+
+	old := run("Starting NVCF cluster validation\nGPU Resources: none found\n", false)
+	assert.Equal(t, SeverityWarning, old.Severity)
+	assert.Contains(t, old.Message, "does not support the control-plane checks")
+
+	current := run("Starting NVCF cluster validation\nValidator role: control-plane\nTier-1: failed\n", false)
+	assert.Equal(t, SeverityError, current.Severity, "a role-aware image's failure is a real failure")
+
+	unread := run("", false)
+	assert.Equal(t, SeverityError, unread.Severity, "an empty transcript proves nothing about the image")
+}

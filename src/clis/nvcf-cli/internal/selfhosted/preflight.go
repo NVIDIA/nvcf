@@ -661,6 +661,20 @@ func clusterValidatorCheck(
 				r.Err = result.Err
 				return r
 			}
+			// An image that predates role support ignores VALIDATOR_ROLE and runs
+			// the compute-plane GPU checks, which fail on a CPU-only control
+			// plane. The latest tag can be such an image until a release with
+			// role support is published, so report it as the image being too
+			// old rather than as the cluster failing. An empty transcript
+			// proves nothing, so it is left to the normal handling.
+			if role == validatorRoleControlPlane && result.Logs != "" &&
+				!strings.Contains(result.Logs, validatorRoleMarker+validatorRoleControlPlane) {
+				r.Severity = SeverityWarning
+				r.Message = "cluster-validator image does not support the control-plane checks (it ran the " +
+					"compute-plane set); use an image from an NVCA release that supports validator roles, " +
+					"or pass --skip-cluster-validation"
+				return r
+			}
 			r.Passed = result.Passed
 			if result.Passed {
 				r.Severity = SeverityInfo
@@ -673,6 +687,11 @@ func clusterValidatorCheck(
 		},
 	}
 }
+
+// validatorRoleMarker prefixes the line a role-aware validator prints naming
+// the check set it runs. Must match RoleMarker in
+// nvca/internal/clustervalidator/validator.go.
+const validatorRoleMarker = "Validator role: "
 
 // validatorCleanupHint is the command that removes everything one --no-cleanup
 // run kept. Everything it created carries the run label, so one selector

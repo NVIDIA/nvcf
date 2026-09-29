@@ -143,7 +143,10 @@ api_keys_owner_id: svc@nvcf-api.local
 # Image reference for the cluster-validator pod used by
 # `nvcf-cli self-hosted check`. The CLI runs this image as a Job in the
 # cluster being checked to verify prerequisites before install. One image
-# serves both roles; the Job environment selects the check set.
+# serves both roles; the Job environment selects the check set. The
+# control-plane checks need an image from an NVCA release that supports
+# validator roles; with an older image the CLI reports a warning instead of
+# running them.
 #
 # The Job needs a ServiceAccount, ClusterRole, and ClusterRoleBinding, which
 # the CLI creates and removes per run. The kubeconfig context therefore needs
