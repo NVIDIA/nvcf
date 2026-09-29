@@ -42,7 +42,7 @@ pub use model_discovery::{
 };
 pub use model_lifecycle::{
     ModelInitialization, ModelLifecycleConfig, ModelLifecycleError, ModelLifecycleHandle,
-    ModelSource, start_model_lifecycle,
+    ModelSource, StartupHealthWait, start_model_lifecycle,
 };
 pub use queue_admission::PylonQueueMismatchRetryConfig;
 pub use quic_http_tunnel::{
@@ -51,7 +51,8 @@ pub use quic_http_tunnel::{
     TunnelForwardingConfig, UpstreamBackend, start_quic_http_tunnel, start_reverse_quic_tunnel,
 };
 pub use registration::{
-    ClientError, InferenceServerRegistrationClient, InferenceServerRegistrationConfig,
+    ClientError, DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF, InferenceServerRegistrationClient,
+    InferenceServerRegistrationConfig,
 };
 pub use request_observer::{
     RequestObservation, RequestObservationEndpoint, RequestObservationState,

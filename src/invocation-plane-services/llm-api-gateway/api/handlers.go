@@ -35,6 +35,7 @@ type Handlers struct {
 	config        *config.Config
 	provider      provider.InferenceProvider
 	proxyProvider provider.OpenAIProxyProvider
+	modelLister   provider.ModelLister
 	rateLimiter   ratelimit.RateLimiter
 	limitResolver LimitResolver
 	observability observabilityMetrics
@@ -94,6 +95,9 @@ func NewHandlers(
 	if proxyProvider, ok := any(p).(provider.OpenAIProxyProvider); ok {
 		h.proxyProvider = proxyProvider
 	}
+	if modelLister, ok := any(p).(provider.ModelLister); ok {
+		h.modelLister = modelLister
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(h)
@@ -114,6 +118,10 @@ func (h *Handlers) AsOpenAIProxyHandlers() *OpenAIProxyHandlers {
 	return &OpenAIProxyHandlers{handlers: h}
 }
 
+func (h *Handlers) AsModelRegistryHandlers() *ModelRegistryHandlers {
+	return &ModelRegistryHandlers{handlers: h}
+}
+
 func (h *Handlers) normalizeChatRequest(
 	c *GatewayContext,
 	request *models.ChatCompletionRequest,
@@ -121,17 +129,14 @@ func (h *Handlers) normalizeChatRequest(
 ) (*provider.NormalizedRequest, error) {
 	reqCtx := c.RequestContext()
 	if reqCtx == nil {
-		return nil, echo.NewHTTPError(
-			http.StatusBadRequest,
-			"model prefix is required",
-		)
+		return nil, h.missingRequestContextError()
 	}
 
 	if request.Messages == nil || len(*request.Messages) == 0 {
 		return nil, echo.NewHTTPError(http.StatusBadRequest, "messages is required")
 	}
 
-	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model)
+	routedModel, err := h.normalizeRequestModel(reqCtx, request.Model)
 	if err != nil {
 		return nil, err
 	}

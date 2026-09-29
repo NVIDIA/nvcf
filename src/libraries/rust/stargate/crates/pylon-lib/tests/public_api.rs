@@ -18,9 +18,9 @@ use std::time::Duration;
 
 use pylon_lib::{
     ClientError, CurrentModelStats, DEFAULT_MAX_SSE_BUFFER_BYTES,
-    InferenceServerRegistrationClient, InferenceServerRegistrationConfig, QuicHttpTunnelConfig,
-    RequestCounterUpdate, RequestCounterUpdateInput, ReverseQuicTunnelConfig, StatsUpdateSource,
-    TunnelTransportProtocol,
+    DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF, InferenceServerRegistrationClient,
+    InferenceServerRegistrationConfig, QuicHttpTunnelConfig, RequestCounterUpdate,
+    RequestCounterUpdateInput, ReverseQuicTunnelConfig, StatsUpdateSource, TunnelTransportProtocol,
 };
 
 #[test]
@@ -37,6 +37,7 @@ fn crate_root_exports_registration_public_api() {
         cluster_id: "cluster-a".to_string(),
         inference_server_url: "quic://127.0.0.1:8443".to_string(),
         min_update_interval: Duration::from_secs(1),
+        reconnect_max_backoff: DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF,
         reverse_tunnel: false,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,

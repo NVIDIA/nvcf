@@ -21,6 +21,7 @@ use stargate_protocol::TunnelTransportProtocol;
 
 use crate::quic_http_tunnel::{TunnelError, TunnelForwardingConfig};
 
+use super::reconnect::RECONNECT_INITIAL_BACKOFF;
 use super::urls::{infer_upstream_http_base_url, is_direct_inference_server_url};
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +32,9 @@ pub enum ClientError {
     Tunnel(#[from] TunnelError),
 }
 
+/// Default for [`InferenceServerRegistrationConfig::reconnect_max_backoff`].
+pub const DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 pub struct InferenceServerRegistrationConfig {
     pub seeds: Vec<String>,
@@ -39,6 +43,11 @@ pub struct InferenceServerRegistrationConfig {
     pub inference_server_url: String,
     pub forwarding: TunnelForwardingConfig,
     pub min_update_interval: Duration,
+    /// Cap for the delay between reconnect attempts to one router. The delay
+    /// starts at one second (or the cap, if smaller), doubles after every
+    /// failed open or closed stream, carries +/-20 percent jitter, and
+    /// restarts once the router acknowledges an update. Must be non-zero.
+    pub reconnect_max_backoff: Duration,
     pub reverse_tunnel: bool,
     pub tls_cert_pem: Option<Vec<u8>>,
     pub grpc_tls_ca_cert_pem: Option<Vec<u8>>,
@@ -55,6 +64,9 @@ pub(super) struct RegistrationSessionConfig {
     pub(super) inference_server_url: String,
     pub(super) forwarding: TunnelForwardingConfig,
     pub(super) min_update_interval: Duration,
+    /// First reconnect delay; [`RECONNECT_INITIAL_BACKOFF`] outside tests.
+    pub(super) reconnect_initial_backoff: Duration,
+    pub(super) reconnect_max_backoff: Duration,
     pub(super) reverse_tunnel: bool,
     pub(super) tls_cert_pem: Option<Vec<u8>>,
     pub(super) grpc_tls_ca_cert_pem: Option<Vec<u8>>,
@@ -73,6 +85,12 @@ impl TryFrom<InferenceServerRegistrationConfig> for RegistrationSessionConfig {
         if !config.reverse_tunnel && !is_direct_inference_server_url(&config.inference_server_url) {
             return Err(ClientError::Config(
                 "direct registration inference_server_url must be quic://".to_string(),
+            ));
+        }
+
+        if config.reconnect_max_backoff.is_zero() {
+            return Err(ClientError::Config(
+                "reconnect_max_backoff must be greater than zero".to_string(),
             ));
         }
 
@@ -97,6 +115,8 @@ impl TryFrom<InferenceServerRegistrationConfig> for RegistrationSessionConfig {
             inference_server_url,
             forwarding: config.forwarding,
             min_update_interval: config.min_update_interval,
+            reconnect_initial_backoff: RECONNECT_INITIAL_BACKOFF,
+            reconnect_max_backoff: config.reconnect_max_backoff,
             reverse_tunnel: config.reverse_tunnel,
             tls_cert_pem: config.tls_cert_pem,
             grpc_tls_ca_cert_pem: config.grpc_tls_ca_cert_pem,

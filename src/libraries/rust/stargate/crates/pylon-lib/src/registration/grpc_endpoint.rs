@@ -243,6 +243,12 @@ fn classify_stargate_grpc_certificate_failure(
     }
 }
 
+/// Whether `error` carries a typed TLS certificate validation failure, which
+/// [`log_stargate_grpc_certificate_failure`] reports.
+pub(super) fn is_stargate_grpc_certificate_failure(error: &(dyn Error + 'static)) -> bool {
+    classify_stargate_grpc_certificate_failure(error).is_some()
+}
+
 pub(super) fn log_stargate_grpc_certificate_failure(
     target: &StargateGrpcEndpoint,
     operation: &'static str,

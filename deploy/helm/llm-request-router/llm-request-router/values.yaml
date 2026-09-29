@@ -264,8 +264,33 @@ llmRequestRouter:
     configPath: ""
     config: ""
 
+  # Worker registration authentication. Select exactly one mode; the chart
+  # fails to render otherwise, and Stargate refuses to start without one.
   auth:
+    # Verify worker tokens with the gateway AuthLlmWorker gRPC call. The router
+    # authenticates that call with the Vault-provided nvcfApiToken. Set to ""
+    # to use credentialsSecret or allowOpen instead.
     workerAuthEndpoint: "http://api.nvcf.svc.cluster.local:9090"
+    # Verify worker tokens against a static worker auth file mounted from an
+    # existing Secret. This mode needs no Vault access for worker auth. The
+    # Secret key holds YAML that binds each cluster id to the SHA-256 hashes of
+    # that cluster's bearer tokens, one or two per cluster:
+    #   clusters:
+    #     <clusterId>:
+    #       - sha256:<64 hex>
+    #       - sha256:<64 hex>    # next credential during rotation
+    # A worker whose token matches a hash may register only with that cluster
+    # id. The router refuses to start when the file is missing or invalid.
+    # Afterwards it re-reads the file every 30 seconds, so an updated Secret
+    # takes effect without a restart; an invalid update keeps the last good
+    # credentials.
+    credentialsSecret:
+      name: ""
+      key: credentials.yaml
+    # Development only: accept every worker without authentication. Valid only
+    # when neither workerAuthEndpoint nor credentialsSecret.name is set; the
+    # chart and the router reject the combination.
+    allowOpen: false
 
   vault:
     audience: ""

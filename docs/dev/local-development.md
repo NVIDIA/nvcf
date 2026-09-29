@@ -30,6 +30,11 @@ Four canonical flows are covered below: pick a topology from
 | Multi-cluster | CLI (`nvcf-cli self-hosted install`) |
 | Multi-cluster | Helmfile (`make install HELMFILE_ENV=...`) |
 
+To run only the LLM gateway, the LLM request router and Pylon Operator,
+without the NVCF control plane, see the
+[Inference Endpoints quickstart](/nvcf/overview/inference-endpoints-quickstart). It uses
+its own k3d cluster, `pylon-op-e2e`.
+
 ## Topologies
 
 Single-cluster topology: This brings up one k3d cluster named `ncp-local`. Control

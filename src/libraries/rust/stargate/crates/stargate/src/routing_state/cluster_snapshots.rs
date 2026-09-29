@@ -395,6 +395,17 @@ impl RoutedClusterState {
             .collect()
     }
 
+    /// Returns the exact registrations of the backends this cluster currently
+    /// routes to, in stable inference-server id order.
+    pub(super) fn backend_registrations(&self) -> Vec<Arc<RegistrationGeneration>> {
+        self.generation
+            .lock()
+            .backends
+            .iter()
+            .map(|backend| Arc::clone(&backend.registration))
+            .collect()
+    }
+
     pub(super) fn select_backend(
         &self,
         failed_backend_ids: &HashSet<String>,

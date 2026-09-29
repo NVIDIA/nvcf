@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
-use crate::stats::PylonMetrics;
+use crate::stats::{PylonMetrics, RegistrationStreamClosure};
 use stargate_auth::AuthTokenProvider;
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
@@ -31,6 +31,7 @@ use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 use super::grpc_endpoint::{
     StargateGrpcEndpoint, connect_stargate_grpc_channel, log_stargate_grpc_certificate_failure,
 };
+use super::reconnect::{ReconnectBackoff, StreamOpenFailureLog};
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
 };
@@ -46,6 +47,13 @@ pub(super) async fn run_router_registration_stream(
 ) {
     let router_addr = router_endpoint.authority_addr().to_string();
     let mut last_certificate_failure = None;
+    let mut open_failures = StreamOpenFailureLog::new("register_inference_server");
+    let mut backoff = ReconnectBackoff::new(
+        config.reconnect_initial_backoff,
+        config.reconnect_max_backoff,
+    );
+    let mut closures =
+        RegistrationStreamClosures::new(config.forwarding.metrics.as_deref(), &router_addr);
 
     loop {
         let connection = tokio::select! {
@@ -60,6 +68,7 @@ pub(super) async fn run_router_registration_stream(
         let (mut ack_stream, update_tx) = match connection {
             Ok(connection) => {
                 last_certificate_failure = None;
+                open_failures.record_opened();
                 connection
             }
             Err(error) => {
@@ -69,11 +78,10 @@ pub(super) async fn run_router_registration_stream(
                     error.as_ref(),
                     last_certificate_failure,
                 );
-                if stop
-                    .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
-                    .await
-                    .is_none()
-                {
+                closures.record_open_failure(&error);
+                let delay = backoff.next_delay();
+                open_failures.record(&router_addr, error.as_ref(), delay);
+                if !wait_before_reconnect(&router_addr, delay, &stop).await {
                     return;
                 }
                 continue;
@@ -119,14 +127,13 @@ pub(super) async fn run_router_registration_stream(
         let mut advertised_reverse_connected = false;
         let advertised = advertised_model_statuses(&initial_registration);
         if !send_registration_update(&update_tx, initial_registration, &stop).await {
+            if !stop.is_cancelled() {
+                closures.record(RegistrationStreamClosure::Io);
+            }
             if let Some(task) = reverse_task {
                 task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
             }
-            if stop
-                .run_until_cancelled(tokio::time::sleep(Duration::from_millis(200)))
-                .await
-                .is_none()
-            {
+            if !wait_before_reconnect(&router_addr, backoff.next_delay(), &stop).await {
                 return;
             }
             continue;
@@ -150,6 +157,7 @@ pub(super) async fn run_router_registration_stream(
                 }
                 state_changed = reverse_state_rx.changed(), if config.reverse_tunnel => {
                     if state_changed.is_err() {
+                        closures.record(RegistrationStreamClosure::Other);
                         break false;
                     }
                     let connected = reverse_state_rx.borrow_and_update().is_connected();
@@ -160,9 +168,19 @@ pub(super) async fn run_router_registration_stream(
                     connected
                 }
                 maybe_ack = ack_stream.message() => {
-                    let Ok(Some(ack)) = maybe_ack else {
-                        break false;
+                    let ack = match maybe_ack {
+                        Ok(Some(ack)) => ack,
+                        Ok(None) => {
+                            closures.record(RegistrationStreamClosure::EndOfStream);
+                            break false;
+                        }
+                        Err(status) => {
+                            closures.record_status(&status);
+                            break false;
+                        }
                     };
+                    closures.record_admitted();
+                    backoff.reset();
                     if config.reverse_tunnel {
                         let endpoint = reverse_tunnel_endpoint_from_ack(&ack);
                         reverse_state_tx.send_if_modified(move |state| {
@@ -175,6 +193,9 @@ pub(super) async fn run_router_registration_stream(
             let registration_update = current_registration(reverse_connected);
             let advertised = advertised_model_statuses(&registration_update);
             if !send_registration_update(&update_tx, registration_update, &stop).await {
+                if !stop.is_cancelled() {
+                    closures.record(RegistrationStreamClosure::Io);
+                }
                 break false;
             }
             advertised_status.record_successful_advertisement(advertised);
@@ -185,10 +206,23 @@ pub(super) async fn run_router_registration_stream(
         if let Some(task) = reverse_task {
             task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
         }
-        if stopped {
+        if stopped || !wait_before_reconnect(&router_addr, backoff.next_delay(), &stop).await {
             return;
         }
     }
+}
+
+/// Sleeps before the next attempt to open a registration stream. Returns
+/// `false` when `stop` is cancelled first.
+async fn wait_before_reconnect(router: &str, delay: Duration, stop: &CancellationToken) -> bool {
+    tracing::debug!(
+        router,
+        retry_in_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+        "waiting before reopening stargate registration stream"
+    );
+    stop.run_until_cancelled(tokio::time::sleep(delay))
+        .await
+        .is_some()
 }
 
 pub(super) async fn send_registration_update(
@@ -199,6 +233,104 @@ pub(super) async fn send_registration_update(
     stop.run_until_cancelled(update_tx.send(update))
         .await
         .is_some_and(|result| result.is_ok())
+}
+
+/// Counts and logs why registration streams to one router end. A closure logs
+/// at warn when its reason differs from the previous closure since the router
+/// last acknowledged a registration, and at debug otherwise, so a router that
+/// keeps rejecting this Pylon does not flood the log on every retry.
+/// Connection failures stay at debug here: the certificate failure log reports
+/// TLS problems and `StreamOpenFailureLog` reports each distinct open failure.
+#[derive(Debug)]
+pub(super) struct RegistrationStreamClosures<'a> {
+    metrics: Option<&'a PylonMetrics>,
+    router_addr: &'a str,
+    last_logged: Option<RegistrationStreamClosure>,
+}
+
+impl<'a> RegistrationStreamClosures<'a> {
+    /// Publishes every closure reason for the router at zero.
+    pub(super) fn new(metrics: Option<&'a PylonMetrics>, router_addr: &'a str) -> Self {
+        if let Some(metrics) = metrics {
+            metrics.init_registration_stream_closures(router_addr);
+        }
+        Self {
+            metrics,
+            router_addr,
+            last_logged: None,
+        }
+    }
+
+    /// Re-arms warn logging once the router acknowledges a registration.
+    pub(super) fn record_admitted(&mut self) {
+        self.last_logged = None;
+    }
+
+    pub(super) fn record(&mut self, closure: RegistrationStreamClosure) {
+        self.count_and_log(closure, None, None);
+    }
+
+    pub(super) fn record_status(&mut self, status: &tonic::Status) {
+        self.count_and_log(
+            closure_for_status(status),
+            Some(status.code()),
+            Some(status.message()),
+        );
+    }
+
+    pub(super) fn record_open_failure(&mut self, error: &anyhow::Error) {
+        if let Some(status) = error.downcast_ref::<tonic::Status>() {
+            self.record_status(status);
+            return;
+        }
+        let closure = if error.downcast_ref::<tonic::transport::Error>().is_some() {
+            RegistrationStreamClosure::Connect
+        } else {
+            RegistrationStreamClosure::Other
+        };
+        self.count_and_log(closure, None, Some(&format!("{error:#}")));
+    }
+
+    fn count_and_log(
+        &mut self,
+        closure: RegistrationStreamClosure,
+        code: Option<tonic::Code>,
+        detail: Option<&str>,
+    ) {
+        if let Some(metrics) = self.metrics {
+            metrics.observe_registration_stream_closure(self.router_addr, closure);
+        }
+        let code = code.map(|code| format!("{code:?}"));
+        let repeated = self.last_logged == Some(closure);
+        self.last_logged = Some(closure);
+        if repeated || closure == RegistrationStreamClosure::Connect {
+            tracing::debug!(
+                router = self.router_addr,
+                reason = closure.as_str(),
+                code = code.as_deref(),
+                detail,
+                "stargate registration stream closed; retrying"
+            );
+        } else {
+            tracing::warn!(
+                router = self.router_addr,
+                reason = closure.as_str(),
+                code = code.as_deref(),
+                detail,
+                "stargate registration stream closed; retrying"
+            );
+        }
+    }
+}
+
+pub(super) fn closure_for_status(status: &tonic::Status) -> RegistrationStreamClosure {
+    match status.code() {
+        tonic::Code::Unauthenticated => RegistrationStreamClosure::Unauthenticated,
+        tonic::Code::InvalidArgument => RegistrationStreamClosure::InvalidArgument,
+        tonic::Code::PermissionDenied => RegistrationStreamClosure::PermissionDenied,
+        tonic::Code::Unavailable => RegistrationStreamClosure::Unavailable,
+        _ => RegistrationStreamClosure::Other,
+    }
 }
 
 #[derive(Debug)]

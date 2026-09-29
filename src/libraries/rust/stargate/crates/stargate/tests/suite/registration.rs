@@ -13,19 +13,154 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::sse::{assert_sse_done, parse_sse_events};
 use crate::common::{
-    direct_registration_config, init_crypto, make_stargate_runtime, start_dummy_inst,
-    wait_for_routing, with_proxy_headers,
+    direct_registration_config, init_crypto, make_stargate_runtime,
+    make_stargate_runtime_with_auth, start_dummy_inst, wait_for_routing, with_proxy_headers,
 };
 use pylon_lib::{InferenceServerRegistrationClient, PylonRuntimeState};
+use sha2::Digest;
+use stargate::auth::{
+    RegistrationAuthFailure, StaticClusterAuthenticator, WorkerAuthReloadOutcome,
+};
 use stargate_proto::pb::InferenceServerStatus;
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration};
 use tonic::Response;
 use tonic::transport::Channel;
+
+/// Opens a raw registration stream and returns the router's rejection.
+async fn registration_rejection(
+    grpc_addr: SocketAddr,
+    token: &str,
+    cluster_id: &str,
+) -> tonic::Status {
+    let channel = Channel::from_shared(format!("http://{grpc_addr}"))
+        .expect("invalid endpoint")
+        .connect()
+        .await
+        .expect("connect failed");
+    let mut client = StargateControlPlaneClient::new(channel);
+    let (tx, rx) = flume::bounded(8);
+    tx.send_async(InferenceServerRegistration {
+        inference_server_id: "static-auth-inst".to_string(),
+        cluster_id: cluster_id.to_string(),
+        inference_server_url: "quic://127.0.0.1:1".to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("send failed");
+    let mut request = tonic::Request::new(rx.into_stream());
+    request.metadata_mut().insert(
+        "authorization",
+        format!("Bearer {token}")
+            .parse()
+            .expect("bearer header should be ASCII"),
+    );
+
+    let status = match client.register_inference_server(request).await {
+        Err(status) => status,
+        Ok(response) => response
+            .into_inner()
+            .message()
+            .await
+            .expect_err("registration should be rejected"),
+    };
+    drop(tx);
+    status
+}
+
+fn worker_auth_file(cluster_id: &str, tokens: &[&str]) -> String {
+    let mut contents = format!("clusters:\n  {cluster_id}:\n");
+    for token in tokens {
+        let digest: String = sha2::Sha256::digest(token.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        contents.push_str(&format!("    - sha256:{digest}\n"));
+    }
+    contents
+}
+
+#[tokio::test]
+async fn static_cluster_credentials_gate_registration_and_count_failures() {
+    init_crypto();
+    let dir = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = dir.path().join("credentials.yaml");
+    std::fs::write(&path, worker_auth_file("cluster-a", &["cluster-a-token"]))
+        .expect("worker auth file should be writable");
+    let authenticator = StaticClusterAuthenticator::load(&path)
+        .await
+        .expect("worker auth file should load")
+        .with_reload_interval(Duration::from_millis(20));
+    let (grpc_addr, _http_addr, runtime) =
+        make_stargate_runtime_with_auth("test-sg-static-auth", Arc::new(authenticator));
+    let handle = runtime.start().await.expect("stargate failed to start");
+    let metrics = handle.metrics();
+    let failures = |reason| metrics.registration_auth_failures_total(reason).get();
+    let reloads = |outcome| metrics.worker_auth_reloads_total(outcome).get();
+
+    let status = registration_rejection(grpc_addr, "wrong-token", "cluster-a").await;
+    assert_eq!(status.code(), tonic::Code::Unauthenticated, "{status}");
+    assert_eq!(failures(RegistrationAuthFailure::UnknownCredential), 1);
+
+    let status = registration_rejection(grpc_addr, "", "cluster-a").await;
+    assert_eq!(status.code(), tonic::Code::Unauthenticated, "{status}");
+    assert_eq!(failures(RegistrationAuthFailure::MissingToken), 1);
+
+    let status = registration_rejection(grpc_addr, "cluster-a-token", "cluster-b").await;
+    assert_eq!(status.code(), tonic::Code::InvalidArgument, "{status}");
+    assert_eq!(
+        status.message(),
+        "cluster_id does not match the authenticated credential"
+    );
+    assert_eq!(failures(RegistrationAuthFailure::ClusterMismatch), 1);
+
+    // The runtime's reload task activates a rotated credential without a
+    // restart and keeps the last good set when the file breaks.
+    let staged = dir.path().join("staged.yaml");
+    std::fs::write(
+        &staged,
+        worker_auth_file("cluster-a", &["cluster-a-token", "cluster-a-next-token"]),
+    )
+    .expect("staged file should be writable");
+    std::fs::rename(&staged, &path).expect("staged file should replace the live file");
+    wait_for(|| reloads(WorkerAuthReloadOutcome::Success) == 1).await;
+    let status = registration_rejection(grpc_addr, "cluster-a-next-token", "cluster-b").await;
+    assert_eq!(
+        status.code(),
+        tonic::Code::InvalidArgument,
+        "the rotated token must authenticate as cluster-a: {status}"
+    );
+
+    std::fs::remove_file(&path).expect("worker auth file should be removable");
+    wait_for(|| reloads(WorkerAuthReloadOutcome::Rejected) == 1).await;
+    let status = registration_rejection(grpc_addr, "cluster-a-next-token", "cluster-b").await;
+    assert_eq!(
+        status.code(),
+        tonic::Code::InvalidArgument,
+        "the last good set must stay active: {status}"
+    );
+    assert_eq!(failures(RegistrationAuthFailure::UnknownCredential), 1);
+    assert_eq!(failures(RegistrationAuthFailure::MissingToken), 1);
+
+    handle.begin_shutdown();
+    handle.wait_for_shutdown(Duration::from_secs(5)).await;
+}
+
+async fn wait_for(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("condition should hold within five seconds");
+}
 
 #[tokio::test]
 async fn duplicate_inference_server_id_rejected() {

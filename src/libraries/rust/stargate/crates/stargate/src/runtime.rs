@@ -339,6 +339,9 @@ impl StargateRuntime {
             reverse_tunnel,
         };
 
+        // The authenticator is built before the runtime, so its reload task
+        // joins the critical task group here, once metrics exist.
+        let worker_auth_reload = self.config.authenticator.clone().reload_task();
         let service = StargateService::new(StargateServiceConfig {
             stargate_id: self.config.stargate_id.clone(),
             advertise_addr: self.config.advertise_addr,
@@ -394,13 +397,18 @@ impl StargateRuntime {
             let warmup_config = self.config.warmup.clone();
             let shutdown = tasks.shutdown_signal();
             tasks.task_tracker().spawn(async move {
-                run_warmup_stabilization(
-                    warmup_state,
-                    warmup_config,
-                    ready_token,
-                    shutdown,
-                )
-                .await;
+                run_warmup_stabilization(warmup_state, warmup_config, ready_token, shutdown).await;
+            });
+        }
+
+        if let Some(reload) = worker_auth_reload {
+            let metrics = metrics.clone();
+            tasks.spawn_critical("worker auth reload", move |stop| async move {
+                reload
+                    .run(stop, move |outcome| {
+                        metrics.worker_auth_reloads_total(outcome).inc();
+                    })
+                    .await
             });
         }
 

@@ -24,10 +24,19 @@ use crate::routing_state::RegistrationIdentity;
 
 use stargate_proto::pb::InferenceServerRegistration;
 
+/// Status message for a registration whose cluster id differs from the one
+/// bound to the worker's credential.
+const CLUSTER_ID_MISMATCH_MESSAGE: &str = "cluster_id does not match the authenticated credential";
+
+pub(super) fn is_cluster_id_mismatch(status: &Status) -> bool {
+    status.code() == tonic::Code::InvalidArgument && status.message() == CLUSTER_ID_MISMATCH_MESSAGE
+}
+
 pub(super) fn admit_initial_registration(
     update: &InferenceServerRegistration,
     reverse_tunnel_configured: bool,
     routing_key: Option<&str>,
+    authenticated_cluster_id: Option<&str>,
 ) -> Result<RegistrationIdentity, Status> {
     if update.inference_server_id.is_empty() {
         warn!("inference_server_id is empty; denying registration");
@@ -67,9 +76,22 @@ pub(super) fn admit_initial_registration(
         ));
     }
 
+    let cluster_id = effective_cluster_id(update);
+    if let Some(authenticated_cluster_id) = authenticated_cluster_id
+        && authenticated_cluster_id != cluster_id
+    {
+        warn!(
+            inference_server_id = %update.inference_server_id,
+            cluster_id = %cluster_id,
+            authenticated_cluster_id = %authenticated_cluster_id,
+            "cluster_id does not match the authenticated credential; denying registration"
+        );
+        return Err(Status::invalid_argument(CLUSTER_ID_MISMATCH_MESSAGE));
+    }
+
     Ok(RegistrationIdentity {
         inference_server_id: update.inference_server_id.clone(),
-        cluster_id: effective_cluster_id(update).to_owned(),
+        cluster_id: cluster_id.to_owned(),
         inference_server_url: update.inference_server_url.clone(),
         routing_key: routing_key.map(ToOwned::to_owned),
         reverse_tunnel: update.reverse_tunnel,
@@ -192,7 +214,7 @@ mod tests {
     fn initial_registration_rejects_empty_id() {
         let update = make_update("", "quic://10.0.0.1:8080", false);
 
-        let status = admit_initial_registration(&update, false, None)
+        let status = admit_initial_registration(&update, false, None, None)
             .expect_err("empty inference_server_id should be rejected");
 
         assert_invalid_argument(status, "inference_server_id is empty");
@@ -202,7 +224,7 @@ mod tests {
     fn initial_registration_rejects_empty_url() {
         let update = make_update("server-1", "", true);
 
-        let status = admit_initial_registration(&update, true, None)
+        let status = admit_initial_registration(&update, true, None, None)
             .expect_err("empty inference_server_url should be rejected");
 
         assert_invalid_argument(status, "inference_server_url is empty");
@@ -215,7 +237,7 @@ mod tests {
             ..make_update("server-1", "quic://10.0.0.1:8080", false)
         };
 
-        let identity = admit_initial_registration(&update, false, Some("tenant-a"))
+        let identity = admit_initial_registration(&update, false, Some("tenant-a"), None)
             .expect("valid direct registration should be admitted");
 
         assert_eq!(identity.inference_server_id, "server-1");
@@ -229,10 +251,48 @@ mod tests {
     fn direct_registration_defaults_empty_cluster_id_to_server_id() {
         let update = make_update("server-1", "quic://10.0.0.1:8080", false);
 
-        let identity = admit_initial_registration(&update, false, None)
+        let identity = admit_initial_registration(&update, false, None, None)
             .expect("valid direct registration should be admitted");
 
         assert_eq!(identity.cluster_id, "server-1");
+    }
+
+    #[test]
+    fn registration_with_authenticated_cluster_id_is_admitted_under_that_cluster() {
+        let update = InferenceServerRegistration {
+            cluster_id: "cluster-a".to_string(),
+            ..make_update("server-1", "quic://10.0.0.1:8080", false)
+        };
+
+        let identity = admit_initial_registration(&update, false, None, Some("cluster-a"))
+            .expect("matching cluster id should be admitted");
+
+        assert_eq!(identity.cluster_id, "cluster-a");
+    }
+
+    #[test]
+    fn registration_cluster_id_must_match_authenticated_credential() {
+        for (case, cluster_id) in [
+            ("different cluster", "cluster-b"),
+            ("empty cluster defaults to server id", ""),
+        ] {
+            let update = InferenceServerRegistration {
+                cluster_id: cluster_id.to_string(),
+                ..make_update("server-1", "quic://10.0.0.1:8080", false)
+            };
+
+            let status = admit_initial_registration(&update, false, None, Some("cluster-a"))
+                .expect_err(case);
+
+            assert_invalid_argument(
+                status.clone(),
+                "cluster_id does not match the authenticated credential",
+            );
+            assert!(is_cluster_id_mismatch(&status), "{case}");
+        }
+        assert!(!is_cluster_id_mismatch(&Status::invalid_argument(
+            "cluster_id changed"
+        )));
     }
 
     #[test]
@@ -269,7 +329,7 @@ mod tests {
     fn reverse_tunnel_registration_rejects_non_http_url() {
         let update = make_update("server-1", "quic://10.0.0.1:8080", true);
 
-        let status = admit_initial_registration(&update, true, None)
+        let status = admit_initial_registration(&update, true, None, None)
             .expect_err("reverse-tunnel registration with non-HTTP URL should be rejected");
 
         assert_invalid_argument(
@@ -282,7 +342,7 @@ mod tests {
     fn reverse_tunnel_registration_requires_reverse_tunnel_config() {
         let update = make_update("server-1", "http://backend.default.svc:8080", true);
 
-        let status = admit_initial_registration(&update, false, None)
+        let status = admit_initial_registration(&update, false, None, None)
             .expect_err("reverse-tunnel registration without config should be rejected");
 
         assert_invalid_argument(
@@ -295,7 +355,7 @@ mod tests {
     fn reverse_tunnel_registration_accepts_http_url_when_configured() {
         let update = make_update("server-1", "http://backend.default.svc:8080", true);
 
-        let identity = admit_initial_registration(&update, true, None)
+        let identity = admit_initial_registration(&update, true, None, None)
             .expect("valid reverse tunnel registration should be admitted");
 
         assert!(identity.reverse_tunnel);

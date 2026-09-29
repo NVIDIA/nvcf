@@ -69,7 +69,26 @@ message ListModelsRequest {
 }
 
 message ListModelsResponse {
+  // Distinct model ids with at least one active inference server, sorted.
+  // Kept for callers that predate `entries`; it always equals the distinct
+  // `model_id` values of `entries`.
   repeated string model_ids = 1;
+  // One entry per active inference server of each returned model, sorted by
+  // model_id, then inference_server_id.
+  repeated ListModelsEntry entries = 2;
+}
+
+// One active inference server behind a model returned by ListModels. Only
+// servers the local routing state can route to are listed: the model is
+// active on the server and the server's path has a measured RTT.
+message ListModelsEntry {
+  string model_id = 1;
+  // Effective cluster id of the registration: its `cluster_id`, or its
+  // `inference_server_id` when the registration left `cluster_id` empty.
+  string cluster_id = 2;
+  string inference_server_id = 3;
+  // Field 4 (registration metadata) was retired on this branch.
+  reserved 4;
 }
 
 message ModelStats {
@@ -139,6 +158,8 @@ message InferenceServerRegistration {
   string cluster_id = 5;
   reserved 6;
   reserved "coordinated_calibration";
+  // Field 7 (registration metadata) was retired on this branch.
+  reserved 7;
 }
 
 message InferenceServerModelRegistration {

@@ -98,3 +98,22 @@ type OpenAIProxyProvider interface {
 		request *ProxyRequest,
 	) (*ProxyResponse, error)
 }
+
+// RouterModelList is the router's GET /v1/models response. It lists only
+// routable inference servers; ModelIDs is the distinct model ids of Entries.
+type RouterModelList struct {
+	ModelIDs []string           `json:"model_ids"`
+	Entries  []RouterModelEntry `json:"entries"`
+}
+
+// RouterModelEntry is one routable inference server serving one model.
+type RouterModelEntry struct {
+	ModelID           string `json:"model_id"`
+	ClusterID         string `json:"cluster_id"`
+	InferenceServerID string `json:"inference_server_id"`
+}
+
+// ModelLister lists the models the router can currently route to.
+type ModelLister interface {
+	ListModels(ctx context.Context) (*RouterModelList, error)
+}

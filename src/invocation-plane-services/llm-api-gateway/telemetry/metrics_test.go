@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	"go.opentelemetry.io/otel"
@@ -70,6 +71,7 @@ func TestMetricsDefinitionsUseServiceScopedNames(t *testing.T) {
 	Record(ProviderTime(), 0.03)
 	Record(StreamFirstToken(), 0.04)
 	Record(StreamDuration(), 0.05)
+	RecordTLSCertificateExpiry(context.Background(), time.Unix(1_900_000_000, 0))
 
 	names := collectMetricNames(t, reader)
 	for name := range names {
@@ -104,6 +106,8 @@ func TestMetricsDefinitionsUseServiceScopedNames(t *testing.T) {
 		"llm_api_gateway_rate_limit_synchronizer_queue_wait_seconds",
 		"llm_api_gateway_rate_limit_synchronizer_queue_length",
 		"llm_api_gateway_rate_limit_synchronizer_events_dropped_total",
+		"llm_api_gateway_tls_certificate_expiry_seconds",
+		"llm_api_gateway_tls_reloads_total",
 	} {
 		if !names[want] {
 			t.Fatalf("missing metric %q in %#v", want, names)
@@ -252,6 +256,80 @@ func TestPrometheusHandlerProducesParseableMetricNames(t *testing.T) {
 	if !foundTranslated {
 		t.Fatalf("missing translated HTTP client metric in %#v", families)
 	}
+}
+
+func TestTLSMetricsPrometheusExposition(t *testing.T) {
+	provider, gatherer, err := newMeterProvider(context.Background(), "", resource.Empty(), true, "")
+	if err != nil {
+		t.Fatalf("new meter provider: %v", err)
+	}
+	oldProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(oldProvider)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	InitializeMetrics()
+	expiry, reloads := scrapeTLSMetrics(t, gatherer)
+	if len(expiry) != 0 {
+		t.Fatalf("expiry = %v, want no sample before a certificate is loaded", expiry)
+	}
+	if len(reloads) != 2 || reloads["success"] != 0 || reloads["rejected"] != 0 {
+		t.Fatalf("pre-initialized reloads = %v, want success=0 rejected=0", reloads)
+	}
+
+	RecordTLSCertificateExpiry(context.Background(), time.Unix(1_900_000_000, 0))
+	RecordTLSReload(context.Background(), TLSReloadSuccess)
+	RecordTLSReload(context.Background(), TLSReloadRejected)
+	RecordTLSReload(context.Background(), TLSReloadRejected)
+
+	expiry, reloads = scrapeTLSMetrics(t, gatherer)
+	if len(expiry) != 1 || expiry[0] != 1_900_000_000 {
+		t.Fatalf("expiry = %v, want one sample of 1900000000", expiry)
+	}
+	if reloads["success"] != 1 || reloads["rejected"] != 2 {
+		t.Fatalf("reloads = %v, want success=1 rejected=2", reloads)
+	}
+}
+
+// scrapeTLSMetrics returns the exported expiry gauge samples and the reload
+// counter by outcome, checking the Prometheus names and types.
+func scrapeTLSMetrics(t *testing.T, gatherer prometheus.Gatherer) (expiry []float64, reloads map[string]float64) {
+	t.Helper()
+
+	recorder := httptest.NewRecorder()
+	NewPrometheusHandler(gatherer).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	parser := expfmt.NewTextParser(model.LegacyValidation)
+	families, err := parser.TextToMetricFamilies(recorder.Body)
+	if err != nil {
+		t.Fatalf("parse Prometheus metrics: %v", err)
+	}
+
+	if family, ok := families["llm_api_gateway_tls_certificate_expiry_seconds"]; ok {
+		if got := family.GetType().String(); got != "GAUGE" {
+			t.Fatalf("expiry type = %s, want GAUGE", got)
+		}
+		for _, metric := range family.GetMetric() {
+			expiry = append(expiry, metric.GetGauge().GetValue())
+		}
+	}
+	family, ok := families["llm_api_gateway_tls_reloads_total"]
+	if !ok {
+		t.Fatalf("missing llm_api_gateway_tls_reloads_total among %d families", len(families))
+	}
+	if got := family.GetType().String(); got != "COUNTER" {
+		t.Fatalf("reloads type = %s, want COUNTER", got)
+	}
+	reloads = map[string]float64{}
+	for _, metric := range family.GetMetric() {
+		for _, pair := range metric.GetLabel() {
+			if pair.GetName() == "outcome" {
+				reloads[pair.GetValue()] += metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return expiry, reloads
 }
 
 func TestObservedRateLimitSynchronizerQueueLengthSumsObservers(t *testing.T) {

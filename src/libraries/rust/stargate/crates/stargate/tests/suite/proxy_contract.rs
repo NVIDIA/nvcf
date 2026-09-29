@@ -2282,6 +2282,7 @@ async fn transport_local_shared_cluster_failover_stays_within_selected_cluster()
             cluster_id: "shared-failover-cluster".to_string(),
             inference_server_url: "http://127.0.0.1:1".to_string(),
             min_update_interval: Duration::from_millis(100),
+            reconnect_max_backoff: pylon_lib::DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF,
             reverse_tunnel: true,
             forwarding: pylon_lib::TunnelForwardingConfig {
                 runtime_state: bad_runtime.clone(),

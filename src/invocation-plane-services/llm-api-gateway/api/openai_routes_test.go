@@ -51,6 +51,8 @@ func TestRegisterRoutesRegistersOpenAIRoutes(t *testing.T) {
 		http.MethodPost + " /v1/chat/completions",
 		http.MethodPost + " /v1/responses",
 		http.MethodPost + " /v1/embeddings",
+		http.MethodGet + " /v1/models",
+		http.MethodGet + " /v1/registry",
 	}
 
 	for _, route := range expected {
@@ -61,6 +63,8 @@ func TestRegisterRoutesRegistersOpenAIRoutes(t *testing.T) {
 
 	notExpected := []string{
 		http.MethodPost + " /v1/chat/completions/template",
+		http.MethodPost + " /v1/models",
+		http.MethodPost + " /v1/registry",
 	}
 	for _, route := range notExpected {
 		if _, ok := routes[route]; ok {

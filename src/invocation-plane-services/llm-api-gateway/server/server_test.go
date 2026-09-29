@@ -19,17 +19,39 @@ package server
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	echo "github.com/labstack/echo/v4"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
@@ -472,4 +494,640 @@ func pacedStargate(t *testing.T, gaps []time.Duration) *httptest.Server {
 	}))
 	t.Cleanup(upstream.Close)
 	return upstream
+}
+
+const (
+	testModel  = "meta/llama-3.1-8b-instruct"
+	testAPIKey = "sk-static-e2e"
+)
+
+type routerRequest struct {
+	path      string
+	header    http.Header
+	bodyModel string
+}
+
+// stubRouter stands in for llm-request-router and records every request.
+type stubRouter struct {
+	mu       sync.Mutex
+	requests []routerRequest
+	server   *httptest.Server
+}
+
+func newStubRouter(t *testing.T) *stubRouter {
+	t.Helper()
+	r := &stubRouter{}
+	r.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&payload)
+		r.mu.Lock()
+		r.requests = append(r.requests, routerRequest{path: req.URL.Path, header: req.Header.Clone(), bodyModel: payload.Model})
+		r.mu.Unlock()
+
+		if req.Method == http.MethodGet && req.URL.Path == "/v1/models" {
+			w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			_, _ = io.WriteString(w, `{"model_ids":["`+testModel+`"],"entries":[{"model_id":"`+testModel+
+				`","cluster_id":"spark-berlin","inference_server_id":"spark-berlin.models.llama.pylon-abc"}]}`)
+			return
+		}
+
+		w.Header().Set(echo.HeaderContentType, "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","created":1,`+
+			`"model":"`+testModel+`","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},`+
+			`"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(r.server.Close)
+	return r
+}
+
+func (r *stubRouter) Requests() []routerRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]routerRequest(nil), r.requests...)
+}
+
+func writeAPIKeyFile(t *testing.T) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte(testAPIKey))
+	data, err := json.Marshal(statickeys.File{Keys: []statickeys.FileKey{
+		{ID: "team-a", SHA256: hex.EncodeToString(sum[:])},
+	}})
+	if err != nil {
+		t.Fatalf("marshal key file: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "api-keys.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+	return path
+}
+
+func newStaticModeGateway(t *testing.T, router *stubRouter, serviceToken string) *echo.Echo {
+	t.Helper()
+
+	cfg := config.Default()
+	cfg.Auth.APIKeysPath = writeAPIKeyFile(t)
+	cfg.Stargate.URL = router.server.URL
+	cfg.Stargate.ServiceToken = serviceToken
+
+	authorizer, err := statickeys.New(cfg.Auth.APIKeysPath)
+	if err != nil {
+		t.Fatalf("new authorizer: %v", err)
+	}
+	stargateProvider, err := provider.NewStargateProvider(cfg.Stargate)
+	if err != nil {
+		t.Fatalf("new stargate provider: %v", err)
+	}
+	e, err := New(cfg, stargateProvider, authorizer)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	return e
+}
+
+func TestStaticModeEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	chatBody := `{"model":"` + testModel + `","messages":[{"role":"user","content":"hello"}]}`
+	tests := []struct {
+		name         string
+		method       string
+		path         string
+		body         string
+		bearer       string
+		serviceToken string
+		wantStatus   int
+		wantRouted   bool
+		wantAuth     []string
+	}{
+		{
+			name: "valid key reaches router with bare model", method: http.MethodPost,
+			path: "/v1/chat/completions", body: chatBody, bearer: testAPIKey,
+			wantStatus: http.StatusOK, wantRouted: true,
+		},
+		{
+			name: "service token replaces caller bearer", method: http.MethodPost,
+			path: "/v1/chat/completions", body: chatBody, bearer: testAPIKey, serviceToken: "router-token",
+			wantStatus: http.StatusOK, wantRouted: true, wantAuth: []string{"Bearer router-token"},
+		},
+		{
+			name: "missing key", method: http.MethodPost,
+			path: "/v1/chat/completions", body: chatBody,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name: "wrong key", method: http.MethodPost,
+			path: "/v1/chat/completions", body: chatBody, bearer: "sk-not-a-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name: "path outside STATIC_ALLOWED_PATHS", method: http.MethodPost,
+			path: "/v1/embeddings", body: `{"model":"` + testModel + `","input":"hello"}`, bearer: testAPIKey,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "health probe stays open", method: http.MethodGet, path: "/healthz",
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			router := newStubRouter(t)
+			e := newStaticModeGateway(t, router, tc.serviceToken)
+
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			if tc.bearer != "" {
+				req.Header.Set(echo.HeaderAuthorization, "Bearer "+tc.bearer)
+			}
+			req.Header.Set("X-Routing-Key", "smuggled-routing-key")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			requests := router.Requests()
+			if !tc.wantRouted {
+				if len(requests) != 0 {
+					t.Fatalf("router received %d requests, want 0", len(requests))
+				}
+				return
+			}
+			if len(requests) != 1 {
+				t.Fatalf("router received %d requests, want 1", len(requests))
+			}
+			got := requests[0]
+			if got.header.Get("X-Model") != testModel {
+				t.Fatalf("X-Model = %q, want %q", got.header.Get("X-Model"), testModel)
+			}
+			if got.bodyModel != testModel {
+				t.Fatalf("body model = %q, want %q", got.bodyModel, testModel)
+			}
+			if values := got.header.Values("X-Routing-Key"); len(values) != 0 {
+				t.Fatalf("X-Routing-Key = %q, want absent", values)
+			}
+			if values := got.header.Values(echo.HeaderAuthorization); !slices.Equal(values, tc.wantAuth) {
+				t.Fatalf("Authorization = %q, want %q", values, tc.wantAuth)
+			}
+			for name, values := range got.header {
+				for _, value := range values {
+					if strings.Contains(value, testAPIKey) {
+						t.Fatalf("caller API key reached the router in header %s", name)
+					}
+				}
+			}
+
+			var response struct {
+				Model string `json:"model"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if response.Model != testModel {
+				t.Fatalf("response model = %q, want %q", response.Model, testModel)
+			}
+		})
+	}
+}
+
+func TestNewRefusesStaticModeWithoutAuthorizer(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Auth.APIKeysPath = "/etc/llm-api-gateway/api-keys.json"
+	if _, err := New(cfg, provider.NewEchoProvider(), nil); err == nil {
+		t.Fatal("server.New() error = nil, want error for static mode without an authorizer")
+	}
+}
+
+type rejectingAuthClient struct{}
+
+func (rejectingAuthClient) AuthorizeInvocation(
+	context.Context, string, string,
+) (*nvcf.InvocationAuthResponse, error) {
+	return nil, status.Error(codes.Unauthenticated, "invalid key")
+}
+
+func TestNVCFModeEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		body        string
+		bearer      string
+		wantStatus  int
+		wantMessage string
+	}{
+		{
+			name:       "unauthenticated check without bearer",
+			body:       `{"model":"unauthenticated/check","messages":[]}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "unauthenticated check with rejected bearer",
+			body:       `{"model":"unauthenticated/check","messages":[]}`,
+			bearer:     "sk-bad",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			// NVCF mode keeps prefix parsing: "meta" is taken as the routing
+			// key and authorized against it.
+			name:        "namespaced model is parsed as routing key",
+			body:        `{"model":"` + testModel + `","messages":[{"role":"user","content":"hello"}]}`,
+			bearer:      "sk-bad",
+			wantStatus:  http.StatusUnauthorized,
+			wantMessage: "authentication failed",
+		},
+		{
+			name:        "model without slash",
+			body:        `{"model":"alpha-model","messages":[{"role":"user","content":"hello"}]}`,
+			bearer:      "sk-bad",
+			wantStatus:  http.StatusBadRequest,
+			wantMessage: "model prefix is required",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, err := New(config.Default(), provider.NewEchoProvider(), rejectingAuthClient{})
+			if err != nil {
+				t.Fatalf("server.New() error = %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			if tc.bearer != "" {
+				req.Header.Set(echo.HeaderAuthorization, "Bearer "+tc.bearer)
+			}
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantMessage != "" && !strings.Contains(rec.Body.String(), tc.wantMessage) {
+				t.Fatalf("response body = %q, want it to contain %q", rec.Body.String(), tc.wantMessage)
+			}
+		})
+	}
+}
+
+func TestNewAppliesServerTimeouts(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Server.ReadHeaderTimeout = 3 * time.Second
+	cfg.Server.ReadTimeout = 4 * time.Second
+	cfg.Server.WriteTimeout = 5 * time.Second
+	cfg.Server.IdleTimeout = 6 * time.Second
+
+	e, err := New(cfg, provider.NewEchoProvider(), nil)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	// Start and StartTLS both serve on e.Server, so these limits cover TLS too.
+	s := e.Server
+	if s.ReadHeaderTimeout != 3*time.Second || s.ReadTimeout != 4*time.Second ||
+		s.WriteTimeout != 5*time.Second || s.IdleTimeout != 6*time.Second {
+		t.Fatalf("server timeouts = %v/%v/%v/%v",
+			s.ReadHeaderTimeout, s.ReadTimeout, s.WriteTimeout, s.IdleTimeout)
+	}
+}
+
+func TestStartTLSServesOnConfiguredServer(t *testing.T) {
+	t.Parallel()
+
+	certFile, keyFile := writeSelfSignedCert(t)
+	e, addr := startTLSGateway(t, certFile, keyFile, time.Hour)
+
+	resp := getHealthz(t, newTLSClient(t, false), addr)
+	if resp.StatusCode != http.StatusOK || resp.TLS == nil {
+		t.Fatalf("status = %d, tls = %v, want 200 over TLS", resp.StatusCode, resp.TLS != nil)
+	}
+	// e.StartTLS would serve from e.TLSServer with the bare Echo handler.
+	if e.Server.Addr != addr || e.Server.Handler == http.Handler(e) {
+		t.Fatal("StartTLS did not serve through the handler New installed on e.Server")
+	}
+	if cfg := e.Server.TLSConfig; cfg == nil || cfg.GetCertificate == nil || cfg.MinVersion != tls.VersionTLS12 ||
+		!slices.Equal(cfg.NextProtos, []string{"h2", "http/1.1"}) {
+		t.Fatalf("tls config = %+v, want GetCertificate, TLS 1.2 minimum, h2 and http/1.1", cfg)
+	}
+}
+
+func TestStartTLSServesRenewedCertificate(t *testing.T) {
+	t.Parallel()
+
+	certFile, keyFile := writeSelfSignedCert(t)
+	_, addr := startTLSGateway(t, certFile, keyFile, 10*time.Millisecond)
+
+	// This client keeps its connection from before the renewal.
+	kept := newTLSClient(t, false)
+	if got := servedSerial(t, getHealthz(t, kept, addr)); got != 1 {
+		t.Fatalf("serial before renewal = %d, want 1", got)
+	}
+
+	// Renew in place, as cert-manager does, while the gateway keeps serving.
+	writeSelfSignedPair(t, certFile, keyFile, 2)
+
+	fresh := newTLSClient(t, true)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp := getHealthz(t, fresh, addr)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status after renewal = %d, want 200", resp.StatusCode)
+		}
+		if servedSerial(t, resp) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("new connections still get serial 1 five seconds after the renewal")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The renewal does not disturb a connection that was already open.
+	resp := getHealthz(t, kept, addr)
+	if resp.StatusCode != http.StatusOK || servedSerial(t, resp) != 1 {
+		t.Fatalf("kept connection: status = %d, serial = %d, want 200 on the original serial 1",
+			resp.StatusCode, servedSerial(t, resp))
+	}
+}
+
+func TestStartTLSFailsWithoutLoadablePair(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(config.Default(), provider.NewEchoProvider(), nil)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	dir := t.TempDir()
+	err = StartTLS(e, "127.0.0.1:0", filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key"), time.Second)
+	if err == nil || errors.Is(err, http.ErrServerClosed) || !strings.Contains(err.Error(), "tls.crt") {
+		t.Fatalf("StartTLS() error = %v, want a load error naming the certificate file", err)
+	}
+}
+
+// startTLSGateway serves a gateway through StartTLS on a free local port and
+// shuts it down when the test ends.
+func startTLSGateway(t *testing.T, certFile, keyFile string, reloadInterval time.Duration) (*echo.Echo, string) {
+	t.Helper()
+
+	e, err := New(config.Default(), provider.NewEchoProvider(), nil)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	served := make(chan error, 1)
+	go func() {
+		served <- StartTLS(e, addr, certFile, keyFile, reloadInterval)
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = e.Shutdown(ctx)
+		if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("serve: %v", err)
+		}
+	})
+	return e, addr
+}
+
+// newTLSClient trusts any certificate. With fresh set, every request opens a
+// new connection and so a new handshake.
+func newTLSClient(t *testing.T, fresh bool) *http.Client {
+	t.Helper()
+
+	transport := &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // self-signed test cert
+		DisableKeepAlives: fresh,
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	return &http.Client{Transport: transport, Timeout: 5 * time.Second}
+}
+
+// getHealthz sends GET /healthz, retrying until the listener is up, and reads
+// the body so a kept-alive connection can be reused.
+func getHealthz(t *testing.T, client *http.Client, addr string) *http.Response {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := client.Get("https://" + addr + "/healthz")
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			return resp
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET /healthz over TLS: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func servedSerial(t *testing.T, resp *http.Response) int64 {
+	t.Helper()
+
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		t.Fatal("response was not served over TLS")
+	}
+	return resp.TLS.PeerCertificates[0].SerialNumber.Int64()
+}
+
+func writeSelfSignedCert(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	certFile = filepath.Join(dir, "tls.crt")
+	keyFile = filepath.Join(dir, "tls.key")
+	writeSelfSignedPair(t, certFile, keyFile, 1)
+	return certFile, keyFile
+}
+
+// writeSelfSignedPair writes a self-signed pair for 127.0.0.1 with the given
+// serial. A replaced file's modification time moves forward by a second so
+// the change is visible regardless of the filesystem's timestamp resolution.
+func writeSelfSignedPair(t *testing.T, certFile, keyFile string, serial int64) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: "127.0.0.1"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, file := range []struct {
+		path string
+		data []byte
+	}{
+		{certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})},
+		{keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})},
+	} {
+		previous, statErr := os.Stat(file.path)
+		if err := os.WriteFile(file.path, file.data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if statErr == nil {
+			next := previous.ModTime().Add(time.Second)
+			if err := os.Chtimes(file.path, next, next); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+type acceptingAuthClient struct{}
+
+func (acceptingAuthClient) AuthorizeInvocation(
+	context.Context, string, string,
+) (*nvcf.InvocationAuthResponse, error) {
+	return &nvcf.InvocationAuthResponse{ClientAuthID: "subject-123", RateLimitKey: "nca-456"}, nil
+}
+
+func TestDiscoveryEndpointsAuthPerMode(t *testing.T) {
+	t.Parallel()
+
+	const (
+		static    = "static-keys"
+		nvcfMode  = "nvcf"
+		anonymous = "anonymous"
+	)
+	yes, no := true, false
+	tests := []struct {
+		name        string
+		mode        string
+		publicReads *bool
+		nvcfAccepts bool
+		method      string
+		path        string
+		bearer      string
+		wantStatus  int
+	}{
+		{name: "static default serves models without key", mode: static,
+			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
+		{name: "static default serves registry without key", mode: static,
+			method: http.MethodGet, path: "/v1/registry", wantStatus: http.StatusOK},
+		{name: "static default POST models needs a key", mode: static,
+			method: http.MethodPost, path: "/v1/models", wantStatus: http.StatusUnauthorized},
+		{name: "static default POST models with key is outside the allowlist", mode: static,
+			method: http.MethodPost, path: "/v1/models", bearer: testAPIKey, wantStatus: http.StatusForbidden},
+		{name: "static private models without key", mode: static, publicReads: &no,
+			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusUnauthorized},
+		{name: "static private registry without key", mode: static, publicReads: &no,
+			method: http.MethodGet, path: "/v1/registry", wantStatus: http.StatusUnauthorized},
+		{name: "static private models with wrong key", mode: static, publicReads: &no,
+			method: http.MethodGet, path: "/v1/models", bearer: "sk-not-a-key", wantStatus: http.StatusUnauthorized},
+		{name: "static private registry with key needs no allowlist entry", mode: static, publicReads: &no,
+			method: http.MethodGet, path: "/v1/registry", bearer: testAPIKey, wantStatus: http.StatusOK},
+		{name: "anonymous default serves models", mode: anonymous,
+			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
+		{name: "anonymous default serves registry", mode: anonymous,
+			method: http.MethodGet, path: "/v1/registry", wantStatus: http.StatusOK},
+		{name: "anonymous private has no authenticator to require", mode: anonymous, publicReads: &no,
+			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
+		{name: "nvcf default models without bearer", mode: nvcfMode,
+			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusUnauthorized},
+		{name: "nvcf default registry with rejected bearer", mode: nvcfMode,
+			method: http.MethodGet, path: "/v1/registry", bearer: "nvapi-bad", wantStatus: http.StatusUnauthorized},
+		{name: "nvcf default models with accepted bearer", mode: nvcfMode, nvcfAccepts: true,
+			method: http.MethodGet, path: "/v1/models", bearer: "nvapi-ok", wantStatus: http.StatusOK},
+		{name: "nvcf public override serves models without bearer", mode: nvcfMode, publicReads: &yes,
+			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			router := newStubRouter(t)
+			cfg := config.Default()
+			cfg.Stargate.URL = router.server.URL
+			cfg.Auth.PublicReadEndpoints = tc.publicReads
+			var authClient api.InvocationAuthClient
+			switch tc.mode {
+			case static:
+				cfg.Auth.APIKeysPath = writeAPIKeyFile(t)
+				authorizer, err := statickeys.New(cfg.Auth.APIKeysPath)
+				if err != nil {
+					t.Fatalf("new authorizer: %v", err)
+				}
+				authClient = authorizer
+			case nvcfMode:
+				cfg.NVCF.GRPCAddr = "api.nvcf.example:9090"
+				authClient = rejectingAuthClient{}
+				if tc.nvcfAccepts {
+					authClient = acceptingAuthClient{}
+				}
+			case anonymous:
+				cfg.Auth.AllowAnonymous = true
+			}
+			stargateProvider, err := provider.NewStargateProvider(cfg.Stargate)
+			if err != nil {
+				t.Fatalf("new stargate provider: %v", err)
+			}
+			e, err := New(cfg, stargateProvider, authClient)
+			if err != nil {
+				t.Fatalf("server.New() error = %v", err)
+			}
+
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			if tc.bearer != "" {
+				req.Header.Set(echo.HeaderAuthorization, "Bearer "+tc.bearer)
+			}
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			requests := router.Requests()
+			if tc.wantStatus != http.StatusOK {
+				if len(requests) != 0 {
+					t.Fatalf("router received %d requests, want 0", len(requests))
+				}
+				return
+			}
+			if len(requests) != 1 || requests[0].path != "/v1/models" {
+				t.Fatalf("router requests = %+v, want one GET /v1/models", requests)
+			}
+			if values := requests[0].header.Values(echo.HeaderAuthorization); len(values) != 0 {
+				t.Fatalf("Authorization = %q, want absent without a service token", values)
+			}
+			if !strings.Contains(rec.Body.String(), testModel) {
+				t.Fatalf("body = %s, want it to list %s", rec.Body.String(), testModel)
+			}
+		})
+	}
 }

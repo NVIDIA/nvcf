@@ -1,0 +1,275 @@
+{
+    "title": "Chart Values",
+    "type": "object",
+    "definitions": {
+        "duration": {
+            "type": "string",
+            "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"
+        },
+        "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+        },
+        "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "repository": {
+                    "type": "string",
+                    "description": "Container registry path, without tag",
+                    "default": ""
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Image tag, or a digest starting with sha256:",
+                    "default": ""
+                },
+                "pullPolicy": {
+                    "type": "string",
+                    "description": "K8s ImagePullPolicy",
+                    "enum": ["Always", "IfNotPresent", "Never"],
+                    "default": "IfNotPresent"
+                }
+            }
+        }
+    },
+    "properties": {
+        "image": {
+            "$ref": "#/definitions/image",
+            "description": "Pylon Operator image. repository is required; tag defaults to the chart appVersion"
+        },
+        "imagePullSecrets": {
+            "type": "array",
+            "description": "Image pull Secrets for the operator pod",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": ["name"]
+            },
+            "default": []
+        },
+        "nameOverride": {
+            "type": "string",
+            "default": ""
+        },
+        "fullnameOverride": {
+            "type": "string",
+            "default": ""
+        },
+        "clusterId": {
+            "type": "string",
+            "description": "Name of this installation's cluster, a DNS label. Required",
+            "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+            "default": ""
+        },
+        "router": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "grpcAddress": {
+                    "type": "string",
+                    "description": "gRPC address of the LLM request router that transport pods register with. Required",
+                    "default": ""
+                }
+            }
+        },
+        "pylon": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "image": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Image of the Pylon transport pods. repository and tag are required",
+                    "properties": {
+                        "repository": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "tag": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "pullPolicy": {
+                            "type": "string",
+                            "description": "imagePullPolicy of the transport container",
+                            "enum": ["Always", "IfNotPresent", "Never"],
+                            "default": "IfNotPresent"
+                        }
+                    }
+                }
+            }
+        },
+        "watchNamespaces": {
+            "type": "array",
+            "description": "Namespaces to watch. Empty watches all namespaces",
+            "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+            },
+            "uniqueItems": true,
+            "default": []
+        },
+        "transport": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "replicas": {
+                    "type": "integer",
+                    "description": "Replicas of each transport Deployment",
+                    "minimum": 1,
+                    "default": 1
+                },
+                "initialInputTPS": {
+                    "type": ["number", "string"],
+                    "description": "Initial input tokens per second passed to transport pods",
+                    "exclusiveMinimum": 0,
+                    "pattern": "^[0-9]*\\.?[0-9]+$",
+                    "default": 100
+                }
+            }
+        },
+        "probeInterval": {
+            "$ref": "#/definitions/duration",
+            "description": "Period of the backend health probe"
+        },
+        "scrapeInterval": {
+            "$ref": "#/definitions/duration",
+            "description": "Period of the transport pod metrics scrape"
+        },
+        "devInsecureTransport": {
+            "type": "boolean",
+            "description": "Run transport pods with --quic-insecure. For local k3d clusters only",
+            "default": false
+        },
+        "leaderElection": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true
+                }
+            }
+        },
+        "credential": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "existingSecret": {
+                    "type": "string",
+                    "description": "Existing Secret that holds the cluster credential. When set, the chart creates no Secret",
+                    "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                    "maxLength": 253,
+                    "default": ""
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Secret key that holds the cluster credential. The operator reads only cluster-token",
+                    "pattern": "^[-._a-zA-Z0-9]+$",
+                    "default": "cluster-token"
+                },
+                "generate": {
+                    "type": "boolean",
+                    "description": "Generate the credential Secret when existingSecret is empty",
+                    "default": true
+                }
+            }
+        },
+        "trustBundle": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "configMap": {
+                    "type": "string",
+                    "description": "Existing ConfigMap in the release namespace whose ca.crt key holds the router CA bundle",
+                    "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                    "maxLength": 253,
+                    "default": ""
+                }
+            }
+        },
+        "installCRDs": {
+            "type": "boolean",
+            "description": "Render the InferenceEndpoint CRD",
+            "default": true
+        },
+        "logLevel": {
+            "type": ["string", "integer"],
+            "description": "Operator log level, passed as --zap-log-level",
+            "default": "info"
+        },
+        "extraArgs": {
+            "type": "array",
+            "description": "Additional operator arguments",
+            "items": {
+                "type": "string"
+            },
+            "default": []
+        },
+        "serviceAccount": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "create": {
+                    "type": "boolean",
+                    "default": true
+                },
+                "name": {
+                    "type": "string",
+                    "default": ""
+                },
+                "annotations": {
+                    "type": "object",
+                    "default": {}
+                }
+            }
+        },
+        "metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "port": {
+                    "$ref": "#/definitions/port",
+                    "default": 8080
+                }
+            }
+        },
+        "healthProbe": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "port": {
+                    "$ref": "#/definitions/port",
+                    "default": 8081
+                }
+            }
+        },
+        "resources": {
+            "type": "object"
+        },
+        "podAnnotations": {
+            "type": "object"
+        },
+        "podSecurityContext": {
+            "type": "object"
+        },
+        "securityContext": {
+            "type": "object"
+        },
+        "nodeSelector": {
+            "type": "object"
+        },
+        "tolerations": {
+            "type": "array"
+        },
+        "affinity": {
+            "type": "object"
+        }
+    }
+}

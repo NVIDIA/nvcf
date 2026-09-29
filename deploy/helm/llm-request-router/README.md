@@ -18,9 +18,11 @@ tunnels before a new replica receives request traffic. The backend router and
 direct multi-replica discovery use the headless Service.
 
 A Vault Agent sidecar is configured to fetch a service token from a Vault or
-OpenBao backend. The application reads `nvcfApiToken` from
-`/vault/secrets/secrets.json` and attaches it as a Bearer token to outgoing
-worker authentication gRPC calls.
+OpenBao backend. In the default worker authentication mode, the application
+reads `nvcfApiToken` from `/vault/secrets/secrets.json` and attaches it as a
+Bearer token to outgoing worker authentication gRPC calls. See
+[Worker Authentication](#worker-authentication) for the static credentials
+mode, which does not use Vault.
 
 The default chart values do not set the required image registry and repository. They must be supplied through an additional values file at install time, and access to those images must be arranged separately.
 
@@ -128,6 +130,7 @@ Important settings to review before deployment:
 - `llmRequestRouter.tls.*` to mount the TLS Secret and pass cert/key paths to Stargate
 - `llmRequestRouter.tls.mode` to choose the source of the QUIC server identity. `certManager` (default) mounts the Secret cert-manager writes for `certificate.*`. `existingSecret` mounts a pre-created Secret instead: the chart renders no `Certificate` and adds no issuer dependency, `certificate.enabled` must stay `false`, `tls.secretName`, `tls.certPath`, and `tls.keyPath` are required, and the operator owns issuance, renewal, rotation, and recovery. The Secret must provide the `tls.crt` and `tls.key` entries. The chart cannot read a pre-created Secret, so it does not validate its SANs or expiry.
 - `llmRequestRouter.pki.*` to provision the OpenBao service-issuing PKI hierarchy that cert-manager mints the Certificate from. Opt-in via `pki.enabled=true`. Mirrors the SIS chart's `hook-lls-migrations.yaml` pattern: a Helm pre-install/pre-upgrade Job runs the `nvcf-openbao-migrations` image with `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLM_ENABLED=true` so only the LLM addon executes. `pki.allowedDomains` (comma-separated DNS suffixes) is required when enabled and is the OpenBao PKI role's `allowed_domains` security constraint. Typically this is `<customer-domain>,cluster.local`. Job-level fail-hard is handled by `restartPolicy: OnFailure` + `pki.backoffLimit` combined with the migrations image's `FAILED_MIGRATIONS` accumulator (image `>= 0.12.1`).
+- `llmRequestRouter.auth.*` to select how the router authenticates workers; see [Worker Authentication](#worker-authentication)
 - `llmRequestRouter.vault.audience` for the projected ServiceAccount token audience used to authenticate to OpenBao
 - `llmRequestRouter.vault.noVaultAnnotations` to disable Vault Agent injection (useful for local testing without OpenBao)
 
@@ -191,6 +194,98 @@ Stargate and the backend router poll the mounted TLS certificate and key and
 reload the server identity for new connections. Client trust-bundle changes
 are not hot-reloaded; roll out workers and other Pylon clients after changing
 the CA bundle they use to verify the router.
+
+## Worker Authentication
+
+The router authenticates every worker registration and reverse tunnel. Select
+exactly one mode under `llmRequestRouter.auth`; the chart fails to render
+otherwise, and the router refuses to start without an authenticator.
+
+| Mode | Values | Router arguments |
+| --- | --- | --- |
+| Gateway (default) | `workerAuthEndpoint` set | `--worker-auth-endpoint`, plus the Vault `--secrets-path` token unless `vault.noVaultAnnotations=true` |
+| Static credentials | `workerAuthEndpoint: ""`, `credentialsSecret.name` set | `--worker-auth-file=/etc/stargate/worker-auth/<key>` |
+| Open (development only) | `workerAuthEndpoint: ""`, `allowOpen: true` | `--allow-open-worker-auth` |
+
+Setting both `workerAuthEndpoint` and `credentialsSecret.name` fails the
+render. `allowOpen: true` next to either of them also fails the render, because
+the router refuses `--allow-open-worker-auth` together with a configured
+authenticator.
+
+### Static credentials file
+
+In static credentials mode, the chart mounts key `credentialsSecret.key`
+(default `credentials.yaml`) of the existing Secret `credentialsSecret.name`
+read-only at `/etc/stargate/worker-auth` and passes it as `--worker-auth-file`.
+The key holds YAML that binds each cluster id to the SHA-256 hashes of that
+cluster's worker bearer tokens:
+
+```yaml
+clusters:
+  spark-berlin-01:
+    - sha256:<64 hex>
+    - sha256:<64 hex>    # next credential during rotation
+```
+
+Rules the router enforces:
+
+- Each entry is `sha256:` followed by exactly 64 hex characters of the SHA-256
+  of the token. Hex case is ignored.
+- A cluster lists at least one hash, and `clusters` lists at least one cluster
+  with a non-empty id.
+- A hash appears once in the whole file; one credential identifies one cluster.
+- No other top-level keys.
+
+The router refuses to start when the file is missing or invalid. After start it
+re-reads the file every 30 seconds and swaps in a valid changed set. A missing
+or invalid update keeps the last good set active and logs one error per
+distinct failure.
+
+Create the Secret from the hash, not the token:
+
+```bash
+hash="$(printf '%s' "${WORKER_TOKEN}" | sha256sum | cut -d' ' -f1)"
+printf 'clusters:\n  spark-berlin-01:\n    - sha256:%s\n' "${hash}" > credentials.yaml
+kubectl -n nvcf create secret generic llm-request-router-worker-credentials \
+  --from-file=credentials.yaml
+```
+
+```yaml
+llmRequestRouter:
+  auth:
+    workerAuthEndpoint: ""
+    credentialsSecret:
+      name: llm-request-router-worker-credentials
+  vault:
+    noVaultAnnotations: true
+```
+
+A worker presenting a matching token registers without a routing key and only
+under its bound cluster id; a registration with another `cluster_id` is
+rejected. Static credentials mode does not read Vault; set
+`vault.noVaultAnnotations=true` when no Vault or OpenBao is available so the
+Vault Agent sidecar is not injected.
+
+### Rotating a cluster credential
+
+Rotation needs no router restart and no registration gap:
+
+1. Add the hash of the new token under the cluster id, next to the current
+   hash, and update the Secret. Within about a minute of kubelet projecting the
+   update, plus up to 30 seconds, the router accepts both tokens.
+2. Rotate the token Secret on the compute side, for example the pylon-operator
+   credential Secret. Transport pods reconnect with the new token.
+3. Remove the old hash and update the Secret again. The old token stops working
+   at the next reload.
+
+### Metrics
+
+- `stargate_registration_auth_failures_total{reason}` counts rejected
+  registrations: `missing_token`, `unknown_credential`, or `cluster_mismatch`.
+  The claimed cluster id is never a label.
+- `stargate_worker_auth_reloads_total{outcome}` counts reloads that activated a
+  changed set (`success`) and reloads that kept the last good set because the
+  file could not be read or parsed (`rejected`, once per distinct failure).
 
 ## Load Balancer Configuration
 

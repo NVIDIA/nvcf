@@ -198,7 +198,7 @@ func (h *OpenAIProxyHandlers) SpeechToSpeech(ec echo.Context) error {
 	}
 
 	requestModel := params.LLM.Model
-	routedModel, err := normalizeOpenAIRequestModel(reqCtx, requestModel)
+	routedModel, err := h.handlers.normalizeRequestModel(reqCtx, requestModel)
 	if err != nil {
 		return err
 	}

@@ -459,6 +459,44 @@ the mount and the Stargate arguments are all conditional on them.
 {{- end }}
 
 {{/*
+Worker registration authentication mode: endpoint, credentialsSecret, or open.
+Stargate refuses to start without a worker authenticator unless open worker
+auth is explicitly allowed, and refuses open worker auth next to a configured
+authenticator, so the chart rejects the same combinations at render time
+instead of shipping a pod that cannot start.
+*/}}
+{{- define "llm-request-router.workerAuthMode" -}}
+{{- $auth := .Values.llmRequestRouter.auth | default dict -}}
+{{- $credentialsSecret := $auth.credentialsSecret | default dict -}}
+{{- $endpoint := $auth.workerAuthEndpoint | default "" | toString | trim -}}
+{{- $secretName := $credentialsSecret.name | default "" | toString | trim -}}
+{{- if and $auth.allowOpen (or $endpoint $secretName) -}}
+{{- fail "llmRequestRouter.auth.allowOpen cannot be combined with workerAuthEndpoint or credentialsSecret.name; set workerAuthEndpoint to \"\" and leave credentialsSecret.name empty for a development router that accepts unauthenticated workers" -}}
+{{- else if and $endpoint $secretName -}}
+{{- fail "llmRequestRouter.auth.workerAuthEndpoint and llmRequestRouter.auth.credentialsSecret.name are mutually exclusive; set workerAuthEndpoint to \"\" to use the static credentials Secret" -}}
+{{- else if $endpoint -}}
+endpoint
+{{- else if $secretName -}}
+{{- $key := $credentialsSecret.key | default "" | toString -}}
+{{- if not (regexMatch "^[-._a-zA-Z0-9]+$" $key) -}}
+{{- fail (printf "llmRequestRouter.auth.credentialsSecret.key must be a Secret key name made of letters, digits, '-', '_' or '.', got %q" $key) -}}
+{{- end -}}
+{{- if has $key (list "." "..") -}}
+{{- fail (printf "llmRequestRouter.auth.credentialsSecret.key must be a Secret key name, got %q" $key) -}}
+{{- end -}}
+credentialsSecret
+{{- else if $auth.allowOpen -}}
+open
+{{- else -}}
+{{- fail "llmRequestRouter.auth requires workerAuthEndpoint or credentialsSecret.name; set llmRequestRouter.auth.allowOpen=true only for development routers that accept unauthenticated workers" -}}
+{{- end -}}
+{{- end }}
+
+{{- define "llm-request-router.workerAuthMountPath" -}}
+/etc/stargate/worker-auth
+{{- end }}
+
+{{/*
 Vault Annotations
 */}}
 {{- define "llm-request-router.vaultAnnotations" -}}

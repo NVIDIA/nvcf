@@ -15,6 +15,7 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use stargate::registration::{
@@ -262,6 +263,12 @@ struct Args {
     /// gRPC endpoint for worker authentication (e.g. http://llm-gateway:50051)
     #[arg(long, value_name = "URL")]
     worker_auth_endpoint: Option<String>,
+    /// YAML worker auth file binding cluster ids to SHA-256 hashes of worker bearer tokens: `clusters: {<clusterId>: [sha256:<64 hex>, ...]}`. Startup fails when the file is missing or invalid; afterwards it is re-read every 30 seconds and an invalid update keeps the last good set. Mutually exclusive with `--worker-auth-endpoint`.
+    #[arg(long, env = "STARGATE_WORKER_AUTH_FILE", value_name = "PATH")]
+    worker_auth_file: Option<PathBuf>,
+    /// Accept worker registrations without authentication. Development only; an error together with `--worker-auth-endpoint` or `--worker-auth-file`.
+    #[arg(long, default_value_t = false, env = "STARGATE_ALLOW_OPEN_WORKER_AUTH")]
+    allow_open_worker_auth: bool,
     /// JSON secrets file path for worker-auth bearer tokens.
     #[arg(long, env = "SECRETS_PATH", value_name = "PATH")]
     secrets_path: Option<String>,
@@ -454,11 +461,13 @@ mod tests {
     use stargate_tls::ServerTlsIdentity;
 
     use super::startup::{
-        DiscoveryAndForwarding, WorkerAuthStartup, bind_reverse_tunnel_from_args,
+        DiscoveryAndForwarding, WorkerAuthConfig, WorkerAuthStartup, bind_reverse_tunnel_from_args,
         make_discovery_with_resolver_and_addresses, make_resolver, proxy_retry_config_from_args,
-        proxy_transport_config_from_args, runtime_config_from_args, worker_auth_startup_from_args,
+        proxy_transport_config_from_args, runtime_config_from_args, worker_auth_config_from_args,
+        worker_auth_startup_from_args,
     };
     use super::*;
+    use stargate::auth::OpenAuthenticator;
 
     #[derive(Clone)]
     struct TestLogWriter(Arc<Mutex<Vec<u8>>>);
@@ -530,6 +539,27 @@ mod tests {
         proxy_transport_config_from_args(args).expect("proxy transport config should parse")
     }
 
+    fn runtime_config(args: &Args) -> stargate::runtime::StargateRuntimeConfig {
+        runtime_config_from_args(args, proxy_transport(args), Arc::new(OpenAuthenticator))
+            .expect("runtime config should parse")
+    }
+
+    fn worker_auth_config(extra: &str) -> Result<WorkerAuthConfig> {
+        worker_auth_config_from_args(&mut parse_args(extra))
+    }
+
+    fn sha256_hex(token: &str) -> String {
+        use sha2::Digest;
+        sha2::Sha256::digest(token.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    const OPEN_RUNTIME_ARGS: &str = "--allow-open-worker-auth --disable-dns-discovery \
+         --listen-addr 127.0.0.1:0 --model-discovery-listen-addr 127.0.0.1:0 \
+         --http-listen-addr 127.0.0.1:0";
+
     fn retry_values(retry: &ProxyRetryConfig) -> (u32, u32, usize, bool, Option<&str>) {
         (
             retry.max_connect_retries,
@@ -545,20 +575,225 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_config_owns_default_runtime_dependencies() {
-        let args = parse_args("");
-        let config = runtime_config_from_args(&args, proxy_transport(&args))
+        let mut args = parse_args("--allow-open-worker-auth");
+        let authenticator = worker_auth_config_from_args(&mut args)
+            .expect("explicit open worker auth should be accepted")
+            .into_authenticator()
+            .await
+            .expect("open authenticator should build");
+        let config = runtime_config_from_args(&args, proxy_transport(&args), authenticator)
             .expect("runtime config should parse");
         assert_eq!(config.warmup.warmup_duration, Duration::ZERO);
         assert!(config.forwarding.is_none());
+        let result = config
+            .authenticator
+            .authenticate(None)
+            .await
+            .expect("explicitly allowed open auth should accept anonymous workers");
+        assert_eq!(result.routing_key, None);
+        assert_eq!(result.cluster_id, None);
+    }
+
+    #[test]
+    fn worker_auth_flags_default_to_fail_closed() {
+        let defaults = parse_args("");
+        assert_eq!(defaults.worker_auth_file, None);
+        assert!(!defaults.allow_open_worker_auth);
+
+        let args = parse_args("--worker-auth-file /etc/stargate/worker-auth/credentials.yaml");
         assert_eq!(
-            config
-                .authenticator
-                .authenticate(None)
-                .await
-                .expect("default authenticator should accept anonymous workers")
-                .routing_key,
-            None
+            args.worker_auth_file,
+            Some(PathBuf::from("/etc/stargate/worker-auth/credentials.yaml"))
         );
+
+        assert_parse_error(
+            "--worker-auth-credentials-file /etc/stargate/worker-auth/credentials.json",
+            "unexpected argument '--worker-auth-credentials-file'",
+        );
+    }
+
+    #[test]
+    fn worker_auth_flag_matrix_selects_exactly_one_authenticator() {
+        const ENDPOINT: &str = "--worker-auth-endpoint http://auth.example.test";
+        const FILE: &str = "--worker-auth-file /etc/stargate/worker-auth/credentials.yaml";
+        const OPEN: &str = "--allow-open-worker-auth";
+        const EXCLUSIVE: &str =
+            "--worker-auth-endpoint and --worker-auth-file are mutually exclusive";
+        const OPEN_CONFLICT: &str = "--allow-open-worker-auth cannot be combined with --worker-auth-endpoint or --worker-auth-file";
+        const NONE: &str = "no worker authenticator configured";
+        for (endpoint, file, open, expected) in [
+            (false, false, false, Err(NONE)),
+            (false, false, true, Ok("open")),
+            (true, false, false, Ok("gateway")),
+            (false, true, false, Ok("static")),
+            (true, true, false, Err(EXCLUSIVE)),
+            (true, false, true, Err(OPEN_CONFLICT)),
+            (false, true, true, Err(OPEN_CONFLICT)),
+            (true, true, true, Err(EXCLUSIVE)),
+        ] {
+            let flags = [(endpoint, ENDPOINT), (file, FILE), (open, OPEN)]
+                .into_iter()
+                .filter_map(|(set, flag)| set.then_some(flag))
+                .collect::<Vec<_>>()
+                .join(" ");
+            match (worker_auth_config(&flags), expected) {
+                (Ok(config), Ok(kind)) => {
+                    let selected = match config {
+                        WorkerAuthConfig::Gateway(_) => "gateway",
+                        WorkerAuthConfig::StaticCluster(_) => "static",
+                        WorkerAuthConfig::Open => "open",
+                    };
+                    assert_eq!(selected, kind, "{flags}");
+                }
+                (Err(error), Err(message)) => assert_error_contains(&error, message),
+                (result, expected) => {
+                    panic!("{flags}: got {result:?}, expected {expected:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn worker_auth_endpoint_selects_gateway_authenticator() {
+        let config = worker_auth_config(
+            "--worker-auth-endpoint http://auth.example.test \
+             --secrets-path /var/run/secrets/auth.json",
+        )
+        .expect("endpoint-only worker auth should be accepted");
+        let WorkerAuthConfig::Gateway((endpoint, token_provider)) = config else {
+            panic!("endpoint should select the gateway authenticator: {config:?}");
+        };
+        assert_eq!(endpoint, "http://auth.example.test");
+        assert!(matches!(
+            token_provider,
+            Some(stargate_auth::AuthTokenProvider::JsonFile { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn worker_auth_file_selects_static_cluster_authenticator() {
+        let dir = tempfile::tempdir().expect("temp dir should be creatable");
+        let path = dir.path().join("credentials.yaml");
+        std::fs::write(
+            &path,
+            format!(
+                "clusters:\n  cluster-a:\n    - sha256:{}\n",
+                sha256_hex("cluster-a-token")
+            ),
+        )
+        .expect("worker auth file should be writable");
+        let config = worker_auth_config(&format!("--worker-auth-file {}", path.display()))
+            .expect("worker auth file should be accepted");
+        assert!(
+            matches!(&config, WorkerAuthConfig::StaticCluster(selected) if *selected == path),
+            "the worker auth file should select the static authenticator: {config:?}"
+        );
+
+        let authenticator = config
+            .into_authenticator()
+            .await
+            .expect("static authenticator should load the file");
+        let result = authenticator
+            .authenticate(Some("cluster-a-token"))
+            .await
+            .expect("known token should authenticate");
+        assert_eq!(result.cluster_id.as_deref(), Some("cluster-a"));
+        assert!(authenticator.authenticate(None).await.is_err());
+        assert!(
+            authenticator.clone().reload_task().is_some(),
+            "the runtime needs the reload task"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_fails_when_the_worker_auth_file_is_missing_or_invalid() {
+        let dir = tempfile::tempdir().expect("temp dir should be creatable");
+        let missing = dir.path().join("missing.yaml");
+        let previous_format = dir.path().join("credentials.json");
+        std::fs::write(
+            &previous_format,
+            format!(
+                r#"{{"clusters": {{"cluster-a": "{}"}}}}"#,
+                sha256_hex("cluster-a-token")
+            ),
+        )
+        .expect("worker auth file should be writable");
+        for (path, expected) in [
+            (&missing, "cannot open the file"),
+            (
+                &previous_format,
+                "must map to a list of sha256:<64 hex> entries",
+            ),
+        ] {
+            let error = runtime_startup_error(&format!(
+                "--worker-auth-file {} --disable-dns-discovery --listen-addr 127.0.0.1:0 \
+                 --model-discovery-listen-addr 127.0.0.1:0 --http-listen-addr 127.0.0.1:0 \
+                 --metrics-port 0",
+                path.display()
+            ))
+            .await;
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(&format!(
+                    "failed to load worker auth file {}",
+                    path.display()
+                )),
+                "{message}"
+            );
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_worker_authenticator_is_rejected_before_binding_listeners() {
+        let error = worker_auth_config("").expect_err("no authenticator should be rejected");
+        for option in [
+            "--worker-auth-endpoint",
+            "--worker-auth-file",
+            "--allow-open-worker-auth",
+        ] {
+            assert_error_contains(&error, option);
+        }
+
+        let blocker =
+            std::net::TcpListener::bind("0.0.0.0:0").expect("metrics blocker should bind");
+        let metrics_port = blocker
+            .local_addr()
+            .expect("metrics blocker should have an address")
+            .port();
+        let error = runtime_startup_error(&format!(
+            "--disable-dns-discovery --listen-addr 127.0.0.1:0 \
+             --model-discovery-listen-addr 127.0.0.1:0 --http-listen-addr 127.0.0.1:0 \
+             --metrics-port {metrics_port}"
+        ))
+        .await;
+        assert_error_contains(&error, "no worker authenticator configured");
+    }
+
+    /// Other tests reach the same callsites concurrently without a subscriber;
+    /// rebuilding the interest cache under the capturing subscriber keeps a
+    /// cached "never" interest from hiding the event.
+    fn capture_worker_auth_logs(extra: &str) -> (Result<WorkerAuthConfig>, String) {
+        capture_logs(tracing::Level::WARN, || {
+            tracing::callsite::rebuild_interest_cache();
+            worker_auth_config(extra)
+        })
+    }
+
+    #[test]
+    fn allowed_open_worker_auth_logs_unauthenticated_registration_warning() {
+        let (config, logs) = capture_worker_auth_logs("--allow-open-worker-auth");
+        assert!(matches!(
+            config.expect("explicit open worker auth should be accepted"),
+            WorkerAuthConfig::Open
+        ));
+        assert_eq!(
+            logs.matches("worker registration is unauthenticated")
+                .count(),
+            1,
+            "expected exactly one unauthenticated-registration warning: {logs}"
+        );
+        assert!(logs.contains("development_only=true"), "{logs}");
     }
 
     #[test]
@@ -656,8 +891,7 @@ mod tests {
     #[test]
     fn readiness_warmup_override_reaches_runtime_config() {
         let args = parse_args("--readiness-warmup-ms 1234");
-        let config = runtime_config_from_args(&args, proxy_transport(&args))
-            .expect("runtime config should parse");
+        let config = runtime_config(&args);
 
         assert_eq!(config.warmup.warmup_duration, Duration::from_millis(1234));
 
@@ -1060,11 +1294,9 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_startup_returns_process_owned_shutdown_timeout() {
-        let startup = runtime_from_args(parse_args(
-            "--disable-dns-discovery --listen-addr 127.0.0.1:0 \
-             --model-discovery-listen-addr 127.0.0.1:0 --http-listen-addr 127.0.0.1:0 \
-             --metrics-port 0 --shutdown-drain-timeout-ms 1234",
-        ))
+        let startup = runtime_from_args(parse_args(&format!(
+            "{OPEN_RUNTIME_ARGS} --metrics-port 0 --shutdown-drain-timeout-ms 1234"
+        )))
         .await
         .expect("runtime startup should build without DNS when discovery is disabled");
         assert_eq!(startup.shutdown_drain_timeout, Duration::from_millis(1234));
@@ -1072,16 +1304,16 @@ mod tests {
 
     #[tokio::test]
     async fn occupied_metrics_port_fails_before_runtime_construction() {
+        // Block the wildcard address the metrics listener binds; a loopback
+        // blocker does not conflict with a wildcard bind on every platform.
         let blocker =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("metrics blocker should bind");
+            std::net::TcpListener::bind("0.0.0.0:0").expect("metrics blocker should bind");
         let metrics_port = blocker
             .local_addr()
             .expect("metrics blocker should have an address")
             .port();
         let error = runtime_startup_error(&format!(
-            "--disable-dns-discovery --listen-addr 127.0.0.1:0 \
-             --model-discovery-listen-addr 127.0.0.1:0 --http-listen-addr 127.0.0.1:0 \
-             --metrics-port {metrics_port}"
+            "{OPEN_RUNTIME_ARGS} --metrics-port {metrics_port}"
         ))
         .await;
         assert_error_contains(&error, "metrics");
@@ -1204,8 +1436,7 @@ mod tests {
              --readiness-stabilization-sample-interval-ms 250 \
              --readiness-stabilization-window 7",
         );
-        let config = runtime_config_from_args(&args, proxy_transport(&args))
-            .expect("runtime config should parse");
+        let config = runtime_config(&args);
         assert_eq!(
             config.warmup.warmup_duration,
             std::time::Duration::from_millis(12345)

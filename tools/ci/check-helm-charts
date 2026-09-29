@@ -50,10 +50,12 @@ chart_map=(
     "http-invocation          http-invocation/nvcf-invocation-service"
     "icms                     icms/icms-api"
     "llm-api-gateway          llm-api-gateway/llm-api-gateway"
+    "llm-gateway-stack        llm-gateway-stack/llm-gateway-stack"
     "llm-request-router       llm-request-router/llm-request-router"
     "notary                   notary/nvcf-notary-service"
     "nvca-operator            nvca-operator/nvca-operator"
     "openbao                  openbao/helm"
+    "pylon-operator           pylon-operator/pylon-operator"
     "ratelimiter              ratelimiter/nvcf-ratelimiter"
     "vanity-gateway           vanity-gateway/helm-nvcf-vanity-gateway"
 )

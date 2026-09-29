@@ -14,11 +14,14 @@
 // limitations under the License.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use stargate::auth::OpenAuthenticator;
+use stargate::auth::{
+    GrpcWorkerAuthenticator, OpenAuthenticator, StaticClusterAuthenticator, WorkerAuthenticator,
+};
 use stargate::discovery::{
     Discovery, DnsDiscovery, HeadlessDnsDiscovery, HeadlessDnsDiscoveryConfig, SelfOnlyDiscovery,
 };
@@ -42,19 +45,38 @@ pub(super) type DiscoveryAndForwarding = (Box<dyn Discovery>, Option<Arc<dyn For
 
 pub(super) type WorkerAuthStartup = (String, Option<stargate_auth::AuthTokenProvider>);
 
+/// The single worker authenticator selected by the command line.
+#[derive(Debug)]
+pub(super) enum WorkerAuthConfig {
+    Gateway(WorkerAuthStartup),
+    StaticCluster(PathBuf),
+    Open,
+}
+
+impl WorkerAuthConfig {
+    pub(super) async fn into_authenticator(self) -> Result<Arc<dyn WorkerAuthenticator>> {
+        Ok(match self {
+            Self::Gateway((endpoint, token_provider)) => Arc::new(
+                GrpcWorkerAuthenticator::connect(&endpoint, token_provider)
+                    .await
+                    .context("failed to connect to worker auth endpoint")?,
+            ),
+            // The initial load must succeed; the error names the path.
+            Self::StaticCluster(path) => Arc::new(StaticClusterAuthenticator::load(path).await?),
+            Self::Open => Arc::new(OpenAuthenticator),
+        })
+    }
+}
+
 pub(super) async fn runtime_from_args(mut args: Args) -> Result<RuntimeStartup> {
     validate_backend_connectivity_args(&args)?;
     validate_discovery_args(&args)?;
+    let worker_auth = worker_auth_config_from_args(&mut args)?;
     let proxy_transport = proxy_transport_config_from_args(&args)?;
     let reverse_tunnel = bind_reverse_tunnel_from_args(&args)?;
-    let worker_auth = worker_auth_startup_from_args(
-        args.worker_auth_endpoint.take(),
-        args.secrets_path.take(),
-        args.secrets_json_path.take(),
-        args.oauth2_provider_host.take(),
-    )?;
+    let authenticator = worker_auth.into_authenticator().await?;
 
-    let mut runtime_config = runtime_config_from_args(&args, proxy_transport)?;
+    let mut runtime_config = runtime_config_from_args(&args, proxy_transport, authenticator)?;
     let listeners = BoundStargateListeners::bind(&mut runtime_config)?;
     let (discovery, forwarding) = make_discovery_with_resolver_and_addresses(
         &args,
@@ -63,13 +85,6 @@ pub(super) async fn runtime_from_args(mut args: Args) -> Result<RuntimeStartup> 
         make_resolver,
     )?;
     runtime_config.forwarding = forwarding;
-    if let Some((endpoint, token_provider)) = worker_auth {
-        let authenticator =
-            stargate::auth::GrpcWorkerAuthenticator::connect(&endpoint, token_provider)
-                .await
-                .context("failed to connect to worker auth endpoint")?;
-        runtime_config.authenticator = Arc::new(authenticator);
-    }
     Ok(RuntimeStartup {
         runtime: StargateRuntime::new(runtime_config, discovery, listeners, reverse_tunnel),
         shutdown_drain_timeout: Duration::from_millis(args.shutdown_drain_timeout_ms),
@@ -172,6 +187,7 @@ pub(super) fn bind_reverse_tunnel_from_args(args: &Args) -> Result<Option<Revers
 pub(super) fn runtime_config_from_args(
     args: &Args,
     proxy_transport: ProxyTransportConfig,
+    authenticator: Arc<dyn WorkerAuthenticator>,
 ) -> Result<StargateRuntimeConfig> {
     let millis = Duration::from_millis;
     Ok(StargateRuntimeConfig {
@@ -192,7 +208,7 @@ pub(super) fn runtime_config_from_args(
         lb_config_path: args.lb_config_path.clone(),
         metrics_prefix: args.metrics_prefix.clone(),
         forwarding: None,
-        authenticator: Arc::new(OpenAuthenticator),
+        authenticator,
         warmup: WarmupConfig {
             warmup_duration: millis(args.readiness_warmup_ms),
             sample_interval: millis(args.readiness_stabilization_sample_interval_ms),
@@ -315,6 +331,51 @@ pub(super) fn make_resolver(ttl: Duration) -> Result<hickory_resolver::TokioAsyn
 
 /// Router OAuth2 scope, distinct from the gateway invocation scope.
 const WORKER_AUTH_SCOPE: &str = "llm:check_worker";
+
+/// Selects exactly one worker authenticator. Registration fails closed: with
+/// neither an auth endpoint nor a worker auth file, startup is refused unless
+/// open worker auth is explicitly allowed, and allowing open auth next to a
+/// configured authenticator is refused as contradictory.
+pub(super) fn worker_auth_config_from_args(args: &mut Args) -> Result<WorkerAuthConfig> {
+    let auth_file = args.worker_auth_file.take();
+    ensure!(
+        args.worker_auth_endpoint.is_none() || auth_file.is_none(),
+        "--worker-auth-endpoint and --worker-auth-file are mutually exclusive; configure one worker authenticator"
+    );
+    ensure!(
+        !args.allow_open_worker_auth
+            || (args.worker_auth_endpoint.is_none() && auth_file.is_none()),
+        "--allow-open-worker-auth cannot be combined with --worker-auth-endpoint or --worker-auth-file; it is valid only when no worker authenticator is configured"
+    );
+    let gateway = worker_auth_startup_from_args(
+        args.worker_auth_endpoint.take(),
+        args.secrets_path.take(),
+        args.secrets_json_path.take(),
+        args.oauth2_provider_host.take(),
+    )?;
+    Ok(match (gateway, auth_file) {
+        (Some(gateway), _) => WorkerAuthConfig::Gateway(gateway),
+        (None, Some(path)) => {
+            tracing::info!(
+                path = %path.display(),
+                "worker registration authenticates with the static cluster credentials in the worker auth file"
+            );
+            WorkerAuthConfig::StaticCluster(path)
+        }
+        (None, None) => {
+            ensure!(
+                args.allow_open_worker_auth,
+                "no worker authenticator configured: set --worker-auth-endpoint or --worker-auth-file, or set --allow-open-worker-auth to accept unauthenticated workers (development only)"
+            );
+            tracing::warn!(
+                development_only = true,
+                stargate_id = args.stargate_id.as_str(),
+                "worker registration is unauthenticated: --allow-open-worker-auth is set and no worker authenticator is configured"
+            );
+            WorkerAuthConfig::Open
+        }
+    })
+}
 
 pub(super) fn worker_auth_startup_from_args(
     endpoint: Option<String>,
