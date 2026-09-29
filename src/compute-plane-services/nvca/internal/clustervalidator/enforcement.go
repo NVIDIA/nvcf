@@ -538,7 +538,9 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 			return fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
 		}
 
-		pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		getCtx, cancel := attemptContext(ctx, deadline)
+		pod, err := client.CoreV1().Pods(ns).Get(getCtx, name, metav1.GetOptions{})
+		cancel()
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
 				return fmt.Errorf("getting pod %s/%s: %w", ns, name, err)

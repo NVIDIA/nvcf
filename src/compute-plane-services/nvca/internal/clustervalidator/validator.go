@@ -40,6 +40,10 @@ const (
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
 	Log *logrus.Entry
+	// Preflight is set for a one-shot run before the stack is installed (no
+	// summary write). Checks use it to tell "nothing installed yet" from
+	// "installed control plane is missing".
+	Preflight bool
 	// NodeToNodeNotApplicable holds the reason the overlay probe could not
 	// apply (for example a single schedulable node). Non-empty means the check
 	// is reported as Not Applicable rather than Verified or Unknown, and is
@@ -95,12 +99,13 @@ type ValidationState struct {
 	EnvoyGatewayOK        *bool
 	GatewayRoutesOK       *bool
 	ExternalLBOK          *bool
-	// NodeToNodeOK is nil when the check was skipped (single-node cluster or
-	// compute-plane role). true = overlay verified, false = failed.
+	// NodeToNodeOK is nil when the overlay was not observed, when the check
+	// does not apply (see NodeToNodeNotApplicable), or under the compute-plane
+	// role. true = overlay verified, false = failed.
 	NodeToNodeOK *bool
 	// Tier1DeploymentsOK is nil when the check did not run (compute-plane role)
-	// or when a Deployment list call fails. Pre-install (no Deployments found)
-	// sets this to true, not nil.
+	// or nothing could be assessed. Finding no Deployments is true in preflight
+	// and false otherwise.
 	Tier1DeploymentsOK *bool
 	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role)
 	// or when a StatefulSet list call fails. No quorum StatefulSets found
@@ -162,6 +167,7 @@ func Run(
 		Log:                 log,
 		Role:                role,
 		ControlPlaneHealthy: true,
+		Preflight:           !emitMetrics,
 		NodesAllReady:       true,
 	}
 
@@ -204,7 +210,7 @@ func Run(
 		checkGatewayRoutes(ctx, client, state)
 		checkExternalLoadBalancer(ctx, client, routes, state)
 		checkNodeToNode(ctx, client, state, nodeToNodeProbeImage(netCfg))
-		checkTier1Deployments(ctx, client, state)
+		checkTier1Deployments(ctx, client, routes, state)
 		checkTier2StatefulSets(ctx, client, state)
 	} else {
 		// Compute-plane cluster (default): GPU operator, SMB CSI driver.

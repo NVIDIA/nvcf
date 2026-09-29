@@ -1457,7 +1457,9 @@ Per-check status from the latest run. The check set is fixed (18 entries; see `C
 > tier2_statefulsets) are the mirror image: present only on a control-plane run,
 > and absent when the check could not be observed at all (an RBAC denial or an
 > apiserver error). Absent means "not observed", which is not the same as `0`
-> ("observed and failing"), so these also need an `absent()` guard.
+> ("observed and failing"), so these also need an `absent()` guard. Scope that
+> guard to control-plane clusters: a compute-plane run never emits these keys,
+> so an unscoped `absent()` fires on every compute-plane cluster.
 
 ### `nvca_cluster_validator_endpoint_reachable`
 

@@ -557,6 +557,8 @@ clusterValidator:
   gatewayNames: []
   # Set for air-gapped or registry-mirrored clusters. Without it every probe
   # pod pulls busybox from Docker Hub and the overlay row reports UNKNOWN.
+  # The probe runs in a fresh namespace with no imagePullSecrets, so the image
+  # must be pullable anonymously or through node-level registry credentials.
   nodeToNodeProbeImage: ""
   image:
     repository: ""

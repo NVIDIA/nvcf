@@ -274,6 +274,43 @@ assert_distroless_operator_commands() {
 
 assert_distroless_operator_commands "${repo_root}/deployments/nvca-operator" "service chart"
 assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
+
+# The operator init container must always run the compute-plane check set, and
+# must drop its summary write whenever the CronJob runs the control-plane set.
+# The role is matched the way the validator parses it: trimmed, any case.
+assert_cluster_validator_role() {
+  local chart_dir=${1}
+  local chart_label=${2}
+  local rendered init_env cron_env
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+  init_env='select(.kind == "Deployment") | .spec.template.spec.initContainers[0].env[]'
+  cron_env='select(.kind == "CronJob") | .spec.jobTemplate.spec.template.spec.containers[0].env[]'
+
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true --set "clusterValidator.role=Control-Plane" >"${rendered}"
+  assert_eq "compute-plane" "$(yq "${init_env} | select(.name == \"VALIDATOR_ROLE\") | .value" "${rendered}")" \
+    "${chart_label} init container stays on the compute-plane checks"
+  assert_eq "true" "$(yq "${init_env} | select(.name == \"VALIDATOR_PREFLIGHT\") | .value" "${rendered}")" \
+    "${chart_label} init container skips the summary under a mixed-case control-plane role"
+  assert_eq "Control-Plane" "$(yq "${cron_env} | select(.name == \"VALIDATOR_ROLE\") | .value" "${rendered}")" \
+    "${chart_label} CronJob receives the configured role"
+
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true >"${rendered}"
+  assert_eq "" "$(yq "${init_env} | select(.name == \"VALIDATOR_PREFLIGHT\") | .value" "${rendered}")" \
+    "${chart_label} init container writes the summary under the default role"
+
+  if helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true --set "clusterValidator.role=controlplane" >/dev/null 2>&1; then
+    printf 'FAIL %s schema accepted an unknown clusterValidator.role\n' "${chart_label}" >&2
+    return 1
+  fi
+  printf 'ok %s schema rejects an unknown clusterValidator.role\n' "${chart_label}"
+}
+
+assert_cluster_validator_role "${repo_root}/deployments/nvca-operator" "service chart"
+assert_cluster_validator_role "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 install_kubeconform
 assert_pre_delete_cleanup_rbac
 run_lint nvca-operator --set "ngcConfig.serviceKey=fakekey"

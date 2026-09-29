@@ -1237,6 +1237,33 @@
                     "description": "ConfigMap name for user-defined network checks (reachability + network policy validation)",
                     "default": "cluster-validator-network-checks"
                 },
+                "role": {
+                  "type": "string",
+                  "description": "Check set: control-plane runs the gateway, storage, overlay and HA checks; any other value runs the compute-plane checks. Matched case-insensitively.",
+                  "pattern": "^(?i)\\s*(control-plane|compute-plane)?\\s*$",
+                  "default": ""
+                },
+                "openBaoNamespace": {
+                  "type": "string",
+                  "description": "Namespace holding OpenBao when it is not vault-system",
+                  "default": ""
+                },
+                "envoyGatewayNamespace": {
+                  "type": "string",
+                  "description": "Namespace holding Envoy Gateway when it is not envoy-gateway-system",
+                  "default": ""
+                },
+                "gatewayNames": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Override for the NVCF Gateways (name or namespace/name) the LoadBalancer check inspects; replaces discovery from the NVCF routes",
+                  "default": []
+                },
+                "nodeToNodeProbeImage": {
+                  "type": "string",
+                  "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets",
+                  "default": ""
+                },
                 "networkChecks": {
                     "type": [
                         "object",
