@@ -134,13 +134,6 @@ type Config struct {
 	// genuinely mean "this node".
 	AdvertiseIP string
 
-	// BlobStoreURL is the base URL of the cluster's nvsnap-blobstore
-	// (Phase 5d.2 durable backstop). Empty disables capture-side
-	// upload AND cascade tier-3 fallback — agents fall back to
-	// peer-only fanout. Default in cluster:
-	// http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000
-	BlobStoreURL string
-
 	// FSStorePath is the agent-container path to a distributed
 	// filesystem mounted on every node — Lustre, Weka, EFS,
 	// Filestore, NFS, etc. Phase 2c of the 16-node distribution

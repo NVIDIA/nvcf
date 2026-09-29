@@ -9,12 +9,12 @@ CONTAINER_TOOL ?= docker
 GO_FLAGS ?= -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD_DIR ?= bin
 
-.PHONY: all build agent restore-entrypoint nvsnap-server nvsnap-blobstore clean test test-coverage test-checkpoint test-server deploy install-crds placeholder generate
+.PHONY: all build agent restore-entrypoint nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds placeholder generate
 
 all: build
 
 # Build all binaries
-build: agent restore-entrypoint nvsnap-server nvsnap-blobstore
+build: agent restore-entrypoint nvsnap-server
 
 # Build the agent binary
 agent:
@@ -27,12 +27,6 @@ nvsnap-server:
 	@echo "Building nvsnap-server..."
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/nvsnap-server ./cmd/nvsnap-server
-
-# Build the nvsnap-blobstore binary (Phase 5d.2 durable backstop)
-nvsnap-blobstore:
-	@echo "Building nvsnap-blobstore..."
-	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/nvsnap-blobstore ./cmd/nvsnap-blobstore
 
 # Build the restore-entrypoint binary (for self-restoring placeholders)
 restore-entrypoint:

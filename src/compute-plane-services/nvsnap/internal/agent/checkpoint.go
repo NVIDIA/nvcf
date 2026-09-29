@@ -2885,24 +2885,8 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		}
 	}
 
-	// Phase 5d.2: kick off the durable backstop upload to the cluster's
-	// nvsnap-blobstore. Async on purpose — the source pod has already
-	// resumed by here; the upload is best-effort durability that
-	// shouldn't block the API response. background ctx avoids
-	// HTTP-request cancellation truncating multi-minute uploads.
-	if a.config.BlobStoreURL != "" {
-		go func(id string) {
-			uploadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			defer cancel()
-			if err := a.UploadCheckpoint(uploadCtx, id); err != nil {
-				a.log.WithError(err).WithField("checkpoint_id", id).
-					Warn("blob-store upload failed; checkpoint remains node-pinned hostPath")
-			}
-		}(checkpointID)
-	}
-
-	// Phase 2c: publish to the shared filesystem if configured. Same
-	// async best-effort pattern as the blob-store upload — the hostPath
+	// Phase 2c: publish to the shared filesystem if configured. Async
+	// and best-effort — the hostPath
 	// dump is the source of truth on this node; FSStore publish is
 	// what makes the dump available to peers without the network
 	// cascade. A failure here just falls the cluster back to the peer

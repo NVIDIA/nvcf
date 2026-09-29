@@ -18,7 +18,6 @@ limitations under the License.
 package agent
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,7 +35,7 @@ import (
 )
 
 // shaHex computes sha256 hex of b — handy in cascade tests for
-// constructing matched (sha, body) pairs for the fake blob store.
+// constructing matched (sha, body) pairs for fake peers.
 func shaHex(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
@@ -64,7 +63,7 @@ func newPeerAgent(t *testing.T) (peerURL, checkpointID string, total int64) {
 // tests verify the receiver registered itself after a successful
 // fetch (the load-bearing 5d.1 invariant: every successful restore
 // expands the fanout fan).
-func fakeCatalog(t *testing.T, peers []map[string]string, blobURI string) (catalogURL string, peerAdds *int32) {
+func fakeCatalog(t *testing.T, peers []map[string]string) (catalogURL string, peerAdds *int32) {
 	t.Helper()
 	var added int32
 	mux := http.NewServeMux()
@@ -77,7 +76,6 @@ func fakeCatalog(t *testing.T, peers []map[string]string, blobURI string) (catal
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"checkpoint_id": id,
 				"peers":         peers,
-				"blob_uri":      blobURI,
 			})
 		case strings.HasSuffix(r.URL.Path, "/peer-add") && r.Method == http.MethodPost:
 			atomic.AddInt32(&added, 1)
@@ -154,7 +152,7 @@ func TestEnsureLocal_PeerSuccess(t *testing.T) {
 
 	catalogURL, peerAdds := fakeCatalog(t, []map[string]string{
 		{"node_name": "node-A", "agent_url": peerURL},
-	}, "")
+	})
 
 	a, dir := receiverAgent(t, catalogURL)
 	if err := a.EnsureLocal(t.Context(), id); err != nil {
@@ -197,7 +195,7 @@ func TestEnsureLocal_PeerFallover(t *testing.T) {
 	catalogURL, peerAdds := fakeCatalog(t, []map[string]string{
 		{"node_name": "dead-node", "agent_url": deadURL},
 		{"node_name": "good-node", "agent_url": goodURL},
-	}, "")
+	})
 
 	a, dir := receiverAgent(t, catalogURL)
 	if err := a.EnsureLocal(t.Context(), id); err != nil {
@@ -211,7 +209,7 @@ func TestEnsureLocal_PeerFallover(t *testing.T) {
 	}
 }
 
-// TestEnsureLocal_AllPeersFail — every peer dead, no blob URI. Cascade
+// TestEnsureLocal_AllPeersFail — every peer dead. Cascade
 // must surface a clear error, NOT silently leave a partial dir behind.
 func TestEnsureLocal_AllPeersFail(t *testing.T) {
 	deadSrv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -222,7 +220,7 @@ func TestEnsureLocal_AllPeersFail(t *testing.T) {
 	catalogURL, peerAdds := fakeCatalog(t, []map[string]string{
 		{"node_name": "dead-A", "agent_url": deadURL},
 		{"node_name": "dead-B", "agent_url": deadURL + "0"}, // also unreachable
-	}, "")
+	})
 
 	a, dir := receiverAgent(t, catalogURL)
 	err := a.EnsureLocal(t.Context(), id)
@@ -242,107 +240,6 @@ func TestEnsureLocal_AllPeersFail(t *testing.T) {
 	}
 }
 
-// fakeBlobStore stands up an httptest server that mimics
-// nvsnap-blobstore: serves manifest + per-sha blobs from an
-// in-memory map. Stage 5d.2 cascade tier-3 fallback hits this
-// when no peer can serve.
-func fakeBlobStore(t *testing.T, blobs map[string][]byte, manifest blobStoreManifest) string {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/capture/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(manifest)
-	})
-	mux.HandleFunc("/v1/blob/", func(w http.ResponseWriter, r *http.Request) {
-		sha := strings.TrimPrefix(r.URL.Path, "/v1/blob/")
-		body, ok := blobs[sha]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		_, _ = w.Write(body)
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv.URL
-}
-
-// TestEnsureLocal_BlobStoreFallback — happy path for tier-3.
-// All peers fail, catalog has a blob URI, blobstore serves
-// manifest + blobs successfully → restored dir mirrors source.
-func TestEnsureLocal_BlobStoreFallback(t *testing.T) {
-	// Two blobs that compose a single capture.
-	body1 := []byte("inv-data")
-	body2 := []byte("pages-data")
-	sha1 := shaHex(body1)
-	sha2 := shaHex(body2)
-	blobs := map[string][]byte{sha1: body1, sha2: body2}
-	manifest := blobStoreManifest{}
-	manifest.Files = []struct {
-		Path   string `json:"path"`
-		SHA256 string `json:"sha256"`
-		Size   int64  `json:"size"`
-	}{
-		{Path: "inventory.img", SHA256: sha1, Size: int64(len(body1))},
-		{Path: "pages-1.img", SHA256: sha2, Size: int64(len(body2))},
-	}
-	blobURL := fakeBlobStore(t, blobs, manifest)
-
-	id := "ckpt-blob-fallback"
-	catalogURL, peerAdds := fakeCatalog(t, []map[string]string{}, blobURL)
-
-	a, dir := receiverAgent(t, catalogURL)
-	if err := a.EnsureLocal(t.Context(), id); err != nil {
-		t.Fatalf("EnsureLocal: %v", err)
-	}
-
-	got1, err := os.ReadFile(filepath.Join(dir, id, "inventory.img"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got1, body1) {
-		t.Errorf("inventory.img mismatch: got %q want %q", got1, body1)
-	}
-	got2, err := os.ReadFile(filepath.Join(dir, id, "pages-1.img"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got2, body2) {
-		t.Errorf("pages-1.img mismatch")
-	}
-
-	if atomic.LoadInt32(peerAdds) != 1 {
-		t.Errorf("peer-add count = %d, want 1 (blob fallback should still register)", atomic.LoadInt32(peerAdds))
-	}
-}
-
-// TestEnsureLocal_BlobStoreManifestMissing — cascade reaches
-// tier-3 but the blobstore doesn't have the manifest (capture
-// was deleted between catalog query and our fetch). Error
-// surfaced cleanly; partial dest dir cleaned up.
-func TestEnsureLocal_BlobStoreManifestMissing(t *testing.T) {
-	// Empty blobstore — every GET returns 404.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", http.NotFound)
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	id := "ckpt-no-manifest"
-	catalogURL, _ := fakeCatalog(t, []map[string]string{}, srv.URL)
-	a, dir := receiverAgent(t, catalogURL)
-	err := a.EnsureLocal(t.Context(), id)
-	if err == nil {
-		t.Fatal("want error from tier-3, got nil")
-	}
-	if !strings.Contains(err.Error(), "blob fallback failed") {
-		t.Errorf("error = %q, should mention 'blob fallback failed'", err.Error())
-	}
-	if _, err := os.Stat(filepath.Join(dir, id)); err == nil {
-		t.Errorf("partial dir left behind after blob fallback failure")
-	}
-}
-
 // TestEnsureLocal_SkipsSelfInPeerList — catalog returns OUR own URL
 // among peers (e.g., a stale entry from a prior restore on this node
 // that lost its local copy). Cascade must skip and try real peers
@@ -356,7 +253,7 @@ func TestEnsureLocal_SkipsSelfInPeerList(t *testing.T) {
 	catalogURL, peerAdds := fakeCatalog(t, []map[string]string{
 		{"node_name": "receiver-node", "agent_url": "http://10.0.0.99:8081"},
 		{"node_name": "real-peer", "agent_url": goodURL},
-	}, "")
+	})
 
 	a, dir := receiverAgent(t, catalogURL)
 	if err := a.EnsureLocal(t.Context(), id); err != nil {
@@ -374,10 +271,10 @@ func TestEnsureLocal_SkipsSelfInPeerList(t *testing.T) {
 // that the restore caller hits. Cascade error → 502 with the error
 // in the body so the caller can log it. Same-node hit → 204.
 func TestEnsureLocalHandler_PropagatesCascadeFailure(t *testing.T) {
-	// No peers, no blob URI: cascade must fail and the handler must
+	// No peers: cascade must fail and the handler must
 	// translate that into 502.
 	id := "ckpt-handler-fail"
-	catalogURL, _ := fakeCatalog(t, []map[string]string{}, "")
+	catalogURL, _ := fakeCatalog(t, []map[string]string{})
 	a, _ := receiverAgent(t, catalogURL)
 
 	router := mux.NewRouter()
@@ -399,7 +296,7 @@ func TestEnsureLocalHandler_PropagatesCascadeFailure(t *testing.T) {
 // surface restore-side test-e2e calls; same-node short-circuit must
 // be observable as a fast 204 (no body) so callers can `curl -f`.
 func TestEnsureLocalHandler_SameNodeReturns204(t *testing.T) {
-	catalogURL, _ := fakeCatalog(t, []map[string]string{}, "")
+	catalogURL, _ := fakeCatalog(t, []map[string]string{})
 	a, dir := receiverAgent(t, catalogURL)
 	id, _, _ := makeCheckpointDir(t, dir)
 

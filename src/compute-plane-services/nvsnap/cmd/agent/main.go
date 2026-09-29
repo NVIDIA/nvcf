@@ -73,8 +73,6 @@ func main() {
 		"This agent's reachable address from peers (downward API status.hostIP when hostNetwork:true). Empty disables peer registration.")
 	flag.StringVar(&config.AdvertiseIP, "advertise-ip", os.Getenv("POD_IP"),
 		"Address peers dial to reach this agent (downward API status.podIP; equals the node IP under hostNetwork). Falls back to --node-ip when empty. See GH #490.")
-	flag.StringVar(&config.BlobStoreURL, "blob-store-url", os.Getenv("NVSNAP_BLOB_STORE_URL"),
-		"NvSnap-blobstore base URL for Phase 5d.2 durable backstop (e.g. http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000). Empty disables capture-side upload AND cascade tier-3 fallback.")
 	// Cross-cluster replication (docs/design/cross-cluster-replication.md).
 	flag.StringVar(&config.Replication.ObjectStore.Provider, "replication-provider", os.Getenv("NVSNAP_REPLICATION_PROVIDER"),
 		"Object-store provider for cross-cluster replication: gcs | s3. Empty (default) disables replication. Replication is enabled only when both --replication-provider and --replication-home-bucket are set.")

@@ -167,14 +167,6 @@ spec:
               fi
               {{- end }}
 
-              {{- if .Values.blobstore.enabled }}
-              echo "--- [3/5] nvsnap-blobstore Deployment ready ---"
-              # Blobstore has no /healthz endpoint — the readinessProbe in
-              # its Deployment is the source of truth, so rollout status
-              # already proves it's serving.
-              kubectl rollout status deploy/nvsnap-blobstore -n {{ .Release.Namespace }} --timeout=60s
-              echo "  OK"
-              {{- end }}
 
               {{- if .Values.webhook.enabled }}
               echo "--- [4/5] webhook TLS cert issued ---"

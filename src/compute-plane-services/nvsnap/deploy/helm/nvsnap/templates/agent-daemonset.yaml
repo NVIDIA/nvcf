@@ -212,10 +212,6 @@ spec:
             - name: NVSNAP_CATALOG_URL
               value: "http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.port }}"
             {{- end }}
-            {{- if .Values.blobstore.enabled }}
-            - name: NVSNAP_BLOB_STORE_URL
-              value: "http://nvsnap-blobstore.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.blobstore.service.port }}"
-            {{- end }}
             {{- if .Values.jaeger.enabled }}
             # OTLP/gRPC. The bundled Jaeger all-in-one Pod listens on
             # 4317 for protobuf-encoded spans. nvsnap-agent reads this

@@ -7,9 +7,6 @@ Components deployed:
 {{- if .Values.server.enabled }}
   - nvsnap-server (REST API + UI, port {{ .Values.server.service.port }}, type {{ .Values.server.service.type }})
 {{- end }}
-{{- if .Values.blobstore.enabled }}
-  - nvsnap-blobstore (durable backstop, port {{ .Values.blobstore.service.port }})
-{{- end }}
 {{- if .Values.webhook.enabled }}
   - nvsnap-webhook (mutating admission, in-agent)
 {{- end }}

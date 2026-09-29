@@ -34,7 +34,7 @@ import (
 
 // objectStoreUploadConcurrency is the number of parallel object PUTs during
 // a push. Object stores sustain many concurrent streams; 8 matches the
-// blobstore uploader.
+// replication uploader.
 const objectStoreUploadConcurrency = 8
 
 // startReplication opens the shared object-store client and resolves the
@@ -72,24 +72,16 @@ func (a *Agent) startReplication(ctx context.Context) error {
 	return nil
 }
 
-// postCaptureCommit is the rootfs PostCommit hook: it pushes a committed
-// capture to the same-cluster nvsnap-blobstore (tier-3 fallback) and, when
-// cross-cluster replication is enabled, to this cluster's home bucket (the
-// L4 cross-cluster tier). Both are best-effort and independent — a failure
-// in one is logged but doesn't block the other or roll back the capture.
+// postCaptureCommit is the rootfs PostCommit hook: when cross-cluster
+// replication is enabled it pushes a committed capture to this cluster's
+// home bucket (the L4 cross-cluster tier). Best-effort: a failure is
+// logged and does not roll back the capture.
 func (a *Agent) postCaptureCommit(ctx context.Context, hash string) error {
-	var firstErr error
-	if err := a.UploadCapture(ctx, hash); err != nil {
-		a.log.WithError(err).WithField("hash", hash).Warn("blobstore upload failed")
-		firstErr = err
-	}
 	if err := a.UploadCaptureToObjectStore(ctx, hash); err != nil {
 		a.log.WithError(err).WithField("hash", hash).Warn("replication push failed")
-		if firstErr == nil {
-			firstErr = err
-		}
+		return err
 	}
-	return firstErr
+	return nil
 }
 
 // UploadCaptureToObjectStore pushes a committed rootfs capture's on-disk
@@ -102,7 +94,7 @@ func (a *Agent) postCaptureCommit(ctx context.Context, hash string) error {
 // verbatim — object keys are "<hash>/<relpath>", so a remote cluster GETs
 // the same files into the same layout and replays the capture commit.
 //
-// Best-effort, like the blobstore uploader: a missing HomeBucket or a
+// Best-effort: a missing HomeBucket or a
 // transient PUT failure returns an error (logged by the PostCommit caller)
 // but never rolls back the local capture.
 func (a *Agent) UploadCaptureToObjectStore(ctx context.Context, hash string) error {

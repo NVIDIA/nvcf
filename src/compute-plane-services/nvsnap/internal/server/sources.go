@@ -53,7 +53,6 @@ type peerRegisterRequest struct {
 type sourcesResponse struct {
 	CheckpointID string             `json:"checkpoint_id"`
 	Peers        []sourcesPeerEntry `json:"peers"`
-	BlobURI      string             `json:"blob_uri,omitempty"` // empty until stage 5d.2 wires the uploader
 }
 
 type sourcesPeerEntry struct {
@@ -64,12 +63,12 @@ type sourcesPeerEntry struct {
 }
 
 // getCheckpointSources is the load-bearing query the restore-side
-// cascade reads on every fanout. Returns the prioritized peer list +
-// blob fallback URI in one round-trip.
+// cascade reads on every fanout. Returns the prioritized peer list in
+// one round-trip.
 //
 // Status codes:
 //   - 200: response valid (peers may be empty if no agent has
-//     registered yet; receiver should fall back to blob_uri)
+//     registered yet)
 //   - 404: checkpoint id unknown to the catalog
 //   - 500: db error
 func (s *Server) getCheckpointSources(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +81,7 @@ func (s *Server) getCheckpointSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peers, blobURI, err := s.catalog.GetCheckpointSources(id)
+	peers, err := s.catalog.GetCheckpointSources(id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query sources: %v", err), http.StatusInternalServerError)
 		return
@@ -91,7 +90,6 @@ func (s *Server) getCheckpointSources(w http.ResponseWriter, r *http.Request) {
 	out := sourcesResponse{
 		CheckpointID: id,
 		Peers:        make([]sourcesPeerEntry, 0, len(peers)),
-		BlobURI:      blobURI,
 	}
 	for _, p := range peers {
 		out.Peers = append(out.Peers, sourcesPeerEntry{
@@ -166,13 +164,6 @@ func (s *Server) peerRemoveCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// blobUploadedRequest is the JSON body for /blob-uploaded. The agent
-// reports the nvsnap-blobstore base URL it uploaded to so the cascade
-// can construct manifest + per-blob URLs from the same prefix.
-type blobUploadedRequest struct {
-	BlobURI string `json:"blob_uri"`
 }
 
 // registerCheckpointRequest is the JSON body for /register. Agents
@@ -277,40 +268,6 @@ func (s *Server) registerCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.catalog.UpsertCheckpoint(cp); err != nil {
 		http.Error(w, fmt.Sprintf("upsert checkpoint: %v", err), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// blobUploadedCheckpoint records a successful upload to the cluster's
-// nvsnap-blobstore. Triggered by the agent's background uploader after
-// every file in the dump dir is durably stored. Once this fires, the
-// checkpoint survives loss of the source node — the catalog will
-// route restores to the blob store as the tier-3 fallback.
-//
-// 204 on success, 400 on missing fields, 404 if the checkpoint id
-// was deleted between capture and upload-callback (rare but possible
-// under aggressive retention sweeps).
-func (s *Server) blobUploadedCheckpoint(w http.ResponseWriter, r *http.Request) {
-	id := mux.Vars(r)["id"]
-
-	var req blobUploadedRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
-		return
-	}
-	if req.BlobURI == "" {
-		http.Error(w, "blob_uri required", http.StatusBadRequest)
-		return
-	}
-
-	if _, err := s.catalog.GetCheckpoint(id); err != nil {
-		http.Error(w, fmt.Sprintf("checkpoint not found: %v", err), http.StatusNotFound)
-		return
-	}
-
-	if err := s.catalog.SetCheckpointBlobURI(id, req.BlobURI); err != nil {
-		http.Error(w, fmt.Sprintf("set blob uri: %v", err), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
