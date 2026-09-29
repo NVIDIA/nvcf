@@ -214,7 +214,7 @@ struct Args {
     /// Minimum additive delta above Stargate's queue estimate before local retry
     #[arg(
         long,
-        default_value_t = 25,
+        default_value_t = pylon_lib::DEFAULT_QUEUE_MISMATCH_MIN_DELTA_MS,
         env = "PYLON_QUEUE_MISMATCH_MIN_DELTA_MS",
         value_name = "MS"
     )]
@@ -222,7 +222,7 @@ struct Args {
     /// Multiplicative tolerance above Stargate's queue estimate before local retry
     #[arg(
         long,
-        default_value_t = 1.25,
+        default_value_t = pylon_lib::DEFAULT_QUEUE_MISMATCH_TOLERANCE_FACTOR,
         env = "PYLON_QUEUE_MISMATCH_TOLERANCE_FACTOR",
         value_name = "FACTOR"
     )]

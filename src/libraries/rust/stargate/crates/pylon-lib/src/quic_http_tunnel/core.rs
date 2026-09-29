@@ -1610,6 +1610,7 @@ mod tests {
     async fn queue_rejection_precedes_chat_usage_rewrite_capacity() {
         let (mut app, _observations) = observed_app("http://127.0.0.1:0");
         app.force_chat_completions_include_usage = true;
+        app.queue_mismatch_retry = PylonQueueMismatchRetryConfig::strict();
         app.runtime_state.update_model_throughput("model-a", 100.0);
         let _queued_request = app.runtime_state.track_request(&RequiredTunnelHeaders {
             request_id: "req-already-queued".to_string(),

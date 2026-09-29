@@ -203,6 +203,10 @@ Stargate strips pylon retry metadata before returning downstream:
 Stargate may retry when the request body is replayable and retry budget remains.
 Pylon may return retryable `429` with
 `x-stargate-retry-reason: queue_estimate_mismatch` before upstream execution.
+By default it does so only when its local queue estimate exceeds Stargate's by
+at least 10 s and at least 4 times (`--pylon-queue-mismatch-min-delta-ms`,
+`--pylon-queue-mismatch-tolerance-factor`). Stargate's estimate lags behind
+Pylon's under load, so smaller differences are expected.
 The local upstream may mark `429` or `503` retryable for pylon with
 `x-stargate-upstream-retryable: true`; pylon converts that to Stargate retry
 metadata and does not forward the upstream header downstream.

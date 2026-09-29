@@ -22,7 +22,7 @@ use crate::common::{
     DummyState, SelfDiscovery, TunnelTestCase, base_config, bind_ephemeral,
     direct_registration_config, dummy_chat, init_crypto, make_stargate_runtime,
     make_stargate_runtime_for_tunnel_case, make_stargate_runtime_with_lb,
-    reverse_registration_config, start_dummy_inst, wait_for_routing,
+    reverse_registration_config, start_dummy_inst, strict_queue_mismatch_retry, wait_for_routing,
     wait_for_routing_with_cache_affinity, wait_until, with_proxy_headers,
 };
 use axum::Router;
@@ -611,6 +611,7 @@ impl ProxyFixture {
         );
         tunnel_config.tunnel_protocol = protocol;
         tunnel_config.forwarding.runtime_state = runtime_state.clone();
+        tunnel_config.forwarding.queue_mismatch_retry = strict_queue_mismatch_retry();
         let tunnel = start_quic_http_tunnel(tunnel_config)
             .await
             .expect("capturing backend tunnel failed to start");

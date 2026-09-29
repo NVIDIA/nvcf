@@ -44,7 +44,10 @@ pub use model_lifecycle::{
     ModelInitialization, ModelLifecycleConfig, ModelLifecycleError, ModelLifecycleHandle,
     ModelSource, start_model_lifecycle,
 };
-pub use queue_admission::PylonQueueMismatchRetryConfig;
+pub use queue_admission::{
+    DEFAULT_QUEUE_MISMATCH_MIN_DELTA_MS, DEFAULT_QUEUE_MISMATCH_TOLERANCE_FACTOR,
+    PylonQueueMismatchRetryConfig,
+};
 pub use quic_http_tunnel::{
     DEFAULT_FIRST_OUTPUT_TIMEOUT, DEFAULT_MAX_SSE_BUFFER_BYTES, DEFAULT_OUTPUT_CHUNK_TIMEOUT,
     DEFAULT_PRIORITY_CEILING, PylonRetryConfig, QuicHttpTunnelConfig, QuicHttpTunnelHandle,
