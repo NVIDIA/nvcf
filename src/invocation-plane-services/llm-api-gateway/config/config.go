@@ -55,9 +55,10 @@ type ServerConfig struct {
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
 	// InferenceWriteTimeout replaces WriteTimeout on inference routes. It
-	// bounds each write rather than the whole response, so long generations
-	// and streams are not cut off; it only stops a write that stalls on a
-	// client that stopped reading. Zero or negative disables the deadline.
+	// bounds each write rather than the whole response and does not run
+	// between writes, so long generations, streams, and upstream pauses are
+	// not cut off; it only stops a write that stalls on a client that
+	// stopped reading. Zero or negative disables the deadline.
 	InferenceWriteTimeout time.Duration
 	IdleTimeout           time.Duration
 	Region                string
