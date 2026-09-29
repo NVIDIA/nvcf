@@ -53,22 +53,39 @@ func newInferenceWriteDeadlineMiddleware(timeout time.Duration) echo.MiddlewareF
 			w.clearDeadline()
 			if timeout > 0 {
 				response.Writer = w
+				if final, ok := ec.Request().Context().Value(finalWriteDeadlineKey{}).(*finalWriteDeadline); ok {
+					final.needed = true
+				}
 			}
 			return next(ec)
 		}
 	}
 }
 
-// WithFinalWriteDeadline arms the write deadline once next has returned, so
+type finalWriteDeadlineKey struct{}
+
+// finalWriteDeadline records whether the inference middleware replaced the
+// server-wide write deadline for a request.
+type finalWriteDeadline struct {
+	needed bool
+}
+
+// WithFinalWriteDeadline arms the write deadline once next has returned, for
+// requests whose server-wide deadline the inference middleware replaced, so
 // the flush net/http performs after the handler (the rest of the buffered
 // body, the chunked terminator, or the HTTP/2 end of stream) cannot block
 // forever on a client that stopped reading. Wrap the whole Echo instance so
 // the deadline starts only after every middleware and the error handler are
-// done. A timeout <= 0 leaves the deadline as the handler set it.
+// done. Other routes keep http.Server.WriteTimeout. A timeout <= 0 disables
+// this, matching the inference middleware.
 func WithFinalWriteDeadline(next http.Handler, timeout time.Duration) http.Handler {
+	if timeout <= 0 {
+		return next
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-		if timeout > 0 {
+		final := &finalWriteDeadline{}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), finalWriteDeadlineKey{}, final)))
+		if final.needed {
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout))
 		}
 	})

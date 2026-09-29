@@ -193,6 +193,22 @@ func TestFinalWriteDeadlineArmsAfterAllEchoWork(t *testing.T) {
 	}
 }
 
+func TestFinalWriteDeadlineSkipsOtherRoutes(t *testing.T) {
+	t.Parallel()
+
+	e := echo.New()
+	e.GET("/healthz", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	WithFinalWriteDeadline(e, time.Second).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	// Routes without the inference middleware keep http.Server.WriteTimeout.
+	if len(recorder.events) != 0 {
+		t.Fatalf("deadline events = %v, want none", recorder.events)
+	}
+}
+
 func TestInferenceWriteDeadlineDisabled(t *testing.T) {
 	t.Parallel()
 
