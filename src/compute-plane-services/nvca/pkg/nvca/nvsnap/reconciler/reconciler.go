@@ -358,7 +358,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 			AttemptCount:    0,
 			LastError:       "",
 			LastAttemptAt:   now,
-		}); err != nil {
+		}, claimToken{}); err != nil {
 			return fmt.Errorf("recovery: writeStatus Warm: %w", err)
 		}
 		return r.removeCheckpointOnWarm(ctx, pod, log)
@@ -415,7 +415,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 	// buffer so losers skip immediately rather than each dwelling.
 	claimNow := time.Now()
 	owner := pod.Namespace + "/" + pod.Name
-	claimed, err := tryClaimCaptureLive(ctx, r.DynClient, fvID, owner, claimNow.Add(r.CaptureLeaseTTL), claimNow, r.claimOwnerAlive)
+	token := claimToken{Owner: owner, UID: string(pod.UID)}
+	claimed, err := tryClaimCaptureLive(ctx, r.DynClient, fvID, owner, token.UID, claimNow.Add(r.CaptureLeaseTTL), claimNow, r.claimOwnerAlive)
 	if err != nil {
 		return fmt.Errorf("capture-once claim for %s: %w", fvID, err)
 	}
@@ -445,7 +446,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 		LeaveRunning:  true,
 	})
 	if err != nil {
-		return r.recordFailure(ctx, fvID, "create_failed", prev, fmt.Errorf("nvsnap CreateCheckpoint: %w", err), log)
+		return r.recordFailure(ctx, fvID, "create_failed", prev, fmt.Errorf("nvsnap CreateCheckpoint: %w", err), token, log)
 	}
 	log = log.WithField("checkpointID", ckpt.ID)
 
@@ -454,11 +455,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 	defer pollCancel()
 	final, err := r.pollCheckpointTerminal(pollCtx, ckpt.ID, log)
 	if err != nil {
-		return r.recordFailure(ctx, fvID, "poll_failed", prev, err, log)
+		return r.recordFailure(ctx, fvID, "poll_failed", prev, err, token, log)
 	}
 	if final.Phase == nvsnap.PhaseFailed {
 		return r.recordFailure(ctx, fvID, "completed_failed", prev,
-			fmt.Errorf("nvsnap-server reported checkpoint %s Phase=Failed: %s", ckpt.ID, final.Error), log)
+			fmt.Errorf("nvsnap-server reported checkpoint %s Phase=Failed: %s", ckpt.ID, final.Error), token, log)
 	}
 
 	// Defense in depth (nvca#14 + nvca#15). nvsnap-server should always
@@ -499,7 +500,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 		// an attempt. This branch's contract is "treat it as if the capture
 		// never happened" -- prior state, no CFS-level error surface -- so it
 		// restores prev verbatim and lets writeStatus drop the claim fields.
-		if err := releaseCaptureClaim(ctx, r.DynClient, fvID, prev); err != nil {
+		if err := releaseCaptureClaim(ctx, r.DynClient, fvID, prev, token); err != nil {
 			// Non-fatal: the lease still expires on its own, just later.
 			log.WithError(err).Warn("failed to release capture claim after empty hash; " +
 				"peers will be gated until the lease expires")
@@ -540,7 +541,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 		log.WithError(err).WithField("hash", final.Hash).
 			Warn("L2 promote-state poll did not reach terminal — falling back to cold start (capture itself succeeded)")
 		return r.recordFailure(ctx, fvID, "promote_poll_failed", prev,
-			fmt.Errorf("L2 promote poll: %w", err), log)
+			fmt.Errorf("L2 promote poll: %w", err), token, log)
 	}
 	switch promote.State {
 	case "failed":
@@ -554,7 +555,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 			"pvc_name": promote.PVCName,
 		}).Warn("L2 promote terminally failed — pods will cold-start until next successful capture")
 		return r.recordFailure(ctx, fvID, "promote_failed", prev,
-			fmt.Errorf("L2 promote state=failed for hash %s", final.Hash), log)
+			fmt.Errorf("L2 promote state=failed for hash %s", final.Hash), token, log)
 	case "ready":
 		log.WithFields(logrus.Fields{
 			"hash":     final.Hash,
@@ -578,7 +579,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 		AttemptCount:    0,
 		LastError:       "",
 		LastAttemptAt:   now,
-	}); err != nil {
+	}, token); err != nil {
+		if errors.Is(err, ErrClaimSuperseded) {
+			// Another pod took the claim while this capture finished (this
+			// pod was terminating). Its result stands; ours is not recorded.
+			log.WithField("hash", final.Hash).Warn("capture finished after the claim was taken over; leaving the new owner's status untouched")
+			return nil
+		}
 		log.WithError(err).Error("status update failed after successful checkpoint; will retry on next reconcile")
 		return err
 	}
@@ -706,7 +713,7 @@ func isNonTransientAPIError(err error) bool {
 //
 // `reason` is a small enum that lands in the metric label — keep the
 // set bounded (see metrics.go).
-func (r *Reconciler) recordFailure(ctx context.Context, fvID, reason string, prev cfsStatus, cause error, log logrus.FieldLogger) error {
+func (r *Reconciler) recordFailure(ctx context.Context, fvID, reason string, prev cfsStatus, cause error, token claimToken, log logrus.FieldLogger) error {
 	now := time.Now()
 	upd := statusUpdate{
 		CheckpointHash:  prev.CheckpointHash,
@@ -723,7 +730,11 @@ func (r *Reconciler) recordFailure(ctx context.Context, fvID, reason string, pre
 	if prev.CapturedAt != nil {
 		upd.CapturedAt = prev.CapturedAt.Time
 	}
-	if err := writeStatus(ctx, r.DynClient, fvID, upd); err != nil {
+	if err := writeStatus(ctx, r.DynClient, fvID, upd, token); err != nil {
+		if errors.Is(err, ErrClaimSuperseded) {
+			log.WithError(cause).Warn("attempt failed after the claim was taken over; the new owner's status is left untouched")
+			return nil
+		}
 		log.WithError(err).Error("failed to write failure status; original error preserved in log")
 	}
 	checkpointAttemptFailures.WithLabelValues(reason).Inc()
@@ -771,7 +782,7 @@ func (r *Reconciler) removeCheckpointOnWarm(ctx context.Context, pod *corev1.Pod
 // claimOwnerAlive reports whether the pod holding a capture claim still
 // exists and is not terminating. Errors other than NotFound count as alive:
 // a transient API failure must not let two pods capture at once.
-func (r *Reconciler) claimOwnerAlive(ctx context.Context, owner string) bool {
+func (r *Reconciler) claimOwnerAlive(ctx context.Context, owner, ownerUID string) bool {
 	ns, name, ok := strings.Cut(owner, "/")
 	if !ok || r.KubeClient == nil {
 		return true
@@ -779,6 +790,12 @@ func (r *Reconciler) claimOwnerAlive(ctx context.Context, owner string) bool {
 	p, err := r.KubeClient.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return !apierrors.IsNotFound(err)
+	}
+	// Inference pods have deterministic names: a later reconciliation
+	// can recreate the same name after the claimant died. A different
+	// UID under the same name is a replacement, not the owner.
+	if ownerUID != "" && string(p.UID) != ownerUID {
+		return false
 	}
 	if p.DeletionTimestamp != nil {
 		return false

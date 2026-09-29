@@ -91,7 +91,7 @@ func (r *Reconciler) SweepOnce(ctx context.Context) {
 			AttemptCount:    0,
 			LastError:       "",
 			LastAttemptAt:   now,
-		}); err != nil {
+		}, claimToken{}); err != nil {
 			log.WithError(err).WithField("functionVersionID", fvID).
 				Warn("sweep: writeStatus Warm failed; will retry next tick")
 			continue
