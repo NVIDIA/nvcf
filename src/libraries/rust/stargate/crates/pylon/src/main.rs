@@ -119,7 +119,7 @@ struct Args {
     /// Maximum concurrent requests used during calibration
     #[arg(long, default_value_t = 4, value_name = "N")]
     calibration_max_concurrency: usize,
-    /// Timeout for canary requests in milliseconds. An active canary that times out while the upstream completes other requests does not mark the model unavailable
+    /// Timeout for canary requests in milliseconds. An active canary that times out while other requests make progress does not mark the model unavailable
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     bringup_canary_timeout_ms: u64,
     /// Timeout for calibration requests in milliseconds
