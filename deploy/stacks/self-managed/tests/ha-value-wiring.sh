@@ -166,6 +166,12 @@ grep -A3 "disruptionBudget:" "$work_dir/openbao-on.yaml" | grep -q "maxUnavailab
   fail "openbao: expected server.ha.disruptionBudget maxUnavailable=1 when highAvailability.mode=preferred"
 awk '/^openbao:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/openbao-on.yaml" | grep -q "topology.kubernetes.io/zone" ||
   fail "openbao: expected Tier-2 zone spread when highAvailability.mode=preferred"
+# The agent injector shares instance=openbao-server; placement must select servers only.
+openbao_block="$(awk '/^openbao:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/openbao-on.yaml")"
+grep -q "key: component" <<<"$openbao_block" ||
+  fail "openbao: anti-affinity must also match component=server"
+grep -Eq '^ *component: "?server"?$' <<<"$openbao_block" ||
+  fail "openbao: zone spread must also match component=server"
 
 render_chart_values nats "$work_dir/nats-on.yaml" "$deps" || fail "render nats (preferred)"
 grep -A5 "cluster:" "$work_dir/nats-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||
@@ -182,6 +188,12 @@ grep -q "maxUnavailable: 1" <<<"$nats_pdb" ||
 if grep -q "minAvailable" <<<"$nats_pdb"; then
   fail "nats: podDisruptionBudget must not set minAvailable; upstream already sets maxUnavailable"
 fi
+# nats-box shares instance=nats; placement must select the server Pods only.
+nats_block="$(awk '/^nats:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/nats-on.yaml")"
+grep -q "key: app.kubernetes.io/component" <<<"$nats_block" ||
+  fail "nats: anti-affinity must also match app.kubernetes.io/component=nats"
+grep -Eq 'app.kubernetes.io/component: "?nats"?$' <<<"$nats_block" ||
+  fail "nats: zone spread must also match app.kubernetes.io/component=nats"
 
 # rateLimiter + nats-auth-callout scale to 2 replicas.
 render_chart_values ratelimiter "$work_dir/ratelimiter-on.yaml" "$core" --state-values-set rateLimiter.enabled=true ||
@@ -351,6 +363,20 @@ render_chart_values ratelimiter "$work_dir/ratelimiter-enforced.yaml" "$core" --
   fail "render ratelimiter (enforced)"
 awk '/^rateLimiter:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/ratelimiter-enforced.yaml" | grep -q "requiredDuringSchedulingIgnoredDuringExecution:" ||
   fail "ratelimiter: expected required anti-affinity when highAvailability.mode=enforced"
+
+# Hard placement for the quorum servers must not count their helper Pods.
+render_chart_values nats "$work_dir/nats-enforced.yaml" "$deps" || fail "render nats (enforced)"
+nats_enforced="$(awk '/^nats:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/nats-enforced.yaml")"
+grep -q "requiredDuringSchedulingIgnoredDuringExecution:" <<<"$nats_enforced" ||
+  fail "nats: expected required anti-affinity when highAvailability.mode=enforced"
+grep -Eq 'app.kubernetes.io/component: "?nats"?$' <<<"$nats_enforced" ||
+  fail "nats: hard zone spread must select the server Pods only"
+render_chart_values openbao-server "$work_dir/openbao-enforced.yaml" "$deps" || fail "render openbao (enforced)"
+openbao_enforced="$(awk '/^openbao:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/openbao-enforced.yaml")"
+grep -q "whenUnsatisfiable: DoNotSchedule" <<<"$openbao_enforced" ||
+  fail "openbao: expected hard zone spread when highAvailability.mode=enforced"
+grep -Eq '^ *component: "?server"?$' <<<"$openbao_enforced" ||
+  fail "openbao: hard zone spread must select the server Pods only"
 
 echo "== highAvailability sizing is a floor, not a replacement =="
 write_env <<'EOF'

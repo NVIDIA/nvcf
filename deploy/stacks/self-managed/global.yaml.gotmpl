@@ -124,6 +124,12 @@ requiredDuringSchedulingIgnoredDuringExecution:
           operator: In
           values:
             - {{ .instance | quote }}
+        {{- range $key, $value := .matchLabels }}
+        - key: {{ $key }}
+          operator: In
+          values:
+            - {{ $value | quote }}
+        {{- end }}
     topologyKey: kubernetes.io/hostname
 {{- else if eq .haMode "preferred" -}}
 preferredDuringSchedulingIgnoredDuringExecution:
@@ -135,6 +141,12 @@ preferredDuringSchedulingIgnoredDuringExecution:
             operator: In
             values:
               - {{ .instance | quote }}
+          {{- range $key, $value := .matchLabels }}
+          - key: {{ $key }}
+            operator: In
+            values:
+              - {{ $value | quote }}
+          {{- end }}
       topologyKey: kubernetes.io/hostname
 {{- end -}}
 {{- end -}}
@@ -148,6 +160,9 @@ preferredDuringSchedulingIgnoredDuringExecution:
   labelSelector:
     matchLabels:
       app.kubernetes.io/instance: {{ .instance | quote }}
+      {{- range $key, $value := .matchLabels }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
 {{- end -}}
 {{- end -}}
 
@@ -163,7 +178,7 @@ preferredDuringSchedulingIgnoredDuringExecution:
 {{- with index $byClass "all" -}}{{- toYaml . -}}{{- end -}}
 {{- else -}}
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- with include "nvcf.ha._generatedPodAntiAffinity" (dict "haMode" $haMode "instance" .instance) }}
+{{- with include "nvcf.ha._generatedPodAntiAffinity" (dict "haMode" $haMode "instance" .instance "matchLabels" (dig "matchLabels" dict .)) }}
 podAntiAffinity:
 {{- . | nindent 2 }}
 {{- end -}}
@@ -180,7 +195,7 @@ podAntiAffinity:
 {{- with index $byClass "all" -}}{{- toYaml . -}}{{- end -}}
 {{- else -}}
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- include "nvcf.ha._generatedTopologySpread" (dict "haMode" $haMode "instance" .instance) -}}
+{{- include "nvcf.ha._generatedTopologySpread" (dict "haMode" $haMode "instance" .instance "matchLabels" (dig "matchLabels" dict .)) -}}
 {{- end -}}
 {{- end -}}
 
@@ -398,12 +413,13 @@ openbao:
     podDisruptionBudget:
       minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
-    {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "openbao-server" "class" "vault") }}
+    {{- /* The agent injector shares the release's instance label; select server Pods only. */}}
+    {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "openbao-server" "class" "vault" "matchLabels" (dict "component" "server")) }}
     # String form: OpenBao tpl-renders server.affinity.
     affinity: |
       {{- . | nindent 6 }}
     {{- end }}
-    {{- with include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "openbao-server" "class" "vault") }}
+    {{- with include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "openbao-server" "class" "vault" "matchLabels" (dict "component" "server")) }}
     # String form: OpenBao tpl-renders server.topologySpreadConstraints.
     topologySpreadConstraints: |
       {{- . | nindent 6 }}
@@ -482,8 +498,10 @@ nats:
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
-  {{- $natsAffinity := include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
-  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
+  {{- /* nats-box shares the release's instance label; select server Pods only. */}}
+  {{- $natsServers := dict "app.kubernetes.io/component" "nats" -}}
+  {{- $natsAffinity := include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
+  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
   {{- if or $natsNs $natsTol $natsAffinity $natsTopoSpread }}
   podTemplate:
     merge:
