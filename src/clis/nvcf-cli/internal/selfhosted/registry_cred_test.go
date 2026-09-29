@@ -545,3 +545,30 @@ func TestEnumerateRegistries_RejectedImageRegistryDoesNotSuppressFallback(t *tes
 	}
 	assert.Contains(t, names, ngcRegistry)
 }
+
+// A critical registry whose /v2/ answers 200 lets anyone in, so a configured
+// credential cannot be checked there. The result says so instead of
+// "credentials valid", and the check still passes.
+func TestProbeRegistryCredential_CriticalAnonymousIsNotVerified(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	origTransport := http.DefaultTransport
+	http.DefaultTransport = srv.Client().Transport
+	t.Cleanup(func() { http.DefaultTransport = origTransport })
+	host := strings.TrimPrefix(srv.URL, "https://")
+	dockerHome(t, inlineDockerConfig(t, host, "u", "p", ""))
+
+	err := probeRegistryCredential(context.Background(), host, "", true)
+	var notVerified errRegistryCredentialsNotVerified
+	require.ErrorAs(t, err, &notVerified)
+
+	r := registryCredentialCheck(func(ctx context.Context, reg, repo string, critical bool) error {
+		return probeRegistryCredential(ctx, reg, repo, critical)
+	}, RegistryEntry{Registry: host, Critical: true}).Run(context.Background())
+	assert.True(t, r.Passed)
+	assert.NotContains(t, r.Message, "credentials valid")
+	assert.Contains(t, r.Message, "not verified")
+}

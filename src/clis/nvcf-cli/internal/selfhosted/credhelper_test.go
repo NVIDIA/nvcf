@@ -18,6 +18,7 @@ limitations under the License.
 package selfhosted
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,6 +42,21 @@ func TestSelectAuthChallenge(t *testing.T) {
 // dockerHome writes ~/.docker/config.json under a temporary HOME and puts a
 // fake docker-credential-<name> for each helper on PATH, each answering with
 // its own secret.
+// inlineDockerConfig builds a config.json with one inline credential at run
+// time. A literal auths blob trips secret scanners even with fake values.
+func inlineDockerConfig(t *testing.T, registry, user, pass, credsStore string) string {
+	t.Helper()
+	cfg := map[string]any{"auths": map[string]any{
+		registry: map[string]string{"username": user, "password": pass},
+	}}
+	if credsStore != "" {
+		cfg["credsStore"] = credsStore
+	}
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	return string(b)
+}
+
 func dockerHome(t *testing.T, config string, helpers ...string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -80,13 +96,61 @@ func TestCredsFromDockerConfig_CredHelpersBeatCredsStore(t *testing.T) {
 	assert.Equal(t, "u-ngc", u)
 }
 
-// Inline credentials are still read without running any helper.
-func TestCredsFromDockerConfig_InlineAuthNeedsNoHelper(t *testing.T) {
-	dockerHome(t, `{"auths":{"nvcr.io":{"username":"x","password":"y"}},"credsStore":"missing"}`)
+// Inline credentials are read when no store is configured.
+func TestCredsFromDockerConfig_InlineAuthWithoutAStore(t *testing.T) {
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "x", "y", ""))
 	u, p, ok := credsFromDockerConfig("nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "x", u)
 	assert.Equal(t, "y", p)
+}
+
+// With a store configured docker never reads an inline password, so a stale
+// one left in the file must not win over the store.
+func TestCredsFromDockerConfig_StoreBeatsStaleInlineAuth(t *testing.T) {
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "old", "stale", "store"), "store")
+	u, p, ok := credsFromDockerConfig("nvcr.io")
+	require.True(t, ok)
+	assert.Equal(t, "u-store", u)
+	assert.Equal(t, "s-store", p)
+}
+
+// Docker Hub logins live under the legacy index key, whatever host name the
+// image uses.
+func TestCredsFromDockerConfig_DockerHubKey(t *testing.T) {
+	dockerHome(t, inlineDockerConfig(t, "https://index.docker.io/v1/", "hub", "pw", ""))
+	for _, host := range []string{"docker.io", "index.docker.io", "registry-1.docker.io"} {
+		u, _, ok := credsFromDockerConfig(host)
+		require.True(t, ok, host)
+		assert.Equal(t, "hub", u)
+	}
+}
+
+// The timeout holds even when the helper leaves a child holding stdout open.
+func TestCredsFromHelper_TimeoutIsEnforced(t *testing.T) {
+	dockerHome(t, `{"credsStore":"hang"}`)
+	bin := t.TempDir()
+	script := "#!/bin/sh\nsleep 30 &\nsleep 30\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker-credential-hang"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	credentialHelperTimeout = 500 * time.Millisecond
+
+	start := time.Now()
+	_, _, ok := credsFromDockerConfig("nvcr.io")
+	assert.False(t, ok)
+	assert.Less(t, time.Since(start), 10*time.Second, "the helper call must not outlive its timeout by the child's lifetime")
+}
+
+// A helper that floods stdout is refused rather than buffered without bound.
+func TestCredsFromHelper_OutputIsCapped(t *testing.T) {
+	dockerHome(t, `{"credsStore":"flood"}`)
+	bin := t.TempDir()
+	// Valid JSON padded past the cap, so only the cap can refuse it.
+	script := "#!/bin/sh\nprintf '{\"Username\":\"u\",\"Secret\":\"s\"}'\nhead -c 200000 /dev/zero | tr '\\0' ' '\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker-credential-flood"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_, _, ok := credsFromDockerConfig("nvcr.io")
+	assert.False(t, ok)
 }
 
 // The helper name comes from a file; anything that is not a plain helper
@@ -96,4 +160,12 @@ func TestCredsFromDockerConfig_RefusesUnsafeHelperName(t *testing.T) {
 	dockerHome(t, `{"credsStore":"bad name"}`, "bad name")
 	_, _, ok := credsFromDockerConfig("nvcr.io")
 	assert.False(t, ok)
+}
+
+// Several challenges can share one header, comma-separated.
+func TestSelectAuthChallenge_JoinedInOneHeader(t *testing.T) {
+	got := selectAuthChallenge([]string{`Negotiate, Bearer realm="https://auth.example/token",service="r"`})
+	assert.Equal(t, `Bearer realm="https://auth.example/token",service="r"`, got)
+	assert.Equal(t, `Basic realm="bearer thing"`, selectAuthChallenge([]string{`Basic realm="bearer thing"`}),
+		"a quoted word is not a challenge")
 }

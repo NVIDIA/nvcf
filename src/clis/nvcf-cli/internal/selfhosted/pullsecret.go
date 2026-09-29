@@ -204,7 +204,7 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 				// deleted by its own run's sweep mid-pull, which the kubelet
 				// reports as FailedToRetrieveImagePullSecret. A --no-cleanup
 				// Secret would otherwise be adopted by every later run.
-				if hasValidatorManagedLabels(s.Labels) {
+				if isAnyValidatorSecret(&s) {
 					continue
 				}
 				return s.Name, nil
@@ -326,6 +326,17 @@ func writeDockerConfigSecret(
 // path is create-only rather than adopt-or-update.
 func isManagedByValidatorCLI(s *corev1.Secret) bool {
 	return hasValidatorManagedLabels(s.Labels)
+}
+
+// isAnyValidatorSecret reports whether a Secret was minted by any version of
+// this CLI's validator, including released ones that label with
+// managed-by=nvcf-cli and use the bare nvcf-preflight-pull-secret name. Such a
+// Secret belongs to another run: its CLI deletes it on exit, possibly while
+// this run's pod is still pulling, and a stale one would be reused forever.
+func isAnyValidatorSecret(s *corev1.Secret) bool {
+	return hasValidatorManagedLabels(s.Labels) ||
+		s.Labels["app.kubernetes.io/name"] == clusterValidatorAppLabel ||
+		strings.HasPrefix(s.Name, validatorPullSecretName)
 }
 
 // hasValidatorManagedLabels reports whether an object carries the labels this

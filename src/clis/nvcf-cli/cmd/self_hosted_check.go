@@ -22,8 +22,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -186,7 +188,13 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			outerTimeout += waitDur
 		}
 	}
-	ctx, cancel := context.WithTimeout(c.Context(), outerTimeout)
+	// Catch Ctrl-C and SIGTERM so an interrupted run unwinds through its
+	// deferred cleanup. Without this the process exits on the signal and the
+	// validator's cluster-wide ClusterRole, bound to a ServiceAccount in
+	// default, stays behind until a later check's orphan sweep.
+	sigCtx, stop := signal.NotifyContext(c.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(sigCtx, outerTimeout)
 	defer cancel()
 
 	// Legacy --output=json: warn and treat as --json.

@@ -18,6 +18,7 @@ limitations under the License.
 package selfhosted
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -228,7 +229,9 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	// or is an NGC auth domain when the registry is NGC-hosted (NGC delegates
 	// token issuance to authn.nvidia.com and other nvidia.com sub-domains).
 	realmHost := strings.ToLower(u.Hostname())
-	regHost := strings.ToLower(registry)
+	// Brackets off, to match u.Hostname(): "[fd00::1]" with no port fails
+	// SplitHostPort and would otherwise reject its own token server.
+	regHost := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(registry, "["), "]"))
 	if h, _, err := net.SplitHostPort(registry); err == nil {
 		regHost = strings.ToLower(h)
 	}
@@ -543,18 +546,21 @@ func credsFromDockerConfig(registry string) (string, string, bool) {
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return "", "", false
 	}
-	// A per-registry helper wins over the global store, as in docker itself.
-	// Docker Desktop keeps every login in credsStore and leaves only an empty
-	// auths entry, so without this a working `docker login` is invisible.
-	helper := doc.CredHelpers[registry]
+	// Docker's order: a per-registry credHelpers entry, else credsStore, and
+	// only with neither configured the inline auths entry. With a store
+	// configured docker never reads an inline password, so an old one left in
+	// the file must not win here either: that sent a stale key while `docker
+	// pull` worked.
+	key := dockerConfigKey(registry)
+	helper := doc.CredHelpers[key]
 	if helper == "" {
 		helper = doc.CredsStore
 	}
-	entry, ok := doc.Auths[registry]
-	if !ok || (entry.Auth == "" && entry.Username == "") {
-		if helper != "" {
-			return credsFromHelper(helper, registry)
-		}
+	if helper != "" {
+		return credsFromHelper(helper, key)
+	}
+	entry, ok := doc.Auths[key]
+	if !ok {
 		return "", "", false
 	}
 	if entry.Username != "" && entry.Password != "" {
@@ -572,6 +578,20 @@ func credsFromDockerConfig(registry string) (string, string, bool) {
 		return string(raw[:colon]), string(raw[colon+1:]), true
 	}
 	return "", "", false
+}
+
+// dockerHubConfigKey is the key docker stores Docker Hub logins under.
+const dockerHubConfigKey = "https://index.docker.io/v1/"
+
+// dockerConfigKey maps a registry host to the key docker uses for it in
+// config.json. Docker Hub's hosts all share one legacy key; every other
+// registry is keyed by its host.
+func dockerConfigKey(registry string) string {
+	switch registry {
+	case "docker.io", "index.docker.io", "registry-1.docker.io":
+		return dockerHubConfigKey
+	}
+	return registry
 }
 
 // credentialHelperName matches the docker-credential-<name> suffixes docker
@@ -594,18 +614,44 @@ func credsFromHelper(helper, registry string) (string, string, bool) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker-credential-"+helper, "get")
 	cmd.Stdin = strings.NewReader(registry)
-	out, err := cmd.Output()
-	if err != nil {
+	// Without WaitDelay a helper that leaves a child holding stdout open keeps
+	// Output waiting past the timeout. The output cap keeps a misbehaving
+	// helper from filling memory; a credential is a few hundred bytes.
+	cmd.WaitDelay = time.Second
+	var out cappedBuffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil || out.overflow {
 		return "", "", false
 	}
 	var cred struct {
 		Username string `json:"Username"`
 		Secret   string `json:"Secret"`
 	}
-	if err := json.Unmarshal(out, &cred); err != nil || cred.Secret == "" {
+	if err := json.Unmarshal(out.buf.Bytes(), &cred); err != nil || cred.Secret == "" {
 		return "", "", false
 	}
 	return cred.Username, cred.Secret, true
+}
+
+// credentialHelperOutputLimit caps what a credential helper may write.
+const credentialHelperOutputLimit = 64 << 10
+
+// cappedBuffer keeps at most credentialHelperOutputLimit bytes and records
+// whether more were written.
+type cappedBuffer struct {
+	buf      bytes.Buffer
+	overflow bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := credentialHelperOutputLimit - c.buf.Len(); len(p) > room {
+		c.overflow = true
+		if room > 0 {
+			c.buf.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	return c.buf.Write(p)
 }
 
 // pickBestValidatorTag filters to recognized validator tags and returns

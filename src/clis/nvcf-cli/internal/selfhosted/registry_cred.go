@@ -115,12 +115,16 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 			}
 		}
 		// Anonymous read works. For a critical registry that is still not
-		// enough: the install pulls private repositories, so fall through to
-		// the credential requirement below rather than returning early.
+		// enough: the install pulls private repositories, so a credential must
+		// exist. It cannot be verified here, since /v2/ accepts anyone, so say
+		// so rather than report "credentials valid".
 		if !critical {
 			return nil
 		}
-		return requireConfiguredCredentials(registry)
+		if err := requireConfiguredCredentials(registry); err != nil {
+			return err
+		}
+		return errRegistryCredentialsNotVerified{registry: registry}
 	case http.StatusUnauthorized:
 		// Auth required - proceed with token exchange.
 	default:
@@ -167,6 +171,15 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	return nil
 }
 
+// errRegistryCredentialsNotVerified marks a registry that allows anonymous
+// access to /v2/: a local credential exists, but nothing here proves the
+// registry accepts it. Reported as a pass that says so.
+type errRegistryCredentialsNotVerified struct{ registry string }
+
+func (e errRegistryCredentialsNotVerified) Error() string {
+	return "credentials configured; not verified, because the registry allows anonymous access to /v2/"
+}
+
 // errRegistryProbeSkipped marks a registry this probe cannot speak to. The
 // caller reports it as a skip rather than a credential failure.
 type errRegistryProbeSkipped struct{ reason string }
@@ -182,11 +195,33 @@ func selectAuthChallenge(challenges []string) string {
 		if strings.EqualFold(authChallengeScheme(c), "Bearer") {
 			return c
 		}
+		// Several challenges can also share one header, comma-separated:
+		// `Negotiate, Bearer realm="..."`. Take the Bearer one from there.
+		if i := bearerChallengeStart(c); i > 0 {
+			return c[i:]
+		}
 	}
 	if len(challenges) > 0 {
 		return challenges[0]
 	}
 	return ""
+}
+
+// bearerChallengeStart returns where a Bearer challenge begins after a comma
+// in a joined WWW-Authenticate value, or -1.
+func bearerChallengeStart(header string) int {
+	lower := strings.ToLower(header)
+	for from := 0; ; {
+		j := strings.Index(lower[from:], "bearer ")
+		if j < 0 {
+			return -1
+		}
+		j += from
+		if j > 0 && strings.HasSuffix(strings.TrimRight(lower[:j], " "), ",") {
+			return j
+		}
+		from = j + 1
+	}
 }
 
 // authChallengeScheme returns the auth scheme named by a WWW-Authenticate

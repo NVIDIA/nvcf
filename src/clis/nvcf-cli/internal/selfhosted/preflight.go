@@ -665,10 +665,11 @@ func clusterValidatorCheck(
 			// the compute-plane GPU checks, which fail on a CPU-only control
 			// plane. The latest tag can be such an image until a release with
 			// role support is published, so report it as the image being too
-			// old rather than as the cluster failing. An empty transcript
-			// proves nothing, so it is left to the normal handling.
-			if role == validatorRoleControlPlane && result.Logs != "" &&
-				!strings.Contains(result.Logs, validatorRoleMarker+validatorRoleControlPlane) {
+			// old rather than as the cluster failing. That needs positive
+			// evidence of the legacy check set, not just a missing role line: a
+			// role-aware image that fails before printing it (say, building its
+			// Kubernetes client) must still fail the run.
+			if role == validatorRoleControlPlane && isLegacyComputePlaneTranscript(result.Logs) {
 				r.Severity = SeverityWarning
 				r.Message = "cluster-validator image does not support the control-plane checks (it ran the " +
 					"compute-plane set); use an image from an NVCA release that supports validator roles, " +
@@ -692,6 +693,17 @@ func clusterValidatorCheck(
 // the check set it runs. Must match RoleMarker in
 // nvca/internal/clustervalidator/validator.go.
 const validatorRoleMarker = "Validator role: "
+
+// legacyComputePlaneHeader is a section header only the compute-plane check
+// set prints. A validator that predates roles always runs that set.
+const legacyComputePlaneHeader = "GPU Resources"
+
+// isLegacyComputePlaneTranscript reports whether logs come from a validator
+// that ignored the requested control-plane role: no role line, and the
+// compute-plane check set's output instead.
+func isLegacyComputePlaneTranscript(logs string) bool {
+	return !strings.Contains(logs, validatorRoleMarker) && strings.Contains(logs, legacyComputePlaneHeader)
+}
 
 // validatorCleanupHint is the command that removes everything one --no-cleanup
 // run kept. Everything it created carries the run label, so one selector
@@ -754,7 +766,13 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 				// credential. Neither may block the run.
 				var skipped errRegistryProbeSkipped
 				var unverified errRegistryCredentialsUnverified
+				var notVerified errRegistryCredentialsNotVerified
 				switch {
+				case errors.As(err, &notVerified):
+					r.Passed = true
+					r.Severity = SeverityInfo
+					r.Message = entry.Registry + ": " + err.Error()
+					return r
 				case errors.As(err, &skipped):
 					r.Passed = true
 					r.Severity = SeverityInfo

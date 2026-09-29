@@ -372,8 +372,9 @@ func TestExchangeBearerToken_RejectsAttackerRealm(t *testing.T) {
 	//
 	// Credentials have to be configured for the assertion to mean anything: if
 	// none were present, no request could carry an Authorization header whether
-	// the control works or not.
-	t.Setenv("NGC_API_KEY", "test-key")
+	// the control works or not. NGC_API_KEY is not one: it only applies to NGC
+	// registries, so it left this assertion vacuous.
+	dockerHome(t, inlineDockerConfig(t, "harbor.company.internal", "u", "p", ""))
 
 	rec := &recordingTransport{inner: http.DefaultTransport}
 	client := &http.Client{Transport: rec}
@@ -396,7 +397,7 @@ func TestExchangeBearerToken_RejectsAttackerRealm(t *testing.T) {
 // u.Host (":443") so it clears the relative-realm guard, but Hostname() is "",
 // and an empty trustedRealmDelegations lookup would compare equal to it.
 func TestExchangeBearerToken_RejectsEmptyRealmHost(t *testing.T) {
-	t.Setenv("NGC_API_KEY", "test-key")
+	dockerHome(t, inlineDockerConfig(t, "harbor.company.internal", "u", "p", ""))
 	rec := &recordingTransport{inner: http.DefaultTransport}
 	client := &http.Client{Transport: rec}
 
@@ -499,4 +500,32 @@ func TestExchangeNGCBearerToken_RejectsHostConfusion(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, rec.withAuth, "the NGC API key must not be sent to a confused host")
 	assert.Empty(t, rec.requests, "no request may be issued at all")
+}
+
+// A bracketed IPv6 registry on the default port must accept its own token
+// server: u.Hostname() drops the brackets, so the registry side must too.
+func TestExchangeBearerToken_AcceptsBracketedIPv6Registry(t *testing.T) {
+	dockerHome(t, inlineDockerConfig(t, "[fd00::1]", "u", "p", ""))
+	rec := &recordingTransport{inner: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"token":"t"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	tok, err := exchangeBearerToken(context.Background(), &http.Client{Transport: rec},
+		"[fd00::1]", "repo", `Bearer realm="https://[fd00::1]/token",service="r"`)
+	require.NoError(t, err)
+	assert.Equal(t, "t", tok)
+}
+
+// A redirect may not downgrade to cleartext: Go keeps the Authorization header
+// across a same-host redirect whatever the scheme.
+func TestRefuseInsecureRedirect(t *testing.T) {
+	plain, err := http.NewRequest(http.MethodGet, "http://reg.example.com/token", nil)
+	require.NoError(t, err)
+	assert.Error(t, refuseInsecureRedirect(plain, nil))
+	secure, err := http.NewRequest(http.MethodGet, "https://reg.example.com/token", nil)
+	require.NoError(t, err)
+	assert.NoError(t, refuseInsecureRedirect(secure, nil))
 }

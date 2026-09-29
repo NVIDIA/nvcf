@@ -371,13 +371,43 @@ func TestClusterValidatorCheck_PreRoleImageIsAWarning(t *testing.T) {
 		return clusterValidatorCheck(cv, "", "img:1", "", false, validatorRoleControlPlane, nil, nil).Run(context.Background())
 	}
 
-	old := run("Starting NVCF cluster validation\nGPU Resources: none found\n", false)
+	old := run("Starting NVCF cluster validation\n=== GPU Resources ===\nno GPUs found\n", false)
 	assert.Equal(t, SeverityWarning, old.Severity)
 	assert.Contains(t, old.Message, "does not support the control-plane checks")
+
+	// A role-aware image that fails before printing its role line prints no
+	// GPU section either, so its failure must stand.
+	early := run("level=fatal msg=\"Failed to create Kubernetes client\"\n", false)
+	assert.Equal(t, SeverityError, early.Severity, "a missing role line alone is not proof of an old image")
 
 	current := run("Starting NVCF cluster validation\nValidator role: control-plane\nTier-1: failed\n", false)
 	assert.Equal(t, SeverityError, current.Severity, "a role-aware image's failure is a real failure")
 
 	unread := run("", false)
 	assert.Equal(t, SeverityError, unread.Severity, "an empty transcript proves nothing about the image")
+}
+
+// An interrupt cancels the caller's context. The operator abandoned the run,
+// so the Job is stopped and everything reclaimed now, rather than leaving a
+// cluster-wide ClusterRole bound in default until a later orphan sweep.
+func TestRunClusterValidator_InterruptLeavesNothingBehind(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "key")
+	client := lifecycleClient(running, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	res := runClusterValidator(ctx, client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorControlPlaneRole, nil, nil)
+	require.Error(t, res.Err)
+	assert.Empty(t, leftovers(t, client, res.RunID))
+	deleted := false
+	for _, a := range client.Actions() {
+		if a.GetVerb() == "delete" && a.GetResource().Resource == "jobs" {
+			deleted = true
+		}
+	}
+	assert.True(t, deleted, "the Job must be stopped so its pod stops using the RBAC")
 }

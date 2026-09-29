@@ -287,6 +287,15 @@ func runClusterValidator(
 		deleteValidatorJob(context.Background(), client, jobName)
 		podMayBeRunning = false
 	}
+	// An interrupt (Ctrl-C, SIGTERM) cancels the caller's context. The
+	// operator has abandoned the run, so stop the pod and reclaim everything
+	// now rather than leave cluster-wide RBAC for a later orphan sweep. A
+	// timeout is different: it leaves ctx itself live, and a pod that may
+	// still be running keeps its RBAC.
+	if errors.Is(ctx.Err(), context.Canceled) && !noCleanup {
+		deleteValidatorJob(context.Background(), client, jobName)
+		podMayBeRunning = false
+	}
 
 	if waitErr != nil {
 		return ClusterValidatorResult{

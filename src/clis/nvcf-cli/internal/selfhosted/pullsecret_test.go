@@ -547,3 +547,28 @@ func TestAutoCreatePullSecretFromEnv_MintsUnderTheRunScopedName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, got, "a1b2c3d4e5", "the minted secret must be run-scoped")
 }
+
+// A released CLI's pull Secret carries managed-by=nvcf-cli and the bare name.
+// It is that CLI's to delete, so adopting it breaks a pull mid-flight or
+// reuses a stale key forever.
+func TestScanAndMirrorPullSecret_NeverAdoptsAReleasedCLIsSecret(t *testing.T) {
+	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
+	legacy := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretName,
+			Namespace: clusterValidatorNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       clusterValidatorAppLabel,
+				"app.kubernetes.io/managed-by": "nvcf-cli",
+				"app.kubernetes.io/component":  "preflight",
+			},
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	}
+	client := fake.NewSimpleClientset(legacy)
+	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
+		clusterValidatorComputePlaneRole, "runid", false)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
