@@ -19,6 +19,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -61,19 +62,6 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			requestStart := time.Now()
 
 			requestID := requestIDHeader(gc.Request().Header)
-
-			// Enforce the body limit before anything buffers the body, including
-			// the routing-key lookup below. A rejected request still gets the
-			// span, metrics, and completion log.
-			bodyErr := bufferRequestBody(gc.Request(), maxRequestBodyBytes)
-			routingKey := ""
-			if bodyErr == nil {
-				routingKey = requestRoutingKey(gc.Request())
-			}
-			targetRegion := targetRegionHeader(gc.Request().Header)
-			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
-			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
-
 			gc.store.Set(contextKeyRequestID, requestID)
 
 			parentCtx := otel.GetTextMapPropagator().Extract(
@@ -85,6 +73,18 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				parentCtx,
 				gc.Request().Method+" "+routePath,
 			)
+
+			// Enforce the body limit inside the span and before anything else
+			// buffers the body, including the routing-key lookup. A rejected
+			// request still gets the span, metrics, and completion log.
+			bodyErr := bufferRequestBody(gc.Request(), maxRequestBodyBytes)
+			routingKey := ""
+			if bodyErr == nil {
+				routingKey = requestRoutingKey(gc.Request())
+			}
+			targetRegion := targetRegionHeader(gc.Request().Header)
+			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
+			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
 
 			span.SetAttributes(
 				attribute.String("http.request.method", gc.Request().Method),
@@ -101,6 +101,7 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			ctx = telemetry.LoggingSpanContext(ctx, logger)
 			gc.SetUserContext(ctx)
 			gc.SetRequest(gc.Request().WithContext(ctx))
+			logRequestBodyReadFailure(ctx, bodyErr)
 			gc.Response().Header().Set(HeaderRequestID, requestID)
 
 			metricAttrs := []attribute.KeyValue{
@@ -129,6 +130,20 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			return err
 		}
 	}
+}
+
+// logRequestBodyReadFailure logs the internal cause of a body read failure,
+// which the client response omits. Oversized bodies carry no internal cause
+// and are covered by the completion log.
+func logRequestBodyReadFailure(ctx context.Context, err error) {
+	var httpErr *echo.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Internal == nil {
+		return
+	}
+	telemetry.Logger(ctx).Warn().
+		Err(httpErr.Internal).
+		Int("status", httpErr.Code).
+		Msg("failed to read request body")
 }
 
 func requestIDHeader(headers http.Header) string {

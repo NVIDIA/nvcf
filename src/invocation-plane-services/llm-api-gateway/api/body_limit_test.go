@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -25,14 +26,22 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	echo "github.com/labstack/echo/v4"
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 func newBodyLimitAPI(limit int64, handlerBody *string) *echo.Echo {
@@ -190,4 +199,68 @@ func TestContextMiddlewareStopsReadingOversizedBodies(t *testing.T) {
 		require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 		require.LessOrEqual(t, body.read, 9, "unknown length = %v", unknownLength)
 	}
+}
+
+type slowReader struct {
+	delay  time.Duration
+	reader io.Reader
+	slept  bool
+}
+
+func (r *slowReader) Read(p []byte) (int, error) {
+	if !r.slept {
+		time.Sleep(r.delay)
+		r.slept = true
+	}
+	return r.reader.Read(p)
+}
+
+func TestContextMiddlewareSpanCoversBodyRead(t *testing.T) {
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
+	t.Cleanup(func() { _ = tracerProvider.Shutdown(context.Background()) })
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = sync.OnceValue(func() trace.Tracer { return tracerProvider.Tracer("test") })
+	t.Cleanup(func() { telemetry.Tracer = oldTracer })
+
+	handlerBody := "not called"
+	e := newBodyLimitAPI(1024, &handlerBody)
+
+	const delay = 50 * time.Millisecond
+	req := httptest.NewRequest(http.MethodPost, "/", &slowReader{delay: delay, reader: strings.NewReader("12345678")})
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	spans := spanRecorder.Ended()
+	require.Len(t, spans, 1)
+	require.GreaterOrEqual(t, spans[0].EndTime().Sub(spans[0].StartTime()), delay)
+}
+
+func TestContextMiddlewareLogsRequestBodyReadFailureCause(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := zlog.Logger
+	zlog.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { zlog.Logger = oldLogger })
+
+	handlerBody := "not called"
+	e := newBodyLimitAPI(8, &handlerBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/", failingReader{})
+	req.ContentLength = -1
+	e.ServeHTTP(httptest.NewRecorder(), req)
+
+	require.Contains(t, logs.String(), `"level":"warn"`)
+	require.Contains(t, logs.String(), `"message":"failed to read request body"`)
+	require.Contains(t, logs.String(), "i/o timeout")
+	require.Contains(t, logs.String(), `"request_id"`)
+
+	logs.Reset()
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader("123456789"))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	require.NotContains(t, logs.String(), "failed to read request body",
+		"oversized bodies are not logged as read failures")
 }
