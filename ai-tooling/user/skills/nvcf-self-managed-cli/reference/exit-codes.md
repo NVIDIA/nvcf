@@ -6,7 +6,7 @@ Stable across subcommands. Use these to drive agent retry / surfacing logic.
 |---|---|---|
 | `0` | Success | All checks passed; install completed; deployment ACTIVE |
 | `1` | Generic error | Helm render failed; network unreachable; file not found; YAML parse error |
-| `2` | Pre-flight check failed | Gateway API CRDs missing; kubectl not on PATH; default StorageClass absent |
+| `2` | Pre-flight check failed | A `check` result at error severity: Gateway API CRDs missing; kubectl not on PATH; default StorageClass absent. Warning-severity results, such as a validator that could not run, exit `0` |
 | `3` | Admin auth failed | No token + `--non-interactive` set; ICMS rejected JWT; init endpoint unreachable |
 | `5` | Manifest apply or `--wait` timed out | Helm install timeout; check polled but didn't pass before duration |
 | `130` | Cancelled by SIGINT/SIGTERM | User Ctrl-C; CI budget exceeded; pod evicted |
@@ -24,4 +24,4 @@ Stable across subcommands. Use these to drive agent retry / surfacing logic.
 
 ## Where to find more detail
 
-Every non-zero exit emits a structured `phase_failed` JSON event with `errCategory`, `errMessage`, `remediation` (array), `retryClass` (enum: `none|immediate|backoff|after_remediation|unknown`), `retryAfterSec` (int, optional), and `raw` (subprocess + HTTP + Kubernetes signal). Always consume these in `--json` mode rather than parsing English from stderr.
+`check` reports its outcome in one `final` event (`success`, `verdict`, `failedCount`) and never emits `phase_failed`; see `examples/ci-pipelines.md`. Every other non-zero exit emits a structured `phase_failed` JSON event with `errCategory`, `errMessage`, `remediation` (array), `retryClass` (enum: `none|immediate|backoff|after_remediation|unknown`), `retryAfterSec` (int, optional), and `raw` (subprocess + HTTP + Kubernetes signal). Always consume these in `--json` mode rather than parsing English from stderr.

@@ -24,7 +24,7 @@
 | `--control-plane-context CTX` | kubectl context for control plane (REQ-20) | current context |
 | `--compute-plane-context CTX` | kubectl context for compute plane (REQ-20) | current context |
 | `--icms-url URL` | Public ICMS URL; required when contexts differ | derived from `base_http_url` |
-| `--local-only` | `check --pre` only; skip all kubectl contact | `false` |
+| `--local-only` | `check` only; run the local-host checks and skip all kubectl contact, whatever scope flag is passed. The CLI prints a note saying so. Env: `NVCF_CLI_SELFHOSTED_LOCAL_ONLY` | `false` |
 
 ## `check`-specific
 
@@ -49,7 +49,8 @@ after the run, so the kubeconfig context needs permission to manage those.
 | Flag | Purpose | Default |
 |---|---|---|
 | `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. Unset everywhere skips the probe with a warning | - |
-| `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. `nvcr.io` is always probed. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | `nvcr.io` only |
+| `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry`, and `quay.io` for the cert-manager ACME solver unless the stack sets `certManager.acmesolver.image`. `nvcr.io` is probed, as non-critical, only when neither the image nor the stack names a registry. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | - |
+| `--cluster-validator-probe-image REF` | Image for the control-plane validator's node-to-node overlay probe. Needs `sh` and a busybox-style `nc`. Set a mirror for air-gapped clusters. Env: `NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE`; config key `cluster_validator_probe_image` | `busybox:1.36` from Docker Hub |
 | `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and copies it into `default` for the run. Failing that, and only for an image on an NGC registry, it mints one from `NGC_API_KEY` | auto-detect |
 | `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |
 | `--no-cleanup` | Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging. A later check reclaims them after 24 hours; the result prints the `kubectl delete` command that removes them now | `false` |
