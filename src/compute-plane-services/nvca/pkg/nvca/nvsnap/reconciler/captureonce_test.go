@@ -150,6 +150,40 @@ func TestTryClaimCapture(t *testing.T) {
 // the Capturing claim — without this a completed/failed capture would
 // leave captureOwner/leaseExpiry set and either pin the function or let
 // readStatus mis-report a stale owner.
+// A live lease held by a pod that no longer exists is stealable at once:
+// the owner died mid-capture (dev1 2026-09-28: the node agent restarted
+// under it and the pod was replaced) and nothing would release the claim
+// before the lease expired.
+func TestTryClaimCapture_DeadOwnerIsStealable(t *testing.T) {
+	ctx := context.Background()
+	fvID := "fv-dead"
+	now := time.Now()
+	lease := now.Add(50 * time.Minute)
+	dyn := newFakeDynamic(coldCFS(fvID))
+	if claimed, err := tryClaimCapture(ctx, dyn, fvID, "ns1/podA", lease, now); err != nil || !claimed {
+		t.Fatalf("podA claim: claimed=%v err=%v", claimed, err)
+	}
+	dead := func(context.Context, string) bool { return false }
+	alive := func(context.Context, string) bool { return true }
+	if claimed, _ := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podB", lease, now, alive); claimed {
+		t.Fatal("podB must not steal a live claim from a live owner")
+	}
+	if claimed, _ := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podB", lease, now, nil); claimed {
+		t.Fatal("unknown liveness (nil) must keep the claim")
+	}
+	claimed, err := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podB", lease, now, dead)
+	if err != nil || !claimed {
+		t.Fatalf("podB must steal the claim from a dead owner: claimed=%v err=%v", claimed, err)
+	}
+	cur, err := dyn.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := readStatus(cur); st.CaptureOwner != "ns1/podB" {
+		t.Errorf("owner after steal = %q, want ns1/podB", st.CaptureOwner)
+	}
+}
+
 func TestWriteStatusReleasesClaim(t *testing.T) {
 	const fvID = "fv-release"
 	ctx := context.Background()
@@ -203,6 +237,10 @@ func TestReconcileSkipsWhenCaptureInFlight(t *testing.T) {
 	// podA already holds a live Capturing claim on this fvID.
 	dyn := newFakeDynamic(capturingCFS(fvID, "ns1/podA", time.Now().Add(30*time.Minute)))
 	r := newTestReconciler(t, pod, srv, dyn)
+	// podA, the claim owner, is alive: the in-flight guard must hold.
+	if _, err := r.KubeClient.CoreV1().Pods("ns1").Create(context.Background(), inferencePod("podA", "ns1", fvID), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := r.Reconcile(context.Background(), pod); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -214,5 +252,31 @@ func TestReconcileSkipsWhenCaptureInFlight(t *testing.T) {
 	cur, _ := dyn.Resource(CFSResource).Get(context.Background(), fvID, metav1.GetOptions{})
 	if st := readStatus(cur); st.CaptureOwner != "ns1/podA" {
 		t.Errorf("claim owner = %q, want unchanged ns1/podA", st.CaptureOwner)
+	}
+}
+
+// Same scenario, but the claim owner no longer exists: the claim is dead
+// and podB must capture instead of waiting out the lease.
+func TestReconcileStealsClaimFromDeadOwner(t *testing.T) {
+	fvID := "fv-dead-owner"
+	posted := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/api/v1/checkpoints/lookup"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"matches": []any{}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/api/v1/checkpoints"):
+			posted++
+			w.WriteHeader(http.StatusInternalServerError) // stop the flow here; the claim is what is under test
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	pod := inferencePod("podB", "ns1", fvID)
+	dyn := newFakeDynamic(capturingCFS(fvID, "ns1/podA", time.Now().Add(30*time.Minute)))
+	r := newTestReconciler(t, pod, srv, dyn)
+	_ = r.Reconcile(context.Background(), pod)
+	if posted != 1 {
+		t.Fatalf("podB must take over a claim whose owner pod is gone; POSTs=%d", posted)
 	}
 }

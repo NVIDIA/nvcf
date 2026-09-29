@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -414,7 +415,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 	// buffer so losers skip immediately rather than each dwelling.
 	claimNow := time.Now()
 	owner := pod.Namespace + "/" + pod.Name
-	claimed, err := tryClaimCapture(ctx, r.DynClient, fvID, owner, claimNow.Add(r.CaptureLeaseTTL), claimNow)
+	claimed, err := tryClaimCaptureLive(ctx, r.DynClient, fvID, owner, claimNow.Add(r.CaptureLeaseTTL), claimNow, r.claimOwnerAlive)
 	if err != nil {
 		return fmt.Errorf("capture-once claim for %s: %w", fvID, err)
 	}
@@ -765,4 +766,22 @@ func (r *Reconciler) removeCheckpointOnWarm(ctx context.Context, pod *corev1.Pod
 		return err
 	}
 	return nil
+}
+
+// claimOwnerAlive reports whether the pod holding a capture claim still
+// exists and is not terminating. Errors other than NotFound count as alive:
+// a transient API failure must not let two pods capture at once.
+func (r *Reconciler) claimOwnerAlive(ctx context.Context, owner string) bool {
+	ns, name, ok := strings.Cut(owner, "/")
+	if !ok || r.KubeClient == nil {
+		return true
+	}
+	p, err := r.KubeClient.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return !apierrors.IsNotFound(err)
+	}
+	if p.DeletionTimestamp != nil {
+		return false
+	}
+	return p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed
 }

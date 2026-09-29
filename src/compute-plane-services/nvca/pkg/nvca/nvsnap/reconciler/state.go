@@ -331,6 +331,22 @@ func writeStatus(ctx context.Context, dc dynamic.Interface, fvID string, upd sta
 // wall-clock deadline to stamp; now is injected for deterministic
 // tests.
 func tryClaimCapture(ctx context.Context, dc dynamic.Interface, fvID, owner string, leaseExpiry, now time.Time) (bool, error) {
+	return tryClaimCaptureLive(ctx, dc, fvID, owner, leaseExpiry, now, nil)
+}
+
+// OwnerAliveFunc reports whether the pod named "namespace/name" that holds a
+// capture claim still exists and is not terminating. nil means "unknown",
+// which keeps the claim.
+type OwnerAliveFunc func(ctx context.Context, owner string) bool
+
+// tryClaimCaptureLive is tryClaimCapture with a liveness check on the
+// current owner. A live lease normally protects an in-flight capture from a
+// second pioneer, but the lease outlives its owner: a pod that dies mid
+// capture (evicted, replaced by a redeploy, its node agent restarted under
+// it) leaves the version Capturing with nobody working on it until the
+// lease expires, roughly 50 minutes. If the owner is gone, the claim is
+// stealable at once.
+func tryClaimCaptureLive(ctx context.Context, dc dynamic.Interface, fvID, owner string, leaseExpiry, now time.Time, ownerAlive OwnerAliveFunc) (bool, error) {
 	cur, err := dc.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
 	if err != nil {
 		return false, fmt.Errorf("get NvSnapFunctionState %s: %w", fvID, err)
@@ -343,9 +359,13 @@ func tryClaimCapture(ctx context.Context, dc dynamic.Interface, fvID, owner stri
 	case nvsnapv1alpha1.LocalCacheStateCapturing:
 		leaseLive := st.CaptureLeaseExpiry != nil && now.Before(st.CaptureLeaseExpiry.Time)
 		if leaseLive && st.CaptureOwner != owner {
-			return false, nil // another pod holds a live claim
+			if ownerAlive == nil || ownerAlive(ctx, st.CaptureOwner) {
+				return false, nil // another pod holds a live claim
+			}
+			// The owner is gone: nothing will finish or release this
+			// claim. Steal it now rather than at lease expiry.
 		}
-		// expired lease (steal) or our own claim (re-entrant) → fall through
+		// expired lease, dead owner (steal) or our own claim (re-entrant) → fall through
 	}
 
 	// Patch only the keys we manage; preserve checkpointHash/attemptCount/etc.
