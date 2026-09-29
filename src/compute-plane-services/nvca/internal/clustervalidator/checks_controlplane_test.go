@@ -918,9 +918,8 @@ func TestCheckTier2StatefulSets_HealthyPeerDoesNotMaskRollingOne(t *testing.T) {
 // Same shape for Tier-1: a ready Deployment does not certify one still rolling.
 // A mid-rollout Deployment that is still serving its full replica count hides
 // nothing, so it must not pin this critical row to UNKNOWN. rollingOut is not
-// self-limiting: a paused rollout, progressDeadlineSeconds=2147483647, and a
-// wedged controller all stay "rolling" forever without ever setting
-// ProgressDeadlineExceeded.
+// self-limiting: progressDeadlineSeconds=2147483647 and a wedged controller
+// both stay "rolling" forever without ever setting ProgressDeadlineExceeded.
 func TestCheckTier1Deployments_RollingAtFullReplicasStillPasses(t *testing.T) {
 	two := int32(2)
 	client := fake.NewSimpleClientset(
@@ -2088,4 +2087,45 @@ func TestDiscoverNVCFGateways_NoClientIsAnError(t *testing.T) {
 	got, err := discoverNVCFGateways(context.Background(), fake.NewSimpleClientset(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, got)
+}
+
+// A paused Deployment is not mid-rollout, so it is assessed at its current
+// readiness. Tolerating it as a rollout passed one at 0/3 on every run.
+func TestCheckTier1Deployments_PausedIsAssessedNotTolerated(t *testing.T) {
+	three := int32(3)
+	paused := func(ready int32) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 2},
+			Spec:       appsv1.DeploymentSpec{Replicas: &three, Paused: true},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration: 2, UpdatedReplicas: 0, ReadyReplicas: ready,
+			},
+		}
+	}
+
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(paused(0)), state)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "a paused Deployment with no ready pods is down")
+
+	state = &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(paused(3)), state)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "a paused Deployment at full readiness serves traffic")
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "rollout in progress")
+}
+
+// A 429 is not an RBAC denial, so the warning must not say it is.
+func TestCheckTier1Deployments_ListFailureIsNotCalledRBAC(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "deployments", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewTooManyRequestsError("slow down")
+	})
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	joined := strings.Join(state.Warnings, "; ")
+	assert.NotContains(t, joined, "RBAC denied")
+	assert.Contains(t, joined, "denied or failed")
 }

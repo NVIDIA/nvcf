@@ -2326,7 +2326,7 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 	deniedCount := 0
 	rollingCount := 0
 	// rollingUnderReplicated counts mid-rollout Deployments that are also
-	// below their target, which bounds the skip: a paused or sentinel-deadline
+	// below their target, which bounds the skip: a sentinel-deadline
 	// Deployment can stay "rolling" forever, but if it is still serving its
 	// full replica count there is nothing to report.
 	rollingUnderReplicated := 0
@@ -2376,8 +2376,12 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			// ObservedGeneration == Generation. ProgressDeadlineExceeded is the
 			// signal that separates "in flight" from "stuck", so a stalled
 			// rollout falls through to the under-replicated check below.
-			rollingOut := d.Status.ObservedGeneration < d.Generation ||
-				d.Status.UpdatedReplicas < want
+			// A paused Deployment is not rolling anywhere: the controller
+			// holds it at UpdatedReplicas < want indefinitely without ever
+			// reporting ProgressDeadlineExceeded, so tolerating it as a rollout
+			// passed a paused Deployment at 0/3 on every run. Assess it as is.
+			rollingOut := !d.Spec.Paused && (d.Status.ObservedGeneration < d.Generation ||
+				d.Status.UpdatedReplicas < want)
 			if rollingOut && !deploymentRolloutStalled(d) {
 				msg := fmt.Sprintf("%s/%s: rollout in progress (updated: %d/%d); re-run check after rollout completes",
 					ns, d.Name, d.Status.UpdatedReplicas, want)
@@ -2404,10 +2408,12 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 
 	if checkedCount == 0 {
 		if deniedCount > 0 {
-			// Leave nil: every namespace was denied, so nothing was observed.
+			// Leave nil: nothing was assessed and at least one namespace could
+			// not be read, so an empty result is not evidence of pre-install.
 			printWarning(log, fmt.Sprintf("Deployments not readable in %d control-plane namespace(s)", deniedCount))
-			state.Warnings = append(state.Warnings,
-				"Tier-1 Deployments: status unknown (RBAC denied Deployment list in all control-plane namespaces)")
+			state.Warnings = append(state.Warnings, fmt.Sprintf(
+				"Tier-1 Deployments: status unknown (Deployment list denied or failed in %d control-plane namespace(s))",
+				deniedCount))
 			return
 		}
 		if rollingCount > 0 {
@@ -2469,7 +2475,8 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 		printWarning(log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
 			checkedCount, deniedCount))
 		state.Warnings = append(state.Warnings,
-			"Tier-1 Deployments: status unknown (RBAC denied Deployment list in one or more control-plane namespaces)")
+			fmt.Sprintf("Tier-1 Deployments: status unknown (Deployment list denied or failed in %d control-plane namespace(s))",
+				deniedCount))
 		return
 	}
 
@@ -2531,8 +2538,8 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 		stsList, err := client.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			// See checkTier1Deployments: a 403 must not reach the trivial-pass
-			// exit. This fires today, as the validator ClusterRole grants
-			// deployments and daemonsets but not statefulsets.
+			// exit. The chart ClusterRole grants statefulsets, but a narrower
+			// role or a namespace-scoped policy can still deny it.
 			if apierrors.IsForbidden(err) {
 				deniedCount++
 				continue
@@ -2670,8 +2677,9 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 	if checkedCount == 0 {
 		if deniedCount > 0 {
 			printWarning(log, fmt.Sprintf("StatefulSets not readable in %d control-plane namespace(s)", deniedCount))
-			state.Warnings = append(state.Warnings,
-				"Tier-2 StatefulSets: status unknown (RBAC denied StatefulSet list in all control-plane namespaces)")
+			state.Warnings = append(state.Warnings, fmt.Sprintf(
+				"Tier-2 StatefulSets: status unknown (StatefulSet list denied or failed in %d control-plane namespace(s))",
+				deniedCount))
 			return
 		}
 		if rollingCount > 0 {
@@ -2724,7 +2732,8 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 		printWarning(log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d namespace(s) were not readable",
 			checkedCount, deniedCount))
 		state.Warnings = append(state.Warnings,
-			"Tier-2 StatefulSets: status unknown (RBAC denied StatefulSet list in one or more control-plane namespaces)")
+			fmt.Sprintf("Tier-2 StatefulSets: status unknown (StatefulSet list denied or failed in %d control-plane namespace(s))",
+				deniedCount))
 		return
 	}
 
