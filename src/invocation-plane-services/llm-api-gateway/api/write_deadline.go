@@ -138,11 +138,10 @@ func (w *deadlineWriter) clearDeadline() {
 }
 
 func (w *deadlineWriter) afterWrite(err error) {
+	w.clearDeadline()
 	if err != nil {
 		w.logTimeout(err)
-		return
 	}
-	w.clearDeadline()
 }
 
 func (w *deadlineWriter) setDeadline(deadline time.Time) {

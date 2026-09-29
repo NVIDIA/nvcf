@@ -20,6 +20,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -206,6 +207,21 @@ func TestFinalWriteDeadlineSkipsOtherRoutes(t *testing.T) {
 	// Routes without the inference middleware keep http.Server.WriteTimeout.
 	if len(recorder.events) != 0 {
 		t.Fatalf("deadline events = %v, want none", recorder.events)
+	}
+}
+
+func TestInferenceWriteDeadlineClearedAfterFailedWrite(t *testing.T) {
+	t.Parallel()
+
+	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder(), writeErr: errors.New("write tcp: broken pipe")}
+	serveWithWriteDeadline(t, time.Second, recorder, &bytes.Buffer{}, func(c echo.Context) error {
+		_, _ = c.Response().Write([]byte("data: x\n\n"))
+		return nil
+	})
+
+	// A failed write must not leave the deadline armed until the final arm.
+	if got, want := strings.Join(recorder.events, " "), "clear arm write clear arm"; got != want {
+		t.Fatalf("deadline events = %s, want %s", got, want)
 	}
 }
 
