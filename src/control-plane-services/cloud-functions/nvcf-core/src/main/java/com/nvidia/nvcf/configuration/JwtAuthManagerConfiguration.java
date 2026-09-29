@@ -49,21 +49,27 @@ public class JwtAuthManagerConfiguration {
 
     @Bean
     IssuerAuthenticationManagerEntry jwtAuthManager() {
-        return new IssuerAuthenticationManagerEntry(issuerUri, jwtAuthenticationManager());
+        return new IssuerAuthenticationManagerEntry(
+                issuerUri, jwtAuthenticationManager(issuerUri, jwkSetUri));
     }
 
-    private AuthenticationManager jwtAuthenticationManager() {
-        var provider = new JwtAuthenticationProvider(jwtDecoder());
+    /**
+     * Shared by the primary issuer and by every
+     * {@code nvcf.security.jwt.trusted-issuers[]} entry, so token validation is identical
+     * regardless of which issuer signed the token.
+     */
+    AuthenticationManager jwtAuthenticationManager(String issuer, String jwkSet) {
+        var provider = new JwtAuthenticationProvider(jwtDecoder(issuer, jwkSet));
         provider.setJwtAuthenticationConverter(jwtAuthenticationConverter());
         return provider::authenticate;
     }
 
-    private JwtDecoder jwtDecoder() {
+    private JwtDecoder jwtDecoder(String issuer, String jwkSet) {
         var decoder = NimbusJwtDecoder
-                .withJwkSetUri(jwkSetUri)
+                .withJwkSetUri(jwkSet)
                 .jwsAlgorithm(jwsAlgorithm)
                 .build();
-        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuerUri));
+        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuer));
         return decoder;
     }
 

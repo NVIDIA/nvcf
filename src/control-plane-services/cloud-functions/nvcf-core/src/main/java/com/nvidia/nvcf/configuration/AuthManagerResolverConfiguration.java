@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
@@ -37,6 +38,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtIss
 import org.springframework.security.oauth2.server.resource.authentication.OpaqueTokenAuthenticationProvider;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
+import org.springframework.util.StringUtils;
 
 @RequiredArgsConstructor
 @Configuration(proxyBeanMethods = false)
@@ -44,8 +46,19 @@ public class AuthManagerResolverConfiguration {
 
     private final List<IssuerAuthenticationManagerEntry> jwtAuthManagers;
     private final ApiKeysService apiKeysService;
+    private final JwtAuthManagerConfiguration jwtAuthManagerConfiguration;
+    /**
+     * Held as a field rather than flattened at construction so the refresh-scoped resolver
+     * re-reads it when configuration is refreshed.
+     */
+    private final TrustedJwtIssuerProperties trustedIssuerProperties;
 
+    /**
+     * Refresh-scoped so {@code trusted-issuers[]} entries added, changed or removed at runtime
+     * take effect without a restart.
+     */
     @Bean
+    @RefreshScope
     AuthenticationManagerResolver<HttpServletRequest> authenticationManagerResolver() {
         var jwtResolver = jwtResolver();
         return request -> {
@@ -79,12 +92,28 @@ public class AuthManagerResolverConfiguration {
         };
     }
 
+    /**
+     * The built-in issuers (primary OpenBao, notary) plus any configured trusted issuers.
+     * Built-ins win: a {@code trusted-issuers[]} entry naming one of them is ignored rather
+     * than replacing it.
+     */
     private JwtIssuerAuthenticationManagerResolver jwtResolver() {
         var managers = jwtAuthManagers
                 .stream()
                 .collect(Collectors.toMap(
                         IssuerAuthenticationManagerEntry::issuer,
                         IssuerAuthenticationManagerEntry::authenticationManager));
+        for (TrustedJwtIssuerProperties.TrustedIssuer entry
+                : trustedIssuerProperties.getTrustedIssuers()) {
+            if (!StringUtils.hasText(entry.getIssuerUri())
+                    || !StringUtils.hasText(entry.getJwkSetUri())) {
+                continue;
+            }
+            managers.putIfAbsent(
+                    entry.getIssuerUri(),
+                    jwtAuthManagerConfiguration.jwtAuthenticationManager(
+                            entry.getIssuerUri(), entry.getJwkSetUri()));
+        }
         return new JwtIssuerAuthenticationManagerResolver(managers::get);
     }
 }
