@@ -109,13 +109,19 @@ not.
    namespaces and new versions of the function all attach the same
    volume. There is no capture copy of the model anymore.
 
-   Reaper (agent, every ten minutes, idempotent on every node): read-only
-   model PVs whose claim is gone (Released, or bound in a namespace that
-   no longer exists) are deleted as objects only, since the storage
-   belongs to the primary; primaries Released without the complete label
-   for fifteen minutes are switched to reclaim Delete and removed, freeing
-   the capacity of an abandoned copy. Complete primaries are kept;
-   retention is a separate decision.
+   Reaper (agent, every `agent.modelVolume.reapInterval`, default ten
+   minutes, idempotent on every node), for model and cache volumes alike:
+   read-only claims that no pod in their namespace has referenced for ten
+   minutes are deleted together with their mount-holders (pvc-protection
+   keeps a claim Terminating while a holder mounts it, and owner GC waits
+   for the claim); read-only PVs whose claim is gone (Released, or bound
+   in a namespace that no longer exists) are deleted as objects only,
+   since the storage belongs to the primary; primaries Released without
+   the complete label for fifteen minutes are switched to reclaim Delete
+   and removed, freeing the capacity of an abandoned copy. A PV that still
+   has a VolumeAttachment is left for the next sweep: deleting it wedges
+   behind the attacher finalizer (dev1 2026-09-29). Complete primaries
+   are kept; retention is a separate decision.
 
 4. Readers reach the volume without help from inside the pod (webhook +
    agent). On a distributed filesystem the RWX claim exists and is bound
@@ -145,12 +151,33 @@ not.
    every pod; the engines' `filelock` and atomic replace make identical
    compiles converge; `cacheMode: shadow` in the profile keeps a per-pod
    writable copy seeded from it where the operator does not trust the
-   filesystem's locks (Lustre needs `-o flock`; the agent checks). NVMesh:
-   each pod compiles into a local emptyDir on the first start; after the
-   writer is Ready the agent captures its cache dir into a read-only cache
-   volume `nvsnap-cache-<key>` (the existing capture path, now caches
-   only, hundreds of MB); every later pod mounts it read-only with a
-   writable shadow (today's seed init).
+   filesystem's locks (Lustre needs `-o flock`; the agent checks).
+
+   Block storage: each pod compiles into its local `/opt/nvsnap/cache`
+   emptyDir. The cache identity is `cache://<config hash>/<ordinal>`:
+   the role-neutral configuration hash plus the pod's index in its group
+   (LeaderWorkerSet worker index, else the StatefulSet ordinal, else 0).
+   Per ordinal, never merged: the ranks of a tensor-parallel group write
+   rank-specific directories, and the paths they share (Inductor and
+   Triton autotune results) differ in content between ranks (measured
+   2026-09-29). A single-pod group is ordinal 0 and holds every rank.
+   The first pod of a key to become Ready is the source: the agent on its
+   node waits for the cache tree to stop changing (readiness is not
+   "compiled": a worker reports Ready before its torch.compile finishes),
+   then measures it, creates a claim of that size in the nvsnap namespace
+   (KindCache, names `nvsnap-cache-<key>`), copies the tree in through a
+   mount-holder, labels the retained PV complete and releases the claim.
+   Atomic claim creation picks one source among all pods sharing the key.
+   Every later pod with the key gets the read-only claim minted in its
+   namespace at admission and a seed init copies it into the cachedir
+   before the engine starts, best effort. Failures release the claim so
+   another pod can be the source; after the last attempt a failure record
+   stops admissions from waiting for the key for an hour.
+
+   Measured on dev1 (Qwen2.5-0.5B, TP=2 across two pods, H100): cold
+   torch.compile 23 s per pod; seeded from the cache volume 2.9 s; Ready
+   +131 s instead of +183 s. The 31 MB cache copies in a few seconds.
+   CUDA graph capture (7 s) is not cacheable.
 
 ## Every scenario, same mechanisms
 
