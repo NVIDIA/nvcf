@@ -6,6 +6,7 @@ package modelvolume
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -147,5 +148,173 @@ func TestProvisioner_DownloadJobIdempotent(t *testing.T) {
 	}
 	if ok, _ := p.JobSucceeded(ctx, uri, "fn"); !ok {
 		t.Error("succeeded job must report true")
+	}
+}
+
+// A block-mode claim is sized from the bytes that landed: measured plus
+// ten percent headroom, whole GiB, never below the floor. A 1 GB model
+// no longer reserves the 512Gi ceiling.
+func TestConfig_VolumeSize(t *testing.T) {
+	gib := int64(1) << 30
+	cfg := Config{}
+	for _, tc := range []struct {
+		bytes int64
+		want  string
+	}{
+		{999_604_126, "2Gi"}, // 0.93 GiB + 10% = 1.02 GiB -> 2Gi
+		{100 * gib, "110Gi"}, // exact headroom
+		{1, "1Gi"},           // floor without MinSize
+		{290 * gib, "319Gi"}, // 70B class
+	} {
+		q := cfg.VolumeSize(tc.bytes)
+		if got := q.String(); got != tc.want {
+			t.Errorf("VolumeSize(%d) = %s, want %s", tc.bytes, got, tc.want)
+		}
+	}
+	cfg.MinSize = resource.MustParse("8Gi")
+	if q := cfg.VolumeSize(999_604_126); q.String() != "8Gi" {
+		t.Errorf("MinSize floor: got %s", q.String())
+	}
+	if q := cfg.VolumeSize(100 * gib); q.String() != "110Gi" {
+		t.Errorf("MinSize must not cap: got %s", q.String())
+	}
+	if (Config{}).SystemNamespace() != "nvsnap-system" || (Config{Namespace: "x"}).SystemNamespace() != "x" {
+		t.Error("system namespace default")
+	}
+}
+
+// Block mode stages into an emptyDir: no claim exists yet because its size
+// is unknown until the download has run, and not every storage class can
+// grow a volume. The Job outlives its success so the agent can copy, it
+// names the staged volume, and it carries no service-account token.
+func TestProvisioner_StagingJob(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc"}}
+	step := DownloadStep{
+		Container: corev1.Container{Image: "img", Command: []string{"/bin/sh", "-c"}, Args: []string{"dl"},
+			VolumeMounts: []corev1.VolumeMount{{Name: "models", MountPath: "/m"}, {Name: "kube-api-access-abc", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount"}, {Name: "secrets", MountPath: "/var/secrets"}}},
+		VolumeName: "models",
+		Volumes: []corev1.Volume{
+			{Name: "kube-api-access-abc", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{}}},
+			{Name: "secrets", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "fn"}}},
+		},
+	}
+	if _, err := p.EnsureDownloadJob(ctx, uri, "fn", "", step); err != nil {
+		t.Fatal(err)
+	}
+	job, err := kc.BatchV1().Jobs("fn").Get(ctx, JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := job.Spec.Template.Spec
+	if ps.Volumes[0].Name != "models" || ps.Volumes[0].EmptyDir == nil || job.Annotations[StagingAnnotation] != "models" || job.Spec.Template.Annotations[StagingAnnotation] != "models" {
+		t.Errorf("landing must be an emptyDir named by the staging annotation on Job and pod: %+v %v", ps.Volumes[0], job.Annotations)
+	}
+	// kubelet removes the emptyDir when the pod terminates, so the download
+	// is an init container and a hold container keeps the pod Running until
+	// the agent has copied and deletes the Job; a deadline bounds the wait.
+	if len(ps.InitContainers) != 1 || ps.InitContainers[0].Name != DownloadContainer || len(ps.Containers) != 1 || ps.Containers[0].Name != HoldContainer || ps.Containers[0].Image != "img" {
+		t.Fatalf("staging pod = download init + hold container: inits=%d containers=%v", len(ps.InitContainers), ps.Containers)
+	}
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds < 3600 {
+		t.Error("staging Job needs an active deadline as the safety net")
+	}
+	hold := ps.Containers[0]
+	if hold.SecurityContext == nil || hold.SecurityContext.Capabilities == nil || hold.Resources.Limits.Cpu().IsZero() {
+		t.Errorf("hold container must satisfy the baselines: %+v", hold)
+	}
+	if !StagingReady(&corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning, InitContainerStatuses: []corev1.ContainerStatus{{Name: DownloadContainer, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}}}}) ||
+		StagingReady(&corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning, InitContainerStatuses: []corev1.ContainerStatus{{Name: DownloadContainer, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}}}) ||
+		StagingReady(&corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}) {
+		t.Error("StagingReady: Running pod with download init exited 0, nothing else")
+	}
+	names := []string{}
+	for _, v := range ps.Volumes {
+		names = append(names, v.Name)
+	}
+	mounts := []string{}
+	for _, m := range ps.InitContainers[0].VolumeMounts {
+		mounts = append(mounts, m.Name)
+	}
+	if len(names) != 2 || names[1] != "secrets" || len(mounts) != 2 || mounts[1] != "secrets" {
+		t.Errorf("projected SA token dropped, credentials kept: volumes=%v mounts=%v", names, mounts)
+	}
+	if claims, _ := kc.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{}); len(claims.Items) != 0 {
+		t.Error("staging creates no claim")
+	}
+	if err := p.DeleteJob(ctx, uri, "fn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kc.BatchV1().Jobs("fn").Get(ctx, JobName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("job must be gone")
+	}
+	if err := p.DeleteJob(ctx, uri, "fn"); err != nil {
+		t.Errorf("second delete is a no-op: %v", err)
+	}
+}
+
+func TestProvisioner_SizedClaimAndWaitBound(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc", Size: resource.MustParse("512Gi")}}
+	name, err := p.EnsureSizedClaim(ctx, uri, "nvsnap-system", resource.MustParse("3Gi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, name, metav1.GetOptions{})
+	if got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "3Gi" {
+		t.Errorf("sized claim requests %s, want 3Gi", got.String())
+	}
+	if _, err := p.EnsureSizedClaim(ctx, uri, "nvsnap-system", resource.MustParse("9Gi")); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, name, metav1.GetOptions{})
+	if got := again.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "3Gi" {
+		t.Errorf("an existing claim is kept as is, got %s", got.String())
+	}
+	if _, err := p.WaitBound(ctx, "nvsnap-system", name, 10*time.Millisecond); err == nil {
+		t.Error("unbound claim must time out")
+	}
+	again.Spec.VolumeName = "pv-1"
+	again.Status.Phase = corev1.ClaimBound
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Update(ctx, again, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if pv, err := p.WaitBound(ctx, "nvsnap-system", name, time.Second); err != nil || pv != "pv-1" {
+		t.Errorf("bound: %q %v", pv, err)
+	}
+}
+
+func TestProvisioner_FailureRecord(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc"}}
+	if st, _ := p.Lookup(ctx, uri); st.Failed {
+		t.Error("no record yet")
+	}
+	if err := p.RecordFailure(ctx, uri, "copy failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RecordFailure(ctx, uri, "again"); err != nil {
+		t.Errorf("record is idempotent: %v", err)
+	}
+	st, err := p.Lookup(ctx, uri)
+	if err != nil || !st.Failed {
+		t.Errorf("fresh record marks the identity failed: %+v %v", st, err)
+	}
+	cm, _ := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, FailureRecordName(uri), metav1.GetOptions{})
+	cm.Data["failedAt"] = time.Now().Add(-2 * FailureTTL).UTC().Format(time.RFC3339)
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := p.Lookup(ctx, uri); st.Failed {
+		t.Error("an expired record no longer holds pods back")
+	}
+	if err := p.ClearFailure(ctx, uri); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ClearFailure(ctx, uri); err != nil {
+		t.Errorf("clear is idempotent: %v", err)
 	}
 }

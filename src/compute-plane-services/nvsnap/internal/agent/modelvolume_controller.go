@@ -17,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
@@ -30,11 +31,20 @@ import (
 // ModelVolumeController is the agent half of
 // docs/proposals/helm-shared-model-volume.md.
 //
-//   - Download Jobs (any node): when the Job for an identity succeeds, the
-//     claim is labelled complete and, on block storage, the read-only
-//     claim is minted in the Job's namespace. The Job's exit is what
-//     released the volume; NVMesh refuses a read-only attach while a
-//     running pod holds it read-write.
+//   - Download Jobs, RWX (any node): when the Job for an identity
+//     succeeds, the shared claim is labelled complete.
+//   - Staging pods, block storage (the pod's node): the Job's download
+//     init wrote into a pod-local emptyDir and a hold container keeps the
+//     pod Running (kubelet removes the emptyDir the moment a pod
+//     terminates). This agent measures the bytes on disk, creates a claim
+//     of that size in the nvsnap namespace, attaches it through a
+//     mount-holder, copies the tree in, labels the retained PV complete,
+//     releases the claim so the volume detaches, and deletes the Job. The
+//     same download-then-copy shape as the cachedir capture: no size is
+//     guessed, no expansion is assumed, any downloader works. After
+//     StagingAttempts failures it gives up: records the failure so new
+//     admissions keep their own download and releases the readers pending
+//     on the claim, so nothing ever waits forever.
 //   - Pending readers on this node (block storage): once the identity is
 //     complete, the read-only claim is minted in the reader's namespace,
 //     attached to this node through a mount-holder, bind-mounted read-only
@@ -61,6 +71,17 @@ type ModelVolumeController struct {
 	HolderImage       string
 	HolderPullSecrets []string
 	Log               logrus.FieldLogger
+	// Copier writes a staged download into the attached claim; the
+	// agent's in-process tree copier. Required in block mode.
+	Copier checkpointstore.Copier
+	// HostFSRoot is the agent's view of the node filesystem (/host);
+	// KubeletPodsDir is the host path of per-pod kubelet state, where
+	// emptyDirs are materialised. Defaults: /host, /var/lib/kubelet/pods.
+	HostFSRoot     string
+	KubeletPodsDir string
+	// StagingAttempts bounds the copy retries per identity before the
+	// staged Job is dropped and readers are left to their fallback.
+	StagingAttempts int
 
 	// Seams for tests: attach returns the host path a claim is mounted at
 	// on this node; bind bind-mounts src onto dst read-only; unbind undoes
@@ -70,10 +91,25 @@ type ModelVolumeController struct {
 	bind          func(src, dst string) error
 	unbind        func(dst string) error
 	mountedDevice func(dst string) string
+	// stageSize measures a staged tree (agent-visible path); copyStaging
+	// copies host path src into claim ns/name and returns when the
+	// volume is detached again.
+	stageSize   func(path string) (int64, error)
+	copyStaging func(ctx context.Context, ns, claim, src string) error
 
-	mu      sync.Mutex
-	holders map[string]*checkpointstore.MountHolder
+	mu       sync.Mutex
+	holders  map[string]*checkpointstore.MountHolder
+	inflight map[string]bool
+	attempts map[string]int
 }
+
+// stagingBindTimeout bounds the wait for a freshly created primary
+// claim to bind; stagingDetachTimeout the wait for the holder's
+// attachment to go away after the copy.
+const (
+	stagingBindTimeout   = 3 * time.Minute
+	stagingDetachTimeout = 2 * time.Minute
+)
 
 // Run starts the informer and blocks until ctx is done.
 func (c *ModelVolumeController) Run(ctx context.Context) error {
@@ -119,6 +155,27 @@ func (c *ModelVolumeController) init() {
 	if c.mountedDevice == nil {
 		c.mountedDevice = mountedDeviceAt
 	}
+	if c.stageSize == nil {
+		c.stageSize = stagedSize
+	}
+	if c.copyStaging == nil {
+		c.copyStaging = c.copyThroughHolder
+	}
+	if c.inflight == nil {
+		c.inflight = map[string]bool{}
+	}
+	if c.attempts == nil {
+		c.attempts = map[string]int{}
+	}
+	if c.HostFSRoot == "" {
+		c.HostFSRoot = "/host"
+	}
+	if c.KubeletPodsDir == "" {
+		c.KubeletPodsDir = "/var/lib/kubelet/pods"
+	}
+	if c.StagingAttempts == 0 {
+		c.StagingAttempts = 3
+	}
 }
 
 func (c *ModelVolumeController) log() logrus.FieldLogger {
@@ -136,7 +193,18 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	}
 	c.init()
 	uri := pod.Annotations[modelvolume.IdentityAnnotation]
-	if uri == "" || pod.Labels[modelvolume.RoleLabel] != "reader" {
+	if uri == "" {
+		return
+	}
+	if staging := pod.Annotations[modelvolume.StagingAnnotation]; staging != "" {
+		// A Block-mode staging pod: its download init finished and the
+		// hold container keeps the emptyDir alive for this node's agent.
+		if pod.Spec.NodeName == c.NodeName && modelvolume.StagingReady(pod) {
+			c.promoteStaging(ctx, pod, uri, staging, c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName}))
+		}
+		return
+	}
+	if pod.Labels[modelvolume.RoleLabel] != "reader" {
 		return
 	}
 	if pod.Labels[modelvolume.PendingLabel] != "true" {
@@ -170,11 +238,203 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 		return
 	}
 	log := c.log().WithFields(logrus.Fields{"job": job.Namespace + "/" + job.Name, "model": uri})
+	if job.Annotations[modelvolume.StagingAnnotation] != "" {
+		return // Block mode: the staging pod event drives the copy
+	}
 	if err := c.Provisioner.MarkComplete(ctx, uri, job.Namespace); err != nil {
 		log.WithError(err).Warn("model volume: mark complete failed")
 		return
 	}
 	log.Info("model volume: download complete; readers may attach once the volume detaches")
+}
+
+// promoteStaging turns a staging pod on this node into the completed
+// primary PV. Idempotent and retried on every pod event until the
+// identity is complete or StagingAttempts is spent.
+func (c *ModelVolumeController) promoteStaging(ctx context.Context, pod *corev1.Pod, uri, staging string, log logrus.FieldLogger) {
+	st, err := c.Provisioner.Lookup(ctx, uri)
+	if err != nil {
+		log.WithError(err).Warn("model volume: lookup failed")
+		return
+	}
+	if st.Complete {
+		// Another attempt finished it; the staged bytes are surplus.
+		if derr := c.Provisioner.DeleteJob(ctx, uri, pod.Namespace); derr != nil {
+			log.WithError(derr).Warn("model volume: delete surplus staging job failed")
+		}
+		return
+	}
+	c.mu.Lock()
+	if c.inflight[uri] || c.attempts[uri] >= c.StagingAttempts {
+		c.mu.Unlock()
+		return
+	}
+	c.inflight[uri] = true
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.inflight, uri)
+			c.mu.Unlock()
+		}()
+		src := filepath.Join(c.KubeletPodsDir, string(pod.UID), "volumes", "kubernetes.io~empty-dir", staging)
+		if cerr := c.copyStaged(ctx, uri, src, log); cerr != nil {
+			c.mu.Lock()
+			c.attempts[uri]++
+			n := c.attempts[uri]
+			c.mu.Unlock()
+			log.WithError(cerr).WithField("attempt", n).Warn("model volume: staging copy failed")
+			if n >= c.StagingAttempts {
+				c.giveUp(ctx, uri, pod.Namespace, cerr.Error(), log)
+			}
+			return
+		}
+		c.mu.Lock()
+		delete(c.attempts, uri)
+		c.mu.Unlock()
+		if err := c.Provisioner.DeleteJob(ctx, uri, pod.Namespace); err != nil {
+			log.WithError(err).Warn("model volume: delete staging job after copy failed")
+		}
+	}()
+}
+
+// giveUp is the fallback when the copy cannot be made to work: record the
+// failure so new admissions keep their own download, drop the staging
+// Job and the sized claim, and release the readers pending on a claim
+// that will not come, so their controllers recreate them and they are
+// admitted on their own path. Never a deadlock.
+func (c *ModelVolumeController) giveUp(ctx context.Context, uri, jobNS, reason string, log logrus.FieldLogger) {
+	log.Error("model volume: staging copy gave up; readers are released to their own download")
+	if err := c.Provisioner.RecordFailure(ctx, uri, reason); err != nil {
+		log.WithError(err).Warn("model volume: record failure failed")
+	}
+	sysNS := c.Provisioner.Cfg.SystemNamespace()
+	if err := c.Kube.CoreV1().PersistentVolumeClaims(sysNS).Delete(ctx, modelvolume.ClaimName(uri), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		log.WithError(err).Warn("model volume: delete failed primary claim failed")
+	}
+	if err := c.Provisioner.DeleteJob(ctx, uri, jobNS); err != nil {
+		log.WithError(err).Warn("model volume: delete staging job failed")
+	}
+	sel := modelvolume.IdentityLabel + "=" + modelvolume.Key(uri) + "," + modelvolume.RoleLabel + "=reader," + modelvolume.PendingLabel + "=true"
+	pods, err := c.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: sel})
+	if err != nil {
+		log.WithError(err).Warn("model volume: list pending readers failed")
+		return
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if err := c.Kube.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).WithField("reader", p.Namespace+"/"+p.Name).Warn("model volume: release pending reader failed")
+			continue
+		}
+		log.WithField("reader", p.Namespace+"/"+p.Name).Info("model volume: released pending reader to its own download")
+	}
+	c.mu.Lock()
+	delete(c.attempts, uri)
+	c.mu.Unlock()
+}
+
+// copyStaged is one attempt: measure, claim, copy, complete.
+func (c *ModelVolumeController) copyStaged(ctx context.Context, uri, src string, log logrus.FieldLogger) error {
+	start := time.Now()
+	bytes, err := c.stageSize(filepath.Join(c.HostFSRoot, src))
+	if err != nil {
+		return fmt.Errorf("measure staged tree: %w", err)
+	}
+	if bytes <= 0 {
+		return fmt.Errorf("staged tree %s is empty", src)
+	}
+	size := c.Provisioner.Cfg.VolumeSize(bytes)
+	sysNS := c.Provisioner.Cfg.SystemNamespace()
+	claim, err := c.Provisioner.EnsureSizedClaim(ctx, uri, sysNS, size)
+	if err != nil {
+		return err
+	}
+	pv, err := c.Provisioner.WaitBound(ctx, sysNS, claim, stagingBindTimeout)
+	if err != nil {
+		return err
+	}
+	log = log.WithFields(logrus.Fields{"staged_bytes": bytes, "claim_size": size.String(), "claim": sysNS + "/" + claim, "pv": pv})
+	log.Info("model volume: primary claim sized from the staged download; copying")
+	if err := c.copyStaging(ctx, sysNS, claim, src); err != nil {
+		return err
+	}
+	if err := c.Provisioner.MarkComplete(ctx, uri, sysNS); err != nil {
+		return err
+	}
+	if err := c.Provisioner.ClearFailure(ctx, uri); err != nil {
+		log.WithError(err).Warn("model volume: clear failure record failed")
+	}
+	log.WithField("elapsed", time.Since(start).Round(time.Second).String()).Info("model volume: download complete; readers may attach once the volume detaches")
+	return nil
+}
+
+// stagedSize measures a staged tree; a missing tree is an error, not zero.
+func stagedSize(path string) (int64, error) {
+	if _, err := os.Stat(path); err != nil {
+		return 0, err
+	}
+	return dirSizeBytes(path), nil
+}
+
+// copyThroughHolder attaches the claim on this node with a one-shot
+// mount-holder, copies the staged tree into it, removes the holder and
+// waits for the volume to detach so read-only attaches elsewhere succeed.
+func (c *ModelVolumeController) copyThroughHolder(ctx context.Context, ns, claim, src string) error {
+	if c.Copier == nil {
+		return fmt.Errorf("no copier configured")
+	}
+	pvc, err := c.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, claim, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get claim %s/%s: %w", ns, claim, err)
+	}
+	entry, _ := c.log().(*logrus.Entry)
+	if entry == nil {
+		entry = logrus.NewEntry(logrus.New())
+	}
+	name := "nvsnap-model-copy-" + strings.TrimPrefix(claim, "nvsnap-model-") + "-" + shortNode(c.NodeName)
+	h := checkpointstore.NewMountHolder(c.Kube, entry, ns, name, c.NodeName, claim, pvc.UID, c.HolderImage, c.HostFSRoot, c.HolderPullSecrets)
+	if err = h.Create(ctx); err != nil {
+		return fmt.Errorf("create copy holder: %w", err)
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), checkpointstore.MountHolderDeleteTimeout+5*time.Second)
+		defer cancel()
+		if derr := h.Delete(cleanup); derr != nil {
+			entry.WithError(derr).Warn("model volume: copy holder delete failed")
+		}
+	}()
+	if err = h.WaitRunning(ctx); err != nil {
+		return fmt.Errorf("copy holder not running: %w", err)
+	}
+	dst, err := h.PVMountPath()
+	if err != nil {
+		return err
+	}
+	if _, _, err = c.Copier.Copy(ctx, dst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: src, DstSubpath: ""}}); err != nil {
+		return fmt.Errorf("copy staged tree: %w", err)
+	}
+	if err = h.Delete(ctx); err != nil {
+		return fmt.Errorf("release copy holder: %w", err)
+	}
+	deadline := time.Now().Add(stagingDetachTimeout)
+	for {
+		detached, err := c.Provisioner.Detached(ctx, pvc.Spec.VolumeName)
+		if err != nil {
+			return err
+		}
+		if detached {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("primary %s still attached %s after the copy holder left", pvc.Spec.VolumeName, stagingDetachTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *corev1.Pod, uri string) {

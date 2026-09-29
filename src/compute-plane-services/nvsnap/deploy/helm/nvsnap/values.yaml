@@ -120,7 +120,10 @@ agent:
   # names it attaches that volume; compile caches are shared the same way.
   # Mode comes from the storage profile: block on NVMesh (the L2 class),
   # rwx when the profile declares a distributed-filesystem class. Block
-  # readers reference a read-only claim by default (profile
+  # downloads stage in the Job's emptyDir and the agent copies them into a
+  # claim sized from the bytes on disk (profile modelVolume.minSize is the
+  # floor); rwx claims use profile modelVolume.size. Block readers
+  # reference a read-only claim by default (profile
   # modelVolume.readerMode: pvc); readerMode: hostPath schedules readers
   # at once and binds the volume in, for gang-scheduled charts where
   # policy allows hostPath. Needs agent.l2. Off until qualified.
@@ -129,6 +132,9 @@ agent:
     # How long a reader waits for the writer's download before it downloads
     # itself. Never a deadlock: past this, every pod is self-sufficient.
     waitDeadline: 1h
+    # How often each agent sweeps read-only model PVs whose claim or
+    # namespace is gone and primaries whose copy never completed.
+    reapInterval: 10m
 
   election:
     enabled: false

@@ -96,9 +96,13 @@ type ModelVolumeProfile struct {
 	Mode string `json:"mode"`
 	// StorageClass for the volume; empty uses the L2 class.
 	StorageClass string `json:"storageClass,omitempty"`
-	// Size requested per volume (a ceiling; the model size is unknown at
-	// admission). Empty means "512Gi".
+	// Size of an rwx-mode claim, created at admission before anything is
+	// downloaded, so a ceiling. Empty means "512Gi". Block-mode claims
+	// ignore it: they are sized from the downloaded bytes.
 	Size string `json:"size,omitempty"`
+	// MinSize is the floor for a block-mode claim sized from the download.
+	// Empty means "1Gi".
+	MinSize string `json:"minSize,omitempty"`
 	// ReaderMode for block volumes: "pvc" (default; policy-friendly, pods
 	// wait on volume binding) or "hostPath" (schedules at once, agent binds;
 	// needed under gang schedulers, requires hostPath allowed by policy).

@@ -177,7 +177,7 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 		log.WithField("deadline", a.config.Election.Deadline).Info("admission election enabled (one downloader per hash)")
 	}
 	if a.config.ModelVolume.Enabled {
-		if mv, minter, err := buildModelVolume(kc, profile, promoter, cfg.StorageClass, log); err != nil {
+		if mv, minter, err := buildModelVolume(kc, profile, promoter, cfg.StorageClass, cfg.Namespace, log); err != nil {
 			log.WithError(err).Warn("model volume disabled")
 		} else {
 			a.modelVolume, a.modelMinter = mv, minter
@@ -353,8 +353,8 @@ func vramGBFromGPUType(gpuType string) string {
 // storage profile: "block" on shared-volume strategies (NVMesh), whose
 // promoter mints the read-only claims; "rwx" when the profile declares a
 // distributed-filesystem class. Anything else leaves Helm functions alone.
-func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageProfile, promoter checkpointstore.Promoter, l2Class string, log logrus.FieldLogger) (*modelvolume.Provisioner, *checkpointstore.SharedVolumePromoter, error) {
-	cfg := modelvolume.Config{StorageClass: l2Class, Size: resource.MustParse("512Gi")}
+func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageProfile, promoter checkpointstore.Promoter, l2Class, namespace string, log logrus.FieldLogger) (*modelvolume.Provisioner, *checkpointstore.SharedVolumePromoter, error) {
+	cfg := modelvolume.Config{StorageClass: l2Class, Size: resource.MustParse("512Gi"), Namespace: namespace}
 	var mvp *checkpointstore.ModelVolumeProfile
 	if profile != nil {
 		mvp = profile.ModelVolume
@@ -381,6 +381,13 @@ func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageP
 			}
 			cfg.Size = q
 		}
+		if mvp.MinSize != "" {
+			q, err := resource.ParseQuantity(mvp.MinSize)
+			if err != nil {
+				return nil, nil, fmt.Errorf("modelVolume.minSize %q: %w", mvp.MinSize, err)
+			}
+			cfg.MinSize = q
+		}
 	}
 	var minter *checkpointstore.SharedVolumePromoter
 	if cfg.Mode == modelvolume.ModeBlock {
@@ -390,7 +397,7 @@ func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageP
 		}
 		minter = sp
 	}
-	log.WithFields(logrus.Fields{"mode": cfg.Mode, "storage_class": cfg.StorageClass, "size": cfg.Size.String()}).Info("model volume enabled (one download per model per cluster)")
+	log.WithFields(logrus.Fields{"mode": cfg.Mode, "storage_class": cfg.StorageClass, "namespace": cfg.SystemNamespace(), "rwx_size": cfg.Size.String()}).Info("model volume enabled (one download per model per cluster; block claims sized from the download)")
 	return &modelvolume.Provisioner{Kube: kc, Cfg: cfg}, minter, nil
 }
 

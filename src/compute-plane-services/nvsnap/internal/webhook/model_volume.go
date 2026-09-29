@@ -72,24 +72,38 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 	if err != nil {
 		return nil, err
 	}
+	if st.Failed {
+		// The last copy gave up recently. A reader referencing a claim
+		// that never comes would hang, so the pod keeps its own download;
+		// the record expires and a later deployment tries again.
+		log.Info("model volume: recent failure recorded for this model; leaving pod on its own download")
+		return nil, nil
+	}
 	if !st.Complete {
 		// The download step is a Job, created once per identity; create is
-		// atomic so concurrent admissions converge without an election.
-		// The claim lives where the Job runs, the pod's namespace.
-		claim, err := m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
-		if err != nil {
-			return nil, err
-		}
+		// atomic so concurrent admissions converge without an election. It
+		// runs in the pod's namespace because that is where the chart's
+		// registry credentials are. RWX: it writes into the shared claim.
+		// Block: it writes into a pod-local emptyDir and the agent on that
+		// node copies the result into a claim sized from the bytes that
+		// landed; nothing is guessed at admission.
 		step, ok := m.downloadStep(pod, main, land, res.Identity)
 		if !ok {
 			log.Info("model volume: no download step can be derived (engine downloads a non-HF model); leaving pod alone")
 			return nil, nil
 		}
+		claim := ""
+		if m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX {
+			claim, err = m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
+			if err != nil {
+				return nil, err
+			}
+		}
 		job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, claim, step)
 		if err != nil {
 			return nil, err
 		}
-		log.WithFields(logrus.Fields{"claim": claim, "job": job}).Info("model volume: download job ensured")
+		log.WithFields(logrus.Fields{"claim": claim, "job": job, "staging": claim == ""}).Info("model volume: download job ensured")
 	}
 	patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
 	switch {

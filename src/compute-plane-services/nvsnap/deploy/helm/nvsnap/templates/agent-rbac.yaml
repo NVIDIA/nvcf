@@ -57,6 +57,11 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get"]
+  # namespaces (get): the model volume reaper checks whether the namespace
+  # a read-only model PV is bound in still exists before removing the PV.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
   # nvsnap#63: L2 per-capture PVC backend. The agent provisions a
   # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
   # reader PVC after every successful CRIU dump. Lease is the

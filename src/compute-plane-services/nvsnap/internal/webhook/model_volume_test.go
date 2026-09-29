@@ -143,21 +143,33 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 	if v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
 		t.Errorf("every pod is a reader: ann=%v labels=%v", v.annotations, v.labels)
 	}
-	pvc, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ClaimName(uri), metav1.GetOptions{})
-	if err != nil || pvc.Spec.AccessModes[0] != corev1.ReadWriteOnce {
-		t.Errorf("download claim must exist RWO in the pod namespace: %v", err)
+	// Block mode: no claim is created at admission. The size of the model
+	// is unknown until it has been downloaded, and not every storage
+	// system can grow a volume, so the Job stages into an emptyDir and the
+	// agent sizes the claim from what landed (the cachedir shape).
+	if claims, _ := kc.CoreV1().PersistentVolumeClaims("").List(context.Background(), metav1.ListOptions{}); len(claims.Items) != 0 {
+		t.Errorf("block mode creates no claim at admission, got %d", len(claims.Items))
 	}
 	job, err := kc.BatchV1().Jobs("sr-fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("download Job must be created: %v", err)
 	}
-	jc := job.Spec.Template.Spec.Containers[0]
+	// The download is an init container; a hold container keeps the pod,
+	// and with it the staged emptyDir, alive until the agent has copied.
+	if len(job.Spec.Template.Spec.InitContainers) != 1 || len(job.Spec.Template.Spec.Containers) != 1 || job.Spec.Template.Spec.Containers[0].Name != modelvolume.HoldContainer {
+		t.Fatalf("staging pod shape: inits=%d containers=%+v", len(job.Spec.Template.Spec.InitContainers), job.Spec.Template.Spec.Containers)
+	}
+	jc := job.Spec.Template.Spec.InitContainers[0]
 	script := jc.Args[0]
 	if jc.Image != "nvcr.io/org/ultra:vllm" || !strings.Contains(script, "ngc registry model download-version") || !strings.Contains(script, "touch /config/models/.nvsnap-complete") {
 		t.Errorf("job must run the chart's own download then touch the marker:\n%s", script)
 	}
-	if len(jc.Env) != 2 || jc.VolumeMounts[0].MountPath != "/config/models" || job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != modelvolume.ClaimName(uri) {
-		t.Errorf("job must carry the init's env and mount the claim at the init's path: env=%v mounts=%v", jc.Env, jc.VolumeMounts)
+	landing := job.Spec.Template.Spec.Volumes[0]
+	if len(jc.Env) != 2 || jc.VolumeMounts[0].MountPath != "/config/models" || landing.EmptyDir == nil || landing.Name != "ngc-models" || job.Annotations[modelvolume.StagingAnnotation] != "ngc-models" {
+		t.Errorf("job must carry the init's env and stage into an emptyDir at the init's path, named by the staging annotation: env=%v mounts=%v landing=%+v ann=%v", jc.Env, jc.VolumeMounts, landing, job.Annotations)
+	}
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds < 3600 {
+		t.Error("a staging Job carries an active deadline as the safety net for an agent that never copies")
 	}
 	// The NGC key lives in a secret file and the init's helper scripts in
 	// a ConfigMap; the Job must mount both or the download cannot run.
@@ -483,5 +495,30 @@ func TestModelVolume_LeavesOthersAlone(t *testing.T) {
 	}
 	if el.called != 0 {
 		t.Error("no election for pods that are left alone")
+	}
+}
+
+// A fresh failure record means the last copy gave up; a reader that
+// referenced the read-only claim would wait forever, so the pod keeps its
+// own download and nothing is created for it.
+func TestModelVolume_RecentFailureLeavesPodAlone(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	if err := m.ModelVolume.RecordFailure(context.Background(), uri, "copy failed"); err != nil {
+		t.Fatal(err)
+	}
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range patches {
+		if strings.Contains(p.Path, "nvsnap.io~1model") || strings.HasPrefix(p.Path, "/spec/volumes") || strings.HasPrefix(p.Path, "/spec/initContainers") {
+			t.Errorf("pod must be left on its own download, got patch %s", p.Path)
+		}
+	}
+	if jobs, _ := kc.BatchV1().Jobs("").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Error("no download Job while the failure record is fresh")
 	}
 }

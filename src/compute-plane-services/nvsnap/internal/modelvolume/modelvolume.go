@@ -26,10 +26,14 @@ limitations under the License.
 //     identity per namespace, mounted by writer and readers alike at
 //     admission. Completion is a marker file the writer's download step
 //     leaves at the volume root.
-//   - ModeBlock (NVMesh): the writer's ReadWriteOnce claim is the artifact.
-//     When its download step exits 0 the agent marks the claim complete and
-//     mints the read-only secondary PV and claim; readers admitted before
-//     that keep an emptyDir and wait for the agent to bind the volume in.
+//   - ModeBlock (NVMesh): the download Job writes into a pod-local
+//     emptyDir, exactly like the single-GPU cachedir capture. When it exits
+//     0 the agent on that node measures the bytes on disk, creates a
+//     ReadWriteOnce claim of that size in the nvsnap namespace, copies the
+//     tree in, labels the retained PV complete and releases the claim. The
+//     PV is the artifact; read-only claims are minted from it per reader
+//     namespace. No size is guessed and no volume expansion is assumed, so
+//     the same flow serves NGC, Hugging Face and any other downloader.
 package modelvolume
 
 import (
@@ -37,6 +41,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -76,6 +82,20 @@ const (
 	// DownloadInitAnnotation on a writer names the init container whose
 	// exit 0 means the download completed.
 	DownloadInitAnnotation = "nvsnap.io/model-download-init"
+	// StagingAnnotation on a Block-mode download Job names the emptyDir
+	// volume the download landed in; the agent on the Job's node copies it
+	// into the sized claim.
+	StagingAnnotation = "nvsnap.io/model-staging-volume"
+	// SourceNamespaceLabel on the primary PV records the namespace the
+	// download Job ran in.
+	SourceNamespaceLabel = "nvsnap.io/model-source-namespace"
+	// DownloadContainer is the Job's download step; in Block mode it is an
+	// init container and HoldContainer keeps the pod, and with it the
+	// staged emptyDir, alive until the agent has copied it out.
+	DownloadContainer = "download"
+	HoldContainer     = "hold"
+	// FailedAnnotation on the failure record carries the reason.
+	FailedAnnotation = "nvsnap.io/model-failed"
 
 	managedBy = "nvsnap"
 )
@@ -98,12 +118,48 @@ const (
 type Config struct {
 	Mode         Mode
 	StorageClass string
-	// Size requested for a new volume; the model size is unknown at
-	// admission, so this is a ceiling. Thin-provisioned classes make it
-	// cheap.
+	// Size is the RWX-mode claim size: a shared filesystem claim is created
+	// at admission, before anything is downloaded, so it is a ceiling that
+	// the filesystem's own quota semantics make cheap. Block mode never
+	// uses it; those claims are sized from the downloaded bytes.
 	Size resource.Quantity
 	// Reader selects the Block-mode reader mode; empty means ReaderPVC.
 	Reader ReaderMode
+	// Namespace holds Block-mode primary claims and their copy holders, so
+	// no artifact is tied to a function namespace's lifetime. Empty means
+	// nvsnap-system.
+	Namespace string
+	// MinSize is the floor for a sized Block-mode claim. Empty means 1Gi.
+	MinSize resource.Quantity
+}
+
+// SystemNamespace returns the namespace Block-mode primaries live in.
+func (c Config) SystemNamespace() string {
+	if c.Namespace == "" {
+		return "nvsnap-system"
+	}
+	return c.Namespace
+}
+
+// headroomPercent is the slack added on top of the measured bytes: the
+// filesystem's own metadata, the completion marker, and xfs allocation
+// rounding on a freshly made volume.
+const headroomPercent = 10
+
+// VolumeSize is the claim size for a downloaded tree of bytes: measured
+// plus headroom, rounded up to a whole GiB, never below MinSize.
+func (c Config) VolumeSize(bytes int64) resource.Quantity {
+	const gib = int64(1) << 30
+	want := bytes + bytes/100*headroomPercent
+	gibs := (want + gib - 1) / gib
+	if gibs < 1 {
+		gibs = 1
+	}
+	q := *resource.NewQuantity(gibs*gib, resource.BinarySI)
+	if !c.MinSize.IsZero() && q.Cmp(c.MinSize) < 0 {
+		return c.MinSize.DeepCopy()
+	}
+	return q
 }
 
 // ReaderMode returns the configured reader mode with its default.
@@ -144,7 +200,17 @@ type State struct {
 	// PrimaryPV is the retained volume holding the model (Block mode,
 	// complete); read-only claims are minted from it.
 	PrimaryPV string
+	// Failed: the last attempt to produce the volume gave up recently.
+	// Pods admitted while this holds are left alone and download for
+	// themselves; the record expires so a later deployment retries.
+	Failed bool
 }
+
+// FailureRecordName is the ConfigMap that records a given-up download.
+func FailureRecordName(uri string) string { return "nvsnap-model-failed-" + Key(uri) }
+
+// FailureTTL is how long a failure record keeps pods on their own path.
+const FailureTTL = time.Hour
 
 // Provisioner creates and inspects model volumes.
 type Provisioner struct {
@@ -152,11 +218,18 @@ type Provisioner struct {
 	Cfg  Config
 }
 
-// EnsureWriterClaim creates the claim the download Job writes into, in ns.
-// Idempotent. RWX mode creates a ReadWriteMany claim readers share; Block
-// mode a ReadWriteOnce claim that is released after the download, leaving
-// the retained PV as the artifact.
+// EnsureWriterClaim creates the claim the download writes into, in ns, at
+// the configured RWX size. Idempotent. RWX mode creates a ReadWriteMany
+// claim readers share; Block mode callers use EnsureSizedClaim instead.
 func (p *Provisioner) EnsureWriterClaim(ctx context.Context, uri, ns string) (string, error) {
+	return p.EnsureSizedClaim(ctx, uri, ns, p.Cfg.Size)
+}
+
+// EnsureSizedClaim creates the claim for uri in ns at size. Idempotent: an
+// existing claim is returned as is, whatever its size. Block mode creates
+// a ReadWriteOnce claim that is released after the copy, leaving the
+// retained PV as the artifact.
+func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (string, error) {
 	name := ClaimName(uri)
 	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		return name, nil
@@ -180,7 +253,7 @@ func (p *Provisioner) EnsureWriterClaim(ctx context.Context, uri, ns string) (st
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{mode},
 			StorageClassName: &sc,
-			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: p.Cfg.Size}},
+			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: size}},
 		},
 	}
 	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -189,13 +262,44 @@ func (p *Provisioner) EnsureWriterClaim(ctx context.Context, uri, ns string) (st
 	return name, nil
 }
 
+// WaitBound polls until the claim in ns has a bound volume and returns
+// the PV name. Block-mode classes bind immediately; this covers the
+// provisioner's round trip.
+func (p *Provisioner) WaitBound(ctx context.Context, ns, name string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		pvc, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("get claim %s/%s: %w", ns, name, err)
+		}
+		if pvc.Spec.VolumeName != "" && pvc.Status.Phase == corev1.ClaimBound {
+			return pvc.Spec.VolumeName, nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("claim %s/%s not bound after %s (phase %s)", ns, name, timeout, pvc.Status.Phase)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // Lookup reports the identity's state. Block mode: a retained PV labelled
-// complete is the artifact (the writer claim is released after the
-// download so the volume detaches); otherwise an in-flight writer claim.
-// RWX mode: the shared claim carries the label.
+// complete is the artifact (the primary claim is released after the copy
+// so the volume detaches); otherwise an in-flight claim means a copy is
+// running. RWX mode: the shared claim carries the label.
 func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 	st := State{}
 	if p.Cfg.Mode == ModeBlock {
+		if cm, err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Get(ctx, FailureRecordName(uri), metav1.GetOptions{}); err == nil {
+			if at, perr := time.Parse(time.RFC3339, cm.Data["failedAt"]); perr == nil && time.Since(at) < FailureTTL {
+				st.Failed = true
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return State{}, fmt.Errorf("get failure record for %s: %w", uri, err)
+		}
 		pvs, err := p.Kube.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: IdentityLabel + "=" + Key(uri) + "," + CompleteLabel + "=true"})
 		if err != nil {
 			return State{}, fmt.Errorf("list volumes for %s: %w", uri, err)
@@ -260,6 +364,7 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 			pv.Labels["app.kubernetes.io/managed-by"] = managedBy
 			pv.Labels[IdentityLabel] = Key(uri)
 			pv.Labels[CompleteLabel] = "true"
+			pv.Labels[SourceNamespaceLabel] = ns
 			if pv.Annotations == nil {
 				pv.Annotations = map[string]string{}
 			}
@@ -332,11 +437,13 @@ type DownloadStep struct {
 	MainSecurityContext *corev1.SecurityContext
 }
 
-// EnsureDownloadJob creates the one download Job for uri in ns, writing
-// into claim. Create is atomic, so N concurrent admissions produce one
-// Job and need no election. On NVMesh the Job's exit is what releases the
-// volume for read-only attaches elsewhere; a download inside a serving
-// pod would hold it forever.
+// EnsureDownloadJob creates the one download Job for uri in ns. With a
+// claim (RWX mode) the Job writes straight into it. With an empty claim
+// (Block mode) the Job writes into a pod-local emptyDir on the node's
+// disk and stays Succeeded until the agent on that node has copied the
+// tree into a claim sized from what landed; the Job's staging annotation
+// names the volume. Create is atomic, so N concurrent admissions produce
+// one Job and need no election.
 func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim string, step DownloadStep) (string, error) {
 	name := JobName(uri)
 	if _, err := p.Kube.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
@@ -345,22 +452,36 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 		return "", fmt.Errorf("get job %s/%s: %w", ns, name, err)
 	}
 	backoff := int32(6)
-	// A Succeeded pod keeps its volumes attached; on NVMesh that blocks the
-	// read-only attach on every other node (dev1 2026-09-26). The Job and
-	// its pod go away shortly after success; completion state lives on the
-	// claim label, not on the Job.
+	// A finished pod keeps its volume attached, which blocks a read-only
+	// attach elsewhere on some drivers (dev1 2026-09-26), so a finished Job
+	// goes away shortly. In Block mode the Job never finishes on its own:
+	// the agent deletes it after the copy (see the hold container below).
 	ttl := int32(30)
+	annotations := map[string]string{IdentityAnnotation: uri}
+	landing := corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}
+	if claim == "" {
+		landing = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+		annotations[StagingAnnotation] = step.VolumeName
+	}
 	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, IdentityLabel: Key(uri)}
 	c := step.Container
-	c.Name = "download"
+	c.Name = DownloadContainer
 	// The container keeps every mount the chart's init had (registry keys
 	// under /var/secrets, scripts from a ConfigMap); only the landing
-	// volume is redirected to the claim.
-	volumes := []corev1.Volume{{Name: step.VolumeName, VolumeSource: corev1.VolumeSource{
-		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}}}
+	// volume is redirected. The pod's projected service-account token is
+	// dropped: the Job mounts no token.
+	volumes := []corev1.Volume{{Name: step.VolumeName, VolumeSource: landing}}
 	for i := range step.Volumes {
-		if step.Volumes[i].Name != step.VolumeName {
-			volumes = append(volumes, step.Volumes[i])
+		v := &step.Volumes[i]
+		if v.Name == step.VolumeName || strings.HasPrefix(v.Name, "kube-api-access-") {
+			continue
+		}
+		volumes = append(volumes, *v)
+	}
+	for i := range c.VolumeMounts {
+		if strings.HasPrefix(c.VolumeMounts[i].Name, "kube-api-access-") {
+			c.VolumeMounts = append(c.VolumeMounts[:i], c.VolumeMounts[i+1:]...)
+			break
 		}
 	}
 	Harden(&c, DownloadResources, step.MainSecurityContext)
@@ -371,23 +492,44 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 	if psc.SeccompProfile == nil {
 		psc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 	}
+	podSpec := corev1.PodSpec{
+		RestartPolicy:                corev1.RestartPolicyOnFailure,
+		AutomountServiceAccountToken: new(bool),
+		SecurityContext:              psc,
+		ImagePullSecrets:             step.ImagePullSecrets,
+		Tolerations:                  step.Tolerations,
+		NodeSelector:                 step.NodeSelector,
+		Containers:                   []corev1.Container{c},
+		Volumes:                      volumes,
+	}
+	var activeDeadline *int64
+	if claim == "" {
+		// kubelet removes a pod's emptyDir as soon as the pod terminates,
+		// so the staged bytes only exist while the pod runs. The download
+		// is an init container (exit 0 is the completion signal, retried
+		// under OnFailure) and a hold container keeps the pod Running
+		// until the agent has copied the tree and deletes the Job. The
+		// active deadline bounds a node whose agent never gets to it.
+		hold := corev1.Container{
+			Name:    HoldContainer,
+			Image:   c.Image,
+			Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 60; done"},
+		}
+		Harden(&hold, HoldResources, step.MainSecurityContext)
+		podSpec.InitContainers = []corev1.Container{c}
+		podSpec.Containers = []corev1.Container{hold}
+		deadline := int64(6 * 3600)
+		activeDeadline = &deadline
+	}
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: map[string]string{IdentityAnnotation: uri}},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: annotations},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
+			ActiveDeadlineSeconds:   activeDeadline,
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: corev1.PodSpec{
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
-					AutomountServiceAccountToken: new(bool),
-					SecurityContext:              psc,
-					ImagePullSecrets:             step.ImagePullSecrets,
-					Tolerations:                  step.Tolerations,
-					NodeSelector:                 step.NodeSelector,
-					Containers:                   []corev1.Container{c},
-					Volumes:                      volumes,
-				},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: annotations},
+				Spec:       podSpec,
 			},
 		},
 	}
@@ -409,11 +551,72 @@ func (p *Provisioner) JobSucceeded(ctx context.Context, uri, ns string) (bool, e
 	return job.Status.Succeeded > 0, nil
 }
 
+// RecordFailure writes the failure record for uri so admissions for the
+// next FailureTTL leave pods alone. Idempotent (overwrites the time).
+func (p *Provisioner) RecordFailure(ctx context.Context, uri, reason string) error {
+	ns := p.Cfg.SystemNamespace()
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: FailureRecordName(uri), Namespace: ns,
+			Labels:      map[string]string{"app.kubernetes.io/managed-by": managedBy, IdentityLabel: Key(uri)},
+			Annotations: map[string]string{IdentityAnnotation: uri, FailedAnnotation: reason}},
+		Data: map[string]string{"failedAt": time.Now().UTC().Format(time.RFC3339)},
+	}
+	if _, err := p.Kube.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("record failure for %s: %w", uri, err)
+		}
+		if _, err := p.Kube.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update failure record for %s: %w", uri, err)
+		}
+	}
+	return nil
+}
+
+// ClearFailure removes the failure record for uri. Idempotent.
+func (p *Provisioner) ClearFailure(ctx context.Context, uri string) error {
+	if err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Delete(ctx, FailureRecordName(uri), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("clear failure record for %s: %w", uri, err)
+	}
+	return nil
+}
+
+// DeleteJob removes the download Job for uri in ns and its pod, freeing
+// the staged emptyDir. Idempotent.
+func (p *Provisioner) DeleteJob(ctx context.Context, uri, ns string) error {
+	prop := metav1.DeletePropagationBackground
+	if err := p.Kube.BatchV1().Jobs(ns).Delete(ctx, JobName(uri), metav1.DeleteOptions{PropagationPolicy: &prop}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete job %s/%s: %w", ns, JobName(uri), err)
+	}
+	return nil
+}
+
 // DownloadResources are the defaults for a container that downloads a
 // model: enough CPU and memory for a parallel fetch, bounded for policy.
 var DownloadResources = corev1.ResourceRequirements{
 	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")},
 	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8"), corev1.ResourceMemory: resource.MustParse("16Gi")},
+}
+
+// HoldResources are the defaults for the container that only keeps a
+// staging pod alive.
+var HoldResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
+	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
+}
+
+// StagingReady reports whether a Block-mode staging pod holds a finished
+// download: the pod runs and its download init exited 0.
+func StagingReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for i := range pod.Status.InitContainerStatuses {
+		s := &pod.Status.InitContainerStatuses[i]
+		if s.Name == DownloadContainer {
+			return s.State.Terminated != nil && s.State.Terminated.ExitCode == 0
+		}
+	}
+	return false
 }
 
 // Harden gives a container the fields function-namespace baselines

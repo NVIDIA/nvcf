@@ -7,6 +7,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
@@ -14,7 +15,9 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
@@ -300,5 +303,183 @@ func TestModelVolumeController_PVCReaderMintedWithoutBind(t *testing.T) {
 	c.Handle(ctx, reader) // idempotent
 	if len(*attached) != 0 {
 		t.Error("nothing to attach on the second pass either")
+	}
+}
+
+// stagingFixture: a staging Job in a function namespace whose pod on
+// node has finished its download init and is held Running, and a fake
+// provisioner that binds claims on create the way an Immediate-binding
+// CSI class does.
+func stagingFixture(t *testing.T, node string) (*fake.Clientset, *modelvolume.Provisioner, *corev1.Pod) {
+	t.Helper()
+	job := downloadJob(0)
+	job.Annotations[modelvolume.StagingAnnotation] = "ngc-models"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: job.Name + "-x1", Namespace: "sr-fn", UID: "pod-uid-1",
+			Labels:      map[string]string{"job-name": job.Name, "batch.kubernetes.io/job-name": job.Name, modelvolume.IdentityLabel: modelvolume.Key(mvURI)},
+			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI, modelvolume.StagingAnnotation: "ngc-models"}},
+		Spec: corev1.PodSpec{NodeName: node},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, InitContainerStatuses: []corev1.ContainerStatus{{Name: modelvolume.DownloadContainer,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}}},
+	}
+	kc := fake.NewSimpleClientset(job, pod)
+	kc.PrependReactor("create", "persistentvolumeclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		pvc := action.(k8stesting.CreateAction).GetObject().(*corev1.PersistentVolumeClaim)
+		pvc = pvc.DeepCopy()
+		pvc.Spec.VolumeName = "pvc-staged"
+		pvc.Status.Phase = corev1.ClaimBound
+		pv := &corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{Name: "pvc-staged"},
+			Spec: corev1.PersistentVolumeSpec{
+				Capacity:                      corev1.ResourceList{corev1.ResourceStorage: pvc.Spec.Resources.Requests[corev1.ResourceStorage]},
+				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+				PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-staged:vol"}},
+			},
+		}
+		if err := kc.Tracker().Add(pv); err != nil {
+			return true, nil, err
+		}
+		gvr := corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims")
+		if err := kc.Tracker().Create(gvr, pvc, pvc.Namespace); err != nil {
+			return true, nil, err
+		}
+		return true, pvc, nil
+	})
+	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock, StorageClass: "nvcf-sc", Namespace: "nvsnap-system"}}
+	return kc, p, pod
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The block-mode completion is the cachedir shape: measure the staged
+// emptyDir on the pod's node, create a claim of that size in the nvsnap
+// namespace, copy, label the retained PV complete, release the claim,
+// drop the Job. Nothing is guessed and nothing is grown.
+func TestModelVolumeController_StagingCopiedIntoSizedClaim(t *testing.T) {
+	ctx := context.Background()
+	kc, p, pod := stagingFixture(t, "node-a")
+	c, _, _ := mvController(t, kc, p, "node-a")
+	var measured, copied string
+	c.stageSize = func(path string) (int64, error) { measured = path; return 30 << 30, nil }
+	c.copyStaging = func(_ context.Context, ns, claim, src string) error {
+		copied = ns + "/" + claim + "<-" + src
+		return nil
+	}
+	c.Handle(ctx, pod)
+	waitUntil(t, "job deleted after copy", func() bool {
+		_, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(mvURI), metav1.GetOptions{})
+		return err != nil
+	})
+	wantSrc := "/var/lib/kubelet/pods/pod-uid-1/volumes/kubernetes.io~empty-dir/ngc-models"
+	if measured != "/host"+wantSrc {
+		t.Errorf("measured %q, want the staged emptyDir through the host root", measured)
+	}
+	if copied != "nvsnap-system/"+modelvolume.ClaimName(mvURI)+"<-"+wantSrc {
+		t.Errorf("copied %q", copied)
+	}
+	pv, err := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-staged", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := pv.Spec.Capacity[corev1.ResourceStorage]; size.String() != "33Gi" {
+		t.Errorf("claim sized from 30 GiB staged plus headroom, got %s", size.String())
+	}
+	if pv.Labels[modelvolume.CompleteLabel] != "true" || pv.Labels[modelvolume.IdentityLabel] != modelvolume.Key(mvURI) || pv.Labels[modelvolume.SourceNamespaceLabel] != "nvsnap-system" || pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Errorf("primary must be complete and retained: %v", pv.Labels)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Error("primary claim must be released after the copy so the volume detaches")
+	}
+	if claims, _ := kc.CoreV1().PersistentVolumeClaims("sr-fn").List(ctx, metav1.ListOptions{}); len(claims.Items) != 0 {
+		t.Error("nothing is created in the function namespace")
+	}
+	st, _ := p.Lookup(ctx, mvURI)
+	if !st.Complete || st.PrimaryPV != "pvc-staged" {
+		t.Errorf("lookup after promote: %+v", st)
+	}
+}
+
+func TestModelVolumeController_StagingOnAnotherNodeOrUnfinishedIsIgnored(t *testing.T) {
+	ctx := context.Background()
+	kc, p, pod := stagingFixture(t, "node-b")
+	c, _, _ := mvController(t, kc, p, "node-a")
+	called := false
+	c.stageSize = func(string) (int64, error) { called = true; return 1, nil }
+	c.Handle(ctx, pod)
+	early := pod.DeepCopy()
+	early.Spec.NodeName = "node-a"
+	early.Status.InitContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+	c.Handle(ctx, early)
+	time.Sleep(50 * time.Millisecond)
+	if called {
+		t.Error("only the agent on the pod's node copies, and only once the download init exited 0")
+	}
+	if _, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(mvURI), metav1.GetOptions{}); err != nil {
+		t.Error("job must stay for its own node's agent")
+	}
+}
+
+// A copy that keeps failing is abandoned: the Job (and its emptyDir) and
+// the sized claim go away, a failure record keeps new admissions on their
+// own download, and readers pending on the claim that will never come
+// are deleted so their controllers recreate them on that path.
+func TestModelVolumeController_StagingGivesUpAfterAttempts(t *testing.T) {
+	ctx := context.Background()
+	kc, p, pod := stagingFixture(t, "node-a")
+	pending := readerPod("sr-fn", "")
+	pending.Name = "mini-service-0"
+	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, pending, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c, _, _ := mvController(t, kc, p, "node-a")
+	c.StagingAttempts = 2
+	c.stageSize = func(string) (int64, error) { return 1 << 30, nil }
+	fails := 0
+	c.copyStaging = func(context.Context, string, string, string) error { fails++; return context.DeadlineExceeded }
+	c.Handle(ctx, pod)
+	waitUntil(t, "first attempt", func() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.attempts[mvURI] == 1 })
+	if _, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(mvURI), metav1.GetOptions{}); err != nil {
+		t.Fatal("job must survive the first failure for a retry")
+	}
+	c.Handle(ctx, pod)
+	waitUntil(t, "job dropped", func() bool {
+		_, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(mvURI), metav1.GetOptions{})
+		return err != nil
+	})
+	if fails != 2 {
+		t.Errorf("attempts %d", fails)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Error("the sized claim is released so the primary can be reaped")
+	}
+	waitUntil(t, "failure recorded", func() bool { st, _ := p.Lookup(ctx, mvURI); return st.Failed && !st.Complete })
+	waitUntil(t, "pending reader released", func() bool {
+		_, err := kc.CoreV1().Pods("sr-fn").Get(ctx, "mini-service-0", metav1.GetOptions{})
+		return err != nil
+	})
+}
+
+// RWX Jobs carry no staging annotation and complete as before.
+func TestModelVolumeController_RWXJobCompletesInPlace(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("512Gi")}}
+	if _, err := p.EnsureWriterClaim(ctx, mvURI, "sr-fn"); err != nil {
+		t.Fatal(err)
+	}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, NodeName: "node-a", Log: logrus.New()}
+	c.HandleJob(ctx, downloadJob(1))
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{})
+	if pvc.Labels[modelvolume.CompleteLabel] != "true" {
+		t.Error("RWX shared claim labelled complete in place")
 	}
 }

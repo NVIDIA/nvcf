@@ -180,6 +180,8 @@ func main() {
 		"Download each model once per cluster into a shared volume and attach it to every other pod that names it (needs L2)")
 	flag.StringVar(&config.ModelVolume.HostRoot, "model-volume-host-root", "",
 		"Host directory (mounted Bidirectional into the agent at the same path) where completed model volumes are bound for readers on block storage (default /var/lib/containerd/nvsnap-models)")
+	flag.DurationVar(&config.ModelVolume.ReapInterval, "model-volume-reap-interval", 0,
+		"How often the model volume reaper removes read-only PVs without a claim and abandoned primaries (0 = 10m)")
 	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
 		"How long a reader waits for the writer's download before downloading itself (default 1h)")
 

@@ -71,21 +71,51 @@ not.
    2026-09-26: `NVMesh Attach Failed` on the read-only PV while the writer
    pod held the primary). The download step has to exit and release the
    volume before readers attach, so it cannot live inside a pod that goes
-   on to serve. The Job's pod must also be removed after success
-   (`ttlSecondsAfterFinished`): a Succeeded pod keeps its volumes attached,
-   and on dev1 the read-only attach worked on the Job's node but failed on
-   every other node until that pod was deleted. A Job also decouples the download from the workload's
+   on to serve. A Job also decouples the download from the workload's
    scheduling: it runs on any node with the image, and the workload pods
    of a multi-node group or a gang all schedule as plain readers.
+
+   Where the Job writes depends on the mode. Distributed filesystem: into
+   the shared RWX claim, created at admission (the filesystem's quota
+   makes its size nominal). Block storage: into a pod-local emptyDir on
+   the node's disk, the same place the single-GPU cachedir capture
+   downloads to. No claim exists yet, because the model's size is unknown
+   until it has been downloaded, registries do not all expose it, and
+   not every storage system can grow a volume. kubelet removes an emptyDir
+   the moment its pod terminates (verified on dev1 2026-09-28), so the
+   download is the pod's init container and a small hold container keeps
+   the pod Running until the agent has copied the tree out (mechanism 3)
+   and deletes the Job; a six-hour active deadline is the safety net. The
+   pod carries no service-account token.
 
 3. Model volume per identity, immutable after download (agent + storage
    profile). Distributed filesystem: one RWX volume; writer and readers
    mount it at admission; completion is a marker file the writer's init
-   writes on exit 0. NVMesh: the writer's PVC is the artifact; on the
-   init's exit 0 the agent creates the read-only static PV and marks it
-   complete; readers attach it read-only. Later deployments, other
-   namespaces (`EnsureClaim`, done) and new versions of the function all
-   attach the same volume. There is no capture copy of the model anymore.
+   writes on exit 0. Block storage: when the staging pod's download init
+   exits 0, the agent on its node measures the bytes on disk, creates a ReadWriteOnce
+   claim of measured size plus ten percent, rounded up to a whole GiB
+   (profile `modelVolume.minSize` is the floor), in the nvsnap namespace,
+   attaches it through a mount-holder, copies the tree in with the
+   agent's tree copier, labels the retained PV complete, releases the
+   claim so the volume detaches, and deletes the Job so the emptyDir is
+   freed. The PV is the artifact; it belongs to no function namespace.
+   A copy that fails three times is given up: the Job and claim are
+   dropped, a failure record (ConfigMap in the nvsnap namespace, one
+   hour) makes the webhook leave new pods on their own download, and the
+   readers pending on the read-only claim are deleted so their
+   controllers recreate them on that path. A pod Pending on a claim
+   cannot run a fallback init, so this is what keeps "never deadlock"
+   true in `pvc` reader mode. Later deployments, other
+   namespaces and new versions of the function all attach the same
+   volume. There is no capture copy of the model anymore.
+
+   Reaper (agent, every ten minutes, idempotent on every node): read-only
+   model PVs whose claim is gone (Released, or bound in a namespace that
+   no longer exists) are deleted as objects only, since the storage
+   belongs to the primary; primaries Released without the complete label
+   for fifteen minutes are switched to reclaim Delete and removed, freeing
+   the capacity of an abandoned copy. Complete primaries are kept;
+   retention is a separate decision.
 
 4. Readers reach the volume without help from inside the pod (webhook +
    agent). On a distributed filesystem the RWX claim exists and is bound
@@ -168,10 +198,12 @@ reconciler, `vllm-workers` chart and runner.
 
 New: identity from init containers and group inheritance; the download
 Job derived from the chart's init or from `hf download`; init wrapping
-for the wait; per-identity model volume created at admission from the profile's
-class (RWX on DFS, RWO writer PVC on NVMesh); agent completion handler
-(init exit 0 -> marker / ro PV + bind); cache volume capture (caches only)
-on NVMesh; `cacheMode`; last-use labels.
+for the wait; per-identity model volume (RWX on DFS created at admission;
+on block storage staged in the Job's emptyDir and copied by the agent
+into a claim sized from the download, in the nvsnap namespace); agent
+completion handler (Job success -> marker / sized PV + read-only claims);
+model volume reaper; cache volume capture (caches only) on NVMesh;
+`cacheMode`; last-use labels.
 
 Removed for Helm: `schedulingGates`, promote-to-ROX of the whole tree,
 `nvsnap-l2-wait`, `restore-from`.

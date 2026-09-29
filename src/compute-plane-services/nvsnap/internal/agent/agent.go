@@ -238,6 +238,9 @@ type ModelVolumeConfig struct {
 	// at the same path, where completed model volumes are bound for
 	// readers on block storage. Default /var/lib/containerd/nvsnap-models.
 	HostRoot string
+	// ReapInterval is how often the reaper removes read-only model PVs
+	// without a claim and abandoned primaries. Zero means ten minutes.
+	ReapInterval time.Duration
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
@@ -675,6 +678,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			HostRoot:          a.modelHostRoot(),
 			HolderImage:       a.config.L2.WriterImage,
 			HolderPullSecrets: l2PullSecrets(a.config.L2),
+			Copier:            NewAgentCopier("/host", a.log.WithField("subsys", "modelvolume.copy")),
 			Log:               a.log.WithField("subsys", "modelvolume"),
 		}
 		go func() {
@@ -682,6 +686,10 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.log.WithError(err).Error("model volume controller stopped")
 			}
 		}()
+		// Read-only PVs whose namespace is gone and primaries whose copy
+		// never completed; idempotent, so every agent may run it.
+		reaper := &modelvolume.Reaper{Kube: a.kubeClient, Log: a.log.WithField("subsys", "modelvolume.reaper")}
+		go reaper.Run(ctx, a.config.ModelVolume.ReapInterval)
 	}
 
 	// nvsnap#194: OverlayFS cleanup-on-pod-delete + startup sweep. Safe
