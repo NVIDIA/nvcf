@@ -360,6 +360,8 @@ pub enum BringupError {
 }
 
 impl BringupError {
+    /// Returns whether the request timed out after the connection was
+    /// established, while waiting for response headers or the body.
     pub(crate) fn is_timeout(&self) -> bool {
         match self {
             Self::Timeout(_) => true,

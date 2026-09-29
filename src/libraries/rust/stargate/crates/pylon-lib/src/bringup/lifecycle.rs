@@ -47,6 +47,8 @@ enum CanaryOutcome {
 }
 
 impl CanaryProbe<'_> {
+    /// Sends one canary and records its result. Only an active-phase response
+    /// timeout that overlaps upstream progress is `TimedOutUpstreamBusy`.
     async fn send(&self, phase: CanaryPhase) -> CanaryOutcome {
         let started_at = Instant::now();
         let outcome = match send_canary_request(
@@ -193,6 +195,9 @@ pub(crate) async fn run_bringup_task(
     }
 }
 
+/// Runs active canaries until one fails. Returns `true` on a failure that
+/// should demote the model and `false` when stopped or active canaries are
+/// disabled.
 async fn wait_for_active_canary_failure(probe: &CanaryProbe<'_>, stop: &CancellationToken) -> bool {
     if probe.config.active_canary_interval.is_zero() {
         stop.cancelled().await;

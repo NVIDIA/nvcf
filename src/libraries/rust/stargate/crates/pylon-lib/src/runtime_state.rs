@@ -692,6 +692,8 @@ impl RequestObservationEvent {
     }
 }
 
+/// Generated output with a 2xx or not-yet-known status, or a 2xx completion,
+/// shows that the upstream is serving requests.
 fn observation_shows_upstream_progress(observation: &RequestObservation) -> bool {
     let success_status = |status: u16| (200..300).contains(&status);
     match observation.state {
