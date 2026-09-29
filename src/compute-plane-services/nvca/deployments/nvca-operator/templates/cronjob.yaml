@@ -81,9 +81,9 @@ spec:
                     fieldRef:
                       fieldPath: metadata.namespace
                 # Selects the check set: "control-plane" runs the gateway,
-                # storage, overlay and HA checks; anything else (including
-                # unset) runs the compute-plane GPU set. Without this the
-                # control-plane checks are unreachable from the chart.
+                # storage, overlay and HA checks; "compute-plane" or unset runs
+                # the GPU set, and the schema rejects anything else. Without
+                # this the control-plane checks are unreachable from the chart.
                 - name: VALIDATOR_ROLE
                   value: {{ $cv.role | quote }}
                 # The CronJob runs beside an installed stack, so an empty
