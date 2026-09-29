@@ -94,6 +94,16 @@ func (s *Server) lookupCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range rows {
 		row := &rows[i]
+		// A capture whose L2 promotion failed is durable on its node but
+		// not restorable from anywhere: the webhook finds no rox for the
+		// hash and cold-starts. Handing it out here made NVCA stamp
+		// restore-from instead of capturing, so the version stayed cold
+		// with nobody re-capturing (dev1 2026-09-28). Pending and empty
+		// states stay: pending resolves shortly, empty is a legacy or
+		// L1-only capture the restore side still knows how to use.
+		if row.PVCPromoteState == db.PVCPromoteStateFailed {
+			continue
+		}
 		// CapturedAt is the time the checkpoint completed — use
 		// CompletedAt when present, fall back to CreatedAt.
 		capturedAt := row.CreatedAt

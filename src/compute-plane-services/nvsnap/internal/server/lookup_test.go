@@ -98,6 +98,43 @@ func TestLookupCheckpoint_HappyPath(t *testing.T) {
 	}
 }
 
+// A capture whose L2 promotion failed is not restorable from anywhere and
+// must not be handed out: NVCA would stamp restore-from instead of
+// capturing and the version would stay cold. Pending and unset states are
+// still returned.
+func TestLookupCheckpoint_SkipsFailedPromotion(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	base := db.Checkpoint{ImageRef: "nvcr.io/foo:1.2", ModelID: "meta/llama", DriverVersion: "550.90.07"}
+	failed := base
+	failed.Hash, failed.PVCPromoteState = "dead0001", db.PVCPromoteStateFailed
+	pending := base
+	pending.Hash, pending.PVCPromoteState = "pend0001", db.PVCPromoteStatePending
+	legacy := base
+	legacy.Hash = "lega0001"
+	seedLookupRow(t, s, "ck-failed", failed)
+	seedLookupRow(t, s, "ck-pending", pending)
+	seedLookupRow(t, s, "ck-legacy", legacy)
+
+	rr := postLookup(t, s, lookupCheckpointRequest{ImageRef: "nvcr.io/foo:1.2", ModelID: "meta/llama", DriverMajor: 550})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	var resp lookupCheckpointResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, m := range resp.Matches {
+		got[m.CheckpointID] = true
+	}
+	if got["ck-failed"] {
+		t.Error("a failed-promotion capture must not be returned")
+	}
+	if !got["ck-pending"] || !got["ck-legacy"] {
+		t.Errorf("pending and legacy captures must be returned, got %v", got)
+	}
+}
+
 func TestLookupCheckpoint_NoMatchReturnsEmptyList(t *testing.T) {
 	s := newTestServerWithCatalog(t)
 	rr := postLookup(t, s, lookupCheckpointRequest{ImageRef: "nvcr.io/nothing:1.0"})
