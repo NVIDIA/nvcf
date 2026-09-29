@@ -17,10 +17,10 @@
 
 package com.nvidia.apikeys.persistance.models;
 
+import com.nvidia.apikeys.vo.KeyByAccountOwnerAndServiceVo;
+import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyStatus;
-import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.boot.jwt.services.mapping.annotation.EncryptedFields;
-import com.nvidia.boot.observability.tracing.redaction.DoNotTraceValue;
 import java.time.Instant;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -33,32 +33,52 @@ import org.springframework.data.cassandra.core.mapping.Column;
 import org.springframework.data.cassandra.core.mapping.PrimaryKeyColumn;
 import org.springframework.data.cassandra.core.mapping.Table;
 
+/**
+ * Account-scoped management index for keys. Partition lookups serve one owner in one account.
+ * Storage-attached indexes on nca_id, owner, issuer, status, and created_at serve bulk selection.
+ */
 @Builder(toBuilder = true)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor(onConstructor_ = @PersistenceCreator)
-@Table(KeyModel.TABLE_NAME)
-public class KeyModel {
+@Table(KeyByAccountOwnerAndServiceModel.TABLE_NAME)
+public class KeyByAccountOwnerAndServiceModel {
 
-    public static final String TABLE_NAME = "keys";
-    public static final String COLUMN_API_KEY_HASH = "api_key_hash";
-    public static final String COLUMN_STATUS = "status";
+    public static final String TABLE_NAME = "keys_by_account_owner_and_service";
+    public static final String COLUMN_NCA_ID = "nca_id";
+    public static final String COLUMN_OWNER_TYPE = "owner_type";
+    public static final String COLUMN_OWNER_ID = "owner_id";
+    public static final String COLUMN_ISSUER_SERVICE_ID = "issuer_service_id";
+    public static final String COLUMN_KEY_ID = "key_id";
+    public static final String COLUMN_KEY_STATUS = "key_status";
+    public static final String COLUMN_CREATED_AT = "created_at";
     public static final String COLUMN_EXPIRES_AT = "expires_at";
     public static final String COLUMN_DELETES_AT = "deletes_at";
     public static final String COLUMN_KEY_DETAILS = "key_details";
-    public static final String COLUMN_NCA_ID = "nca_id";
 
-    @DoNotTraceValue
     @NonNull
-    @PrimaryKeyColumn(name = COLUMN_API_KEY_HASH, ordinal = 0, type = PrimaryKeyType.PARTITIONED)
-    private String keyHash;
-
-    @Column(COLUMN_NCA_ID)
+    @PrimaryKeyColumn(name = COLUMN_NCA_ID, ordinal = 0, type = PrimaryKeyType.PARTITIONED)
     private String ncaId;
 
     @NonNull
-    @Column(COLUMN_STATUS)
+    @PrimaryKeyColumn(name = COLUMN_OWNER_TYPE, ordinal = 1, type = PrimaryKeyType.PARTITIONED)
+    private KeyOwnerType ownerType;
+
+    @NonNull
+    @PrimaryKeyColumn(name = COLUMN_OWNER_ID, ordinal = 2, type = PrimaryKeyType.PARTITIONED)
+    private String ownerId;
+
+    @PrimaryKeyColumn(name = COLUMN_ISSUER_SERVICE_ID, ordinal = 3, type = PrimaryKeyType.CLUSTERED)
+    private String issuerServiceId;
+
+    @PrimaryKeyColumn(name = COLUMN_KEY_ID, ordinal = 4, type = PrimaryKeyType.CLUSTERED)
+    private String keyId;
+
+    @Column(COLUMN_KEY_STATUS)
     private KeyStatus keyStatus;
+
+    @Column(COLUMN_CREATED_AT)
+    private Instant createdAt;
 
     @Column(COLUMN_EXPIRES_AT)
     private Instant expiresAt;
@@ -66,7 +86,8 @@ public class KeyModel {
     @Column(COLUMN_DELETES_AT)
     private Instant deletesAt;
 
-    @EncryptedFields(encryptionKeyName = "payload_jwe_kid", valueObject = KeyVo.class)
     @Column(COLUMN_KEY_DETAILS)
+    @EncryptedFields(encryptionKeyName = "payload_jwe_kid",
+            valueObject = KeyByAccountOwnerAndServiceVo.class)
     private String keyDetails;
 }

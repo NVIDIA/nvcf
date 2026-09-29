@@ -19,6 +19,7 @@ package com.nvidia.apikeys.validators;
 
 import static com.nvidia.apikeys.vo.KeyStatus.ACTIVE;
 
+import com.nvidia.apikeys.vo.KeyByAccountOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyByOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyVo;
@@ -47,6 +48,14 @@ public class KeyExpirationValidator {
     }
 
     public KeyByOwnerAndServiceVo validateStatus(KeyByOwnerAndServiceVo key) {
+        return isExpired(key::getExpiresAt, key::getKeyStatus)
+                ? key.toBuilder()
+                .keyStatus(KeyStatus.EXPIRED)
+                .build()
+                : key;
+    }
+
+    public KeyByAccountOwnerAndServiceVo validateStatus(KeyByAccountOwnerAndServiceVo key) {
         return isExpired(key::getExpiresAt, key::getKeyStatus)
                 ? key.toBuilder()
                 .keyStatus(KeyStatus.EXPIRED)
