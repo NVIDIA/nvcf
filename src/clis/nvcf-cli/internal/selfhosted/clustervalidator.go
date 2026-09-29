@@ -418,14 +418,16 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 
 	cr := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: roleLabels},
+		// Least privilege: only what the validator actually calls. It never
+		// creates Services, reads pod logs or watches anything, and it reads
+		// GatewayClasses through discovery alone.
 		Rules: []rbacv1.PolicyRule{
-			// Read-only: cluster inventory and configuration.
-			{APIGroups: []string{""}, Resources: []string{"nodes", "configmaps"}, Verbs: []string{"get", "list", "watch"}},
-			// Read + write: enforcement checks create and delete probe namespaces
-			// and pods; the active-LB check creates and deletes a probe service.
-			{APIGroups: []string{""}, Resources: []string{"namespaces", "pods", "services"}, Verbs: []string{"get", "list", "watch", "create", "delete"}},
-			// Pod log subresource: read probe output without exec.
-			{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}},
+			// Read-only: cluster inventory, its config ConfigMap, and the
+			// LoadBalancer Services the external-LB check inspects.
+			{APIGroups: []string{""}, Resources: []string{"nodes", "configmaps", "services"}, Verbs: []string{"get", "list"}},
+			// Read + write: the overlay and enforcement probes create and delete
+			// their own namespaces and pods.
+			{APIGroups: []string{""}, Resources: []string{"namespaces", "pods"}, Verbs: []string{"get", "list", "create", "delete"}},
 			{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"csidrivers", "storageclasses"}, Verbs: []string{"get", "list"}},
 			// NetworkPolicies: read for CNI detection; write for enforcement
 			// check which creates/updates/deletes policies in the temp namespace.
@@ -435,11 +437,11 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 			// DaemonSets: create/delete for the node-to-node DaemonSet probe; list to watch pod readiness.
 			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"get", "list"}},
 			{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"get", "list", "create", "delete"}},
-			// Gateway API: control-plane gateway and route health checks. The
-			// validator follows every NVCF route kind's parentRefs to learn
-			// which Gateways are NVCF's, so all four route kinds are read.
+			// Gateway API: the validator follows every NVCF route kind's
+			// parentRefs to learn which Gateways are NVCF's, and reads those
+			// Gateways' classes.
 			{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{
-				"gatewayclasses", "gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes",
+				"gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes",
 			}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/version", "/healthz"}, Verbs: []string{"get"}},
 		},

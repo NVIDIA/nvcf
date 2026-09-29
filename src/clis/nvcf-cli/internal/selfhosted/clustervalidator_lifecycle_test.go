@@ -411,3 +411,24 @@ func TestRunClusterValidator_InterruptLeavesNothingBehind(t *testing.T) {
 	}
 	assert.True(t, deleted, "the Job must be stopped so its pod stops using the RBAC")
 }
+
+// The run's ClusterRole grants only what the validator calls. It never creates
+// Services, reads pod logs or watches anything.
+func TestEnsureClusterValidatorRBAC_LeastPrivilege(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client, clusterValidatorControlPlaneRole, "runid", false))
+	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
+		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
+	require.NoError(t, err)
+	for _, r := range cr.Rules {
+		for _, v := range r.Verbs {
+			assert.NotEqual(t, "watch", v, "no rule needs watch")
+		}
+		for _, res := range r.Resources {
+			assert.NotEqual(t, "pods/log", res)
+			if res == "services" {
+				assert.ElementsMatch(t, []string{"get", "list"}, r.Verbs, "services are only read")
+			}
+		}
+	}
+}

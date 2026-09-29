@@ -263,17 +263,16 @@ func TestEnsureClusterValidatorRBAC_WritableResources(t *testing.T) {
 		// Probe pods spun up for node-to-node and inter-namespace checks.
 		{"", "pods", "create"},
 		{"", "pods", "delete"},
-		// Log reading: fetch probe output without exec.
-		{"", "pods/log", "get"},
-		// Active LB probe service.
-		{"", "services", "create"},
-		{"", "services", "delete"},
+		// The external-LB check lists LoadBalancer Services.
+		{"", "services", "list"},
+		// The node-to-node probe DaemonSet.
+		{"apps", "daemonsets", "create"},
+		{"apps", "daemonsets", "delete"},
 		// Enforcement check creates/updates/deletes NetworkPolicies in temp namespace.
 		{"networking.k8s.io", "networkpolicies", "create"},
 		{"networking.k8s.io", "networkpolicies", "update"},
 		{"networking.k8s.io", "networkpolicies", "delete"},
 		// Gateway API health checks.
-		{"gateway.networking.k8s.io", "gatewayclasses", "get"},
 		{"gateway.networking.k8s.io", "gateways", "list"},
 		{"gateway.networking.k8s.io", "httproutes", "get"},
 		{"gateway.networking.k8s.io", "grpcroutes", "list"},
