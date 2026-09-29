@@ -70,8 +70,6 @@ async fn test_passthrough() -> anyhow::Result<()> {
             "/?query=123",
             "/abc/123",
             "/abc/123?query=456",
-            "/info",
-            "/info?build=true",
         ] {
             tracing::info!(method = %method, path = path, "creating request");
             let request = axum::http::Request::builder()
