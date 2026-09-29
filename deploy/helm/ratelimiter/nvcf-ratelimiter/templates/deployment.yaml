@@ -22,6 +22,14 @@ metadata:
     {{- include "nvcf-ratelimiter.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.rateLimiter.replicaCount }}
+  # Surge first so a live member exists to receive the outgoing pod's counters.
+  # Pinned because the percentage defaults allow an unavailable pod at some
+  # replica counts.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       {{- include "nvcf-ratelimiter.selectorLabels" . | nindent 6 }}
@@ -32,10 +40,12 @@ spec:
         {{- with .Values.rateLimiter.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        checksum/config-env: {{ printf "%s|%s|%s" (toYaml .Values.rateLimiter.env) (include "nvcf-ratelimiter.oauth2Issuer" .) (include "nvcf-ratelimiter.audience" .) | sha256sum }}
+        checksum/config-env: {{ printf "%s|%s|%s|%s" (toYaml .Values.rateLimiter.env) (include "nvcf-ratelimiter.oauth2Issuer" .) (include "nvcf-ratelimiter.audience" .) (toString .Values.rateLimiter.olricReplicaCount) | sha256sum }}
       labels:
         {{- include "nvcf-ratelimiter.selectorLabels" . | nindent 8 }}
     spec:
+      # Covers the readiness delay plus the counter hand-off.
+      terminationGracePeriodSeconds: {{ .Values.rateLimiter.terminationGracePeriodSeconds }}
       {{- with .Values.rateLimiter.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -83,6 +93,10 @@ spec:
               value: {{ include "nvcf-ratelimiter.oauth2Issuer" . | quote }}
             - name: AUDIENCE
               value: {{ include "nvcf-ratelimiter.audience" . | quote }}
+            {{- with .Values.rateLimiter.olricReplicaCount }}
+            - name: OLRIC_REPLICA_COUNT
+              value: {{ . | quote }}
+            {{- end }}
             {{- range $key, $value := .Values.rateLimiter.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
