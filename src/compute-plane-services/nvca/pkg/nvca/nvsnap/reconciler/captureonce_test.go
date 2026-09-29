@@ -258,6 +258,18 @@ func TestWriteStatusRejectsSupersededClaim(t *testing.T) {
 	if st := readStatus(cur2); st.CaptureOwner != "ns1/podC" {
 		t.Errorf("claim must survive: %+v", st)
 	}
+	// The version fence catches what state comparison cannot: a claim that
+	// opened and closed, or a lease refresh by the same owner, between the
+	// observation and the write.
+	obj := coldCFS("fv-versioned")
+	obj.SetResourceVersion("41")
+	dyn3 := newFakeDynamic(obj)
+	if err := writeStatus(ctx, dyn3, "fv-versioned", warm, claimToken{ExpectUnclaimed: true, ObservedResourceVersion: "40"}); !errors.Is(err, ErrClaimSuperseded) {
+		t.Fatalf("a write observed at an older version must be rejected: %v", err)
+	}
+	if err := writeStatus(ctx, dyn3, "fv-versioned", warm, claimToken{ExpectUnclaimed: true, ObservedResourceVersion: "41"}); err != nil {
+		t.Fatalf("a write at the observed version goes through: %v", err)
+	}
 }
 
 func TestWriteStatusReleasesClaim(t *testing.T) {

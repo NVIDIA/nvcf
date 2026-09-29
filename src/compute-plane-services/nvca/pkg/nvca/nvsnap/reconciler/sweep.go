@@ -84,9 +84,13 @@ func (r *Reconciler) SweepOnce(ctx context.Context) {
 
 		// An in-flight capture is not recovered over. A live claim whose
 		// owner pod is alive is left alone (unknown liveness counts as
-		// alive); a dead or expired claim is taken over, fenced on the
-		// claim as observed so a newer claimant cannot be released.
-		token := claimToken{ExpectUnclaimed: true}
+		// alive). Every sweep write is fenced on the resourceVersion it
+		// listed: any change since then (a claim that opened, or opened
+		// and closed, a lease the owner refreshed, a result that landed)
+		// makes the write fail and the next tick re-evaluate. The owner
+		// and unclaimed checks stay as a second line for objects whose
+		// version the fake or an old server does not track.
+		token := claimToken{ExpectUnclaimed: true, ObservedResourceVersion: cfs.GetResourceVersion()}
 		if st.CaptureOwner != "" {
 			leaseLive := st.CaptureLeaseExpiry != nil && time.Now().Before(st.CaptureLeaseExpiry.Time)
 			if leaseLive && r.claimOwnerAlive(ctx, st.CaptureOwner, st.CaptureOwnerUID) {
@@ -94,7 +98,7 @@ func (r *Reconciler) SweepOnce(ctx context.Context) {
 					Debug("sweep: capture in flight with a live owner; not recovering over it")
 				continue
 			}
-			token = claimToken{Owner: st.CaptureOwner, UID: st.CaptureOwnerUID}
+			token = claimToken{Owner: st.CaptureOwner, UID: st.CaptureOwnerUID, ObservedResourceVersion: cfs.GetResourceVersion()}
 		}
 
 		now := time.Now()

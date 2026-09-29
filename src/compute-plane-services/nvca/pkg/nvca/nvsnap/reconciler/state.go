@@ -264,9 +264,16 @@ type claimToken struct {
 	// claim appeared in between, so a fresh capture is never released by
 	// a recovery that read stale state.
 	ExpectUnclaimed bool
+	// ObservedResourceVersion, when set, rejects the write if the object
+	// changed at all since the writer observed it. Owner and unclaimed
+	// checks compare states and cannot see a claim that opened and closed
+	// in between, or a lease the same pod refreshed; the version can.
+	ObservedResourceVersion string
 }
 
-func (t claimToken) empty() bool { return t.Owner == "" && !t.ExpectUnclaimed }
+func (t claimToken) empty() bool {
+	return t.Owner == "" && !t.ExpectUnclaimed && t.ObservedResourceVersion == ""
+}
 
 // ErrClaimSuperseded is returned by writeStatus when the caller's claim
 // token no longer matches the claim on the object: another reconcile owns
@@ -281,6 +288,9 @@ func (st cfsStatus) supersedes(token claimToken) bool {
 	}
 	if token.ExpectUnclaimed {
 		return st.CaptureOwner != ""
+	}
+	if token.Owner == "" {
+		return false // version-only fence, checked by the caller
 	}
 	if st.CaptureOwner == "" {
 		// The writer's claim is gone: another terminal write (a recovery
@@ -298,6 +308,9 @@ func writeStatus(ctx context.Context, dc dynamic.Interface, fvID string, upd sta
 	cur, err := dc.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get NvSnapFunctionState %s: %w", fvID, err)
+	}
+	if token.ObservedResourceVersion != "" && cur.GetResourceVersion() != token.ObservedResourceVersion {
+		return ErrClaimSuperseded
 	}
 	if readStatus(cur).supersedes(token) {
 		return ErrClaimSuperseded

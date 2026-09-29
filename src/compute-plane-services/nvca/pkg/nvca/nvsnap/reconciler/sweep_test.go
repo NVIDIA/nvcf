@@ -26,7 +26,9 @@ import (
 	"errors"
 	nvsnapv1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvsnap/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -293,5 +295,34 @@ func TestSweep_RecoversOverDeadOwner(t *testing.T) {
 	}
 	if s := readStatus(mustGet(t, dyn, fvID)); s.LocalCacheState != nvsnapv1alpha1.LocalCacheStateWarm {
 		t.Errorf("recovered Warm must stand: %+v", s)
+	}
+}
+
+// The sweep fences on the version it listed: an object that changed after
+// the list (here: the owner refreshed its lease) is not written.
+func TestSweep_StaleObservationIsNotWritten(t *testing.T) {
+	const fvID, image, hash = "fv-sweep-stale", "ngc.io/fn:1", "deadbeefcafe1004"
+	srv := usableCaptureServer(image, hash)
+	defer srv.Close()
+	obj := capturingWithLookup(fvID, image, "ns1/podA", "uid-a", time.Now().Add(-time.Minute)) // expired: recoverable
+	obj.SetResourceVersion("7")
+	dyn := newFakeDynamic(obj)
+	// Between the sweep's list and its write the owner refreshes the lease:
+	// simulate by bumping the version the Get returns.
+	dyn.PrependReactor("get", "nvsnapfunctionstates", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		cur, err := dyn.Tracker().Get(CFSResource, "", fvID)
+		if err != nil {
+			return true, nil, err
+		}
+		u := cur.(*unstructured.Unstructured).DeepCopy()
+		u.SetResourceVersion("8")
+		return true, u, nil
+	})
+	r := sweepReconciler(srv, dyn)
+	r.KubeClient = k8sfake.NewSimpleClientset()
+	r.SweepOnce(context.Background())
+	got, _ := dyn.Tracker().Get(CFSResource, "", fvID)
+	if s := readStatus(got.(*unstructured.Unstructured)); s.LocalCacheState != nvsnapv1alpha1.LocalCacheStateCapturing {
+		t.Errorf("an object that changed since the list must not be written: %+v", s)
 	}
 }
