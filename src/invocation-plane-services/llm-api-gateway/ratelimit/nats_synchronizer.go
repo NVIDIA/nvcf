@@ -123,12 +123,7 @@ func NewNATSSynchronizer(
 		cfg:         cfg,
 		clusterName: clusterName,
 	}
-	telemetry.RegisterRateLimitSynchronizerQueueLength(func() int64 {
-		if s.resultChan == nil {
-			return -1
-		}
-		return int64(len(s.resultChan))
-	})
+	telemetry.RegisterRateLimitSynchronizerQueueLength(s.events.length)
 	return s
 }
 
@@ -257,12 +252,12 @@ type natsSynchronizer struct {
 	cfg         NATSSyncConfig
 	clusterName string
 	wg          sync.WaitGroup
-	resultChan  chan *RateLimitEventWireFormat
+	events      eventQueue
 }
 
-func (s *natsSynchronizer) Send(_ context.Context, rle *RateLimitEvent) error {
+func (s *natsSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) error {
 	queueStart := time.Now()
-	s.resultChan <- &RateLimitEventWireFormat{
+	if err := s.events.send(ctx, &RateLimitEventWireFormat{
 		Key:         rle.Key,
 		Units:       rle.Result.Requested,
 		Rate:        rle.Result.RateLimit.Limit,
@@ -271,6 +266,8 @@ func (s *natsSynchronizer) Send(_ context.Context, rle *RateLimitEvent) error {
 		ClusterName: s.clusterName,
 		CreatedAt:   time.Now().Unix(),
 		MustConsume: rle.MustConsume,
+	}); err != nil {
+		return err
 	}
 	telemetry.Record(
 		telemetry.RateLimitSynchronizerQueueWait(),
@@ -281,17 +278,16 @@ func (s *natsSynchronizer) Send(_ context.Context, rle *RateLimitEvent) error {
 }
 
 func (s *natsSynchronizer) Start() {
-	s.resultChan = make(chan *RateLimitEventWireFormat, publishResultBufferSize)
+	events := s.events.open(publishResultBufferSize)
 	for i := range numPublishResultProcessors {
 		s.wg.Go(func() {
-			s.processor(i)
+			s.processor(i, events)
 		})
 	}
 }
 
 func (s *natsSynchronizer) Stop() {
-	if s.resultChan != nil {
-		close(s.resultChan)
+	if s.events.close() {
 		s.wg.Wait()
 	}
 
@@ -301,8 +297,8 @@ func (s *natsSynchronizer) Stop() {
 	}
 }
 
-func (s *natsSynchronizer) processor(i int) {
-	for data := range s.resultChan {
+func (s *natsSynchronizer) processor(i int, events <-chan *RateLimitEventWireFormat) {
+	for data := range events {
 		lag := time.Since(time.Unix(data.CreatedAt, 0)).Seconds()
 		if lag > dropMessagesOlderThan {
 			zlog.Debug().

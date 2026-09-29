@@ -17,7 +17,14 @@ limitations under the License.
 
 package ratelimit
 
-import "context"
+import (
+	"context"
+	"errors"
+	"sync"
+)
+
+// ErrSynchronizerStopped is returned by Send after the synchronizer stopped.
+var ErrSynchronizerStopped = errors.New("rate limit synchronizer is stopped")
 
 type RateLimitEvent struct {
 	Key         string
@@ -45,3 +52,75 @@ func (s nopSynchronizer) Send(context.Context, *RateLimitEvent) error { return n
 func (s nopSynchronizer) Start() {}
 
 func (s nopSynchronizer) Stop() {}
+
+// eventQueue buffers rate-limit events between Send and a synchronizer's
+// publish processors. Requests still finishing during shutdown can call Send
+// after Stop, so sends after close return ErrSynchronizerStopped instead of
+// panicking on the closed channel, and close releases senders blocked on a
+// full queue.
+type eventQueue struct {
+	mu       sync.Mutex
+	ch       chan *RateLimitEventWireFormat
+	stopping chan struct{}
+	senders  sync.WaitGroup
+	closed   bool
+}
+
+// open creates the channel the publish processors read from.
+func (q *eventQueue) open(size int) <-chan *RateLimitEventWireFormat {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.ch = make(chan *RateLimitEventWireFormat, size)
+	q.stopping = make(chan struct{})
+	return q.ch
+}
+
+func (q *eventQueue) send(ctx context.Context, event *RateLimitEventWireFormat) error {
+	q.mu.Lock()
+	if q.ch == nil || q.closed {
+		q.mu.Unlock()
+		return ErrSynchronizerStopped
+	}
+	q.senders.Add(1)
+	ch, stopping := q.ch, q.stopping
+	q.mu.Unlock()
+	defer q.senders.Done()
+
+	select {
+	case ch <- event:
+		return nil
+	case <-stopping:
+		return ErrSynchronizerStopped
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// close stops accepting events, waits for in-progress sends to finish, and
+// closes the channel so processors drain what is queued. It reports whether
+// the queue was open, so the caller knows to wait for its processors.
+func (q *eventQueue) close() bool {
+	q.mu.Lock()
+	if q.ch == nil || q.closed {
+		q.closed = true
+		q.mu.Unlock()
+		return false
+	}
+	q.closed = true
+	close(q.stopping)
+	q.mu.Unlock()
+
+	q.senders.Wait()
+	close(q.ch)
+	return true
+}
+
+// length reports the queued events, or -1 before the queue is opened.
+func (q *eventQueue) length() int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.ch == nil {
+		return -1
+	}
+	return int64(len(q.ch))
+}

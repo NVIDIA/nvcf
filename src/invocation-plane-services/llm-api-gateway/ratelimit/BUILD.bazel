@@ -53,6 +53,7 @@ alias(
 go_test(
     name = "ratelimit_test",
     srcs = [
+        "event_queue_test.go",
         "fake_store_test.go",
         "nats_synchronizer_test.go",
         "olric_cluster_test.go",

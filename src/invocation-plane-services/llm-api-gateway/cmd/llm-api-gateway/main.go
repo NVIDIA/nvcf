@@ -35,7 +35,12 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-const defaultGatewayShutdownTimeout = 5 * time.Second
+const (
+	defaultGatewayShutdownTimeout = 5 * time.Second
+	// telemetryShutdownTimeout bounds the final telemetry flush so the whole
+	// shutdown fits in the pod's termination grace period.
+	telemetryShutdownTimeout = 5 * time.Second
+)
 
 func main() {
 	cfg, err := config.LoadFromEnv()
@@ -52,7 +57,9 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to initialize open telemetry")
 	}
 	defer func() {
-		if shutdownErr := observability.Shutdown(context.Background()); shutdownErr != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), telemetryShutdownTimeout)
+		defer cancel()
+		if shutdownErr := observability.Shutdown(ctx); shutdownErr != nil {
 			zlog.Error().Err(shutdownErr).Msg("failed to shutdown open telemetry")
 		}
 	}()
@@ -88,10 +95,16 @@ func main() {
 	if err := runGateway(
 		ctx,
 		cfg.Server.Addr,
-		shutdownTimeout(cfg.Server.WriteTimeout),
+		shutdownTimeout(cfg.Server.ShutdownTimeout),
 		e.Start,
-		e.Shutdown,
-	); err != nil {
+		func(ctx context.Context) error { return server.Shutdown(ctx, e) },
+	); errors.Is(err, context.DeadlineExceeded) {
+		// Return normally so deferred telemetry shutdown still flushes.
+		zlog.Warn().
+			Err(err).
+			Dur("shutdown_timeout", cfg.Server.ShutdownTimeout).
+			Msg("shutdown timed out; closed requests still in flight")
+	} else if err != nil {
 		zlog.Fatal().Err(err).Msg("gateway exited unexpectedly")
 	}
 }
