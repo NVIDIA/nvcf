@@ -1856,7 +1856,7 @@ func TestCheckTier2StatefulSets_OnDeleteAtFullReadyIsClean(t *testing.T) {
 // -- NVCF Gateway discovery --
 
 var routeVersions = map[string]string{
-	"HTTPRoute": "v1", "GRPCRoute": "v1", "TCPRoute": "v1alpha2", "UDPRoute": "v1alpha2",
+	"HTTPRoute": "v1", "GRPCRoute": "v1", "TCPRoute": "v1alpha2", "UDPRoute": "v1alpha2", "Gateway": "v1",
 }
 
 func parentRef(kv ...string) map[string]interface{} {
@@ -2528,4 +2528,148 @@ func TestPostInstallMode(t *testing.T) {
 	for v, want := range map[string]bool{"true": true, " TRUE ": true, "1": true, "": false, "no": false} {
 		assert.Equal(t, want, postInstallMode(v), v)
 	}
+}
+
+func gatewayObject(ns, name, class string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": gatewayAPIGroup + "/v1",
+		"kind":       "Gateway",
+		"metadata":   map[string]interface{}{"name": name, "namespace": ns},
+		"spec":       map[string]interface{}{"gatewayClassName": class},
+	}}
+}
+
+// gatewayClient returns a route client holding the given Gateways. They are
+// added under an explicit resource: the fake guesses the resource from the
+// kind, and its naive pluralizer turns Gateway into "gatewaies".
+func gatewayClient(t *testing.T, gws ...*unstructured.Unstructured) *dynamicfake.FakeDynamicClient {
+	t.Helper()
+	dyn := routeClient()
+	gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: "v1", Resource: "gateways"}
+	for _, gw := range gws {
+		require.NoError(t, dyn.Tracker().Create(gvr, gw, gw.GetNamespace()))
+	}
+	return dyn
+}
+
+// Serves the route kinds plus gateways, so GatewayClass lookups can run.
+func gatewayClassDiscoveryClient() *fake.Clientset {
+	return gatewayDiscoveryClient(
+		gatewayAPIGroup+"/v1/httproutes",
+		gatewayAPIGroup+"/v1/gateways",
+	)
+}
+
+// In merged-gateways mode the single proxy carries only its GatewayClass. It
+// serves NVCF's Gateway when their classes match, so it is assessed; a
+// class-only proxy of another class, and another team's per-Gateway proxy that
+// happens to share the class, are not.
+func TestCheckTier1Deployments_MergedProxyIsAttributedByClass(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/shared-gw")
+	two := int32(2)
+	proxy := func(name string, labels map[string]string, ready int32) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: envoyGatewayNamespace, Generation: 1, Labels: labels},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: ready},
+		}
+	}
+	run := func(objs ...*appsv1.Deployment) *ValidationState {
+		client := gatewayClassDiscoveryClient()
+		for _, d := range objs {
+			_, err := client.AppsV1().Deployments(d.Namespace).Create(context.Background(), d, metav1.CreateOptions{})
+			require.NoError(t, err)
+		}
+		state := &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), client, gatewayClient(t, gatewayObject("nvcf", "shared-gw", "eg")), state)
+		return state
+	}
+
+	state := run(proxy("envoy-merged", map[string]string{owningGatewayClassLabel: "eg"}, 1))
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "the merged proxy serving NVCF's class is NVCF's")
+
+	state = run(
+		proxy("envoy-merged-other", map[string]string{owningGatewayClassLabel: "team-b"}, 1),
+		proxy("envoy-team-b", map[string]string{
+			owningGatewayNameLabel: "team-b-gw", owningGatewayNamespaceLabel: "team-b", owningGatewayClassLabel: "eg",
+		}, 1),
+		proxy("envoy-merged", map[string]string{owningGatewayClassLabel: "eg"}, 2),
+	)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "other classes and other teams' per-Gateway proxies are not NVCF's")
+}
+
+// The LoadBalancer row counts a merged-gateways Service for every NVCF Gateway
+// of its class, instead of reporting each as missing.
+func TestCheckExternalLoadBalancer_MergedProxyServesNVCFGateways(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/shared-gw,nvcf/grpc-gw")
+	merged := func(ip string) *corev1.Service {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "envoy-merged", Namespace: envoyGatewayNamespace,
+				Labels: map[string]string{owningGatewayClassLabel: "eg"}},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		}
+		if ip != "" {
+			svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip}}
+		}
+		return svc
+	}
+	gws := func() *dynamicfake.FakeDynamicClient {
+		return gatewayClient(t, gatewayObject("nvcf", "shared-gw", "eg"), gatewayObject("nvcf", "grpc-gw", "eg"))
+	}
+
+	client := gatewayClassDiscoveryClient()
+	addServices(t, client, merged("203.0.113.1"))
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, gws(), state)
+	require.NotNil(t, state.ExternalLBOK)
+	assert.True(t, *state.ExternalLBOK)
+
+	client = gatewayClassDiscoveryClient()
+	addServices(t, client, merged(""))
+	state = &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, gws(), state)
+	require.NotNil(t, state.ExternalLBOK)
+	assert.False(t, *state.ExternalLBOK, "the merged proxy still pending is NVCF's pending address")
+}
+
+// Without the Gateways' classes a merged proxy cannot be attributed, so the
+// Gateways it may be serving are unknown rather than missing.
+func TestCheckExternalLoadBalancer_UnreadableClassesAreUnknown(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/shared-gw")
+	client := gatewayClassDiscoveryClient()
+	addServices(t, client, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-merged", Namespace: envoyGatewayNamespace,
+			Labels: map[string]string{owningGatewayClassLabel: "eg"}},
+		Spec:   corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.1"}}}},
+	})
+	dyn := routeClient()
+	dyn.PrependReactor("list", "gateways", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: gatewayAPIGroup, Resource: "gateways"}, "", fmt.Errorf("denied"))
+	})
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, dyn, state)
+
+	assert.Nil(t, state.ExternalLBOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not be attributed")
+}
+
+// A configured bare name matches that Gateway in any namespace, and a Gateway
+// that is not NVCF's contributes no class.
+func TestNVCFGatewayClasses_MatchesQualifiedAndBareEntries(t *testing.T) {
+	dyn := gatewayClient(t,
+		gatewayObject("nvcf", "shared-gw", "eg"),
+		gatewayObject("gw", "grpc-gw", "eg-grpc"),
+		gatewayObject("team-b", "b-gw", "team-b"),
+	)
+	got, err := nvcfGatewayClasses(context.Background(), gatewayClassDiscoveryClient(), dyn,
+		gatewaySet{"nvcf/shared-gw": true, "grpc-gw": true})
+	require.NoError(t, err)
+	assert.Equal(t, map[string][]string{"eg": {"nvcf/shared-gw"}, "eg-grpc": {"grpc-gw"}}, got)
 }

@@ -58,10 +58,11 @@ rules:
     resourceNames: ["cluster-validator-summary"]
     verbs: ["update"]
   - apiGroups: ["gateway.networking.k8s.io"]
-    # Read-only: the LoadBalancer check follows the NVCF routes' parentRefs
-    # to learn which Gateways are NVCF's, so another team's pending proxy
-    # Service in the shared Envoy namespace is not blamed on NVCF.
-    resources: ["httproutes", "grpcroutes", "tcproutes", "udproutes"]
+    # Read-only: the LoadBalancer and Tier-1 checks follow the NVCF routes'
+    # parentRefs to learn which Gateways are NVCF's, so another team's proxy
+    # in the shared Envoy namespace is not blamed on NVCF. gateways gives
+    # their GatewayClass, which is how a merged-gateways proxy is labelled.
+    resources: ["httproutes", "grpcroutes", "tcproutes", "udproutes", "gateways"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]

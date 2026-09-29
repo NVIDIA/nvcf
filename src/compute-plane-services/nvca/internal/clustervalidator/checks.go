@@ -1222,7 +1222,8 @@ func checkExternalLoadBalancer(
 	}
 
 	if len(gateways) > 0 {
-		judgeNVCFGatewayServices(log, state, gateways, services)
+		classes, classErr := nvcfGatewayClasses(ctx, client, routes, gateways)
+		judgeNVCFGatewayServices(log, state, gateways, classes, classErr, services)
 		return
 	}
 	judgeUnattributedServices(log, state, services, discoveryErr)
@@ -1251,17 +1252,27 @@ func lbAddress(svc *corev1.Service) string {
 // judgeNVCFGatewayServices is the strict path: every NVCF Gateway must have a
 // proxy Service, and every one exposed through a LoadBalancer must have an
 // address. Other Gateways' Services are ignored.
-func judgeNVCFGatewayServices(log *logrus.Entry, state *ValidationState, gateways gatewaySet, services []corev1.Service) {
+func judgeNVCFGatewayServices(
+	log *logrus.Entry, state *ValidationState, gateways gatewaySet,
+	classes map[string][]string, classErr error, services []corev1.Service,
+) {
 	var found []lbResult
 	var pending []string
 	seen := map[string]bool{}
+	mergedProxies := 0
 	for i := range services {
 		svc := &services[i]
-		entry := gateways.entryFor(svc.Labels)
-		if entry == "" {
+		if svc.Labels[owningGatewayNameLabel] == "" && svc.Labels[owningGatewayClassLabel] != "" {
+			mergedProxies++
+		}
+		entries := gateways.entriesForProxy(svc.Labels, classes)
+		if len(entries) == 0 {
 			continue
 		}
-		seen[entry] = true
+		for _, e := range entries {
+			seen[e] = true
+		}
+		entry := strings.Join(entries, ", ")
 		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
 			// An EnvoyProxy can expose a Gateway as NodePort or ClusterIP on
 			// purpose; that Gateway has no external LB to check.
@@ -1280,6 +1291,16 @@ func judgeNVCFGatewayServices(log *logrus.Entry, state *ValidationState, gateway
 		if !seen[entry] {
 			missing = append(missing, entry)
 		}
+	}
+
+	if len(missing) > 0 && classErr != nil && mergedProxies > 0 {
+		// A merged-gateways proxy may be serving the "missing" Gateways, but
+		// without their classes it cannot be attributed.
+		msg := fmt.Sprintf("no per-Gateway proxy for %s, and the merged-gateways proxy could not be "+
+			"attributed: %v", strings.Join(missing, ", "), classErr)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+		return
 	}
 
 	if len(missing) > 0 || len(pending) > 0 {
@@ -2235,6 +2256,64 @@ func (g gatewaySet) entryFor(labels map[string]string) string {
 	return ""
 }
 
+// entriesForProxy returns the entries a proxy Service or Deployment serves.
+// A per-Gateway proxy names its Gateway. A merged-gateways proxy carries only
+// its GatewayClass and serves every Gateway of that class, so it serves the
+// NVCF entries whose Gateways use that class. The class match is limited to
+// class-only proxies: a shared class name such as "eg" must not pull another
+// team's per-Gateway proxy in.
+func (g gatewaySet) entriesForProxy(labels map[string]string, classes map[string][]string) []string {
+	if entry := g.entryFor(labels); entry != "" {
+		return []string{entry}
+	}
+	if labels[owningGatewayNameLabel] == "" {
+		return classes[labels[owningGatewayClassLabel]]
+	}
+	return nil
+}
+
+// nvcfGatewayClasses maps each GatewayClass used by an NVCF Gateway to the
+// entries that use it, so merged-gateways proxies can be attributed.
+func nvcfGatewayClasses(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, g gatewaySet,
+) (map[string][]string, error) {
+	if len(g) == 0 {
+		return nil, nil
+	}
+	surface, err := discoverGatewayAPIResources(client)
+	if err != nil {
+		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
+	}
+	version := surface.servedVersion("gateways")
+	if version == "" {
+		return nil, nil
+	}
+	if routes == nil {
+		return nil, fmt.Errorf("no client available to list gateways")
+	}
+	gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gateways"}
+	list, err := routes.Resource(gvr).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing gateways: %w", err)
+	}
+	classes := map[string][]string{}
+	for i := range list.Items {
+		gw := &list.Items[i]
+		class, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
+		entry := gw.GetNamespace() + "/" + gw.GetName()
+		if !g[entry] {
+			if !g[gw.GetName()] {
+				continue
+			}
+			entry = gw.GetName()
+		}
+		if class != "" {
+			classes[class] = append(classes[class], entry)
+		}
+	}
+	return classes, nil
+}
+
 // namespaces returns the distinct Gateway namespaces in the set, excluding
 // skip, so the caller can search them for proxy Services.
 func (g gatewaySet) namespaces(skip string) []string {
@@ -2474,6 +2553,11 @@ func checkTier1Deployments(
 	// assessed. A foreign proxy at 1/2 otherwise fails this critical row.
 	envoyNS := envoyGatewayNamespaceName()
 	gateways, _, gatewayErr := resolveNVCFGateways(ctx, client, routes)
+	var classes map[string][]string
+	var classErr error
+	if gatewayErr == nil {
+		classes, classErr = nvcfGatewayClasses(ctx, client, routes, gateways)
+	}
 	skippedProxies := 0
 
 	for _, ns := range controlPlaneNamespaceSet() {
@@ -2499,7 +2583,7 @@ func checkTier1Deployments(
 		}
 		for i := range deploys.Items {
 			d := &deploys.Items[i]
-			if ns == envoyNS && isEnvoyProxy(d.Labels) && gateways.entryFor(d.Labels) == "" {
+			if ns == envoyNS && isEnvoyProxy(d.Labels) && len(gateways.entriesForProxy(d.Labels, classes)) == 0 {
 				skippedProxies++
 				continue
 			}
@@ -2561,6 +2645,11 @@ func checkTier1Deployments(
 	case skippedProxies > 0 && gatewayErr != nil:
 		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: could not determine the NVCF Gateways (%v)",
 			skippedProxies, envoyNS, gatewayErr)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
+	case skippedProxies > 0 && classErr != nil:
+		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: could not read the NVCF Gateways' classes (%v)",
+			skippedProxies, envoyNS, classErr)
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
 	case skippedProxies > 0 && len(gateways) == 0:

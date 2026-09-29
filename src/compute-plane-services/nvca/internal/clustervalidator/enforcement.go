@@ -534,7 +534,7 @@ func probeConnectivityWithDelay(
 func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		if time.Now().After(deadline) {
+		if !time.Now().Before(deadline) {
 			return fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
 		}
 
@@ -568,9 +568,16 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 const pollAttemptTimeout = 10 * time.Second
 
 // attemptContext bounds one poll attempt by pollAttemptTimeout and by the
-// time left before deadline. The one-second floor keeps a final attempt from
-// being cancelled before it is sent. An attempt that times out is an ordinary
+// time left before deadline. An attempt that times out is an ordinary
 // transient error to the caller's retry loop.
+//
+// The one-second floor is deliberate. waitForDaemonSetPods and
+// waitForDaemonSetDesiredCount check their deadline after each attempt, so the
+// last attempt usually starts just past it (the deadline expires during the
+// sleep). Without the floor that attempt is cancelled at once, and
+// waitForDaemonSetPods reports "listing failed" instead of classifying the pods,
+// turning a real CNI fault into UNKNOWN. The loops that check the deadline
+// first can overrun it by at most the floor.
 func attemptContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, max(min(pollAttemptTimeout, time.Until(deadline)), time.Second))
 }
@@ -581,7 +588,7 @@ func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name s
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
-		if time.Now().After(deadline) {
+		if !time.Now().Before(deadline) {
 			if lastErr != nil {
 				return false, fmt.Errorf("pod %s/%s did not complete within %v (last error: %w)",
 					ns, name, timeout, lastErr)
