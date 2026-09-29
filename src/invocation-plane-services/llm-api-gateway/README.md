@@ -144,6 +144,9 @@ Useful overrides:
 - `NVCF_GATEWAY_ADDR` to bind a specific listen address
 - `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` to reject larger request bodies with
   413 (default `0`, no limit)
+- `NVCF_GATEWAY_SHUTDOWN_TIMEOUT` to bound how long a graceful shutdown waits
+  for in-flight requests, including streams (default `60s`). Keep the pod's
+  `terminationGracePeriodSeconds` above it.
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth

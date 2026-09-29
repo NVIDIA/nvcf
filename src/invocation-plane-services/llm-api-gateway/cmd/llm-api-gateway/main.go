@@ -88,7 +88,7 @@ func main() {
 	if err := runGateway(
 		ctx,
 		cfg.Server.Addr,
-		shutdownTimeout(cfg.Server.WriteTimeout),
+		shutdownTimeout(cfg.Server.ShutdownTimeout),
 		e.Start,
 		e.Shutdown,
 	); err != nil {

@@ -66,6 +66,7 @@ Important settings to review before deployment:
 - `llmApiGateway.imagePullSecrets` for private registry access
 - `llmApiGateway.replicaCount`, resource requests, and limits for your environment
 - `llmApiGateway.config.requestRouterUrl` and timeout values for the LLM Request Router HTTP endpoint
+- `llmApiGateway.config.shutdownTimeout` and `llmApiGateway.terminationGracePeriodSeconds` for how long a stopping pod drains in-flight requests (defaults `60s` and `75`; keep the grace period above the shutdown timeout)
 - `llmApiGateway.config.nvcfGrpc*` for optional NVCF gRPC auth integration
 - `llmApiGateway.metrics.enabled` to expose a metrics port on the Service and Deployment (default: `false`)
 - `llmApiGateway.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)

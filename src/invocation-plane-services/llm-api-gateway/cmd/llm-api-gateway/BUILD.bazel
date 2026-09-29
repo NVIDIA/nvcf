@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "llm-api-gateway_lib",
@@ -39,4 +39,10 @@ go_binary(
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
     },
+)
+
+go_test(
+    name = "llm-api-gateway_test",
+    srcs = ["main_test.go"],
+    embed = [":llm-api-gateway_lib"],
 )

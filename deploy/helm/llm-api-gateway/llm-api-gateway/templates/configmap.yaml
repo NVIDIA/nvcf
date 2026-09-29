@@ -23,6 +23,7 @@ metadata:
     {{- include "llm-api-gateway.labels" . | nindent 4 }}
 data:
   PORT: "8080"
+  NVCF_GATEWAY_SHUTDOWN_TIMEOUT: {{ $cfg.shutdownTimeout | quote }}
   NVCF_REGION: {{ $cfg.region | quote }}
   STARGATE_URL: {{ required "llmApiGateway.config.requestRouterUrl is required" $cfg.requestRouterUrl | quote }}
   STARGATE_CONNECT_TIMEOUT: {{ $cfg.requestRouterConnectTimeout | quote }}

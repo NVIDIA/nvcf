@@ -37,6 +37,7 @@ spec:
         checksum/config-env: {{ include "llm-api-gateway.configChecksum" . }}
     spec:
       serviceAccountName: {{ include "llm-api-gateway.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.llmApiGateway.terminationGracePeriodSeconds }}
       # Olric's k8s memberlist plugin calls the k8s API from inside the pod to
       # list peer pods, so the SA token must be mounted when Olric is enabled.
       automountServiceAccountToken: {{ .Values.llmApiGateway.olric.enabled }}

@@ -16,6 +16,10 @@
 llmApiGateway:
   replicaCount: 3
 
+  # Seconds Kubernetes waits after SIGTERM before killing the pod. Keep it
+  # above config.shutdownTimeout so in-flight requests can finish draining.
+  terminationGracePeriodSeconds: 75
+
   podDisruptionBudget:
     enabled: false
     # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
@@ -75,6 +79,9 @@ llmApiGateway:
     defaultModel: ""
     defaultRpm: 120
     defaultTpm: 240000
+    # How long a graceful shutdown waits for in-flight requests, including
+    # streams, before closing them. Keep below terminationGracePeriodSeconds.
+    shutdownTimeout: 60s
 
   # Rate-limit state is kept in an embedded Olric cluster colocated with the
   # gateway pods (no separate Redis deployment). The gateway's server.go picks

@@ -59,6 +59,10 @@ type ServerConfig struct {
 	// MaxRequestBodyBytes rejects larger request bodies with 413. Zero disables
 	// the limit.
 	MaxRequestBodyBytes int64
+	// ShutdownTimeout bounds how long a graceful shutdown waits for in-flight
+	// requests, including streams, before closing them. Keep the pod's
+	// terminationGracePeriodSeconds above it.
+	ShutdownTimeout time.Duration
 }
 
 type TelemetryConfig struct {
@@ -198,6 +202,7 @@ func Default() *Config {
 			WriteTimeout:      60 * time.Second,
 			IdleTimeout:       60 * time.Second,
 			Region:            "global",
+			ShutdownTimeout:   60 * time.Second,
 		},
 		Stargate: StargateConfig{
 			URL:            "http://127.0.0.1:8000",
@@ -300,6 +305,14 @@ func applyServerTelemetryEnv(cfg *Config, errs *envErrs) {
 			errs.add("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", strconv.FormatInt(limit, 10), errors.New("must be >= 0"))
 		} else {
 			cfg.Server.MaxRequestBodyBytes = limit
+		}
+	}
+
+	if timeout, ok := errs.duration("NVCF_GATEWAY_SHUTDOWN_TIMEOUT"); ok {
+		if timeout <= 0 {
+			errs.add("NVCF_GATEWAY_SHUTDOWN_TIMEOUT", timeout.String(), errors.New("must be > 0"))
+		} else {
+			cfg.Server.ShutdownTimeout = timeout
 		}
 	}
 

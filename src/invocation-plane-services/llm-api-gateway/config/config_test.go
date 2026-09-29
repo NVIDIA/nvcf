@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
@@ -292,6 +293,41 @@ func TestLoadFromEnvRejectsInvalidMaxRequestBodyBytes(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES") {
 				t.Fatalf("error %q does not mention NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvReadsShutdownTimeout(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.ShutdownTimeout != 60*time.Second {
+		t.Fatalf("default shutdown timeout = %s, want 60s", cfg.Server.ShutdownTimeout)
+	}
+
+	t.Setenv("NVCF_GATEWAY_SHUTDOWN_TIMEOUT", "5m")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.ShutdownTimeout != 5*time.Minute {
+		t.Fatalf("shutdown timeout = %s, want 5m", cfg.Server.ShutdownTimeout)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidShutdownTimeout(t *testing.T) {
+	for _, value := range []string{"0s", "-1s", "60"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NVCF_GATEWAY_SHUTDOWN_TIMEOUT", value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "NVCF_GATEWAY_SHUTDOWN_TIMEOUT") {
+				t.Fatalf("error %q does not mention NVCF_GATEWAY_SHUTDOWN_TIMEOUT", err.Error())
 			}
 		})
 	}
