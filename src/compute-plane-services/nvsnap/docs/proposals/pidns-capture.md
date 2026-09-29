@@ -146,3 +146,28 @@ Validation before it becomes the default:
 Step 4 is not optional. Without it an upgraded agent silently reuses old
 captures and the fix appears not to work -- the same trap that made the
 runtime-directory fix look ineffective until the version was bumped.
+
+## Findings from the NVCF function test (2026-09-29)
+
+A stock LLM NIM (Llama-3.1-8B, vLLM profile) deployed as an NVCF container
+function runs its server as pid 1. Through the NVCA integration on dev1:
+
+- The pid-1 dump works: 163 s for a 107 GB checkpoint (77 GB CRIU images,
+  of which a single 77.5 GB pages image holds the engine's GPU state at
+  gpu_memory_utilization 0.9, plus a 30 GB rootfs diff holding the model).
+- Promotion to the read-only volume works once the volume is sized from
+  the measured dump (82 s, 115 GB copied in 44 s).
+- The CRIU restore completes: 1m15s for the same image, restorer CPU-bound
+  with the pages in page cache.
+- The restored tree exits within a second. The pid-1 dump pairs
+  `--empty-ns net` with `--tcp-close`, so the loopback connections between
+  the API server, the engine subprocess and the c10d TCPStore are closed
+  at restore; torch's NCCL heartbeat monitor sees the store gone and
+  aborts, and PMIx (HPC-X orted) logs NO-PERMISSIONS on its shared-memory
+  store. A single-process engine survives `--tcp-close`; a multi-process
+  one does not.
+
+The next step for pid-1 restore is to keep loopback TCP: restore into the
+placeholder pod's network namespace with `--tcp-established`, closing only
+sockets whose peer is outside the pod, and to restore `/dev/shm` entries
+with their original ownership.
