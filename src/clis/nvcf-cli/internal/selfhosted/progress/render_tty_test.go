@@ -568,6 +568,25 @@ func TestCheckOneShotRenderer_FlushesFailedSummaryOnFinal(t *testing.T) {
 	assert.Contains(t, out, "Status: ✘ failed  (1/2 passed, 1 failed)")
 }
 
+// An interrupted check ends on a cancelled final event, which must not read
+// as a pass.
+func TestCheckOneShotRenderer_CancelledIsNotOK(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	var buf bytes.Buffer
+	r := NewCheckOneShotRenderer(&buf, ModelOpts{Mode: ModeCheck, Output: &buf})
+	ctx := context.Background()
+	require.NoError(t, r.Emit(ctx, CheckStarted{Category: "local-host-tools", ID: "kubectl-on-path"}))
+	require.NoError(t, r.Emit(ctx, CheckCompleted{
+		Category: "local-host-tools", ID: "kubectl-on-path", Passed: true, Severity: "info", Message: "kubectl on PATH",
+	}))
+	require.NoError(t, r.Emit(ctx, Final{Cancelled: true}))
+	require.NoError(t, r.Close())
+
+	out := buf.String()
+	assert.Contains(t, out, "Status: cancelled")
+	assert.NotContains(t, out, "Status: ✓ ok")
+}
+
 // A warning row is not marked as a failure: it does not fail the run.
 func TestCheckGlyph_WarningIsNotAFailure(t *testing.T) {
 	assert.Equal(t, "[✓]", checkGlyph(checkRow{finished: true, passed: true}))

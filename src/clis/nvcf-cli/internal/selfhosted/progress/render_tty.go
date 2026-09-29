@@ -285,6 +285,7 @@ type Model struct {
 	checkFinalTotal  int
 	checkFinalPassed int
 	checkFinalFailed int
+	checkCancelled   bool // final event came from SIGINT/SIGTERM, not a verdict
 
 	// log tail (LogLine ring buffer; rendered as a "Recent" panel during
 	// long phases like apply-cp). Capacity is fixed; new lines push older
@@ -744,6 +745,7 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 		m.checkFinalTotal = ev.TotalChecks
 		m.checkFinalPassed = ev.PassedCount
 		m.checkFinalFailed = ev.FailedCount
+		m.checkCancelled = ev.Cancelled
 		return m, tea.Quit
 	}
 	return m, nil
@@ -1852,6 +1854,9 @@ func (m Model) viewCheck(now time.Time) string {
 	}
 	var statusLine string
 	switch {
+	case m.finished && m.checkCancelled:
+		// Checks cut short by the interrupt are neither passed nor failed.
+		statusLine = fmt.Sprintf("Status: cancelled  (%s)", tally)
 	case anyInFlight || (!m.finished && len(m.checkCategories) > 0 && !allFinished):
 		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
 	case m.finished && failed > 0:

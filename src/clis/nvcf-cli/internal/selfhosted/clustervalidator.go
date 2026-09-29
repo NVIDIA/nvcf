@@ -72,7 +72,17 @@ const (
 var (
 	clusterValidatorTimeout         = 5 * time.Minute
 	clusterValidatorLogFetchTimeout = 10 * time.Second
+	// validatorCleanupTimeout bounds each deferred sweep. They run after an
+	// interrupt, when CI will not send a second signal, so an unreachable
+	// apiserver must not hold the CLI open.
+	validatorCleanupTimeout = 30 * time.Second
 )
+
+// cleanupContext is a fresh, bounded context for one deferred sweep. It does
+// not derive from the run's ctx, which may already be cancelled.
+func cleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), validatorCleanupTimeout)
+}
 
 // Kubelet Waiting.Reason values that mean the pod will never start without
 // operator intervention. Detecting any short-circuits the 5-minute wait.
@@ -191,7 +201,9 @@ func runClusterValidator(
 	// per-role secret scoping exists to prevent.
 	defer func() {
 		if !noCleanup && !podMayBeRunning {
-			sweepManagedPullSecrets(context.Background(), client, role, runID)
+			cctx, cancel := cleanupContext()
+			defer cancel()
+			sweepManagedPullSecrets(cctx, client, role, runID)
 		}
 	}()
 
@@ -204,7 +216,9 @@ func runClusterValidator(
 	// label-guarded, so running it when nothing was created is a no-op.
 	defer func() {
 		if !noCleanup && !podMayBeRunning {
-			sweepClusterValidatorRBAC(context.Background(), client, role, runID)
+			cctx, cancel := cleanupContext()
+			defer cancel()
+			sweepClusterValidatorRBAC(cctx, client, role, runID)
 		}
 	}()
 	if err := ensureClusterValidatorRBAC(vctx, client, role, runID, noCleanup); err != nil {
@@ -226,7 +240,9 @@ func runClusterValidator(
 		// operator asked to keep the run's artifacts.
 		defer func() {
 			if !noCleanup && !podMayBeRunning {
-				sweepClusterValidatorConfig(context.Background(), client, runID)
+				cctx, cancel := cleanupContext()
+				defer cancel()
+				sweepClusterValidatorConfig(cctx, client, runID)
 			}
 		}()
 		if err := ensureClusterValidatorConfig(vctx, client, registries, runID, noCleanup); err != nil {

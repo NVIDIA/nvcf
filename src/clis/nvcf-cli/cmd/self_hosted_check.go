@@ -267,6 +267,13 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if starter, ok := sink.(interface{ Start() }); ok {
 		starter.Start()
 	}
+	// An interrupted run still ends the stream with a final event, marked
+	// cancelled as up marks its own, so a --json consumer is not left waiting
+	// for one. Emitted on a fresh ctx: the run's ctx is already cancelled.
+	exitInterrupted := func() error {
+		_ = sink.Emit(context.Background(), progress.Final{Cancelled: true})
+		return &ExitCodeError{Code: 130, Msg: "interrupted"}
+	}
 
 	var lastResults []selfhosted.CheckResult
 
@@ -292,7 +299,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		// Single-shot mode.
 		lastResults = runOnce()
 		if interrupted() {
-			return &ExitCodeError{Code: 130, Msg: "interrupted"}
+			return exitInterrupted()
 		}
 		emitCheckFinal(ctx, sink, lastResults)
 		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
@@ -315,7 +322,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	for {
 		lastResults = runOnce()
 		if interrupted() {
-			return &ExitCodeError{Code: 130, Msg: "interrupted"}
+			return exitInterrupted()
 		}
 		if !anyFailed(lastResults) {
 			emitCheckFinal(ctx, sink, lastResults)
@@ -332,7 +339,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			// continue polling
 		case <-ctx.Done():
 			if interrupted() {
-				return &ExitCodeError{Code: 130, Msg: "interrupted"}
+				return exitInterrupted()
 			}
 			return ctx.Err()
 		}

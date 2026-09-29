@@ -115,7 +115,8 @@ func TestCheck_InterruptExits130(t *testing.T) {
 	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	rootCmd.SetErr(&bytes.Buffer{})
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
 	rootCmd.SetOut(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil); rootCmd.SetOut(nil) })
 	// Cobra keeps a subcommand's context from an earlier Execute, so set it
@@ -128,4 +129,6 @@ func TestCheck_InterruptExits130(t *testing.T) {
 	var exitErr *ExitCodeError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 130, exitErr.Code)
+	assert.Regexp(t, `"event":"final".*"cancelled":true`, stderr.String(),
+		"the JSON stream still ends with a final event, marked cancelled")
 }

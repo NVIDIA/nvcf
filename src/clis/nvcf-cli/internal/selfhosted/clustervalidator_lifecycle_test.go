@@ -19,6 +19,10 @@ package selfhosted
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,7 +38,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	ktesting "k8s.io/client-go/testing"
 )
 
@@ -466,4 +472,61 @@ func TestBuildClusterValidatorJob_ConfigNamePerRole(t *testing.T) {
 	cp := configName(clusterValidatorComputePlaneRole)
 	assert.Equal(t, clusterValidatorNoConfigName, cp)
 	assert.NotEqual(t, clusterValidatorConfigName, cp, "must not be the validator's default name")
+}
+
+// An apiserver that stops answering after the bootstrap fails must not hold
+// the CLI open in the deferred sweeps: each one is bounded, and the run
+// returns once they time out.
+func TestRunClusterValidator_CleanupIsBoundedWhenTheAPIServerHangs(t *testing.T) {
+	prev := validatorCleanupTimeout
+	validatorCleanupTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { validatorCleanupTimeout = prev })
+
+	var hang atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hang.Load() {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/clusterroles"):
+			// The bootstrap fails here, after its ServiceAccount exists, and
+			// the apiserver goes silent for everything after.
+			hang.Store(true)
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`)
+		case r.Method == http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(body)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","code":500}`)
+		}
+	}))
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+	// JSON, so the server can echo a created object back as the response.
+	client, err := kubernetes.NewForConfig(&rest.Config{
+		Host:          srv.URL,
+		ContentConfig: rest.ContentConfig{ContentType: "application/json"},
+	})
+	require.NoError(t, err)
+
+	done := make(chan ClusterValidatorResult, 1)
+	go func() {
+		done <- runClusterValidator(context.Background(), client, "registry.example.com/validator:1",
+			"", false, clusterValidatorComputePlaneRole, nil, nil)
+	}()
+	select {
+	case res := <-done:
+		require.Error(t, res.Err)
+		assert.Contains(t, res.Err.Error(), "create cluster role", "the run must reach the hang, not fail earlier")
+		assert.True(t, hang.Load())
+	case <-time.After(10 * time.Second):
+		t.Fatal("the deferred cleanup did not return against a hung apiserver")
+	}
 }
