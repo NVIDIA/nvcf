@@ -234,7 +234,7 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.image.repository`                   | Cluster Validator container registry path, without tag                            | `""`                                   |
 | `clusterValidator.image.tag`                          | Cluster Validator container image tag                                             | `v2.0.0`                               |
 | `clusterValidator.image.pullPolicy`                   | K8s ImagePullPolicy for cluster-validator                                         | `IfNotPresent`                         |
-| `clusterValidator.role`                               | Check set: `control-plane`, or any other value for the GPU checks                 | `""`                                   |
+| `clusterValidator.role`                               | Check set: `control-plane`, or `compute-plane` or empty for the GPU checks        | `""`                                   |
 | `clusterValidator.openBaoNamespace`                   | Namespace holding OpenBao when it is not `vault-system`                           | `""`                                   |
 | `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
 | `clusterValidator.gatewayNames`                       | Override for the NVCF Gateways (`name` or `namespace/name`); replaces discovery   | `[]` (discovered from NVCF routes)     |

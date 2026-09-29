@@ -2716,3 +2716,93 @@ func TestCheckTier1Deployments_UnidentifiedProxiesAreUnknown(t *testing.T) {
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.False(t, *state.Tier1DeploymentsOK, "an observed failure still decides the row")
 }
+
+// deniedGatewayList is a route client whose Gateway List is forbidden, so the
+// NVCF Gateways' classes cannot be read.
+func deniedGatewayList() *dynamicfake.FakeDynamicClient {
+	dyn := routeClient()
+	dyn.PrependReactor("list", "gateways", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: gatewayAPIGroup, Resource: "gateways"}, "", fmt.Errorf("denied"))
+	})
+	return dyn
+}
+
+// Unreadable classes leave only merged-gateways proxies unattributed. Another
+// team's per-Gateway proxy names its own Gateway, so skipping it does not make
+// a clean row UNKNOWN; a skipped class-only proxy does.
+func TestCheckTier1Deployments_UnreadableClassesOnlyAffectMergedProxies(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/shared-gw")
+	two := int32(2)
+	dep := func(ns, name string, labels map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Generation: 1, Labels: labels},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 2},
+		}
+	}
+	run := func(objs ...*appsv1.Deployment) *ValidationState {
+		client := gatewayClassDiscoveryClient()
+		for _, d := range objs {
+			_, err := client.AppsV1().Deployments(d.Namespace).Create(context.Background(), d, metav1.CreateOptions{})
+			require.NoError(t, err)
+		}
+		state := &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), client, deniedGatewayList(), state)
+		return state
+	}
+
+	state := run(dep("nvcf", "api", nil), dep(envoyGatewayNamespace, "envoy-team-b", map[string]string{
+		owningGatewayNameLabel: "team-b-gw", owningGatewayNamespaceLabel: "team-b", owningGatewayClassLabel: "eg",
+	}))
+	require.NotNil(t, state.Tier1DeploymentsOK, "a foreign per-Gateway proxy does not depend on the classes")
+	assert.True(t, *state.Tier1DeploymentsOK)
+
+	state = run(dep("nvcf", "api", nil), dep(envoyGatewayNamespace, "envoy-merged",
+		map[string]string{owningGatewayClassLabel: "eg"}))
+	assert.Nil(t, state.Tier1DeploymentsOK, "a merged proxy may be NVCF's and was not assessed")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "merged-gateways Envoy proxy")
+}
+
+// An NVCF proxy observed without an address fails the row even when a merged
+// proxy could not be attributed to the other NVCF Gateway.
+func TestCheckExternalLoadBalancer_PendingBeatsUnattributed(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/shared-gw,nvcf/api-gw")
+	client := gatewayClassDiscoveryClient()
+	addServices(t, client,
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "envoy-merged", Namespace: envoyGatewayNamespace,
+				Labels: map[string]string{owningGatewayClassLabel: "eg"}},
+			Spec:   corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+			Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.1"}}}},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "envoy-api", Namespace: envoyGatewayNamespace,
+				Labels: map[string]string{owningGatewayNameLabel: "api-gw", owningGatewayNamespaceLabel: "nvcf"}},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		},
+	)
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, deniedGatewayList(), state)
+
+	require.NotNil(t, state.ExternalLBOK)
+	assert.False(t, *state.ExternalLBOK)
+	warnings := strings.Join(state.Warnings, "; ")
+	assert.Contains(t, warnings, "have no external address")
+	assert.NotContains(t, warnings, "no proxy Service found", "an unattributed Gateway is not reported as missing")
+}
+
+// The Gateway CRD can be removed between discovery and the List; no Gateways
+// means no classes, not an error.
+func TestNVCFGatewayClasses_ListNotFoundIsEmpty(t *testing.T) {
+	dyn := routeClient()
+	dyn.PrependReactor("list", "gateways", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(schema.GroupResource{Group: gatewayAPIGroup, Resource: "gateways"}, "")
+	})
+	got, err := nvcfGatewayClasses(context.Background(), gatewayClassDiscoveryClient(), dyn,
+		gatewaySet{"nvcf/shared-gw": true})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}

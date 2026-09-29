@@ -19,6 +19,8 @@ package clustervalidator
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -30,7 +32,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	ktesting "k8s.io/client-go/testing"
 )
 
@@ -283,6 +287,68 @@ func TestWaitForPodDone_NotFoundIsTerminal(t *testing.T) {
 	_, err := waitForPodDone(context.Background(), fake.NewSimpleClientset(), "ns", "p", 30*time.Second)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+// hangingClient is a real clientset against an apiserver that never answers,
+// holding each request until the client gives up on it.
+func hangingClient(t *testing.T) kubernetes.Interface {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	require.NoError(t, err)
+	return client
+}
+
+// finishesWithin fails the test if fn has not returned after limit, instead of
+// letting a hung wait run into the package timeout.
+func finishesWithin(t *testing.T, limit time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		t.Fatalf("did not return within %v", limit)
+	}
+}
+
+// The client sets no request timeout, so a hung Get must be bounded by the
+// wait's own deadline, not left to block the check forever.
+func TestWaitForPodReady_HungGetEndsAtTheDeadline(t *testing.T) {
+	client := hangingClient(t)
+	finishesWithin(t, 5*time.Second, func() {
+		err := waitForPodReady(context.Background(), client, "ns", "srv", time.Second)
+		assert.Error(t, err)
+	})
+}
+
+func TestWaitForPodDone_HungGetEndsAtTheDeadline(t *testing.T) {
+	client := hangingClient(t)
+	finishesWithin(t, 6*time.Second, func() {
+		_, err := waitForPodDone(context.Background(), client, "ns", "p", time.Second)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "did not complete", "a timed-out Get is transient, so the deadline ends the wait")
+	})
+}
+
+// A spent budget returns at once without another API call.
+func TestWaitForPod_ExpiredBudgetMakesNoCall(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		return false, nil, nil
+	})
+	require.Error(t, waitForPodReady(context.Background(), client, "ns", "srv", 0))
+	_, err := waitForPodDone(context.Background(), client, "ns", "p", 0)
+	require.Error(t, err)
+	assert.Zero(t, calls)
 }
 
 // ---------------------------------------------------------------------------

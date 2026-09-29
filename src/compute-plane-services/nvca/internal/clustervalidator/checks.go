@@ -912,11 +912,15 @@ const (
 	// report a live gateway as missing.
 	envoyGatewayNamespaceEnv = "NVCF_ENVOY_GATEWAY_NAMESPACE"
 	// nvcfGatewayNamesEnv lists the NVCF Gateways, comma-separated, as "name"
-	// or "namespace/name". Envoy Gateway puts every Gateway's proxy Service in
-	// its own namespace by default, so without this the LoadBalancer check
-	// cannot tell NVCF's Services from another team's.
+	// or "namespace/name", replacing discovery from the NVCF routes. Envoy
+	// Gateway puts every Gateway's proxy in its controller namespace by
+	// default, so the Envoy checks need the NVCF Gateways to tell NVCF's
+	// proxies from another team's.
 	nvcfGatewayNamesEnv = "NVCF_GATEWAY_NAMES"
-	// Labels Envoy Gateway stamps on each proxy Service to name its Gateway.
+	// Labels Envoy Gateway stamps on proxy Services and Deployments. A
+	// per-Gateway proxy carries its Gateway's name and namespace; a
+	// merged-gateways proxy serves every Gateway of a class and carries only
+	// the class.
 	owningGatewayNameLabel      = "gateway.envoyproxy.io/owning-gateway-name"
 	owningGatewayNamespaceLabel = "gateway.envoyproxy.io/owning-gateway-namespace"
 	owningGatewayClassLabel     = "gateway.envoyproxy.io/owning-gatewayclass"
@@ -1293,19 +1297,24 @@ func judgeNVCFGatewayServices(
 		}
 	}
 
-	if len(missing) > 0 && classErr != nil && mergedProxies > 0 {
-		// A merged-gateways proxy may be serving the "missing" Gateways, but
-		// without their classes it cannot be attributed.
+	// A merged-gateways proxy may be serving the "missing" Gateways, but
+	// without their classes it cannot be attributed, so they are unknown
+	// rather than missing. An NVCF proxy observed without an address still
+	// fails the row: that is a failure whatever the unattributed ones show.
+	unattributed := len(missing) > 0 && classErr != nil && mergedProxies > 0
+	if unattributed {
 		msg := fmt.Sprintf("no per-Gateway proxy for %s, and the merged-gateways proxy could not be "+
 			"attributed: %v", strings.Join(missing, ", "), classErr)
 		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
-		return
+		if len(pending) == 0 {
+			state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+			return
+		}
 	}
 
-	if len(missing) > 0 || len(pending) > 0 {
+	if (len(missing) > 0 && !unattributed) || len(pending) > 0 {
 		var problems []string
-		if len(missing) > 0 {
+		if len(missing) > 0 && !unattributed {
 			problems = append(problems, fmt.Sprintf("no proxy Service found for Gateway(s) %s; "+
 				"check the Gateway exists and Envoy Gateway provisioned it", strings.Join(missing, ", ")))
 		}
@@ -2294,6 +2303,11 @@ func nvcfGatewayClasses(
 	gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gateways"}
 	list, err := routes.Resource(gvr).List(ctx, metav1.ListOptions{})
 	if err != nil {
+		// The CRD can go between discovery and the List. No Gateways means no
+		// classes, the same as the resource not being served.
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("listing gateways: %w", err)
 	}
 	classes := map[string][]string{}
@@ -2548,9 +2562,9 @@ func checkTier1Deployments(
 	// replica target but still at or above their rollout floor.
 	rollingUnderReplicated := 0
 
-	// Envoy Gateway runs one proxy Deployment per Gateway beside its
-	// controller, including other teams' Gateways, so only NVCF's proxies are
-	// assessed. A foreign proxy at 1/2 otherwise fails this critical row.
+	// Envoy Gateway runs a proxy Deployment per Gateway, or one per class in
+	// merged-gateways mode, beside its controller, including for other teams'
+	// Gateways, so only NVCF's proxies are assessed. A foreign proxy at 1/2 otherwise fails this critical row.
 	envoyNS := envoyGatewayNamespaceName()
 	gateways, _, gatewayErr := resolveNVCFGateways(ctx, client, routes)
 	var classes map[string][]string
@@ -2559,6 +2573,10 @@ func checkTier1Deployments(
 		classes, classErr = nvcfGatewayClasses(ctx, client, routes, gateways)
 	}
 	skippedProxies := 0
+	// skippedMergedProxies counts the skipped proxies that carry only a
+	// GatewayClass. Only those depend on the classes; a per-Gateway proxy
+	// names its Gateway and is attributed without them.
+	skippedMergedProxies := 0
 
 	for _, ns := range controlPlaneNamespaceSet() {
 		deploys, err := client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
@@ -2585,6 +2603,9 @@ func checkTier1Deployments(
 			d := &deploys.Items[i]
 			if ns == envoyNS && isEnvoyProxy(d.Labels) && len(gateways.entriesForProxy(d.Labels, classes)) == 0 {
 				skippedProxies++
+				if d.Labels[owningGatewayNameLabel] == "" {
+					skippedMergedProxies++
+				}
 				continue
 			}
 			want := int32(1)
@@ -2640,19 +2661,21 @@ func checkTier1Deployments(
 	// Skipped proxies are reported rather than silently dropped. When the NVCF
 	// Gateways could not be determined, NVCF's own proxies may be among the
 	// skipped ones, so the row is not a pass: it ends UNKNOWN unless an
-	// observed failure decides it first. With no NVCF routes at all (normal
-	// before install) none of the skipped proxies is NVCF's, so that is only
-	// a warning.
-	proxiesUnobserved := skippedProxies > 0 && (gatewayErr != nil || classErr != nil)
+	// observed failure decides it first. Unreadable classes leave only the
+	// merged-gateways proxies unattributed; a skipped per-Gateway proxy names
+	// another Gateway and is someone else's either way. With no NVCF routes
+	// at all (normal before install) none of the skipped proxies is NVCF's,
+	// so that is only a warning.
+	proxiesUnobserved := (skippedProxies > 0 && gatewayErr != nil) || (skippedMergedProxies > 0 && classErr != nil)
 	switch {
 	case skippedProxies > 0 && gatewayErr != nil:
 		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: could not determine the NVCF Gateways (%v)",
 			skippedProxies, envoyNS, gatewayErr)
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-	case skippedProxies > 0 && classErr != nil:
-		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: could not read the NVCF Gateways' classes (%v)",
-			skippedProxies, envoyNS, classErr)
+	case skippedMergedProxies > 0 && classErr != nil:
+		msg := fmt.Sprintf("%d merged-gateways Envoy proxy Deployment(s) in %s not assessed: could not read the NVCF "+
+			"Gateways' classes (%v)", skippedMergedProxies, envoyNS, classErr)
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
 	case skippedProxies > 0 && len(gateways) == 0:

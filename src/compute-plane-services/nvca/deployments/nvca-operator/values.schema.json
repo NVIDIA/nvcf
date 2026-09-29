@@ -1239,7 +1239,7 @@
                 },
                 "role": {
                     "type": "string",
-                    "description": "Check set: control-plane runs the gateway, storage, overlay and HA checks; any other value runs the compute-plane checks. Matched case-insensitively.",
+                    "description": "Check set: control-plane runs the gateway, storage, overlay and HA checks; compute-plane or empty runs the compute-plane checks. Matched case-insensitively; other values are rejected.",
                     "pattern": "^\\s*([Cc][Oo][Nn][Tt][Rr][Oo][Ll]-[Pp][Ll][Aa][Nn][Ee]|[Cc][Oo][Mm][Pp][Uu][Tt][Ee]-[Pp][Ll][Aa][Nn][Ee])?\\s*$",
                     "default": ""
                 },
