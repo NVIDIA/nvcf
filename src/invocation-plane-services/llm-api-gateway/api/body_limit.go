@@ -26,46 +26,39 @@ import (
 	echo "github.com/labstack/echo/v4"
 )
 
-// NewRequestBodyLimitMiddleware buffers the request body up to limit bytes and
-// rejects larger bodies with 413 before any handler reads them. Handlers keep
-// reading the buffered copy. A limit of zero or less disables the check.
-func NewRequestBodyLimitMiddleware(limit int64) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		if limit <= 0 {
-			return next
-		}
-		return func(c echo.Context) error {
-			req := c.Request()
-			if req.Body == nil || req.Body == http.NoBody {
-				return next(c)
-			}
-			if req.ContentLength > limit {
-				return echo.ErrStatusRequestEntityTooLarge
-			}
+// bufferRequestBody reads the request body up to limit bytes and replaces it
+// with the buffered copy, so later readers never see more than limit bytes. It
+// returns 413 for larger bodies. A limit of zero or less disables the check.
+// Read failures return a generic 400 and keep the cause internal.
+func bufferRequestBody(req *http.Request, limit int64) error {
+	if limit <= 0 || req == nil || req.Body == nil || req.Body == http.NoBody {
+		return nil
+	}
+	if req.ContentLength > limit {
+		return echo.ErrStatusRequestEntityTooLarge
+	}
 
-			body, err := io.ReadAll(io.LimitReader(req.Body, limit))
-			if err == nil && int64(len(body)) == limit {
-				// Probe for one more byte instead of reading limit+1, which
-				// overflows at math.MaxInt64.
-				var extra [1]byte
-				var n int
-				n, err = io.ReadFull(req.Body, extra[:])
-				if n > 0 {
-					_ = req.Body.Close()
-					return echo.ErrStatusRequestEntityTooLarge
-				}
-				if errors.Is(err, io.EOF) {
-					err = nil
-				}
-			}
+	body, err := io.ReadAll(io.LimitReader(req.Body, limit))
+	if err == nil && int64(len(body)) == limit {
+		// Probe for one more byte instead of reading limit+1, which
+		// overflows at math.MaxInt64.
+		var extra [1]byte
+		var n int
+		n, err = io.ReadFull(req.Body, extra[:])
+		if n > 0 {
 			_ = req.Body.Close()
-			if err != nil {
-				return echo.NewHTTPError(http.StatusBadRequest, "read request body: "+err.Error())
-			}
-
-			req.Body = io.NopCloser(bytes.NewReader(body))
-			req.ContentLength = int64(len(body))
-			return next(c)
+			return echo.ErrStatusRequestEntityTooLarge
+		}
+		if errors.Is(err, io.EOF) {
+			err = nil
 		}
 	}
+	_ = req.Body.Close()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "failed to read request body").SetInternal(err)
+	}
+
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	return nil
 }

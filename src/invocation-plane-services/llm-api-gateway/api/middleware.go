@@ -50,6 +50,10 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	requestsTotal := telemetry.HTTPRequestsTotal()
 	requestDuration := telemetry.HTTPServerRequestDuration()
 	activeRequests := telemetry.HTTPActiveRequests()
+	var maxRequestBodyBytes int64
+	if cfg != nil {
+		maxRequestBodyBytes = cfg.Server.MaxRequestBodyBytes
+	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec echo.Context) error {
@@ -58,7 +62,14 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 
 			requestID := requestIDHeader(gc.Request().Header)
 
-			routingKey := requestRoutingKey(gc.Request())
+			// Enforce the body limit before anything buffers the body, including
+			// the routing-key lookup below. A rejected request still gets the
+			// span, metrics, and completion log.
+			bodyErr := bufferRequestBody(gc.Request(), maxRequestBodyBytes)
+			routingKey := ""
+			if bodyErr == nil {
+				routingKey = requestRoutingKey(gc.Request())
+			}
 			targetRegion := targetRegionHeader(gc.Request().Header)
 			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
 			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
@@ -100,7 +111,10 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			telemetry.AddUpDownWithContext(ctx, activeRequests, 1, metricAttrs...)
 			defer telemetry.AddUpDownWithContext(context.WithoutCancel(ctx), activeRequests, -1, metricAttrs...)
 
-			err := next(gc)
+			err := bodyErr
+			if err == nil {
+				err = next(gc)
+			}
 			statusCode := httpStatusCode(gc, err)
 			status := strconv.Itoa(statusCode)
 			finalAttrs := append(metricAttrs, attribute.String("status", status))
