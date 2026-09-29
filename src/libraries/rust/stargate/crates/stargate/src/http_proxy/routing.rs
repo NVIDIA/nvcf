@@ -36,6 +36,7 @@ const ERROR_NO_ELIGIBLE_CANDIDATES_BODY: &str =
     r#"{"error":"no eligible candidates","code":"no_eligible_candidates"}"#;
 const ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED: &str = "input_work_limit_exceeded";
 const ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE: &str = "input_work_capacity_unavailable";
+const ADMISSION_REASON_ROUTING_CAPACITY_UNAVAILABLE: &str = "routing_capacity_unavailable";
 const ROUTING_RETRY_SLEEP_MIN_MS: u64 = 1;
 const ROUTING_RETRY_SLEEP_MAX_MS: u64 = 10;
 const ROUTING_RETRY_MAX_WAIT_MS: u64 = 60_000;
@@ -147,6 +148,9 @@ pub(super) struct NoRoutingFinalizationContext<'a> {
     pub(super) failed_cluster_count: usize,
     pub(super) routing_retry_attempts: u64,
     pub(super) capacity_rejected: bool,
+    /// The load balancer had eligible candidates but none could admit the
+    /// request (capacity, queue-time limit, KV tokens, or a closed bucket).
+    pub(super) routing_capacity_rejected: bool,
 }
 
 pub(super) fn finalize_no_routing_choice(
@@ -184,7 +188,15 @@ pub(super) fn finalize_no_routing_choice(
                 .metrics
                 .requests_total(rk_ref, model_id, "", "503")
                 .inc();
-            if context.capacity_rejected {
+            if context.routing_capacity_rejected {
+                let reason = ADMISSION_REASON_ROUTING_CAPACITY_UNAVAILABLE;
+                Span::current().record("routing.admission_rejection_reason", reason);
+                context
+                    .metrics
+                    .admission_rejections_total(rk_ref, model_id, reason)
+                    .inc();
+            }
+            if context.capacity_rejected || context.routing_capacity_rejected {
                 Ok(overloaded_response())
             } else {
                 Err(StatusCode::SERVICE_UNAVAILABLE)
