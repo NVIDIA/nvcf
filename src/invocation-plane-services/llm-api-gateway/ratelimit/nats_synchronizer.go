@@ -255,9 +255,9 @@ type natsSynchronizer struct {
 	events      eventQueue
 }
 
-func (s *natsSynchronizer) Send(_ context.Context, rle *RateLimitEvent) error {
+func (s *natsSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) error {
 	queueStart := time.Now()
-	if err := s.events.send(&RateLimitEventWireFormat{
+	if err := s.events.send(ctx, &RateLimitEventWireFormat{
 		Key:         rle.Key,
 		Units:       rle.Result.Requested,
 		Rate:        rle.Result.RateLimit.Limit,

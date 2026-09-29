@@ -20,33 +20,53 @@ package server
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	echo "github.com/labstack/echo/v4"
 )
 
+// canceledRequestGrace bounds how long Shutdown waits, after a timed-out
+// drain closes the remaining connections, for their canceled handlers to
+// return before stopping dependencies.
+const canceledRequestGrace = 5 * time.Second
+
 // teardowns maps each Echo instance built by New to its teardown.
 var teardowns sync.Map
 
-// teardown stops what in-flight requests depend on (auth client, rate-limit
-// sync, Olric) only after those requests finish. http.Server runs
-// RegisterOnShutdown hooks as soon as Shutdown starts, concurrently with the
-// drain, so stopping dependencies there breaks requests that are still
-// running.
+// teardown stops what requests depend on (auth client, rate-limit sync,
+// Olric). It is not registered with http.Server.RegisterOnShutdown, because
+// those hooks start as soon as Shutdown begins, concurrently with the drain,
+// and would stop dependencies under requests that are still running.
 type teardown struct {
-	mu       sync.Mutex
-	idle     *sync.Cond
-	inFlight int
-	steps    []func()
-	done     chan struct{}
+	mu     sync.Mutex
+	steps  []func()
+	once   sync.Once
+	active atomic.Int64
 }
 
 func newTeardown(e *echo.Echo) *teardown {
-	t := &teardown{done: make(chan struct{})}
-	t.idle = sync.NewCond(&t.mu)
+	t := &teardown{}
 	e.Pre(t.track)
-	e.Server.RegisterOnShutdown(t.run)
 	teardowns.Store(e, t)
 	return t
+}
+
+// track counts running handlers, so a timed-out Shutdown can wait for the
+// requests it canceled to unwind.
+func (t *teardown) track(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		t.active.Add(1)
+		defer t.active.Add(-1)
+		return next(c)
+	}
+}
+
+func (t *teardown) waitIdle(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for t.active.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func teardownOf(e *echo.Echo) *teardown {
@@ -54,61 +74,42 @@ func teardownOf(e *echo.Echo) *teardown {
 	return t.(*teardown)
 }
 
-// add registers a step to run once in-flight requests finish. Steps run in
-// registration order.
+// add registers a step. Steps run once, in registration order, and must
+// bound their own duration.
 func (t *teardown) add(step func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.steps = append(t.steps, step)
 }
 
-func (t *teardown) track(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		t.mu.Lock()
-		t.inFlight++
-		t.mu.Unlock()
-		defer func() {
-			t.mu.Lock()
-			t.inFlight--
-			if t.inFlight == 0 {
-				t.idle.Broadcast()
-			}
-			t.mu.Unlock()
-		}()
-		return next(c)
-	}
-}
-
 func (t *teardown) run() {
-	t.mu.Lock()
-	for t.inFlight > 0 {
-		t.idle.Wait()
-	}
-	steps := t.steps
-	t.mu.Unlock()
-
-	for _, step := range steps {
-		step()
-	}
-	close(t.done)
+	t.once.Do(func() {
+		t.mu.Lock()
+		steps := t.steps
+		t.mu.Unlock()
+		for _, step := range steps {
+			step()
+		}
+	})
 }
 
-// Shutdown drains in-flight requests on e, then waits for the dependencies
-// New started to stop, both within ctx. It returns ctx's error if either
-// does not finish in time.
+// Shutdown stops e gracefully. It stops accepting connections and waits for
+// in-flight requests, including streams, until ctx is done. If ctx expires
+// first, it closes the remaining connections, which cancels their requests,
+// and waits briefly for their handlers to return. Either way it then stops
+// the dependencies New started and returns the drain error, if any. It is
+// safe to call more than once.
 func Shutdown(ctx context.Context, e *echo.Echo) error {
-	defer teardowns.Delete(e)
-	if err := e.Shutdown(ctx); err != nil {
-		return err
+	v, tracked := teardowns.Load(e)
+	err := e.Shutdown(ctx)
+	if err != nil {
+		_ = e.Close()
+		if tracked {
+			v.(*teardown).waitIdle(canceledRequestGrace)
+		}
 	}
-	t, ok := teardowns.Load(e)
-	if !ok {
-		return nil
+	if tracked {
+		v.(*teardown).run()
 	}
-	select {
-	case <-t.(*teardown).done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return err
 }

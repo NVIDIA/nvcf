@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,40 +35,47 @@ import (
 )
 
 // TestShutdownStopsDependenciesAfterDrain checks that teardown steps run only
-// once in-flight requests finish, and that Shutdown waits for them.
+// after in-flight requests end: after they finish when the drain succeeds,
+// and after they are canceled when it times out.
 func TestShutdownStopsDependenciesAfterDrain(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name    string
 		release bool
+		timeout time.Duration
+		wantErr error
 	}{
-		{name: "request finishes during the drain", release: true},
-		{name: "request outlives the drain"},
+		{name: "request finishes during the drain", release: true, timeout: 30 * time.Second},
+		{name: "request outlives the drain", timeout: 300 * time.Millisecond, wantErr: context.DeadlineExceeded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			e := echo.New()
 			teardown := newTeardown(e)
-			var stopped atomic.Bool
-			teardown.add(func() { stopped.Store(true) })
+			var stops atomic.Int32
+			teardown.add(func() { stops.Add(1) })
 
 			started := make(chan struct{})
 			release := make(chan struct{})
-			t.Cleanup(func() { close(release) })
-			stoppedWhileInFlight := make(chan bool, 1)
+			var releaseOnce sync.Once
+			releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(releaseHandler)
+			stoppedDuringRequest := make(chan bool, 1)
 			e.GET("/slow", func(c echo.Context) error {
 				close(started)
 				select {
 				case <-release:
 				case <-c.Request().Context().Done():
 				}
-				stoppedWhileInFlight <- stopped.Load()
+				stoppedDuringRequest <- stops.Load() > 0
 				return c.String(http.StatusOK, "done")
 			})
 			shutdownStarted := make(chan struct{})
-			e.Server.RegisterOnShutdown(func() { close(shutdownStarted) })
+			var shutdownOnce sync.Once
+			// http.Server reruns this hook on every Shutdown call.
+			e.Server.RegisterOnShutdown(func() { shutdownOnce.Do(func() { close(shutdownStarted) }) })
 
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
@@ -86,35 +94,32 @@ func TestShutdownStopsDependenciesAfterDrain(t *testing.T) {
 			}()
 			waitFor(t, started, "request to start")
 
-			timeout := 20 * time.Second
-			if !tc.release {
-				timeout = 300 * time.Millisecond
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			ctx, cancel := context.WithTimeout(context.Background(), tc.timeout)
 			defer cancel()
 			shutdownDone := make(chan error, 1)
 			go func() { shutdownDone <- Shutdown(ctx, e) }()
 			waitFor(t, shutdownStarted, "shutdown to start")
-
-			if !tc.release {
-				if err := waitFor(t, shutdownDone, "shutdown to return"); !errors.Is(err, context.DeadlineExceeded) {
-					t.Fatalf("Shutdown() error = %v, want context.DeadlineExceeded", err)
-				}
-				if stopped.Load() {
-					t.Fatal("dependencies stopped while a request was still in flight")
-				}
-				return
+			if tc.release {
+				releaseHandler()
 			}
 
-			release <- struct{}{}
-			if waitFor(t, stoppedWhileInFlight, "handler to finish") {
-				t.Fatal("dependencies stopped before the in-flight request finished")
+			// Timing out cancels the request instead of leaving it running.
+			if waitFor(t, stoppedDuringRequest, "request to end") {
+				t.Fatal("dependencies stopped while the request was still in flight")
 			}
-			if err := waitFor(t, shutdownDone, "shutdown to return"); err != nil {
-				t.Fatalf("Shutdown() error = %v, want nil", err)
+			if err := waitFor(t, shutdownDone, "shutdown to return"); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Shutdown() error = %v, want %v", err, tc.wantErr)
 			}
-			if !stopped.Load() {
-				t.Fatal("Shutdown returned before dependencies stopped")
+			if got := stops.Load(); got != 1 {
+				t.Fatalf("teardown ran %d times, want 1", got)
+			}
+
+			// A repeated Shutdown must not run teardown again.
+			if err := Shutdown(context.Background(), e); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				t.Fatalf("second Shutdown() error = %v", err)
+			}
+			if got := stops.Load(); got != 1 {
+				t.Fatalf("teardown ran %d times after a second Shutdown, want 1", got)
 			}
 		})
 	}

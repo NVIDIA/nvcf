@@ -80,7 +80,7 @@ func (s *pubSubSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) erro
 	)
 
 	queueStart := time.Now()
-	if err := s.events.send(&data); err != nil {
+	if err := s.events.send(ctx, &data); err != nil {
 		return err
 	}
 	telemetry.Record(

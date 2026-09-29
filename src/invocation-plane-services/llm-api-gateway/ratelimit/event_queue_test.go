@@ -31,7 +31,7 @@ func TestEventQueueRejectsSendsAfterClose(t *testing.T) {
 	t.Parallel()
 
 	var q eventQueue
-	if err := q.send(&RateLimitEventWireFormat{}); !errors.Is(err, ErrSynchronizerStopped) {
+	if err := q.send(context.Background(), &RateLimitEventWireFormat{}); !errors.Is(err, ErrSynchronizerStopped) {
 		t.Fatalf("send before open error = %v, want ErrSynchronizerStopped", err)
 	}
 	if got := q.length(); got != -1 {
@@ -39,7 +39,7 @@ func TestEventQueueRejectsSendsAfterClose(t *testing.T) {
 	}
 
 	q.open(1)
-	if err := q.send(&RateLimitEventWireFormat{}); err != nil {
+	if err := q.send(context.Background(), &RateLimitEventWireFormat{}); err != nil {
 		t.Fatalf("send error = %v", err)
 	}
 	if got := q.length(); got != 1 {
@@ -51,8 +51,57 @@ func TestEventQueueRejectsSendsAfterClose(t *testing.T) {
 	if q.close() {
 		t.Fatal("second close() = true, want false")
 	}
-	if err := q.send(&RateLimitEventWireFormat{}); !errors.Is(err, ErrSynchronizerStopped) {
+	if err := q.send(context.Background(), &RateLimitEventWireFormat{}); !errors.Is(err, ErrSynchronizerStopped) {
 		t.Fatalf("send after close error = %v, want ErrSynchronizerStopped", err)
+	}
+}
+
+// TestEventQueueCloseReleasesBlockedSenders fills the queue with no consumer
+// running, as when publishers are stalled, and checks that close still
+// returns and releases the blocked sender.
+func TestEventQueueCloseReleasesBlockedSenders(t *testing.T) {
+	t.Parallel()
+
+	var q eventQueue
+	q.open(1)
+	if err := q.send(context.Background(), &RateLimitEventWireFormat{}); err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan error, 1)
+	go func() { blocked <- q.send(context.Background(), &RateLimitEventWireFormat{}) }()
+
+	closed := make(chan bool, 1)
+	go func() { closed <- q.close() }()
+	select {
+	case ok := <-closed:
+		if !ok {
+			t.Fatal("close() = false, want true")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("close() blocked behind a sender on a full queue")
+	}
+	select {
+	case err := <-blocked:
+		if !errors.Is(err, ErrSynchronizerStopped) {
+			t.Fatalf("blocked send error = %v, want ErrSynchronizerStopped", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("blocked send was not released")
+	}
+}
+
+func TestEventQueueSendHonorsContext(t *testing.T) {
+	t.Parallel()
+
+	var q eventQueue
+	q.open(1)
+	if err := q.send(context.Background(), &RateLimitEventWireFormat{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := q.send(ctx, &RateLimitEventWireFormat{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("send on full queue with canceled context error = %v, want context.Canceled", err)
 	}
 }
 

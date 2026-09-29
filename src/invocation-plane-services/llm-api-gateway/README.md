@@ -146,7 +146,8 @@ Useful overrides:
   413 (default `0`, no limit)
 - `NVCF_GATEWAY_SHUTDOWN_TIMEOUT` to bound how long a graceful shutdown waits
   for in-flight requests, including streams (default `60s`). Keep the pod's
-  `terminationGracePeriodSeconds` above it.
+  `terminationGracePeriodSeconds` at least 30s above it for dependency
+  teardown and the final telemetry flush.
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth

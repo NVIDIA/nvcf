@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,17 +36,20 @@ func TestRunGatewayDrainsInFlightRequests(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		release bool
+		timeout time.Duration
 	}{
-		{name: "request finishes during the drain", release: true},
-		{name: "request outlives the drain"},
+		{name: "request finishes during the drain", release: true, timeout: 30 * time.Second},
+		{name: "request outlives the drain", timeout: 500 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			const timeout = 500 * time.Millisecond
+			timeout := tc.timeout
 			started := make(chan struct{})
 			release := make(chan struct{})
-			t.Cleanup(func() { close(release) })
+			var releaseOnce sync.Once
+			releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(releaseHandler)
 			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				close(started)
 				select {
@@ -61,11 +65,9 @@ func TestRunGatewayDrainsInFlightRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			shutdownStarted := make(chan time.Time, 1)
 			shutdownDeadline := make(chan time.Time, 1)
 			shutdown := func(ctx context.Context) error {
 				deadline, _ := ctx.Deadline()
-				shutdownStarted <- time.Now()
 				shutdownDeadline <- deadline
 				return server.Shutdown(ctx)
 			}
@@ -97,15 +99,15 @@ func TestRunGatewayDrainsInFlightRequests(t *testing.T) {
 			}()
 
 			waitFor(t, started, "request to start")
+			stopped := time.Now()
 			stop()
-			began := waitFor(t, shutdownStarted, "shutdown to start")
-			// The drain gets exactly the configured timeout.
-			if got := waitFor(t, shutdownDeadline, "shutdown deadline").Sub(began); got <= 0 || got > timeout {
-				t.Fatalf("shutdown deadline is %s after shutdown began, want at most %s", got, timeout)
+			// The drain gets the configured timeout, measured from shutdown.
+			if got := waitFor(t, shutdownDeadline, "shutdown deadline").Sub(stopped); got < timeout || got > timeout+10*time.Second {
+				t.Fatalf("shutdown deadline is %s after stop, want about %s", got, timeout)
 			}
 
 			if tc.release {
-				release <- struct{}{}
+				releaseHandler()
 				if err := waitFor(t, gatewayDone, "gateway to stop"); err != nil {
 					t.Fatalf("runGateway() error = %v, want nil", err)
 				}

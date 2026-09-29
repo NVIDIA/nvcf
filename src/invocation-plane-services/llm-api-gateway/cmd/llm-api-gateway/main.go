@@ -103,7 +103,7 @@ func main() {
 		zlog.Warn().
 			Err(err).
 			Dur("shutdown_timeout", cfg.Server.ShutdownTimeout).
-			Msg("shutdown timed out; closing requests still in flight")
+			Msg("shutdown timed out; closed requests still in flight")
 	} else if err != nil {
 		zlog.Fatal().Err(err).Msg("gateway exited unexpectedly")
 	}
