@@ -19,12 +19,14 @@ package operator
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -75,14 +77,9 @@ func (bc *BackendK8sCache) rotateTLSCert(ctx context.Context, nb *nvidiaiov1.NVC
 			return fmt.Errorf("get webhook TLS cert secret: %w", err)
 		}
 
-		p, _ := pem.Decode(certSecret.Data[dataKey])
-		if p == nil || p.Type != "CERTIFICATE" {
-			return fmt.Errorf("failed to decode webhook TLS cert in key %q: none found", dataKey)
-		}
-
-		cert, err := x509.ParseCertificate(p.Bytes)
+		cert, err := parseCertPEM(certSecret.Data[dataKey])
 		if err != nil {
-			return err
+			return fmt.Errorf("decode webhook TLS cert in key %q: %w", dataKey, err)
 		}
 
 		// Check if cert expires in less than two weeks.
@@ -107,4 +104,130 @@ func (bc *BackendK8sCache) rotateTLSCert(ctx context.Context, nb *nvidiaiov1.NVC
 		return fmt.Errorf("update webhook secrets: %w", err)
 	}
 	return nil
+}
+
+// parseCertPEM decodes a single PEM-encoded CERTIFICATE block and parses it into
+// an x509.Certificate.
+func parseCertPEM(pemBytes []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("no CERTIFICATE PEM block found")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+// ensureWebhookCert returns the webhook serving certificate and its CA, reusing the
+// material already stored in the TLS secrets whenever it is still present and
+// internally consistent, and only minting a fresh certificate when the stored
+// material is missing, unparseable, mismatched, or expired.
+//
+// generateWebhookCerts mints a brand-new self-signed CA on every call, so invoking
+// it on every rollout continuously rewrites both the serving cert secret and the
+// webhook caBundle. The nvca pod only picks up a new serving cert after it
+// restarts, so during that window the served cert no longer chains to the freshly
+// written caBundle and admission calls fail with "x509: certificate signed by
+// unknown authority". Reusing the stored certificate keeps the serving cert and
+// the caBundle stable across reconciles and eliminates that drift. Proactive
+// renewal ahead of expiry is handled separately by rotateTLSCert.
+func (bc *BackendK8sCache) ensureWebhookCert(
+	ctx context.Context, nb *nvidiaiov1.NVCFBackend, now time.Time,
+) (WebhookCert, error) {
+	existing, ok, err := bc.reusableWebhookCert(ctx, nb, now)
+	if err != nil {
+		return WebhookCert{}, err
+	}
+	if ok {
+		core.GetLogger(ctx).Debug("reusing existing webhook TLS certs")
+		return existing, nil
+	}
+	return generateWebhookCerts(nb, now)
+}
+
+// reusableWebhookCert loads the stored webhook certificate and reports whether it
+// can be reused as-is. It returns ok=false (nil error) when the certificate is
+// absent or no longer trustworthy, so the caller mints a replacement. A non-nil
+// error is reserved for transient failures reading the secrets, so a read blip
+// never causes the certificate to be regenerated.
+func (bc *BackendK8sCache) reusableWebhookCert(
+	ctx context.Context, nb *nvidiaiov1.NVCFBackend, now time.Time,
+) (WebhookCert, bool, error) {
+	log := core.GetLogger(ctx)
+	secretClient := bc.clients.K8s.CoreV1().Secrets(getSystemNamespace(nb))
+
+	tlsSecret, err := secretClient.Get(ctx, NVCAWebhookTLSCertSecretName, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		log.Info("Generating webhook TLS certs: server cert secret not found")
+		return WebhookCert{}, false, nil
+	}
+	if err != nil {
+		return WebhookCert{}, false, fmt.Errorf("get %s: %w", NVCAWebhookTLSCertSecretName, err)
+	}
+
+	caSecret, err := secretClient.Get(ctx, NVCAWebhookTLSCASecretName, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		log.Info("Generating webhook TLS certs: CA secret not found")
+		return WebhookCert{}, false, nil
+	}
+	if err != nil {
+		return WebhookCert{}, false, fmt.Errorf("get %s: %w", NVCAWebhookTLSCASecretName, err)
+	}
+
+	tlsCert, tlsKey, caBytes := tlsSecret.Data[TLSCertName], tlsSecret.Data[TLSKeyName], caSecret.Data[TLSCAName]
+	if len(tlsCert) == 0 || len(tlsKey) == 0 || len(caBytes) == 0 {
+		log.Info("Generating webhook TLS certs: stored cert material is incomplete")
+		return WebhookCert{}, false, nil
+	}
+
+	servingCert, err := parseCertPEM(tlsCert)
+	if err != nil {
+		log.WithError(err).Info("Generating webhook TLS certs: stored server cert is not parseable")
+		return WebhookCert{}, false, nil
+	}
+	caCert, err := parseCertPEM(caBytes)
+	if err != nil {
+		log.WithError(err).Info("Generating webhook TLS certs: stored CA cert is not parseable")
+		return WebhookCert{}, false, nil
+	}
+	if !certValidAt(servingCert, now) {
+		log.Info("Generating webhook TLS certs: stored server cert is outside its validity window")
+		return WebhookCert{}, false, nil
+	}
+	// The CA is written to the webhook caBundle; an out-of-window CA is rejected by
+	// the API server ("x509: certificate has expired or is not yet valid"), so it
+	// must be regenerated even when the serving cert still has time left.
+	if !certValidAt(caCert, now) {
+		log.Info("Generating webhook TLS certs: stored CA cert is outside its validity window")
+		return WebhookCert{}, false, nil
+	}
+	// Verify the serving cert chains to the stored CA, is still valid for the
+	// expected service DNS name, and carries server-auth usage. A stored pair that
+	// fails any of these (broken chain, stale SAN after a cluster/namespace config
+	// change, or a corrupted cert) is unusable and must be regenerated rather than
+	// reused, otherwise real TLS verification fails downstream.
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+	if _, err := servingCert.Verify(x509.VerifyOptions{
+		Roots:       roots,
+		CurrentTime: now,
+		DNSName:     getTLSDNSNames(nb)[0],
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		log.WithError(err).Info("Generating webhook TLS certs: stored server cert failed verification against the stored CA")
+		return WebhookCert{}, false, nil
+	}
+	// A stored cert/key pair that doesn't actually match is unusable by the webhook
+	// server (tls.X509KeyPair rejects it), so verify the pairing here rather than
+	// discovering it only when the server tries to load the Secret.
+	if _, err := tls.X509KeyPair(tlsCert, tlsKey); err != nil {
+		log.WithError(err).Info("Generating webhook TLS certs: stored server cert does not match the stored key")
+		return WebhookCert{}, false, nil
+	}
+
+	return WebhookCert{CACertBytes: caBytes, TLSCert: tlsCert, TLSKey: tlsKey}, true, nil
+}
+
+// certValidAt reports whether now falls within cert's validity window,
+// treating the exact NotAfter instant as already expired.
+func certValidAt(cert *x509.Certificate, now time.Time) bool {
+	return !now.Before(cert.NotBefore) && now.Before(cert.NotAfter)
 }

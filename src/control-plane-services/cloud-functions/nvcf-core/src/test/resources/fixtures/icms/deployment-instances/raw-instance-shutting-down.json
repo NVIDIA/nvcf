@@ -1,0 +1,26 @@
+{
+  "CreateTime": "2024-05-03T15:04:14.830Z",
+  "ImageId": "BaseIcms-master-936923e-20251209-134332.qcow2",
+  "ContainerImage": "stg.nvcr.io/ax3ysqem02xw/asset-graph-service:0.0.6",
+  "InstanceId": "%s",
+  "CloudProvider": "GFN",
+  "InstanceType": "%s",
+  "Placement": {
+    "AvailabilityZone": "%s"
+  },
+  "State": {
+    "Code": 32,
+    "Name": "shutting-down"
+  },
+  "HealthInfo": {
+    "ErrorLog": "Backend GFN, Instance Type '%s': Instance is shutting down due to a customer call"
+  },
+  "LaunchRequestId": "%s",
+  "InstanceIps": [
+    "10.0.140.1",
+    "10.0.172.1"
+  ],
+  "CapacityType": "RESERVED",
+  "DeploymentId": "%s",
+  "GpuSpecificationId": "%s"
+}

@@ -1,0 +1,91 @@
+# Variables
+release ?= nvct-api
+namespace ?= nvcf
+helm_dir ?= ./nvct-api
+values := $(helm_dir)/values.yaml
+
+# OPTIONAL for deploy target: Path to an additional Helm values file.
+# Example: make deploy values=my-values.yaml additional_values=override.yaml
+additional_values ?=
+
+# OCI Registry details
+OCI_REGISTRY_HOST ?= nvcr.io
+OCI_REGISTRY_NAMESPACE ?= 0651155215864979/ncp-dev
+
+# Automatically determine chart name and version from Chart.yaml
+# IMPORTANT: For this setup, CHART_NAME is expected to include any desired OCI prefix (e.g., "helm-yourchart")
+# as defined in helm/Chart.yaml's 'name' field.
+CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
+CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
+
+.PHONY: deploy delete status lint template clean package push-oci install uninstall validate
+
+install:
+ifndef values
+	$(error "values" variable is not set. Please specify with 'make deploy values=<path-to-your-values.yaml>')
+endif
+	@echo "Deploying $(release) to namespace $(namespace) using values file '$(values)'..."
+	@echo "Additional values file: '$(if $(additional_values),$(additional_values),N/A)'"
+	helm install $(release) $(helm_dir) \
+		--namespace $(namespace) \
+		--values $(values) \
+		$(if $(additional_values),--values $(additional_values),) \
+		--atomic \
+		--create-namespace \
+		--wait \
+		--wait-for-jobs \
+		--timeout 20m
+
+uninstall:
+	@echo "Deleting $(release) from namespace $(namespace)..."
+	helm uninstall $(release) --namespace $(namespace)
+
+status:
+	@echo "Checking status of $(release) in namespace $(namespace)..."
+	helm status $(release) --namespace $(namespace)
+
+lint:
+	@echo "Linting chart $(helm_dir)..."
+	helm lint $(helm_dir) \
+		$(if $(values),--values $(values),) \
+		$(if $(additional_values),--values $(additional_values),)
+
+template:
+	@echo "Templating chart $(helm_dir)..."
+	@mkdir -p bin
+	helm template $(release) $(helm_dir) \
+		--namespace $(namespace) \
+		$(if $(values),--values $(values),) \
+		$(if $(additional_values),--values $(additional_values),) \
+		> bin/manifest.yaml
+	@echo "Rendered manifest to bin/manifest.yaml"
+
+validate: template
+	@echo "Validating manifest with kubeconform..."
+	@kubeconform -strict -summary -output pretty -kubernetes-version 1.31.5 bin/manifest.yaml
+
+
+# Publish Chart
+# NOTE: this is manual until the CI pipeline is updated to push the chart to the NVCR OCI registry
+clean:
+	rm -rf ./bin
+	rm -rf ./packaged-charts
+
+package: clean lint
+	@echo "[package] Packaging Helm chart $(CHART_NAME) version $(CHART_VERSION)..."
+	@mkdir -p ./packaged-charts
+	@helm package $(helm_dir) -d ./packaged-charts/
+	@echo "[package] Packaged chart to ./packaged-charts/$(CHART_NAME)-$(CHART_VERSION).tgz"
+
+push-oci:
+	@echo "[push-oci] Pushing chart $(CHART_NAME) version $(CHART_VERSION) to oci://$(OCI_REGISTRY_HOST)/$(OCI_REGISTRY_NAMESPACE)/$(CHART_NAME):$(CHART_VERSION)"
+	@echo "[push-oci] Note: You must be logged into oci://$(OCI_REGISTRY_HOST) for the push to succeed."
+	@if [ ! -f ./packaged-charts/$(CHART_NAME)-$(CHART_VERSION).tgz ]; then \
+		echo "[push-oci] Error: Packaged chart ./packaged-charts/$(CHART_NAME)-$(CHART_VERSION).tgz not found. Run 'make package' first."; \
+		exit 1; \
+	fi
+	@helm push ./packaged-charts/$(CHART_NAME)-$(CHART_VERSION).tgz oci://$(OCI_REGISTRY_HOST)/$(OCI_REGISTRY_NAMESPACE)
+	@echo "[push-oci] Successfully pushed chart to OCI registry."
+	@echo "[push-oci] Cleaning up temporary package directory..."
+	@rm -rf ./packaged-charts
+	@echo "[push-oci] Cleanup complete."

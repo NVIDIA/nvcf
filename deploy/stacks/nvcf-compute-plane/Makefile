@@ -60,7 +60,7 @@ include Makefile.dist
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nats-reloader-alignment test-nats-server-source test-nvca-entrypoints test-nvca-default-ownership test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -130,6 +130,9 @@ dist: clean-dist
 	# Copy helmfile.d files
 	@cp -r "$(MAKEFILE_DIR)/helmfile.d" "$(DIST_DIR)/"
 
+	# Copy local charts referenced by helmfile.d releases via relative paths
+	@cp -r "$(MAKEFILE_DIR)/charts" "$(DIST_DIR)/"
+
 	# Copy and transform README (remove internal references)
 	@sed -e 's|nvcf-ncp-internal/ncp-dev|your-org/your-team|g' \
 	     -e 's|0651155215864979/ncp-dev|YOUR_ORG/YOUR_TEAM|g' \
@@ -153,25 +156,45 @@ dist: clean-dist
 # Golden manifests for `make test-local` (compared against $(DIST_DIR)/out)
 GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local
 
+# Strip helmfile's default {{ .State.AbsPathSHA1 }} from the output directory
+# name for golden rendering only. That hash is a SHA1 of the helmfile's absolute
+# path, so fixtures generated in one checkout would not match another. Applies to
+# this repo's tests; `make template` on its own keeps helmfile's default layout.
+GOLDEN_OUTPUT_DIR_TEMPLATE ?= {{ .OutputDir }}/{{ .State.BaseName }}-{{ .Release.Name }}
+
 render-local: dist
 	@echo ">>> Rendering local environment into $(DIST_DIR)/out..."
 	@cp -r testdata/environments/* $(DIST_DIR)/environments/
 	@cp -r testdata/registration $(DIST_DIR)/
-	@cd $(DIST_DIR) && CLUSTER_NAME=ncp-local NCA_ID=ncp-local HELMFILE_ENV=local make template
+	@cd $(DIST_DIR) && CLUSTER_NAME=ncp-local NCA_ID=ncp-local HELMFILE_ENV=local \
+		make template OUTPUT_DIR_TEMPLATE='$(GOLDEN_OUTPUT_DIR_TEMPLATE)'
 
 test-observability-profile:
 	@tests/observability-profile.sh
 
-test-local: test-observability-profile render-local
-	@echo ">>> Comparing $(DIST_DIR)/out against golden $(GOLDEN_LOCAL_DIR)..."
-	@if ! tests/compare-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"; then \
-		echo ""; \
-		echo "ERROR: rendered output in $(DIST_DIR)/out differs from golden $(GOLDEN_LOCAL_DIR)."; \
-		echo "       Review the diff above. If the change is intentional, refresh the golden files:"; \
-		echo "         make generate-golden"; \
-		exit 1; \
-	fi
-	@echo ">>> Local render matches golden $(GOLDEN_LOCAL_DIR)."
+test-register-cluster:
+	@tests/register-cluster.sh
+
+test-kube-context:
+	@tests/kube-context.sh
+
+test-nvca-entrypoints: render-local
+	@tests/nvca-entrypoints.sh "$(DIST_DIR)/out"
+
+test-nvca-default-ownership:
+	@tests/nvca-default-ownership.sh
+
+test-compare-golden:
+	@tests/test-compare-golden.sh
+
+test-nats-reloader-alignment:
+	@tests/nats-reloader-alignment.sh
+
+test-nats-server-source:
+	@tests/nats-server-source.sh
+
+test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-default-ownership test-compare-golden test-nats-reloader-alignment test-nats-server-source test-nvca-entrypoints
+	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local
 	@echo ">>> Updating golden $(GOLDEN_LOCAL_DIR) from $(DIST_DIR)/out..."
@@ -190,16 +213,16 @@ help:
 	@echo "Required:"
 	@echo "  CLUSTER_NAME       Name of the GPU cluster to target"
 	@echo ""
+	@echo "Prerequisite: export the selected control-plane profile"
+	@echo "  nvcf-cli self-hosted --control-plane-stack <path> --env <env> control-plane profile export"
+	@echo ""
 	@echo "Compute Plane: 2-command deployment flow"
 	@echo "  1. make register-cluster CLUSTER_NAME=<name>   Register cluster with ICMS"
-	@echo "                               (writes out/<name>-register-values.yaml)"
+	@echo "                     (writes registration/<name>-register-values.yaml)"
 	@echo "  2. make install CLUSTER_NAME=<name>             Deploy nvca-operator"
 	@echo ""
-	@echo "  register-cluster is idempotent (nvcf-cli --ignore-existing): re-runs"
-	@echo "  each invocation and rewrites the values file."
-	@echo ""
 	@echo "Core Targets:"
-	@echo "  register-cluster   Register/refresh cluster with ICMS (idempotent)"
+	@echo "  register-cluster   Register cluster from the generated control-plane profile"
 	@echo "  template           Generate Kubernetes manifests without applying"
 	@echo "  install            Initial deployment to cluster (helmfile sync)"
 	@echo "  apply              Update existing deployment (helmfile apply)"
@@ -212,6 +235,11 @@ help:
 	@echo ""
 	@echo "Testing Targets:"
 	@echo "  test-observability-profile  Verify NVCA observability profile defaults"
+	@echo "  test-register-cluster       Verify generated profile registration handoff"
+	@echo "  test-kube-context           Verify lifecycle and cleanup context propagation"
+	@echo "  test-nats-reloader-alignment Verify compute-plane and chart-default NATS reloader pins match"
+	@echo "  test-nats-server-source     Verify Dynamo NATS defaults and mirror override wiring"
+	@echo "  test-nvca-entrypoints       Verify rendered NVCA images use available entrypoints"
 	@echo "  test-local         Render the local env and diff against golden testdata"
 	@echo "  generate-golden    Render the local env and update golden testdata"
 	@echo ""
@@ -224,8 +252,11 @@ help:
 	@echo "                     from the correct cluster)"
 	@echo "  OUTPUT_DIR         Output and Helmfile handoff directory (default: ./out)"
 	@echo "  NCA_ID             NCA identifier (default: $(NCA_ID))"
+	@echo "  CONTROL_PLANE_PROFILE  Generated control-plane profile (default:"
+	@echo "                         ../self-managed/out/control-plane-profile.yaml)"
+	@echo "  NVCF_CLI_CONFIG        Optional nvcf-cli config path for registration"
+	@echo "  COMPUTE_KUBE_CONTEXT   Optional kubeconfig context for registration and install"
 	@echo "  CLUSTER_REGION     Cluster region (default: $(CLUSTER_REGION))"
-	@echo "  ICMS_URL           ICMS endpoint (default: $(ICMS_URL))"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make register-cluster CLUSTER_NAME=gpu-east KUBECONFIG_FILE=~/.kube/gpu-east.yaml"

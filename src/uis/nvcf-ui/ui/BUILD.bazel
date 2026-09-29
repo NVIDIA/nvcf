@@ -1,0 +1,100 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//src/uis/nvcf-ui/ui:@biomejs/biome/package_json.bzl", biome_bin = "bin")
+load("@npm//src/uis/nvcf-ui/ui:typescript/package_json.bzl", tsc_bin = "bin")
+load("@npm//src/uis/nvcf-ui/ui:vite/package_json.bzl", vite_bin = "bin")
+load("@npm//src/uis/nvcf-ui/ui:vitest/package_json.bzl", vitest_bin = "bin")
+
+exports_files(["pnpm-lock.yaml"])
+
+npm_link_all_packages(name = "node_modules")
+
+SRCS = glob(
+    [
+        "src/**",
+        "public/**",
+        "vendor/**",
+    ],
+    allow_empty = True,
+) + [
+    "index.html",
+    "vite.config.ts",
+    "tsconfig.json",
+    "package.json",
+]
+
+filegroup(
+    name = "sources",
+    srcs = SRCS,
+    visibility = ["//visibility:public"],
+)
+
+# Vite production build (out_dir "ui" avoids colliding with the source ui/dist/).
+# no-sandbox is required for Vite 8's Rolldown bundler (aspect-build/rules_js#2888);
+# do not remove it until that issue is resolved.
+vite_bin.vite(
+    name = "ui",
+    srcs = SRCS + [":node_modules"],
+    args = [
+        "build",
+        "--outDir",
+        "ui",
+    ],
+    chdir = package_name(),
+    out_dirs = ["ui"],
+    tags = ["no-sandbox"],
+    visibility = ["//visibility:public"],
+)
+
+# Biome lint and format check. --config-path=. uses ui/biome.json directly as root.
+biome_bin.biome_test(
+    name = "lint",
+    args = ["check", "--config-path=."],
+    chdir = package_name(),
+    data = SRCS + [
+        "biome.json",
+        "orval.config.ts",
+        ":node_modules",
+    ],
+    tags = ["no-sandbox"],
+)
+
+# TypeScript type check. no-sandbox so tsc can resolve the full source tree.
+tsc_bin.tsc_test(
+    name = "typecheck",
+    args = ["--noEmit"],
+    chdir = package_name(),
+    data = SRCS + [
+        "vitest.setup.ts",
+        ":node_modules",
+    ],
+    tags = ["no-sandbox"],
+)
+
+# Vitest suite. no-sandbox for the same Vite 8/Rolldown reason as //ui;
+# BAZEL_VITEST enables the runfiles overrides in vite.config.ts.
+vitest_bin.vitest_test(
+    name = "test",
+    args = ["run"],
+    chdir = package_name(),
+    data = SRCS + [
+        "vitest.setup.ts",
+        ":node_modules",
+    ],
+    env = {"BAZEL_VITEST": "1"},
+    tags = ["no-sandbox"],
+)

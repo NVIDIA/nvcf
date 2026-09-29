@@ -1,0 +1,67 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "reconciler",
+    srcs = [
+        "backoff.go",
+        "health.go",
+        "metrics.go",
+        "reconciler.go",
+        "recover.go",
+        "state.go",
+        "sweep.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/reconciler",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/otel",
+        "//src/compute-plane-services/nvca/pkg/apis/nvsnap/v1alpha1",
+        "//src/compute-plane-services/nvca/pkg/nvca/nvsnap",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promauto",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":reconciler",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "reconciler_test",
+    srcs = [
+        "backoff_test.go",
+        "captureonce_test.go",
+        "coldstart_pioneer_test.go",
+        "reconciler_test.go",
+        "recover_test.go",
+        "sweep_test.go",
+    ],
+    embed = [":reconciler"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvsnap/v1alpha1",
+        "//src/compute-plane-services/nvca/pkg/nvca/nvsnap",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/testutil",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
+    ],
+)

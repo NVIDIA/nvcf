@@ -25,7 +25,10 @@ const (
 
 // Failure reason values for model cache metrics
 const (
-	ReasonCacheSpecInvalid   = "cache_spec_invalid"
+	ReasonCacheSpecInvalid = "cache_spec_invalid"
+	// ReasonCatalogMissing: the storage capability catalog ConfigMap is absent,
+	// so the request was created without a durable cache.
+	ReasonCatalogMissing     = "catalog_missing"
 	ReasonPVCSetupFailed     = "pvc_setup_failed"
 	ReasonPVCBindFailed      = "pvc_bind_failed"
 	ReasonRWPVCBindFailed    = "rw_pvc_bind_failed"
@@ -37,12 +40,19 @@ const (
 	ReasonSchedulingTimeout  = "scheduling_timeout"
 	ReasonAdmissionRejected  = "admission_rejected"
 	ReasonInitJobFailed      = "init_job_failed"
+	// ReasonSambaInfraFailed covers non-transient errors bootstrapping the
+	// per-handle Samba server (Deployment, Service, backing PVC).
+	ReasonSambaInfraFailed = "samba_infra_failed"
+	// ReasonSambaInfraTimeout is the per-handle Samba server staying unavailable
+	// past its readiness threshold, usually an unbindable backing PVC.
+	ReasonSambaInfraTimeout = "samba_infra_timeout"
 )
 
 // AllFailureReasons is the complete set of known failure reasons.
 // Used for pre-initializing Prometheus counters to zero.
 var AllFailureReasons = []string{
 	ReasonCacheSpecInvalid,
+	ReasonCatalogMissing,
 	ReasonPVCSetupFailed,
 	ReasonPVCBindFailed,
 	ReasonRWPVCBindFailed,
@@ -54,6 +64,8 @@ var AllFailureReasons = []string{
 	ReasonSchedulingTimeout,
 	ReasonAdmissionRejected,
 	ReasonInitJobFailed,
+	ReasonSambaInfraFailed,
+	ReasonSambaInfraTimeout,
 }
 
 // Backend label values come from the HelmCacheBackend constants in pkg/types

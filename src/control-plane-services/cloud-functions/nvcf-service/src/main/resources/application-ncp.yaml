@@ -1,0 +1,167 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    contact-points: ${CASSANDRA_CONTACT_POINTS:cassandra.cassandra-system.svc.cluster.local}
+    keyspace-name: nvcf_api
+    local-datacenter: ${CASSANDRA_DATACENTER:ncp}
+    username: cassandra
+    password: cassandra
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://api.nvcf.svc.cluster.local
+          jwk-set-uri: http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/nvcf-api/jwt/jwks
+      client:
+        registration:
+          api-keys:
+            client-id: unused      # Override the inherited expression from application.yaml
+            client-secret: unused
+          icms:
+            client-id: unused
+            client-secret: unused
+          notary:
+            client-id: unused
+            client-secret: unused
+          ess:
+            client-id: unused
+            client-secret: unused
+          reval:
+            client-id: unused
+            client-secret: unused
+        provider:
+          api-keys:
+            token-uri: unused
+          icms:
+            token-uri: unused
+          notary:
+            token-uri: unused
+          ess:
+            token-uri: unused
+          reval:
+            token-uri: unused
+
+management:
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+          headers:
+            lightstep-access-token: unused
+
+nvcf:
+  aws:
+    region: ncp
+    s3:
+      provisioned-region: us-west-2  # Unused
+      results:
+        bucket-name: results
+        role-arn: unused
+      assets:
+        bucket-name: assets
+  fqdn: http://api.nvcf.svc.cluster.local:8080
+  global-fqdn-grpc: http://api.nvcf.svc.cluster.local:9090
+  # Host:port the LLM router client dials to reach the request router.
+  # Advertised to the LLM worker env as LLM_REQUEST_ROUTER_ADDRESS.
+  # Self-managed deployments override via the chart (NVCF_LLM_REQUEST_ROUTER_WORKER_ADDRESS).
+  llm-request-router:
+    worker-address: llm-request-router.nvcf.svc.cluster.local:50071
+  # Sidecar container images are configured in configData in nvcf-api-colocated-deploy/nvcf-api/values.yaml:
+  # https://gitlab-master.nvidia.com/ncp/nvcf/application-services/nvcf-api-colocated-deploy/-/blob/main/nvcf-api/values.yaml
+  sidecars:
+    tracing-key: unused
+    hostname: nvcr.io
+    repository: nv-cf/nvcf-core
+    inference-container: dummy
+    init-container: dummy
+    utils-container-image:
+      go: dummy
+    otel-container: dummy
+    niclls-container: dummy
+    ess-agent-container: dummy
+    otel-collector-container: dummy
+    llm-credential-manager-image: dummy
+    llm-router-client-image: dummy
+  ess:
+    base-url: http://ess-api.ess.svc.cluster.local:8080
+    # ESS_FQDN advertised to the LLM worker (go-worker-init pkg/ess reads it as
+    # Ess.Address). Defaults to the in-cluster ess.base-url for colocated; split or
+    # external compute planes override via NVCF_ESS_WORKER_BASE_URL with the public
+    # gateway address (e.g. https://ess.<domain>).
+    worker-base-url: ${nvcf.ess.base-url}
+    static:
+      token: ${kv.tokens.ess}
+  notary:
+    audiences:
+      ess: ess-api
+      nvcf: nvcf-api
+      sbs: sbs-api
+      turn: turn-api
+    base-url: http://notary.nvcf.svc.cluster.local:8080
+    static:
+      token: ${kv.tokens.notary}
+  reval:
+    enabled: false
+    base-url: http://reval.nvcf.svc.cluster.local:8080
+    static:
+      token: ${kv.tokens.reval}
+  icms:
+    base-url: http://api.sis.svc.cluster.local:8080
+    # base-url: http://api.icms.svc.cluster.local:8080 -- Use when self-hosted stack is ready
+    static:
+      token: ${kv.tokens.icms}
+  api-keys:
+    base-url: http://api-keys.api-keys.svc.cluster.local:8080
+    # base-url: http://api-keys.nvcf.svc.cluster.local:8080 -- Use when self-hosted stack is ready
+    static:
+      token: ${kv.tokens.api-keys}
+  registries:
+    account-provisioning:
+      artifact-types: CONTAINER,HELM
+    recognized:
+      container:
+        ngc:
+          hostname: "nvcr.io"
+      helm:
+        ngc:
+          hostname: "helm.ngc.nvidia.com"
+          oauth2:
+            base-url: https://authn.nvidia.com
+            group-scope: ngc
+      model:
+        ngc:
+          hostname: "api.ngc.nvidia.com"
+          oauth2:
+            base-url: https://authn.nvidia.com
+            group-scope: ngc
+      resource:
+        ngc:
+          hostname: "api.ngc.nvidia.com"
+          oauth2:
+            base-url: https://authn.nvidia.com
+            group-scope: ngc
+  nats:
+    url: nats://nats.nats-system.svc.cluster.local:4222 # TODO no tls
+    worker-url: nats://nats.nats-system.svc.cluster.local:4222
+    oauth2-properties:
+      enabled: false
+  account:
+    max-functions-allowed: 2147483647 # Integer.MAX_VALUE — no cap for self-hosted
+    max-tasks-allowed: 2147483647 # Integer.MAX_VALUE — no cap for self-hosted

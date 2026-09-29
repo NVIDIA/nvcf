@@ -41,18 +41,20 @@ type Handlers struct {
 }
 
 type observabilityMetrics struct {
-	llmTokens        otelmetric.Int64Counter
-	providerTime     otelmetric.Float64Histogram
-	streamFirstToken otelmetric.Float64Histogram
-	streamDuration   otelmetric.Float64Histogram
+	llmTokens                   otelmetric.Int64Counter
+	providerTime                otelmetric.Float64Histogram
+	streamFirstToken            otelmetric.Float64Histogram
+	streamDuration              otelmetric.Float64Histogram
+	modelURIAllowlistRejections otelmetric.Int64Counter
 }
 
 func newObservabilityMetrics() observabilityMetrics {
 	return observabilityMetrics{
-		llmTokens:        telemetry.LLMTokens(),
-		providerTime:     telemetry.ProviderTime(),
-		streamFirstToken: telemetry.StreamFirstToken(),
-		streamDuration:   telemetry.StreamDuration(),
+		llmTokens:                   telemetry.LLMTokens(),
+		providerTime:                telemetry.ProviderTime(),
+		streamFirstToken:            telemetry.StreamFirstToken(),
+		streamDuration:              telemetry.StreamDuration(),
+		modelURIAllowlistRejections: telemetry.ModelURIAllowlistRejections(),
 	}
 }
 
@@ -115,6 +117,7 @@ func (h *Handlers) AsOpenAIProxyHandlers() *OpenAIProxyHandlers {
 func (h *Handlers) normalizeChatRequest(
 	c *GatewayContext,
 	request *models.ChatCompletionRequest,
+	rawBody []byte,
 ) (*provider.NormalizedRequest, error) {
 	reqCtx := c.RequestContext()
 	if reqCtx == nil {
@@ -136,6 +139,15 @@ func (h *Handlers) normalizeChatRequest(
 	reqCtx.Model = routedModel
 	setRoutingMethodForModel(reqCtx, routedModel)
 
+	if err := h.requireModelURIAllowlist(
+		c,
+		routedModel,
+		chatCompletionsEndpointPath,
+		h.modelURIAllowlistEnabled(),
+	); err != nil {
+		return nil, err
+	}
+
 	if !request.ServiceTier.IsValid() {
 		request.ServiceTier = h.config.DefaultServiceTier
 	}
@@ -143,7 +155,7 @@ func (h *Handlers) normalizeChatRequest(
 	estimatedInputTokens := estimatedInputTokensForNormalizedRequest(
 		request.Model,
 		request,
-	)
+	) + estimatedTokenCountForUnmodeledChatFields(rawBody)
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(request)
 	checkRequest := ratelimit.ResourceRequest{
@@ -183,6 +195,7 @@ func (h *Handlers) normalizeChatRequest(
 
 	return &provider.NormalizedRequest{
 		ChatRequest:     request,
+		RawBody:         rawBody,
 		InputTokens:     inputTokens,
 		MaxOutputTokens: maxOutputTokens,
 		AdmissionPlan:   admissionPlan,

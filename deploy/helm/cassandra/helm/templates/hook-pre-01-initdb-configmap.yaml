@@ -20,8 +20,9 @@ metadata:
   name: cassandra-init-cql
   namespace: {{ include "cassandra.namespace" . }}
   annotations:
-    helm.sh/hook: pre-install
+    helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
 data:
   keyspace.cql: |-
     CREATE KEYSPACE IF NOT EXISTS schema_migrations WITH replication = {'class': 'NetworkTopologyStrategy', 'ncp': '{{ .Values.cassandra.replicaCount }}' } AND durable_writes = true;
@@ -29,5 +30,5 @@ data:
     ALTER KEYSPACE system_distributed WITH replication = {'class': 'NetworkTopologyStrategy', 'ncp': '{{ .Values.cassandra.replicaCount }}' } AND durable_writes = true;
     ALTER KEYSPACE system_traces WITH replication = {'class': 'NetworkTopologyStrategy', 'ncp': '1' } AND durable_writes = true;
     CONSISTENCY ALL;
-    SELECT * FROM system_auth.roles;
-    SELECT * FROM system_auth.role_permissions;
+    SELECT role FROM system_auth.roles LIMIT 1;
+    SELECT role FROM system_auth.role_permissions LIMIT 1;

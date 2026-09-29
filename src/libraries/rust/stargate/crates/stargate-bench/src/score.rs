@@ -982,14 +982,14 @@ stargate_proxy_retry_exhausted_total_total{model="dummy-model",reason="retry_bud
     #[test]
     fn routing_selection_delta_excludes_pre_replay_probe_counters() {
         let baseline = r#"
-stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="primary"} 3
-stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="fallback"} 1
-stargate_routing_kv_free_token_fallback_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key=""} 1
+stargate_routing_selections_total_total{algorithm="pulsar-wait-and-widen",model="dummy-model",routing_key="",selection="primary"} 3
+stargate_routing_selections_total_total{algorithm="pulsar-wait-and-widen",model="dummy-model",routing_key="",selection="fallback"} 1
+stargate_routing_kv_free_token_fallback_selections_total_total{algorithm="pulsar-wait-and-widen",model="dummy-model",routing_key=""} 1
 "#;
         let post_replay = r#"
-stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="primary"} 13
-stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="fallback"} 5
-stargate_routing_kv_free_token_fallback_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key=""} 4
+stargate_routing_selections_total_total{algorithm="pulsar-wait-and-widen",model="dummy-model",routing_key="",selection="primary"} 13
+stargate_routing_selections_total_total{algorithm="pulsar-wait-and-widen",model="dummy-model",routing_key="",selection="fallback"} 5
+stargate_routing_kv_free_token_fallback_selections_total_total{algorithm="pulsar-wait-and-widen",model="dummy-model",routing_key=""} 4
 "#;
 
         let summary = routing_selection_summary_delta_from_prometheus(baseline, post_replay);

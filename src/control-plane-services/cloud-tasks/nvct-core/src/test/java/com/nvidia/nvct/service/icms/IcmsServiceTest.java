@@ -164,8 +164,7 @@ class IcmsServiceTest {
         // Assert
         assertThat(requestId).isNotNull();
         List<ServeEvent> allServeEvents = MockIcmsServer.getMockIcmsServer().getAllServeEvents();
-        String formUrlEncodedBody = allServeEvents.getFirst().getRequest().getBodyAsString();
-        validateTaskInstancePayload(formUrlEncodedBody, task1);
+        validateTaskInstanceRequest(allServeEvents.getFirst(), task1);
 
         taskService.deleteTask(task1);
     }
@@ -183,8 +182,7 @@ class IcmsServiceTest {
         // Assert
         assertThat(requestId).isNotNull();
         List<ServeEvent> allServeEvents = MockIcmsServer.getMockIcmsServer().getAllServeEvents();
-        String formUrlEncodedBody = allServeEvents.getFirst().getRequest().getBodyAsString();
-        validateTaskInstancePayload(formUrlEncodedBody, task1);
+        validateTaskInstanceRequest(allServeEvents.getFirst(), task1);
 
         taskService.deleteTask(task1);
     }
@@ -209,7 +207,11 @@ class IcmsServiceTest {
     }
 
     @SneakyThrows
-    private void validateTaskInstancePayload(String formUrlEncodedBody, TaskEntity task) {
+    private void validateTaskInstanceRequest(ServeEvent serveEvent, TaskEntity task) {
+        assertThat(serveEvent.getRequest().queryParameter("Action").firstValue())
+                .isEqualTo("RequestInstancesForTask");
+
+        String formUrlEncodedBody = serveEvent.getRequest().getBodyAsString();
         Map<String, Object> paramMap = Arrays.stream(formUrlEncodedBody.split("&"))
                 .map(s -> s.split("=", 2))
                 .collect(Collectors.toMap(

@@ -45,8 +45,25 @@ push_img() { [ "$PUSH" = "1" ] && "$BUILDER" push "$1" || echo "[build-image] PU
 # guard_ref: fail loud if a fork ref isn't pinned (don't guess a branch).
 guard_ref() { [ -n "$2" ] || { echo "[build-image] $1 is unset — pin the fork ref in scripts/versions.sh" >&2; exit 2; }; }
 
-# clone_fork: shallow-clone a fork at a ref into $1.
-clone_fork() { git clone --depth 1 --branch "$3" "$2" "$1"; }
+# clone_fork: shallow-check-out a fork at a ref into $1.
+#
+# Fetch rather than `clone --branch`: -b takes a branch or tag name and rejects
+# a commit id, so it cannot reach NVSNAP_CRIU_REF, which is pinned to a SHA for
+# reproducibility. `fetch <ref>` accepts all three, so one path serves every
+# fork here (the others are pinned to branch names). Matches how
+# scripts/build-agent.sh reaches the same ref.
+clone_fork() {
+    local dst="$1" repo="$2" ref="$3"
+    mkdir -p "$dst"
+    git -C "$dst" init -q
+    git -C "$dst" remote add origin "$repo"
+    git -C "$dst" fetch --depth 1 origin "$ref" || {
+        echo "[build-image] fetch $ref from $repo failed" >&2
+        echo "[build-image] a commit ref must be the full 40-char SHA; an abbreviated one is not a ref name" >&2
+        exit 2
+    }
+    git -C "$dst" checkout -q FETCH_HEAD
+}
 
 build() {
     local img="$1"; shift

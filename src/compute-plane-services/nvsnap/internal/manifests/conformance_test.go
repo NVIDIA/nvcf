@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // criu-v2 nsenters CRIU into the container's mount namespace, and
@@ -81,6 +83,41 @@ func TestV2RestoreHasNoRestoreEntrypoint(t *testing.T) {
 		if strings.Contains(read(t, path), "restore-entrypoint") {
 			t.Errorf("%s execs restore-entrypoint, which the criu-v2 engine does not use",
 				base)
+		}
+	}
+}
+
+// Multi-GPU cannot use CRIU. The agent refuses it outright once it counts the
+// devices ("multi-GPU CRIU is unsupported ... use the rootfs-only path", see
+// internal/agent/checkpoint.go), and test-e2e.sh independently routes anything
+// requesting >= 2 GPUs to the cachedir path.
+//
+// Declaring nvsnap.io/path: "criu" on such a manifest is therefore a promise
+// nothing can keep, and it does damage well away from the annotation:
+// IsCRIUV2Source keys off it, so the generator emits a criu-v2 restore
+// placeholder -- a bash sleep loop that waits for an agent-driven restore that
+// only ever happens on the criu path. The capture then succeeds via cachedir
+// while the restore pod idles until the readiness timeout, which reads as a
+// restore bug rather than a mislabelled source. vllm-tp2 sat like that.
+func TestMultiGPUSourcesAreNotCRIU(t *testing.T) {
+	for _, path := range manifests(t) {
+		base := filepath.Base(path)
+		if strings.HasSuffix(base, "-restore.yaml") {
+			continue
+		}
+		var p sourcePod
+		if err := yaml.Unmarshal([]byte(read(t, path)), &p); err != nil {
+			continue // not a pod manifest
+		}
+		if p.Metadata.Annotations["nvsnap.io/path"] != "criu" {
+			continue
+		}
+		for _, c := range p.Spec.Containers {
+			if gpus := c.Resources.Limits["nvidia.com/gpu"]; gpus != "" && gpus != "0" && gpus != "1" {
+				t.Errorf("%s requests %s GPUs but declares nvsnap.io/path: \"criu\"; "+
+					"the agent rejects multi-GPU CRIU, so this must be \"rootfs\"",
+					base, gpus)
+			}
 		}
 	}
 }

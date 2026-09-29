@@ -73,12 +73,10 @@ message ListModelsResponse {
 }
 
 message ModelStats {
-  // Aggregation note for multi-backend clusters: Stargate currently aggregates
-  // backend-scoped fields below across active backends that share a
-  // `cluster_id` according to each field's semantics, and takes the latest
-  // active backend snapshot for the cluster-scoped fields below. This is
-  // routing policy, not a permanent API contract; individual fields may move
-  // between sections if the reported semantics change.
+  // For active backends that share a cluster_id, Stargate sums request-local
+  // rates and gauges, takes the maximum max_output_tps, combines priority queue
+  // estimates using input-throughput weighting, and sources shared engine state
+  // from one backend.
 
   // Sticky last valid mean input TPS for this backend observation. Stargate
   // never receives live/raw input TPS. For shared clusters, active backend
@@ -94,24 +92,23 @@ message ModelStats {
   // value, add a new field rather than overloading `queued_input_size`.
   uint64 queued_input_size = 4;
 
-  // Cluster-scoped shared-hardware/scheduler state.
+  // Maximum observed output TPS used as fallback routing capacity.
   double max_output_tps = 5;
+  // Cluster-scoped shared engine state. These fields are not summed.
   uint64 kv_cache_capacity_tokens = 6;
   uint64 kv_cache_used_tokens = 7;
   uint64 kv_cache_free_tokens = 8;
-  // Current number of model requests consuming scheduling capacity in the
-  // underlying cluster. Stargate currently treats this as latest-wins across
-  // active backends that share a `cluster_id`.
+  // Current number of requests handled by this backend.
   uint64 num_running_queries = 9;
   // Cluster scheduler concurrency capacity. A value of 0 means the backend did
   // not report this metric; routers should not apply the full-backend admission
   // filter.
   uint64 max_engine_concurrency = 10;
-  // Sum of input tokens across active/queued requests for this model in the
-  // underlying cluster.
+  // Sum of input tokens across requests handled by this backend.
   uint64 total_query_input_size = 11;
-  // Cluster queue-time estimates keyed by request priority. When populated,
-  // priority-aware routers should prefer this over aggregate queue work.
+  // Backend queue-time estimates keyed by request priority. When populated,
+  // priority-aware routers should prefer the cluster aggregate of this map over
+  // aggregate queue work.
   map<uint32, uint64> queue_time_estimate_ms_by_priority = 12;
   // Number of live requests still in input/prefill processing.
   uint64 input_processing_queries = 13;

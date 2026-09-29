@@ -24,6 +24,65 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
+func TestSplitOpenAIModelIDCanonicalizesUUIDRoutingKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		modelID        string
+		wantRoutingKey string
+		wantModel      string
+	}{
+		{
+			name:           "uppercase uuid lowercased",
+			modelID:        "3F2B1C4D-5E6A-4B7C-8D9E-0A1B2C3D4E5F/company-name/model-name",
+			wantRoutingKey: "3f2b1c4d-5e6a-4b7c-8d9e-0a1b2c3d4e5f",
+			wantModel:      "company-name/model-name",
+		},
+		{
+			name:           "mixed case uuid lowercased",
+			modelID:        "3f2b1c4d-5E6A-4b7c-8D9E-0a1b2c3d4e5f/company-name/model-name",
+			wantRoutingKey: "3f2b1c4d-5e6a-4b7c-8d9e-0a1b2c3d4e5f",
+			wantModel:      "company-name/model-name",
+		},
+		{
+			name:           "lowercase uuid unchanged",
+			modelID:        "3f2b1c4d-5e6a-4b7c-8d9e-0a1b2c3d4e5f/company-name/model-name",
+			wantRoutingKey: "3f2b1c4d-5e6a-4b7c-8d9e-0a1b2c3d4e5f",
+			wantModel:      "company-name/model-name",
+		},
+		{
+			name:           "opaque routing key passes through",
+			modelID:        "Fn-Alpha/company-name/model-name",
+			wantRoutingKey: "Fn-Alpha",
+			wantModel:      "company-name/model-name",
+		},
+		{
+			name:           "36-char non-uuid key passes through",
+			modelID:        "abcdefghijklmnopqrstuvwxyz0123456789/model",
+			wantRoutingKey: "abcdefghijklmnopqrstuvwxyz0123456789",
+			wantModel:      "model",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			routingKey, routedModel, hasPrefix := splitOpenAIModelID(tc.modelID)
+			if !hasPrefix {
+				t.Fatalf("hasPrefix = false, want true")
+			}
+			if routingKey != tc.wantRoutingKey {
+				t.Fatalf("routing key = %q, want %q", routingKey, tc.wantRoutingKey)
+			}
+			if routedModel != tc.wantModel {
+				t.Fatalf("routed model = %q, want %q", routedModel, tc.wantModel)
+			}
+		})
+	}
+}
+
 func TestSetRoutingMethodForModelForwardsTrimmedAuthValue(t *testing.T) {
 	t.Parallel()
 

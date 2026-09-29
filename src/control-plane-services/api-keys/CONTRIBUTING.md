@@ -28,7 +28,7 @@ certify that you wrote or otherwise have the right to submit your
 contribution. The full text of the DCO is available at
 [https://developercertificate.org/](https://developercertificate.org/):
 
-```
+```text
 Developer Certificate of Origin
 Version 1.1
 
@@ -68,7 +68,7 @@ By making a contribution to this project, I certify that:
 
 Add a `Signed-off-by` line to each of your commit messages:
 
-```
+```text
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
@@ -88,7 +88,8 @@ git commit -s -m "Your commit message"
    file in `src/` for the canonical form); other file types follow the
    comment style native to that file format. The header text is the
    Apache-2.0 SPDX boilerplate found in `LICENSE`.
-5. Run the full test suite locally (`mvn clean verify`)
+5. Run the full test suite from the monorepo root:
+   `bazel test //src/control-plane-services/api-keys/... --cache_test_results=no`
 6. Commit your changes with DCO sign-off (`git commit -s`)
 7. Push to your branch (`git push origin feature/my-feature`)
 8. Open a Merge Request (or Pull Request on the GitHub mirror)

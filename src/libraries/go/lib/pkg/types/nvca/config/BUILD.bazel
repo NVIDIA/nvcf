@@ -42,6 +42,7 @@ go_test(
         "autobind_env_test.go",
         "config_test.go",
         "deepcopy_test.go",
+        "transport_tls_installer_image_test.go",
         "types_additional_test.go",
         "types_test.go",
     ],

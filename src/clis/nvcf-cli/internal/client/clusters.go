@@ -120,7 +120,7 @@ type ICMSCluster struct {
 	ClusterGroupID string `json:"clusterGroupId,omitempty"`
 
 	NVCAVersion                string `json:"nvcaVersion,omitempty"`
-	ClusterStatus              string `json:"clusterStatus,omitempty"`
+	ClusterStatus              string `json:"status,omitempty"`
 	NVCALastConnected          string `json:"nvcaLastConnected,omitempty"`
 	HealthyHeartbeatReportTime string `json:"healthyHeartbeatReportTime,omitempty"`
 }

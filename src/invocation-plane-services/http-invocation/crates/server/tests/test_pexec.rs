@@ -27,7 +27,8 @@ use mime::TEXT_EVENT_STREAM;
 use mocks::{
     fixtures,
     nvcf_worker_mock::{
-        DefaultWorkHandler, FnWorkHandler, SseWorkHandler, Worker, WorkerProperties,
+        DefaultWorkHandler, FnWorkHandler, JsonHttpRequest, ReturnRequestHandler, SseWorkHandler,
+        Worker, WorkerProperties,
     },
     rate_limit_mock, API_KEY, FUNCTION_ID, FUNCTION_ID_2_RATELIMIT_SYNC,
     FUNCTION_ID_3_RATELIMIT_ASYNC, INSTANCE_ID, VERSION_ID_1, VERSION_ID_3, VERSION_ID_4,
@@ -102,6 +103,62 @@ async fn test_pexec() -> anyhow::Result<()> {
         assert_eq!(response_body, "a response");
         tracing::info!("completed request {i}");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_pexec_forwards_invocation_region() -> anyhow::Result<()> {
+    let (_localstack, _nats, _mock_nvcf_api, mut config) = fixtures().await;
+    config.nats_properties.region = "server-region".into();
+    let mut app = app(config.clone(), None).await?;
+    let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+    let _worker = Worker::new(
+        config.nats_properties.clone(),
+        WorkerProperties {
+            function_id: FUNCTION_ID,
+            function_version_id: VERSION_ID_1,
+            instance_id: INSTANCE_ID.into(),
+        },
+        Box::new(ReturnRequestHandler {}),
+        PublishMode::Attach(app.clone()),
+    )
+    .await?
+    .into_background_task();
+
+    let request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri(format!(
+            "/v2/nvcf/pexec/functions/{FUNCTION_ID}/versions/{VERSION_ID_1}"
+        ))
+        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
+        .header("x-user-header", "user-value")
+        .header("NVCF-INVOCATION-REGION", "client-region")
+        .body(Body::from("a body"))?;
+    let response = app.call(request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get_all("nvcf-invocation-region")
+        .iter()
+        .next()
+        .is_none());
+    let response_body = response.into_body().collect().await?.to_bytes();
+    let parsed_request: JsonHttpRequest = serde_json::from_slice(&response_body)?;
+    let regions: Vec<_> = parsed_request
+        .headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("nvcf-invocation-region"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(regions, ["server-region"]);
+    assert_eq!(
+        parsed_request
+            .headers
+            .iter()
+            .find(|(key, _)| key == "x-user-header")
+            .map(|(_, value)| value.as_str()),
+        Some("user-value")
+    );
     Ok(())
 }
 

@@ -40,6 +40,9 @@ limitations under the License.
 //	NVSNAP_POD_UID         (required) downward API: metadata.uid
 //	NVSNAP_RESTORE_HASH    (required) full sha256 of the capture
 //	NVSNAP_AGENT_URL       (required) e.g. http://$(HOST_IP):8081
+//	NVSNAP_AGENT_TOKEN     (optional) bearer token for the agent API (GH #486);
+//	                       empty sends no header, which is correct while the
+//	                       agent still runs with auth disabled
 //	NVSNAP_CAPTURE_NODE    (optional) where capture data lives; empty=this node
 //	NVSNAP_PREP_MOUNTS     (required) JSON-encoded []VolumeMeta from the manifest
 //	NVSNAP_PREP_DEADLINE   (optional) duration; default 15m
@@ -196,6 +199,7 @@ func startWithRetry(agentURL string, req prepRequest) error {
 			return err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		setAgentAuth(httpReq)
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
 			lastErr = err
@@ -220,6 +224,7 @@ func startWithRetry(agentURL string, req prepRequest) error {
 
 func getStatus(agentURL, podUID string) (*prepStatus, error) {
 	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, agentURL+"/v1/restore/prep/"+podUID, http.NoBody)
+	setAgentAuth(httpReq)
 	if err != nil {
 		return nil, err
 	}
@@ -243,4 +248,16 @@ func getStatus(agentURL, podUID string) (*prepStatus, error) {
 		return nil, fmt.Errorf("decode status: %w", err)
 	}
 	return &s, nil
+}
+
+// setAgentAuth attaches the agent API bearer token when one is configured.
+// Empty is the normal state until the operator turns auth on, and sending no
+// header is exactly what a disabled or permissive agent expects. See GH #486.
+func setAgentAuth(r *http.Request) {
+	if r == nil {
+		return
+	}
+	if tok := os.Getenv("NVSNAP_AGENT_TOKEN"); tok != "" {
+		r.Header.Set("Authorization", "Bearer "+tok)
+	}
 }

@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "server_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/cmd/server",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/uis/nvcf-ui/backend/internal/control-plane",
+        "//src/uis/nvcf-ui/backend/internal/middleware",
+        "//src/uis/nvcf-ui/backend/internal/token-watcher",
+        "//src/uis/nvcf-ui/backend/internal/utils",
+        "@com_github_rs_zerolog//:zerolog",
+        "@com_github_rs_zerolog//hlog",
+        "@io_k8s_sigs_controller_runtime//pkg/manager/signals",
+    ],
+)
+
+go_binary(
+    name = "server",
+    embed = [":server_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "server_test",
+    srcs = ["main_test.go"],
+    embed = [":server_lib"],
+)
+
+filegroup(
+    name = "sources",
+    srcs = glob(
+        [
+            "*.go",
+            "*.md",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

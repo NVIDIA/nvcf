@@ -20,7 +20,10 @@ use tokio_util::task::TaskTracker;
 
 use stargate_protocol::TunnelTransportProtocol;
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
-use stargate_tls::ServerTlsIdentity;
+use stargate_tls::{
+    DEFAULT_TLS_RELOAD_INTERVAL, ServerIdentityReloadTask, ServerIdentityReloader,
+    ServerTlsIdentity,
+};
 
 use super::core::{TunnelForwardingConfig, TunnelServerApp};
 use super::endpoint::{TunnelError, ensure_rustls_provider, make_server_config};
@@ -36,6 +39,8 @@ pub struct QuicHttpTunnelConfig {
     pub forwarding: TunnelForwardingConfig,
     pub tls_cert_pem: Option<Vec<u8>>,
     pub tls_key_pem: Option<Vec<u8>>,
+    pub server_identity_reloader: Option<ServerIdentityReloader>,
+    pub tls_reload_interval: std::time::Duration,
     pub tunnel_protocol: TunnelTransportProtocol,
 }
 
@@ -48,6 +53,8 @@ impl QuicHttpTunnelConfig {
             forwarding: TunnelForwardingConfig::default(),
             tls_cert_pem: None,
             tls_key_pem: None,
+            server_identity_reloader: None,
+            tls_reload_interval: DEFAULT_TLS_RELOAD_INTERVAL,
             tunnel_protocol: TunnelTransportProtocol::RawQuic,
         }
     }
@@ -90,10 +97,22 @@ pub async fn start_quic_http_tunnel(
         forwarding,
         tls_cert_pem,
         tls_key_pem,
+        server_identity_reloader,
+        tls_reload_interval,
         tunnel_protocol,
     } = config;
-    let tls_identity = ServerTlsIdentity::from_optional_pem(tls_cert_pem, tls_key_pem)
-        .map_err(|source| TunnelError::Tls { source })?;
+    let tls_identity = match &server_identity_reloader {
+        Some(reloader) => reloader.current_identity().clone(),
+        None => ServerTlsIdentity::from_optional_pem(tls_cert_pem, tls_key_pem)
+            .map_err(|source| TunnelError::Tls { source })?,
+    };
+    let metrics = forwarding.metrics.clone();
+    if let (Some(reloader), Some(metrics)) = (&server_identity_reloader, &metrics) {
+        metrics
+            .tls_identity()
+            .set_validity(reloader.current_validity());
+        metrics.refresh_tls_certificate_expiry();
+    }
     let server_config = make_server_config(&tls_identity, tunnel_protocol)
         .map_err(|source| TunnelError::Tls { source })?;
     let endpoint = Endpoint::server(server_config, listen_addr).map_err(TunnelError::Bind)?;
@@ -110,11 +129,46 @@ pub async fn start_quic_http_tunnel(
         forwarding,
     );
     let task_tracker_for_accept = task_tracker.clone();
+    let reload = server_identity_reloader.map(|reloader| ServerIdentityReloadTask {
+        component: "pylon",
+        reloader,
+        endpoint: endpoint.clone(),
+        build_server_config: Box::new(move |identity| {
+            make_server_config(identity, tunnel_protocol)
+        }),
+        poll_interval: tls_reload_interval,
+        status: metrics
+            .as_ref()
+            .map_or_else(stargate_tls::TlsIdentityStatus::new, |metrics| {
+                metrics.tls_identity()
+            }),
+    });
 
     let accept_task = OwnedTask::spawn("direct tunnel accept loop", move |shutdown| async move {
+        let reload_shutdown = shutdown.clone();
+        let reload_task = async move {
+            let Some(reload) = reload else {
+                return std::future::pending::<anyhow::Result<()>>().await;
+            };
+            reload
+                .run(reload_shutdown, move |outcome| {
+                    if let Some(metrics) = &metrics {
+                        metrics.observe_server_identity_reload(outcome);
+                        metrics.refresh_tls_certificate_expiry();
+                    }
+                })
+                .await
+        };
+        tokio::pin!(reload_task);
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
+                result = &mut reload_task => {
+                    if let Err(error) = result {
+                        tracing::error!(component = "pylon", %error, "TLS reload task stopped");
+                    }
+                    break;
+                }
                 incoming = endpoint_for_task.accept() => {
                     let Some(incoming) = incoming else {
                         break;

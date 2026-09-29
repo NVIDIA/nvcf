@@ -672,7 +672,7 @@ mod tests {
         let actions = RefCell::new(Vec::new());
 
         finalize_k8s_run_with_actions(
-            "power-of-two",
+            "power-of-n",
             true,
             false,
             || {
@@ -694,7 +694,7 @@ mod tests {
     ) -> Vec<&'static str> {
         let actions = RefCell::new(Vec::new());
         finalize_k8s_run_with_actions(
-            "power-of-two",
+            "power-of-n",
             run_failed,
             keep_resources_on_failure,
             || {
@@ -806,7 +806,7 @@ mod tests {
     #[test]
     fn k8s_replay_artifacts_use_canonical_run_filenames() {
         let tempdir = tempfile::tempdir().expect("tempdir should create");
-        let run_dir = tempdir.path().join("run-power-of-two");
+        let run_dir = tempdir.path().join("run-power-of-n");
 
         let artifacts = K8sRunArtifacts(&run_dir);
 
@@ -1010,8 +1010,8 @@ traffic_pattern:
   output_tokens: { distribution: constant, value: 20 }
   arrival: { distribution: constant, interval_ms: 10 }
 algorithms:
-  - name: power-of-two
-    config: { default: power-of-two }
+  - name: power-of-n
+    config: { default: power-of-n }
 "#,
         )
         .expect("benchmark config fixture should parse")
@@ -1069,11 +1069,11 @@ algorithms:
     ) -> BenchmarkK8sRun {
         std::fs::create_dir_all(run_dir).expect("run dir should create");
         BenchmarkK8sRun {
-            algorithm_name: "power-of-two".to_string(),
+            algorithm_name: "power-of-n".to_string(),
             manifest_path: run_dir.join("manifest.json"),
             run_dir: run_dir.to_path_buf(),
-            stargate_ns: "sgbench-sg-power-of-two".to_string(),
-            backends_ns: "sgbench-be-power-of-two".to_string(),
+            stargate_ns: "sgbench-sg-power-of-n".to_string(),
+            backends_ns: "sgbench-be-power-of-n".to_string(),
             stargate_count: 1,
             nodeport_host: "node.test".to_string(),
             stargate_http_endpoint: "http://node.test:30080".to_string(),

@@ -5,12 +5,14 @@ Quick reference for working with **NVCA** (NVIDIA Cloud Functions Agent), a Kube
 ## Quick Start
 
 **Use standard Go tooling by default:**
+
 ```bash
 go test ./internal/miniservice/... \
     -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
 ```
 
 **Repository structure:**
+
 - `cmd/nvca/` - Main NVCA agent binary
 - `cmd/webhook-server/` - Admission webhook server
 - `cmd/discover-gpus/` - GPU discovery tool
@@ -38,12 +40,14 @@ go test ./internal/miniservice/... \
 ## Build & Test Commands
 
 **Quick check before commit:**
+
 ```bash
 make test           # Unit tests (excludes generated code)
 make lint           # golangci-lint + helm lint
 ```
 
 **Run specific tests:**
+
 ```bash
 go test ./pkg/nvca -run TestBackend \
     -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
@@ -63,6 +67,7 @@ go test ./internal/miniservice/... -v \
 This is automatically handled by `make test`, but required when using `go test` directly.
 
 **Build artifacts:**
+
 ```bash
 mkdir -p _output/bin
 go build -o _output/bin/nvca ./cmd/nvca
@@ -71,6 +76,7 @@ go build -o _output/bin/webhook-server ./cmd/webhook-server
 ```
 
 **Code generation (MUST run after CRD changes):**
+
 ```bash
 make codegen-update      # Generate clientsets, informers, listers, DeepCopy
 make openapigen-update   # Update OpenAPI schema
@@ -79,6 +85,7 @@ make docs-update         # Regenerate docs
 ```
 
 **Local E2E tests:**
+
 ```bash
 make test-e2e
 ```
@@ -86,6 +93,7 @@ make test-e2e
 ## Testing Instructions
 
 **Before committing:**
+
 ```bash
 # Format YOUR code only (DO NOT run gofmt on vendor/)
 gofmt -w $(find . -name '*.go' -not -path './vendor/*')
@@ -99,12 +107,14 @@ git diff --exit-code
 ```
 
 **Quick pre-commit validation:**
+
 ```bash
 # Run all checks in one go
 gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lint && git diff --exit-code
 ```
 
 **Test structure:**
+
 - Tests live next to code: `foo.go` → `foo_test.go`
 - Use table-driven tests for multiple scenarios
 - Test naming: `TestFunctionName` or `TestStructName_MethodName`
@@ -112,6 +122,7 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 - E2E tests in `test/e2e/` (run with `make test-e2e`)
 
 **Envtest setup (for K8s controller tests):**
+
 ```bash
 # Automatically handled by make test, but for IDE:
 source <(./scripts/setup_envtest)
@@ -119,6 +130,7 @@ echo $KUBEBUILDER_ASSETS
 ```
 
 **Example test pattern:**
+
 ```go
 func TestQueueMessageProcessing(t *testing.T) {
     tests := []struct {
@@ -140,6 +152,7 @@ func TestQueueMessageProcessing(t *testing.T) {
 ## Code Style
 
 **General implementation guidance (applies to AI agents too):**
+
 - Match the existing package structure, naming, logging, and error-handling conventions in the repo instead of imposing a new framework or style
 - Prefer small, explicit changes over broad refactors
 - Keep code idempotent and defensive when working on controllers, reconcilers, queue handlers, or release tooling
@@ -150,6 +163,7 @@ func TestQueueMessageProcessing(t *testing.T) {
 - If a task is not HTTP/API work, do not force API patterns into the implementation
 
 **Go standards:**
+
 - All exported symbols need godoc comments
 - Use `logrus` for app logging, `klog` for K8s logging
 - Handle all errors explicitly
@@ -157,12 +171,14 @@ func TestQueueMessageProcessing(t *testing.T) {
 - 120 char line limit
 
 **NVCA-specific patterns:**
+
 - Queue message handlers must be idempotent
 - Use context for cancellation and timeouts
 - Separate storage controller reconciliation from main agent loop
 - MiniService controller handles Helm chart lifecycle
 
 **Operator-specific patterns:**
+
 - Reconciliation must be idempotent
 - Always update status separately from spec
 - Use finalizers for cleanup
@@ -170,6 +186,7 @@ func TestQueueMessageProcessing(t *testing.T) {
 - Keep webhook logic fast and deterministic
 
 **Reconcile error handling:**
+
 - Use `k8sutil.IsTransientK8sError(err)` (`internal/util/k8sutil/errors.go`) to classify K8s API errors before deciding how to handle them
 - **Transient errors** (timeouts, 429, 503, 500, conflicts, network errors) → return `reconcile.Result{Requeue: true}, nil` (silent requeue, no error metric)
 - **Non-transient errors** (Forbidden, Unauthorized, Invalid, Gone) → return `reconcile.Result{}, err` (surfaces as reconcile failure)
@@ -180,7 +197,8 @@ func TestQueueMessageProcessing(t *testing.T) {
 - Keep NotFound handling scoped to resource discovery and Kubernetes API errors that can recover on retry.
 
 **Package structure:**
-```
+
+```text
 cmd/                    - Binary entry points (nvca, webhook-server, nvca-operator, nvca-self-managed, nvca-mirror)
 pkg/apis/               - CRD definitions (triggers codegen)
 pkg/apis/nvcf/v1/       - NVCFBackend CRD types
@@ -202,13 +220,15 @@ deployments/nvca-operator/ - Operator Helm chart
 ## Commit & PR Instructions
 
 **General PR authoring guidance (applies to AI agents too):**
+
 - Use the local PR template shape with `Customer Summary`, `TL;DR`, `Additional Details`, `For the Reviewer`, `For QA`, and `Tickets`
 - For `feat`, `fix`, and `perf` PRs, make `Customer Summary` customer-facing because it is used in release notes
 - In `For QA`, list the exact checks or commands you ran and state whether QA is needed
 - Reference the relevant ticket when one exists; use `NO-REF` only when that is acceptable for the change
 
 **Commit format (Conventional Commits v1.0.0 required):**
-```
+
+```text
 <type>(<scope>): <short description>
 
 [optional body]
@@ -217,18 +237,21 @@ Closes NVCFCLUST-XXXX  # or use NO-REF if no ticket
 ```
 
 **Types:**
+
 - **Customer** (in release notes): `feat`, `fix`, `perf` - **scope required**
 - **Foundational** (not in release notes): `docs`, `build`, `test`, `refactor`, `ci`, `chore`, `style`, `revert`
 
 **Examples:**
-```
+
+```text
 feat(queue): add support for batch message processing
 fix(storage): handle PVC deletion race condition
 test(miniservice): add unit tests for chart reconciliation
 ```
 
 **Breaking changes - add to footer:**
-```
+
+```text
 feat(api): change MiniService status structure
 
 BREAKING CHANGE: The status.conditions field has been restructured.
@@ -237,6 +260,7 @@ Closes NVCFCLUST-1234
 ```
 
 **Before committing (CRITICAL - prevents CI failures):**
+
 ```bash
 # 1. Format YOUR Go code only (NOT vendor/)
 gofmt -w $(find . -name '*.go' -not -path './vendor/*')
@@ -258,11 +282,13 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 ```
 
 **IMPORTANT: Never modify vendor files**
+
 - All fixes and changes must be made in non-vendor files only
 - Vendor files are managed by `go mod vendor` and should not be edited directly
 - If you encounter issues in vendor code, update dependencies in `go.mod` and run `go mod vendor`
 
 **PR checklist:**
+
 1. Fork repo, create feature branch
 2. Add tests for your changes (aim for >73% coverage)
 3. **Format YOUR code only**: `gofmt -w $(find . -name '*.go' -not -path './vendor/*')`
@@ -276,18 +302,21 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 11. Address review feedback
 
 **Branch strategy:**
+
 - `main` - development branch, target for new features
 - `release-x.y` - release branches, bugfixes only
 
 ## Security Considerations
 
 **Critical rules:**
+
 - NEVER commit credentials, API keys, or secrets (use K8s secrets, inject at runtime)
 - Validate all webhook inputs, use TLS, implement timeouts
 - Check `go.mod` replace directives for security patches
 - Run containers as non-root when possible
 
 **Reporting vulnerabilities - DO NOT use public issue trackers:**
+
 - Web: https://www.nvidia.com/object/submit-security-vulnerability.html
 - Email: psirt@nvidia.com
 - Include: product/version, vulnerability type, repro steps, PoC code, impact
@@ -306,17 +335,20 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 ## Code Generation Triggers
 
 **Modified CRD types in `pkg/apis/`?** Run:
+
 ```bash
 make codegen-update     # Generates clientsets, informers, listers, DeepCopy
 make openapigen-update  # Updates OpenAPI schema
 ```
 
 **Modified test data templates?** Run:
+
 ```bash
 make testdata-update
 ```
 
 **Changed dependencies (go.mod)?** Run:
+
 ```bash
 go mod tidy
 go mod vendor
@@ -327,6 +359,7 @@ find vendor -name "LICENSE*" -type f | sort
 ```
 
 **Update all generated code:**
+
 ```bash
 make codegen-update
 make openapigen-update
@@ -339,10 +372,12 @@ make docs-update
 The `LICENSE` file contains the NVIDIA Apache 2.0 license and a complete list of third-party licenses from vendored dependencies.
 
 **When to update:**
+
 - After running `go mod vendor`
 - After adding/removing/updating dependencies in `go.mod`
 
 **How to update:**
+
 ```bash
 # Generate the list of third-party licenses
 find vendor -name "LICENSE*" -type f | sort
@@ -351,6 +386,7 @@ find vendor -name "LICENSE*" -type f | sort
 ```
 
 **Why this matters:**
+
 - Legal compliance requires accurate attribution of third-party code
 - The LICENSE file must reflect current vendored dependencies
 
@@ -359,6 +395,7 @@ find vendor -name "LICENSE*" -type f | sort
 Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so they appear on the first Prometheus scrape. **When adding new label values, update the initialization code.**
 
 **Files to update:**
+
 - `internal/metrics/metrics.go` - Add new values to the initialization loops in `NewDefaultMetrics()`
 - `internal/metrics/metrics_test.go` - Add new values to `TestMetricsInitializedToZero`
 
@@ -383,6 +420,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 | `SchedulerWorkloadCount` | `workload_kind` | Constants in `internal/metrics/workloadtypes/types.go` (`AllWorkloadKinds`) |
 
 **When to update:**
+
 - Adding a new K8s resource type to `TrackK8sAPICall()` calls
 - Adding a new GC cleaner in `internal/gc/`
 - Adding a new resource type constant in `internal/metrics/gctypes/`
@@ -392,6 +430,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 - Adding a new maintenance mode to `AllMaintenanceModes` in `pkg/types/types.go`
 
 **Why this matters:**
+
 - Prometheus `absent()` alerts fail on non-existent metrics
 - `rate()` calculations give unexpected results if metrics appear mid-scrape
 - Dashboards show gaps instead of zeros
@@ -416,35 +455,46 @@ the recipe for adding a new dependency or a new transport type.
 ## Key Environment Variables
 
 Useful local test variables:
+
 - `NVCF_GOMAXPROCS` - max parallel test execution (default: 4)
 - `KUBEBUILDER_ASSETS` - envtest binaries location
 
 ## Versioning & Tag Formats
 
-This project uses [Semantic Versioning](https://semver.org/) with a `v` prefix for git tags.
+NVCA uses [Semantic Versioning](https://semver.org/). Tags are path-scoped,
+because every subproject in this monorepo shares one tag namespace:
 
-**Supported tag formats:**
-
-| Format | Description | Example | Audience |
-|--------|-------------|---------|----------|
-| `vMAJOR.MINOR.PATCH` | Release version | `v1.20.0` | QA / Production |
-| `vMAJOR.MINOR.PATCH-dev.N` | Dev/prerelease build | `v1.20.0-dev.0` | Dev |
-| `vMAJOR.MINOR.PATCH-rc.N` | Release candidate (stage) | `v1.20.0-rc.1` | QA |
-
-**Version precedence (lowest to highest):**
-- `v1.20.0-dev.0` < `v1.20.0-dev.1` < `v1.20.0-rc.1` < `v1.20.0`
-
-**Creating tags:**
-```bash
-# Release tag
-git tag v1.20.0
-
-# Dev build tag
-git tag v1.20.0-dev.0
+```text
+src/compute-plane-services/nvca/vMAJOR.MINOR.PATCH
 ```
 
-**CI behavior:**
-- Tags should trigger release validation in the hosting environment.
+Do not create a bare `vMAJOR.MINOR.PATCH` tag. That was the convention in the
+standalone NVCA repository and it collides with every other subproject here.
+
+Supported tag formats:
+
+| Format | Description | Example |
+|--------|-------------|---------|
+| `<path>/vMAJOR.MINOR.PATCH` | Release version | `src/compute-plane-services/nvca/v3.4.0` |
+| `<path>/vMAJOR.MINOR.PATCH-rc.N` | Release candidate | `src/compute-plane-services/nvca/v3.4.0-rc.1` |
+
+Version precedence, lowest to highest: `3.4.0-rc.1` < `3.4.0`.
+
+Creating tags on `main`: do not. Release automation cuts the tag when a
+`feat`, `fix`, or `perf` commit touching this subtree merges to `main`.
+
+On a `release-*` maintenance branch there is no automation, so a maintainer
+does create and push the patch tag by hand. See
+[RELEASE.md](../../../RELEASE.md) at the repository root for that procedure
+and the full model.
+
+NVCA previously cut `-dev.N` prereleases from a `VERSION` file on every push
+to `main`. That model is retired: the `VERSION` file is gone and the existing
+`-dev.N` tags remain only as history.
+
+CI behavior:
+
+- Tags trigger release validation in the hosting environment.
 - Keep GitHub-facing documentation free of internal CI pipeline commands and generated pipeline artifacts.
 
 ## Observability
@@ -470,6 +520,7 @@ git tag v1.20.0-dev.0
 ## Feature Flags & Attributes
 
 For cluster-wide attributes and feature flags documentation, see:
+
 - [Feature Flags Doc](./docs/users/byoc/featureflags.md)
 
 ## Quick Links
@@ -482,6 +533,7 @@ For cluster-wide attributes and feature flags documentation, see:
 - Maintainers: nvidia/nvca-dev
 
 ## NVCF Workspace Routing
+
 - Team: `@NVIDIA/nvcf-dev`.
 - This repo is part of the `self-hosted-nvcf` workspace in `nvcf-agentic-dev`.
 - Manifest tier: `image-source`.
@@ -499,10 +551,12 @@ For cluster-wide attributes and feature flags documentation, see:
 - Treat `nvcf-agentic-dev` as the routing layer: use it to identify the owning repo and dependencies, then do the implementation in the correct repo.
 
 ## Repo-Specific Routing Guidance
+
 - This repo owns NVCA worker/agent logic. Deployment packaging usually lives in `nvca-operator-deploy`; SBOM consumers may involve `sbom-templates` and `manifests`.
 - Closely related repos: `nvca-operator`, `nvca-operator-deploy`, `sbom-templates`, `manifests`.
 
 ## Agent Expectations for Workspace Routing
+
 - Summarize the route you chose before substantial edits: why this repo is the owner, what sibling repos are relevant, and whether `nvcf-agentic-dev` docs influenced the plan.
 - Keep changes scoped to this repo unless the task explicitly requires coordinated edits elsewhere.
 - If the work really belongs in another repo, say so clearly and move there instead of forcing the change here.

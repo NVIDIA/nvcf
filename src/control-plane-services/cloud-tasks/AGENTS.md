@@ -5,9 +5,10 @@ Bazel module. It is not a nested Bazel module and does not own a
 `MODULE.bazel`, lockfile, `.bazelrc`, `.bazelversion`, downloader config, or
 third-party dependency hub.
 
-Maven POMs remain during coexistence, but Bazel uses source targets throughout
-the monorepo. Do not generate or publish Maven-shaped project artifacts from
-Bazel.
+The monorepo copy is Bazel-only and contains no project POMs. Bazel uses source
+targets throughout the monorepo. Keep any Maven build support in the
+independent source repository. Do not restore project POMs or add Maven build
+instructions here.
 
 ## Build And Test
 

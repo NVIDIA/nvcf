@@ -82,7 +82,7 @@ func TestDecide_NoAnnotationAdmitsUnchanged(t *testing.T) {
 func TestDecide_HappyPathProducesPatch(t *testing.T) {
 	b, _ := checkpointstore.NewLocal(t.TempDir())
 	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	src := t.TempDir()
+	src := srcWith(t, "volumes/v")
 	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: src}}, checkpointstore.Manifest{
 		Volumes: []checkpointstore.VolumeMeta{
 			{Name: "v", MountPath: "/cache", Type: "emptyDir", FileCount: 1, SizeBytes: 1},

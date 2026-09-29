@@ -18,7 +18,7 @@ metadata:
   description: Short growing-prefix validation run for coding-style sessions with long shared context and small new suffixes.
   tags: [load-balance, grouped-pylons, cache, prefix-reuse, coding-session, smoke]
   expected_runtime: short
-  expected_signal: Once a session is warm on a cluster, its TTFT should reflect only the appended suffix; compare cache-affine GMR and the no-SLO PULSAR/PULSAR-multiregion primary controls against non-affine routing.
+  expected_signal: Once a session is warm on a cluster, its TTFT should reflect only the appended suffix; compare cache-affine WaitAndWiden and the no-SLO PULSAR/PULSAR-wait-and-widen primary controls against non-affine routing.
 model: dummy-model
 seed: 704
 request_count: 32
@@ -63,31 +63,31 @@ traffic_pattern:
     target_rps: 20
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
+      default: power-of-n
   - name: round-robin
     config:
       default: round-robin
   - name: random
     config:
       default: random
-  - name: groq-multiregion
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
-  - name: groq-multiregion-affinity
+      default: wait-and-widen
+  - name: wait-and-widen-affinity
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
-          algorithm: groq-multiregion
-          seed: growing-prefix-smoke-gmr-affinity-v1
+          algorithm: wait-and-widen
+          seed: growing-prefix-smoke-wait-and-widen-affinity-v1
           require_cache_affinity_key: true
           require_input_tokens: true
           cache_affinity_backend_selection_count: 1
   - name: pulsar
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar
@@ -96,28 +96,28 @@ algorithms:
           require_input_tokens: true
   - name: pulsar-consider-kv-free-tokens
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar
           seed: growing-prefix-smoke-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true
-  - name: pulsar-multiregion
+  - name: pulsar-wait-and-widen
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: growing-prefix-smoke-v1
           require_cache_affinity_key: true
           require_input_tokens: true
-  - name: pulsar-multiregion-consider-kv-free-tokens
+  - name: pulsar-wait-and-widen-consider-kv-free-tokens
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: growing-prefix-smoke-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true

@@ -67,7 +67,15 @@ type Config struct {
 	CRIUPath            string
 	NodeName            string
 	LogLevel            string
-	UseNsenter          bool // Run CRIU/cuda-checkpoint in host mount namespace (for containerized agents)
+
+	// AuthToken is the shared bearer token callers must present on the
+	// agent API. Sourced from a Secret rather than a flag so it does not
+	// land in the pod spec or in `ps` output. Empty disables the check.
+	AuthToken string
+	// AuthMode is disabled (default), permissive, or required. See auth.go
+	// for why the rollout needs a permissive state.
+	AuthMode   AuthMode
+	UseNsenter bool // Run CRIU/cuda-checkpoint in host mount namespace (for containerized agents)
 
 	// Prewarm enables agent-side page-cache prewarm of the rox-backed
 	// overlay lowerdir on restore (--prewarm, default true). Reads the
@@ -112,6 +120,17 @@ type Config struct {
 	// status.hostIP). Used to advertise the agent's HTTP endpoint
 	// when registering as a peer in the catalog.
 	NodeIP string
+
+	// AdvertiseIP overrides NodeIP as the address peers dial (GH #490).
+	//
+	// Under hostNetwork the two are the same, because kubelet reports a
+	// hostNetwork pod's status.podIP as the node IP. Under pod networking
+	// they differ, and peers must dial the pod IP -- the node IP would only
+	// work via hostPort, which is exactly the node-wide exposure we are
+	// trying not to require. The chart sets this from status.podIP, which
+	// is correct in both modes; NodeIP stays available for the places that
+	// genuinely mean "this node".
+	AdvertiseIP string
 
 	// BlobStoreURL is the base URL of the cluster's nvsnap-blobstore
 	// (Phase 5d.2 durable backstop). Empty disables capture-side
@@ -436,6 +455,30 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 
 	router := mux.NewRouter()
+
+	// RED metrics for every route: rate and status via APIRequestsTotal,
+	// duration via APIRequestDuration, keyed on the route TEMPLATE rather
+	// than the concrete path so checkpoint IDs never become label values.
+	// Registered outermost so it also observes requests the auth guard
+	// rejects -- a spike of 401s is exactly what the rollout needs to see.
+	router.Use(metrics.InstrumentRoute())
+
+	// Present the token on our own peer calls too. Set unconditionally: an
+	// agent in permissive mode still has peers that may already require it.
+	SetOutboundToken(a.config.AuthToken)
+
+	// Order matters: gorilla/mux runs middleware in registration order, so
+	// auth is registered FIRST. Otherwise pathVarGuard answers a malformed
+	// {id} with 400 before the caller is authenticated, telling an
+	// unauthenticated client which routes exist and how their variables are
+	// shaped. Authenticate, then validate.
+	if guard := tokenGuard(a.config.AuthMode, a.config.AuthToken, a.log); guard != nil {
+		router.Use(guard)
+		a.log.WithField("mode", a.config.AuthMode).Info("Agent API authentication enabled")
+	} else {
+		a.log.Warn("Agent API is UNAUTHENTICATED: set NVSNAP_AGENT_TOKEN and " +
+			"--auth-mode to require a bearer token (GH #486)")
+	}
 
 	// Every {id}/{hash}/{pod-uid} below names a directory under a hostPath
 	// mount. Validate them in one place so a route added later is covered

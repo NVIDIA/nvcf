@@ -16,6 +16,7 @@
 use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt, TryStreamExt};
+use stargate_protocol::common::valid_last_mean_input_tps;
 
 use crate::generated_request_id::GeneratedRequestKind;
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
@@ -88,6 +89,9 @@ pub(crate) async fn run_calibration(
                     current_stats = ?stats,
                     "model calibration reached its saturation timeout"
                 );
+                if !valid_last_mean_input_tps(stats.last_mean_input_tps) {
+                    return Err(BringupError::InsufficientCalibrationData);
+                }
                 return Ok(());
             }
             Err(BringupError::PromptTooLong) => {

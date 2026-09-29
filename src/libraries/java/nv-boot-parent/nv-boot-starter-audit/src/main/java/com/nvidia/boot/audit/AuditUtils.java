@@ -134,8 +134,8 @@ public final class AuditUtils {
             String encodedHmac = Base64.getEncoder().encodeToString(hmac);
             return format(HMAC_FORMAT, ALGORITHM_HMAC_SHA3_512, kid, encodedHmac);
         } catch (NoSuchAlgorithmException | InvalidKeyException | NoSuchProviderException e) {
-            var mesg = "Failed to compute HMAC";
-            log.error(mesg, e);
+            var mesg = "Failed to compute HMAC - '{}'";
+            log.error(mesg, e.getMessage());
             throw new IllegalArgumentException(mesg, e);
         }
     }

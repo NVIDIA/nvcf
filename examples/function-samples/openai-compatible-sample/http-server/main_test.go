@@ -206,7 +206,7 @@ func TestAnyLoadTesterHeaderDisablesBodyControls(t *testing.T) {
 func TestResponsesStreamPreservesSSESemanticsAndFlushes(t *testing.T) {
 	chunk := "quote\" slash\\ newline\n"
 	recorder := newFlushCountingRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model","input":"hello","stream":true}`))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model","input":"hello","stream":true}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(headerChunk, chunk)
 	request.Header.Set(headerOutputChunks, "3")
@@ -424,7 +424,7 @@ func TestOutputChunksLimit(t *testing.T) {
 		{name: "above default maximum rejected", value: "6001", want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/responses", nil)
 			request.Header.Set(headerOutputChunks, test.value)
 			tuning, err := resolveBenchmarkTuning(request, benchmarkBodyControls{}, defaultMaxOutputChunks)
 			if test.want {
@@ -463,7 +463,7 @@ func TestConfiguredOutputChunksLimit(t *testing.T) {
 		{name: "above configured maximum rejected", output: "12001", wantStatus: http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model"}`))
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model"}`))
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set(headerOutputChunks, test.output)
 			recorder := httptest.NewRecorder()
@@ -554,7 +554,7 @@ func TestChunkBytesControlsOutput(t *testing.T) {
 }
 
 func TestBodyControlMapping(t *testing.T) {
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/responses", nil)
 	tuning, err := resolveBenchmarkTuning(request, benchmarkBodyControls{
 		QueueDelay:       json.RawMessage(`1`),
 		TTFT:             json.RawMessage(`2`),
@@ -749,7 +749,7 @@ func TestConcurrencyLimit(t *testing.T) {
 		activeRequests.Store(0)
 	})
 	router := newRouter()
-	firstRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
+	firstRequest := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
 	firstRequest.Header.Set("Content-Type", "application/json")
 	firstRequest.Header.Set(headerMaxConcurrency, "1")
 	firstRequest.Header.Set(headerTTFT, "100")
@@ -768,7 +768,7 @@ func TestConcurrencyLimit(t *testing.T) {
 		t.Fatal("first request did not acquire the concurrency slot")
 	}
 
-	secondRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
+	secondRequest := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
 	secondRequest.Header.Set("Content-Type", "application/json")
 	secondRequest.Header.Set(headerMaxConcurrency, "1")
 	secondRecorder := httptest.NewRecorder()
@@ -797,7 +797,7 @@ func TestBodyConcurrencyLimit(t *testing.T) {
 	})
 	router := newRouter()
 	body := `{"model":"test-model","x_load_tester_max_concurrency":1,"x_load_tester_ttft_ms":100}`
-	firstRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	firstRequest := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	firstRequest.Header.Set("Content-Type", "application/json")
 	go func() {
 		defer close(requestFinished)
@@ -814,7 +814,7 @@ func TestBodyConcurrencyLimit(t *testing.T) {
 		t.Fatal("first request did not acquire the concurrency slot")
 	}
 
-	secondRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	secondRequest := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	secondRequest.Header.Set("Content-Type", "application/json")
 	secondRecorder := httptest.NewRecorder()
 	router.ServeHTTP(secondRecorder, secondRequest)
@@ -885,7 +885,7 @@ func TestLegacyStreamsFlushOncePerFrame(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := newFlushCountingRecorder()
-			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, test.path, strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set(headerOutputChunks, "2")
 			newRouter().ServeHTTP(recorder, request)
@@ -910,7 +910,7 @@ func TestCompletionsAndModels(t *testing.T) {
 		t.Fatalf("object = %#v, want text_completion", got)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/models", nil)
 	recorder = httptest.NewRecorder()
 	newRouter().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -973,7 +973,7 @@ func postJSON(t *testing.T, path, body string) *httptest.ResponseRecorder {
 
 func postJSONWithHeaders(t *testing.T, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	for name, value := range headers {
 		request.Header.Set(name, value)

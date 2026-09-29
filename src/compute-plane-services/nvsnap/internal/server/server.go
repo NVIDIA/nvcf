@@ -79,6 +79,12 @@ type Config struct {
 	// and every NVCA rootfs capture timed out at 15m → Failed → no
 	// pvc_promote_state=ready → no restore. GCP-H100-a 2026-06-10.)
 	ManifestNamespace string
+	// AgentToken is the shared bearer token the agent expects on its API
+	// (nvsnap#486). Empty when the deployment runs without
+	// agent.auth.enabled, in which case no header is sent and behaviour is
+	// unchanged. Read from NVSNAP_AGENT_TOKEN, which the chart projects
+	// from the nvsnap-agent-token Secret.
+	AgentToken string
 }
 
 // Server is the K8s-aware NVSNAP API server.
@@ -114,7 +120,7 @@ func New(cfg Config, kubeClient kubernetes.Interface, dynClient dynamic.Interfac
 		config:     cfg,
 		kubeClient: kubeClient,
 		dynClient:  dynClient,
-		httpClient: &http.Client{Timeout: 10 * time.Minute},
+		httpClient: withAgentAuth(&http.Client{Timeout: 10 * time.Minute}, cfg.AgentToken),
 		log:        log,
 		demo:       newDemoSession(),
 		hub:        newHub(log),
@@ -996,7 +1002,11 @@ func (s *Server) deleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 	result := s.cascadeDeleteCheckpoint(ctx, id, agentID, row)
 
-	if !result.AnySuccess {
+	// Genuine 404: nothing matched anywhere AND nothing failed. A cascade
+	// that failed on every tier also leaves AnySuccess false, but there the
+	// checkpoint still exists -- answering 404 would claim it is gone.
+	// CatalogRetained separates the two.
+	if !result.AnySuccess && !result.CatalogRetained {
 		s.writeError(w, http.StatusNotFound, "checkpoint not found in any tier (agent, peers, blobstore, catalog)")
 		return
 	}
@@ -1009,6 +1019,16 @@ func (s *Server) deleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 		Status:     result.Status(),
 		Message:    result.Summary(),
 	})
+	// A partial cascade must not report 204. The catalog row is retained in
+	// that case (see cascadeDeleteCheckpoint), so the checkpoint still
+	// exists and the caller has to retry -- telling them "No Content" hides
+	// an orphaned dump behind an apparent success (nvsnap#736). The delete
+	// is idempotent, so retrying after the failing tier recovers is safe.
+	if result.CatalogRetained {
+		s.writeError(w, http.StatusInternalServerError,
+			"checkpoint partially deleted; catalog row retained for retry: "+result.Summary())
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1043,8 +1063,15 @@ func (s *Server) deleteCheckpointByHash(w http.ResponseWriter, r *http.Request) 
 		Status:     result.Status(),
 		Message:    result.Summary(),
 	})
-	if !result.AnySuccess {
+	if !result.AnySuccess && !result.CatalogRetained {
 		s.writeError(w, http.StatusNotFound, "no artifacts found for hash "+hash)
+		return
+	}
+	// Same contract as deleteCheckpoint: a retained catalog row means the
+	// checkpoint is still there, so this is not a 204 (nvsnap#736).
+	if result.CatalogRetained {
+		s.writeError(w, http.StatusInternalServerError,
+			"checkpoint partially deleted; catalog row retained for retry: "+result.Summary())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1065,6 +1092,12 @@ type cascadeDeleteResult struct {
 	CaptureCMs   int // count of rootfs-capture-manifest ConfigMaps deleted (per hash)
 	Errors       []string
 	AnySuccess   bool
+
+	// CatalogRetained is set when the catalog rows were deliberately kept
+	// because a tier delete failed. The row is the only pointer to the
+	// on-disk dump, so dropping it on a partial cascade orphans those bytes
+	// (nvsnap#736). Callers must not report success when this is set.
+	CatalogRetained bool
 }
 
 // Status returns "success" when every attempted sub-delete succeeded
@@ -1116,7 +1149,10 @@ func (r *cascadeDeleteResult) Summary() string {
 
 func (s *Server) cascadeDeleteCheckpoint(ctx context.Context, id, agentID string, row *db.Checkpoint) cascadeDeleteResult {
 	var result cascadeDeleteResult
-	client := &http.Client{Timeout: 10 * time.Second}
+	// Own client rather than s.httpClient (much shorter timeout), so it needs
+	// the token wrapper too. Without it the L1 delete 401s, the row is dropped
+	// anyway, and the dump is orphaned (nvsnap#736).
+	client := withAgentAuth(&http.Client{Timeout: 10 * time.Second}, s.config.AgentToken)
 
 	// Targeted row, synthesizing missing fields from (id, agentID)
 	// so the per-row helper has what it needs even when row is nil
@@ -1172,12 +1208,33 @@ func (s *Server) cascadeDeleteCheckpoint(ctx context.Context, id, agentID string
 		s.deleteCaptureManifestCM(ctx, row.Hash, &result)
 	}
 
-	// Catalog rows — DeleteByHash takes everything sharing this hash
-	// in one statement. Falls back to single-id delete when hash is
-	// unknown.
+	// Catalog rows LAST, and only when the tiers above actually cleaned up.
+	//
+	// The row is the only pointer to the on-disk dump. Deleting it while a
+	// tier delete failed (agent 401 under --auth-mode=required, agent down,
+	// blobstore unreachable) orphans those bytes: nothing references them,
+	// so nothing will ever retry or GC them. Keeping the row on failure
+	// makes the delete retryable and keeps the dump discoverable.
+	//
+	// This was the worst part of nvsnap#736 -- the catalog delete also set
+	// AnySuccess, so a cascade where every tier failed still returned 204 No
+	// Content. The caller was told the checkpoint was gone while the bytes
+	// stayed on disk.
+	if len(result.Errors) > 0 {
+		// Not appended to Errors: that list is the set of things that
+		// actually failed, and callers count it.
+		result.CatalogRetained = true
+		return result
+	}
+
+	// DeleteByHash takes everything sharing this hash in one statement.
+	// Falls back to single-id delete when hash is unknown.
 	if row != nil && row.Hash != "" {
 		n, err := s.catalog.DeleteByHash(row.Hash)
 		if err != nil {
+			// The row survived the delete just as deliberately as in the
+			// branch above, so callers must hear about it the same way.
+			result.CatalogRetained = true
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("catalog DeleteByHash(%s): %v", row.Hash[:12], err))
 		} else {
@@ -1188,6 +1245,7 @@ func (s *Server) cascadeDeleteCheckpoint(ctx context.Context, id, agentID string
 		}
 	} else if row != nil {
 		if err := s.catalog.DeleteCheckpoint(id); err != nil {
+			result.CatalogRetained = true
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("catalog DeleteCheckpoint(%s): %v", id, err))
 		} else {
@@ -1421,7 +1479,7 @@ func (s *Server) proxyToAgentCheckpoint(w http.ResponseWriter, r *http.Request, 
 			continue
 		}
 		url := fmt.Sprintf("http://%s:%d%s?%s", ip, s.config.AgentPort, agentPath, r.URL.RawQuery)
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := withAgentAuth(&http.Client{Timeout: 10 * time.Second}, s.config.AgentToken)
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, http.NoBody)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -1844,7 +1902,7 @@ func (s *Server) listAgentCheckpoints(ctx context.Context) []map[string]interfac
 		wg     sync.WaitGroup
 	)
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := withAgentAuth(&http.Client{Timeout: 5 * time.Second}, s.config.AgentToken)
 
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
@@ -1907,7 +1965,7 @@ func (s *Server) checkAgentHealth(ctx context.Context, nodeIP string) bool {
 	if nodeIP == "" {
 		return false
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := withAgentAuth(&http.Client{Timeout: 3 * time.Second}, s.config.AgentToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		fmt.Sprintf("http://%s:%d/health", nodeIP, s.config.AgentPort), http.NoBody)
 	if err != nil {

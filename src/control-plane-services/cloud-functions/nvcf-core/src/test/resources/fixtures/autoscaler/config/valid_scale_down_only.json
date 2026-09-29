@@ -1,0 +1,11 @@
+{
+  "scaleDownDetails": {
+    "metric": "worker_utilization",
+    "factor": 0.5,
+    "threshold": 20,
+    "stickiness": {
+      "size": "PT30M",
+      "threshold": "PT5M"
+    }
+  }
+}

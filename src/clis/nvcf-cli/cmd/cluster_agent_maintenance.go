@@ -55,9 +55,10 @@ var clusterAgentCordonDrainCmd = &cobra.Command{
 deployments, let in-flight requests complete, and scale all function instances
 to zero.
 
-This sets the CordonAndDrainMaintenance feature flag and maintenanceMode on the
-NVCA agent-config ConfigMap and restarts the NVCA deployment. The command returns
-once NVCA has been told to drain (and, by default, once the restart rolls out);
+This sets the CordonAndDrainMaintenance feature flag on the NVCFBackend CR's
+spec.overrides.featureGate.values; the NVCA operator's own reconcile then
+regenerates agent-config and restarts NVCA. The command returns once the CR
+update is accepted (and, by default, once the operator's rollout completes);
 use "cluster agent list-functions --phase DRAINING" to watch instances wind down.
 
 Select the cluster with --compute-plane-context, as with the inspection commands.`,
@@ -71,7 +72,8 @@ var clusterAgentUncordonCmd = &cobra.Command{
 	SilenceUsage: true,
 	Args:         cobra.NoArgs,
 	Long: `Reverse a cordon-and-drain: remove the CordonAndDrainMaintenance feature
-flag and maintenanceMode from the NVCA agent-config ConfigMap and restart NVCA so
+flag from the NVCFBackend CR's spec.overrides.featureGate.values; the NVCA
+operator's own reconcile then regenerates agent-config and restarts NVCA so
 the cluster accepts new deployments again.`,
 	RunE: runClusterAgentUncordon,
 }
@@ -150,6 +152,7 @@ func initClusterAgentMaintenanceCmds() {
 	for _, c := range []*cobra.Command{clusterAgentKillFunctionCmd, clusterAgentKillAllCmd} {
 		c.Flags().String(flagReason, "", "Optional reason recorded in logs for audit")
 		c.Flags().Bool(flagForce, false, "Strip finalizers so requests stuck Terminating are removed")
+		c.Flags().Duration(flagTimeout, clusteragent.DefaultKillTimeout, "How long to wait for NVCA to finish evicting a terminated request before reporting it as still terminating")
 	}
 	clusterAgentKillAllCmd.Flags().String(flagConfirm, "", "Cluster name confirming kill-all (required with --yes)")
 }
@@ -251,6 +254,7 @@ func runClusterAgentKillFunction(cmd *cobra.Command, args []string) error {
 	force, _ := cmd.Flags().GetBool(flagForce)
 	reason, _ := cmd.Flags().GetString(flagReason)
 	expect, _ := cmd.Flags().GetString(flagExpectClusterID)
+	timeout, _ := cmd.Flags().GetDuration(flagTimeout)
 
 	ctx := context.Background()
 
@@ -278,6 +282,7 @@ func runClusterAgentKillFunction(cmd *cobra.Command, args []string) error {
 		Reason:          reason,
 		DryRun:          dryRun,
 		Force:           force,
+		Timeout:         timeout,
 	})
 	return finishKill(cmd, res, err)
 }
@@ -295,6 +300,7 @@ func runClusterAgentKillAll(cmd *cobra.Command, _ []string) error {
 	reason, _ := cmd.Flags().GetString(flagReason)
 	expect, _ := cmd.Flags().GetString(flagExpectClusterID)
 	confirm, _ := cmd.Flags().GetString(flagConfirm)
+	timeout, _ := cmd.Flags().GetDuration(flagTimeout)
 
 	ctx := context.Background()
 
@@ -346,6 +352,7 @@ func runClusterAgentKillAll(cmd *cobra.Command, _ []string) error {
 		Reason:          reason,
 		DryRun:          dryRun,
 		Force:           force,
+		Timeout:         timeout,
 	})
 	return finishKill(cmd, res, err)
 }
@@ -447,13 +454,13 @@ func printDrainResult(cmd *cobra.Command, res *clusteragent.DrainResult, drain b
 		return
 	}
 	if res.DryRun {
-		fmt.Fprintln(w, "  would update agent-config and restart NVCA")
+		fmt.Fprintln(w, "  would update the NVCFBackend CR; the NVCA operator would then roll out the change")
 		return
 	}
 	if drain {
-		fmt.Fprintf(w, "  agent-config updated (maintenanceMode=%s); NVCA restart triggered\n", orDash(res.Mode))
+		fmt.Fprintf(w, "  NVCFBackend updated (maintenanceMode=%s)\n", orDash(res.Mode))
 	} else {
-		fmt.Fprintln(w, "  agent-config updated (maintenance cleared); NVCA restart triggered")
+		fmt.Fprintln(w, "  NVCFBackend updated (maintenance cleared)")
 	}
 	switch {
 	case res.RolloutComplete:
@@ -480,21 +487,27 @@ func printKillResult(cmd *cobra.Command, res *clusteragent.KillResult) {
 		prefix = "[dry-run] "
 		verbed = "would terminate"
 	}
-	fmt.Fprintf(w, "%s%s %d request(s) in namespace %s\n", prefix, verbed, len(res.Affected)-res.FailedCount, res.RequestsNamespace)
+	deletedCount := len(res.Affected) - res.FailedCount - res.TerminatingCount
+	fmt.Fprintf(w, "%s%s %d request(s) in namespace %s\n", prefix, verbed, deletedCount, res.RequestsNamespace)
 	if res.Reason != "" {
 		fmt.Fprintf(w, "  reason: %s\n", res.Reason)
 	}
 	for _, r := range res.Affected {
 		status := "deleted"
-		if res.DryRun {
+		switch {
+		case res.DryRun:
 			status = "would delete"
-		}
-		if r.Error != "" {
+		case r.Error != "":
 			status = "FAILED: " + r.Error
+		case r.Terminating:
+			status = "terminating: NVCA has not finished evicting the workload yet"
 		}
 		fmt.Fprintf(w, "  %s/%s  function=%s version=%s  [%s]\n", r.Namespace, r.Name, orDash(r.FunctionID), orDash(r.FunctionVersionID), status)
 	}
 	if res.FailedCount > 0 {
 		fmt.Fprintf(w, "%d of %d request(s) failed\n", res.FailedCount, len(res.Affected))
+	}
+	if res.TerminatingCount > 0 {
+		fmt.Fprintf(w, "%d of %d request(s) still terminating; re-check with cluster agent get-function\n", res.TerminatingCount, len(res.Affected))
 	}
 }

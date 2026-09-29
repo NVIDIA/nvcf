@@ -32,6 +32,7 @@ mod sse_message_stream;
 mod stats;
 #[cfg(test)]
 mod test_support;
+mod upstream_health;
 mod upstream_url;
 
 pub use bringup::{BringupConfig, BringupError, CalibrationConfig};
@@ -45,9 +46,9 @@ pub use model_lifecycle::{
 };
 pub use queue_admission::PylonQueueMismatchRetryConfig;
 pub use quic_http_tunnel::{
-    DEFAULT_MAX_SSE_BUFFER_BYTES, PylonRetryConfig, QuicHttpTunnelConfig, QuicHttpTunnelHandle,
-    ReverseQuicTunnelConfig, ReverseQuicTunnelHandle, TunnelError, TunnelForwardingConfig,
-    start_quic_http_tunnel, start_reverse_quic_tunnel,
+    DEFAULT_MAX_SSE_BUFFER_BYTES, DEFAULT_PRIORITY_CEILING, PylonRetryConfig, QuicHttpTunnelConfig,
+    QuicHttpTunnelHandle, ReverseQuicTunnelConfig, ReverseQuicTunnelHandle, TunnelError,
+    TunnelForwardingConfig, UpstreamBackend, start_quic_http_tunnel, start_reverse_quic_tunnel,
 };
 pub use registration::{
     ClientError, InferenceServerRegistrationClient, InferenceServerRegistrationConfig,
@@ -65,3 +66,4 @@ pub use stats::{
     start_stats_collector, start_stats_collector_with_engine_stats,
     stats_aggregator_update_channel,
 };
+pub use upstream_health::{DEFAULT_UPSTREAM_HEALTH_PATHS, UpstreamHealthPaths};

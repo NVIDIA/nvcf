@@ -136,7 +136,7 @@ Optional trusted headers:
 | `x-routing-key` | Authenticated routing scope. Omit for unscoped. |
 | `x-routing-method` | Request-scoped load-balancer override, only for methods allowed by Stargate config. |
 | `x-cache-affinity-key` | Opaque cache/prefix identity. Required by some LB configs. |
-| `x-priority` | Unsigned priority, default `0`. |
+| `x-priority` | Unsigned priority rank; lower is more urgent. Omit when no priority is resolved. |
 | `x-request-slo-ms` | Per-request LB latency hint. |
 | `x-max-wait-ms` | Wait budget for temporarily infeasible candidates. |
 | `x-stargate-max-wait-ms` | Stargate internal retry budget. |
@@ -144,10 +144,27 @@ Optional trusted headers:
 The gateway must synthesize or validate these headers. Do not pass public
 caller-supplied routing headers through blindly.
 
-Internal header:
+Internal headers:
 
 - `x-stargate-expected-queue-ms`: Stargate-to-pylon only. Stargate strips
   caller values; pylon strips it before upstream forwarding.
+- `x-dynamo-request-priority` and `x-dynamo-request-strict-priority`:
+  pylon-to-engine only. Pylon strips inbound values in every backend mode, so
+  pylon is the only writer of these two headers. When pylon runs with
+  `--pylon-upstream-backend dynamo` (the default), it emits both headers on
+  every inference request: the priority is derived from `x-priority` as
+  `max(0, ceiling - x)` with a configurable ceiling
+  (`--pylon-priority-ceiling`, default 3600), requests without `x-priority`
+  carry the lowest value `0`, and the strict tier is always `0`. Always
+  emitting means the engine reads priority only from pylon, never from
+  client-supplied values. Other engine headers pass through unchanged; the
+  strip denylist is scoped to the priority headers.
+
+  An absent `x-priority` and `x-priority: 0` are opposite ends of the range:
+  absence maps to the lowest engine priority, while rank `0` maps to the
+  highest. The gateway must not synthesize `x-priority: 0` for unconfigured
+  requests. Stargate treats an absent header as `0` for its own queue
+  accounting only; that default never reaches the engine.
 
 Body rules:
 

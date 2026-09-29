@@ -25,33 +25,40 @@ template source, generator logic, or supported backend examples.
 
 CI subproject id: `byoo-otel-collector`. The umbrella CI lane is declared in
 `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
-present in this public snapshot; current custom checks include
-`check-version-modified`, generated example drift, generated config drift, and
-otelconfig validation. Do not add a subtree `.gitlab-ci.yml`.
+present in this public snapshot; current custom checks include generated example
+drift, generated config drift, and otelconfig validation. Do not add a subtree
+`.gitlab-ci.yml`.
 
 ## Collector Version Updates
 
 Use the script instead of editing version strings by hand:
 
 ```bash
-./scripts/update-collector-version.sh v0.157.0 v1.63.0
-# If service release tags are already ahead of the collector patch:
-./scripts/update-collector-version.sh v0.157.0 v1.63.0 0.153.2
+./scripts/update-collector-version.sh v0.160.0 v1.66.0
 ```
 
 The script updates version references in `otel-collector-build.yaml`,
 `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`,
 `Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`, and
-`VERSION`. It also updates `.gitlab-ci.yml` when that file exists. Run it from
-the BYOO collector root. You can pass versions with or without the `v` prefix
-(for example, `v0.157.0` or `0.157.0`). Pass the optional `v1.x.y` provider
-version when the stable collector modules need a matching release, and pass the
-optional app release override when existing service tags require the next BYOO
-patch version. The app release major/minor must match the collector
-major/minor. After running, regenerate `otelcol/` if needed, review
-`git diff`, and run the relevant build or validation command.
+`.gitlab-ci.yml` when that file exists. Run it from the BYOO collector root.
+You can pass versions with or without the `v` prefix (for example, `v0.160.0`
+or `0.160.0`). Pass the optional `v1.x.y` provider version when the stable
+collector modules need a matching release. After running, regenerate `otelcol/`
+if needed, review `git diff`, and run the relevant build or validation command.
 
-The root generated release config must keep `release.version_file: VERSION` and `release.version_major_minor_source_file: otel-collector-build.yaml` for this service so publishing reads the next BYOO release version from `VERSION`, and so `VERSION` major/minor cannot drift from the collector config.
+GitHub semantic-release calculates the NVIDIA wrapper SemVer from Conventional
+Commits. The tag records both sources as
+`src/compute-plane-services/byoo-otel-collector/v<upstream>-nv-<wrapper>`.
+The upstream part comes from `otel-collector-build.yaml`; do not add a `VERSION`
+file or a CI gate that requires one. `RELEASE_SERIES_START` anchors the first
+wrapper release and must remain in the repository.
+
+Commit a collector version bump as `fix(byoo-otel-collector):`, not
+`chore(byoo-otel-collector):`. `chore` commits are not release-worthy (see
+`RELEASE_RULES` in `tools/ci/github-release`), so a `chore` bump only
+synthesizes a compatibility tag anchor and never triggers the image build and
+push. Because the upstream version is embedded directly in the published tag
+and image, every bump must ship a real image, not just update the pin in git.
 
 ## Local Gotchas
 

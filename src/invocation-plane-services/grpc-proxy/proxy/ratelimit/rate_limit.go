@@ -22,8 +22,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/clients"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"

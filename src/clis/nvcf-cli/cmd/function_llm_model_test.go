@@ -160,16 +160,29 @@ func TestParseLLMModelString(t *testing.T) {
 func TestParseLLMModelStringAcceptsAdvancedRoutingMethods(t *testing.T) {
 	t.Parallel()
 
-	for _, routingMethod := range []string{"groq_multiregion", "pulsar"} {
-		t.Run(routingMethod, func(t *testing.T) {
+	for _, test := range []struct {
+		input    string
+		expected string
+	}{
+		{input: "groq_multiregion", expected: "groq_multiregion"},
+		{input: "groq-multiregion", expected: "groq_multiregion"},
+		{input: "round-robin", expected: "round_robin"},
+		{input: "power-of-two", expected: "power_of_two"},
+		{input: "wait_and_widen", expected: "wait_and_widen"},
+		{input: "wait-and-widen", expected: "wait_and_widen"},
+		{input: "pulsar_wait_and_widen", expected: "pulsar_wait_and_widen"},
+		{input: "pulsar-wait-and-widen", expected: "pulsar_wait_and_widen"},
+		{input: "pulsar", expected: "pulsar"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
 			t.Parallel()
 
-			model, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions,routingMethod=" + routingMethod)
+			model, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions,routingMethod=" + test.input)
 			if err != nil {
 				t.Fatalf("parse llm model: %v", err)
 			}
-			if got := stringValue(model.LLMConfig.RoutingMethod); got != routingMethod {
-				t.Fatalf("routingMethod = %q, want %q", got, routingMethod)
+			if got := stringValue(model.LLMConfig.RoutingMethod); got != test.expected {
+				t.Fatalf("routingMethod = %q, want %q", got, test.expected)
 			}
 		})
 	}
@@ -381,16 +394,29 @@ func TestParseLLMModelUpdateString(t *testing.T) {
 func TestParseLLMModelUpdateStringAcceptsAdvancedRoutingMethods(t *testing.T) {
 	t.Parallel()
 
-	for _, routingMethod := range []string{"groq_multiregion", "pulsar"} {
-		t.Run(routingMethod, func(t *testing.T) {
+	for _, test := range []struct {
+		input    string
+		expected string
+	}{
+		{input: "groq_multiregion", expected: "groq_multiregion"},
+		{input: "groq-multiregion", expected: "groq_multiregion"},
+		{input: "round-robin", expected: "round_robin"},
+		{input: "power-of-two", expected: "power_of_two"},
+		{input: "wait_and_widen", expected: "wait_and_widen"},
+		{input: "wait-and-widen", expected: "wait_and_widen"},
+		{input: "pulsar_wait_and_widen", expected: "pulsar_wait_and_widen"},
+		{input: "pulsar-wait-and-widen", expected: "pulsar_wait_and_widen"},
+		{input: "pulsar", expected: "pulsar"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
 			t.Parallel()
 
-			update, err := parseLLMModelUpdateString("name=dummy-model,routingMethod=" + routingMethod)
+			update, err := parseLLMModelUpdateString("name=dummy-model,routingMethod=" + test.input)
 			if err != nil {
 				t.Fatalf("parse llm model update: %v", err)
 			}
-			if got := stringValue(update.LLMConfig.RoutingMethod); got != routingMethod {
-				t.Fatalf("routingMethod = %q, want %q", got, routingMethod)
+			if got := stringValue(update.LLMConfig.RoutingMethod); got != test.expected {
+				t.Fatalf("routingMethod = %q, want %q", got, test.expected)
 			}
 		})
 	}

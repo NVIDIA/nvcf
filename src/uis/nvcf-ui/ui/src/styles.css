@@ -1,0 +1,55 @@
+/**
+ * SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* fonts, css variables, CSS reset/preflight */
+@import "../vendor/kui-foundations/base-external.css";
+/* component specific styling */
+@import "../vendor/kui-foundations/components.css";
+@import "@nvidia/foundations-tailwind-plugin";
+@source "../node_modules/@nvidia/foundations-react-core";
+
+#style-root {
+  @tailwind utilities;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  background-color: var(--background-color-surface-sunken);
+}
+
+body {
+  margin: 0;
+}
+
+/* Keep the browser-default cross-fade for view transitions, tuned snappy. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

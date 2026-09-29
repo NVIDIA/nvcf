@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = ["config.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "config_test",
+    srcs = ["config_test.go"],
+    embed = [":config"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//visibility:public"],
+)

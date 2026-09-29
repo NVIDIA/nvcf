@@ -170,3 +170,95 @@ func TestSharedVolumePromoter_MountSpec(t *testing.T) {
 		t.Errorf("missing rox: err = %v, want ErrNotFound", err)
 	}
 }
+
+// A per-capture PV whose PVC was deleted goes Released with the dead claim's
+// UID pinned in claimRef, and Retain keeps it that way. A freshly created PVC
+// of the same name has a different UID, so the binder refuses the volume and
+// the claim stays Pending forever -- the capture becomes unrestorable even
+// though its data is intact. ensureSecondaryPV has to hand the volume back.
+func TestEnsureSecondaryPVReclaimsReleasedVolume(t *testing.T) {
+	const (
+		secName = "nvsnap-ro-pv-abc123"
+		roxName = "rox-abc123"
+		ns      = "nvsnap-system"
+	)
+	released := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: secName},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			ClaimRef: &corev1.ObjectReference{
+				APIVersion: "v1", Kind: "PersistentVolumeClaim",
+				Name: roxName, Namespace: ns,
+				UID:             "dead-uid-from-the-deleted-pvc",
+				ResourceVersion: "100494062",
+			},
+		},
+		Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased},
+	}
+	kc := fake.NewSimpleClientset(released)
+	p := &SharedVolumePromoter{KubeClient: kc}
+
+	if err := p.ensureSecondaryPV(context.Background(), nil, secName, roxName, ns); err != nil {
+		t.Fatalf("ensureSecondaryPV: %v", err)
+	}
+
+	got, err := kc.CoreV1().PersistentVolumes().Get(context.Background(), secName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.ClaimRef == nil {
+		t.Fatal("claimRef was dropped entirely; the PV is no longer reserved and any pending claim could take it")
+	}
+	if got.Spec.ClaimRef.UID != "" || got.Spec.ClaimRef.ResourceVersion != "" {
+		t.Errorf("stale binding not cleared: uid=%q rv=%q",
+			got.Spec.ClaimRef.UID, got.Spec.ClaimRef.ResourceVersion)
+	}
+	if got.Spec.ClaimRef.Name != roxName || got.Spec.ClaimRef.Namespace != ns {
+		t.Errorf("reservation changed: %s/%s", got.Spec.ClaimRef.Namespace, got.Spec.ClaimRef.Name)
+	}
+}
+
+// Never steal a Released volume that is reserved for someone else.
+func TestEnsureSecondaryPVRefusesForeignReleasedVolume(t *testing.T) {
+	const secName = "nvsnap-ro-pv-abc123"
+	foreign := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: secName},
+		Spec: corev1.PersistentVolumeSpec{
+			ClaimRef: &corev1.ObjectReference{Name: "someone-elses-pvc", Namespace: "other-ns"},
+		},
+		Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased},
+	}
+	kc := fake.NewSimpleClientset(foreign)
+	p := &SharedVolumePromoter{KubeClient: kc}
+
+	err := p.ensureSecondaryPV(context.Background(), nil, secName, "rox-abc123", "nvsnap-system")
+	if err == nil {
+		t.Fatal("rebound a Released PV reserved for a different claim")
+	}
+}
+
+// A Bound volume must be left alone -- reconciling it would disturb a live claim.
+func TestEnsureSecondaryPVLeavesBoundVolumeAlone(t *testing.T) {
+	const (
+		secName = "nvsnap-ro-pv-abc123"
+		roxName = "rox-abc123"
+		ns      = "nvsnap-system"
+	)
+	bound := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: secName},
+		Spec: corev1.PersistentVolumeSpec{
+			ClaimRef: &corev1.ObjectReference{Name: roxName, Namespace: ns, UID: "live-uid"},
+		},
+		Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeBound},
+	}
+	kc := fake.NewSimpleClientset(bound)
+	p := &SharedVolumePromoter{KubeClient: kc}
+
+	if err := p.ensureSecondaryPV(context.Background(), nil, secName, roxName, ns); err != nil {
+		t.Fatalf("ensureSecondaryPV: %v", err)
+	}
+	got, _ := kc.CoreV1().PersistentVolumes().Get(context.Background(), secName, metav1.GetOptions{})
+	if got.Spec.ClaimRef.UID != "live-uid" {
+		t.Error("disturbed the binding of a live, Bound volume")
+	}
+}

@@ -45,6 +45,10 @@ pub const VERSION_ID_1: Uuid = uuid!("26597542-1782-4a18-aa02-504ba0598202");
 pub const VERSION_ID_2: Uuid = uuid!("49331123-201a-407d-9cbc-7bb328fd0295");
 pub const VERSION_ID_3: Uuid = uuid!("4117e32b-1b96-4be2-8cd2-9da4047daa05");
 pub const VERSION_ID_4: Uuid = uuid!("2bf046f7-37c1-40b8-b2c2-8f8d260f7645");
+#[allow(unused)]
+pub const LLM_FUNCTION_ID: Uuid = uuid!("5d0c8a3e-9f4b-4e62-8a1d-3b7e2c9f0a14");
+#[allow(unused)]
+pub const LLM_VERSION_ID: Uuid = uuid!("e2a7b4c1-6d3f-4a85-9c02-7f1e8b5d3a96");
 pub const LOCALSTACK_REGION: &str = "us-east-1";
 pub const ASSETS_BUCKET: &str = "assets-bucket";
 pub const RESULTS_BUCKET: &str = "results-bucket";
@@ -97,16 +101,33 @@ async fn localstack_() -> ContainerAsync<LocalStack> {
     localstack
 }
 
+/// Absolute path to the NATS config the container bind-mounts.
+///
+/// Docker runs outside the test process, so the path has to exist on the host
+/// and has to be absolute. Bazel passes it as NATS_SERVER_CONF from the target's
+/// data dependency, relative to the runfiles root, so it is canonicalized here.
+/// Cargo sets no such variable and resolves from the manifest directory instead.
+/// `env!` cannot serve both: under Bazel it bakes in a per-action sandbox path
+/// that is gone by the time the container starts.
+fn nats_server_conf_path() -> String {
+    if let Ok(from_bazel) = std::env::var("NATS_SERVER_CONF") {
+        return std::fs::canonicalize(&from_bazel)
+            .unwrap_or_else(|e| panic!("resolve NATS_SERVER_CONF {from_bazel}: {e}"))
+            .to_string_lossy()
+            .into_owned();
+    }
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
+    format!("{manifest_dir}/tests/mocks/nats-server.conf")
+}
+
 pub async fn nats() -> ContainerAsync<Nats> {
     tracing::info!("starting nats");
     let ret = Nats::default()
         .with_tag("2.10.25")
         .with_mount(
-            Mount::bind_mount(
-                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/mocks/nats-server.conf"),
-                "/nats-server.conf",
-            )
-            .with_access_mode(ReadOnly),
+            Mount::bind_mount(nats_server_conf_path(), "/nats-server.conf")
+                .with_access_mode(ReadOnly),
         )
         .start()
         .await
@@ -124,6 +145,7 @@ async fn mock_nvcf_api() -> ApiMockServer {
                     functions: vec![VERSION_ID_1, VERSION_ID_2],
                     has_rate_limit: false,
                     sync_check: false,
+                    is_llm: false,
                 },
             ),
             // FUNCTION_ID_2_RATELIMIT_SYNC has rate limit and sync check
@@ -133,6 +155,7 @@ async fn mock_nvcf_api() -> ApiMockServer {
                     functions: vec![VERSION_ID_3],
                     has_rate_limit: true,
                     sync_check: true,
+                    is_llm: false,
                 },
             ),
             // FUNCTION_ID_3_RATELIMIT_ASYNC has rate limit and async check
@@ -142,6 +165,16 @@ async fn mock_nvcf_api() -> ApiMockServer {
                     functions: vec![VERSION_ID_4],
                     has_rate_limit: true,
                     sync_check: false,
+                    is_llm: false,
+                },
+            ),
+            (
+                LLM_FUNCTION_ID,
+                FunctionMetadata {
+                    functions: vec![LLM_VERSION_ID],
+                    has_rate_limit: false,
+                    sync_check: false,
+                    is_llm: true,
                 },
             ),
         ]

@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Allowlist for GitLab -> GitHub copy.
+# Same format as .gitignore; only paths matching a pattern below are copied.
+#
+# Intentionally omitted:
+# - .gitlab-ci.yml          (internal CI only)
+# - backend/bin/**           (compiled binaries)
+# - backend/static/**        (built SPA output)
+# - backend/vendor/**        (vendored Go deps; covered by root NOTICE)
+# - ui/node_modules/**       (npm deps; not source)
+# - ui/dist/**               (Vite build output)
+# - ui/pnpm-lock.yaml        (lockfile; no license header needed)
+# - ui/.aspect_rules_js/**   (Bazel-generated npm cache)
+# - ui/vendor/**             (vendored third-party CSS; not NVIDIA-authored)
+
+# OSS prep metadata
+.oss-allowlist
+
+# Root files
+.gitignore
+AGENTS.md
+CLAUDE.md
+NOTICE
+THIRD-PARTY.txt
+README.md
+Taskfile.yml
+license-header.txt
+
+# Bazel scaffold
+BUILD.bazel
+**/BUILD.bazel
+**/*.bzl
+
+# Helm chart
+helm/**
+
+# OpenAPI specs
+spec/**
+
+# Go backend source
+backend/go.mod
+backend/go.sum
+backend/.golangci.yml
+backend/cmd/**
+backend/internal/**
+
+# UI source
+ui/src/**
+ui/scripts/**
+ui/biome.json
+ui/index.html
+ui/orval.config.ts
+ui/tsconfig.json
+ui/vite.config.ts
+ui/vitest.setup.ts
+ui/package.json
+ui/Taskfile.yml
+ui/BUILD.bazel
+ui/pnpm-workspace.yaml

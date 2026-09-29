@@ -1,0 +1,12 @@
+{
+  "scaleUpDetails": {
+    "metric": "worker_utilization",
+    "factor": 1.5,
+    "threshold": 80
+  },
+  "scaleDownDetails": {
+    "metric": "worker_utilization",
+    "factor": 0.5,
+    "threshold": 20
+  }
+}

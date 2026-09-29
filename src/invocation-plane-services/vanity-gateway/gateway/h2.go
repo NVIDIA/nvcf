@@ -35,6 +35,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 )
 
 const (
@@ -69,7 +71,23 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 		MaxIdleConnsPerHost: 64,
 		DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 	})
-	healthManager, err := healthManager(serverConfig.NvcfApiEndpoint, transport)
+	llmGatewayEndpoint := ""
+	var llmGatewayDirector *LLMGatewayDirector
+	if mappings.HasLLMGatewayRoute() {
+		if serverConfig.LLMGatewayEndpoint == "" {
+			return nil, fmt.Errorf("LLM_GATEWAY_ENDPOINT is required when a model sets functionType LLM")
+		}
+		llmGatewayEndpoint = serverConfig.LLMGatewayEndpoint
+		llmGatewayDirector, err = NewLLMGatewayDirector(llmGatewayEndpoint, transport)
+		if err != nil {
+			return nil, err
+		}
+		if hostWithoutPort(mappings.OpenAI.Host) == llmGatewayDirector.UpstreamHostname() {
+			return nil, fmt.Errorf("openai.host %q is the LLM Gateway endpoint; the gateway would proxy to itself", mappings.OpenAI.Host)
+		}
+	}
+
+	healthManager, err := healthManager(serverConfig.NvcfApiEndpoint, llmGatewayEndpoint, transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create health manager: %w", err)
 	}
@@ -85,7 +103,7 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 	}
 	shadower := NewTrafficShadower(shadowMaxConcurrent, requestTimeout)
 
-	openAIDirector, err := NewOpenAIDirectorV2(mappings, re, vanityDirector, shadower)
+	openAIDirector, err := NewOpenAIDirectorV2(mappings, re, vanityDirector, llmGatewayDirector, shadower)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +128,7 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 
 	r.Use(hostRouter.Handler)
 	r.With(serverTelemetry).Get(healthPath, healthManager.HandlerFunc)
+	r.With(serverTelemetry).Get("/info", golibversion.Handler().ServeHTTP)
 	return r, nil
 }
 
@@ -143,6 +162,7 @@ func registerVanity(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 			})
 		}
 		r.Get(healthPath, healthManager.HandlerFunc)
+		r.Get("/info", golibversion.Handler().ServeHTTP)
 		r.Get("/v1/status/{requestId}", vanityDirector.ServePolling)
 		hostRouter.Register(vanity.Host, chimiddleware.New(r))
 	}
@@ -164,6 +184,7 @@ func registerOpenAI(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 	r.Get("/v1/models/{company}/{model}", openAIDirector.GetModel)
 
 	r.Get(healthPath, healthManager.HandlerFunc)
+	r.Get("/info", golibversion.Handler().ServeHTTP)
 
 	// special domain for openai
 	hostRouter.Register(mappings.OpenAI.Host, chimiddleware.New(r))

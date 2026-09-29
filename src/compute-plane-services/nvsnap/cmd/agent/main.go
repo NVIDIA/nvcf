@@ -71,6 +71,8 @@ func main() {
 		"NvSnap-server base URL for peer-fanout catalog lookups (e.g. http://nvsnap-server.nvsnap-system.svc.cluster.local:8080). Empty disables cross-node cascade.")
 	flag.StringVar(&config.NodeIP, "node-ip", os.Getenv("HOST_IP"),
 		"This agent's reachable address from peers (downward API status.hostIP when hostNetwork:true). Empty disables peer registration.")
+	flag.StringVar(&config.AdvertiseIP, "advertise-ip", os.Getenv("POD_IP"),
+		"Address peers dial to reach this agent (downward API status.podIP; equals the node IP under hostNetwork). Falls back to --node-ip when empty. See GH #490.")
 	flag.StringVar(&config.BlobStoreURL, "blob-store-url", os.Getenv("NVSNAP_BLOB_STORE_URL"),
 		"NvSnap-blobstore base URL for Phase 5d.2 durable backstop (e.g. http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000). Empty disables capture-side upload AND cascade tier-3 fallback.")
 	// Cross-cluster replication (docs/design/cross-cluster-replication.md).
@@ -90,6 +92,11 @@ func main() {
 	flag.StringVar(&config.FSStorePath, "fsstore-path", os.Getenv("NVSNAP_FSSTORE_PATH"),
 		"Path to a shared filesystem mounted on every node (Lustre/Weka/EFS/Filestore/NFS). When set, captures are published here and the restore cascade copies from this path before peer fanout. Empty disables.")
 	flag.StringVar(&config.ListenAddr, "listen", ":8081", "Listen address")
+	// The token itself is env-only, never a flag: flag values show up in the
+	// pod spec and in `ps`, and this is a credential.
+	var authMode string
+	flag.StringVar(&authMode, "auth-mode", os.Getenv("NVSNAP_AGENT_AUTH_MODE"),
+		"Agent API authentication: disabled (default), permissive (check, log failures, still serve), or required (401). Token comes from NVSNAP_AGENT_TOKEN. See GH #486.")
 	flag.StringVar(&config.CheckpointDir, "checkpoint-dir", "/var/lib/nvsnap/checkpoints", "Checkpoint storage directory (in-agent-container path)")
 	flag.StringVar(&config.CheckpointHostDir, "checkpoint-host-dir", "/var/lib/containerd/nvsnap-checkpoints", "Host path that backs --checkpoint-dir (must match the DaemonSet hostPath mount; used to translate paths for the capture-write writer Job)")
 	flag.StringVar(&config.CRIUPath, "criu-path", "/usr/local/sbin/criu", "Path to CRIU binary (on host filesystem)")
@@ -109,6 +116,8 @@ func main() {
 		"Directory the Local backend writes captures into")
 	flag.StringVar(&config.RootfsCapture.PodCacheDir, "pod-cache-dir", os.Getenv("NVSNAP_POD_CACHE_DIR"),
 		"In-pod cache mount path (e.g. /opt/nvsnap) for cachedir mode: capture ONLY this dir as the PVC root, restore RO-mounts the rox here (no overlayfs). Empty = standard whole-rootfs capture. Must match the webhook's cacheDir.")
+	flag.BoolVar(&config.RootfsCapture.AllowWholeRootfs, "allow-whole-rootfs", os.Getenv("NVSNAP_ALLOW_WHOLE_ROOTFS") == "1",
+		"Permit capture without --pod-cache-dir, i.e. capture the whole container rootfs. Off by default: whole-rootfs capture succeeds silently and only diverges later, at restore, from the cachedir behaviour every workload and benchmark assumes. Set only to run that path deliberately.")
 	flag.StringVar(&config.RootfsCapture.PodCacheEnvFile, "cachedir-env-file", os.Getenv("NVSNAP_CACHEDIR_ENV_FILE"),
 		"Path to a mounted ConfigMap file with the cachedir env template (NAME=value lines; {root}/{cache}/{model} placeholders). Read on capture inject only — edit the ConfigMap to add/remove cache env vars without an agent rebuild. Empty/unreadable = built-in default. Restore replays the env stamped in the manifest.")
 	flag.StringVar(&config.OverlayRoot, "overlay-root", "/var/lib/nvsnap/overlays",
@@ -183,6 +192,8 @@ func main() {
 		"Strategy for restore-side overlay mount prep: inline (do mounts during admission, default) or init-container (delegate to nvsnap-mount-prep init container on the restored pod)")
 	flag.StringVar(&config.Webhook.MountPrepInitImage, "webhook-mount-prep-init-image", "",
 		"Image ref for the nvsnap-mount-prep init container injected when --webhook-restore-prep-strategy=init-container. Must contain /nvsnap-mount-prep (the agent image satisfies this).")
+	flag.StringVar(&config.Webhook.AgentBaseURL, "webhook-agent-base-url", os.Getenv("NVSNAP_WEBHOOK_AGENT_BASE_URL"),
+		"Base URL the injected nvsnap-mount-prep init container uses to reach its node-local agent. Empty uses http://$(NVSNAP_HOST_IP):<port>, which requires hostPort. Set to the internalTrafficPolicy:Local Service under pod networking. See GH #490.")
 	flag.IntVar(&config.Webhook.AgentHostPort, "webhook-agent-host-port", 8081,
 		"Port the nvsnap-mount-prep init container reaches the agent on (matches --listen and the agent DaemonSet's hostPort).")
 
@@ -204,6 +215,19 @@ func main() {
 		"imagePullSecret name for the mount-holder pod (created by operators in the workload namespace). Defaults to nvsnap-agent-pull; set to '-' to disable.")
 
 	flag.Parse()
+
+	// Fail startup on a bad mode rather than falling back to disabled: an
+	// operator who typo'd --auth-mode should hear about it now, not discover
+	// months later that the API was open the whole time.
+	var authErr error
+	if config.AuthMode, authErr = agent.ParseAuthMode(authMode); authErr != nil {
+		logrus.WithError(authErr).Fatal("invalid --auth-mode")
+	}
+	config.AuthToken = os.Getenv("NVSNAP_AGENT_TOKEN")
+	if config.AuthMode != agent.AuthDisabled && config.AuthToken == "" {
+		logrus.Fatalf("--auth-mode=%s requires NVSNAP_AGENT_TOKEN to be set", config.AuthMode)
+	}
+
 	config.RootfsCapture.WarmupDelay = time.Duration(rootfsWarmupSec) * time.Second
 	for _, b := range strings.Split(replicationPeerBuckets, ",") {
 		if b = strings.TrimSpace(b); b != "" {

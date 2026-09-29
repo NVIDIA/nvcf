@@ -59,6 +59,7 @@ class ByocSqsMessageModelTest {
                         .cloudProvider("test")
                         .deploymentId(UUID.randomUUID())
                         .gpuSpecificationId(UUID.randomUUID())
+                        .maxRequestConcurrency(37)
                         .build())
                 .accountName("test-account-name")
                 .functionDetails(FunctionDetails.builder()
@@ -74,40 +75,41 @@ class ByocSqsMessageModelTest {
         JsonNode jsonNode = objectMapper.readTree(jsonString);
 
         // Validate all fields directly from JSON
-        assertEquals("test-request-id", jsonNode.get("requestId").asText());
-        assertEquals("test-customer", jsonNode.get("sub").asText());
-        assertEquals("test-nca-id", jsonNode.get("ncaId").asText());
-        assertEquals("RequestSpotInstances", jsonNode.get("action").asText());
-        assertEquals("test-instance-type", jsonNode.get("instanceType").asText());
+        assertEquals("test-request-id", jsonNode.get("requestId").asString());
+        assertEquals("test-customer", jsonNode.get("sub").asString());
+        assertEquals("test-nca-id", jsonNode.get("ncaId").asString());
+        assertEquals("RequestSpotInstances", jsonNode.get("action").asString());
+        assertEquals("test-instance-type", jsonNode.get("instanceType").asString());
         assertEquals(2, jsonNode.get("instanceCount").asInt());
-        assertEquals("test-gpu-type", jsonNode.get("gpuType").asText());
+        assertEquals("test-gpu-type", jsonNode.get("gpuType").asString());
         assertEquals(1, jsonNode.get("requestedGPUCount").asInt());
-        assertEquals("test-account-name", jsonNode.get("accountName").asText());
-        assertEquals("test-message-batch-id", jsonNode.get("messageBatchId").asText());
+        assertEquals("test-account-name", jsonNode.get("accountName").asString());
+        assertEquals("test-message-batch-id", jsonNode.get("messageBatchId").asString());
 
         // Validate launchSpecification object
         JsonNode launchSpecNode = jsonNode.get("launchSpecification");
         assertNotNull(launchSpecNode);
-        assertEquals("test-instance-type", launchSpecNode.get("instanceType").asText());
-        assertEquals("test-instance-type-name", launchSpecNode.get("instanceTypeName").asText());
-        assertEquals("test-instance-type-value", launchSpecNode.get("instanceTypeValue").asText());
+        assertEquals("test-instance-type", launchSpecNode.get("instanceType").asString());
+        assertEquals("test-instance-type-name", launchSpecNode.get("instanceTypeName").asString());
+        assertEquals("test-instance-type-value", launchSpecNode.get("instanceTypeValue").asString());
         assertEquals(2, launchSpecNode.get("instanceCount").asInt());
-        assertEquals("test-gpu-type", launchSpecNode.get("gpuType").asText());
+        assertEquals("test-gpu-type", launchSpecNode.get("gpuType").asString());
         assertEquals(1, launchSpecNode.get("requestedGPUCount").asInt());
-        assertEquals("test-container-image", launchSpecNode.get("containerImage").asText());
-        assertEquals("test-environment", launchSpecNode.get("environment").asText());
-        assertEquals("test", launchSpecNode.get("spotEnvironment").asText());
-        assertEquals("test", launchSpecNode.get("icmsEnvironment").asText());
-        assertEquals("test", launchSpecNode.get("cloudProvider").asText());
+        assertEquals("test-container-image", launchSpecNode.get("containerImage").asString());
+        assertEquals("test-environment", launchSpecNode.get("environment").asString());
+        assertEquals("test", launchSpecNode.get("spotEnvironment").asString());
+        assertEquals("test", launchSpecNode.get("icmsEnvironment").asString());
+        assertEquals("test", launchSpecNode.get("cloudProvider").asString());
         assertNotNull(launchSpecNode.get("deploymentId"));
         assertNotNull(launchSpecNode.get("gpuSpecificationId"));
+        assertEquals(37, launchSpecNode.get("maxRequestConcurrency").asInt());
 
         // Validate functionDetails object
         JsonNode functionDetailsNode = jsonNode.get("functionDetails");
         assertNotNull(functionDetailsNode);
         assertNotNull(functionDetailsNode.get("functionId"));
         assertNotNull(functionDetailsNode.get("functionVersionId"));
-        assertEquals("DEFAULT", functionDetailsNode.get("functionType").asText());
+        assertEquals("DEFAULT", functionDetailsNode.get("functionType").asString());
 
         // Test 2: Build with pre-built launch specification object
         ByocLaunchSpecification preBuiltLaunchSpec = ByocLaunchSpecification.builder()
@@ -157,17 +159,17 @@ class ByocSqsMessageModelTest {
         // Validate launchSpecification is properly nested in the second model
         JsonNode launchSpecNode2 = jsonNode2.get("launchSpecification");
         assertNotNull(launchSpecNode2);
-        assertEquals("prebuilt-instance-type", launchSpecNode2.get("instanceType").asText());
-        assertEquals("prebuilt-instance-type-name", launchSpecNode2.get("instanceTypeName").asText());
-        assertEquals("prebuilt-instance-type-value", launchSpecNode2.get("instanceTypeValue").asText());
+        assertEquals("prebuilt-instance-type", launchSpecNode2.get("instanceType").asString());
+        assertEquals("prebuilt-instance-type-name", launchSpecNode2.get("instanceTypeName").asString());
+        assertEquals("prebuilt-instance-type-value", launchSpecNode2.get("instanceTypeValue").asString());
         assertEquals(3, launchSpecNode2.get("instanceCount").asInt());
-        assertEquals("prebuilt-gpu-type", launchSpecNode2.get("gpuType").asText());
+        assertEquals("prebuilt-gpu-type", launchSpecNode2.get("gpuType").asString());
         assertEquals(2, launchSpecNode2.get("requestedGPUCount").asInt());
-        assertEquals("prebuilt-container-image", launchSpecNode2.get("containerImage").asText());
-        assertEquals("prebuilt-environment", launchSpecNode2.get("environment").asText());
-        assertEquals("prebuilt", launchSpecNode2.get("spotEnvironment").asText());
-        assertEquals("prebuilt", launchSpecNode2.get("icmsEnvironment").asText());
-        assertEquals("prebuilt", launchSpecNode2.get("cloudProvider").asText());
+        assertEquals("prebuilt-container-image", launchSpecNode2.get("containerImage").asString());
+        assertEquals("prebuilt-environment", launchSpecNode2.get("environment").asString());
+        assertEquals("prebuilt", launchSpecNode2.get("spotEnvironment").asString());
+        assertEquals("prebuilt", launchSpecNode2.get("icmsEnvironment").asString());
+        assertEquals("prebuilt", launchSpecNode2.get("cloudProvider").asString());
         assertNotNull(launchSpecNode2.get("deploymentId"));
         assertNotNull(launchSpecNode2.get("gpuSpecificationId"));
     }

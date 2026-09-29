@@ -104,8 +104,9 @@ source backend disappears, recompute from remaining active snapshots.
 
 All algorithms choose from cluster snapshots.
 
-- `power-of-two`: compares aggregated cluster load.
-- `groq-multiregion`: uses aggregated stats and representative RTT.
+- `power-of-n`: compares aggregated cluster load.
+- `wait-and-widen`: uses aggregated stats and representative RTT.
+- `pulsar-wait-and-widen`: combines Pulsar ranking with WaitAndWiden fallback.
 - `round-robin`: rounds across clusters.
 - `random`: picks a cluster.
 - `pulsar`: hashes by `cluster_id`, not `backend_id`.

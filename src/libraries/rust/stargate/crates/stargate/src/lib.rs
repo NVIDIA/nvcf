@@ -25,12 +25,17 @@ pub(crate) mod tunnel;
 
 pub(crate) mod queue_estimate {
     use stargate_proto::pb::ModelStats;
-    use stargate_protocol::common::queue_time_delta_ms;
+    use stargate_protocol::common::{has_available_engine_slot, queue_time_delta_ms};
 
     pub(crate) fn queue_time_estimate_ms_for_priority(
         stats: &ModelStats,
         priority: u32,
     ) -> Option<u64> {
+        // Keep raw work estimates intact so reservations can fill the last slot
+        // without losing the backlog needed by subsequent routing decisions.
+        if has_available_engine_slot(stats.num_running_queries, stats.max_engine_concurrency) {
+            return Some(0);
+        }
         if !stats.queue_time_estimate_ms_by_priority.is_empty() {
             return priority_map_estimate_ms_for_priority(stats, priority).or(Some(0));
         }
@@ -41,12 +46,15 @@ pub(crate) mod queue_estimate {
         stats: &ModelStats,
         priority: u32,
     ) -> Option<u64> {
-        stats
-            .queue_time_estimate_ms_by_priority
-            .iter()
-            .filter(|(candidate_priority, _)| **candidate_priority <= priority)
-            .max_by_key(|(candidate_priority, _)| **candidate_priority)
-            .map(|(_, queue_time_ms)| *queue_time_ms)
+        let mut best = None;
+        for (&candidate_priority, &queue_time_ms) in &stats.queue_time_estimate_ms_by_priority {
+            if candidate_priority <= priority
+                && best.is_none_or(|(best_priority, _)| candidate_priority > best_priority)
+            {
+                best = Some((candidate_priority, queue_time_ms));
+            }
+        }
+        best.map(|(_, queue_time_ms)| queue_time_ms)
     }
 
     pub(crate) fn aggregate_queue_time_estimate_ms(stats: &ModelStats) -> Option<u64> {

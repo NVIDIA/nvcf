@@ -51,6 +51,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -739,6 +740,84 @@ class InstanceControllerTest extends IntegrationTest {
     }
 
     @Test
+    void terminateInstanceCountPerGpuSpec_routesToBoundedTermination()
+            throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        var response = new TerminateInstancesResponse();
+
+        doReturn(response).when(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(gpuSpecId), eq(2), Mockito.any());
+
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/gpuSpecs/" + gpuSpecId + "/instances";
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", "2"))
+                .andExpect(status().isOk());
+
+        verify(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(gpuSpecId), eq(2), Mockito.any());
+    }
+
+    @Test
+    void terminateInstanceCountPerWorkload_routesToBoundedTermination()
+            throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        var response = new TerminateInstancesResponse();
+
+        doReturn(response).when(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(null), eq(2), Mockito.any());
+
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/instances";
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", "2"))
+                .andExpect(status().isOk());
+
+        verify(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(null), eq(2), Mockito.any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void terminateInstanceCountPerWorkload_withNonPositiveCount_returnsBadRequest(
+            int instanceCount) throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/instances";
+
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", String.valueOf(instanceCount)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(instanceService);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void terminateInstanceCountPerGpuSpec_withNonPositiveCount_returnsBadRequest(
+            int instanceCount) throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/gpuSpecs/" + gpuSpecId + "/instances";
+
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", String.valueOf(instanceCount)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(instanceService);
+    }
+
+    @Test
     void terminateInstances_withInstanceIdsNotProvided_returnsError()
             throws Exception {
         HttpHeaders httpHeaders = generateAuthorizationHeader();
@@ -1026,8 +1105,8 @@ class InstanceControllerTest extends IntegrationTest {
     // Instance listing
     @ParameterizedTest
     @ValueSource(strings = {
-            TestUtil.NON_BYOC_CLUSTER_REGISTRATION_SCOPE,
-            TestUtil.CLUSTER_INSTANCES_SCOPE
+            TestUtil.CLUSTER_INSTANCES_SCOPE,
+            TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE
     })
     void getActiveInstancesForZone_withSupportedScope_returnsSuccess(String scope)
             throws Exception {
@@ -1076,7 +1155,7 @@ class InstanceControllerTest extends IntegrationTest {
                                         .contentType(MediaType.APPLICATION_JSON)
                                         .header(HttpHeaders.AUTHORIZATION,
                                                 JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
-                                                                          TestUtil.NON_BYOC_CLUSTER_REGISTRATION_SCOPE)))
+                                                                          TestUtil.CLUSTER_INSTANCES_SCOPE)))
                         .andExpect(MockMvcResultMatchers.status().isInternalServerError())
                         .andReturn();
 
@@ -1084,6 +1163,25 @@ class InstanceControllerTest extends IntegrationTest {
         Assertions.assertThat(mvcResult.getResponse().getContentAsString())
                 .isEqualTo("{\"error\":\"Internal Server Error\"}");
         verify(instanceService).getActiveInstancesForZone(DUMMY_CLUSTER_ID);
+    }
+
+    // Error: 403 - the cluster registration scope no longer grants instance listing
+    @Test
+    void getActiveInstancesForZone_withClusterRegistrationScope_throwsException()
+            throws Exception {
+        // Act
+        MvcResult mvcResult =
+                mockMvc.perform(
+                                MockMvcRequestBuilders.get(INSTANCE_LISTING_API_URL, DUMMY_CLUSTER_ID)
+                                        .contentType(MediaType.APPLICATION_JSON)
+                                        .header(HttpHeaders.AUTHORIZATION,
+                                                JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                          TestUtil.NON_BYOC_CLUSTER_REGISTRATION_SCOPE)))
+                        .andExpect(MockMvcResultMatchers.status().isForbidden()).andReturn();
+
+        // Assert
+        Assertions.assertThat(mvcResult.getResponse().getContentAsString())
+                .isEqualTo("{\"error\":\"Access Denied\"}");
     }
 
     // Error: 401

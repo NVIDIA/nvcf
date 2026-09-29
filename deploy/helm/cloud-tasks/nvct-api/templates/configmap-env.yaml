@@ -1,0 +1,13 @@
+{{- if .Values.nvctApi.env -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nvct-api.fullname" . }}-env
+  namespace: {{ include "nvct-api.namespace" . }}
+  labels:
+    {{- include "nvct-api.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.nvctApi.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end -}}

@@ -1,20 +1,16 @@
 """Shared Java build macros for the NVCF monorepo.
 
-Reusable Starlark APIs for Java libraries and their JUnit 5 + JaCoCo tests.
-These macros are owned by the root module and consumed by every native Java
-subtree through direct `//rules/java:defs.bzl` loads. Third-party artifacts
-resolve from the single root `@nv_third_party_deps` hub; executable helpers
-and shared build targets (Lombok, JaCoCo CLI, JUnit runner) live under
-`//tools/bazel/java`.
-
-Two profiles coexist while services keep distinct compile settings:
-- nv_boot_*  : nv-boot-parent library profile (`-Xlint:deprecation`).
-- nvct_*     : cloud-tasks service profile (`--release 25` + Error Prone opts).
-Generalize into one profile only after multiple services demonstrate the same
-need, per the monorepo Java architecture.
+Control-plane components use the neutral `nvcf_*` API. The `nv_boot_*`
+wrappers are local profiles for sources owned by nv-boot-parent. Third-party
+artifacts resolve from the root `@nv_third_party_deps` hub; executable helpers
+and shared build targets live under `//tools/bazel/java`.
 """
 
-load("@rules_java//java:defs.bzl", _java_binary = "java_binary", _java_library = "java_library")
+load(
+    "@rules_java//java:defs.bzl",
+    _java_library = "java_library",
+    _java_test = "java_test",
+)
 load("@rules_java//java/common:java_info.bzl", "JavaInfo")
 load("@rules_shell//shell:sh_test.bzl", _sh_test = "sh_test")
 
@@ -31,7 +27,6 @@ _JUNIT5_ARGS = [
     "--details=flat",
     "--disable-ansi-colors",
     "--details-theme=ascii",
-    "--include-classname=.*(Test|IntegrationTest)",
     "--fail-if-no-tests",
 ]
 
@@ -68,6 +63,13 @@ def _unique(values):
             seen[value] = True
             result.append(value)
     return result
+
+def _conventional_resource_root(path):
+    return native.glob(
+        [path],
+        allow_empty = True,
+        exclude_directories = 0,
+    )
 
 # ============================================================================
 # Shared rules.
@@ -132,21 +134,32 @@ _workspace_runfiles = rule(
     },
 )
 
-# Both profiles expose the same runfiles rule under their historical names.
+# Control-plane components use the neutral name. nv-boot-parent keeps its local
+# wrapper name because it describes the owning library profile.
+nvcf_workspace_runfiles = _workspace_runfiles
 nv_boot_workspace_runfiles = _workspace_runfiles
-nvct_workspace_runfiles = _workspace_runfiles
 
 # ============================================================================
-# nv-boot-parent library profile.
+# Shared NVCF Java profile.
 # ============================================================================
-NV_JAVA_JAVACOPTS = [
+NVCF_JAVA_JAVACOPTS = [
+    "--release",
+    "25",
     "-Xlint:deprecation",
 ]
 
-def nv_boot_library(
+NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS = [
+    "-Xep:CheckReturnValue:OFF",
+    "-Xep:ImpossibleNullComparison:OFF",
+    "-Xep:OptionalOfRedundantMethod:OFF",
+]
+
+def nvcf_java_library(
         name,
         srcs,
         deps = [],
+        ide_visible = True,
+        javacopts = [],
         resources = [],
         runtime_deps = [],
         testonly = False,
@@ -155,180 +168,175 @@ def nv_boot_library(
     _java_library(
         name = name,
         srcs = srcs,
-        deps = deps + _LOMBOK_COMPILE_DEPS,
-        javacopts = NV_JAVA_JAVACOPTS,
+        deps = _unique(deps + _LOMBOK_COMPILE_DEPS),
+        javacopts = NVCF_JAVA_JAVACOPTS + javacopts,
         plugins = _LOMBOK_PLUGINS,
         resources = resources,
         resource_strip_prefix = resource_strip_prefix,
         runtime_deps = runtime_deps,
+        tags = [] if ide_visible else ["no-ide"],
         testonly = testonly,
         visibility = visibility,
     )
 
-def nv_boot_library_test(
+    main_resource_roots = _conventional_resource_root("src/main/resources")
+    if main_resource_roots and not native.existing_rule("_nvcf_ide_main_resources"):
+        # JetBrains treats each Bazel `resources` entry as a resource root.
+        # Expose the conventional directory without changing runtime packaging.
+        _java_library(
+            name = "_nvcf_ide_main_resources",
+            resources = main_resource_roots,
+            tags = ["manual"],
+            visibility = ["//visibility:private"],
+        )
+
+    test_resource_roots = _conventional_resource_root("src/test/resources")
+    if test_resource_roots and not native.existing_rule("_nvcf_ide_test_resources"):
+        # Keep this metadata-only target outside the test macro. JetBrains
+        # requires a runnable test macro to expand to one same-named target.
+        _java_test(
+            name = "_nvcf_ide_test_resources",
+            main_class = "org.junit.platform.console.ConsoleLauncher",
+            resources = test_resource_roots,
+            runtime_deps = _JUNIT5_RUNTIME_DEPS,
+            tags = ["manual"],
+            testonly = True,
+            use_testrunner = False,
+            visibility = ["//visibility:private"],
+        )
+
+def nvcf_java_test(
         name,
-        srcs,
         deps,
-        coverage_library,
         data = [],
+        include_classname = ".*(Test|IntegrationTest)",
+        ide_visible = True,
+        javacopts = [],
         junit_classpath = [],
         jvm_flags = [],
         resources = [],
         runtime_deps = [],
         size = "small",
+        srcs = [],
         tags = [],
         timeout = "short",
-        resource_strip_prefix = ""):
-    if type(coverage_library) != "string" or not coverage_library.startswith(":"):
-        fail(
-            "coverage_library must be the module library target as a local "
-            + "label starting with ':'",
-        )
-
-    coverage_sourcefiles = native.glob(["src/main/java/**/*.java"])
-    coverage_source_root = native.package_name() + "/src/main/java"
-    junit_runner = name + "_junit_runner"
-
-    _java_binary(
-        name = junit_runner,
-        srcs = srcs,
-        data = data + [_JACOCO_AGENT, _MOCKITO_CORE],
-        deps = deps + _LOMBOK_COMPILE_DEPS + _JUNIT5_COMPILE_DEPS,
-        javacopts = NV_JAVA_JAVACOPTS,
-        jvm_flags = _JACOCO_AGENT_JVM_FLAGS + [
+        resource_strip_prefix = "",
+        visibility = None):
+    compile_deps = _unique(deps + _LOMBOK_COMPILE_DEPS + _JUNIT5_COMPILE_DEPS)
+    test_runtime_deps = _unique(runtime_deps + _JUNIT5_RUNTIME_DEPS)
+    test_jar = native.package_name() + "/" + name + ".jar"
+    test_args = {
+        "name": name,
+        "srcs": srcs,
+        "data": _unique(data + [_JACOCO_AGENT, _MOCKITO_CORE]),
+        "deps": compile_deps,
+        "javacopts": NVCF_JAVA_JAVACOPTS + javacopts,
+        "jvm_flags": _JACOCO_AGENT_JVM_FLAGS + [
             "-javaagent:$(location %s)" % _MOCKITO_CORE,
         ] + jvm_flags,
-        main_class = "org.junit.platform.console.ConsoleLauncher",
-        plugins = _LOMBOK_PLUGINS,
-        resources = resources,
-        resource_strip_prefix = resource_strip_prefix,
-        runtime_deps = runtime_deps + _JUNIT5_RUNTIME_DEPS,
-        tags = ["manual"],
-        testonly = True,
-        visibility = ["//visibility:private"],
-    )
-
-    _sh_test(
-        name = name,
-        srcs = [_JACOCO_TEST_RUNNER],
-        args = [
-            "$(location :%s)" % junit_runner,
-            "$(location %s)" % coverage_library,
-            coverage_source_root if coverage_sourcefiles else "",
-            native.package_name(),
-            "$(location %s)" % _JACOCO_CLI,
-        ] + _JUNIT5_ARGS + [
-            "--class-path=$(location :%s.jar)" % junit_runner,
-            "--scan-classpath=$(location :%s.jar)" % junit_runner,
+        "main_class": "org.junit.platform.console.ConsoleLauncher",
+        "plugins": _LOMBOK_PLUGINS,
+        "resources": resources,
+        "runtime_deps": test_runtime_deps,
+        "size": size,
+        # Intentional: wildcard test patterns must select the companion coverage
+        # target, not this Java target, so the suite runs once and CI gets its
+        # JUnit and JaCoCo artifacts. IntelliJ imports this manual target through
+        # allow_manual_targets_sync.
+        "tags": _unique(tags + ["manual"] + ([] if ide_visible else ["no-ide"])),
+        "testonly": True,
+        "timeout": timeout,
+        "use_testrunner": False,
+        "visibility": visibility,
+        "args": _JUNIT5_ARGS + [
+            "--include-classname=%s" % include_classname,
+            "--class-path=%s" % test_jar,
+            "--scan-classpath=%s" % test_jar,
         ] + [
             "--class-path=%s" % path
             for path in junit_classpath
         ],
-        data = [
-            ":" + junit_runner,
-            ":%s.jar" % junit_runner,
-            coverage_library,
-            _JACOCO_CLI,
-        ] + coverage_sourcefiles,
-        size = size,
-        tags = tags,
-        timeout = timeout,
-    )
+    }
+    if resource_strip_prefix:
+        test_args["resource_strip_prefix"] = resource_strip_prefix
+    _java_test(**test_args)
 
-# ============================================================================
-# cloud-tasks service profile.
-# ============================================================================
-NVCT_JAVACOPTS = [
-    "--release",
-    "25",
-    "-Xep:CheckReturnValue:OFF",
-    "-Xep:ImpossibleNullComparison:OFF",
-    "-Xep:OptionalOfRedundantMethod:OFF",
-    "-Xlint:deprecation",
-]
-
-def nvct_library(
+def nvcf_java_coverage_test(
         name,
-        srcs,
-        deps = [],
-        resources = [],
-        runtime_deps = [],
-        visibility = None,
-        resource_strip_prefix = ""):
-    _java_library(
-        name = name,
-        srcs = srcs,
-        deps = deps + _LOMBOK_COMPILE_DEPS,
-        javacopts = NVCT_JAVACOPTS,
-        plugins = _LOMBOK_PLUGINS,
-        resources = resources,
-        resource_strip_prefix = resource_strip_prefix,
-        runtime_deps = runtime_deps,
-        visibility = visibility,
-    )
-
-def nvct_library_test(
-        name,
-        deps,
-        coverage_library,
-        data = [],
-        jvm_flags = [],
-        resources = [],
-        runtime_deps = [],
-        size = "large",
-        srcs = [],
+        test,
+        coverage_target,
+        include_classname = ".*(Test|IntegrationTest)",
+        junit_classpath = [],
+        size = "small",
         tags = [],
-        timeout = "long",
+        timeout = "short",
         visibility = None):
-    if type(coverage_library) != "string" or not coverage_library.startswith(":"):
+    if type(test) != "string" or not test.startswith(":"):
+        fail("test must be a local label starting with ':'")
+    if type(coverage_target) != "string" or not coverage_target.startswith(":"):
         fail(
-            "coverage_library must be the module library target as a local "
+            "coverage_target must be the module library target as a local "
             + "label starting with ':'",
         )
 
     coverage_sourcefiles = native.glob(["src/main/java/**/*.java"])
     coverage_source_root = native.package_name() + "/src/main/java"
-    junit_runner = name + "_junit_runner"
-
-    _java_binary(
-        name = junit_runner,
-        srcs = srcs,
-        data = _unique(data + [_JACOCO_AGENT, _MOCKITO_CORE]),
-        deps = _unique(deps + _LOMBOK_COMPILE_DEPS + _JUNIT5_COMPILE_DEPS),
-        javacopts = NVCT_JAVACOPTS,
-        jvm_flags = _JACOCO_AGENT_JVM_FLAGS + [
-            "-javaagent:$(location %s)" % _MOCKITO_CORE,
-        ] + jvm_flags,
-        main_class = "org.junit.platform.console.ConsoleLauncher",
-        plugins = _LOMBOK_PLUGINS,
-        resources = resources,
-        runtime_deps = runtime_deps + _JUNIT5_RUNTIME_DEPS,
-        tags = ["manual"],
-        testonly = True,
-        visibility = ["//visibility:private"],
-    )
-
+    test_jar = native.package_name() + "/" + test[1:] + ".jar"
     _sh_test(
         name = name,
         srcs = [_JACOCO_TEST_RUNNER],
         args = [
-            "$(location :%s)" % junit_runner,
-            "$(location %s)" % coverage_library,
+            "$(location %s)" % test,
+            "$(location %s)" % coverage_target,
             coverage_source_root if coverage_sourcefiles else "",
             native.package_name(),
             "$(location %s)" % _JACOCO_CLI,
         ] + _JUNIT5_ARGS + [
-            "--class-path=$(location :%s.jar)" % junit_runner,
-            "--scan-classpath=$(location :%s.jar)" % junit_runner,
+            "--include-classname=%s" % include_classname,
+            "--class-path=%s" % test_jar,
+            "--scan-classpath=%s" % test_jar,
+        ] + [
+            "--class-path=%s" % path
+            for path in junit_classpath
         ],
         data = _unique([
-            ":" + junit_runner,
-            ":%s.jar" % junit_runner,
-            coverage_library,
+            test,
+            coverage_target,
             _JACOCO_CLI,
         ] + coverage_sourcefiles),
         size = size,
+        # Intentional: do not add manual by default. Wildcard test patterns
+        # select this report-producing wrapper. Do not reverse the manual tag
+        # placement without updating .github/workflows/bazel.yml, artifact
+        # staging, and the Java Bazel documentation together.
         tags = tags,
         timeout = timeout,
+        visibility = visibility,
+    )
+
+# ============================================================================
+# nv-boot-parent local profile.
+# ============================================================================
+def nv_boot_library(
+        name,
+        srcs,
+        deps = [],
+        ide_visible = True,
+        javacopts = [],
+        resources = [],
+        runtime_deps = [],
+        testonly = False,
+        visibility = None,
+        resource_strip_prefix = ""):
+    nvcf_java_library(
+        name = name,
+        srcs = srcs,
+        deps = deps,
+        ide_visible = ide_visible,
+        javacopts = javacopts,
+        resources = resources,
+        resource_strip_prefix = resource_strip_prefix,
+        runtime_deps = runtime_deps,
+        testonly = testonly,
         visibility = visibility,
     )

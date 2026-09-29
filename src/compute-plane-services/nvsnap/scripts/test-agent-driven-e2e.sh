@@ -221,6 +221,7 @@ step_begin
 RESTORE_RESP=$(kubectl -n "$NS" exec "$AGENT_POD" -- sh -c "
 rm -f /var/lib/nvsnap/checkpoints/${CKPT_ID}/restore.pid /var/lib/nvsnap/checkpoints/${CKPT_ID}/restore.log
 curl -sS -m 600 -X POST 'http://localhost:8081/v1/restore' \
+    \${NVSNAP_AGENT_TOKEN:+--oauth2-bearer \$NVSNAP_AGENT_TOKEN} \
     -H 'Content-Type: application/json' \
     -d '{\"checkpointId\":\"${CKPT_ID}\",\"placeholderPodName\":\"${PLACEHOLDER_NAME}\",\"placeholderNamespace\":\"${NS}\"}'")
 if ! echo "$RESTORE_RESP" | grep -q '"restoredPid"'; then

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -68,6 +69,29 @@ func TestPersistentPreRunError(t *testing.T) {
 
 	err := cmd.PersistentPreRunE(cmd, nil)
 	require.Error(t, err, "expected PersistentPreRunE to error on invalid task id")
+}
+
+func TestBindWorkerConfigEnvsSupportsNVCTAliases(t *testing.T) {
+	aliases := map[string]string{
+		"TASK_ID":     "NVCT_TASK_ID",
+		"TASK_NAME":   "NVCT_TASK_NAME",
+		"NCA_ID":      "NVCT_NCA_ID",
+		"INSTANCE_ID": "NVCT_INSTANCE_ID",
+	}
+
+	for legacyName, aliasName := range aliases {
+		t.Run(legacyName, func(t *testing.T) {
+			cmd := NewRootCommand(ctx, zapLogger, time.Now())
+			v := viper.New()
+			require.NoError(t, bindWorkerConfigEnvs(v, cmd.Flags()))
+
+			t.Setenv(aliasName, "nvct-value")
+			assert.Equal(t, "nvct-value", v.GetString(legacyName))
+
+			t.Setenv(legacyName, "legacy-value")
+			assert.Equal(t, "legacy-value", v.GetString(legacyName))
+		})
+	}
 }
 
 // TestPersistentPreRunInitConfigError covers the config.InitConfig error branch
@@ -122,14 +146,14 @@ func TestPersistentPreRunSuccess(t *testing.T) {
 	workerToken, err := testutils.GenerateJWT(time.Now().Unix())
 	require.NoError(t, err, "failed to generate worker token")
 
-	// Env var names are the mapstructure tags from configs.Config.
-	t.Setenv("NCA_ID", "test-nca-id")
+	// BYOO task pods expose task identity through the NVCT_-prefixed aliases.
+	t.Setenv("NVCT_NCA_ID", "test-nca-id")
 	t.Setenv("ACCOUNT_NAME", "test-account")
 	t.Setenv("NVCT_WORKER_TOKEN", workerToken)
 	t.Setenv("NVCT_FQDN_GRPC", "http://localhost:9092")
-	t.Setenv("TASK_ID", "10b076eb-b6d2-4cd9-878b-a3614a931570")
-	t.Setenv("TASK_NAME", "test-task")
-	t.Setenv("INSTANCE_ID", "test-instance")
+	t.Setenv("NVCT_TASK_ID", "10b076eb-b6d2-4cd9-878b-a3614a931570")
+	t.Setenv("NVCT_TASK_NAME", "test-task")
+	t.Setenv("NVCT_INSTANCE_ID", "test-instance")
 	t.Setenv("INSTANCE_TYPE_NAME", "test-instance-type")
 	t.Setenv("HEALTH_PORT", "18080")
 	t.Setenv("NVCT_MAX_RUN_TIME_DURATION", "PT1H")

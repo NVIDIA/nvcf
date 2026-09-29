@@ -56,13 +56,14 @@ import com.nvidia.nvct.rest.task.dto.GpuSpecificationDto;
 import com.nvidia.nvct.rest.task.dto.HelmValidationPolicyDto;
 import com.nvidia.nvct.rest.task.dto.SecretDto;
 import com.nvidia.nvct.rest.task.dto.ValidationPolicyNameEnum;
-import com.nvidia.nvct.service.account.dto.RegistryCredentialDto;
+import com.nvidia.nvct.service.account.dto.RegistryCredentialDetailsDto;
 import io.grpc.Metadata;
 import io.grpc.Metadata.Key;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -401,6 +402,48 @@ public class TestConstants {
             UUID.fromString("edc4cd0a-80cd-4a7b-90d9-706b9eae9b4c");
     public static final String TEST_TELEMETRY_ENDPOINT =
             "http://example-telemetry.test.com/endpoint";
+
+    // Registry credential ids referenced by
+    // src/test/resources/fixtures/nvcf/account-response.json and
+    // account-with-telemetries-response.json. The ESS mock (EssResponseTransformer) resolves the
+    // secret for each id from REGISTRY_CRED_SECRETS_BY_ID.
+    public static final UUID REGISTRY_CRED_ID_DOCKER =
+            UUID.fromString("11111111-0000-0000-0000-000000000001");
+    public static final UUID REGISTRY_CRED_ID_ECR_PRIVATE =
+            UUID.fromString("11111111-0000-0000-0000-000000000002");
+    public static final UUID REGISTRY_CRED_ID_ECR_PUBLIC =
+            UUID.fromString("11111111-0000-0000-0000-000000000003");
+    public static final UUID REGISTRY_CRED_ID_VOLCENGINE =
+            UUID.fromString("11111111-0000-0000-0000-000000000004");
+    public static final UUID REGISTRY_CRED_ID_ACR =
+            UUID.fromString("11111111-0000-0000-0000-000000000005");
+    public static final UUID REGISTRY_CRED_ID_HARBOR =
+            UUID.fromString("11111111-0000-0000-0000-000000000006");
+    public static final UUID REGISTRY_CRED_ID_ARTIFACTORY =
+            UUID.fromString("11111111-0000-0000-0000-000000000007");
+    public static final UUID REGISTRY_CRED_ID_NGC_CONTAINER =
+            UUID.fromString("11111111-0000-0000-0000-000000000008");
+    public static final UUID REGISTRY_CRED_ID_NGC_CONTAINER_LOCALHOST =
+            UUID.fromString("11111111-0000-0000-0000-000000000009");
+    public static final UUID REGISTRY_CRED_ID_NGC_MODEL =
+            UUID.fromString("11111111-0000-0000-0000-000000000010");
+    public static final UUID REGISTRY_CRED_ID_NGC_MODEL_LOCALHOST =
+            UUID.fromString("11111111-0000-0000-0000-000000000011");
+    public static final UUID REGISTRY_CRED_ID_NGC_HELM =
+            UUID.fromString("11111111-0000-0000-0000-000000000012");
+    public static final UUID REGISTRY_CRED_ID_NGC_HELM_LOCALHOST =
+            UUID.fromString("11111111-0000-0000-0000-000000000013");
+
+    // Registry credential ids for the standalone builder-based DTOs below.
+    public static final UUID REGISTRY_CRED_ID_TEST_NGC_CONTAINER =
+            UUID.fromString("22222222-0000-0000-0000-000000000001");
+    public static final UUID REGISTRY_CRED_ID_TEST_NGC_MODEL =
+            UUID.fromString("22222222-0000-0000-0000-000000000002");
+    public static final UUID REGISTRY_CRED_ID_TEST_NGC_HELM =
+            UUID.fromString("22222222-0000-0000-0000-000000000003");
+    public static final UUID REGISTRY_CRED_ID_TEST_DOCKER =
+            UUID.fromString("22222222-0000-0000-0000-000000000004");
+
     public static final String BASE64_CONTAINER_REGISTRY_CRED =
             Base64.getEncoder()
                     .encodeToString("$oauthtoken:nvapi-stg-test-container-registry-cred"
@@ -416,8 +459,9 @@ public class TestConstants {
     public static final String BASE64_SIDECAR_REGISTRY_CRED = Base64.getEncoder().encodeToString(
             "$oauthtoken:nvapi-stg-test-sidecar-cred".getBytes(
                     StandardCharsets.UTF_8));
-    public static final RegistryCredentialDto TEST_NGC_CONTAINER_REGISTRY =
-            RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto TEST_NGC_CONTAINER_REGISTRY =
+            RegistryCredentialDetailsDto.builder()
+                    .registryCredentialId(REGISTRY_CRED_ID_TEST_NGC_CONTAINER)
                     .artifactTypes(Set.of(ArtifactTypeEnum.CONTAINER))
                     .registryHostname(TEST_CONTAINER_REGISTRY)
                     .secret(SecretDto.builder()
@@ -425,8 +469,9 @@ public class TestConstants {
                                     .value(new StringNode(BASE64_CONTAINER_REGISTRY_CRED))
                                     .build())
                     .build();
-    public static final RegistryCredentialDto TEST_NGC_MODEL_REGISTRY =
-            RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto TEST_NGC_MODEL_REGISTRY =
+            RegistryCredentialDetailsDto.builder()
+                    .registryCredentialId(REGISTRY_CRED_ID_TEST_NGC_MODEL)
                     .artifactTypes(Set.of(ArtifactTypeEnum.MODEL))
                     .registryHostname(TEST_ARTIFACT_REGISTRY)
                     .secret(SecretDto.builder()
@@ -434,8 +479,9 @@ public class TestConstants {
                                     .value(new StringNode(BASE64_MODEL_REGISTRY_CRED))
                                     .build())
                     .build();
-    public static final RegistryCredentialDto
-            TEST_NGC_HELM_REGISTRY = RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto
+            TEST_NGC_HELM_REGISTRY = RegistryCredentialDetailsDto.builder()
+            .registryCredentialId(REGISTRY_CRED_ID_TEST_NGC_HELM)
             .artifactTypes(Set.of(ArtifactTypeEnum.HELM))
             .registryHostname(TEST_HELM_REGISTRY)
             .secret(SecretDto.builder()
@@ -445,8 +491,9 @@ public class TestConstants {
             .build();
     public static final String BASE64_ENCODED_DOCKER_CRED = Base64.getEncoder()
             .encodeToString("username:docker-pat-password".getBytes(UTF_8));
-    public static final RegistryCredentialDto
-            TEST_DOCKER_CONTAINER_REGISTRY = RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto
+            TEST_DOCKER_CONTAINER_REGISTRY = RegistryCredentialDetailsDto.builder()
+            .registryCredentialId(REGISTRY_CRED_ID_TEST_DOCKER)
             .artifactTypes(Set.of(ArtifactTypeEnum.CONTAINER))
             .registryHostname("docker.io")
             .secret(SecretDto.builder()
@@ -466,6 +513,59 @@ public class TestConstants {
             .encodeToString("harbor-robot-account:harbor-robot-password".getBytes(UTF_8));
     public static final String BASE64_ENCODED_ARTIFACTORY_CRED = Base64.getEncoder()
             .encodeToString("artifactory-username:artifactory-password".getBytes(UTF_8));
+
+    // Registry credential secrets served by the ESS mock keyed by registry credential id. These
+    // model the secrets stored in ESS so that NVCT resolves them by id instead of reading them
+    // from the Get Account Details response.
+    public static final Map<UUID, SecretDto> REGISTRY_CRED_SECRETS_BY_ID = Map.ofEntries(
+            Map.entry(REGISTRY_CRED_ID_DOCKER,
+                      registrySecret("docker-container-registry-credential",
+                                     BASE64_ENCODED_DOCKER_CRED)),
+            Map.entry(REGISTRY_CRED_ID_ECR_PRIVATE,
+                      registrySecret("ecr-container-registry-credential",
+                                     BASE64_ENCODED_ECR_PRIVATE_CRED)),
+            Map.entry(REGISTRY_CRED_ID_ECR_PUBLIC,
+                      registrySecret("ecr-container-registry-credential",
+                                     BASE64_ENCODED_ECR_PUBLIC_CRED)),
+            Map.entry(REGISTRY_CRED_ID_VOLCENGINE,
+                      registrySecret("ve-registry-credential",
+                                     BASE64_ENCODED_VOLCENGINE_CRED)),
+            Map.entry(REGISTRY_CRED_ID_ACR,
+                      registrySecret("acr-registry-credential-1", BASE64_ENCODED_ACR_CRED)),
+            Map.entry(REGISTRY_CRED_ID_HARBOR,
+                      registrySecret("harbor-registry-credential", BASE64_ENCODED_HARBOR_CRED)),
+            Map.entry(REGISTRY_CRED_ID_ARTIFACTORY,
+                      registrySecret("artifactory-registry-credential",
+                                     BASE64_ENCODED_ARTIFACTORY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_NGC_CONTAINER,
+                      registrySecret("ngc-container-registry-credential",
+                                     BASE64_CONTAINER_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_NGC_CONTAINER_LOCALHOST,
+                      registrySecret("ngc-container-registry-credential",
+                                     BASE64_CONTAINER_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_NGC_MODEL,
+                      registrySecret("ngc-model-resource-registry-credential",
+                                     BASE64_MODEL_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_NGC_MODEL_LOCALHOST,
+                      registrySecret("ngc-model-resource-registry-credential",
+                                     BASE64_MODEL_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_NGC_HELM,
+                      registrySecret("ngc-helm-registry-credential", BASE64_HELM_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_NGC_HELM_LOCALHOST,
+                      registrySecret("ngc-helm-registry-credential", BASE64_HELM_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_TEST_NGC_CONTAINER,
+                      registrySecret("container-registry-cred-for-org1",
+                                     BASE64_CONTAINER_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_TEST_NGC_MODEL,
+                      registrySecret("model-registry-cred-for-org1", BASE64_MODEL_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_TEST_NGC_HELM,
+                      registrySecret("helm-registry-cred-for-org1", BASE64_HELM_REGISTRY_CRED)),
+            Map.entry(REGISTRY_CRED_ID_TEST_DOCKER,
+                      registrySecret("cred-for-docker-acct-foo", BASE64_ENCODED_DOCKER_CRED)));
+
+    private static SecretDto registrySecret(String name, String base64Value) {
+        return SecretDto.builder().name(name).value(new StringNode(base64Value)).build();
+    }
 
     public static final String TEST_CUSTOM_REGISTRY_NAME_1 = "custom-1";
     public static final String TEST_CUSTOM_REGISTRY_HOST_NAME_1 = "custom-registry-test-1.com";

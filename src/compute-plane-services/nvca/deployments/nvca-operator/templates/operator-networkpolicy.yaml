@@ -1,0 +1,139 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# NetworkPolicy hardening for the nvca-operator pod itself.
+#
+# By default, in clusters with a default-deny CNI (Calico, Cilium with
+# enforcement, etc.) operator egress is wide open inside the cluster.
+# This template adds explicit allow rules for the three legitimate
+# egress targets:
+#
+#   1. kube-apiserver — for CRD watches, leader-election leases,
+#      child-resource create/update, status writes. CIDR-based rule
+#      because the apiserver IP is cluster-specific; default
+#      0.0.0.0/0 - cluster-internal-CIDRs covers the public apiserver
+#      endpoint without leaking to other pods.
+#
+#   2. nvsnap-server (default nvsnap-system/nvsnap-server, port 8080) —
+#      for L2 promote-state polls and audit calls. Namespace + label
+#      selector keeps it tight.
+#
+#   3. kube-dns — for service name resolution. Without this rule the
+#      operator can't resolve nvsnap-server.nvsnap-system.svc anyway.
+#
+# Ingress: container port 8000 (health/metrics) and 8002 (auxiliary).
+# Allowed from any namespace by default (Prometheus scraping +
+# kubelet probes can come from anywhere). Operators can tighten by
+# overriding ingressFrom.
+#
+# Opt-in via .Values.networkPolicy.operator.enabled (default false)
+# so existing deployments keep working unchanged. Turn on after
+# verifying the rule set fits your cluster.
+#
+# Note: K8s NetworkPolicy semantics are "deny by default IF any
+# NetworkPolicy selects the pod." Creating this policy WITHOUT a
+# matching cluster CNI may have no effect (e.g. some kindnet
+# configs); test in your environment before relying on it.
+{{- if and (hasKey .Values "networkPolicy") (hasKey .Values.networkPolicy "operator") .Values.networkPolicy.operator.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nvcaop.fullname" . }}-operator-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+  annotations:
+    nvca.io/purpose: |
+      Default-deny operator egress + explicit allows for
+      kube-apiserver, nvsnap-server, and kube-dns. Tighten further by
+      overriding .Values.networkPolicy.operator.* — see the template
+      header for the rule shape.
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nvcaop.baseSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Egress
+    - Ingress
+  egress:
+    # 1. Kube-DNS — needed for nvsnap-server.nvsnap-system.svc resolution.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2. nvsnap-server (L2 promote-state, audit log writes).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.operator.nvsnapServerNamespace | default "nvsnap-system" }}
+          podSelector:
+            matchLabels:
+              app: {{ .Values.networkPolicy.operator.nvsnapServerPodLabel | default "nvsnap-server" }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.operator.nvsnapServerPort | default 8080 }}
+    # 3. Kube-apiserver. K8s doesn't expose the apiserver via a
+    #    Service selector inside this NetworkPolicy syntax (kubernetes.default
+    #    isn't a "podSelector" target — it's a virtual endpoint). The cleanest
+    #    portable shape is an IP-based egress to the apiserver port.
+    #    Operators with a known apiserver CIDR can pin it; default 0.0.0.0/0:443
+    #    allows the apiserver but ALSO any other 443 target, which is
+    #    accepted because this rule list is additive (deny-by-default
+    #    elsewhere blocks anything not explicitly allowed).
+    {{- with .Values.networkPolicy.operator.apiServerCIDRs }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.networkPolicy.operator.apiServerPort | default 443 }}
+    {{- end }}
+    # 4. Operator-defined extra egress rules (private registries,
+    #    OTLP collectors, anything cluster-specific). Render verbatim.
+    {{- with .Values.networkPolicy.operator.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  ingress:
+    # Allow scraping + probes from anywhere by default. Tighten via
+    # .Values.networkPolicy.operator.ingressFrom (list of NetworkPolicyPeer).
+    {{- with .Values.networkPolicy.operator.ingressFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8002
+    {{- else }}
+    - ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8002
+    {{- end }}
+{{- end }}

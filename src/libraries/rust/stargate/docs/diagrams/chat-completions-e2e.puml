@@ -35,7 +35,7 @@ Proxy -> LB: cluster_candidates_for_target(\n  RoutingTargetKey{my-rk, my-model}
 LB --> Proxy: [cluster-A (rtt=5ms), cluster-B (rtt=12ms)]
 
 note over LB
-  Default: power-of-two
+  Default: power-of-n
   (sample 2, pick lower prompt-work time).
   Only clusters with a backend that has an open QUIC
   connection and a healthy RTT

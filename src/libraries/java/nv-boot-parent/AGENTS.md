@@ -5,9 +5,10 @@ nv-boot-parent provides the NVCF Spring Boot platform libraries inside the root
 `MODULE.bazel`, lockfile, `.bazelrc`, `.bazelversion`, downloader config, or
 third-party dependency hub.
 
-Maven POMs remain during coexistence for Maven consumers. Bazel consumers use
-the public starter source targets directly; Bazel does not generate or publish
-Maven-shaped nv-boot artifacts.
+The monorepo copy is Bazel-only and contains no project POMs. Applications in
+this repository use the public starter source targets directly. External Maven
+consumers use artifacts published by the independent source repository. Do not
+restore project POMs or add Maven build instructions here.
 
 ## Build And Test
 

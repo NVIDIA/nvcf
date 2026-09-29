@@ -243,7 +243,7 @@ func (c *Client) GenerateAPIKey(ctx context.Context, description string, expires
 
 	// Parse the response
 	var response map[string]interface{}
-	if err := json.Unmarshal(body, &response); err != nil {
+	if err := json.Unmarshal(trimAttachWarnings(body), &response); err != nil {
 		return "", fmt.Errorf("failed to parse API key response: %w", err)
 	}
 
@@ -256,6 +256,18 @@ func (c *Client) GenerateAPIKey(ctx context.Context, description string, expires
 		logging.Debug("Successfully generated API key - Length: %d", len(value))
 	}
 	return value, nil
+}
+
+func trimAttachWarnings(body []byte) []byte {
+	const warningPrefix = "warning: could not attach to pod/"
+
+	for {
+		line, rest, found := bytes.Cut(body, []byte("\n"))
+		if !found || !bytes.HasPrefix(line, []byte(warningPrefix)) {
+			return body
+		}
+		body = rest
+	}
 }
 
 func redactBearerToken(value string) string {

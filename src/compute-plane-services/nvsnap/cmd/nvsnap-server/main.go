@@ -106,6 +106,11 @@ func run(cmd *cobra.Command, args []string) error {
 		Address:      address,
 		AgentPort:    agentPort,
 		BlobstoreURL: blobstoreURL,
+		// Env rather than a flag: the chart projects it straight from the
+		// nvsnap-agent-token Secret, and a flag would put the credential in
+		// the process argv where any pod-reading client can see it.
+		// Empty when auth is off, which sends no header (nvsnap#736).
+		AgentToken: os.Getenv("NVSNAP_AGENT_TOKEN"),
 	}, kubeClient, dynClient, catalog)
 
 	// Embed React UI — serves at / with SPA fallback

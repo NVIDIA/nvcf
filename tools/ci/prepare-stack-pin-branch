@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+branch="${1:?usage: prepare-stack-pin-branch <branch> <base-branch>}"
+base_branch="${2:?usage: prepare-stack-pin-branch <branch> <base-branch>}"
+
+git check-ref-format --branch "${branch}" >/dev/null
+git check-ref-format --branch "${base_branch}" >/dev/null
+
+git fetch origin "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}"
+set +e
+git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null
+branch_status=$?
+set -e
+
+case "${branch_status}" in
+  0)
+    git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+    git checkout -B "${branch}" "origin/${branch}"
+    git rebase "origin/${base_branch}"
+    ;;
+  2)
+    git checkout -B "${branch}" "origin/${base_branch}"
+    ;;
+  *)
+    echo "failed to check whether origin/${branch} exists" >&2
+    exit "${branch_status}"
+    ;;
+esac

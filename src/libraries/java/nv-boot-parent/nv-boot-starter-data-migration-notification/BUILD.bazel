@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_test", "nv_boot_library")
 
 DATA_MIGRATION_NOTIFICATION_COMPILE_DEPS = [
     "@nv_third_party_deps//:io_cloudevents_cloudevents_api",
@@ -30,12 +30,17 @@ nv_boot_library(
     deps = DATA_MIGRATION_NOTIFICATION_COMPILE_DEPS,
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
-    coverage_library = ":nv_boot_starter_data_migration_notification",
     deps = [
         ":nv_boot_starter_data_migration_notification",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_test",
     ] + DATA_MIGRATION_NOTIFICATION_COMPILE_DEPS,
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nv_boot_starter_data_migration_notification",
+    test = ":tests",
 )

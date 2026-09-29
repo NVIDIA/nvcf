@@ -682,6 +682,40 @@ func TestConnectionTrackingConn_ConcurrentAccess(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("concurrent_init_and_close", func(t *testing.T) {
+		clientConn, peerConn := net.Pipe()
+		defer peerConn.Close()
+
+		conn := NewConnectionTrackingConn(clientConn)
+		const numGoroutines = 100
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(2)
+
+			go func(index int) {
+				defer wg.Done()
+				<-start
+				_, err := conn.InitWorkerConn(fmt.Sprintf("func%d", index), "v1", func() (*WorkerConnection, error) {
+					return NewWorkerConnection(uuid.New(), "", "", func() {}, func() {}), nil
+				})
+				if err != nil {
+					t.Errorf("failed to initialize worker connection: %v", err)
+				}
+			}(i)
+
+			go func() {
+				defer wg.Done()
+				<-start
+				_ = conn.Close()
+			}()
+		}
+
+		close(start)
+		wg.Wait()
+	})
 }
 
 func TestFunctionRoutingKey(t *testing.T) {

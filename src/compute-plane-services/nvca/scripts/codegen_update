@@ -79,6 +79,7 @@ main() {
   deepcopy "nvca/v1"
   deepcopy "nvca/v1alpha1"
   deepcopy "nvca/v2beta1"
+  deepcopy "nvsnap/v1alpha1"
   clientgen_all
 }
 

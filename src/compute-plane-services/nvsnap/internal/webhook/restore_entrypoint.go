@@ -90,6 +90,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 const (
@@ -112,7 +114,14 @@ const (
 	// knob, by design: changing the path requires coordinated
 	// edits in both places, which a single config value can't
 	// safely express.
-	DefaultHostBundleRoot = "/var/lib/nvsnap/bundle"
+	// Under the containerd root so the bundle lands on the node's local disk
+	// rather than the boot volume, matching agent.hostPaths in the chart.
+	DefaultHostBundleRoot = "/var/lib/containerd/nvsnap-bundle"
+
+	// envRuntimeDirs carries the capture's recorded runtime directories to the
+	// restore shim, which recreates them before exec. Must match the constant
+	// in cmd/nvsnap-rootfs-restore.
+	envRuntimeDirs = "NVSNAP_RUNTIME_DIRS"
 
 	// envOrigCommand and envOrigArgs are read by restore-entrypoint's
 	// cold-start fallback path (cmd/restore-entrypoint/main.go).
@@ -416,4 +425,23 @@ func hasCapability(list []corev1.Capability, c corev1.Capability) bool {
 		}
 	}
 	return false
+}
+
+// runtimeDirsJSON encodes the capture's recorded runtime directories for the
+// restore shim. Returns "" when there are none, so the env var is present but
+// empty and the shim skips the step -- and so captures taken before this was
+// recorded keep working unchanged.
+//
+// Marshal cannot fail for this type; on the impossible error we return "" and
+// let restore proceed, since a missing runtime dir degrades one workload
+// rather than failing every restore.
+func runtimeDirsJSON(dirs []checkpointstore.EntryRuntimeDir) string {
+	if len(dirs) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(dirs)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

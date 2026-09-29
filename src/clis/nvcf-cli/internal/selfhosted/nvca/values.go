@@ -30,7 +30,6 @@ type Values struct {
 	ClusterID      string             `yaml:"clusterID"`
 	ClusterGroupID string             `yaml:"clusterGroupID"`
 	NCAID          string             `yaml:"ncaID"`
-	Region         string             `yaml:"region"`
 	SelfManaged    SelfManagedValues  `yaml:"selfManaged"`
 	Agent          *AgentValues       `yaml:"agent,omitempty"`
 	AgentConfig    *AgentConfigValues `yaml:"agentConfig,omitempty"`
@@ -42,9 +41,11 @@ type AgentValues struct {
 	LLM *AgentLLMValues `yaml:"llm,omitempty"`
 }
 
-// AgentLLMValues carries agent.llm.* values. RequestRouterAddress is the default
-// host:port LLM request router (Stargate) address for LLM workloads, consumed by
-// the nvca-operator chart under agent.llm.requestRouterAddress.
+// AgentLLMValues carries agent.llm.* values. RequestRouterAddress is the
+// host:port LLM request router (Stargate) address consumed by the
+// nvca-operator chart under agent.llm.requestRouterAddress. It configures the
+// operator; it is not a runtime fallback for LLM workloads, which require
+// LLM_REQUEST_ROUTER_ADDRESS in their launch environment.
 type AgentLLMValues struct {
 	RequestRouterAddress string `yaml:"requestRouterAddress,omitempty"`
 }
@@ -57,6 +58,7 @@ type AgentConfigValues struct {
 
 type SelfManagedValues struct {
 	IdentitySource                 string `yaml:"identitySource"`
+	Region                         string `yaml:"region"`
 	ICMSServiceURL                 string `yaml:"icmsServiceURL,omitempty"`
 	ICMSServiceHostHeaderOverride  string `yaml:"icmsServiceHostHeaderOverride,omitempty"`
 	ReValServiceURL                string `yaml:"revalServiceURL,omitempty"`

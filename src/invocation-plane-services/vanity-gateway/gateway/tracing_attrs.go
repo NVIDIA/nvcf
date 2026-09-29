@@ -23,6 +23,7 @@ const (
 	traceAttrEndpointType              attribute.Key = "endpoint.type"
 	traceAttrFunctionID                attribute.Key = "function.id"
 	traceAttrFunctionVersionID         attribute.Key = "function.version_id"
+	traceAttrGatewayProxyOutcome       attribute.Key = "gateway.proxy.outcome"
 	traceAttrHTTPResponseStatusCode    attribute.Key = "http.response.status_code"
 	traceAttrIsShadow                  attribute.Key = "is_shadow"
 	traceAttrModelName                 attribute.Key = "model.name"
@@ -36,7 +37,8 @@ const (
 	traceAttrShadowTargetModel         attribute.Key = "shadow.target_model"
 	traceAttrShadowTargetModels        attribute.Key = "shadow.target_models"
 
-	traceAttrValueEndpointOpenAI = "openai"
+	traceAttrValueEndpointOpenAI     = "openai"
+	traceAttrValueEndpointLLMGateway = "llm_gateway"
 
 	shadowDroppedReasonBodyReadError    = "body_read_error"
 	shadowDroppedReasonBodyRewriteError = "body_rewrite_error"

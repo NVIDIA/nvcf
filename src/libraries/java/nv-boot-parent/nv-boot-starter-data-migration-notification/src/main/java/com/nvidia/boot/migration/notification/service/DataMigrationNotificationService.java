@@ -108,7 +108,7 @@ public class DataMigrationNotificationService {
             connection.publish(subject, format.serialize(cloudEvent));
             connection.flush(Duration.ofSeconds(5));
         } catch (Exception e) {
-            log.error(MESG_ERROR_SENDING_NATS, ExceptionUtils.getStackTrace(e));
+            log.error(MESG_ERROR_SENDING_NATS, e.getMessage());
         }
     }
 

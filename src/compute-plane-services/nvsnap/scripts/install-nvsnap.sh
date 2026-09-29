@@ -227,6 +227,48 @@ else
     info "skipping cert-manager + webhook (--without-webhook)"
 fi
 
+# L2 per-capture PVC fan-out is off unless agent.l2.storageClass names an
+# RWX-capable class. Left empty the install still succeeds, but restore
+# fan-out silently degrades to the L3 peer cascade — a large throughput
+# difference that only shows up under multi-node fan-out, long after the
+# installer has printed a clean banner. Say so at install time.
+#
+# Reported, not auto-selected: picking the wrong class yields PVCs that
+# never bind, and the right choice depends on cluster topology. RWX
+# capability isn't exposed on the StorageClass API, so candidates are
+# matched on known RWX provisioners.
+#
+# Only --set is inspected here. An operator supplying the value through
+# -f/--values is passing a file this script does not parse, so stay quiet
+# rather than claim L2 is off on evidence we do not have.
+l2_configured=false
+printf '%s\n' "${EXTRA_HELM_ARGS[@]}" | grep -q "agent.l2.storageClass=" && l2_configured=true
+printf '%s\n' "${EXTRA_HELM_ARGS[@]}" | grep -qE '^(-f|--values)$' && l2_configured=true
+
+if [ "$l2_configured" = false ]; then
+    rwx_re='smb\.csi|nfs\.csi|efs\.csi|filestore\.csi|azurefile|excelero|nvmesh|cephfs'
+    # Keep the query's exit status: a denied or unreachable API returns
+    # nothing, which is indistinguishable from "no RWX classes exist" unless
+    # the failure is recorded separately. Reporting the wrong one of those two
+    # sends the operator to provision storage they may already have.
+    sc_ok=true
+    sc_list=$(kubectl get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{" ("}{.provisioner}{")"}{"\n"}{end}' 2>/dev/null) || sc_ok=false
+    candidates=$(printf '%s\n' "$sc_list" | grep -iE "$rwx_re" || true)
+
+    echo "     WARNING: agent.l2.storageClass is unset — L2 per-capture PVC fan-out is DISABLED." >&2
+    echo "              Restore falls back to the L3 peer cascade (slower multi-node fan-out)." >&2
+    if [ "$sc_ok" = false ]; then
+        echo "              Unable to inspect StorageClasses (query failed); cannot list candidates." >&2
+    elif [ -n "$candidates" ]; then
+        echo "              RWX-capable StorageClasses on this cluster:" >&2
+        echo "$candidates" | sed 's/^/                /' >&2
+        echo "              Enable with: --set agent.l2.storageClass=<name>" >&2
+    else
+        echo "              No RWX-capable StorageClass detected; L2 needs one provisioned first." >&2
+        echo "              Reference: deploy/k8s/nvcf-cluster-prep/storage-classes.yaml" >&2
+    fi
+fi
+
 # ─── 6. Helm install ───────────────────────────────────────────────────
 
 step "[6/7] helm install / upgrade nvsnap"

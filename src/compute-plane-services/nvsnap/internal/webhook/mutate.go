@@ -351,6 +351,14 @@ type Mutator struct {
 	// = http://<host-ip>:<AgentHostPort>; host-ip is plumbed via
 	// downward API in the patched pod spec.
 	AgentHostPort int
+
+	// AgentBaseURL overrides how the injected init container addresses the
+	// agent (GH #490). Empty keeps the hostPort form,
+	// http://$(NVSNAP_HOST_IP):<AgentHostPort>, which requires the API to be
+	// bound to every node's IP. Under pod networking the chart sets this to
+	// the internalTrafficPolicy:Local Service instead, which reaches the
+	// agent on the caller's own node without any node-wide listener.
+	AgentBaseURL string
 }
 
 // OverlayPreparer is implemented by *agent.Agent via PrepareOverlay.

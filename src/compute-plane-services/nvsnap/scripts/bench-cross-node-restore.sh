@@ -81,7 +81,11 @@ for r in "${RECEIVERS[@]}"; do
     # default run lightweight.
     if [ "${BENCH_PROFILE:-0}" = "1" ]; then
         log "Starting CPU pprof on agent (30s)…"
-        kubectl -n $NS exec "$agent" -- sh -c "curl -sS 'http://localhost:8081/debug/pprof/profile?seconds=30' -o /tmp/cpu.pb && echo PROFILE_DONE" >/tmp/pprof-$short.log 2>&1 &
+        # pprof is gated by the agent's auth middleware (profiles leak memory
+        # contents), so send the token the chart injects into this container.
+        # --oauth2-bearer, not -H: the header form word-splits when expanded
+        # unquoted through ${:+}.
+        kubectl -n $NS exec "$agent" -- sh -c "curl -sS \${NVSNAP_AGENT_TOKEN:+--oauth2-bearer \$NVSNAP_AGENT_TOKEN} 'http://localhost:8081/debug/pprof/profile?seconds=30' -o /tmp/cpu.pb && echo PROFILE_DONE" >/tmp/pprof-$short.log 2>&1 &
         PPROF_PID=$!
     fi
 

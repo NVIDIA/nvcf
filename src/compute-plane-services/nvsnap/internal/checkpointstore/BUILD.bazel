@@ -49,6 +49,7 @@ go_test(
         "percapture_pvc_test.go",
         "promoter_shared_test.go",
         "storage_profile_test.go",
+        "volumelayout_test.go",
     ],
     embed = [":checkpointstore"],
     deps = [

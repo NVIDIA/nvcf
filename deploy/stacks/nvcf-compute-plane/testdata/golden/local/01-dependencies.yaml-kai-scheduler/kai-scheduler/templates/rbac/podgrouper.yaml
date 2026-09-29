@@ -1,0 +1,416 @@
+---
+# Source: kai-scheduler/templates/rbac/podgrouper.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kai-podgrouper
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  - pods
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - amlarc.azureml.com
+  resources:
+  - amljobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - amlarc.azureml.com
+  resources:
+  - amljobs/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments/finalizers
+  - replicasets/finalizers
+  - statefulsets/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - argoproj.io
+  resources:
+  - workflows
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - argoproj.io
+  resources:
+  - workflows/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  - jobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs/finalizers
+  - jobs/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - egx.nvidia.io
+  resources:
+  - spotrequests
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - egx.nvidia.io
+  resources:
+  - spotrequests/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - grove.io
+  resources:
+  - podcliques
+  - podcliquescalinggroups
+  - podcliquesets
+  - podgangsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - grove.io
+  resources:
+  - podcliques/finalizers
+  - podcliquescalinggroups/finalizers
+  - podcliquesets/finalizers
+  - podgangsets/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - jobset.x-k8s.io
+  resources:
+  - jobsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - jobset.x-k8s.io
+  resources:
+  - jobsets/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - kubeflow.org
+  resources:
+  - jaxjobs
+  - mpijobs
+  - notebooks
+  - pytorchjobs
+  - scheduledworkflows
+  - tfjobs
+  - xgboostjobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubeflow.org
+  resources:
+  - jaxjobs/finalizers
+  - mpijobs/finalizers
+  - notebooks/finalizers
+  - pytorchjobs/finalizers
+  - scheduledworkflows/finalizers
+  - tfjobs/finalizers
+  - xgboostjobs/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  - virtualmachines
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances/finalizers
+  - virtualmachines/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - leaderworkerset.x-k8s.io
+  resources:
+  - leaderworkersets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - leaderworkerset.x-k8s.io
+  resources:
+  - leaderworkersets/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - machinelearning.seldon.io
+  resources:
+  - seldondeployments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - machinelearning.seldon.io
+  resources:
+  - seldondeployments/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - ray.io
+  resources:
+  - rayclusters
+  - rayjobs
+  - rayservices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ray.io
+  resources:
+  - rayclusters/finalizers
+  - rayjobs/finalizers
+  - rayservices/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - run.ai
+  resources:
+  - distributedinferenceworkloads
+  - distributedworkloads
+  - inferenceworkloads
+  - interactiveworkloads
+  - kartas
+  - runaijobs
+  - trainingworkloads
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - run.ai
+  resources:
+  - runaijobs/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - scheduler.grove.io
+  resources:
+  - podgangs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - scheduler.grove.io
+  resources:
+  - podgangs/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - scheduling.k8s.io
+  resources:
+  - priorityclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - scheduling.run.ai
+  resources:
+  - podgroups
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - serving.knative.dev
+  resources:
+  - configurations
+  - revisions
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - serving.knative.dev
+  resources:
+  - configurations/finalizers
+  - revisions/finalizers
+  - services/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - tekton.dev
+  resources:
+  - pipelineruns
+  - taskruns
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - tekton.dev
+  resources:
+  - pipelineruns/finalizers
+  - taskruns/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - trainer.kubeflow.org
+  resources:
+  - trainjobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - trainer.kubeflow.org
+  resources:
+  - trainjobs/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - workspace.devfile.io
+  resources:
+  - devworkspaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - workspace.devfile.io
+  resources:
+  - devworkspaces/finalizers
+  verbs:
+  - create
+  - patch
+  - update
+---
+# Source: kai-scheduler/templates/rbac/podgrouper.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+#
+# DO NOT EDIT - This file is auto-generated by controller-gen
+# To modify RBAC permissions, edit the +kubebuilder:rbac markers in the source code
+# and run 'make manifests' to regenerate this file.

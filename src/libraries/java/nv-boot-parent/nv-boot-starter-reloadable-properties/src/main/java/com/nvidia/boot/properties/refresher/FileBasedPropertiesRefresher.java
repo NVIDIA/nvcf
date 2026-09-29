@@ -117,7 +117,8 @@ public class FileBasedPropertiesRefresher {
                 log.info("{} finished without refresh", this.getClass().getSimpleName());
             }
         } catch (Throwable t) {
-            log.error("{} error during properties refresh", this.getClass().getSimpleName(), t);
+            log.error("{} error during properties refresh - {}",
+                      this.getClass().getSimpleName(), t.getMessage());
         }
     }
 }

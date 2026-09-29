@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -58,7 +58,7 @@ java_library(
     visibility = ["//visibility:private"],
 )
 
-nv_boot_library(
+nvcf_java_library(
     name = "notary_core",
     srcs = NOTARY_CORE_SRCS,
     deps = NOTARY_CORE_DEPS,
@@ -90,7 +90,7 @@ NOTARY_CORE_DIRECT_TEST_DEPS = [
     "@nv_third_party_deps//:org_springframework_spring_beans",
 ]
 
-nv_boot_library(
+nvcf_java_library(
     name = "notary_core_test_fixtures",
     srcs = NOTARY_CORE_TEST_SRCS,
     deps = NOTARY_CORE_TEST_DEPS + NOTARY_CORE_DIRECT_TEST_DEPS + [
@@ -103,16 +103,23 @@ nv_boot_library(
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_test_autoconfigure",
         "@nv_third_party_deps//:org_springframework_spring_test",
     ],
+    ide_visible = False,
     resource_strip_prefix = "src/control-plane-services/notary/notary-core/src/test/resources",
     resources = NOTARY_CORE_TEST_RESOURCES,
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":notary_core",
     srcs = NOTARY_CORE_TEST_SRCS,
     deps = NOTARY_CORE_TEST_DEPS + NOTARY_CORE_DIRECT_TEST_DEPS,
     resource_strip_prefix = "src/control-plane-services/notary/notary-core/src/test/resources",
     resources = NOTARY_CORE_TEST_RESOURCES,
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":notary_core",
+    test = ":tests",
     timeout = "long",
 )

@@ -126,7 +126,8 @@ public abstract class BootWarmupBase
                             return true;
                         } catch (Exception ex) {
                             // Swallow the exception.
-                            log.error("Warmup operation {} failed.", runnable.getName(), ex);
+                            log.error("Warmup operation {} failed - {}",
+                                      runnable.getName(), ex.getMessage());
                             return false;
                         } finally {
                             Thread.currentThread().setContextClassLoader(originalClassLoader);

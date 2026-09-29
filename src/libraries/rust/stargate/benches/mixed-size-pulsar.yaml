@@ -118,15 +118,15 @@ traffic_pattern:
       p99_cap: 2048
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
-  - name: groq-multiregion
+      default: power-of-n
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
+      default: wait-and-widen
   - name: pulsar
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar

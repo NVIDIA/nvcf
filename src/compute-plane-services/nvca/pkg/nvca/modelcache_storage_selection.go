@@ -1,0 +1,149 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package nvca
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
+	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/sirupsen/logrus"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+
+	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
+)
+
+func cacheSelectionInput(
+	req *nvcav2beta1.ICMSRequest,
+) (*common.CacheLaunchSpecification, nvcastorage.ModelCacheWorkflow) {
+	switch {
+	case req.Spec.CreationMsgInfo.FunctionLaunchSpecification != nil:
+		spec := req.Spec.CreationMsgInfo.FunctionLaunchSpecification
+		workflow := nvcastorage.ModelCacheWorkflowRegular
+		if spec.HelmChartLaunchSpecification != nil {
+			workflow = nvcastorage.ModelCacheWorkflowHelm
+		}
+		return spec.CacheLaunchSpecification, workflow
+	case req.Spec.CreationMsgInfo.TaskLaunchSpecification != nil:
+		spec := req.Spec.CreationMsgInfo.TaskLaunchSpecification
+		workflow := nvcastorage.ModelCacheWorkflowRegular
+		if spec.HelmChartLaunchSpecification != nil {
+			workflow = nvcastorage.ModelCacheWorkflowHelm
+		}
+		return spec.CacheLaunchSpecification, workflow
+	default:
+		return nil, ""
+	}
+}
+
+// persistModelCacheStorageSelection resolves and records the cache decision
+// before the ICMSRequest is created. An absent annotation therefore identifies
+// a request created by legacy NVCA.
+func (c *BackendK8sCache) persistModelCacheStorageSelection(
+	ctx context.Context,
+	req *nvcav2beta1.ICMSRequest,
+) error {
+	cacheSpec, workflow := cacheSelectionInput(req)
+	if cacheSpec == nil || cacheSpec.CacheSize <= 0 {
+		return nil
+	}
+
+	mode := nvcastorage.ModelCacheSelectionNone
+	var resolved *nvcastorage.ModelCacheStorageSelection
+	cachingEnabled := c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.CachingSupport)
+	if workflow == nvcastorage.ModelCacheWorkflowHelm {
+		cachingEnabled = cachingEnabled &&
+			c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmModelCaching)
+	}
+	if cachingEnabled {
+		var err error
+		resolved, err = nvcastorage.ResolveModelCacheStorageWithClientset(
+			ctx, c.clients.K8s, c.systemNamespace, workflow)
+		if err == nil && resolved.CatalogBuiltin {
+			c.noteBuiltinCatalog(ctx, req, workflow)
+		}
+		switch {
+		case errors.Is(err, nvcastorage.ErrModelCacheStorageClassNotFound):
+			if workflow == nvcastorage.ModelCacheWorkflowHelm {
+				mode = nvcastorage.ModelCacheSelectionEphemeral
+			}
+		case err != nil:
+			return fmt.Errorf("resolve model cache storage: %w", err)
+		case resolved.Transition == nvcastorage.ModelCacheTransitionDisabled:
+			if workflow == nvcastorage.ModelCacheWorkflowHelm {
+				mode = nvcastorage.ModelCacheSelectionEphemeral
+			}
+		case resolved.Transition == nvcastorage.ModelCacheTransitionROXReadOnly,
+			resolved.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly:
+			// Both shapes are durable for both workflows. Helm routes the
+			// ReadWriteMany shape to the shared-filesystem backend through
+			// HelmCacheBackendFromSelection; the regular workflow serves it from
+			// one shared claim per cache handle.
+			mode = nvcastorage.ModelCacheSelectionDurable
+		default:
+			return fmt.Errorf("unsupported model cache transition %q", resolved.Transition)
+		}
+	}
+
+	selection, err := nvcastorage.NewPersistedModelCacheStorageSelection(workflow, mode, resolved)
+	if err != nil {
+		return fmt.Errorf("build model cache storage selection: %w", err)
+	}
+	// Encryption is a catalog capability gated by a feature flag. Only the
+	// ReadOnlyMany reader shape implements an encrypted cache today, so the
+	// decision is scoped to it even when a driver lists support. The legacy
+	// NVMeshEncryption flag keeps working for existing NVMesh deployments.
+	if selection.Mode == nvcastorage.ModelCacheSelectionDurable &&
+		selection.Transition == nvcastorage.ModelCacheTransitionROXReadOnly &&
+		resolved != nil && resolved.EncryptionSupported {
+		selection.EncryptionRequired = c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.ModelCacheEncryption) ||
+			c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.NVMeshEncryption)
+	}
+	payload, err := selection.Marshal()
+	if err != nil {
+		return err
+	}
+	if req.Annotations == nil {
+		req.Annotations = map[string]string{}
+	}
+	req.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey] = payload
+	return nil
+}
+
+// noteBuiltinCatalog records that a request was resolved against the catalog
+// compiled into NVCA because the nvcf-storage-capabilities ConfigMap is absent.
+// The selection is the one a converged install would make; the warning and the
+// counter exist so the chart rollout gap is visible.
+func (c *BackendK8sCache) noteBuiltinCatalog(
+	ctx context.Context, req *nvcav2beta1.ICMSRequest, workflow nvcastorage.ModelCacheWorkflow,
+) {
+	logging.NewICMSRequestFieldLogger(req, core.GetLogger(ctx)).WithFields(logrus.Fields{
+		"configMap": c.systemNamespace + "/" + nvcastorage.StorageCapabilityConfigMapName,
+		"workflow":  workflow,
+	}).Warn("storage capability catalog ConfigMap is missing, using the catalog built into NVCA")
+	if m := nvcametrics.FromContext(ctx); m != nil {
+		// The backend label is empty: the selection has not chosen a backend yet.
+		m.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonCatalogMissing, "")
+	}
+}

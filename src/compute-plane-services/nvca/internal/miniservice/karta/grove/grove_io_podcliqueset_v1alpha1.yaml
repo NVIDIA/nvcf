@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+kind: Karta
+apiVersion: run.ai/v1alpha1
+metadata:
+  name: grove-io-podcliqueset-v1alpha1
+spec:
+  structureDefinition:
+    rootComponent:
+      name: podcliqueset
+      kind:
+        group: grove.io
+        version: v1alpha1
+        kind: PodCliqueSet
+      statusDefinition:
+        conditionsDefinition:
+          path: .status.conditions
+          typeFieldName: type
+          statusFieldName: status
+          messageFieldName: message
+          reasonFieldName: reason
+        statusMappings:
+          initializing:
+            - byExpression:
+                expression: (.spec.replicas // 0) > 0 and (.status.availableReplicas // 0) < (.spec.replicas // 0)
+                expectedResult: "true"
+          running:
+            - byExpression:
+                expression: (.status.availableReplicas // 0) >= (.spec.replicas // 0)
+                expectedResult: "true"
+          failed:
+            - byConditions:
+                - type: TopologyLevelsUnavailable
+                  status: "True"
+    childComponents:
+      - name: clique
+        kind:
+          group: grove.io
+          version: v1alpha1
+          kind: PodClique
+        ownerRef: podcliqueset
+        specDefinition:
+          fragmentedPodSpecDefinition:
+            schedulerNamePath: .spec.template.cliques[].spec.podSpec.schedulerName
+            labelsPath: .spec.template.cliques[].labels
+            annotationsPath: .spec.template.cliques[].annotations
+            resourceClaimsPath: .spec.template.cliques[].spec.podSpec.resourceClaims
+            podAffinityPath: .spec.template.cliques[].spec.podSpec.affinity.podAffinity
+            nodeAffinityPath: .spec.template.cliques[].spec.podSpec.affinity.nodeAffinity
+            containersPath: .spec.template.cliques[].spec.podSpec.containers
+            priorityClassNamePath: .spec.template.cliques[].spec.podSpec.priorityClassName
+        scaleDefinition:
+          replicasPath: (.spec.replicas // 1) * (.spec.template.cliques[].spec.replicas // 1)
+          minReplicasPath: .spec.template.cliques[].spec.autoScalingConfig.minReplicas
+          maxReplicasPath: .spec.template.cliques[].spec.autoScalingConfig.maxReplicas
+        instanceIdPath: .spec.template.cliques[].name
+        podSelector:
+          componentInstanceSelector:
+            idPath: .metadata.labels["grove.io/podclique"]
+          replicaSelector:
+            keyPath: .metadata.labels["grove.io/podcliqueset-replica-index"]
+      - name: scalinggroup
+        kind:
+          group: grove.io
+          version: v1alpha1
+          kind: PodCliqueScalingGroup
+        ownerRef: podcliqueset
+        scaleDefinition:
+          replicasPath: (.spec.replicas // 1) * (.spec.template.podCliqueScalingGroups[].replicas // 1)
+          minReplicasPath: .spec.template.podCliqueScalingGroups[].scaleConfig.minReplicas
+          maxReplicasPath: .spec.template.podCliqueScalingGroups[].scaleConfig.maxReplicas
+        instanceIdPath: .spec.template.podCliqueScalingGroups[].name
+        podSelector:
+          componentInstanceSelector:
+            idPath: .metadata.labels["grove.io/podcliquescalinggroup"]
+          replicaSelector:
+            keyPath: .metadata.labels["grove.io/podcliquescalinggroup-replica-index"]
+    additionalChildKinds:
+      - group: grove.io
+        version: v1alpha1
+        kind: PodClique
+      - group: grove.io
+        version: v1alpha1
+        kind: PodCliqueScalingGroup
+      - group: scheduler.grove.io
+        version: v1alpha1
+        kind: PodGang
+  optimizationInstructions:
+    gangScheduling:
+      podGroups:
+        - name: podcliqueset-replica
+          members:
+            - componentName: clique
+              groupByKeyPaths:
+                - .metadata.labels["app.kubernetes.io/part-of"]
+                - .metadata.labels["grove.io/podcliqueset-replica-index"]
+            - componentName: scalinggroup
+              groupByKeyPaths:
+                - .metadata.labels["app.kubernetes.io/part-of"]
+                - .metadata.labels["grove.io/podcliqueset-replica-index"]

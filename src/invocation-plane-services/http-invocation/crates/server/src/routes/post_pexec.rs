@@ -31,8 +31,12 @@ use crate::nvcf_api::{
 use crate::rate_limit::{LimitResult, RateLimitService};
 use crate::request_id::RequestId;
 use crate::routes::{
-    app_error::AppError, body_stream, http_headers::remove_hop_by_hop_headers,
-    input_asset_header::InputAssetHeader, nvcf_status_header::NVCFStatusHeader, tlb::FunctionId,
+    app_error::AppError,
+    body_stream,
+    http_headers::{inject_invocation_region_header, remove_hop_by_hop_headers},
+    input_asset_header::InputAssetHeader,
+    nvcf_status_header::NVCFStatusHeader,
+    tlb::FunctionId,
 };
 use crate::s3::{Error, S3Service};
 use crate::settings::AppConfig;
@@ -217,6 +221,7 @@ pub async fn pexec(
 
     let (mut parts, request_body) = req.into_parts();
     remove_hop_by_hop_headers(&mut parts.headers);
+    inject_invocation_region_header(&mut parts.headers, nats_service.invocation_region_header());
     let stream_full_request = app_config.worker_stream_properties.stream_full_request
         || is_only_stream_full_request_opt_in(&parts.headers);
     let headers = if stream_full_request {
@@ -536,7 +541,6 @@ pub(crate) async fn handle_streaming_response(
                 metrics::record_invocation_end(
                     function_id.to_string(),
                     function_version_id.to_string(),
-                    nca_id.to_string(),
                     start_time,
                 );
             }),

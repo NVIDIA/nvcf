@@ -403,7 +403,7 @@ fn float_eq(actual: f64, expected: f64) -> bool {
 }
 
 #[tokio::test]
-async fn power_of_two_prefers_less_input_work() {
+async fn power_of_n_prefers_lower_ttft() {
     let stargate = RunningStargate::start("test-sg-p2c", None).await;
     let mut low =
         RegisteredBackend::active(stargate.grpc_addr, "p2c-model", "inst-low-headroom").await;
@@ -412,7 +412,8 @@ async fn power_of_two_prefers_less_input_work() {
 
     wait_for_routing(stargate.http_addr, "p2c-model", Duration::from_secs(5)).await;
 
-    // More pending prompt work should lose when both clusters report the same service rate.
+    // More pending prompt work increases estimated queue delay and TTFT when both clusters
+    // report the same service rate.
     low.set_stats(CurrentModelStats {
         output_tps: 50.0,
         last_mean_input_tps: 1000.0,
@@ -425,7 +426,7 @@ async fn power_of_two_prefers_less_input_work() {
         ..CurrentModelStats::default()
     });
 
-    // Less pending prompt work should win.
+    // Less pending prompt work should have the lower TTFT.
     high.set_stats(CurrentModelStats {
         output_tps: 50.0,
         last_mean_input_tps: 1000.0,
@@ -456,7 +457,7 @@ async fn power_of_two_prefers_less_input_work() {
     )
     .await;
 
-    // With exactly 2 candidates, p2c samples both and picks the lower work-time candidate.
+    // With exactly 2 candidates, power-of-n samples both and picks the lower TTFT candidate.
     assert_all_probes_routed_to(
         stargate.http_addr,
         "p2c-model",
@@ -476,7 +477,7 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
     let stargate = RunningStargate::start(
         "test-sg-input-work-admission",
         Some(
-            r#"{"models": {"admission-model": {"algorithm": "power-of-two", "max_input_work_seconds": 0.5}}}"#,
+            r#"{"models": {"admission-model": {"algorithm": "power-of-n", "max_input_work_seconds": 0.5}}}"#,
         ),
     )
     .await;
@@ -507,7 +508,12 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
             .send()
             .await
             .expect("admission request failed");
-        if rejected.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        if rejected.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            && rejected
+                .headers()
+                .get("x-stargate-error-code")
+                .is_some_and(|value| value == "overloaded_error")
+        {
             break rejected;
         }
         assert!(
@@ -522,8 +528,11 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
             .headers()
             .get("x-stargate-error-code")
             .and_then(|value| value.to_str().ok()),
-        Some("input_work_limit_exceeded")
+        Some("overloaded_error")
     );
+
+    let body: serde_json::Value = rejected.json().await.expect("read admission rejection");
+    assert_eq!(body["error"]["code"], "overloaded_error");
 
     let missing = with_proxy_headers(
         chat.client.post(&chat.url),
@@ -655,7 +664,7 @@ async fn random_load_balancing_uses_all_instances() {
 }
 
 #[tokio::test]
-async fn power_of_two_uses_cluster_aggregated_metrics_and_backend_round_robin() {
+async fn power_of_n_uses_cluster_aggregated_metrics_and_backend_round_robin() {
     let stargate = RunningStargate::start("test-sg-p2c-clusters", None).await;
     let state = stargate.handle.state();
     let mut shared_a = RegisteredBackend::active_in_cluster(
@@ -847,21 +856,21 @@ async fn power_of_two_uses_cluster_aggregated_metrics_and_backend_round_robin() 
 }
 
 #[tokio::test]
-async fn groq_multiregion_load_balancing_prefers_lower_estimated_ttft() {
+async fn wait_and_widen_load_balancing_prefers_lower_ttft() {
     let stargate = RunningStargate::start(
-        "test-sg-multiregion",
-        Some(r#"{"default": "power-of-two", "models": {"multiregion-model": "groq-multiregion"}}"#),
+        "test-sg-wait-and-widen",
+        Some(r#"{"default": "power-of-n", "models": {"wait-and-widen-model": "wait-and-widen"}}"#),
     )
     .await;
 
     let insts = [
-        ("multiregion-fast", 200.0_f64, 0_u64),
-        ("multiregion-slow", 10.0_f64, 0_u64),
+        ("wait-and-widen-fast", 200.0_f64, 0_u64),
+        ("wait-and-widen-slow", 10.0_f64, 0_u64),
     ];
     let mut backends = Vec::new();
     for (inst_id, last_mean_input_tps, queued_input_size) in insts {
         let backend =
-            RegisteredBackend::active(stargate.grpc_addr, "multiregion-model", inst_id).await;
+            RegisteredBackend::active(stargate.grpc_addr, "wait-and-widen-model", inst_id).await;
         backend.set_stats(CurrentModelStats {
             output_tps: 0.0,
             last_mean_input_tps,
@@ -879,18 +888,18 @@ async fn groq_multiregion_load_balancing_prefers_lower_estimated_ttft() {
 
     wait_for_routing(
         stargate.http_addr,
-        "multiregion-model",
+        "wait-and-widen-model",
         Duration::from_secs(5),
     )
     .await;
 
-    let chat = ChatRequests::new(stargate.http_addr, "multiregion-model");
+    let chat = ChatRequests::new(stargate.http_addr, "wait-and-widen-model");
 
     let mut stable_fast = false;
     let mut poll = tokio::time::interval(Duration::from_millis(100));
     for attempt in 0..60 {
         let resp = chat
-            .request(&format!("req-multiregion-{attempt}"))
+            .request(&format!("req-wait-and-widen-{attempt}"))
             .header("x-input-tokens", "10")
             .send()
             .await
@@ -898,7 +907,7 @@ async fn groq_multiregion_load_balancing_prefers_lower_estimated_ttft() {
 
         if resp.status() == 200 {
             let chosen = response_header(&resp, "x-inference-server-id");
-            if chosen == "multiregion-fast" {
+            if chosen == "wait-and-widen-fast" {
                 stable_fast = true;
                 break;
             }
@@ -907,34 +916,31 @@ async fn groq_multiregion_load_balancing_prefers_lower_estimated_ttft() {
         poll.tick().await;
     }
 
-    assert!(
-        stable_fast,
-        "expected groq-multiregion to prefer lower estimated TTFT"
-    );
+    assert!(stable_fast, "expected wait-and-widen to prefer lower TTFT");
 
     stop_backends(&mut backends);
     stargate.shutdown().await;
 }
 
 #[tokio::test]
-async fn groq_multiregion_waits_for_later_bucket_when_fastest_is_full() {
+async fn wait_and_widen_waits_for_later_bucket_when_fastest_is_full() {
     let stargate = RunningStargate::start(
-        "test-sg-multiregion-wait",
+        "test-sg-wait-and-widen-wait",
         Some(
-            r#"{"default": "power-of-two", "models": {"multiregion-wait-model": "groq-multiregion"}}"#,
+            r#"{"default": "power-of-n", "models": {"wait-and-widen-wait-model": "wait-and-widen"}}"#,
         ),
     )
     .await;
 
     let insts = [
-        ("multiregion-fast-full", 0_u64, 1_u64, 1_u64),
-        ("multiregion-slower-available", 10_u64, 0_u64, 1_u64),
+        ("wait-and-widen-fast-full", 0_u64, 1_u64, 1_u64),
+        ("wait-and-widen-slower-available", 10_u64, 0_u64, 1_u64),
     ];
     let mut backends = Vec::new();
     for (inst_id, total_query_input_size, num_running_queries, max_engine_concurrency) in insts {
         let backend = RegisteredBackend::active_with_fast_updates(
             stargate.grpc_addr,
-            "multiregion-wait-model",
+            "wait-and-widen-wait-model",
             inst_id,
         )
         .await;
@@ -952,13 +958,13 @@ async fn groq_multiregion_waits_for_later_bucket_when_fastest_is_full() {
         backends.push(backend);
     }
 
-    let chat = ChatRequests::new(stargate.http_addr, "multiregion-wait-model");
+    let chat = ChatRequests::new(stargate.http_addr, "wait-and-widen-wait-model");
 
     let mut chose_slower = false;
     let mut poll = tokio::time::interval(Duration::from_millis(100));
     for attempt in 0..30 {
         let resp = chat
-            .request(&format!("req-multiregion-wait-{attempt}"))
+            .request(&format!("req-wait-and-widen-wait-{attempt}"))
             .header("x-max-wait-ms", "250")
             .send()
             .await
@@ -966,7 +972,7 @@ async fn groq_multiregion_waits_for_later_bucket_when_fastest_is_full() {
 
         if resp.status() == 200 {
             let chosen = response_header(&resp, "x-inference-server-id");
-            assert_eq!(chosen, "multiregion-slower-available");
+            assert_eq!(chosen, "wait-and-widen-slower-available");
             chose_slower = true;
             break;
         }
@@ -976,7 +982,7 @@ async fn groq_multiregion_waits_for_later_bucket_when_fastest_is_full() {
 
     assert!(
         chose_slower,
-        "expected groq-multiregion to wait for a later TTFT bucket when the fastest backend is full"
+        "expected wait-and-widen to wait for a later TTFT bucket when the fastest backend is full"
     );
 
     stop_backends(&mut backends);
@@ -984,19 +990,90 @@ async fn groq_multiregion_waits_for_later_bucket_when_fastest_is_full() {
 }
 
 #[tokio::test]
-async fn groq_multiregion_cache_affinity_prefers_stable_subset_then_falls_back() {
+async fn wait_and_widen_widens_to_slower_bucket_without_max_wait_header() {
+    let model = "wait-and-widen-no-header-model";
     let stargate = RunningStargate::start(
-        "test-sg-multiregion-affinity",
+        "test-sg-wait-and-widen-no-header",
+        Some(
+            r#"{"default": "power-of-n", "models": {"wait-and-widen-no-header-model": "wait-and-widen"}}"#,
+        ),
+    )
+    .await;
+
+    // With 4000 input tokens the full backend's TTFT is about 200 ms and the
+    // idle backend's is about 800 ms, so the slower bucket unlocks after
+    // (800 - 200) * 0.25 = 150 ms of routing wait.
+    let insts = [
+        ("wait-and-widen-no-header-fast-full", 20_000.0, 4_u64),
+        ("wait-and-widen-no-header-slow-idle", 5_000.0, 0_u64),
+    ];
+    let mut backends = Vec::new();
+    for (inst_id, last_mean_input_tps, num_running_queries) in insts {
+        let backend =
+            RegisteredBackend::active_with_fast_updates(stargate.grpc_addr, model, inst_id).await;
+        backend.set_stats(CurrentModelStats {
+            last_mean_input_tps,
+            max_output_tps: 1000.0,
+            num_running_queries,
+            max_engine_concurrency: Some(4),
+            ..CurrentModelStats::default()
+        });
+        backends.push(backend);
+    }
+    wait_for_candidate_stats(
+        &stargate.handle.state(),
+        model,
+        &insts.map(
+            |(inference_server_id, last_mean_input_tps, _)| ExpectedCandidateStats {
+                inference_server_id,
+                last_mean_input_tps,
+            },
+        ),
+        Duration::from_secs(15),
+    )
+    .await;
+
+    // Gateways are not required to send x-max-wait-ms. Without it, a full
+    // first bucket must wait for the slower bucket instead of returning 503.
+    let chat = ChatRequests::new(stargate.http_addr, model);
+    for attempt in 0..5 {
+        let started_at = std::time::Instant::now();
+        let resp = chat
+            .with_input_tokens(&format!("req-wait-and-widen-no-header-{attempt}"), 4_000)
+            .send()
+            .await
+            .expect("request failed");
+        assert_eq!(resp.status(), 200, "attempt {attempt} was not routed");
+        assert_eq!(
+            response_header(&resp, "x-inference-server-id"),
+            "wait-and-widen-no-header-slow-idle"
+        );
+        assert!(
+            started_at.elapsed() >= Duration::from_millis(100),
+            "the slower bucket should open only after the routing wait"
+        );
+        let _ = resp.bytes().await;
+    }
+
+    stop_backends(&mut backends);
+    stargate.shutdown().await;
+}
+
+#[tokio::test]
+async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
+    let stargate = RunningStargate::start(
+        "test-sg-wait-and-widen-affinity",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
-                "multiregion-affinity-model": {
-                    "algorithm": "groq-multiregion",
+                "wait-and-widen-affinity-model": {
+                    "algorithm": "wait-and-widen",
                     "seed": "test-seed",
                     "require_cache_affinity_key": true,
                     "cache_affinity_virtual_nodes": 8,
                     "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_wait_ms": 100,
                     "n": 3
                 }
             }
@@ -1006,15 +1083,15 @@ async fn groq_multiregion_cache_affinity_prefers_stable_subset_then_falls_back()
     .await;
 
     let insts = [
-        "multiregion-affinity-a",
-        "multiregion-affinity-b",
-        "multiregion-affinity-c",
+        "wait-and-widen-affinity-a",
+        "wait-and-widen-affinity-b",
+        "wait-and-widen-affinity-c",
     ];
     let mut backends = Vec::new();
     for inst_id in insts {
         let backend = RegisteredBackend::active_with_fast_updates(
             stargate.grpc_addr,
-            "multiregion-affinity-model",
+            "wait-and-widen-affinity-model",
             inst_id,
         )
         .await;
@@ -1035,19 +1112,19 @@ async fn groq_multiregion_cache_affinity_prefers_stable_subset_then_falls_back()
     let affinity_key = "stable-prefix";
     wait_for_routing_with_cache_affinity(
         stargate.http_addr,
-        "multiregion-affinity-model",
+        "wait-and-widen-affinity-model",
         affinity_key,
         Duration::from_secs(5),
     )
     .await;
 
-    let chat = ChatRequests::new(stargate.http_addr, "multiregion-affinity-model");
+    let chat = ChatRequests::new(stargate.http_addr, "wait-and-widen-affinity-model");
 
     let mut stable_choice = None;
     for attempt in 0..20 {
         let resp = chat
             .with_affinity(
-                &format!("req-multiregion-affinity-stable-{attempt}"),
+                &format!("req-wait-and-widen-affinity-stable-{attempt}"),
                 affinity_key,
             )
             .send()
@@ -1069,7 +1146,7 @@ async fn groq_multiregion_cache_affinity_prefers_stable_subset_then_falls_back()
         .find_map(|(inst_id, backend)| (*inst_id == primary).then_some(&backend.runtime))
         .expect("primary backend should have runtime state");
     primary_runtime.set_model_stats(
-        "multiregion-affinity-model".to_string(),
+        "wait-and-widen-affinity-model".to_string(),
         CurrentModelStats {
             output_tps: 0.0,
             last_mean_input_tps: 100.0,
@@ -1088,26 +1165,57 @@ async fn groq_multiregion_cache_affinity_prefers_stable_subset_then_falls_back()
     let mut poll = tokio::time::interval(Duration::from_millis(100));
     loop {
         fallback_attempt += 1;
+        let started_at = std::time::Instant::now();
         let resp = chat
             .with_affinity(
-                &format!("req-multiregion-affinity-fallback-{fallback_attempt}"),
+                &format!("req-wait-and-widen-affinity-fallback-{fallback_attempt}"),
                 affinity_key,
             )
             .send()
             .await
             .expect("request failed");
+        let time_to_headers = started_at.elapsed();
         if resp.status() == 200 {
             let chosen = response_header(&resp, "x-inference-server-id").to_string();
             let _ = tokio::time::timeout(Duration::from_secs(15), resp.bytes()).await;
             if chosen != primary {
+                assert!(
+                    time_to_headers >= Duration::from_millis(100),
+                    "public routing must wait for X without requiring a max-wait header"
+                );
                 break;
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!("expected groq-multiregion affinity subset to fall back after {primary} filled");
+            panic!("expected wait-and-widen affinity subset to fall back after {primary} filled");
         }
         poll.tick().await;
     }
+
+    let response = chat
+        .with_affinity("affinity-explicit-short-deadline", affinity_key)
+        .header("x-max-wait-ms", "10")
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        response.status(),
+        503,
+        "an explicit shorter routing deadline must not open public buckets early"
+    );
+
+    let started_at = std::time::Instant::now();
+    let response = chat
+        .with_affinity("affinity-explicit-long-deadline", affinity_key)
+        .header("x-max-wait-ms", "500")
+        .header("x-request-slo-ms", "5000")
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(response.status(), 200);
+    assert_ne!(response_header(&response, "x-inference-server-id"), primary);
+    assert!(started_at.elapsed() >= Duration::from_millis(100));
+    let _ = response.bytes().await;
 
     for (_, backend) in &mut backends {
         backend.stop();
@@ -1116,15 +1224,15 @@ async fn groq_multiregion_cache_affinity_prefers_stable_subset_then_falls_back()
 }
 
 #[tokio::test]
-async fn groq_multiregion_requires_cache_affinity_key_when_configured() {
+async fn wait_and_widen_requires_cache_affinity_key_when_configured() {
     let stargate = RunningStargate::start(
-        "test-sg-multiregion-affinity-required",
+        "test-sg-wait-and-widen-affinity-required",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
-                "multiregion-affinity-required-model": {
-                    "algorithm": "groq-multiregion",
+                "wait-and-widen-affinity-required-model": {
+                    "algorithm": "wait-and-widen",
                     "seed": "test-seed",
                     "require_cache_affinity_key": true,
                     "cache_affinity_virtual_nodes": 8,
@@ -1139,8 +1247,8 @@ async fn groq_multiregion_requires_cache_affinity_key_when_configured() {
 
     let mut backend = RegisteredBackend::active_with_fast_updates(
         stargate.grpc_addr,
-        "multiregion-affinity-required-model",
-        "multiregion-affinity-required-inst",
+        "wait-and-widen-affinity-required-model",
+        "wait-and-widen-affinity-required-inst",
     )
     .await;
     backend.set_stats(CurrentModelStats {
@@ -1157,16 +1265,16 @@ async fn groq_multiregion_requires_cache_affinity_key_when_configured() {
 
     wait_for_routing_with_cache_affinity(
         stargate.http_addr,
-        "multiregion-affinity-required-model",
+        "wait-and-widen-affinity-required-model",
         "affinity-required-key",
         Duration::from_secs(5),
     )
     .await;
 
-    let chat = ChatRequests::new(stargate.http_addr, "multiregion-affinity-required-model");
+    let chat = ChatRequests::new(stargate.http_addr, "wait-and-widen-affinity-required-model");
 
     let missing_resp = chat
-        .request("req-multiregion-affinity-required-missing")
+        .request("req-wait-and-widen-affinity-required-missing")
         .send()
         .await
         .expect("missing affinity request failed");
@@ -1179,7 +1287,7 @@ async fn groq_multiregion_requires_cache_affinity_key_when_configured() {
 
     let present_resp = chat
         .with_affinity(
-            "req-multiregion-affinity-required-present",
+            "req-wait-and-widen-affinity-required-present",
             "affinity-required-key",
         )
         .send()
@@ -1188,7 +1296,7 @@ async fn groq_multiregion_requires_cache_affinity_key_when_configured() {
     assert_eq!(present_resp.status(), 200);
     assert_eq!(
         response_header(&present_resp, "x-inference-server-id"),
-        "multiregion-affinity-required-inst"
+        "wait-and-widen-affinity-required-inst"
     );
     let _ = present_resp.bytes().await;
 
@@ -1197,15 +1305,16 @@ async fn groq_multiregion_requires_cache_affinity_key_when_configured() {
 }
 
 #[tokio::test]
-async fn groq_multiregion_priority_header_uses_matching_queue_estimate() {
+async fn wait_and_widen_priority_header_uses_matching_queue_estimate() {
     let stargate = RunningStargate::start(
-        "test-sg-multiregion-priority",
+        "test-sg-wait-and-widen-priority",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
-                "multiregion-priority-model": {
-                    "algorithm": "groq-multiregion",
+                "wait-and-widen-priority-model": {
+                    "algorithm": "wait-and-widen",
+                    "comparator": "queue-time",
                     "n": 2
                 }
             }
@@ -1216,21 +1325,21 @@ async fn groq_multiregion_priority_header_uses_matching_queue_estimate() {
 
     let insts = [
         (
-            "multiregion-priority-specific-low",
+            "wait-and-widen-priority-specific-low",
             100_u64,
-            HashMap::from([(4_u32, 5_u64)]),
+            HashMap::from([(0_u32, 1000_u64), (4_u32, 5_u64)]),
         ),
         (
-            "multiregion-priority-specific-high",
+            "wait-and-widen-priority-specific-high",
             0_u64,
-            HashMap::from([(4_u32, 500_u64)]),
+            HashMap::from([(0_u32, 0_u64), (4_u32, 500_u64)]),
         ),
     ];
     let mut backends = Vec::new();
     for (inst_id, total_query_input_size, priority_queue_estimates) in insts {
         let backend = RegisteredBackend::active_with_fast_updates(
             stargate.grpc_addr,
-            "multiregion-priority-model",
+            "wait-and-widen-priority-model",
             inst_id,
         )
         .await;
@@ -1241,7 +1350,8 @@ async fn groq_multiregion_priority_header_uses_matching_queue_estimate() {
             queue_size: u64::from(total_query_input_size > 0),
             queued_input_size: total_query_input_size,
             num_running_queries: u64::from(total_query_input_size > 0),
-            max_engine_concurrency: Some(100),
+            // Unknown capacity keeps this test focused on priority queue estimates.
+            max_engine_concurrency: None,
             total_query_input_size,
             queue_time_estimate_ms_by_priority: Some(priority_queue_estimates),
             ..CurrentModelStats::default()
@@ -1252,15 +1362,15 @@ async fn groq_multiregion_priority_header_uses_matching_queue_estimate() {
     let state = stargate.handle.state();
     wait_for_priority_cluster_stats(
         &state,
-        "multiregion-priority-model",
+        "wait-and-widen-priority-model",
         &[
             ExpectedPriorityClusterStats {
-                cluster_id: "multiregion-priority-specific-low",
+                cluster_id: "wait-and-widen-priority-specific-low",
                 priority: 4,
                 queue_time_estimate_ms: 5,
             },
             ExpectedPriorityClusterStats {
-                cluster_id: "multiregion-priority-specific-high",
+                cluster_id: "wait-and-widen-priority-specific-high",
                 priority: 4,
                 queue_time_estimate_ms: 500,
             },
@@ -1269,10 +1379,10 @@ async fn groq_multiregion_priority_header_uses_matching_queue_estimate() {
     )
     .await;
 
-    let chat = ChatRequests::new(stargate.http_addr, "multiregion-priority-model");
+    let chat = ChatRequests::new(stargate.http_addr, "wait-and-widen-priority-model");
     for attempt in 0..4 {
         let resp = chat
-            .with_input_tokens(&format!("req-multiregion-priority-assert-{attempt}"), 0)
+            .with_input_tokens(&format!("req-wait-and-widen-priority-assert-{attempt}"), 0)
             .header("x-priority", "4")
             .send()
             .await
@@ -1280,21 +1390,21 @@ async fn groq_multiregion_priority_header_uses_matching_queue_estimate() {
         assert_eq!(resp.status(), 200);
         assert_eq!(
             response_header(&resp, "x-inference-server-id"),
-            "multiregion-priority-specific-low",
+            "wait-and-widen-priority-specific-low",
             "x-priority=4 should choose the backend with the lower priority-specific queue estimate"
         );
         let _ = resp.bytes().await;
     }
 
     let resp = chat
-        .with_input_tokens("req-multiregion-priority-no-header", 0)
+        .with_input_tokens("req-wait-and-widen-priority-no-header", 0)
         .send()
         .await
         .expect("non-priority request failed");
     assert_eq!(resp.status(), 200);
     assert_eq!(
         response_header(&resp, "x-inference-server-id"),
-        "multiregion-priority-specific-high",
+        "wait-and-widen-priority-specific-high",
         "without x-priority the aggregate queue estimate should still choose the lower aggregate queue"
     );
     let _ = resp.bytes().await;
@@ -1309,7 +1419,7 @@ async fn pulsar_routes_same_affinity_key_consistently() {
         "test-sg-pulsar",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "pulsar-model": {
                     "algorithm": "pulsar",

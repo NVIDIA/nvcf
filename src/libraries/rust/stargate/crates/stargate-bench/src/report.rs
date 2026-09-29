@@ -432,7 +432,7 @@ fn render_warnings(out: &mut String, context: &ReportContext, entries: &[ReportE
     };
     let cache_focused = has_tag(&["cache", "pulsar", "kv-cache"]);
     let queue_admission_focused = has_tag(&["queue-admission", "queue-mismatch"]);
-    let pmr_fallback_focused = has_tag(&["pmr-fallback"]);
+    let pulsar_wait_and_widen_fallback_focused = has_tag(&["pulsar-wait-and-widen-fallback"]);
     for entry in entries {
         let summary = &entry.summary;
         if summary.success_rate < 1.0 {
@@ -471,11 +471,11 @@ fn render_warnings(out: &mut String, context: &ReportContext, entries: &[ReportE
                 .unwrap();
             }
         }
-        if pmr_fallback_focused
-            && entry.algorithm_name == "pulsar-multiregion"
+        if pulsar_wait_and_widen_fallback_focused
+            && entry.algorithm_name == "pulsar-wait-and-widen"
             && summary.routing_selection_summary.fallback_count == 0.0
         {
-            out.push_str("- pulsar-multiregion did not observe a ranked fallback route choice in the PMR fallback scenario.\n");
+            out.push_str("- pulsar-wait-and-widen did not observe a ranked fallback route choice in the PulsarWaitAndWiden fallback scenario.\n");
         }
     }
     if queue_admission_focused
@@ -591,7 +591,7 @@ mod tests {
             kv_free_token_fallback_count: 1.0,
         };
         let entry = ReportEntry {
-            algorithm_name: "groq-admission-enabled".to_string(),
+            algorithm_name: "wait-and-widen-admission-enabled".to_string(),
             pylon_queue_admission: Some(queue_admission()),
             summary,
         };
@@ -607,7 +607,10 @@ mod tests {
             &std::fs::read(&artifacts.comparison_path).expect("comparison should read"),
         )
         .expect("comparison should parse");
-        assert_eq!(comparison[0]["algorithm_name"], "groq-admission-enabled");
+        assert_eq!(
+            comparison[0]["algorithm_name"],
+            "wait-and-widen-admission-enabled"
+        );
         assert_eq!(comparison[0]["pylon_queue_admission"]["enabled"], true);
         assert_eq!(comparison[0]["p95_ttft_ms"], 17);
         assert_eq!(
@@ -625,7 +628,7 @@ mod tests {
         );
 
         let report = std::fs::read_to_string(&artifacts.report_path).expect("report should read");
-        assert!(report.contains("| groq-admission-enabled | enabled"));
+        assert!(report.contains("| wait-and-widen-admission-enabled | enabled"));
         assert!(report.contains("Pylon Rejected"));
         assert!(report.contains("Fallback Route Choices"));
     }
@@ -675,7 +678,7 @@ mod tests {
             ..CacheSummary::default()
         };
 
-        let report = render(&config(), "power-of-two", None, summary);
+        let report = render(&config(), "power-of-n", None, summary);
 
         assert!(report.contains("| Algorithm | Admission Mode | Success |"));
         assert!(report.contains("Successful RPS"));
@@ -725,7 +728,7 @@ mod tests {
 
         let report = render(
             &config(),
-            "groq-admission-enabled",
+            "wait-and-widen-admission-enabled",
             Some(queue_admission()),
             summary,
         );
@@ -734,7 +737,7 @@ mod tests {
         assert!(report.contains("enabled (min=0ms, factor=1, retry-after=5ms)"));
         assert!(report.contains("Pylon Rejected"));
         assert!(report.contains("Fallback Route Choices"));
-        assert!(report.contains("| groq-admission-enabled | enabled"));
+        assert!(report.contains("| wait-and-widen-admission-enabled | enabled"));
         assert!(report.contains("| 2 | 1 | 3 | 0 | 2 | 1 (retry_budget_exhausted=1) |"));
     }
 
@@ -750,30 +753,30 @@ mod tests {
         }];
 
         let successful_report = render(&config(), "round-robin", None, successful_summary);
-        let failed_report = render(&config(), "power-of-two", None, failed_summary);
+        let failed_report = render(&config(), "power-of-n", None, failed_summary);
 
         assert!(!successful_report.contains("## Failures"));
         assert!(failed_report.contains("## Failures"));
         assert!(failed_report.contains("| Algorithm | Status | Backend | Count | Error |"));
         assert!(
-            failed_report.contains("| power-of-two | 503 | backend-a | 2 | upstream unavailable |")
+            failed_report.contains("| power-of-n | 503 | backend-a | 2 | upstream unavailable |")
         );
     }
 
     #[test]
-    fn markdown_report_warns_when_a_pmr_fallback_scenario_never_uses_fallback() {
+    fn markdown_report_warns_when_a_pulsar_wait_and_widen_fallback_scenario_never_uses_fallback() {
         let mut config = config();
-        config.metadata.tags = vec!["pmr-fallback".to_string()];
+        config.metadata.tags = vec!["pulsar-wait-and-widen-fallback".to_string()];
 
         let report = render(
             &config,
-            "pulsar-multiregion",
+            "pulsar-wait-and-widen",
             None,
             summarize_with_capacity(&[], BTreeMap::new()),
         );
 
         assert!(
-            report.contains("pulsar-multiregion did not observe a ranked fallback route choice")
+            report.contains("pulsar-wait-and-widen did not observe a ranked fallback route choice")
         );
     }
 }

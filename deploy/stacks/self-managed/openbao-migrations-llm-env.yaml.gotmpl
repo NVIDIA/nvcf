@@ -1,0 +1,13 @@
+{{- $secretPath := printf "secrets/%s-secrets.yaml" (requiredEnv "HELMFILE_ENV") -}}
+{{- $secretValues := readFile $secretPath | fromYaml -}}
+{{- $migrationEnv := dig "openbao" "migrations" "env" (list) $secretValues -}}
+openbao:
+  migrations:
+    env:
+{{- with $migrationEnv }}
+{{ toYaml . | nindent 6 }}
+{{- end }}
+      - name: ADDONS_LLM_ENABLED
+        value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
+      - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+        value: {{ dig "addons" "llm" "pki" "allowedDomains" "" .Values | quote }}

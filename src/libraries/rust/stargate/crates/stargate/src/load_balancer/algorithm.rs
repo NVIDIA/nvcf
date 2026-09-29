@@ -20,7 +20,7 @@ use crate::routing_state::RoutedClusterSnapshot;
 
 use super::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
-    LoadBalancerRequest, pulsar,
+    LoadBalancerDecision, LoadBalancerRequest, pulsar,
 };
 
 pub trait LoadBalancer: Send + Sync + fmt::Display {
@@ -29,6 +29,15 @@ pub trait LoadBalancer: Send + Sync + fmt::Display {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice>;
+
+    /// Use this decision when the caller can wait for affinity before falling back.
+    fn decide(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+    ) -> LoadBalancerDecision {
+        self.choose_candidate(request, candidates).into()
+    }
 }
 
 const HASH_INPUT_STACK_LEN: usize = 256;
@@ -67,7 +76,7 @@ pub(crate) fn input_work_seconds_for_request(
         candidates
             .iter()
             .filter(|candidate| match config.algorithm() {
-                LoadBalancerAlgorithm::Pulsar | LoadBalancerAlgorithm::PulsarMultiregion => {
+                LoadBalancerAlgorithm::Pulsar | LoadBalancerAlgorithm::PulsarWaitAndWiden => {
                     pulsar::input_work_admission_candidate(config, request, candidate)
                 }
                 _ => !request.excludes_cluster(&candidate.cluster_id),

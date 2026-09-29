@@ -56,7 +56,7 @@ func newRootfsOverlayMutator(t *testing.T, manifest checkpointstore.Manifest) (*
 	t.Helper()
 	b := newBackend(t)
 	hash := "c1656e2e36d50f26b5dad10f151faef45ced9cc80f9ff6cdb4f8140eb03860da"
-	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: t.TempDir()}}, manifest); err != nil {
+	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcForManifest(t, manifest)}}, manifest); err != nil {
 		t.Fatal(err)
 	}
 	l2 := &stubL2Backend{mountResult: checkpointstore.PodMount{

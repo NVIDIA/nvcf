@@ -627,7 +627,7 @@ func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutp
 		}
 		tuning.Chunk = chunk
 	}
-	chunkBytesName := headerChunkBytes
+	var chunkBytesName string
 	var hasChunkBytes bool
 	if tuning.ChunkBytes, hasChunkBytes, chunkBytesName, err = integerControl(r, headerChunkBytes, bodyChunkBytes, body.ChunkBytes, 0, 0, maxOutputBytes); err != nil {
 		return benchmarkTuning{}, err
@@ -638,18 +638,18 @@ func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutp
 	if tuning.OutputChunks, _, _, err = integerControl(r, headerOutputChunks, bodyOutputChunks, body.OutputChunks, 1, 1, maxOutputChunks); err != nil {
 		return benchmarkTuning{}, err
 	}
-	statusName := headerStatusCode
+	var statusName string
 	if tuning.StatusCode, _, statusName, err = integerControl(r, headerStatusCode, bodyStatusCode, body.StatusCode, 0, 0, 599); err != nil {
 		return benchmarkTuning{}, err
 	}
 	if tuning.StatusCode != 0 && tuning.StatusCode < http.StatusBadRequest {
 		return benchmarkTuning{}, fmt.Errorf("%s must be an HTTP error status", statusName)
 	}
-	streamErrorName := headerStreamErrorAfter
+	var streamErrorName string
 	if tuning.StreamErrorAfter, _, streamErrorName, err = integerControl(r, headerStreamErrorAfter, bodyStreamErrorAfter, body.StreamErrorAfter, -1, -1, tuning.OutputChunks); err != nil {
 		return benchmarkTuning{}, err
 	}
-	streamTruncateName := headerStreamTruncateAfter
+	var streamTruncateName string
 	if tuning.StreamTruncateAfter, _, streamTruncateName, err = integerControl(r, headerStreamTruncateAfter, bodyStreamTruncateAfter, body.StreamTruncateAfter, -1, -1, tuning.OutputChunks); err != nil {
 		return benchmarkTuning{}, err
 	}

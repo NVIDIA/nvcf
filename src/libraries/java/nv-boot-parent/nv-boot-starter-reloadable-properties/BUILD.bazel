@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_workspace_runfiles")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_test", "nv_boot_library", "nv_boot_workspace_runfiles")
 
 RELOADABLE_PROPERTIES_COMPILE_DEPS = [
     "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
@@ -35,10 +35,9 @@ nv_boot_library(
     deps = RELOADABLE_PROPERTIES_COMPILE_DEPS,
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
-    coverage_library = ":nv_boot_starter_reloadable_properties",
     data = [":reloadable_properties_test_resources"],
     junit_classpath = ["src/test/resources"],
     resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties/src/test/resources",
@@ -50,4 +49,11 @@ nv_boot_library_test(
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
         "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
     ] + RELOADABLE_PROPERTIES_COMPILE_DEPS,
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nv_boot_starter_reloadable_properties",
+    junit_classpath = ["src/test/resources"],
+    test = ":tests",
 )

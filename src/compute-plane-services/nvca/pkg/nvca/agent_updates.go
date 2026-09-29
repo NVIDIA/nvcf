@@ -74,21 +74,23 @@ func (a *Agent) initICMSRegistrationSyncer(ctx context.Context) error {
 		var lastRegTime = core.GetCurrentTime(ctx)
 
 		a.syncICMSRegistration = func(ctx context.Context) error {
-			if timeSinceLastUpdate := core.GetCurrentTime(ctx).Sub(lastRegTime); timeSinceLastUpdate < time.Hour {
+			return a.gpuRegistration.withRegistrationOperation(ctx, func() error {
+				if timeSinceLastUpdate := core.GetCurrentTime(ctx).Sub(lastRegTime); timeSinceLastUpdate < time.Hour {
+					return nil
+				}
+
+				regBackendGPUs, err := a.getRegistrationGPUs(ctx)
+				if err != nil {
+					return err
+				}
+
+				if err := a.doRegistrationUpdate(ctx, regBackendGPUs, "Performing hourly ICMS registration refresh"); err != nil {
+					return err
+				}
+
+				lastRegTime = core.GetCurrentTime(ctx)
 				return nil
-			}
-
-			regBackendGPUs, err := a.getRegistrationGPUs(ctx)
-			if err != nil {
-				return err
-			}
-
-			if err := a.doRegistrationUpdate(ctx, regBackendGPUs, "Performing hourly ICMS registration refresh"); err != nil {
-				return err
-			}
-
-			lastRegTime = core.GetCurrentTime(ctx)
-			return nil
+			})
 		}
 		return nil
 	}
@@ -98,35 +100,37 @@ func (a *Agent) initICMSRegistrationSyncer(ctx context.Context) error {
 	var lastRegTime = core.GetCurrentTime(ctx)
 
 	a.syncICMSRegistration = func(ctx context.Context) error {
-		regBackendGPUs, err := a.getRegistrationGPUs(ctx)
-		if err != nil {
-			return err
-		}
+		return a.gpuRegistration.withRegistrationOperation(ctx, func() error {
+			regBackendGPUs, err := a.getRegistrationGPUs(ctx)
+			if err != nil {
+				return err
+			}
 
-		// Determine if we need to register
-		gpusChanged := len(lastRegBackendGPUs) == 0 || !cmp.Equal(lastRegBackendGPUs, regBackendGPUs, cmpopts.EquateEmpty())
-		timeForHourlyRefresh := core.GetCurrentTime(ctx).Sub(lastRegTime) >= time.Hour
+			// Determine if we need to register
+			gpusChanged := len(lastRegBackendGPUs) == 0 || !cmp.Equal(lastRegBackendGPUs, regBackendGPUs, cmpopts.EquateEmpty())
+			timeForHourlyRefresh := core.GetCurrentTime(ctx).Sub(lastRegTime) >= time.Hour
 
-		if !gpusChanged && !timeForHourlyRefresh {
-			log.Debug("Backend GPUs are up to date")
+			if !gpusChanged && !timeForHourlyRefresh {
+				log.Debug("Backend GPUs are up to date")
+				return nil
+			}
+
+			// Register with appropriate reason
+			var reason string
+			if timeForHourlyRefresh {
+				reason = "Performing hourly ICMS registration refresh"
+			} else {
+				reason = "Registering with ICMS due to GPU changes"
+			}
+
+			if err := a.doRegistrationUpdate(ctx, regBackendGPUs, reason); err != nil {
+				return err
+			}
+
+			lastRegBackendGPUs = regBackendGPUs
+			lastRegTime = core.GetCurrentTime(ctx)
 			return nil
-		}
-
-		// Register with appropriate reason
-		var reason string
-		if timeForHourlyRefresh {
-			reason = "Performing hourly ICMS registration refresh"
-		} else {
-			reason = "Registering with ICMS due to GPU changes"
-		}
-
-		if err := a.doRegistrationUpdate(ctx, regBackendGPUs, reason); err != nil {
-			return err
-		}
-
-		lastRegBackendGPUs = regBackendGPUs
-		lastRegTime = core.GetCurrentTime(ctx)
-		return nil
+		})
 	}
 
 	return nil

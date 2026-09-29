@@ -483,6 +483,9 @@ func (c Config) Complete() Config {
 
 // Validate rejects configuration combinations that cannot be applied safely.
 func (c Config) Validate() error {
+	if err := c.Workload.Validate(); err != nil {
+		return err
+	}
 	if err := c.Agent.BYOOOTelCollector.Validate(); err != nil {
 		return fmt.Errorf("agent.byooOtelCollector: %w", err)
 	}
@@ -604,6 +607,9 @@ type AgentConfig struct {
 
 	// CSIVolumeMountOptions for PVC provisioning
 	CSIVolumeMountOptions []string `yaml:",omitempty"`
+
+	// ModelCache configures the Helm model cache.
+	ModelCache ModelCacheConfig `yaml:",omitempty"`
 
 	// Function Deployment Stages service config
 	FunctionDeploymentStagesServiceURL string `yaml:",omitempty"`
@@ -771,6 +777,30 @@ type SharedStorageTaskDataConfig struct {
 	StorageCapacity resource.Quantity `yaml:",omitempty"`
 }
 
+// MarshalYAML encodes storage capacity as its canonical Kubernetes quantity string.
+func (c SharedStorageTaskDataConfig) MarshalYAML() (any, error) {
+	storageCapacity := ""
+	if !c.StorageCapacity.IsZero() {
+		storageCapacity = c.StorageCapacity.String()
+	}
+	return struct {
+		StorageClassName *string  `yaml:"storageClassName,omitempty"`
+		PVMountOptions   []string `yaml:"pvMountOptions,omitempty"`
+		StorageCapacity  string   `yaml:"storageCapacity,omitempty"`
+	}{
+		StorageClassName: c.StorageClassName,
+		PVMountOptions:   c.PVMountOptions,
+		StorageCapacity:  storageCapacity,
+	}, nil
+}
+
+type ModelCacheConfig struct {
+	// StorageClassName is the storage class model cache volumes are provisioned on. Empty uses the default.
+	// Both the storage controller (which creates the volumes) and model cache backend selection (which checks
+	// the class exists before choosing a backend that needs it) read this one value.
+	StorageClassName string `yaml:",omitempty"`
+}
+
 type InternalPersistentStorageConfig struct {
 	StorageClassName string `yaml:",omitempty"`
 	// The desired hard limit for storage in the IPS PVC.
@@ -845,7 +875,15 @@ type TransportTLSConfig struct {
 	TrustBundleKey           string    `yaml:"trustBundleKey"`
 	TrustBundleFingerprint   string    `yaml:"trustBundleFingerprint"`
 	TrustBundlePEM           string    `yaml:"trustBundlePem"`
-	InstallerImage           string    `yaml:"installerImage"`
+	InstalledBundleMountPath string    `yaml:"installedBundleMountPath"`
+}
+
+// Validate rejects workload settings that disable configured transport trust.
+func (t WorkloadConfig) Validate() error {
+	if t.StargateQUICInsecure && t.TransportTLS != nil && t.TransportTLS.TrustMode == TrustModeBundle {
+		return fmt.Errorf("workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system")
+	}
+	return nil
 }
 
 func (t WorkloadConfig) Complete() WorkloadConfig {

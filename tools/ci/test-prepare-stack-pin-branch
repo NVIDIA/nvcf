@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+work_dir="$(mktemp -d)"
+trap 'rm -rf -- "${work_dir}"' EXIT
+
+remote="${work_dir}/remote.git"
+seed="${work_dir}/seed"
+runner="${work_dir}/runner"
+
+git init --bare --initial-branch=main "${remote}" >/dev/null
+git clone "${remote}" "${seed}" >/dev/null 2>&1
+git -C "${seed}" config user.name "Test User"
+git -C "${seed}" config user.email "test@example.com"
+git -C "${seed}" switch -c main >/dev/null 2>&1
+printf 'metadata=old\n' > "${seed}/metadata"
+git -C "${seed}" add metadata
+git -C "${seed}" commit -m "ci: seed release metadata" >/dev/null
+git -C "${seed}" push -u origin main >/dev/null 2>&1
+
+git -C "${seed}" switch -c chore/stack-pin-bumps >/dev/null 2>&1
+printf 'pin=nats-0.8.1\n' > "${seed}/pins"
+git -C "${seed}" add pins
+git -C "${seed}" commit -m "fix(stack): accumulate first pin" >/dev/null
+git -C "${seed}" push -u origin chore/stack-pin-bumps >/dev/null 2>&1
+
+git -C "${seed}" switch main >/dev/null 2>&1
+printf 'metadata=current\n' > "${seed}/metadata"
+git -C "${seed}" add metadata
+git -C "${seed}" commit -m "ci: register another chart" >/dev/null
+git -C "${seed}" push origin main >/dev/null 2>&1
+
+git clone --branch main "${remote}" "${runner}" >/dev/null 2>&1
+git -C "${runner}" config user.name "Test User"
+git -C "${runner}" config user.email "test@example.com"
+
+(
+  cd "${runner}"
+  "${script_dir}/prepare-stack-pin-branch" chore/stack-pin-bumps main >/dev/null
+
+  test "$(git branch --show-current)" = "chore/stack-pin-bumps"
+  test "$(tr -d '\n' < metadata)" = "metadata=current"
+  test "$(tr -d '\n' < pins)" = "pin=nats-0.8.1"
+  git merge-base --is-ancestor origin/main HEAD
+  test -z "$(git rev-list --merges origin/main..HEAD)"
+  git log --format=%s origin/main..HEAD | grep -Fx "fix(stack): accumulate first pin" >/dev/null
+
+  "${script_dir}/prepare-stack-pin-branch" chore/new-stack-pin-bumps main >/dev/null
+  test "$(git branch --show-current)" = "chore/new-stack-pin-bumps"
+  test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+)
+
+echo "prepare-stack-pin-branch tests passed"

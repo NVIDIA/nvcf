@@ -4,9 +4,10 @@ Notary is an OSS/self-hosted Java service in the root `nvcf` Bazel module. It
 does not own a nested module, lockfile, Bazel configuration, or third-party
 dependency hub.
 
-Maven POMs remain for coexistence. Bazel consumes nv-boot through direct source
-labels and produces the executable application jar. Do not generate or publish
-Maven-shaped Notary artifacts from Bazel.
+The monorepo copy is Bazel-only and contains no project POMs. Bazel consumes
+nv-boot through direct source labels and produces the executable application
+jar. Keep any Maven build support in the independent source repository. Do not
+restore project POMs or add Maven build instructions here.
 
 ## Build and test
 

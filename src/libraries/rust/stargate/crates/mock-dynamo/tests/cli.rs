@@ -16,6 +16,21 @@
 use std::process::Command;
 
 #[test]
+fn explains_profile_without_starting_server() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mock-dynamo"))
+        .args(["--explain-profile", "h100-llama-3.1-8b"])
+        .output()
+        .expect("mock-dynamo process should start");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("profile explanation should be UTF-8");
+    assert!(stdout.contains("context length: 131072 input + output tokens"));
+    assert!(stdout.contains("deterministic gaussian distribution over 128..=8192"));
+    assert!(stdout.contains("per active request: 164.0 tokens/s average"));
+    assert!(stdout.contains("1,000 input tokens: about 162.9 ms average"));
+}
+
+#[test]
 fn invalid_http_listen_addr_exits_nonzero() {
     let status = Command::new(env!("CARGO_BIN_EXE_mock-dynamo"))
         .args(["--http-listen-addr", "not-a-socket-addr"])

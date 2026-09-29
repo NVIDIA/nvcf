@@ -35,8 +35,8 @@ alias(
 go_test(
     name = "nvcf_test",
     srcs = [
-        "cryo_config_test.go",
         "nvcfbackend_types_test.go",
+        "nvsnap_config_test.go",
     ],
     embed = [":nvcf"],
     deps = [

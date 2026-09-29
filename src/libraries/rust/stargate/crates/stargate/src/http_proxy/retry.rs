@@ -16,13 +16,15 @@
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderName, StatusCode};
-use stargate_protocol::tunnel_contract::{HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE};
+use stargate_protocol::tunnel_contract::{
+    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED, RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
+};
 
 mod replay;
 
 pub(super) use replay::{ReplayReadiness, ReplayableRequestBody};
 
-const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
 const RETRY_REASON_RETRYABLE_PROXY_ERROR: &str = "retryable_proxy_error";
 const DEFAULT_RETRY_BUDGET_MS_HEADER: &str = "x-stargate-max-wait-ms";
 const DEFAULT_MAX_REPLAY_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -67,6 +69,25 @@ pub(super) enum FinalRetryDisposition {
     Exhausted(String),
     ReplayIncomplete(String),
     PayloadTooLarge(Option<String>),
+}
+
+impl FinalRetryDisposition {
+    pub(super) fn label(&self) -> &'static str {
+        match self {
+            Self::PassThrough => "pass_through",
+            Self::Exhausted(_) => "retry_exhausted",
+            Self::ReplayIncomplete(_) => "replay_incomplete",
+            Self::PayloadTooLarge(_) => "payload_too_large",
+        }
+    }
+
+    pub(super) fn retry_reason(&self) -> Option<&str> {
+        match self {
+            Self::PassThrough => None,
+            Self::Exhausted(reason) | Self::ReplayIncomplete(reason) => Some(reason),
+            Self::PayloadTooLarge(reason) => reason.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,8 +171,23 @@ fn should_retry_upstream_response(
     retry.retryable_status_codes.contains(&status)
         && match header_str(headers, HEADER_STARGATE_RETRYABLE) {
             Some(retryable) => retryable.eq_ignore_ascii_case("true"),
-            None => !retry.require_pylon_retry_signal,
+            None => {
+                !headers.contains_key(HEADER_STARGATE_RETRYABLE)
+                    && !retry.require_pylon_retry_signal
+            }
         }
+}
+
+pub(super) fn is_internal_capacity_rejection(status: StatusCode, headers: &HeaderMap) -> bool {
+    matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+    ) && header_str(headers, HEADER_STARGATE_RETRYABLE)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        && matches!(
+            header_str(headers, HEADER_STARGATE_RETRY_REASON),
+            Some(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH | RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED)
+        )
 }
 
 pub(super) fn should_release_queue_mismatch_reservation(
@@ -201,8 +237,10 @@ fn retry_reason_from_headers(headers: &HeaderMap) -> String {
         .to_owned()
 }
 
-fn header_str<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
-    headers.get(name)?.to_str().ok()
+pub(super) fn header_str<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?.to_str().ok()?;
+    values.next().is_none().then_some(value)
 }
 
 fn retry_exhausted<T>(reason: impl Into<String>) -> RetryDecision<T> {
@@ -214,6 +252,7 @@ mod tests {
     use super::*;
 
     use axum::http::HeaderValue;
+    use stargate_protocol::tunnel_contract::RETRY_REASON_UPSTREAM_ADMISSION_REJECTED;
 
     fn retry_headers(retryable: &'static str, reason: Option<&'static str>) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -237,6 +276,68 @@ mod tests {
         )]
         .into_iter()
         .collect()
+    }
+
+    #[test]
+    fn capacity_rejection_requires_trusted_admission_metadata() {
+        for reason in [
+            RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
+            RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
+        ] {
+            let headers = retry_headers("true", Some(reason));
+            for status in [
+                StatusCode::TOO_MANY_REQUESTS,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ] {
+                assert!(is_internal_capacity_rejection(status, &headers));
+            }
+            assert!(!is_internal_capacity_rejection(StatusCode::OK, &headers));
+        }
+        for headers in [
+            HeaderMap::new(),
+            retry_headers("true", Some(RETRY_REASON_UPSTREAM_ADMISSION_REJECTED)),
+            retry_headers("false", Some(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH)),
+            retry_headers("true", Some("local_connect_failure")),
+            retry_headers("true", Some("model_generation_unavailable")),
+            retry_headers("true", None),
+        ] {
+            for status in [
+                StatusCode::TOO_MANY_REQUESTS,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ] {
+                assert!(!is_internal_capacity_rejection(status, &headers));
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_or_malformed_retry_permission_cannot_authorize_replay() {
+        for require_pylon_retry_signal in [true, false] {
+            let retry = ProxyRetryConfig {
+                require_pylon_retry_signal,
+                ..ProxyRetryConfig::default()
+            };
+            let mut headers = retry_headers("true", Some(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH));
+            headers.append(HEADER_STARGATE_RETRYABLE, HeaderValue::from_static("false"));
+            assert!(!should_retry_upstream_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                &headers,
+                &retry
+            ));
+            assert!(!is_internal_capacity_rejection(
+                StatusCode::TOO_MANY_REQUESTS,
+                &headers
+            ));
+            headers.insert(
+                HEADER_STARGATE_RETRYABLE,
+                HeaderValue::from_bytes(b"\xff").unwrap(),
+            );
+            assert!(!should_retry_upstream_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                &headers,
+                &retry
+            ));
+        }
     }
 
     #[test]

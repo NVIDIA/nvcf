@@ -1,18 +1,16 @@
 # ReVal Helm chart
 
-Canonical Kubernetes chart for the ReVal HTTP service. It renders `config.yaml` keys that match `github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config.RevalConfig` (Viper / mapstructure). Authorization is performed by the self-hosted `Local` JWKS JWT authorizer (configured under `auth`).
+Canonical Kubernetes chart for the ReVal HTTP service. It renders `config.yaml` keys that match `github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config.RevalConfig` (Viper and mapstructure). Authorization supports the self-managed JWKS JWT authorizer and OIDC token introspection.
 
 ## Install (from this repo path)
 
 ```bash
-helm upgrade --install reval . -n reval --create-namespace \
-  --set reval.serviceConfig.auth.jwt.enabled=true \
-  --set reval.serviceConfig.auth.jwt.jwkSetUrl=https://openbao.example.com/v1/identity/oidc/.well-known/jwks.json
+helm upgrade --install reval . -n reval --create-namespace
 ```
 
-If neither `auth.jwt.enabled` nor `auth.oidc.enabled` is true, the server starts with auth disabled and logs a warning.
+The default values enable both authorizers with the self-managed OpenBao and ICMS service endpoints. Override `reval.serviceConfig.auth.jwt.jwkSetUrl` and `reval.serviceConfig.auth.oidc.introspectUrl` when those services use different addresses. Keep at least one authorizer enabled. ReVal rejects requests when neither authorizer is configured.
 
-**Image:** Build the workload image with [`docker/Dockerfile`](../../docker/Dockerfile) — just `make container` (optionally with `GITHUB_TOKEN` for private modules).
+Image: Build the workload image with [`docker/Dockerfile`](../../docker/Dockerfile) by running `make container`. Set `GITHUB_TOKEN` if private modules require it.
 
 ## Ports
 

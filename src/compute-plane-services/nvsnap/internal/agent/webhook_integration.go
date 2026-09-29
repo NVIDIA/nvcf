@@ -87,6 +87,12 @@ type WebhookConfig struct {
 	// reaches the agent on (status.hostIP:AgentHostPort). Defaults to
 	// 8081 (matches the agent's --listen=:8081 default).
 	AgentHostPort int
+
+	// AgentBaseURL overrides the host-IP form the mount-prep init container
+	// uses to reach its node-local agent. Empty keeps
+	// http://$(NVSNAP_HOST_IP):<AgentHostPort>, which needs hostPort. See
+	// GH #490 and internal/webhook/mount_prep_init.go.
+	AgentBaseURL string
 }
 
 // startWebhook starts the agent's mutating-admission TLS server in a
@@ -174,6 +180,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		RestorePrepStrategy: cfg.RestorePrepStrategy,
 		MountPrepInitImage:  cfg.MountPrepInitImage,
 		AgentHostPort:       cfg.AgentHostPort,
+		AgentBaseURL:        cfg.AgentBaseURL,
 	}
 	handler := &webhook.Handler{
 		Mutator: mut,

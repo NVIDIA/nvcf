@@ -50,6 +50,21 @@ func captureRequest(t *testing.T, cfg *Config, customScopes []string) (payload m
 	return payload, headers
 }
 
+func generateAPIKeyFromResponse(t *testing.T, responseBody string) (string, error) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	return NewClient(&Config{
+		ServiceURL: srv.URL,
+		ServiceID:  "svc-id",
+	}).GenerateAPIKey(context.Background(), "test", time.Now().Add(time.Hour), nil)
+}
+
 func policyFrom(t *testing.T, payload map[string]any) map[string]any {
 	t.Helper()
 	auths, _ := payload["authorizations"].(map[string]any)
@@ -150,4 +165,31 @@ func TestGenerateAPIKey_SetsIssuerHeaders(t *testing.T) {
 	assert.Equal(t, "my-issuer", headers.Get("Key-Issuer-Service"))
 	assert.Equal(t, "my-service-id", headers.Get("Key-Issuer-Id"))
 	assert.Equal(t, "svc@my-service.local", headers.Get("Key-Owner-Id"))
+}
+
+// --- Response parsing ---
+
+func TestGenerateAPIKey_ParsesJSONResponse(t *testing.T) {
+	key, err := generateAPIKeyFromResponse(t, `{"value":"nvapi-test-key"}`)
+
+	require.NoError(t, err)
+	assert.Equal(t, "nvapi-test-key", key)
+}
+
+func TestGenerateAPIKey_ParsesJSONAfterAttachWarnings(t *testing.T) {
+	key, err := generateAPIKeyFromResponse(t, "warning: could not attach to pod/mock\n"+
+		"warning: could not attach to pod/mock-sidecar\n"+
+		`{"value":"nvapi-test-key"}`)
+
+	require.NoError(t, err)
+	assert.Equal(t, "nvapi-test-key", key)
+}
+
+func TestGenerateAPIKey_RejectsUnexpectedResponsePrefix(t *testing.T) {
+	_, err := generateAPIKeyFromResponse(t, "notice: proxy output\n"+
+		`{"value":"nvapi-test-key"}`)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "failed to parse API key response")
+	assert.ErrorContains(t, err, "invalid character")
 }

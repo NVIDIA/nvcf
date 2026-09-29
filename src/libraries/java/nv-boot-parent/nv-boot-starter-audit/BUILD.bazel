@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_test", "nv_boot_library", "nv_boot_runtime_classpath_test")
 
 AUDIT_REQUIRED_DEPS = [
     "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
@@ -56,10 +56,9 @@ nv_boot_runtime_classpath_test(
     ],
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
-    coverage_library = ":nv_boot_starter_audit",
     deps = [
         ":nv_boot_starter_audit",
         "@nv_third_party_deps//:ch_qos_logback_logback_classic",
@@ -67,4 +66,10 @@ nv_boot_library_test(
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_test",
         "@nv_third_party_deps//:org_springframework_security_spring_security_test",
     ] + AUDIT_REQUIRED_DEPS + AUDIT_OPTIONAL_COMPILE_DEPS,
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nv_boot_starter_audit",
+    test = ":tests",
 )

@@ -16,7 +16,7 @@
 name: queue-mismatch-retry-ab
 metadata:
   description: A/B diagnostic for pylon rejection of stale Stargate queue estimates under burst load. The scenario runs 2048 requests per arm for benchmark evidence. Mock backends enforce real concurrent-service, prefill, and decode delays; benchmark pylons pin prompt throughput to the matching 2200 tokens/s profile value. Queue admission intentionally models prompt work only because output residency is unknowable at admission time.
-  tags: [queue-admission, queue-mismatch, ab, groq-multiregion, diagnostic]
+  tags: [queue-admission, queue-mismatch, ab, wait-and-widen, diagnostic]
   expected_runtime: medium
   expected_signal: With the same fixed prompt-throughput estimate and real mock service delays in both arms, the enabled row should record pylon rejections and Stargate queue-mismatch retries; the disabled row should record disabled decisions without those retries.
 model: dummy-model
@@ -60,17 +60,17 @@ traffic_pattern:
   burst_period_requests: 16
 
 algorithms:
-  - name: groq-queue-admission-enabled
+  - name: wait-and-widen-queue-admission-enabled
     config:
-      default: groq-multiregion
+      default: wait-and-widen
     pylon_queue_admission:
       enabled: true
       min_delta_ms: 0
       tolerance_factor: 1.0
       retry_after_ms: 5
-  - name: groq-queue-admission-disabled
+  - name: wait-and-widen-queue-admission-disabled
     config:
-      default: groq-multiregion
+      default: wait-and-widen
     pylon_queue_admission:
       enabled: false
       min_delta_ms: 0

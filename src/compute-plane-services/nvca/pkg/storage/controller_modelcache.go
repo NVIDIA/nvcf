@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func NewModelCacheInitNamespace() *corev1.Namespace {
@@ -46,6 +47,14 @@ func NewModelCacheInitNamespace() *corev1.Namespace {
 	namespace.Name = ModelCacheInitNamespace
 	namespace.Labels = map[string]string{
 		"app.kubernetes.io/managed-by": "nvca",
+		// The nvcf-unbound Kyverno ClusterPolicy (add-unbound-dns) matches on
+		// this label to inject the cluster's nvcf-unbound nameserver into pods.
+		// Without it the model-cache writer job falls back to the kube-dns
+		// ClusterIP, which is unreachable on clusters where node-local-dns
+		// serves it from the host network (e.g. node-local-dns DaemonSet with
+		// hostNetwork=true binding the kube-dns VIP), causing DNS timeouts and
+		// a ~7m45s backoff before the deploy continues without a cache.
+		types.WorkloadInstanceTypeLabel: types.WorkloadInstanceTypeValueMiniService,
 	}
 	return namespace
 }

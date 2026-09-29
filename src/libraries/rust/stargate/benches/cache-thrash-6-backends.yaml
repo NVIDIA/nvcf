@@ -64,15 +64,15 @@ traffic_pattern:
     target_rps: 8
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
-  - name: groq-multiregion
+      default: power-of-n
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
+      default: wait-and-widen
   - name: pulsar
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar
@@ -81,28 +81,28 @@ algorithms:
           require_input_tokens: true
   - name: pulsar-consider-kv-free-tokens
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar
           seed: cache-thrash-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true
-  - name: pulsar-multiregion
+  - name: pulsar-wait-and-widen
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: cache-thrash-v1
           require_cache_affinity_key: true
           require_input_tokens: true
-  - name: pulsar-multiregion-consider-kv-free-tokens
+  - name: pulsar-wait-and-widen-consider-kv-free-tokens
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: cache-thrash-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true

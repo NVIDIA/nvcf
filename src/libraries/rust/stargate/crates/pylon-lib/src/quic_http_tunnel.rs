@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod backend;
 mod core;
 mod endpoint;
 mod http3;
@@ -23,6 +24,7 @@ mod server;
 mod tests;
 mod webtransport;
 
+pub use backend::{DEFAULT_PRIORITY_CEILING, UpstreamBackend};
 pub use core::{DEFAULT_MAX_SSE_BUFFER_BYTES, PylonRetryConfig, TunnelForwardingConfig};
 pub use endpoint::TunnelError;
 pub use reverse::{ReverseQuicTunnelConfig, ReverseQuicTunnelHandle, start_reverse_quic_tunnel};

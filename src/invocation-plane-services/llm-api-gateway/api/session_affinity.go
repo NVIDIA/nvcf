@@ -96,6 +96,9 @@ func applyChatSessionAffinity(
 	if err != nil {
 		return err
 	}
+	if value := stringPtrValue(request.PromptCacheKey); value != "" {
+		return setSessionAffinity(reqCtx, sessionAffinitySourcePrompt, value)
+	}
 	if headerSessionID != "" {
 		return setSessionAffinity(reqCtx, sessionAffinitySourceHeader, headerSessionID)
 	}
@@ -132,7 +135,12 @@ func setSessionAffinity(
 	}
 	reqCtx.SessionID = sessionID
 	reqCtx.SessionSource = source
-	reqCtx.CacheAffinityKey = affinityKeyForSessionID(sessionID)
+	reqCtx.CacheAffinityKey = affinityKey(sessionAffinitySourceSession, []byte(sessionID))
+	// A header may contain a derived key returned by an earlier request. Body
+	// identifiers are always hashed so their raw values never become router headers.
+	if source == sessionAffinitySourceHeader {
+		reqCtx.CacheAffinityKey = affinityKeyForSessionID(sessionID)
+	}
 	return nil
 }
 

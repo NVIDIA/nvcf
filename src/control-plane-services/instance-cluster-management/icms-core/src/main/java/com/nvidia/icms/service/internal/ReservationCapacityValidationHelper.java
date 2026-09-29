@@ -111,12 +111,21 @@ public class ReservationCapacityValidationHelper {
                                                 @NotNull InstanceRequestV2Entity instanceRequestEntity,
                                                 @NotNull Integer incomingGpuCount) {
         /*
+        0. Validate that the reservation permits backup at all
+            a. Rejects in-flight requests created before the reservation opted out of backup
         1. Validate if the zone for which reservation backup will be provided is healthy
             a. This will help to fast fail the request as primary zone has become healthy so we don't need to serve RESERVATION_BACKUP
         2. Validate if incoming GPUs can be accepted for reservation
          */
 
         try {
+
+            // 0. Validate that the reservation permits backup at all
+            if (reservation.isBackupDisabled()) {
+                reportAndThrowError(String.format(
+                        "Reservation %s has backup disabled, rejecting RESERVATION_BACKUP support",
+                        reservation.getReservationId()));
+            }
 
             // 1. Validate if the zone for which reservation backup will be provided is healthy
             Map<String, CloudHealthEntity> cloudHealthByClusterId = cloudHealthRepository.findAllInMap();

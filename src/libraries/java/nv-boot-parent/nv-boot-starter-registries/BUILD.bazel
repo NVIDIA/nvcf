@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_test", "nv_boot_library")
 
 REGISTRIES_COMPILE_DEPS = [
     "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
@@ -54,10 +54,9 @@ nv_boot_library(
     deps = REGISTRIES_COMPILE_DEPS,
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
-    coverage_library = ":nv_boot_starter_registries",
     resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-registries/src/test/resources",
     resources = glob(["src/test/resources/**"]),
     deps = [
@@ -68,5 +67,14 @@ nv_boot_library_test(
     ] + REGISTRIES_COMPILE_DEPS,
     size = "medium",
     tags = ["exclusive"],
+    timeout = "moderate",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nv_boot_starter_registries",
+    size = "medium",
+    tags = ["exclusive"],
+    test = ":tests",
     timeout = "moderate",
 )

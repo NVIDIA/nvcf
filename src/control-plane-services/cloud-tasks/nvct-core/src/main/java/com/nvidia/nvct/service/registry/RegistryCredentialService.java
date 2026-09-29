@@ -25,7 +25,8 @@ import com.nvidia.boot.registries.service.registry.RegistryMapperService;
 import com.nvidia.boot.registries.service.registry.dto.ArtifactTypeEnum;
 import com.nvidia.nvct.persistence.task.entity.TaskEntity;
 import com.nvidia.nvct.service.account.AccountService;
-import com.nvidia.nvct.service.account.dto.RegistryCredentialDto;
+import com.nvidia.nvct.service.account.dto.RegistryCredentialDetailsDto;
+import com.nvidia.nvct.service.ess.EssService;
 import com.nvidia.nvct.service.registry.dto.DockerConfigJsonAuthDto;
 import com.nvidia.nvct.service.registry.dto.DockerConfigJsonDto;
 import com.nvidia.nvct.service.registry.dto.K8sSecretsDto;
@@ -35,6 +36,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -55,10 +57,13 @@ public class RegistryCredentialService {
     private static final String MESG_FAIL_TO_ENCODE_SECRETS =
             MESG_COMMON_ERROR_PREFIX + "Failed to encode secrets";
     private static final String MESG_INVALID_REGISTRY_URL = "Invalid registry URL: %s";
+    private static final String MESG_NO_SECRET_IN_ESS =
+            "Account '{}': No secret found in ESS for registry credential '{}'";
 
     private final AccountService accountService;
     private final RegistryMapperService registryMapperService;
     private final RegistryTaskMapperService registryTaskMapperService;
+    private final EssService essService;
     private final JsonMapper jsonMapper;
     private final String sidecarImagePullSecret;
     private final String sidecarRegistryHostname;
@@ -67,6 +72,7 @@ public class RegistryCredentialService {
             AccountService accountService,
             RegistryMapperService registryMapperService,
             RegistryTaskMapperService registryTaskMapperService,
+            EssService essService,
             JsonMapper jsonMapper,
             @Value("${nvct.sidecars.image-pull-secret}")
             String sidecarImagePullSecret,
@@ -75,6 +81,7 @@ public class RegistryCredentialService {
         this.accountService = accountService;
         this.registryTaskMapperService = registryTaskMapperService;
         this.registryMapperService = registryMapperService;
+        this.essService = essService;
         this.jsonMapper = jsonMapper;
         this.sidecarImagePullSecret = sidecarImagePullSecret;
         this.sidecarRegistryHostname = sidecarRegistryHostname;
@@ -92,7 +99,7 @@ public class RegistryCredentialService {
         return base64Encode(taskEntity, dockerConfigJsonDto);
     }
 
-    public List<RegistryCredentialDto> getRegistryCredentials(TaskEntity task,
+    public List<RegistryCredentialDetailsDto> getRegistryCredentials(TaskEntity task,
                                                               String hostname,
                                                               ArtifactTypeEnum artifactTypeEnum) {
         var account = accountService.getAccount(task.getNcaId());
@@ -100,23 +107,44 @@ public class RegistryCredentialService {
             return Collections.emptyList();
         }
         var normalizedHostname = registryMapperService.toNormalizedHostname(hostname);
-        return account.registryCredentials().stream()
+        var registryCredentials = account.registryCredentials().stream()
                 .filter(rc -> rc.artifactTypes().contains(artifactTypeEnum) &&
                         rc.registryHostname().equals(normalizedHostname))
                 .toList();
+        return hydrateSecretsFromEss(task.getNcaId(), registryCredentials);
     }
 
-    private List<RegistryCredentialDto> getRegistryCredentials(
+    private List<RegistryCredentialDetailsDto> getRegistryCredentials(
             TaskEntity task,
             Set<ArtifactTypeEnum> artifactTypeEnums) {
         var account = accountService.getAccount(task.getNcaId());
         if (CollectionUtils.isEmpty(account.registryCredentials())) {
             return Collections.emptyList();
         }
-        return account.registryCredentials().stream()
+        var registryCredentials = account.registryCredentials().stream()
                 .filter(regCred -> !Sets
                         .intersection(regCred.artifactTypes(), artifactTypeEnums)
                         .isEmpty())
+                .toList();
+        return hydrateSecretsFromEss(task.getNcaId(), registryCredentials);
+    }
+
+    // The Get Account Details response no longer supplies the registry credential secret.
+    // Resolve it directly from ESS using the account id and the registry credential id.
+    private List<RegistryCredentialDetailsDto> hydrateSecretsFromEss(
+            String ncaId,
+            List<RegistryCredentialDetailsDto> registryCredentials) {
+        return registryCredentials.stream()
+                .map(registryCredential -> essService
+                        .getRegistryCredentialSecret(
+                                ncaId, registryCredential.registryCredentialId())
+                        .map(secret -> registryCredential.toBuilder().secret(secret).build())
+                        .orElseGet(() -> {
+                            log.error(MESG_NO_SECRET_IN_ESS,
+                                      ncaId, registryCredential.registryCredentialId());
+                            return null;
+                        }))
+                .filter(Objects::nonNull)
                 .toList();
     }
 
@@ -170,7 +198,7 @@ public class RegistryCredentialService {
     }
 
     private K8sSecretsDto getRegistryImagePullSecrets(
-            List<RegistryCredentialDto> registryCredentials) {
+            List<RegistryCredentialDetailsDto> registryCredentials) {
         K8sSecretsDto k8SSecretsDto = K8sSecretsDto.builder().k8sSecrets(new ArrayList<>()).build();
         registryCredentials.forEach(registry -> {
             var hostname = registry.registryHostname();
@@ -186,7 +214,7 @@ public class RegistryCredentialService {
         return k8SSecretsDto;
     }
 
-    public List<RegistryCredentialDto> getContainerRegistryCredentials(TaskEntity task) {
+    public List<RegistryCredentialDetailsDto> getContainerRegistryCredentials(TaskEntity task) {
         if (Strings.isNotBlank(task.getContainerImage())) {
             var containerRegistryHostname = getRegistryHostname(task.getContainerImage());
             var registryCredentials =
@@ -222,7 +250,7 @@ public class RegistryCredentialService {
         return getRegistryImagePullSecrets(containerRegistryCredentials);
     }
 
-    public List<RegistryCredentialDto> getHelmRegistryCredentials(TaskEntity task) {
+    public List<RegistryCredentialDetailsDto> getHelmRegistryCredentials(TaskEntity task) {
 
         if (Strings.isNotBlank(task.getHelmChart())) {
             var helmRegistryHostname = getHelmRegistryHostname(task.getHelmChart());
@@ -252,7 +280,8 @@ public class RegistryCredentialService {
         return getRegistryImagePullSecrets(helmRegistryCredentials);
     }
 
-    public Map<String, List<RegistryCredentialDto>> getModelRegistryCredentials(TaskEntity task) {
+    public Map<String, List<RegistryCredentialDetailsDto>> getModelRegistryCredentials(
+            TaskEntity task) {
         var ncaId = task.getNcaId();
         var taskId = task.getTaskId();
         var normalizedModelRegistriesHostnames = getModelRegistriesHostnames(task);
@@ -277,7 +306,7 @@ public class RegistryCredentialService {
                 .toList();
         return modelRegistryCredentials.stream()
                 .flatMap(registryTaskMapperService::expandRegistryCredentialWithCanaryHostname)
-                .collect(Collectors.groupingBy(RegistryCredentialDto::registryHostname));
+                .collect(Collectors.groupingBy(RegistryCredentialDetailsDto::registryHostname));
     }
 
     public Map<String, List<String>> getModelRegistryCredentialsValue(TaskEntity taskEntity) {
@@ -292,7 +321,7 @@ public class RegistryCredentialService {
                                 .toList()));
     }
 
-    public Map<String, List<RegistryCredentialDto>> getResourceRegistryCredentials(
+    public Map<String, List<RegistryCredentialDetailsDto>> getResourceRegistryCredentials(
             TaskEntity task) {
         var ncaId = task.getNcaId();
         var taskId = task.getTaskId();
@@ -318,7 +347,7 @@ public class RegistryCredentialService {
                 .toList();
         return resourceRegistryCredentials.stream()
                 .flatMap(registryTaskMapperService::expandRegistryCredentialWithCanaryHostname)
-                .collect(Collectors.groupingBy(RegistryCredentialDto::registryHostname));
+                .collect(Collectors.groupingBy(RegistryCredentialDetailsDto::registryHostname));
     }
 
     public Map<String, List<String>> getResourceRegistryCredentialsValue(

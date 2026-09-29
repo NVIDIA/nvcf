@@ -5,9 +5,10 @@ Java service in the root `nvcf` Bazel module. It is not a nested Bazel module
 and does not own a `MODULE.bazel`, lockfile, `.bazelrc`, `.bazelversion`, or
 third-party dependency hub.
 
-Maven remains an independent coexistence path. Bazel consumes nv-boot through
-direct source labels and produces the executable application jar. Do not
-generate or publish Maven-shaped ICMS artifacts from Bazel.
+The monorepo copy is Bazel-only and contains no project POMs. Bazel consumes
+nv-boot through direct source labels and produces the executable application
+jar. Keep any Maven build support in the independent source repository. Do not
+restore project POMs or add Maven build instructions here.
 
 ## Layout
 
@@ -15,7 +16,11 @@ generate or publish Maven-shaped ICMS artifacts from Bazel.
   scheduled tasks.
 - `icms-service/`: Spring Boot application and executable `app.jar`.
 - `local_env/`: Docker Compose bundle for Cassandra, LocalStack, NATS, and
-  Vault. Both modules symlink it as `local_env`.
+  Vault. Both modules symlink it as `local_env`. The `populate` compose
+  profile adds a one-shot `cassandra-populate` service that seeds Cassandra
+  from cqlsh-format CSV exports via `cassandra/populate-data.sh` once the
+  schema init healthcheck passes; set `ICMS_CSV_DIR` to the CSV folder and
+  run `docker compose --profile populate up`.
 - `//rules/java`: shared Java, test, and Spring Boot rules.
 
 ## Build and test
@@ -43,8 +48,7 @@ discover CLI plugins.
 `icms-core:test_fixtures` publishes the core test sources so
 `icms-service:tests` can reuse them. Update both when test fixtures change.
 
-See `BAZEL.md` for coverage output paths, the Docker image build, and the Maven
-coexistence commands.
+See `BAZEL.md` for coverage output paths and the Docker image build.
 
 ## Dependencies
 

@@ -32,13 +32,20 @@ rateLimiter:
 
   replicaCount: 1
 
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
+
   image:
     registry: ""
     repository: ""
     # Image name is chart-owned and appended to registry/repository.
     name: "nvcf-ratelimiter"
     pullPolicy: IfNotPresent
-    tag: "1.15.2"
+    tag: "1.17.3"
 
   imagePullSecrets: []
 

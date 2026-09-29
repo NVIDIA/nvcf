@@ -598,7 +598,7 @@ async fn exercise_active_canary_failure(case: TunnelTestCase, stargates: Stargat
 
     let successful_canaries = backend.canary_requests();
     let next_canary = successful_canaries + 1;
-    backend.set_completion_tokens(CANARY_FAILURE_TOKEN_THRESHOLD);
+    backend.set_completion_tokens(CANARY_FAILURE_TOKEN_THRESHOLD + 1);
     wait_requests!(backend.canary_requests(); reaches next_canary, "failing active canary requests");
     case.wait_for_unroutable(STATUS_TIMEOUT).await;
 
@@ -1264,11 +1264,10 @@ impl LifecycleBackendOptions<'_> {
             ModelLifecycleConfig {
                 upstream_http_base_url: upstream_http_base_url.clone(),
                 source: ModelSource::Static(model_ids.into_iter().collect::<BTreeSet<_>>()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1.0,
-                    pin: true,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
                 bringup,
+                health_paths: pylon_lib::UpstreamHealthPaths::default(),
+                startup_health_wait: std::time::Duration::ZERO,
             },
             runtime_state.clone(),
             &stats_collector,

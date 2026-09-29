@@ -17,15 +17,14 @@
 #
 # update-collector-version.sh - Update OpenTelemetry Collector version across the repo.
 #
-# Usage: ./scripts/update-collector-version.sh <new_version> [new_provider_version] [app_release_version]
+# Usage: ./scripts/update-collector-version.sh <new_version> [new_provider_version]
 #
 # Example: ./scripts/update-collector-version.sh v0.153.0
 #          ./scripts/update-collector-version.sh 0.153.0 v1.59.0
-#          ./scripts/update-collector-version.sh 0.153.0 v1.59.0 0.153.2
 #
 # Updates: otel-collector-build.yaml, AGENTS.md, README.md, Makefile, Dockerfile,
 #          Dockerfile.nvcf-otel-collector, .gitlab-ci.yml,
-#          scripts/regenerate-otelcol.sh, VERSION
+#          scripts/regenerate-otelcol.sh
 # Run from the BYOO collector root.
 
 set -euo pipefail
@@ -35,15 +34,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 usage() {
-	echo "Usage: $0 <new_version> [new_provider_version] [app_release_version]" >&2
+	echo "Usage: $0 <new_version> [new_provider_version]" >&2
 	echo "" >&2
 	echo "  new_version           OpenTelemetry Collector version, with or without 'v' (e.g. v0.153.0 or 0.153.0)" >&2
 	echo "  new_provider_version  Optional confmap provider version, with or without 'v' (e.g. v1.59.0 or 1.59.0)" >&2
-	echo "  app_release_version   Optional app release version for VERSION; defaults to new_version without 'v'" >&2
 	exit 1
 }
 
-if [ $# -lt 1 ] || [ $# -gt 3 ]; then
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
 	usage
 fi
 
@@ -62,42 +60,18 @@ else
 fi
 
 NEW_PROVIDER_V=""
-NEW_APP_PLAIN="$NEW_PLAIN"
 if [ $# -ge 2 ]; then
 	SECOND_ARG="$2"
-	if [[ "$SECOND_ARG" =~ ^v?(0\.[0-9]+\.[0-9]+)$ ]]; then
-		NEW_APP_PLAIN="${BASH_REMATCH[1]}"
-	elif [[ "$SECOND_ARG" =~ ^v?(1\.[0-9]+\.[0-9]+)$ ]]; then
+	if [[ "$SECOND_ARG" =~ ^v?(1\.[0-9]+\.[0-9]+)$ ]]; then
 		if [[ "$SECOND_ARG" == v* ]]; then
 			NEW_PROVIDER_V="${SECOND_ARG}"
 		else
 			NEW_PROVIDER_V="v${SECOND_ARG}"
 		fi
 	else
-		echo "Error: provider version must match 1.x.y or v1.x.y, or app release version must match 0.x.y or v0.x.y" >&2
+		echo "Error: provider version must match 1.x.y or v1.x.y" >&2
 		usage
 	fi
-fi
-
-if [ $# -eq 3 ]; then
-	if [ -z "$NEW_PROVIDER_V" ]; then
-		echo "Error: third argument is only valid when the second argument is the provider version" >&2
-		usage
-	fi
-	NEW_APP_ARG="$3"
-	if [[ "$NEW_APP_ARG" =~ ^v?(0\.[0-9]+\.[0-9]+)$ ]]; then
-		NEW_APP_PLAIN="${BASH_REMATCH[1]}"
-	else
-		echo "Error: app release version must match 0.x.y or v0.x.y (e.g. 0.153.2)" >&2
-		usage
-	fi
-fi
-
-collector_major_minor="${NEW_PLAIN%.*}"
-app_major_minor="${NEW_APP_PLAIN%.*}"
-if [ "$app_major_minor" != "$collector_major_minor" ]; then
-	echo "Error: app release major/minor must match collector major/minor (${collector_major_minor}.x), got ${NEW_APP_PLAIN}" >&2
-	exit 1
 fi
 
 if [ -n "$NEW_PROVIDER_V" ]; then
@@ -114,13 +88,14 @@ if [ -n "$NEW_PROVIDER_V" ]; then
 	fi
 fi
 
-# Detect current version from otel-collector-build.yaml (first v0.x.y on a gomod line)
-CURRENT_V=$(grep -oE 'v0\.[0-9]+\.[0-9]+' otel-collector-build.yaml | head -1 || true)
-if [ -z "$CURRENT_V" ]; then
-	echo "Error: could not detect current collector version in otel-collector-build.yaml" >&2
+# Detect the authoritative Collector version rather than an individual component
+# module version. Component order and third-party component versions may differ.
+CURRENT_PLAIN=$(sed -nE 's/^[[:space:]]*otelcol_version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$/\1/p' otel-collector-build.yaml | head -1 || true)
+if [ -z "$CURRENT_PLAIN" ]; then
+	echo "Error: could not detect dist.otelcol_version in otel-collector-build.yaml" >&2
 	exit 1
 fi
-CURRENT_PLAIN="${CURRENT_V#v}"
+CURRENT_V="v${CURRENT_PLAIN}"
 
 CURRENT_PROVIDER_V=""
 if [ -n "$NEW_PROVIDER_V" ]; then
@@ -135,10 +110,6 @@ echo "Updating OpenTelemetry Collector version: $CURRENT_V -> $NEW_V"
 echo "  (plain form: $CURRENT_PLAIN -> $NEW_PLAIN)"
 if [ -n "$NEW_PROVIDER_V" ]; then
 	echo "Updating confmap provider version: $CURRENT_PROVIDER_V -> $NEW_PROVIDER_V"
-fi
-if [ -f VERSION ]; then
-	CURRENT_APP_PLAIN="$(tr -d '[:space:]' < VERSION)"
-	echo "Updating app release version: ${CURRENT_APP_PLAIN:-<empty>} -> $NEW_APP_PLAIN"
 fi
 echo ""
 
@@ -175,6 +146,11 @@ for f in "${V_FORM_FILES[@]}"; do
 	fi
 done
 
+# dist.otelcol_version is intentionally plain SemVer, unlike the component
+# module pins above. Keep it aligned with the Collector release.
+replace_all "$CURRENT_PLAIN" "$NEW_PLAIN" otel-collector-build.yaml
+echo "  Updated otel-collector-build.yaml (dist.otelcol_version)"
+
 # Replace X.Y.Z (image tag / LABEL form) in files that use plain version
 for f in "${PLAIN_FORM_FILES[@]}"; do
 	if [ -f "$f" ]; then
@@ -190,11 +166,6 @@ if [ -n "$NEW_PROVIDER_V" ]; then
 			echo "  Updated $f (provider v-form)"
 		fi
 	done
-fi
-
-if [ -f VERSION ]; then
-	printf "%s\n" "$NEW_APP_PLAIN" > VERSION
-	echo "  Updated VERSION"
 fi
 
 if [ -f Dockerfile.nvcf-otel-collector ]; then

@@ -37,12 +37,37 @@ spec:
       args:
         - |
           set -e
-          # Push this pod's own pid allocations high so the low pid range the
-          # dump captured stays free for CRIU's exact-pid forks.
-          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
+          # Push this pod's own pid allocations clear of the range the dump
+          # captured, so CRIU's exact-pid forks find those pids free.
+          #
+          # Load-bearing, and quiet when it is missing. Without it the login
+          # shell forks a few hundred times sourcing profile.d before the tail
+          # below starts, parking a long-lived process inside the restored pid
+          # range; CRIU then dies with "Can't fork for <pid>: File exists" on
+          # most attempts, and passes on the rest, which reads as flakiness
+          # rather than breakage.
+          #
+          # This was deleted once on the belief that the write returns EPERM
+          # inside a container. It does not: /proc is mounted rw here and the
+          # write succeeds -- measured, next child landed at pid 100003.
+          # The agent independently refuses to restore into a placeholder whose
+          # pid range was never pushed up, so removing this line fails loudly
+          # instead of silently.
+          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump FAILED -- restore will collide)"
           # Restored workload stdio is a plain-file fd on /tmp/nim.out (the
           # source manifest's setsid convention); surface it via kubelet.
-          touch /tmp/nim.out
+          #
+          # Do NOT pre-create this file. The rootfs-diff replay delivers it
+          # with the exact contents and size CRIU recorded, and CRIU verifies
+          # that size before reopening the fd. An empty placeholder both fails
+          # that check and blocks the replay that would have fixed it:
+          #   tar: ./tmp/nim.out: Cannot open: Permission denied
+          #   Error (criu/files-reg.c:2184): File tmp/nim.out has bad size 0
+          #                                  (expect 17058)
+          #   Error (criu/files.c:1322): Unable to open fd=1 id=0x6
+          # touch creates it owned by the image's unprivileged user, and the
+          # replay's tar cannot overwrite that. Leaving the path absent lets
+          # tar create it cleanly. tail -F already waits for a missing file.
           tail -F /tmp/nim.out &
           while true; do sleep 30; done
       env:
@@ -60,6 +85,13 @@ spec:
         failureThreshold: 180
       securityContext:
         privileged: true
+        # The NIM image's default user is uid 1000, and privileged does not
+        # confer root. Writing /proc/sys/kernel/ns_last_pid then fails with
+        # "Operation not permitted", the pid reservation above silently does
+        # nothing, and the agent refuses the restore. Only the placeholder runs
+        # as root: CRIU restores the workload with the uid recorded in the
+        # checkpoint, so this does not change what the workload runs as.
+        runAsUser: 0
       resources:
         limits:
           nvidia.com/gpu: "1"

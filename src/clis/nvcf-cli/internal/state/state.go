@@ -34,8 +34,8 @@ import (
 // here. omitempty means old state files (without this field) load cleanly with
 // SelfHostedAuth == nil.
 type SelfHostedAuth struct {
-	Token       string         `json:"token,omitempty"`
-	ExpiresAt   time.Time      `json:"expiresAt,omitempty"`
+	Token       string          `json:"token,omitempty"`
+	ExpiresAt   time.Time       `json:"expiresAt,omitempty"`
 	Fingerprint *FingerprintRef `json:"fingerprint,omitempty"`
 }
 
@@ -372,6 +372,20 @@ func formatTime(t time.Time) string {
 // Global state manager instance (default context)
 var DefaultStateManager = NewStateManager()
 
+// ResetDefaultStateManager rebuilds the default state manager, re-reading the
+// home directory.
+//
+// The default manager is constructed at package init, so it captures $HOME
+// before a test can change it. Without this, a test that points HOME at a temp
+// directory still reads the real ~/.nvcf-cli.state, and any credentials there
+// leak into it through the state fallback in LoadConfig.
+//
+// Production never calls this: a CLI process's home directory does not change
+// after start.
+func ResetDefaultStateManager() {
+	DefaultStateManager = NewStateManager()
+}
+
 // GetStateManagerForCurrentConfig returns a state manager for the current config context
 // This function should be called from commands that need config-aware state management
 func GetStateManagerForCurrentConfig() *StateManager {
@@ -402,13 +416,13 @@ func SetConfig(configFile, kubeconfigPath string, clusterMode bool) {
 func SetEndpoints(baseURL, invokeURL, account string) {
 	DefaultStateManager.SetEndpoints(baseURL, invokeURL, account)
 }
-func HasFunction() bool                  { return DefaultStateManager.HasFunction() }
-func IsTokenValid() bool                  { return DefaultStateManager.IsTokenValid() }
-func IsAPIKeyValid() bool                 { return DefaultStateManager.IsAPIKeyValid() }
-func PrintStatus()                        { DefaultStateManager.PrintStatus() }
-func SetTask(taskID, taskName string)                    { DefaultStateManager.SetTask(taskID, taskName) }
-func ClearTask()                                         { DefaultStateManager.ClearTask() }
-func HasTask() bool                                      { return DefaultStateManager.HasTask() }
-func SetNVCTAPIKey(key string, exp time.Time)            { DefaultStateManager.SetNVCTAPIKey(key, exp) }
-func ClearNVCTAPIKey()                                   { DefaultStateManager.ClearNVCTAPIKey() }
-func HasNVCTAPIKey() bool                                { return DefaultStateManager.HasNVCTAPIKey() }
+func HasFunction() bool                       { return DefaultStateManager.HasFunction() }
+func IsTokenValid() bool                      { return DefaultStateManager.IsTokenValid() }
+func IsAPIKeyValid() bool                     { return DefaultStateManager.IsAPIKeyValid() }
+func PrintStatus()                            { DefaultStateManager.PrintStatus() }
+func SetTask(taskID, taskName string)         { DefaultStateManager.SetTask(taskID, taskName) }
+func ClearTask()                              { DefaultStateManager.ClearTask() }
+func HasTask() bool                           { return DefaultStateManager.HasTask() }
+func SetNVCTAPIKey(key string, exp time.Time) { DefaultStateManager.SetNVCTAPIKey(key, exp) }
+func ClearNVCTAPIKey()                        { DefaultStateManager.ClearNVCTAPIKey() }
+func HasNVCTAPIKey() bool                     { return DefaultStateManager.HasNVCTAPIKey() }

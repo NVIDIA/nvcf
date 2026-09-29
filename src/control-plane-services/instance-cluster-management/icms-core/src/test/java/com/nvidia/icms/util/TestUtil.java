@@ -985,7 +985,6 @@ public class TestUtil {
                 .attributes(Set.of("SOC2Compliant"))
                 .gpus(Set.of(gpuRequestSchema))
                 .nvcaVersion("2.1.0")
-                .ssaClientId("dummy_auth_client_id")
                 .oAuthClientId("dummy_auth_client_id")
                 .clusterId(clusterId)
                 .clusterSource(ClusterSource.NGC_MANAGED.toString())

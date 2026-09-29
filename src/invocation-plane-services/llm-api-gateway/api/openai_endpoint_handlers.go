@@ -166,13 +166,16 @@ func (h *OpenAIProxyHandlers) Embeddings(ec echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := rejectAmbiguousMembers(rawBody, models.CreateEmbeddingRequest{}); err != nil {
+		return err
+	}
 
 	var request models.CreateEmbeddingRequest
 	if err := c.Bind(&request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	requestModel, err := h.validateEmbeddingRequest(reqCtx, &request)
+	requestModel, err := h.validateEmbeddingRequest(c, reqCtx, &request)
 	if err != nil {
 		return err
 	}
@@ -309,6 +312,7 @@ func (h *OpenAIProxyHandlers) TextToSpeech(ec echo.Context) error {
 }
 
 func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
+	c *GatewayContext,
 	reqCtx *requestctx.RequestContext,
 	request *models.CreateEmbeddingRequest,
 ) (string, error) {
@@ -322,6 +326,14 @@ func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
 			http.StatusBadRequest,
 			fmt.Sprintf("the model `%s` does not support embeddings", requestModel),
 		)
+	}
+	if err := h.handlers.requireModelURIAllowlist(
+		c,
+		reqCtx.Model,
+		embeddingsEndpointPath,
+		h.handlers.modelURIAllowlistEnabled(),
+	); err != nil {
+		return "", err
 	}
 	if len(request.Input) == 0 {
 		return "", echo.NewHTTPError(http.StatusBadRequest, "'input' array must not be empty")

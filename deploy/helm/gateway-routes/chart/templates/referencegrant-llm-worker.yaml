@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmWorker.enabled }}
+{{- $backendNamespace := include "nvcf-gateway.llmWorkerBackendNamespace" . }}
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-llm-worker-routes
+  namespace: {{ $backendNamespace }}
+  labels:
+    {{- include "nvcf-gateway.labels" . | nindent 4 }}
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: {{ if .Values.llmRequestRouter.grpcTls.enabled }}GRPCRoute{{ else }}TCPRoute{{ end }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
+    - group: gateway.networking.k8s.io
+      kind: UDPRoute
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmQuic.namespace }}
+  to:
+    - group: ""
+      kind: Service
+      name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.backend.name }}
+{{- end }}

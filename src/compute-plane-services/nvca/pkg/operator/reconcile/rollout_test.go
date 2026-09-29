@@ -1252,12 +1252,12 @@ func TestNewAgentConfigChangedCheck_IncludesNATSURL(t *testing.T) {
 		},
 	}
 
-	agentConfig, err := bc.newAgentConfig(ctx, nb)
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, nb)
 	require.NoError(t, err)
-	err = bc.setupAgentConfigConfigMap(ctx, nb, agentConfig)
+	err = bc.setupAgentConfigConfigMap(ctx, desiredConfigMap)
 	require.NoError(t, err)
 
-	checker, err := bc.newAgentConfigChangedCheck(ctx, nb)
+	checker, err := bc.newAgentConfigChangedCheck(ctx, nb, desiredConfigMap)
 	require.NoError(t, err)
 	assert.False(t, checker())
 }

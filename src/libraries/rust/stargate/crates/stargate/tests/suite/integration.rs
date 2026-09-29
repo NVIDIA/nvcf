@@ -269,7 +269,7 @@ async fn round_robin_load_balancing() {
     let mut tmp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
     write!(
         tmp_file,
-        r#"{{"default": "power-of-two", "models": {{"rr-model": "round-robin"}}}}"#
+        r#"{{"default": "power-of-n", "models": {{"rr-model": "round-robin"}}}}"#
     )
     .expect("failed to write config");
     let config_path = tmp_file.path().to_str().unwrap().to_string();

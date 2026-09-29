@@ -60,6 +60,7 @@ pub async fn app(
     config: AppConfig,
     secrets: Option<Arc<SecretFileWatcher>>,
 ) -> anyhow::Result<Router> {
+    let baggage_attribute_allowlist = config.server.tracing.baggage_attribute_allowlist.clone();
     let app_state = AppState {
         nvcf_service: NVCFService::new(
             &config.nvcf_api_address,
@@ -93,7 +94,7 @@ pub async fn app(
     };
 
     let trace_layer = TraceLayer::new_for_http()
-        .make_span_with(NVCFMakeSpan::new())
+        .make_span_with(NVCFMakeSpan::new(baggage_attribute_allowlist))
         .on_request(DefaultOnRequest::new().level(Level::DEBUG))
         .on_response(
             |response: &Response<Body>, _latency: Duration, span: &Span| {
@@ -143,6 +144,7 @@ pub async fn app(
         )
         .layer(axum_mw::from_fn(nvcf_mw::auth::auth_middleware)) // Everything above this layer will require auth DON'T MOVE IT
         .route("/health", get(routes::get_health)) // Needs to be ahead of other layers to avoid auth, and after metrics layer to get recorded
+        .route("/info", get(routes::get_info)) // unauthenticated, same as /health above
         .layer(CorsLayer::very_permissive().max_age(Duration::from_secs(86400))) // only on the path based router. for full path passthrough we send the OPTIONS and all other requests all the way to the worker.
         .layer(
             PrometheusMetricLayerBuilder::new()

@@ -263,7 +263,8 @@ public class CassandraSslBundleConfiguration {
                         newSession.close();
                     }
                 } catch (Exception e) {
-                    log.error("Failed to build new session - keeping old session", e);
+                    var mesg = "Failed to build new session - keeping old session - '{}'";
+                    log.error(mesg, e.getMessage());
                 }
             } finally {
                 sessionLock.unlock();
@@ -337,7 +338,8 @@ public class CassandraSslBundleConfiguration {
                         newSession.close();
                     }
                 } catch (Exception e) {
-                    log.error("Failed to build new session - keeping old session", e);
+                    var mesg = "Failed to build new session - keeping old session - '{}'";
+                    log.error(mesg, e.getMessage());
                 }
             } finally {
                 sessionLock.unlock();
@@ -349,7 +351,7 @@ public class CassandraSslBundleConfiguration {
                 var resultSet = session.execute(SESSION_TEST_QUERY);
                 return resultSet.one() != null;
             } catch (Exception e) {
-                log.error("Session validation failed", e);
+                log.error("Session validation failed - '{}'", e.getMessage());
                 return false;
             }
         }

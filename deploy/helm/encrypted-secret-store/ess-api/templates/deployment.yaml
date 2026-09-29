@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ess-api.fullname" . }}-deployment
+  namespace: {{ include "ess-api.namespace" . }}
+  labels:
+    {{- include "ess-api.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.ess.autoscaling.enabled }}
+  replicas: {{ .Values.ess.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "ess-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "ess-api.vaultAnnotations" . | nindent 8 }}
+        {{- with .Values.ess.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.ess.env }}
+        checksum/config-env: {{ toYaml .Values.ess.env | sha256sum }}
+        {{- end }}
+      labels:
+        {{- include "ess-api.selectorLabels" . | nindent 8 }}
+        {{- with .Values.ess.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.ess.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: ess-api
+      securityContext:
+        {{- toYaml .Values.ess.podSecurityContext | nindent 8 }}
+      {{- with .Values.ess.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "ess-api.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+        - name: token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+                  audience: http://openbao-server.vault-system.svc.cluster.local:8200
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.ess.securityContext | nindent 12 }}
+          image: "{{ include "ess-api.image" . }}"
+          imagePullPolicy: {{ .Values.ess.image.pullPolicy }}
+          volumeMounts:
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+            - name: token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SPRING_PROFILES_ACTIVE
+              value: "{{ .Values.ess.configuration.springProfile }}"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Dapp.version={{ .Values.ess.image.tag }} {{ default "" .Values.ess.configuration.additionalJavaOpts }}"
+          {{ if .Values.ess.env }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "ess-api.fullname" . }}-env
+          {{ end }}
+          ports:
+            {{- range .Values.ess.service.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .port }}
+              protocol: {{ .protocol }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.ess.resources | nindent 12 }}
+          {{- with .Values.ess.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.ess.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.ess.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+

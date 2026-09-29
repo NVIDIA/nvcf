@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "server",
     srcs = [
+        "agent_auth.go",
         "demo.go",
         "lookup.go",
         "manifests.go",
@@ -39,6 +40,7 @@ go_library(
 go_test(
     name = "server_test",
     srcs = [
+        "agent_auth_test.go",
         "checkpoint_status_test.go",
         "delete_cascade_integration_test.go",
         "delete_checkpoint_test.go",

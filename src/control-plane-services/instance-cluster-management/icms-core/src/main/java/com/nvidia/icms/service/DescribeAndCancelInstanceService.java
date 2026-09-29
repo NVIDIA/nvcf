@@ -323,18 +323,18 @@ public class DescribeAndCancelInstanceService {
                 ClientRequestDataModel requestData = getClientRequestDataModelForRequest(request);
 
                 for (InstanceV2Entity instanceEntity : instanceEntities) {
-                    String instanceType = requestData.getLaunchSpecification().getInstanceType();
-                    Optional<ZoneInfo> optionalZoneInfo =
-                            populateZoneInfoForInstanceEntity(instanceEntity, clustersCache);
-                    if (optionalZoneInfo.isEmpty()) {
-                        continue;
-                    }
                     // Only filters real lifecycle-terminated rows. Synthetic terminated
                     // placeholders from populateAcknowledgedInstances are already
                     // in the instance list and are NOT affected by includeTerminated, since
                     // they represent failed ACKs rather than lifecycle terminations.
                     if (!includeTerminated
                             && TERMINATED.equals(instanceEntity.getInstanceStateName())) {
+                        continue;
+                    }
+                    String instanceType = requestData.getLaunchSpecification().getInstanceType();
+                    Optional<ZoneInfo> optionalZoneInfo =
+                            populateZoneInfoForInstanceEntity(instanceEntity, clustersCache);
+                    if (optionalZoneInfo.isEmpty()) {
                         continue;
                     }
                     ZoneInfo zoneInfo = optionalZoneInfo.get();

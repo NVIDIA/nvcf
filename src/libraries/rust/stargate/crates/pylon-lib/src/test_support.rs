@@ -13,11 +13,156 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+
+#[derive(Clone, Debug)]
+pub(crate) struct RecordedTracingEvent {
+    pub(crate) level: tracing::Level,
+    pub(crate) fields: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct RecordingTracingSubscriber {
+    events: Arc<Mutex<Vec<RecordedTracingEvent>>>,
+}
+
+impl RecordingTracingSubscriber {
+    pub(crate) fn events(&self) -> Vec<RecordedTracingEvent> {
+        self.events
+            .lock()
+            .expect("recorded tracing events should not be poisoned")
+            .clone()
+    }
+
+    pub(crate) fn take_events(&self) -> Vec<RecordedTracingEvent> {
+        std::mem::take(
+            &mut *self
+                .events
+                .lock()
+                .expect("recorded tracing events should not be poisoned"),
+        )
+    }
+
+    pub(crate) fn event_count(&self, message: &str) -> usize {
+        self.events
+            .lock()
+            .expect("recorded tracing events should not be poisoned")
+            .iter()
+            .filter(|event| event.fields.get("message").map(String::as_str) == Some(message))
+            .count()
+    }
+}
+
+pub(crate) fn tracing_event_by_message<'a>(
+    events: &'a [RecordedTracingEvent],
+    message: &str,
+) -> &'a RecordedTracingEvent {
+    events
+        .iter()
+        .find(|event| event.fields.get("message").map(String::as_str) == Some(message))
+        .unwrap_or_else(|| panic!("missing tracing event {message:?}"))
+}
+
+pub(crate) fn assert_tracing_event_field(
+    event: &RecordedTracingEvent,
+    field: &str,
+    expected: &str,
+) {
+    assert_eq!(
+        event.fields.get(field).map(String::as_str),
+        Some(expected),
+        "unexpected {field} field in {event:?}"
+    );
+}
+
+impl tracing::Subscriber for RecordingTracingSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.level() <= &tracing::Level::DEBUG
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::metadata::LevelFilter> {
+        Some(tracing::metadata::LevelFilter::DEBUG)
+    }
+
+    fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut visitor = RecordingTracingFieldVisitor::default();
+        event.record(&mut visitor);
+        self.events
+            .lock()
+            .expect("recorded tracing events should not be poisoned")
+            .push(RecordedTracingEvent {
+                level: *event.metadata().level(),
+                fields: visitor.fields,
+            });
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+#[derive(Default)]
+struct RecordingTracingFieldVisitor {
+    fields: BTreeMap<String, String>,
+}
+
+impl tracing::field::Visit for RecordingTracingFieldVisitor {
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
+
+#[test]
+fn recording_tracing_subscriber_records_debug_but_not_trace_events() {
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+
+    tracing::trace!("trace event");
+    tracing::debug!("debug event");
+
+    let messages = subscriber
+        .events()
+        .into_iter()
+        .filter_map(|event| event.fields.get("message").cloned())
+        .collect::<Vec<_>>();
+    assert_eq!(messages, ["debug event"]);
+}
 
 pub(crate) struct TestHttpServer {
     base_url: String,

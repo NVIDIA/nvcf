@@ -1,0 +1,24 @@
+# Canonical project view for the monorepo Java components.
+
+derive_targets_from_directories: true
+allow_manual_targets_sync: true
+
+enabled_rules:
+  rules_java
+
+targets:
+  //src/control-plane-services/api-keys:app_run
+  //src/control-plane-services/cloud-functions/nvcf-service:app_run
+  //src/control-plane-services/cloud-tasks/nvct-service:app_run
+  //src/control-plane-services/encrypted-secret-store/ess-service:app_run
+  //src/control-plane-services/instance-cluster-management/icms-service:app_run
+  //src/control-plane-services/notary/notary-service:app_run
+
+directories:
+  src/libraries/java/nv-boot-parent
+  src/control-plane-services/api-keys
+  src/control-plane-services/cloud-functions
+  src/control-plane-services/cloud-tasks
+  src/control-plane-services/encrypted-secret-store
+  src/control-plane-services/instance-cluster-management
+  src/control-plane-services/notary

@@ -147,7 +147,7 @@ go_oci_image = macro(
     },
 )
 
-def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, cmd, registry, extra_registries, tags):
+def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, cmd, extra_layers, registry, extra_registries, tags):
     """Pack multiple go_binary targets into a single OCI image layer.
 
     Used for images that bundle several binaries (eg nvca-operator's image
@@ -188,7 +188,7 @@ def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint
 
     create_oci_image(
         name = name,
-        tars = [layer_name],
+        tars = [layer_name] + list(extra_layers),
         base = base,
         entrypoint = entrypoint,
         cmd = cmd,
@@ -223,6 +223,10 @@ go_oci_multi_binary_image = macro(
         ),
         "cmd": attr.string_list(
             doc = "Container cmd, if any.",
+            configurable = False,
+        ),
+        "extra_layers": attr.label_list(
+            doc = "Additional layer tarballs appended after the binary layer.",
             configurable = False,
         ),
         "registry": attr.string(

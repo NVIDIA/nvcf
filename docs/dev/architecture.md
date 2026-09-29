@@ -54,7 +54,7 @@ NVCF uses NATS JetStream as a durable request buffer, enabling true scale-to-zer
 
 Each GPU cluster runs its own NVCA instance. NATS JetStream subjects are scoped per cluster:
 
-```
+```text
 Creation stream:    Create.NVCA.*.{clusterID}.*.*
 Termination:        Terminate.NVCA.{clusterID}
 Consumer name:      {streamName}-{clusterID}   (durable, per cluster)
@@ -92,6 +92,7 @@ Each component ships an `AGENTS.md` with detailed internals, data flows, and API
 - [src/invocation-plane-services/grpc-proxy/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/invocation-plane-services/grpc-proxy/AGENTS.md)
 - [src/invocation-plane-services/llm-api-gateway/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/invocation-plane-services/llm-api-gateway/AGENTS.md)
 - [src/invocation-plane-services/ratelimiter/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/invocation-plane-services/ratelimiter/AGENTS.md)
+- [src/control-plane-services/admin-token-issuer-proxy/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/control-plane-services/admin-token-issuer-proxy/AGENTS.md)
 - [src/control-plane-services/nats-auth-callout/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/control-plane-services/nats-auth-callout/AGENTS.md)
 - [src/control-plane-services/function-autoscaler/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/control-plane-services/function-autoscaler/AGENTS.md)
 - [examples/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/examples/AGENTS.md)

@@ -1,0 +1,246 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# details for actuator info endpoint
+info:
+  app:
+    version: '${app.version}'
+
+app:
+  version: '${spring.application.version}'
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        cassandra-ssl:
+          keystore:
+            certificate: "base64:${kv.cassandraAppCert}"
+            private-key: "base64:${kv.cassandraAppKey}"
+          truststore:
+            certificate: "base64:${kv.cassandraTlsCert}"
+  webflux:
+    problemdetails:
+      enabled: true
+  main:
+    allow-bean-definition-overriding: true
+    web-application-type: reactive
+  security:
+    filter:
+      order: 1
+  cassandra:
+    ssl:
+      enabled: true
+      bundle: cassandra-ssl
+    username: ${kv.cassandraUsername}
+    password: ${kv.cassandraPassword}
+    compression: lz4
+    connection:
+      connect-timeout: 10000
+      init-query-timeout: 10000
+    pool:
+      heartbeat-interval: 30000
+      idle-timeout: 60000
+    repositories:
+      type: auto
+    request:
+      # defaulting EACH_QUORUM otherwise consistency overrides to EACH_QUORUM for Batch operations
+      # will not be applied (and will use LOCAL_QUORUM for batch writes)
+      # check actual consistency applied in https://github.com/apache/cassandra-java-driver/blob/d0a1e44a4415c7a0489f8c35ee9ce49e20d7bc61/core/src/main/java/com/datastax/oss/driver/internal/core/cql/Conversions.java#L131
+      consistency: each_quorum
+      page-size: 5000
+      serial-consistency: local_serial
+      throttler:
+        type: none
+      timeout: 10000
+    schema-action: none
+    session-name: ess-session
+    advanced:
+      speculative-execution-policy:
+        class: ConstantSpeculativeExecutionPolicy
+        max-executions: 1
+        delay: 1500 # 1.5 seconds
+      connection:
+        max-requests-per-connection: 5000 # Num Queries per connection, will be set to default value of 10000 if not defined here.
+        pool:
+          local:
+            size: 4 # Connection Pool Size, will be set to default value of 2 if not defined
+      metrics: # https://docs.datastax.com/en/developer/java-driver/4.17/manual/core/configuration/reference/index.html
+        factory:
+          class: MicrometerMetricsFactory
+        id-generator:
+          # override to move node id to tags
+          class: TaggingMetricIdGenerator
+          prefix: cassandra
+        session:
+          # keeping throttling in case it shows up as non-zero
+          enabled: connected-nodes,cql-requests,cql-client-timeouts,throttling.delay,throttling.errors,bytes-sent,bytes-received # throttling.queue-size - re-enable if using throttler other than PassThroughRequestThrottler (no-op and causes log noise)
+          cql-requests:
+            highest-latency: 11000 # > request.timeout
+          throttling:
+            delay:
+              highest-latency: 11000 # > request.timeout
+        node:
+          # to be calibrated, adding a bunch to visualize later
+          enabled: pool.open-connections,pool.in-flight,pool.available-streams,speculative-executions,errors.request.unsent,errors.request.aborted,errors.request.write-timeouts,errors.request.read-timeouts,errors.request.others,retries.total,bytes-sent,bytes-received
+      retry-policy:
+        class: com.nvidia.boot.cassandra.retry.NextHostRetryPolicy
+    port: 9042
+  lifecycle:
+    timeout-per-shutdown-phase: 65s # keep in sync with alb, connection, and pre-stop hook timeouts
+  cloud:
+    discovery:
+      client:
+        composite-indicator:
+          enabled: false
+  reactor:
+    debug-agent:
+      enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+  api-docs:
+    path: "/v3/api-docs"
+    resolve-schema-properties: true
+  paths-to-exclude:
+    - /health/**
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+    opentelemetry:
+      export:
+        schedule-delay: 500ms
+    propagation:
+      type: w3c
+  otlp:
+    tracing:
+      headers:
+        lightstep-access-token: ${kv.lightStepApiKey}
+      timeout: 30s
+      transport: http
+      compression: gzip
+      endpoint: # must be defined per env
+  opentelemetry:
+    resource-attributes:
+      env: ${spring.application.env}
+      region: ${spring.application.host.dc} # duplicate of host.dc, can be removed later when the metrics/traces migrate to host.dc
+      service.version: ${spring.application.version}
+      service.name: ${spring.application.name}
+      host.id: ${spring.application.host.id}
+      host.dc: ${spring.application.host.dc}
+  endpoints:
+    web:
+      base-path: /
+      exposure:
+        include: [ "health", "info" ]
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+      group:
+        # https://blog.colinbreck.com/kubernetes-liveness-and-readiness-probes-how-to-avoid-shooting-yourself-in-the-foot/
+        liveness:
+          include:
+            - livenessState
+        readiness:
+          include:
+            - cassandra
+            - customcassandra
+            - readinessState
+            - serviceWarmup
+  info:
+    env:
+      enabled: true
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        # TBD, maybe will reduce thresholds
+        http.server.requests: 5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s,2500ms,5s,7500ms,10s,20s
+    tags:
+      host_id: ${spring.application.host.id}
+      service_name: ${spring.application.name}
+      service_version: ${spring.application.version}
+      host_dc: ${spring.application.host.dc}
+      env: ${spring.application.env}
+
+server:
+  shutdown: graceful
+  port: 8080
+  forward-headers-strategy: framework
+
+ess:
+  cache:
+    jwk:
+      initSize: 128
+      maxSize: 1024
+      expireAfterWrite: 1d
+      refreshAfterWrite: 1h
+  auth:
+    notary:
+      ttl: 1h
+      clockSkewAdjustments: 10s
+    operator:
+      iss: # must be defined per env
+      jwks: ${ess.auth.operator.iss}/.well-known/jwks.json
+      client-id: # must be defined per env
+    service-id: # must be defined per env
+  logging:
+    errors:
+      - httpStatusCode: 404
+        logLevel: OFF
+  retryconfig:
+    secretEndpointsRetryConfig:
+      createSecretRetryCount: 2
+      minBackoffBetweenRetriesMillis: 400
+      maxBackoffBetweenRetriesMillis: 800
+  secret-size:
+    max: 8KB
+
+logging:
+  level:
+    com.datastax: INFO
+    org.springframework.data.cassandra: INFO
+    com.nvidia: INFO
+    # uncomment if reload logs become noisy
+    # com.nvidia.boot.properties.refresher.FileBasedPropertiesRefresher: WARN
+    io.netty.util: INFO
+    com.github.benmanes.caffeine.cache.LocalAsyncCache: ERROR # warn causes any exceptions through cache to get auto-logged even if used for control flow
+    com.datastax.oss.driver.internal.core.control.ControlConnection: WARN # only way to know if C* issues are from expired certificates
+
+encryption:
+  rollout:
+    enabled: true
+    useDefaultKey: false
+    useAllowList: false
+  rotation:
+    scheduled:
+      enabled: false
+
+metrics:
+  server:
+    enabled: true
+    port: 9464
+    path: /metrics
+
+warmup:
+  blockHealthStatusUntilComplete: true
+  timeout: 15s

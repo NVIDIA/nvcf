@@ -1,8 +1,149 @@
 # Bazel for Notary
 
 Notary is part of the root `nvcf` Bazel module. Run every Bazel command in this
-guide from the monorepo root. Maven commands still run from
-`src/control-plane-services/notary`.
+guide from the monorepo root. The monorepo copy is Bazel-only and does not
+contain project POMs. Any Maven build support remains in the independent source
+repository.
+
+## Bazel in Maven terms
+
+Notary keeps the familiar Maven directory layout. Bazel changes how the
+modules and build actions are named.
+
+| Maven idea | Bazel idea |
+|---|---|
+| A Maven module | A directory with a `BUILD.bazel` file, called a package |
+| A POM dependency | An entry in a target's `deps` list |
+| A plugin or parent-POM convention | A shared Bazel macro |
+| A Maven goal | A Bazel target selected by a label |
+| `mvn test` | `bazel test //src/control-plane-services/notary/...` |
+
+A label has the package path before the colon and the target name after it:
+
+```text
+//src/control-plane-services/notary/notary-core:notary_core
+```
+
+## Project structure and targets
+
+```text
+notary/
+  notary-core/
+    BUILD.bazel
+    src/main/java/            reusable core code
+    src/main/resources/       core resources, when present
+    src/test/java/            core tests
+    src/test/resources/       core test resources
+  notary-service/
+    BUILD.bazel
+    src/main/java/            Spring Boot application code
+    src/main/resources/       application resources
+    src/test/java/            service tests
+    src/test/resources/       service test resources
+```
+
+Keep one `BUILD.bazel` at each Maven-like module root. Do not add Bazel package
+boundaries below the standard source directories.
+
+The important core targets are `notary_core`, `tests`, and `tests_coverage`.
+The important service targets are `app_classes`, `app`, `tests`,
+`tests_coverage`, and `notary-service-oss-image`. `notary-service` depends on
+`notary_core`, just as
+a Maven application module would depend on its core module.
+
+## Shared Java macros
+
+Both modules load shared macros from `//rules/java:defs.bzl`:
+
+- `nvcf_java_library` compiles Java into a reusable library. The core library
+  is `notary_core`. The service library is `app_classes` because the Spring
+  Boot packaging target consumes it.
+- `nvcf_java_test` is a macro that declares one native `java_test` target.
+  The normal target name is `tests`. Bazel and IntelliJ use this same target.
+- `nvcf_java_coverage_test` is a macro that declares the separate
+  `tests_coverage` target. It runs `tests` and writes JUnit and JaCoCo reports
+  for CI. Its `coverage_target` identifies the production library covered by
+  the tests.
+- `spring_boot_app` creates the executable service jar.
+- `java_oci_image` creates the service container image.
+
+Core and service modules use the same macros because the Bazel operations are
+the same. Their directory and target names describe their different roles.
+
+## Bazel terms by example
+
+These terms describe different parts of the same declaration:
+
+| Term | Meaning | Notary example |
+|---|---|---|
+| Macro | A Starlark function that writes one or more rule calls for us | `nvcf_java_test(...)` |
+| Rule | A Bazel building block that knows how to create an output | `java_test(...)` inside `//rules/java:defs.bzl` |
+| Target | One named object created by a rule | `tests` in `notary-core` |
+| Label | The full Bazel address of a target | `//src/control-plane-services/notary/notary-core:tests` |
+
+For example, `notary-core/BUILD.bazel` contains this macro call:
+
+```starlark
+nvcf_java_test(
+    name = "tests",
+    srcs = NOTARY_CORE_TEST_SRCS,
+    deps = NOTARY_CORE_TEST_DEPS + NOTARY_CORE_DIRECT_TEST_DEPS,
+)
+```
+
+The macro contains the actual `_java_test(...)` call. `_java_test` is a private
+name for the standard `java_test` rule from `rules_java`. That rule declares
+the `//src/control-plane-services/notary/notary-core:tests` target.
+
+The `nvcf_java_library(name = "notary_core", ...)` macro call declares the
+`//src/control-plane-services/notary/notary-core:notary_core` target. The
+`notary-service` `app_classes` target lists that label in `deps`. This is the
+Bazel equivalent of the Maven service module depending on the core module.
+
+The separate `nvcf_java_coverage_test(name = "tests_coverage", ...)` macro call
+declares an `sh_test` target. It runs `tests` for CI reports but does not own
+the Java test source files.
+
+## IntelliJ-compatible BUILD structure
+
+The JetBrains Bazel plugin learns roots from Bazel targets. Keep these rules:
+
+1. Give each `src/main/java` tree exactly one IDE-visible library owner.
+2. Give each `src/test/java` tree exactly one IDE-visible native Java test
+   owner. A compatibility fixture library may compile the same files only when
+   it sets `ide_visible = False` and produces a downstream artifact.
+3. Put `src/main/resources` only in production resources.
+4. Put `src/test/resources` only in test resources.
+5. Keep the resource helper targets generated by the macros. IntelliJ uses
+   them to identify Resources Root and Test Resources Root.
+6. Keep coverage and report targets separate from the native Java test. They
+   must not own Java source files.
+
+The canonical project view is `tools/intellij/.managed.bazelproject`. The
+active file under `.bazelbsp` must enable `rules_java`, derive targets from
+directories, and allow manual targets to sync. The managed file already
+includes Notary and these settings.
+
+After changing a `BUILD.bazel` file, run a Bazel project resync in IntelliJ.
+Do not mark roots manually because the next sync replaces those settings. A
+correct sync marks main sources, test sources, main resources, and test
+resources.
+
+The Project view shows the filesystem, so Java packages can look like ordinary
+directories there. Select Packages from the Project tool window's view menu to
+see the Java package hierarchy. In Packages view, open the Options menu and
+turn off Modules. Otherwise, IntelliJ shows Bazel targets such as
+`app_classes` and `tests_coverage` as module names. Turn off Library Contents
+too if external jars make the view noisy. Use Packages view for Java packages
+and the Bazel tool window for Bazel targets.
+
+Each `nvcf_java_test(name = "tests")` macro call declares exactly one native
+`java_test` target named `tests`. This same-name rule lets the JetBrains Bazel
+plugin offer gutter test actions. The new plugin does not add a per-test Run
+action to the Java editor context menu. JetBrains tracks that feature gap in
+[BAZEL-2755](https://youtrack.jetbrains.com/issue/BAZEL-2755). Right-click
+actions remain available on targets in the Bazel tool window. Use
+`tests_coverage` when JUnit or JaCoCo report files are required.
 
 ## Shared configuration
 
@@ -54,8 +195,17 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
   build //src/control-plane-services/notary/notary-core:notary_core
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/control-plane-services/notary/notary-core:notary_core_test_fixtures
+
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
   build //src/control-plane-services/notary/notary-service:app
 ```
+
+`notary_core_test_fixtures` is a compatibility `java_library` target for
+downstream Bzlmod consumers. It produces
+`libnotary_core_test_fixtures.jar`. Its `no-ide` tag keeps it out of the
+IntelliJ project model, so the native `tests` target remains the IDE owner of
+`src/test/java`.
 
 The executable output is:
 
@@ -116,14 +266,25 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
   --test_arg=--include-methodname='.*#sign.*$'
 ```
 
-Each module writes real Java test and coverage outputs under:
+Run the report targets when JUnit XML and JaCoCo output are needed:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test \
+  //src/control-plane-services/notary/notary-core:tests_coverage \
+  //src/control-plane-services/notary/notary-service:tests_coverage \
+  --cache_test_results=no \
+  --test_output=errors
+```
+
+Each module writes its native test log and report output under:
 
 ```text
 bazel-testlogs/src/control-plane-services/notary/<module>/tests/test.log
-bazel-testlogs/src/control-plane-services/notary/<module>/tests/test.outputs/junit/TEST-junit-jupiter.xml
-bazel-testlogs/src/control-plane-services/notary/<module>/tests/test.outputs/jacoco.exec
-bazel-testlogs/src/control-plane-services/notary/<module>/tests/test.outputs/jacoco.xml
-bazel-testlogs/src/control-plane-services/notary/<module>/tests/test.outputs/index.html
+bazel-testlogs/src/control-plane-services/notary/<module>/tests_coverage/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/control-plane-services/notary/<module>/tests_coverage/test.outputs/jacoco.exec
+bazel-testlogs/src/control-plane-services/notary/<module>/tests_coverage/test.outputs/jacoco.xml
+bazel-testlogs/src/control-plane-services/notary/<module>/tests_coverage/test.outputs/index.html
 ```
 
 Use `test.outputs/junit/TEST-junit-jupiter.xml` for JUnit reporting. The nearby
@@ -226,18 +387,6 @@ docker run --rm \
 ```
 
 Readiness is `http://localhost:8181/actuator/health/readiness`.
-
-## Maven coexistence
-
-Maven remains independent:
-
-```bash
-cd src/control-plane-services/notary
-mvn clean verify
-```
-
-Bazel uses direct source labels for co-located nv-boot code. Do not add a local
-source override or a nested dependency hub.
 
 ## GitHub CI
 

@@ -36,7 +36,7 @@ import (
 
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 
-	nvcfversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
@@ -122,10 +122,23 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 
 	oldGrpcMetricsMiddleware := metrics.CreateOldGrpcMetricsMiddleWare(logger, meter)
 
+	httpMetrics := metrics.CreateHttpMetricsMiddleWare(logger, meter)
+	otelTrace := tracing.NewOtelTraceMiddleware()
+	zapLogger := logging.NewZapLoggerMiddleware(logger)
+
+	publicMiddlewares := chi.Chain(
+		httpMetrics,
+		otelTrace,
+		zapLogger,
+		render.SetContentType(render.ContentTypeJSON),
+		chiMiddleware.Recoverer,
+	)
+	serveInfo(router, publicMiddlewares)
+
 	middlewares := chi.Chain(
-		metrics.CreateHttpMetricsMiddleWare(logger, meter),
-		tracing.NewOtelTraceMiddleware(),
-		logging.NewZapLoggerMiddleware(logger),
+		httpMetrics,
+		otelTrace,
+		zapLogger,
 		authzMiddleware,
 		render.SetContentType(render.ContentTypeJSON),
 		// This middleware is the last one in order to recover after panic
@@ -159,6 +172,11 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 	return nil
 }
 
+// serveInfo mounts the unauthenticated GET /info on the API router so it is reachable externally through the ingress.
+func serveInfo(router chi.Router, middlewares chi.Middlewares) {
+	router.With(middlewares...).Get("/info", golibversion.Handler().ServeHTTP)
+}
+
 func serveManagementRoutes(logger *zap.Logger, loggerAtomicLevel *zap.AtomicLevel, cfg config.HTTPConfig) *http.Server {
 	router := chi.NewRouter()
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -168,8 +186,6 @@ func serveManagementRoutes(logger *zap.Logger, loggerAtomicLevel *zap.AtomicLeve
 			logger.Error("failed to write healthz response", zap.Error(err))
 		}
 	})
-
-	router.Get("/info", nvcfversion.Handler().ServeHTTP)
 
 	router.Get("/log_level", loggerAtomicLevel.ServeHTTP)
 

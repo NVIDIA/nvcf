@@ -59,7 +59,7 @@ spec:
       {{- end }}
       containers:
       - name: cleanup
-        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        image: {{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         securityContext:
           runAsUser: 1000
@@ -69,8 +69,6 @@ spec:
             drop:
               - "ALL"
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-operator-cleanup
           - --namespace
           - "{{ .Release.Namespace }}"

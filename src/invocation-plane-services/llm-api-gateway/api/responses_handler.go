@@ -43,7 +43,6 @@ import (
 )
 
 const (
-	responsesEndpointPath       = "/v1/responses"
 	headerResponsesInput        = "X-Input-Tokens"
 	headerResponsesEstimate     = "X-Token-Estimate"
 	headerResponsesRequest      = "X-Request-Id"
@@ -66,6 +65,9 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 	body, err := captureRequestBody(c.Request())
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if err := rejectAmbiguousMembers(body, openairesponses.CreateRequest{}); err != nil {
+		return err
 	}
 
 	var request openairesponses.CreateRequest
@@ -125,7 +127,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 	reqCtx.Model = routedModel
 	setRoutingMethodForModel(reqCtx, routedModel)
 
-	if err := requireResponsesURI(reqCtx, routedModel); err != nil {
+	if err := h.handlers.requireModelURIAllowlist(c, routedModel, responsesEndpointPath, true); err != nil {
 		return nil, nil, err
 	}
 
@@ -179,36 +181,6 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		MaxOutputTokens: maxOutputTokens,
 		AdmissionPlan:   admissionPlan,
 	}, outboundBody, nil
-}
-
-func requireResponsesURI(reqCtx *requestctx.RequestContext, model string) error {
-	if reqCtx == nil || reqCtx.ModelSpecs == nil {
-		return nil
-	}
-
-	spec, ok := reqCtx.ModelSpecs[model]
-	if !ok || len(spec.URIs) == 0 {
-		return nil
-	}
-
-	for _, uri := range spec.URIs {
-		if normalizeModelURI(uri) == responsesEndpointPath {
-			return nil
-		}
-	}
-
-	return echo.NewHTTPError(
-		http.StatusBadRequest,
-		fmt.Sprintf("model %q does not support %s", model, responsesEndpointPath),
-	)
-}
-
-func normalizeModelURI(uri string) string {
-	uri = strings.TrimSpace(uri)
-	if uri == "" {
-		return ""
-	}
-	return "/" + strings.TrimPrefix(uri, "/")
 }
 
 func rewriteResponsesProxyBody(body []byte, model string, stream bool) ([]byte, error) {
@@ -285,6 +257,7 @@ func setResponsesProxyContextHeaders(headers http.Header, reqCtx *requestctx.Req
 	if reqCtx.RoutingKey != "" {
 		headers.Set(headerResponsesRouting, reqCtx.RoutingKey)
 	}
+	headers.Del(headerResponsesMethod)
 	if reqCtx.RoutingMethod != "" {
 		headers.Set(headerResponsesMethod, reqCtx.RoutingMethod)
 	}
@@ -365,13 +338,21 @@ func (h *ResponsesHandlers) aggregateNativeResponsesStream(
 	h.recordNativeResponsesProviderTime(c, start, false)
 	h.finalizeNativeResponsesUsage(c, request, terminalResponse, false)
 	setMultiTurnSessionResponseHeader(c)
-	return c.JSON(http.StatusOK, terminalResponse)
+	return c.JSONBlob(http.StatusOK, terminalResponse.body)
+}
+
+// nativeResponsesTerminal is the response object carried by a terminal
+// Responses stream event. The body is kept as upstream sent it so unary
+// clients see the same fields as streaming clients.
+type nativeResponsesTerminal struct {
+	body  json.RawMessage
+	usage *openairesponses.ResponseUsage
 }
 
 func consumeNativeResponsesSSE(
 	reader io.Reader,
 	writer io.Writer,
-) (*openairesponses.Response, error) {
+) (*nativeResponsesTerminal, error) {
 	if reader == nil {
 		return nil, nil
 	}
@@ -379,7 +360,7 @@ func consumeNativeResponsesSSE(
 	lineReader := bufio.NewReader(reader)
 	var (
 		eventBlock       bytes.Buffer
-		terminalResponse *openairesponses.Response
+		terminalResponse *nativeResponsesTerminal
 	)
 
 	for {
@@ -422,7 +403,7 @@ func isSSEBlankLine(line []byte) bool {
 	return len(bytes.TrimSpace(line)) == 0
 }
 
-func parseNativeResponsesSSEBlock(block []byte) *openairesponses.Response {
+func parseNativeResponsesSSEBlock(block []byte) *nativeResponsesTerminal {
 	var (
 		eventType string
 		dataLines []string
@@ -449,8 +430,8 @@ func parseNativeResponsesSSEBlock(block []byte) *openairesponses.Response {
 	}
 
 	var event struct {
-		Type     string                    `json:"type"`
-		Response *openairesponses.Response `json:"response"`
+		Type     string          `json:"type"`
+		Response json.RawMessage `json:"response"`
 	}
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
 		return nil
@@ -463,20 +444,36 @@ func parseNativeResponsesSSEBlock(block []byte) *openairesponses.Response {
 	case openairesponses.EventTypeResponseCompleted,
 		openairesponses.EventTypeResponseFailed,
 		openairesponses.EventTypeResponseIncomplete:
-		return event.Response
 	default:
 		return nil
 	}
+	if trimmed := bytes.TrimSpace(event.Response); len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil
+	}
+
+	// Decode only usage so output item types the adapter does not know
+	// cannot hide the terminal response.
+	var response struct {
+		Usage *openairesponses.ResponseUsage `json:"usage"`
+	}
+	terminal := &nativeResponsesTerminal{body: event.Response}
+	if err := json.Unmarshal(event.Response, &response); err == nil {
+		terminal.usage = response.Usage
+	}
+	return terminal
 }
 
 func (h *ResponsesHandlers) finalizeNativeResponsesUsage(
 	c *GatewayContext,
 	request *provider.NormalizedRequest,
-	response *openairesponses.Response,
+	response *nativeResponsesTerminal,
 	stream bool,
 ) {
 	ctx := c.UserContext()
-	usage := chatUsageFromResponses(response)
+	var usage *models.ChatCompletionUsage
+	if response != nil {
+		usage = chatUsageFromResponses(response.usage)
+	}
 	if usageHasTokenCounts(usage) {
 		h.handlers.observability.recordLLMUsage(
 			ctx,
@@ -506,15 +503,15 @@ func (h *ResponsesHandlers) recordNativeResponsesProviderTime(
 	)
 }
 
-func chatUsageFromResponses(response *openairesponses.Response) *models.ChatCompletionUsage {
-	if response == nil || response.Usage == nil {
+func chatUsageFromResponses(usage *openairesponses.ResponseUsage) *models.ChatCompletionUsage {
+	if usage == nil {
 		return nil
 	}
 
 	return &models.ChatCompletionUsage{
-		PromptTokens:     responsesUsageTokenCount(response.Usage.InputTokens),
-		CompletionTokens: responsesUsageTokenCount(response.Usage.OutputTokens),
-		TotalTokens:      responsesUsageTokenCount(response.Usage.TotalTokens),
+		PromptTokens:     responsesUsageTokenCount(usage.InputTokens),
+		CompletionTokens: responsesUsageTokenCount(usage.OutputTokens),
+		TotalTokens:      responsesUsageTokenCount(usage.TotalTokens),
 	}
 }
 

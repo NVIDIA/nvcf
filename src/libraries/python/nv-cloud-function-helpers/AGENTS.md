@@ -14,7 +14,7 @@ License: Apache-2.0, covered by the umbrella repo-root `LICENSE`.
 
 From a local checkout of this umbrella repo:
 
-```
+```bash
 pip3 install setuptools
 pip3 install ./src/libraries/python/nv-cloud-function-helpers
 ```

@@ -20,6 +20,8 @@ package webhook
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -35,9 +37,8 @@ import (
 // the hash and the populated Manifest.
 func putHash(t *testing.T, b *checkpointstore.Local, hash string, vols []checkpointstore.VolumeMeta) checkpointstore.Manifest {
 	t.Helper()
-	srcDir := t.TempDir()
 	m := checkpointstore.Manifest{Volumes: vols}
-	stored, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcDir}}, m)
+	stored, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcForManifest(t, m)}}, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,8 +207,7 @@ func TestMutate_RootfsIsSkipped(t *testing.T) {
 func TestMutate_RootfsExtractPaths_Injected(t *testing.T) {
 	b := newBackend(t)
 	hash := "1111111111111111111111111111111111111111111111111111111111111111"
-	srcDir := t.TempDir()
-	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcDir}}, checkpointstore.Manifest{
+	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcWith(t, "rootfs")}}, checkpointstore.Manifest{
 		Volumes: []checkpointstore.VolumeMeta{
 			{Name: "rootfs", MountPath: "/", Type: "rootfs", FileCount: 1, SizeBytes: 1},
 		},
@@ -264,8 +264,7 @@ func TestMutate_RootfsExtractPaths_Injected(t *testing.T) {
 func TestMutate_Rootfs_InjectsRunAsRootNotPrivileged(t *testing.T) {
 	b := newBackend(t)
 	hash := "2222222222222222222222222222222222222222222222222222222222222222"
-	srcDir := t.TempDir()
-	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcDir}}, checkpointstore.Manifest{
+	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcWith(t, "rootfs")}}, checkpointstore.Manifest{
 		CaptureMethod: "rootfs",
 		Volumes: []checkpointstore.VolumeMeta{
 			{Name: "rootfs", MountPath: "/", Type: "rootfs", FileCount: 1, SizeBytes: 1},
@@ -526,8 +525,7 @@ func (s *stubOverlay) MountpointFor(podUID string, vol checkpointstore.VolumeMet
 func TestMutate_OverlayCoversAllVolumes(t *testing.T) {
 	b := newBackend(t)
 	hash := "3333333333333333333333333333333333333333333333333333333333333333"
-	srcDir := t.TempDir()
-	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcDir}}, checkpointstore.Manifest{
+	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcWith(t, "volumes/hf-cache")}}, checkpointstore.Manifest{
 		// Section 1 entries: hostPath user-data volume captured into
 		// tree/volumes/<name>/. This is what DeepSeek-V4-Flash's
 		// hf-cache hostPath looked like on GCP-H100-a 2026-06-05.
@@ -593,8 +591,7 @@ func TestMutate_OverlayCoversAllVolumes(t *testing.T) {
 func TestMutate_OverlayFailureFallsBackToROBind(t *testing.T) {
 	b := newBackend(t)
 	hash := "4444444444444444444444444444444444444444444444444444444444444444"
-	srcDir := t.TempDir()
-	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcDir}}, checkpointstore.Manifest{
+	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcWith(t, "volumes/hf-cache")}}, checkpointstore.Manifest{
 		Volumes: []checkpointstore.VolumeMeta{
 			{Name: "hf-cache", MountPath: "/var/lib/hf-cache", Type: "hostPath", FileCount: 1, SizeBytes: 1},
 		},
@@ -627,8 +624,7 @@ func TestMutate_OverlayFailureFallsBackToROBind(t *testing.T) {
 func TestMutate_InitContainerStrategy_DoesNotMountInline(t *testing.T) {
 	b := newBackend(t)
 	hash := "5555555555555555555555555555555555555555555555555555555555555555"
-	srcDir := t.TempDir()
-	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcDir}}, checkpointstore.Manifest{
+	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcWith(t, "volumes/hf-cache")}}, checkpointstore.Manifest{
 		Volumes: []checkpointstore.VolumeMeta{
 			{Name: "hf-cache", MountPath: "/var/lib/hf-cache", Type: "hostPath", FileCount: 1, SizeBytes: 1},
 		},
@@ -713,8 +709,7 @@ func TestMutate_InitContainerStrategy_DoesNotMountInline(t *testing.T) {
 func TestMutate_InitContainerStrategy_NeedsImage(t *testing.T) {
 	b := newBackend(t)
 	hash := "6666666666666666666666666666666666666666666666666666666666666666"
-	srcDir := t.TempDir()
-	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcDir}}, checkpointstore.Manifest{
+	if _, err := b.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcWith(t, "volumes/hf-cache")}}, checkpointstore.Manifest{
 		Volumes: []checkpointstore.VolumeMeta{
 			{Name: "hf-cache", MountPath: "/var/lib/hf-cache", Type: "hostPath", FileCount: 1, SizeBytes: 1},
 		},
@@ -736,4 +731,38 @@ func TestMutate_InitContainerStrategy_NeedsImage(t *testing.T) {
 	if len(overlay.calls) == 0 {
 		t.Fatal("missing MountPrepInitImage must fall back to inline mounts; got 0 PrepareOverlay calls")
 	}
+}
+
+// srcWith returns a capture-source directory pre-populated with the volume
+// subdirectories the accompanying manifest declares.
+//
+// Local.Put verifies that every volume the manifest declares resolves to a
+// directory that was actually written -- the invariant that catches a capture
+// whose layout contradicts its own manifest. A fixture that declares volumes
+// therefore has to materialize them, or it is asserting against a tree that
+// could never exist in production.
+func srcWith(t *testing.T, subdirs ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, s := range subdirs {
+		if err := os.MkdirAll(filepath.Join(dir, s), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// srcForManifest is srcWith driven by the manifest itself, for fixtures whose
+// volume set is parameterized rather than literal.
+func srcForManifest(t *testing.T, m checkpointstore.Manifest) string {
+	t.Helper()
+	var subs []string
+	for _, v := range m.Volumes {
+		sub, ok := checkpointstore.VolumeSubpath(v)
+		if !ok {
+			t.Fatalf("fixture declares volume %q with no resolvable subpath", v.Name)
+		}
+		subs = append(subs, sub)
+	}
+	return srcWith(t, subs...)
 }

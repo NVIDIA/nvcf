@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVCF Self-Hosted Local Development Environment
+# For use with k3d clusters. See the Local Development guide for setup instructions.
+#
+# Save this file as environments/<name>.yaml in your nvcf-self-managed-stack directory.
+# Create a matching secrets/<name>-secrets.yaml file with your registry credentials.
+# Deploy with: HELMFILE_ENV=<name> helmfile sync
+
+global:
+  # Domain for local access (routes use .localhost TLD)
+  domain: "localhost"
+
+  # Helm chart registry (where helmfile pulls OCI charts from)
+  helm:
+    sources:
+      registry: nvcr.io
+      repository: nvidia/nvcf
+
+  # Container image registry (where Kubernetes pulls images from)
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+
+  # Pull secret created by create-nvcr-pull-secrets.sh (run once before deploying)
+  imagePullSecrets:
+    - name: nvcr-pull-secret
+
+  # Disable node selectors for local development (pods schedule on any node)
+  nodeSelectors:
+    enabled: false
+
+  # k3d uses the local-path StorageClass by default
+  storageClass: local-path
+  storageSize: 2Gi
+
+  observability:
+    tracing:
+      enabled: false
+      collectorEndpoint: ""
+      collectorPort: 4317
+      collectorProtocol: http
+
+# Single Cassandra replica for local development
+cassandra:
+  enabled: true
+  replicaCount: 1
+  jvm:
+    # Fast startup options -- only safe with a single replica.
+    # Do NOT use these settings with multiple replicas.
+    extraOpts: "-Dcassandra.superuser_setup_delay_ms=100 -Dcassandra.gossip_settle_min_wait_ms=1000"
+
+nats:
+  enabled: true
+
+openbao:
+  enabled: true
+  migrations:
+    issuerDiscovery:
+      enabled: true
+
+# Gateway configuration matching the local k3d setup script
+ingress:
+  gatewayApi:
+    enabled: true
+    controllerNamespace: envoy-gateway-system
+    routes:
+      nvcfApi:
+        routeAnnotations: {}
+      apiKeys:
+        routeAnnotations: {}
+      invocation:
+        routeAnnotations: {}
+      grpc:
+        routeAnnotations: {}
+    gateways:
+      shared:
+        name: shared-gw
+        namespace: envoy-gateway-system
+        listenerName: http
+      grpc:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+        listenerName: tcp

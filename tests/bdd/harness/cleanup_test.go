@@ -37,6 +37,14 @@ func (r *recordingRunner) Run(_ context.Context, command string) (Result, error)
 	return r.nextResult, r.nextErr
 }
 
+func (r *recordingRunner) RunWithSensitiveStdin(
+	ctx context.Context,
+	command,
+	_ string,
+) (Result, error) {
+	return r.Run(ctx, command)
+}
+
 func (r *recordingRunner) RunWithTTY(ctx context.Context, command string) (Result, error) {
 	return r.Run(ctx, command)
 }

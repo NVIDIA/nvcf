@@ -13,10 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # Pull base image.
-FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.0.5
+FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.1.2
 
 # Add the service jar
-ARG APP_JAR=notary-service/target/app.jar
+ARG APP_JAR=app.jar
 COPY ${APP_JAR} /usr/share/app.jar
 
 # enable setting the ulimit to max on boot

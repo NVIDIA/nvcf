@@ -20,7 +20,7 @@ This test harness validates the `generate_asymmetric_signing_key()` function by:
 
 ## 2. Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           TEST HARNESS (Go)                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -55,7 +55,7 @@ This test harness validates the `generate_asymmetric_signing_key()` function by:
 
 ## 3. Directory Structure
 
-```
+```text
 tests/
 └── signing-key-harness/
     ├── go.mod                    # Go module definition
@@ -819,7 +819,7 @@ go build -o signing-key-harness .
 
 ### Buggy Code (Before Fix)
 
-```
+```text
 ═════════════════════════════════════════════════════════════════
            JWT SIGNING KEY TEST HARNESS - RESULTS
 ═════════════════════════════════════════════════════════════════
@@ -864,7 +864,7 @@ go build -o signing-key-harness .
 
 ### Fixed Code (After Fix)
 
-```
+```text
 ═════════════════════════════════════════════════════════════════
            JWT SIGNING KEY TEST HARNESS - RESULTS
 ═════════════════════════════════════════════════════════════════
@@ -919,4 +919,3 @@ go build -o signing-key-harness .
 | OpenSSL | 1.1+ | EC key generation (used by bash script) |
 
 **No external Go dependencies** — uses only standard library.
-

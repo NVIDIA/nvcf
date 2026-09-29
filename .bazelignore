@@ -86,6 +86,17 @@ src/libraries/go/lib/pkg/nvkit/build
 # Bazel-managed caches we keep inside the workspace for CI cache: paths.
 .bazel-cache
 
+# Lifted from src/uis/nvcf-ui/.bazelignore on migration into the root module.
+# ui/node_modules in particular is required: aspect_rules_js refuses to evaluate
+# npm_translate_lock unless every nested node_modules pnpm will create is
+# ignored here.
+src/uis/nvcf-ui/ui/node_modules
+src/uis/nvcf-ui/ui/dist
+src/uis/nvcf-ui/ui/coverage
+src/uis/nvcf-ui/backend/static
+src/uis/nvcf-ui/backend/bin
+src/uis/nvcf-ui/node_modules
+
 # Lifted from src/compute-plane-services/ess-agent/.bazelignore on migration into the root module.
 src/compute-plane-services/ess-agent/local
 src/compute-plane-services/ess-agent/vault

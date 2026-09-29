@@ -95,6 +95,7 @@ async fn test_exec_poll() -> anyhow::Result<()> {
         Box::new(PollAwareHandler {
             sleep_time: Duration::from_secs(2),
             enable_echo_request: true,
+            echo_polling_request_headers: false,
         }),
         PublishMode::Attach(app.clone()),
     )
