@@ -50,7 +50,7 @@ func TestDefaultSetsExpectedDefaults(t *testing.T) {
 }
 
 func TestLoadFromEnvReadsInferenceWriteTimeout(t *testing.T) {
-	t.Setenv("INFERENCE_WRITE_TIMEOUT", "0s")
+	t.Setenv("NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT", "0s")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {

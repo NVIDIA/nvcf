@@ -322,7 +322,7 @@ func applyServerTelemetryEnv(cfg *Config, errs *envErrs) {
 		cfg.Server.Region = region
 	}
 
-	if timeout, ok := errs.duration("INFERENCE_WRITE_TIMEOUT"); ok {
+	if timeout, ok := errs.duration("NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT"); ok {
 		cfg.Server.InferenceWriteTimeout = timeout
 	}
 }
