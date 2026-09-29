@@ -97,7 +97,24 @@ func (w *pvcStateHTTPWriter) UpdatePVCPromoteState(hash, state, pvcName string) 
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := w.client.Do(req)
+	// A promote is a 100 GB copy gated by this small write; a transient
+	// server error must not abort it before it starts. nvsnap-server's
+	// SQLite answered 500 SQLITE_BUSY for a moment after a rollout on dev1
+	// (2026-09-29) and the whole promote failed in 0.0 s. Retry 5xx and
+	// transport errors a few times; 4xx are answers, not blips.
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		resp, err = w.client.Do(req)
+		transient := err != nil || resp.StatusCode >= 500
+		if !transient || attempt >= pvcStateRetries {
+			break
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		time.Sleep(pvcStateRetryDelay * time.Duration(attempt+1))
+	}
 	if err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
@@ -116,3 +133,11 @@ func (w *pvcStateHTTPWriter) UpdatePVCPromoteState(hash, state, pvcName string) 
 	}
 	return fmt.Errorf("pvc-state %s → %d: %s", state, resp.StatusCode, string(b))
 }
+
+// pvcStateRetries and pvcStateRetryDelay bound the retry of the pvc-state
+// write on transient server errors: up to 4 more attempts, 1 s, 2 s, 3 s,
+// 4 s apart, about 10 s in total.
+const (
+	pvcStateRetries    = 4
+	pvcStateRetryDelay = time.Second
+)
