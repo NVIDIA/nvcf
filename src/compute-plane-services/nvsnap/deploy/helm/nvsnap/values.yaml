@@ -459,9 +459,12 @@ server:
       memory: "256Mi"
 
 # ─── NvSnap Blobstore (Phase 5d.2 durable backstop) ──────────────────────
+# Retired. Captures are promoted to shared volumes (L2) and model and cache
+# volumes are cluster artifacts; the blob store tier is not used by any
+# current path. Off by default; the code is removed in a follow-up.
 
 blobstore:
-  enabled: true
+  enabled: false
 
   image:
     registry: ""
