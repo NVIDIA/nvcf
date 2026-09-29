@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"nvcf-cli/internal/selfhosted"
 )
@@ -105,4 +106,26 @@ func TestCheck_LocalOnlyNotesSkippedClusterChecks(t *testing.T) {
 	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--local-only", "--json"})
 	_ = rootCmd.Execute()
 	assert.Contains(t, stderr.String(), "--local-only runs the local host checks only")
+}
+
+// An interrupted run reports the interrupt, not a verdict: with the validator
+// cut short the results would otherwise read as a failure, or as a pass.
+func TestCheck_InterruptExits130(t *testing.T) {
+	resetCheckFlags(t)
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetOut(&bytes.Buffer{})
+	t.Cleanup(func() { rootCmd.SetErr(nil); rootCmd.SetOut(nil) })
+	// Cobra keeps a subcommand's context from an earlier Execute, so set it
+	// on the command that runs.
+	selfHostedCheckCmd.SetContext(ctx)
+	t.Cleanup(func() { selfHostedCheckCmd.SetContext(context.Background()) })
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--local-only", "--json"})
+	err := rootCmd.Execute()
+
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 130, exitErr.Code)
 }

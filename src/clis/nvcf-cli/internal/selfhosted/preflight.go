@@ -622,8 +622,10 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 	}
 }
 
-// clusterValidatorCheck runs the validator Job. Runner errors (RBAC/timeout)
-// are warning severity; validator failures are error. role selects the check
+// clusterValidatorCheck runs the validator Job. A validator that could not run
+// (RBAC denied, image pull failure, timeout) is an error like a validator
+// failure: nothing was checked, and a readiness gate must not pass on that.
+// --skip-cluster-validation is the explicit opt-out. role selects the check
 // set via VALIDATOR_ROLE; registries extends the ConfigMap reachability list.
 func clusterValidatorCheck(
 	cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool, role string,
@@ -656,8 +658,9 @@ func clusterValidatorCheck(
 			}
 
 			if result.Err != nil {
-				r.Severity = SeverityWarning
-				r.Message = "cluster-validator did not complete: " + result.Err.Error()
+				r.Severity = SeverityError
+				r.Message = "cluster-validator did not complete, so the cluster was not validated: " +
+					result.Err.Error() + "; fix the cause, or pass --skip-cluster-validation to run without it"
 				r.Err = result.Err
 				return r
 			}

@@ -111,15 +111,19 @@ func TestRunClusterValidator_EmptyImage(t *testing.T) {
 	assert.Empty(t, client.Actions(), "no API calls should be made when input validation fails")
 }
 
-func TestClusterValidatorCheck_OrchestratorErrorStaysWarning(t *testing.T) {
+// A validator that could not run checked nothing, so it fails the run rather
+// than letting a readiness gate pass. The message names the opt-out.
+func TestClusterValidatorCheck_OrchestratorErrorFails(t *testing.T) {
 	cv := func(_ context.Context, _ ClusterValidatorParams) ClusterValidatorResult {
-		return ClusterValidatorResult{Err: fmt.Errorf("transient: API server unreachable")}
+		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: forbidden")}
 	}
 	r := clusterValidatorCheck(cv, "", "", "", false, "", nil, nil).Run(context.Background())
 	assert.False(t, r.Passed)
-	assert.Equal(t, "warning", r.Severity,
-		"transient orchestrator failures should not fail the overall preflight")
+	assert.Equal(t, SeverityError, r.Severity)
+	assert.True(t, r.IsBlockingFailure())
 	assert.Contains(t, r.Message, "cluster-validator did not complete")
+	assert.Contains(t, r.Message, "forbidden")
+	assert.Contains(t, r.Message, "--skip-cluster-validation")
 }
 
 // driveJobToSuccess wires the reactors that make a created Job reach a

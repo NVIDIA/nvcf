@@ -194,6 +194,16 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// default, stays behind until a later check's orphan sweep.
 	sigCtx, stop := signal.NotifyContext(c.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Catch only the first signal. Restoring the default handler once it
+	// arrives lets a second Ctrl-C exit at once instead of waiting out the
+	// cleanup.
+	go func() {
+		<-sigCtx.Done()
+		stop()
+	}()
+	// interrupted is an explicit cancel, not the timeout below, which is a
+	// child of sigCtx and leaves it live.
+	interrupted := func() bool { return sigCtx.Err() != nil }
 	ctx, cancel := context.WithTimeout(sigCtx, outerTimeout)
 	defer cancel()
 
@@ -281,6 +291,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if selfHostedWait == "" {
 		// Single-shot mode.
 		lastResults = runOnce()
+		if interrupted() {
+			return &ExitCodeError{Code: 130, Msg: "interrupted"}
+		}
 		emitCheckFinal(ctx, sink, lastResults)
 		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
 		if anyFailed(lastResults) {
@@ -301,6 +314,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 	for {
 		lastResults = runOnce()
+		if interrupted() {
+			return &ExitCodeError{Code: 130, Msg: "interrupted"}
+		}
 		if !anyFailed(lastResults) {
 			emitCheckFinal(ctx, sink, lastResults)
 			maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
@@ -315,6 +331,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		case <-ticker.C:
 			// continue polling
 		case <-ctx.Done():
+			if interrupted() {
+				return &ExitCodeError{Code: 130, Msg: "interrupted"}
+			}
 			return ctx.Err()
 		}
 	}
