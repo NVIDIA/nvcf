@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1273,4 +1274,21 @@ func TestBuildSummary_OmitsNotApplicableCheck(t *testing.T) {
 	_, present := s.Checks[CheckKeyNodeToNode]
 	assert.False(t, present,
 		"an unexercised check must be absent, not exported as node_to_node=1")
+}
+
+// Run names its check set on a fixed line so a launcher can tell an image that
+// supports roles from one that predates them.
+func TestRun_PrintsTheRoleMarker(t *testing.T) {
+	for role, want := range map[Role]string{
+		RoleControlPlane: RoleMarker + "control-plane",
+		RoleComputePlane: RoleMarker + "compute-plane",
+		"":               RoleMarker + "compute-plane",
+	} {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		ctx := core.WithLogger(context.Background(), logrus.NewEntry(l))
+		_ = Run(ctx, fake.NewSimpleClientset(), nil, "", "", "", false, role)
+		assert.Contains(t, buf.String(), want, "role %q", role)
+	}
 }

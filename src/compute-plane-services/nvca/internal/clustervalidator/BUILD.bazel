@@ -58,6 +58,7 @@ go_test(
     ],
     embed = [":clustervalidator"],
     deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",

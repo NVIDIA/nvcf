@@ -30,6 +30,19 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// RoleMarker prefixes the startup line naming the check set this run executes,
+// for example "Validator role: control-plane". Launchers match on it, so the
+// text is part of the interface and must not change.
+const RoleMarker = "Validator role: "
+
+// effectiveRole is the check set Run actually executes for role.
+func effectiveRole(role Role) Role {
+	if role == RoleControlPlane {
+		return RoleControlPlane
+	}
+	return RoleComputePlane
+}
+
 // Role is the check set selected by VALIDATOR_ROLE.
 type Role string
 
@@ -175,6 +188,10 @@ func Run(
 	startedAt := time.Now()
 	log := core.GetLogger(ctx)
 	log.Info("Starting NVCF cluster validation")
+	// A fixed, parseable line. Launchers that ask for a role look for it: an
+	// image that predates role support never prints it, so they can report
+	// "too old for this role" instead of failing on the checks it ran instead.
+	log.Info(RoleMarker + string(effectiveRole(role)))
 	log.Info("")
 	log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorBlue, colorReset)
 	log.Infof("%s║     NVIDIA Cloud BYOC Cluster Readiness Check             ║%s", colorBlue, colorReset)

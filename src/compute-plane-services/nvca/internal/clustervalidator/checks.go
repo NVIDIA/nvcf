@@ -2637,10 +2637,13 @@ func checkTier1Deployments(
 		}
 	}
 
-	// Skipped proxies are reported rather than silently dropped. This stays a
-	// warning, not UNKNOWN: the Envoy and LoadBalancer rows cover the
-	// Gateway data plane, and blocking this critical row on route RBAC would
-	// fail every run from a launcher that has not been granted it yet.
+	// Skipped proxies are reported rather than silently dropped. When the NVCF
+	// Gateways could not be determined, NVCF's own proxies may be among the
+	// skipped ones, so the row is not a pass: it ends UNKNOWN unless an
+	// observed failure decides it first. With no NVCF routes at all (normal
+	// before install) none of the skipped proxies is NVCF's, so that is only
+	// a warning.
+	proxiesUnobserved := skippedProxies > 0 && (gatewayErr != nil || classErr != nil)
 	switch {
 	case skippedProxies > 0 && gatewayErr != nil:
 		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: could not determine the NVCF Gateways (%v)",
@@ -2668,6 +2671,11 @@ func checkTier1Deployments(
 				len(scaledToZero), strings.Join(scaledToZero, ", ")))
 			ok := false
 			state.Tier1DeploymentsOK = &ok
+			return
+		}
+		if proxiesUnobserved {
+			state.Warnings = append(state.Warnings,
+				"Tier-1 Deployments: status unknown (NVCF Envoy proxies could not be identified, so they were not assessed)")
 			return
 		}
 		if deniedCount > 0 {
@@ -2727,6 +2735,12 @@ func checkTier1Deployments(
 				"self-managed stack values to keep HA headroom.")
 		ok := false
 		state.Tier1DeploymentsOK = &ok
+		return
+	}
+
+	if proxiesUnobserved {
+		state.Warnings = append(state.Warnings,
+			"Tier-1 Deployments: status unknown (NVCF Envoy proxies could not be identified, so they were not assessed)")
 		return
 	}
 

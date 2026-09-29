@@ -2673,3 +2673,46 @@ func TestNVCFGatewayClasses_MatchesQualifiedAndBareEntries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string][]string{"eg": {"nvcf/shared-gw"}, "eg-grpc": {"grpc-gw"}}, got)
 }
+
+// When the NVCF Gateways cannot be determined, NVCF's own proxies may be among
+// those skipped, so a clean row is UNKNOWN rather than a pass. An observed
+// failure still decides the row.
+func TestCheckTier1Deployments_UnidentifiedProxiesAreUnknown(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	two := int32(2)
+	dep := func(ns, name string, labels map[string]string, ready int32) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Generation: 1, Labels: labels},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: ready},
+		}
+	}
+	denied := func() *dynamicfake.FakeDynamicClient {
+		dyn := routeClient()
+		dyn.PrependReactor("list", "*", func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: gatewayAPIGroup, Resource: "httproutes"}, "", fmt.Errorf("denied"))
+		})
+		return dyn
+	}
+	run := func(objs ...*appsv1.Deployment) *ValidationState {
+		client := routeDiscoveryClient()
+		for _, d := range objs {
+			_, err := client.AppsV1().Deployments(d.Namespace).Create(context.Background(), d, metav1.CreateOptions{})
+			require.NoError(t, err)
+		}
+		state := &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), client, denied(), state)
+		return state
+	}
+	proxy := dep(envoyGatewayNamespace, "envoy-x", map[string]string{owningGatewayNameLabel: "x"}, 1)
+
+	state := run(dep("nvcf", "api", nil, 2), proxy)
+	assert.Nil(t, state.Tier1DeploymentsOK, "unidentified proxies are unobserved, not passed")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not be identified")
+
+	state = run(dep("nvcf", "api", nil, 1), proxy.DeepCopy())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "an observed failure still decides the row")
+}
