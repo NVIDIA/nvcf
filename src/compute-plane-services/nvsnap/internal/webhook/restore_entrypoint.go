@@ -167,6 +167,7 @@ func (m *Mutator) restoreBundleInjectPatches(pod *corev1.Pod) ([]PatchOp, error)
 		root = DefaultHostBundleRoot
 	}
 	hostPathDir := corev1.HostPathDirectory
+	hostPathDirOrCreate := corev1.HostPathDirectoryOrCreate
 
 	var patches []PatchOp
 
@@ -190,7 +191,14 @@ func (m *Mutator) restoreBundleInjectPatches(pod *corev1.Pod) ([]PatchOp, error)
 		Name: nvsnapLibVolumeName,
 		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
 			Path: root + "/nvsnap-lib",
-			Type: &hostPathDir,
+			// DirectoryOrCreate: the intercept payload is no longer staged
+			// (criu-v2 restores in-namespace), so the staging init writes
+			// nothing here, yet restore-entrypoint still drops its markers
+			// in it. With type Directory every criu restore pod sat in
+			// FailedMount, "nvsnap-lib is not a directory" (dev1 2026-09-29).
+			// The tools volume above stays Directory: a missing tools tree
+			// must fail loudly.
+			Type: &hostPathDirOrCreate,
 		}},
 	}
 	// Always append via /-. tryL2Mount (the caller) has already

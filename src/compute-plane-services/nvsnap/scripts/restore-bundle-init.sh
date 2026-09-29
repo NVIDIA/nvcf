@@ -61,6 +61,10 @@ cp -a /criu-bundle/. "$TOOLS_TMP/"
 if [[ -x /usr/local/bin/py-spy ]]; then cp /usr/local/bin/py-spy "$TOOLS_TMP/"; fi
 if [[ -x /usr/bin/nsenter ]];     then cp /usr/bin/nsenter     "$TOOLS_TMP/"; fi
 atomic_swap "$NVSNAP_DST" "$TOOLS_TMP"
+# The lib sibling carries no payload any more but restore-entrypoint still
+# writes its markers there and the webhook mounts it; keep the directory
+# present so a hostPath of type Directory on an older webhook still mounts.
+mkdir -p "$(dirname "$NVSNAP_DST")/nvsnap-lib"
 
 # ─── Sanity checks ────────────────────────────────────────────────────
 if [[ ! -x "$NVSNAP_DST/restore-entrypoint" ]]; then

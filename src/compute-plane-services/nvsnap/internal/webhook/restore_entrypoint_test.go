@@ -131,8 +131,8 @@ func TestRestoreBundle_HostPathInjected(t *testing.T) {
 			if v.HostPath.Path != want {
 				t.Errorf("nvsnap-lib hostPath = %q, want %q", v.HostPath.Path, want)
 			}
-			if v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathDirectory {
-				t.Errorf("nvsnap-lib hostPath.type = %v, want Directory", v.HostPath.Type)
+			if v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+				t.Errorf("nvsnap-lib hostPath.type = %v, want DirectoryOrCreate", v.HostPath.Type)
 			}
 		}
 	}
