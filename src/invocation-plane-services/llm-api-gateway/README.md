@@ -31,6 +31,8 @@ The gateway currently serves:
 
 - `GET /healthz`
 - `GET /readyz`
+- `GET /v1/models` (OpenAI model list; see Model discovery)
+- `GET /v1/registry` (per-model registry; see Model discovery)
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
@@ -48,8 +50,9 @@ Each request is normalized into a function-scoped request context.
 - For multipart endpoints, function selection should be explicit through
   `X-NVCF-Function-ID`; the multipart payload is preserved and the configured
   downstream model is forwarded through headers.
-- `Authorization: Bearer ...` is treated as the caller principal for telemetry
-  and is forwarded to NVCF gRPC auth when that adapter is configured.
+- `Authorization: Bearer ...` is the caller credential. It is checked by the
+  configured authenticator (see Authentication) and is never forwarded to
+  Stargate.
 - `X-Request-ID` is accepted if present, otherwise the gateway generates one.
 - `X-NVCF-Target-Region` is forwarded into the request context.
 - `X-Priority` is reserved for the gateway and derived from the caller's
@@ -62,7 +65,9 @@ tokenization are not gateway-owned surfaces.
 
 When a request is forwarded to Stargate, the gateway emits routing headers for
 the selected function/model and estimated prompt size, including
-`x-routing-key`, `x-model`, `x-input-tokens`, and `x-token-estimate`.
+`x-routing-key` (only when the routing key is not empty), `x-model`,
+`x-input-tokens`, and `x-token-estimate`. A client-supplied `x-routing-key`
+is dropped before forwarding.
 
 For OpenAI-compatible multi-turn stickiness, chat completions and responses
 accept `prompt_cache_key` and return the selected session value in
@@ -72,11 +77,123 @@ conversation. The gateway preserves the raw body field for the model backend.
 It forwards only a SHA-256-derived value in the internal
 `x-cache-affinity-key` header to Stargate.
 
-When `NVCF_GRPC_ADDR` is configured, the gateway authenticates each request
-through the NVCF LLM gRPC auth service, derives the per-caller rate-limit key
-from `authContext["ncaId"]`, optionally scopes it further by project, and keeps
-final token consumption accounting in the gateway after completion or stream
-close.
+## Authentication
+
+The gateway fails closed. It starts only when one of these modes is selected:
+
+| Mode | Selected by | `model` format | Routing key |
+|---|---|---|---|
+| NVCF | `NVCF_GRPC_ADDR` | `<routing_key>/<model>` | first `model` segment |
+| Static API keys | `API_KEYS_PATH` | bare, for example `meta/llama-3.1-8b-instruct` | always empty |
+| Anonymous | `ALLOW_ANONYMOUS=true` and neither of the above | `<routing_key>/<model>` | first `model` segment |
+
+`NVCF_GRPC_ADDR` and `API_KEYS_PATH` are mutually exclusive. With neither set
+and `ALLOW_ANONYMOUS` unset or false, the gateway exits at startup with an
+error naming the three options.
+
+NVCF mode authenticates each request through the NVCF LLM gRPC auth service,
+derives the per-caller rate-limit key from `authContext["ncaId"]`, optionally
+scopes it further by project, and keeps final token consumption accounting in
+the gateway after completion or stream close. A `model` without a routing-key
+prefix is rejected with `model prefix is required`.
+
+Static API key mode authenticates callers against a mounted key file, with no
+NVCF dependency:
+
+- Callers send `Authorization: Bearer <key>`. The gateway hashes the key with
+  SHA-256 and compares it in constant time against every entry in the file.
+- The whole `model` string is the model id. It is forwarded unchanged in the
+  body and in `x-model`; `x-routing-key` is never sent.
+- The key id is the rate-limit key. The request context records the caller as
+  `api-key:<id>`.
+- Only paths listed in `STATIC_ALLOWED_PATHS` are served. Other paths return
+  403 after authentication. `/healthz`, `/readyz`, and `/info` need no key.
+  `GET /v1/models` and `GET /v1/registry` are always allowed and need not be
+  listed; any other method on those paths stays subject to the list.
+- Static keys carry no per-model specs, so `MODEL_URI_ALLOWLIST_ENABLED` and
+  per-model token rate limits do not apply.
+
+Key file format:
+
+```json
+{
+  "keys": [
+    {"id": "team-a", "sha256": "<lowercase hex SHA-256 of the key>"}
+  ]
+}
+```
+
+Compute a digest with `printf '%s' "$API_KEY" | sha256sum`. Ids are 1 to 128
+characters from letters, digits, `.`, `_`, and `-`, and start with a letter
+or digit. Ids and digests must be unique. The file is read on the first
+request and re-read at most every 60 seconds, so keys rotate without a
+restart. A missing, empty, or malformed file rejects every request with 401
+until it is valid again; each distinct cause is logged once.
+
+Anonymous mode accepts every request without credentials and logs a warning
+at startup. Use it for local development only.
+
+`PUBLIC_READ_ENDPOINTS` decides whether the read-only discovery endpoints,
+exactly `GET /v1/models` and `GET /v1/registry`, bypass authentication. It
+defaults to `true` in static API key and anonymous mode and to `false` in
+NVCF mode, where the router's model list spans every tenant. Any other method
+on those paths is authenticated like every other route.
+
+| Mode | `PUBLIC_READ_ENDPOINTS=true` | `PUBLIC_READ_ENDPOINTS=false` |
+|---|---|---|
+| Static API keys | no key needed | valid key required, 401 without one |
+| NVCF | no bearer needed | bearer required, checked by the NVCF auth service with an empty routing key |
+| Anonymous | open | open (no authenticator) |
+
+In every mode the caller's `Authorization` header stays at the gateway. Set
+`STARGATE_SERVICE_TOKEN` to send `Authorization: Bearer <token>` to Stargate
+instead.
+
+Set `TLS_CERT_FILE` and `TLS_KEY_FILE` together to serve the listener over
+TLS. Setting only one of them is a startup error, and so is a pair that does
+not load. While serving, the gateway checks the modification time and size of
+both files every `TLS_RELOAD_INTERVAL` (default `30s`) and loads the pair again
+when either changed. New connections get the new certificate; open connections
+keep theirs. A pair that fails to load (unreadable, malformed, or a key that
+does not match the certificate) is rejected: the gateway keeps serving the last
+good pair, logs one warning per distinct error, and retries on every check
+until a good pair loads. Every load is logged at info with the leaf's subject,
+serial, and `not_after`.
+
+In Kubernetes, mount the certificate Secret (for example one cert-manager
+renews) as a volume and point the two variables at its files. The kubelet
+updates the mounted files when the Secret changes, and the gateway serves the
+renewed pair at most one `TLS_RELOAD_INTERVAL` later, without a restart. The
+kubelet's own delay depends on its sync period (about a minute by default).
+Secret volumes mounted with `subPath` are never updated; mount the whole
+volume.
+
+### Model discovery
+
+Both discovery endpoints call the router's `GET /v1/models` on
+`STARGATE_URL` on every request. The call forwards no caller header; it
+carries only `STARGATE_SERVICE_TOKEN` when set, and is bounded by
+`STARGATE_REQUEST_TIMEOUT`, or 10 seconds when that is unset. The router
+lists only routable inference servers, so a model appears only while the
+router can route to at least one of its servers. A router error, a non-2xx status, or a
+body that is not the expected JSON returns 502; a timeout returns 504.
+
+`GET /v1/models` returns the OpenAI list, one entry per distinct model id in
+the router's order:
+
+```json
+{"object":"list","data":[{"id":"meta/llama-3.1-8b-instruct","object":"model","created":0,"owned_by":"nvidia"}]}
+```
+
+`GET /v1/registry` aggregates the router's per-server entries per model,
+sorted by model. `inferenceServers` is the number of routable servers, and
+`clusterId` is the installation's cluster id. Servers that disagree on the
+cluster id yield their sorted distinct ids joined with `,` and a warning in the
+gateway log.
+
+```json
+{"object":"list","data":[{"model":"meta/llama-3.1-8b-instruct","clusterId":"spark-berlin","inferenceServers":1}]}
+```
 
 ## Prerequisites
 
@@ -115,8 +232,9 @@ mise run run
 those files exist.
 
 `mise run run` does not start Stargate. By default the gateway targets
-`http://127.0.0.1:8000`. NVCF gRPC auth is optional for local bootstrapping; if
-`NVCF_GRPC_ADDR` is not set, the auth middleware is disabled.
+`http://127.0.0.1:8000`. NVCF gRPC auth is optional for local bootstrapping:
+`mise run run` sets `ALLOW_ANONYMOUS=true` unless it is already set, so the
+gateway starts without an authenticator and accepts unauthenticated requests.
 
 If `RATE_LIMIT_SYNC_TRANSPORT` is set to `pubsub` or `nats`, run the sync
 consumer as a separate process:
@@ -151,6 +269,18 @@ Useful overrides:
   It applies only while a write is in progress, so long streams, long
   generations, and upstream pauses are not cut off.
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth
+- `API_KEYS_PATH` to enable static API key auth from the key file at that path
+  (see Authentication)
+- `ALLOW_ANONYMOUS=true` to start without any authenticator
+- `STATIC_ALLOWED_PATHS` for the comma-separated request paths served in static
+  API key mode (default `/v1/chat/completions`)
+- `PUBLIC_READ_ENDPOINTS` to serve `GET /v1/models` and `GET /v1/registry`
+  without authentication (default `true` in static API key and anonymous
+  mode, `false` in NVCF mode; see Authentication)
+- `STARGATE_SERVICE_TOKEN` for the bearer the gateway sends to Stargate
+- `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the listener over TLS
+- `TLS_RELOAD_INTERVAL` for how often the TLS files are checked for a renewed
+  pair (default `30s`, must be positive; see Authentication)
 - `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
   fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for
   OAuth2 client-credentials auth.
@@ -175,8 +305,19 @@ request routing key. Requests without a function, such as health checks, use
 
 The label is present on HTTP request, upstream request, token usage, provider
 time, first-token time, and stream duration metrics. Infrastructure metrics for
-authentication, pub/sub, rate-limit synchronization, and Olric remain
+authentication, pub/sub, rate-limit synchronization, TLS, and Olric remain
 function-independent.
+
+With TLS enabled, `llm_api_gateway_tls_certificate_expiry_seconds` is the unix
+time at which the served certificate expires. It has no sample on a plaintext
+gateway. `llm_api_gateway_tls_reloads_total{outcome="success|rejected"}`
+counts reload attempts after startup; a rejected pair is retried, and counted,
+on every check until a good pair loads. Example alert on a certificate that is
+not being renewed:
+
+```promql
+llm_api_gateway_tls_certificate_expiry_seconds - time() < 7 * 24 * 3600
+```
 
 Example request-rate query:
 
@@ -222,6 +363,7 @@ Run it with the embedded Olric rate limiter enabled:
 
 ```bash
 docker run --rm -p 8080:8080 \
+  -e ALLOW_ANONYMOUS=true \
   -e OLRIC_ENABLED=true \
   -e STARGATE_URL=http://host.docker.internal:8000 \
   llm-api-gateway:dev

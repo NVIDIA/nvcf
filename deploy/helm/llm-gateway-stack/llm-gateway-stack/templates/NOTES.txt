@@ -1,0 +1,78 @@
+{{- /*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/ -}}
+{{- $ns := .Release.Namespace -}}
+{{- $r := include "llm-gateway-stack.routerValues" . | fromJson -}}
+{{- $g := include "llm-gateway-stack.gatewayValues" . | fromJson -}}
+{{- $gateway := include "llm-gateway-stack.gatewayName" . -}}
+{{- $gatewayPort := dig "service" "port" 8080 $g -}}
+{{- $caName := .Values.tls.selfSigned.caName -}}
+{{- $scheme := ternary "https" "http" (dig "tls" "enabled" false $g) -}}
+The LLM gateway stack is installed as release {{ .Release.Name }} in namespace {{ $ns }}.
+
+  Gateway:             {{ $scheme }}://{{ $gateway }}.{{ $ns }}.svc.cluster.local:{{ $gatewayPort }}
+  Router worker gRPC:  {{ include "llm-gateway-stack.routerGrpcAddress" . }}
+{{- if .Values.clusterCredential.create }}
+  Cluster id:          {{ .Values.clusterId }}
+{{- end }}
+
+Pylon Operator
+--------------
+Set these values in the pylon-operator chart:
+{{ if .Values.clusterCredential.create }}
+  clusterId: {{ .Values.clusterId }}
+{{- end }}
+  router:
+    grpcAddress: {{ include "llm-gateway-stack.routerGrpcAddress" . }}
+{{- if .Values.tls.selfSigned.enabled }}
+  trustBundle:
+    configMap: {{ $caName }}
+
+The trust bundle ConfigMap must be in the operator's namespace. When the
+operator runs in another namespace than {{ $ns }}, copy it there:
+
+  kubectl -n {{ $ns }} get configmap {{ $caName }} -o jsonpath='{.data.ca\.crt}' > ca.crt
+  kubectl -n <operator-namespace> create configmap {{ $caName }} --from-file=ca.crt=ca.crt
+{{- else }}
+
+tls.selfSigned is off. Create these kubernetes.io/tls Secrets in namespace
+{{ $ns }}, for example with cert-manager Certificates, and give the operator the
+CA that signs the router certificate through its trustBundle.configMap:
+
+  {{ $r.tls.secretName }}  (router)
+  {{ $g.tls.existingSecret }}  (gateway)
+{{- end }}
+{{- if .Values.clusterCredential.create }}
+
+The router trusts the cluster tokens whose SHA-256 hashes are listed in
+clusterCredential.sha256 and clusterCredential.sha256Hashes. To rotate, add the
+new hash to sha256Hashes and upgrade, update the operator's credential Secret,
+then remove the old hash and upgrade again. None of it needs a pod restart.
+{{- else }}
+
+clusterCredential.create is false. Create Secret {{ $r.auth.credentialsSecret.name }}
+with key {{ $r.auth.credentialsSecret.key }} in namespace {{ $ns }}:
+
+  clusters:
+    <clusterId>:
+      - sha256:<sha256 of the cluster token>
+{{- end }}
+
+Call the gateway
+----------------
+{{- if .Values.tls.selfSigned.enabled }}
+  kubectl -n {{ $ns }} get configmap {{ $caName }} -o jsonpath='{.data.ca\.crt}' > ca.crt
+{{- end }}
+  kubectl -n {{ $ns }} port-forward svc/{{ $gateway }} 8080:{{ $gatewayPort }}
+  curl {{ if eq $scheme "https" }}--cacert {{ if .Values.tls.selfSigned.enabled }}ca.crt{{ else }}<CA file of the gateway certificate>{{ end }} {{ end }}{{ $scheme }}://localhost:8080/v1/chat/completions \
+    -H "Authorization: Bearer ${API_KEY}" \
+    -H 'Content-Type: application/json' \
+    -d '{"model": "<modelName of an InferenceEndpoint>", "messages": [{"role": "user", "content": "Hello"}]}'
+{{- if eq $scheme "https" }}
+
+The gateway reads its certificate at startup. After the certificate changes,
+restart it:
+
+  kubectl -n {{ $ns }} rollout restart deployment/{{ $gateway }}
+{{- end }}

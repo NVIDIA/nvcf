@@ -70,6 +70,7 @@ go_test(
     deps = [
         "@com_github_olric_data_olric//:olric",
         "@com_github_olric_data_olric//stats",
+        "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_common//expfmt",
         "@com_github_prometheus_common//model",
         "@com_github_stretchr_testify//require",

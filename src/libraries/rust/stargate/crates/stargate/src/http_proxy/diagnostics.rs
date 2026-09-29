@@ -89,4 +89,25 @@ mod tests {
 
         assert_eq!(request.model_ids, vec![" model-a ", "model-b"]);
     }
+
+    #[test]
+    fn http_model_discovery_serializes_model_ids_before_entries() {
+        let response = ListModelsResponse {
+            model_ids: vec!["model-a".to_string()],
+            entries: vec![stargate_proto::pb::ListModelsEntry {
+                model_id: "model-a".to_string(),
+                cluster_id: "cluster-a".to_string(),
+                inference_server_id: "spark-1".to_string(),
+            }],
+        };
+
+        let body = serde_json::to_string(&response).expect("response should serialize");
+        assert_eq!(
+            body,
+            concat!(
+                r#"{"model_ids":["model-a"],"entries":[{"model_id":"model-a","#,
+                r#""cluster_id":"cluster-a","inference_server_id":"spark-1"}]}"#
+            )
+        );
+    }
 }

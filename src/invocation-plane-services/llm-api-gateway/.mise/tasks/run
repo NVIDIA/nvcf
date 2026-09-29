@@ -25,6 +25,9 @@ export STARGATE_URL="${STARGATE_URL:-http://127.0.0.1:8000}"
 export NVCF_REGION="${NVCF_REGION:-local}"
 export NVCF_DEFAULT_FUNCTION_ID="${NVCF_DEFAULT_FUNCTION_ID:-default}"
 export NVCF_DEFAULT_MODEL="${NVCF_DEFAULT_MODEL:-bootstrap-echo}"
+# The gateway fails closed without an authenticator; local runs opt in to
+# anonymous access unless NVCF_GRPC_ADDR or API_KEYS_PATH is provided.
+export ALLOW_ANONYMOUS="${ALLOW_ANONYMOUS:-true}"
 
 exec watchexec \
   --debounce 200ms \

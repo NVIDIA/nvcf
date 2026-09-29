@@ -73,10 +73,25 @@ The HTTP mirror accepts an optional repeatable `model_ids` filter:
 | --- | --- |
 | `model_ids` | Optional repeatable model filter, for example `?model_ids=a&model_ids=b`. |
 
-The HTTP response is JSON with the same shape as the gRPC response:
+The HTTP response is JSON with the same shape as the gRPC response, with
+`model_ids` first:
 
 ```json
-{"model_ids":["model-a","model-b"]}
+{
+  "model_ids": ["model-a", "model-b"],
+  "entries": [
+    {
+      "model_id": "model-a",
+      "cluster_id": "spark-cluster",
+      "inference_server_id": "pylon-spark-1"
+    },
+    {
+      "model_id": "model-b",
+      "cluster_id": "pylon-station-1",
+      "inference_server_id": "pylon-station-1"
+    }
+  ]
+}
 ```
 
 An empty `model_ids` value returns HTTP `400`. The HTTP path uses the same
@@ -91,7 +106,16 @@ Request:
 Response:
 
 - `model_ids`: model ids with a current routable target generation in the
-  selected pod's local state.
+  selected pod's local state, sorted. Kept for callers that predate
+  `entries`; it always equals the distinct `model_id` values of `entries`.
+- `entries`: one entry per active inference server of each returned model,
+  sorted by `model_id`, then `inference_server_id`. A server is listed only
+  while the proxy can route to it: its model is active and its path has a
+  measured RTT. Fields:
+  - `model_id`: the model the server is active for.
+  - `cluster_id`: the registration's effective cluster id; the
+    `inference_server_id` when the registration left `cluster_id` empty.
+  - `inference_server_id`: the Pylon's registration id.
 
 `ListModels` is a hint, not a reservation. If a recent positive result is
 followed by proxy `404` with `x-stargate-error-code: no_eligible_candidates`,

@@ -37,6 +37,7 @@ use super::http3::{H3ServerConnection, H3ServerRequestStream};
 use super::{
     EnsureConnectedResult, QuicHttpProxy, QuicTunnelConfig, RegistrationTunnel, StreamingResponse,
 };
+use crate::auth::{AuthResult, WorkerAuthenticator};
 use crate::routing_state::{
     RegistrationGeneration, RegistrationIdentity, RunningRegistration, StargateState,
     test_registration_generation,
@@ -79,6 +80,12 @@ tunnel_tests! {
     http3_tunnel_reports_body_send_error_at_response_eof => body_send_error_is_returned_at_response_eof(Http3),
     webtransport_tunnel_reports_body_send_error_at_response_eof => body_send_error_is_returned_at_response_eof(WebTransport),
     raw_quic_tunnel_does_not_wait_forever_for_stalled_request_body_at_response_eof => stalled_body_send_does_not_block_response_eof(RawQuic),
+    raw_quic_reverse_handshake_rejects_other_authenticated_cluster => assert_reverse_handshake_rejects_other_authenticated_cluster(RawQuic, Some("cluster id mismatch")),
+    // The router closes the connection right after the 403, which can race the
+    // response, so only the rejection itself is asserted.
+    webtransport_reverse_connect_rejects_other_authenticated_cluster => assert_reverse_handshake_rejects_other_authenticated_cluster(WebTransport, None),
+    raw_quic_reverse_handshake_accepts_registered_authenticated_cluster => assert_reverse_handshake_accepts_registered_authenticated_cluster(RawQuic),
+    webtransport_reverse_connect_accepts_registered_authenticated_cluster => assert_reverse_handshake_accepts_registered_authenticated_cluster(WebTransport),
 }
 
 fn install_crypto_provider() {
@@ -168,6 +175,18 @@ fn test_quic_proxy_with(
     tunnel_protocol: TunnelTransportProtocol,
     configure: impl FnOnce(&mut QuicTunnelConfig),
 ) -> Arc<QuicHttpProxy> {
+    test_quic_proxy_with_authenticator(
+        tunnel_protocol,
+        configure,
+        Arc::new(crate::auth::OpenAuthenticator),
+    )
+}
+
+fn test_quic_proxy_with_authenticator(
+    tunnel_protocol: TunnelTransportProtocol,
+    configure: impl FnOnce(&mut QuicTunnelConfig),
+    authenticator: Arc<dyn WorkerAuthenticator>,
+) -> Arc<QuicHttpProxy> {
     let mut config = QuicTunnelConfig {
         connect_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(5),
@@ -180,10 +199,7 @@ fn test_quic_proxy_with(
         tunnel_protocol,
     };
     configure(&mut config);
-    Arc::new(
-        QuicHttpProxy::new(config, Arc::new(crate::auth::OpenAuthenticator))
-            .expect("test QUIC proxy should initialize"),
-    )
+    Arc::new(QuicHttpProxy::new(config, authenticator).expect("test QUIC proxy should initialize"))
 }
 
 async fn start_test_quic_tunnel(
@@ -322,8 +338,21 @@ async fn start_tunnel_server(
     state: Arc<StargateState>,
     tunnel_protocol: TunnelTransportProtocol,
 ) -> (Arc<QuicHttpProxy>, SocketAddr, CriticalTaskGroup) {
+    start_tunnel_server_with_authenticator(
+        state,
+        tunnel_protocol,
+        Arc::new(crate::auth::OpenAuthenticator),
+    )
+    .await
+}
+
+async fn start_tunnel_server_with_authenticator(
+    state: Arc<StargateState>,
+    tunnel_protocol: TunnelTransportProtocol,
+    authenticator: Arc<dyn WorkerAuthenticator>,
+) -> (Arc<QuicHttpProxy>, SocketAddr, CriticalTaskGroup) {
     install_crypto_provider();
-    let proxy = test_quic_proxy(tunnel_protocol);
+    let proxy = test_quic_proxy_with_authenticator(tunnel_protocol, |_| {}, authenticator);
     let (tasks, _failures) = CriticalTaskGroup::new("stargate test");
     let addr = proxy
         .start_reverse_listener(
@@ -1678,6 +1707,97 @@ async fn health_check_succeeds_through_reverse_tunnel() {
         .unwrap();
     assert!(rtt.as_millis() < 1000);
     fixture.shutdown().await;
+}
+
+/// Authenticates every worker as one fixed cluster.
+struct FixedClusterAuthenticator(&'static str);
+
+#[async_trait::async_trait]
+impl WorkerAuthenticator for FixedClusterAuthenticator {
+    async fn authenticate(&self, _token: Option<&str>) -> Result<AuthResult> {
+        Ok(AuthResult {
+            routing_key: None,
+            cluster_id: Some(self.0.to_owned()),
+        })
+    }
+}
+
+async fn connect_reverse_tunnel_as_cluster(
+    tunnel_protocol: TunnelTransportProtocol,
+    authenticated_cluster_id: &'static str,
+) -> (
+    Result<pylon_lib::ReverseQuicTunnelHandle, String>,
+    Arc<QuicHttpProxy>,
+    Arc<RegistrationGeneration>,
+    CriticalTaskGroup,
+    RegistrationTunnel,
+) {
+    let state = Arc::new(StargateState::new());
+    // register_backend binds the registration to cluster INFERENCE_SERVER_ID.
+    let registration = register_backend(&state, INFERENCE_SERVER_ID, true);
+    let generation = registration.generation();
+    let (proxy, addr, runtime) = start_tunnel_server_with_authenticator(
+        state,
+        tunnel_protocol,
+        Arc::new(FixedClusterAuthenticator(authenticated_cluster_id)),
+    )
+    .await;
+    let owner = own_reverse_registration(proxy.clone(), &registration);
+    let backend_url = spawn_mock_backend(health_backend("ok")).await;
+    let mut config = reverse_tunnel_config(addr, INFERENCE_SERVER_ID, backend_url);
+    config.quic_insecure = true;
+    config.tunnel_protocol = tunnel_protocol;
+    let result = tokio::time::timeout(Duration::from_secs(3), start_reverse_quic_tunnel(config))
+        .await
+        .expect("reverse tunnel handshake should finish")
+        .map_err(|error| error.to_string());
+    (result, proxy, generation, runtime, owner)
+}
+
+async fn assert_reverse_handshake_rejects_other_authenticated_cluster(
+    tunnel_protocol: TunnelTransportProtocol,
+    expected_error: Option<&str>,
+) {
+    let (result, proxy, generation, runtime, _owner) =
+        connect_reverse_tunnel_as_cluster(tunnel_protocol, "other-cluster").await;
+
+    let error = match result {
+        Ok(handle) => {
+            handle.shutdown().await;
+            panic!("a credential for another cluster must not open the reverse tunnel");
+        }
+        Err(error) => error,
+    };
+    if let Some(expected_error) = expected_error {
+        assert!(
+            error.contains(expected_error),
+            "unexpected rejection: {error}"
+        );
+    }
+    assert!(
+        !proxy
+            .await_reverse_connection(generation, Duration::from_millis(100))
+            .await,
+        "a rejected handshake must not install a reverse connection"
+    );
+    runtime.begin_shutdown();
+}
+
+async fn assert_reverse_handshake_accepts_registered_authenticated_cluster(
+    tunnel_protocol: TunnelTransportProtocol,
+) {
+    let (result, proxy, generation, runtime, _owner) =
+        connect_reverse_tunnel_as_cluster(tunnel_protocol, INFERENCE_SERVER_ID).await;
+
+    let handle = result.expect("a credential for the registered cluster should connect");
+    assert!(
+        proxy
+            .await_reverse_connection(generation, Duration::from_secs(2))
+            .await,
+        "matching cluster id should install the reverse connection"
+    );
+    handle.shutdown().await;
+    runtime.begin_shutdown();
 }
 
 #[tokio::test]

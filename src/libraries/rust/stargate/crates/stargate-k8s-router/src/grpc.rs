@@ -873,6 +873,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registration_forwarding_preserves_message() {
+        let recorder = Recorder::default();
+        let fake = start_fake_stargate("stargate-1", recorder.clone()).await;
+        let router = start_router(snapshot(&[("stargate-1", fake.addr)])).await;
+        let mut registration = registration();
+        registration.cluster_id = "cluster-a".to_string();
+
+        let mut client = router.client("stargate-1.stargate.external");
+        let response = client
+            .register_inference_server(Request::new(tokio_stream::iter([registration.clone()])))
+            .await
+            .expect("registration should route");
+        first_message(response).await;
+
+        assert_eq!(
+            recorder
+                .registrations
+                .lock()
+                .expect("registrations lock poisoned")
+                .as_slice(),
+            [registration]
+        );
+    }
+
+    #[tokio::test]
     async fn registration_rejects_service_authority_without_target_pod() {
         let recorder_a = Recorder::default();
         let fake_a = start_fake_stargate("stargate-0", recorder_a.clone()).await;

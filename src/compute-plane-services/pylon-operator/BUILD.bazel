@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator
+# gazelle:go_naming_convention import_alias
+# gazelle:exclude _output
+# gazelle:exclude config
+# gazelle:exclude hack
+gazelle(name = "gazelle")
+
+# Generated CRDs, read by the envtest suite in internal/integration.
+filegroup(
+    name = "crds",
+    srcs = glob(["config/crd/bases/*.yaml"]),
+    visibility = [":__subpackages__"],
+)
+
+# Build/load/index/tar targets. Publishing is owned by the release pipeline,
+# which copies :image_index by digest.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = "//src/compute-plane-services/pylon-operator/cmd/pylon-operator",
+    binary_path = "/usr/bin/pylon-operator",
+    tags = ["nvcf-pylon-operator"],
+    visibility = ["//visibility:public"],
+)
+
+# Regression guard for the rules_pkg default-0644 startup failure: fails when
+# the entrypoint in the image layer is not executable.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["image_entrypoint_mode_test.sh"],
+    args = ["$(location :image.tar)"],
+    data = [":image.tar"],
+)

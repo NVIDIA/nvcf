@@ -1,0 +1,99 @@
+{{- if .Values.tls.selfSigned.enabled }}
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- $ns := .Release.Namespace }}
+{{- $days := int .Values.tls.selfSigned.validityDays }}
+{{- $caName := .Values.tls.selfSigned.caName }}
+{{- $r := include "llm-gateway-stack.routerValues" . | fromJson }}
+{{- $g := include "llm-gateway-stack.gatewayValues" . | fromJson }}
+{{- /*
+Keep the installed CA across upgrades: transport pods trust it through the
+pylon-operator trust bundle, and Pylon does not reload trust without a restart.
+*/}}
+{{- $ca := dict }}
+{{- $caReused := false }}
+{{- $existingCA := lookup "v1" "Secret" $ns $caName }}
+{{- if and $existingCA $existingCA.data (index $existingCA.data "tls.crt") (index $existingCA.data "tls.key") }}
+{{- $ca = buildCustomCert (index $existingCA.data "tls.crt") (index $existingCA.data "tls.key") }}
+{{- $caReused = true }}
+{{- else }}
+{{- $ca = genCA (printf "%s %s" $caName $ns) $days }}
+{{- end }}
+{{- $caCrt := $ca.Cert | b64enc }}
+{{- $routerName := include "llm-gateway-stack.routerName" . }}
+{{- $routerDns := include "llm-gateway-stack.routerDnsNames" . | fromJsonArray }}
+{{- $routerNames := join "," $routerDns }}
+{{- $router := include "llm-gateway-stack.serverCert" (dict "root" . "ca" $ca "caReused" $caReused "secretName" $r.tls.secretName "commonName" (printf "%s.%s.svc.cluster.local" $routerName $ns) "dnsNames" $routerDns "ips" (list) "names" $routerNames) | fromJson }}
+{{- $gatewayName := include "llm-gateway-stack.gatewayName" . }}
+{{- $gatewayDns := include "llm-gateway-stack.gatewayDnsNames" . | fromJsonArray }}
+{{- $gatewayIPs := .Values.tls.selfSigned.gatewayIPs | default (list) | uniq }}
+{{- $gatewayNames := join "," (concat $gatewayDns $gatewayIPs) }}
+{{- $gateway := include "llm-gateway-stack.serverCert" (dict "root" . "ca" $ca "caReused" $caReused "secretName" $g.tls.existingSecret "commonName" (printf "%s.%s.svc.cluster.local" $gatewayName $ns) "dnsNames" $gatewayDns "ips" $gatewayIPs "names" $gatewayNames) | fromJson }}
+# Self-signed CA. Kept on uninstall so a reinstall under the same release name
+# keeps the trust that transport pods already have. Delete it to issue a new CA
+# and certificates on the next upgrade.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $caName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "llm-gateway-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca
+  annotations:
+    helm.sh/resource-policy: keep
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $caCrt }}
+  tls.key: {{ $ca.Key | b64enc }}
+---
+# CA certificate for clients of the router and the gateway. The pylon-operator
+# chart's trustBundle.configMap can name this ConfigMap when the operator runs
+# in this namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $caName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "llm-gateway-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca
+data:
+  ca.crt: |
+    {{- $ca.Cert | trim | nindent 4 }}
+---
+# Router QUIC server certificate, mounted by the llm-request-router subchart.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $r.tls.secretName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "llm-gateway-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router-tls
+  annotations:
+    llm-gateway-stack.nvidia.com/subject-alt-names: {{ $routerNames | quote }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $router.crt }}
+  tls.key: {{ $router.key }}
+  ca.crt: {{ $caCrt }}
+---
+# Gateway listener certificate, mounted by the llm-api-gateway subchart. The
+# gateway reads it at startup, so restart the gateway after it changes.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $g.tls.existingSecret }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "llm-gateway-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway-tls
+  annotations:
+    llm-gateway-stack.nvidia.com/subject-alt-names: {{ $gatewayNames | quote }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $gateway.crt }}
+  tls.key: {{ $gateway.key }}
+  ca.crt: {{ $caCrt }}
+{{- end }}

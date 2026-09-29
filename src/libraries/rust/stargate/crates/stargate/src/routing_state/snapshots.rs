@@ -224,6 +224,16 @@ impl RoutedInferenceServerSnapshot {
     }
 }
 
+/// One active inference server of a routable target, as listed by
+/// `ListModels`. `registration` is the exact registration generation the
+/// routing state holds for the backend, so its identity is the one admitted for
+/// the stream that published the route.
+#[derive(Clone, Debug)]
+pub(crate) struct ActiveModelServer {
+    pub(crate) model_id: String,
+    pub(crate) registration: Arc<RegistrationGeneration>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RoutedClusterSnapshot {
     pub cluster_id: String,

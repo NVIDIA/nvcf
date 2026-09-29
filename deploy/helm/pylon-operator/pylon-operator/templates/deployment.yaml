@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- include "pylon-operator.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pylon-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pylon-operator.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    {{- if .Values.leaderElection.enabled }}
+    type: RollingUpdate
+    {{- else }}
+    type: Recreate
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pylon-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pylon-operator.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "pylon-operator.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: operator
+          image: {{ include "pylon-operator.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - {{ printf "--cluster-id=%s" .Values.clusterId | quote }}
+            - {{ printf "--router-grpc-address=%s" .Values.router.grpcAddress | quote }}
+            - {{ printf "--pylon-image=%s" (include "pylon-operator.pylonImage" .) | quote }}
+            {{- with .Values.pylon.image.pullPolicy }}
+            - {{ printf "--pylon-image-pull-policy=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.watchNamespaces }}
+            - {{ printf "--watch-namespaces=%s" (join "," .) | quote }}
+            {{- end }}
+            - {{ printf "--transport-replicas=%d" (int .Values.transport.replicas) | quote }}
+            - {{ printf "--initial-input-tps=%v" .Values.transport.initialInputTPS | quote }}
+            - {{ printf "--probe-interval=%s" .Values.probeInterval | quote }}
+            - {{ printf "--scrape-interval=%s" .Values.scrapeInterval | quote }}
+            - {{ printf "--cluster-credential-secret=%s" (include "pylon-operator.credentialSecretName" .) | quote }}
+            {{- with .Values.trustBundle.configMap }}
+            - {{ printf "--trust-bundle-configmap=%s" . | quote }}
+            {{- end }}
+            - {{ printf "--metrics-bind-address=:%d" (int .Values.metrics.port) | quote }}
+            - {{ printf "--health-probe-bind-address=:%d" (int .Values.healthProbe.port) | quote }}
+            {{- if .Values.leaderElection.enabled }}
+            - "--leader-elect"
+            {{- end }}
+            {{- if .Values.devInsecureTransport }}
+            - "--dev-insecure-transport"
+            {{- end }}
+            {{- with .Values.logLevel }}
+            - {{ printf "--zap-log-level=%v" . | quote }}
+            {{- end }}
+            {{- range .Values.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            # Defaults --operator-namespace, where the credential Secret and
+            # the trust bundle ConfigMap live.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.healthProbe.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

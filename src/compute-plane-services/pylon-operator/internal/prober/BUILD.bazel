@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "prober",
+    srcs = ["prober.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/prober",
+    visibility = ["//src/compute-plane-services/pylon-operator:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/pylon-operator/api/v1alpha1",
+        "//src/compute-plane-services/pylon-operator/internal/metrics",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_api//discovery/v1:discovery",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_sigs_controller_runtime//pkg/log",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prober",
+    visibility = ["//src/compute-plane-services/pylon-operator:__subpackages__"],
+)
+
+go_test(
+    name = "prober_test",
+    srcs = ["prober_test.go"],
+    embed = [":prober"],
+    deps = [
+        "//src/compute-plane-services/pylon-operator/api/v1alpha1",
+        "//src/compute-plane-services/pylon-operator/internal/metrics",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_model//go",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_api//discovery/v1:discovery",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_utils//ptr",
+    ],
+)

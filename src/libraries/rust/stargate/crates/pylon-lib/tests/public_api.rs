@@ -17,10 +17,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use pylon_lib::{
-    ClientError, CurrentModelStats, DEFAULT_MAX_SSE_BUFFER_BYTES,
-    InferenceServerRegistrationClient, InferenceServerRegistrationConfig, QuicHttpTunnelConfig,
-    RequestCounterUpdate, RequestCounterUpdateInput, ReverseQuicTunnelConfig, StatsUpdateSource,
-    TunnelTransportProtocol,
+    ClientError, CurrentModelStats, DEFAULT_MAX_SSE_BUFFER_BYTES, InferenceServerRegistrationClient,
+    InferenceServerRegistrationConfig, QuicHttpTunnelConfig, RequestCounterUpdate,
+    RequestCounterUpdateInput, ReverseQuicTunnelConfig, StatsUpdateSource, TunnelTransportProtocol,
 };
 
 #[test]

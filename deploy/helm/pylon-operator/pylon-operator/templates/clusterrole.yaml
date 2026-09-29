@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copied from src/compute-plane-services/pylon-operator/config/rbac/role.yaml
+# by scripts/sync-crd.sh. Do not edit. Run make sync-crd after
+# make codegen-update in the operator module.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pylon-operator.fullname" . }}
+  labels:
+    {{- include "pylon-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - pylon.nvidia.com
+  resources:
+  - inferenceendpoints
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - pylon.nvidia.com
+  resources:
+  - inferenceendpoints/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - pylon.nvidia.com
+  resources:
+  - inferenceendpoints/status
+  verbs:
+  - get
+  - patch
+  - update

@@ -52,6 +52,7 @@ fn invalid_stargate_runtime_listen_addr_exits_nonzero() {
             "stargate-headless",
             "--listen-addr",
             "not-a-socket-addr",
+            "--allow-open-worker-auth",
         ])
         .status()
         .expect("stargate process should start");
@@ -59,6 +60,42 @@ fn invalid_stargate_runtime_listen_addr_exits_nonzero() {
     assert!(
         !status.success(),
         "stargate should reject invalid runtime listen addresses"
+    );
+}
+
+#[test]
+fn stargate_without_worker_authenticator_exits_nonzero() {
+    let output = Command::new(env!("CARGO_BIN_EXE_stargate"))
+        .args([
+            "--stargate-id",
+            "test-stargate",
+            "--advertise-addr",
+            "127.0.0.1:50071",
+            "--stargate-discovery-dns-name",
+            "stargate-headless",
+            "--disable-dns-discovery",
+            "--listen-addr",
+            "127.0.0.1:0",
+            "--model-discovery-listen-addr",
+            "127.0.0.1:0",
+            "--http-listen-addr",
+            "127.0.0.1:0",
+            "--metrics-port",
+            "0",
+        ])
+        .env_remove("STARGATE_WORKER_AUTH_FILE")
+        .env_remove("STARGATE_ALLOW_OPEN_WORKER_AUTH")
+        .output()
+        .expect("stargate process should start");
+
+    assert!(
+        !output.status.success(),
+        "stargate must refuse to start without a worker authenticator"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no worker authenticator configured"),
+        "unexpected stderr: {stderr}"
     );
 }
 
@@ -103,5 +140,47 @@ fn watch_stargates_probe_invalid_endpoint_exits_nonzero() {
     assert!(
         !status.success(),
         "watch-stargates probe should reject invalid control-plane endpoints"
+    );
+}
+
+#[test]
+fn stargate_with_missing_worker_auth_file_exits_nonzero() {
+    let dir = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = dir.path().join("credentials.yaml");
+    let output = Command::new(env!("CARGO_BIN_EXE_stargate"))
+        .args([
+            "--stargate-id",
+            "test-stargate",
+            "--advertise-addr",
+            "127.0.0.1:50071",
+            "--stargate-discovery-dns-name",
+            "stargate-headless",
+            "--disable-dns-discovery",
+            "--listen-addr",
+            "127.0.0.1:0",
+            "--model-discovery-listen-addr",
+            "127.0.0.1:0",
+            "--http-listen-addr",
+            "127.0.0.1:0",
+            "--metrics-port",
+            "0",
+        ])
+        .arg("--worker-auth-file")
+        .arg(&path)
+        .env_remove("STARGATE_ALLOW_OPEN_WORKER_AUTH")
+        .output()
+        .expect("stargate process should start");
+
+    assert!(
+        !output.status.success(),
+        "stargate must refuse to start without a loadable worker auth file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "failed to load worker auth file {}",
+            path.display()
+        )),
+        "unexpected stderr: {stderr}"
     );
 }

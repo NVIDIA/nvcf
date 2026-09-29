@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Single-cluster LLM gateway stack: the LLM API gateway and the LLM request
+# router in the release namespace. The defaults need no Vault, no cert-manager
+# and no NVCF API. Values marked required have no default and fail the render
+# when empty.
+#
+# Both subcharts are configured under their alias below. The stack renders the
+# Secrets they mount under the names set there, so a name changed under
+# llm-request-router or llm-api-gateway is also the name the stack creates.
+
+# Name of this installation's cluster, a DNS label. Required while
+# clusterCredential.create is true. Use the pylon-operator chart's clusterId:
+# the router admits a transport pod only under the cluster id its credential is
+# bound to.
+clusterId: ""
+
+# T0 cluster credential that transport pods present to the router.
+clusterCredential:
+  # Render the router's worker auth file Secret, named by
+  # llm-request-router.llmRequestRouter.auth.credentialsSecret.name, as
+  #   clusters:
+  #     <clusterId>:
+  #       - sha256:<64 hex>
+  # with one entry per hash below. Set false to create that Secret yourself,
+  # for example to list more than one cluster. clusterId, sha256 and
+  # sha256Hashes are then not used.
+  create: true
+  # SHA-256 of the cluster token that the pylon-operator chart generated
+  # (Secret pylon-operator-cluster-credential, key cluster-token), as 64 hex
+  # characters with or without the sha256: prefix. Hex case is ignored. The
+  # token itself never enters this chart.
+  sha256: ""
+  # More hashes in the same forms, merged after sha256 into one list. Set
+  # sha256, sha256Hashes or both; at least one hash is required while create
+  # is true, and a hash may appear only once. Rotation: add the new token's
+  # hash here, rotate the operator's credential Secret, then drop the old hash.
+  sha256Hashes: []
+
+# Caller API keys. Each entry is an id and the lowercase hex SHA-256 of the key;
+# the keys themselves never enter this chart. Ids are 1 to 128 letters, digits,
+# '.', '_' or '-' and start with a letter or digit. Ids and digests must be
+# unique. At least one entry is required while apiKeysSecret.create is true.
+#   apiKeys:
+#     - id: demo
+#       sha256: <output of: printf '%s' "$API_KEY" | shasum -a 256>
+apiKeys: []
+
+apiKeysSecret:
+  # Render the gateway's key file Secret from apiKeys, named by
+  # llm-api-gateway.llmApiGateway.auth.staticKeys.existingSecret, key
+  # api-keys.json. Set false to create that Secret yourself. The gateway
+  # re-reads the file at most every 60 seconds.
+  create: true
+
+tls:
+  selfSigned:
+    # Generate a CA and, signed by it, the router's QUIC certificate and the
+    # gateway's listener certificate, as kubernetes.io/tls Secrets under the
+    # names the subcharts mount (llm-request-router.llmRequestRouter.tls.secretName
+    # and llm-api-gateway.llmApiGateway.tls.existingSecret). Upgrades keep the
+    # installed CA and certificates: the templates read them with lookup and
+    # issue a new certificate only when its DNS names or IPs change or the CA
+    # is gone. The CA Secret is kept on uninstall, so a reinstall under the
+    # same release name keeps the trust that transport pods already have.
+    #
+    # Set false to supply both Secrets yourself, for example from cert-manager
+    # Certificates whose secretName is those two names. The stack then renders
+    # no TLS Secret and no CA ConfigMap.
+    enabled: true
+    # Validity of the generated CA and certificates, in days.
+    validityDays: 3650
+    # Name of the CA Secret and of the ConfigMap that holds the CA certificate
+    # in key ca.crt. Point the pylon-operator chart's trustBundle.configMap at
+    # this ConfigMap when the operator runs in this namespace; otherwise copy
+    # the ConfigMap into the operator's namespace.
+    caName: llm-gateway-stack-ca
+    # Extra DNS names and IP addresses for the gateway certificate, such as the
+    # names clients use from outside the cluster. The in-cluster Service names
+    # are always included. localhost and 127.0.0.1 cover kubectl port-forward.
+    gatewayDnsNames:
+      - localhost
+    gatewayIPs:
+      - 127.0.0.1
+    # Extra DNS names for the router certificate. The router Service, backend
+    # router Service and per-pod headless names are always included.
+    routerDnsNames: []
+
+# Optional monitoring (an OpenTelemetry collector and Grafana) and the demo UI
+# are not part of this chart yet; they are added later.
+
+llm-request-router:
+  llmRequestRouter:
+    # One replica runs without the backend router. The generated certificate
+    # also covers the per-pod and backend router names, so raising
+    # replicaCount needs no new certificate.
+    replicaCount: 1
+    image:
+      # Required: supply registry and repository, for example
+      #   registry: <your-registry>
+      #   repository: <your-org>/stargate
+      registry: ""
+      repository: ""
+      # Pinned here as well as in the router chart; the release tooling moves
+      # this path when the stargate image releases.
+      tag: "0.18.0"
+    auth:
+      # Static credentials mode: no gateway AuthLlmWorker call and no Vault.
+      workerAuthEndpoint: ""
+      credentialsSecret:
+        name: llm-gateway-stack-worker-credentials
+        key: credentials.yaml
+    vault:
+      noVaultAnnotations: true
+    tls:
+      mode: existingSecret
+      secretName: llm-gateway-stack-router-tls
+      certPath: /etc/stargate/tls/tls.crt
+      keyPath: /etc/stargate/tls/tls.key
+      quicInsecure: false
+
+llm-api-gateway:
+  llmApiGateway:
+    replicaCount: 1
+    image:
+      # Required: supply registry and repository, for example
+      #   registry: <your-registry>
+      #   repository: <your-org>/llm-api-gateway
+      registry: ""
+      repository: ""
+      # Pinned here as well as in the gateway chart; the release tooling moves
+      # this path when the llm-api-gateway image releases.
+      tag: "0.14.2"
+    config:
+      # The router Service in the same namespace, by its short name.
+      requestRouterUrl: http://llm-request-router:8000
+    auth:
+      mode: staticKeys
+      staticKeys:
+        existingSecret: llm-gateway-stack-api-keys
+    vault:
+      enabled: false
+    tls:
+      enabled: true
+      existingSecret: llm-gateway-stack-gateway-tls

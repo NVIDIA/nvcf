@@ -27,7 +27,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci test check-pki-render check-multi-replica-render check-backend-router-render check-load-balancer-render test-k8s-readiness-warmup
+.PHONY: install uninstall status lint template validate clean package push-oci test check-pki-render check-multi-replica-render check-backend-router-render check-load-balancer-render check-worker-auth-render test-k8s-readiness-warmup
 
 install:
 ifndef values
@@ -65,7 +65,7 @@ template:
 validate: template
 	kubeconform -strict -summary -output pretty -kubernetes-version 1.31.5 bin/manifest.yaml
 
-test: check-pki-render check-multi-replica-render check-backend-router-render check-load-balancer-render
+test: check-pki-render check-multi-replica-render check-backend-router-render check-load-balancer-render check-worker-auth-render
 
 check-pki-render:
 	sh ./scripts/check-pki-render.sh
@@ -78,6 +78,9 @@ check-backend-router-render:
 
 check-load-balancer-render:
 	bash ./scripts/check-load-balancer-render.sh
+
+check-worker-auth-render:
+	bash ./scripts/check-worker-auth-render.sh
 
 test-k8s-readiness-warmup:
 	python3 ./scripts/test-readiness-warmup-k8s.py

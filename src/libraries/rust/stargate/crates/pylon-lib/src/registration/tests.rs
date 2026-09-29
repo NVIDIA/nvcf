@@ -41,7 +41,7 @@ use tower::util::MapRequestLayer;
 use crate::quic_http_tunnel::{TunnelError, TunnelForwardingConfig};
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
 use crate::runtime_state::{CurrentModelStats, PylonRuntimeState, gated_model_status};
-use crate::stats::PylonMetrics;
+use crate::stats::{PylonMetrics, RegistrationStreamClosure};
 use crate::test_support::{RecordedTracingEvent, RecordingTracingSubscriber};
 
 use super::discovery::*;
@@ -1840,4 +1840,282 @@ async fn registration_stream_termination_delays_reconnect_and_cancels_promptly()
         }));
         server.shutdown().await;
     }
+}
+
+fn closure_samples(router: &str, counts: &[(&str, u64)]) -> Vec<String> {
+    [
+        "unauthenticated",
+        "invalid_argument",
+        "permission_denied",
+        "unavailable",
+        "end_of_stream",
+        "io",
+        "connect",
+        "other",
+    ]
+    .into_iter()
+    .map(|reason| {
+        let count = counts
+            .iter()
+            .find_map(|(counted, count)| (*counted == reason).then_some(*count))
+            .unwrap_or(0);
+        format!(
+            r#"pylon_registration_stream_closures_total{{reason="{reason}",router="{router}"}} {count}"#
+        )
+    })
+    .collect()
+}
+
+fn assert_closures(metrics: &PylonMetrics, router: &str, counts: &[(&str, u64)]) {
+    let samples = closure_samples(router, counts);
+    assert_metrics(
+        metrics,
+        &samples.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn registration_stream_closures_start_at_zero_for_every_reason() {
+    let metrics = PylonMetrics::new().expect("metrics should initialize");
+
+    let _closures = RegistrationStreamClosures::new(Some(metrics.as_ref()), "router-a");
+
+    assert_closures(&metrics, "router-a", &[]);
+}
+
+#[test]
+fn registration_stream_closure_reasons_follow_the_router_status_code() {
+    for (code, expected) in [
+        (tonic::Code::Unauthenticated, "unauthenticated"),
+        (tonic::Code::InvalidArgument, "invalid_argument"),
+        (tonic::Code::PermissionDenied, "permission_denied"),
+        (tonic::Code::Unavailable, "unavailable"),
+        (tonic::Code::AlreadyExists, "other"),
+        (tonic::Code::Internal, "other"),
+        (tonic::Code::Unknown, "other"),
+    ] {
+        assert_eq!(
+            closure_for_status(&Status::new(code, "test")).as_str(),
+            expected,
+            "{code:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn registration_open_failures_count_connect_status_and_local_errors() {
+    let metrics = PylonMetrics::new().expect("metrics should initialize");
+    let transport_error = tonic::transport::Endpoint::from_static("http://127.0.0.1:1")
+        .connect()
+        .await
+        .expect_err("nothing listens on port 1");
+    let mut closures = RegistrationStreamClosures::new(Some(metrics.as_ref()), "router-a");
+
+    closures.record_open_failure(&anyhow::Error::from(transport_error));
+    closures.record_open_failure(&anyhow::Error::from(Status::unauthenticated("bad token")));
+    closures.record_open_failure(
+        &anyhow::Error::from(Status::permission_denied("scope")).context("register"),
+    );
+    closures.record_open_failure(&anyhow::anyhow!("auth token file is unreadable"));
+    closures.record(RegistrationStreamClosure::Io);
+
+    assert_closures(
+        &metrics,
+        "router-a",
+        &[
+            ("connect", 1),
+            ("unauthenticated", 1),
+            ("permission_denied", 1),
+            ("other", 1),
+            ("io", 1),
+        ],
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TestRouterVerdict {
+    RejectAtOpen(tonic::Code),
+    RejectFirstUpdate(tonic::Code),
+    EndAfterFirstAck,
+}
+
+#[derive(Clone)]
+struct VerdictControlPlaneService {
+    verdict: TestRouterVerdict,
+    registrations: mpsc::UnboundedSender<InferenceServerRegistration>,
+}
+
+#[tonic::async_trait]
+impl StargateControlPlane for VerdictControlPlaneService {
+    type WatchStargatesStream = TestWatchStream;
+    type RegisterInferenceServerStream = TestRegistrationStream;
+
+    async fn watch_stargates(
+        &self,
+        _request: Request<WatchStargatesRequest>,
+    ) -> Result<Response<Self::WatchStargatesStream>, Status> {
+        Err(Status::unimplemented("not used by these tests"))
+    }
+
+    async fn register_inference_server(
+        &self,
+        request: Request<tonic::Streaming<InferenceServerRegistration>>,
+    ) -> Result<Response<Self::RegisterInferenceServerStream>, Status> {
+        if let TestRouterVerdict::RejectAtOpen(code) = self.verdict {
+            return Err(Status::new(code, "rejected by test router"));
+        }
+        let verdict = self.verdict;
+        let registrations = self.registrations.clone();
+        let mut inbound = request.into_inner();
+        let stream = async_stream::stream! {
+            if let Ok(Some(registration)) = inbound.message().await {
+                let _ = registrations.send(registration);
+                match verdict {
+                    TestRouterVerdict::RejectFirstUpdate(code) => {
+                        yield Err(Status::new(code, "rejected by test router"));
+                    }
+                    TestRouterVerdict::EndAfterFirstAck | TestRouterVerdict::RejectAtOpen(_) => {
+                        yield Ok(InferenceServerAck::default());
+                    }
+                }
+            }
+        };
+        Ok(Response::new(Box::pin(stream)))
+    }
+}
+
+struct VerdictControlPlane {
+    router_addr: String,
+    registrations: mpsc::UnboundedReceiver<InferenceServerRegistration>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl VerdictControlPlane {
+    async fn spawn(verdict: TestRouterVerdict) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test router should bind");
+        let router_addr = listener
+            .local_addr()
+            .expect("test router address should resolve")
+            .to_string();
+        let (registrations, registrations_rx) = mpsc::unbounded_channel();
+        let service = VerdictControlPlaneService {
+            verdict,
+            registrations,
+        };
+        let incoming = async_stream::stream! {
+            loop {
+                yield listener.accept().await.map(|(stream, _)| stream);
+            }
+        };
+        let task = tokio::spawn(async move {
+            Server::builder()
+                .add_service(StargateControlPlaneServer::new(service))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("test router should serve");
+        });
+        Self {
+            router_addr,
+            registrations: registrations_rx,
+            task,
+        }
+    }
+
+    async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+async fn wait_for_closure(metrics: &PylonMetrics, router: &str, reason: &str) {
+    let sample = format!(
+        r#"pylon_registration_stream_closures_total{{reason="{reason}",router="{router}"}} "#
+    );
+    tokio::time::timeout(TEST_WAIT, async {
+        loop {
+            let body = metrics.gather_text().expect("metrics should encode");
+            let count = body
+                .lines()
+                .find_map(|line| line.strip_prefix(sample.as_str()))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            if count > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected a {reason} closure for {router}"));
+}
+
+async fn run_against_verdict(
+    verdict: TestRouterVerdict,
+    expected_reason: &str,
+) -> Option<InferenceServerRegistration> {
+    let mut router = VerdictControlPlane::spawn(verdict).await;
+    let metrics = PylonMetrics::new().expect("metrics should initialize");
+    let mut config = test_registration_config();
+    config.forwarding.metrics = Some(metrics.clone());
+    let config = Arc::new(
+        RegistrationSessionConfig::try_from(config)
+            .expect("test registration session should build"),
+    );
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(run_router_registration_stream(
+        grpc_endpoint(&router.router_addr),
+        config,
+        stop.clone(),
+    ));
+
+    wait_for_closure(&metrics, &router.router_addr, expected_reason).await;
+    stop.cancel();
+    tokio::time::timeout(TEST_WAIT, task)
+        .await
+        .expect("registration task should stop promptly")
+        .expect("registration task should not panic");
+    let first_registration = router.registrations.try_recv().ok();
+    let other_reasons = closure_samples(&router.router_addr, &[])
+        .into_iter()
+        .filter(|sample| !sample.contains(&format!(r#"reason="{expected_reason}""#)))
+        .collect::<Vec<_>>();
+    assert_metrics(
+        &metrics,
+        &other_reasons.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    router.shutdown().await;
+    first_registration
+}
+
+#[tokio::test]
+async fn router_rejecting_the_credential_counts_an_unauthenticated_closure() {
+    let registration = run_against_verdict(
+        TestRouterVerdict::RejectAtOpen(tonic::Code::Unauthenticated),
+        "unauthenticated",
+    )
+    .await;
+
+    assert!(registration.is_none(), "a rejected open sends no update");
+}
+
+#[tokio::test]
+async fn router_rejecting_the_registration_counts_an_invalid_argument_closure() {
+    let registration = run_against_verdict(
+        TestRouterVerdict::RejectFirstUpdate(tonic::Code::InvalidArgument),
+        "invalid_argument",
+    )
+    .await;
+
+    let registration = registration.expect("the router should receive the registration");
+    assert_eq!(registration.inference_server_id, "inst-a");
+}
+
+#[tokio::test]
+async fn router_ending_the_ack_stream_counts_an_end_of_stream_closure() {
+    let registration =
+        run_against_verdict(TestRouterVerdict::EndAfterFirstAck, "end_of_stream").await;
+
+    assert!(registration.is_some());
 }

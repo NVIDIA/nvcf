@@ -528,7 +528,7 @@ func (h *OpenAIProxyHandlers) validateAndSetInvocationModel(
 	model string,
 ) (string, error) {
 	requestModel := model
-	routedModel, err := normalizeOpenAIRequestModel(reqCtx, requestModel)
+	routedModel, err := h.handlers.normalizeRequestModel(reqCtx, requestModel)
 	if err != nil {
 		return "", err
 	}

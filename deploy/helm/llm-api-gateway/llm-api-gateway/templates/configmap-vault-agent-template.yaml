@@ -1,3 +1,4 @@
+{{- if include "llm-api-gateway.vaultEnabled" . }}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,3 +24,4 @@ metadata:
 data:
   secrets.json.tmpl: |-
 {{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | indent 4 }}
+{{- end }}

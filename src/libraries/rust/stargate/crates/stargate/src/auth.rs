@@ -22,13 +22,97 @@ use stargate_proto::gateway_pb::{AuthLlmWorkerRequest, AuthLlmWorkerResponse};
 use tonic::transport::Channel;
 use tracing::debug;
 
+mod static_cluster;
+
+pub use static_cluster::{
+    CredentialSet, StaticClusterAuthenticator, WORKER_AUTH_RELOAD_INTERVAL,
+    WorkerAuthReloadOutcome, WorkerAuthReloadTask,
+};
+
 pub struct AuthResult {
     pub routing_key: Option<String>,
+    /// Cluster id bound to the presented credential. When present, the worker
+    /// may register and open reverse tunnels only under this cluster id.
+    pub cluster_id: Option<String>,
+}
+
+/// Bounded `reason` label values for `registration_auth_failures_total`.
+///
+/// The cluster id a registration claims is never a label value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationAuthFailure {
+    /// The registration presented no bearer token.
+    MissingToken,
+    /// The presented token matches no trusted credential.
+    UnknownCredential,
+    /// The registration named a cluster other than the one its credential is
+    /// bound to.
+    ClusterMismatch,
+}
+
+impl RegistrationAuthFailure {
+    pub const ALL: [Self; 3] = [
+        Self::MissingToken,
+        Self::UnknownCredential,
+        Self::ClusterMismatch,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingToken => "missing_token",
+            Self::UnknownCredential => "unknown_credential",
+            Self::ClusterMismatch => "cluster_mismatch",
+        }
+    }
+
+    /// Classifies an authenticator error for the presented `token`.
+    ///
+    /// Returns `None` when the verifier itself failed, for example because the
+    /// auth gateway was unreachable or its token could not be minted. That is
+    /// not a verdict on the worker's credential, so it is not counted.
+    pub fn classify(error: &anyhow::Error, token: Option<&str>) -> Option<Self> {
+        if let Some(error) = error.downcast_ref::<WorkerAuthError>() {
+            return Some(match error {
+                WorkerAuthError::MissingToken => Self::MissingToken,
+                WorkerAuthError::UnknownCredential => Self::UnknownCredential,
+            });
+        }
+        let status = error.downcast_ref::<tonic::Status>()?;
+        matches!(
+            status.code(),
+            tonic::Code::Unauthenticated | tonic::Code::PermissionDenied
+        )
+        .then(|| {
+            if token.is_none_or(str::is_empty) {
+                Self::MissingToken
+            } else {
+                Self::UnknownCredential
+            }
+        })
+    }
+}
+
+/// Credential verdicts of a local authenticator. Messages never include the
+/// presented token.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkerAuthError {
+    #[error("worker credential rejected: missing bearer token")]
+    MissingToken,
+    #[error("worker credential rejected: unknown credential")]
+    UnknownCredential,
 }
 
 #[async_trait::async_trait]
 pub trait WorkerAuthenticator: Send + Sync {
     async fn authenticate(&self, token: Option<&str>) -> Result<AuthResult>;
+
+    /// Returns the task that keeps this authenticator's credentials current.
+    ///
+    /// The runtime runs it in its critical task group for the process
+    /// lifetime. Authenticators without reloadable state return `None`.
+    fn reload_task(self: Arc<Self>) -> Option<WorkerAuthReloadTask> {
+        None
+    }
 }
 
 pub struct GrpcWorkerAuthenticator {
@@ -88,6 +172,7 @@ fn auth_result_from_gateway_response(response: AuthLlmWorkerResponse) -> AuthRes
         } else {
             Some(routing_key.to_string())
         },
+        cluster_id: None,
     }
 }
 
@@ -96,7 +181,10 @@ pub struct OpenAuthenticator;
 #[async_trait::async_trait]
 impl WorkerAuthenticator for OpenAuthenticator {
     async fn authenticate(&self, _token: Option<&str>) -> Result<AuthResult> {
-        Ok(AuthResult { routing_key: None })
+        Ok(AuthResult {
+            routing_key: None,
+            cluster_id: None,
+        })
     }
 }
 
@@ -130,6 +218,7 @@ mod tests {
             .expect("gateway auth should succeed");
 
         assert_eq!(result.routing_key.as_deref(), Some("tenant-a"));
+        assert_eq!(result.cluster_id, None);
         let requests = gateway.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].worker_token, "worker-token");
@@ -179,6 +268,77 @@ mod tests {
         assert_eq!(requests[0].authorization, None);
 
         handle.abort();
+    }
+
+    #[test]
+    fn auth_failure_classification_uses_bounded_reasons() {
+        let status = |status: tonic::Status| anyhow::Error::new(status);
+        for (error, token, expected) in [
+            (
+                anyhow::Error::new(WorkerAuthError::MissingToken),
+                None,
+                Some(RegistrationAuthFailure::MissingToken),
+            ),
+            (
+                anyhow::Error::new(WorkerAuthError::UnknownCredential),
+                Some("token"),
+                Some(RegistrationAuthFailure::UnknownCredential),
+            ),
+            (
+                status(tonic::Status::unauthenticated("bad token")),
+                Some("token"),
+                Some(RegistrationAuthFailure::UnknownCredential),
+            ),
+            (
+                status(tonic::Status::permission_denied("bad token")),
+                Some("token"),
+                Some(RegistrationAuthFailure::UnknownCredential),
+            ),
+            (
+                status(tonic::Status::unauthenticated("no token")),
+                None,
+                Some(RegistrationAuthFailure::MissingToken),
+            ),
+            (
+                status(tonic::Status::unauthenticated("empty token")),
+                Some(""),
+                Some(RegistrationAuthFailure::MissingToken),
+            ),
+            (
+                status(tonic::Status::unavailable("gateway down")),
+                Some("token"),
+                None,
+            ),
+            (
+                anyhow::anyhow!("token provider failed"),
+                Some("token"),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                RegistrationAuthFailure::classify(&error, token),
+                expected,
+                "unexpected classification for {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn registration_auth_failure_labels_are_bounded() {
+        let labels: Vec<_> = RegistrationAuthFailure::ALL
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect();
+        assert_eq!(
+            labels,
+            ["missing_token", "unknown_credential", "cluster_mismatch"]
+        );
+    }
+
+    #[test]
+    fn only_reloadable_authenticators_provide_a_reload_task() {
+        let open: Arc<dyn WorkerAuthenticator> = Arc::new(OpenAuthenticator);
+        assert!(open.reload_task().is_none());
     }
 
     #[derive(Clone)]

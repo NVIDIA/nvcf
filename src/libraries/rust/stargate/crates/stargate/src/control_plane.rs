@@ -27,17 +27,17 @@ use stargate_forwarding::{
     ForwardingResolver, PeerResolution, PeerTarget, forward_stream_messages,
 };
 
-use crate::auth::WorkerAuthenticator;
+use crate::auth::{RegistrationAuthFailure, WorkerAuthenticator};
 use crate::discovery::Discovery;
-use crate::routing_state::StargateState;
+use crate::routing_state::{ActiveModelServer, StargateState};
 use stargate_runtime::CriticalTaskGroup;
 
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::stargate_control_plane_server::StargateControlPlane;
 use stargate_proto::pb::stargate_model_discovery_server::StargateModelDiscovery;
 use stargate_proto::pb::{
-    InferenceServerAck, InferenceServerRegistration, ListModelsRequest, ListModelsResponse,
-    WatchStargatesRequest, WatchStargatesResponse,
+    InferenceServerAck, InferenceServerRegistration, ListModelsEntry, ListModelsRequest,
+    ListModelsResponse, WatchStargatesRequest, WatchStargatesResponse,
 };
 
 mod registration;
@@ -273,7 +273,17 @@ impl StargateControlPlane for StargateService {
 
         let token = bearer_token(request.metadata());
         let auth_result = self.authenticator.authenticate(token).await.map_err(|e| {
-            warn!(error = %e, "gRPC registration authentication failed");
+            // A verifier failure, such as an unreachable auth gateway, has no
+            // credential verdict and is logged without being counted.
+            let reason = RegistrationAuthFailure::classify(&e, token);
+            if let Some(reason) = reason {
+                self.state.record_registration_auth_failure(reason);
+            }
+            warn!(
+                error = %e,
+                reason = reason.map_or("verifier_error", RegistrationAuthFailure::as_str),
+                "gRPC registration authentication failed"
+            );
             Status::unauthenticated("authentication failed")
         })?;
 
@@ -323,25 +333,51 @@ impl StargateModelDiscovery for StargateService {
     }
 }
 
+/// Serves `ListModels` from one read of the local routing state, so
+/// `model_ids` always equals the distinct model ids of `entries`.
 pub(crate) async fn list_models_for_state(
     state: &StargateState,
     request: ListModelsRequest,
 ) -> Result<ListModelsResponse, &'static str> {
     let requested = normalize_list_models_request(request)?;
     let model_id_filter_count = requested.model_ids.len();
-    let model_ids = state
-        .list_active_models(requested.routing_key.as_deref(), &requested.model_ids)
+    let servers = state
+        .list_active_model_servers(requested.routing_key.as_deref(), &requested.model_ids)
         .await;
+    let response = list_models_response(servers);
 
     debug!(
         routing_key = ?requested.routing_key,
         model_id_filter_count,
         return_all_models = model_id_filter_count == 0,
-        returned_model_count = model_ids.len(),
+        returned_model_count = response.model_ids.len(),
+        returned_entry_count = response.entries.len(),
         "list_models completed"
     );
 
-    Ok(ListModelsResponse { model_ids })
+    Ok(response)
+}
+
+/// Builds the response from servers sorted by model id, then inference server
+/// id.
+fn list_models_response(servers: Vec<ActiveModelServer>) -> ListModelsResponse {
+    let mut model_ids: Vec<String> = Vec::new();
+    let mut entries = Vec::with_capacity(servers.len());
+    for ActiveModelServer {
+        model_id,
+        registration,
+    } in servers
+    {
+        if model_ids.last() != Some(&model_id) {
+            model_ids.push(model_id.clone());
+        }
+        entries.push(ListModelsEntry {
+            model_id,
+            cluster_id: registration.cluster_id().to_owned(),
+            inference_server_id: registration.inference_server_id().to_owned(),
+        });
+    }
+    ListModelsResponse { model_ids, entries }
 }
 
 fn normalize_list_models_request(
@@ -367,6 +403,204 @@ fn normalize_list_models_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::auth::OpenAuthenticator;
+    use crate::discovery::SelfOnlyDiscovery;
+    use crate::routing_state::{RegistrationIdentity, RunningRegistration};
+    use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
+    use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
+    use stargate_runtime::CriticalTaskFailureReceiver;
+
+    fn test_service(
+        state: Arc<StargateState>,
+    ) -> (
+        StargateService,
+        CriticalTaskGroup,
+        CriticalTaskFailureReceiver,
+    ) {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let (tasks, critical_failure_rx) = CriticalTaskGroup::new("stargate-test");
+        let advertise_addr: SocketAddr = "127.0.0.1:50071".parse().expect("valid address");
+        let quic_proxy = QuicHttpProxy::new(
+            QuicTunnelConfig {
+                connect_timeout: Duration::from_millis(10),
+                request_timeout: Duration::from_millis(10),
+                direct_quic_connections: 1,
+                tls_cert_pem: None,
+                server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
+                server_identity_reloader: None,
+                tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
+                quic_insecure: true,
+                tunnel_protocol: Default::default(),
+            },
+            Arc::new(OpenAuthenticator),
+        )
+        .expect("quic proxy should initialize");
+        let service = StargateService::new(StargateServiceConfig {
+            stargate_id: "stargate-test".to_string(),
+            advertise_addr,
+            discovery_dns_name: "stargate-headless".to_string(),
+            discovery: Box::new(SelfOnlyDiscovery::new(
+                advertise_addr,
+                "stargate-test".to_string(),
+                8000,
+            )),
+            remote_watch_stargate_urls: Vec::new(),
+            grpc_pylon_dial_addr: None,
+            discovery_poll_interval: Duration::from_secs(60),
+            watch_heartbeat_interval: Duration::from_secs(60),
+            tasks: tasks.clone(),
+            registration_update_idle_timeout: Duration::ZERO,
+            registration_update_max_idle_timeout: Duration::ZERO,
+            state,
+            registration_connection_config: RegistrationConnectionConfig {
+                quic_proxy: Arc::new(quic_proxy),
+                reverse_tunnel: None,
+            },
+            forwarding: None,
+            authenticator: Arc::new(OpenAuthenticator),
+        });
+        (service, tasks, critical_failure_rx)
+    }
+
+    async fn register_backend(
+        state: &StargateState,
+        inference_server_id: &str,
+        cluster_id: &str,
+        models: &[(&str, InferenceServerStatus)],
+        rtt: Option<Duration>,
+    ) -> RunningRegistration {
+        let identity = RegistrationIdentity {
+            inference_server_id: inference_server_id.to_string(),
+            cluster_id: cluster_id.to_string(),
+            inference_server_url: "quic://127.0.0.1:5000".to_string(),
+            routing_key: None,
+            reverse_tunnel: false,
+        };
+        let running = state
+            .begin_registration(&identity)
+            .expect("registration should begin");
+        let update = InferenceServerRegistration {
+            inference_server_id: identity.inference_server_id.clone(),
+            inference_server_url: identity.inference_server_url.clone(),
+            models: models
+                .iter()
+                .map(|(model_id, status)| {
+                    (
+                        model_id.to_string(),
+                        InferenceServerModelRegistration {
+                            stats: Some(ModelStats::default()),
+                            status: *status as i32,
+                        },
+                    )
+                })
+                .collect(),
+            reverse_tunnel: false,
+            cluster_id: identity.cluster_id.clone(),
+        };
+        state
+            .apply_registration_update(&running, &update, true, rtt)
+            .await;
+        running
+    }
+
+    fn entry(model_id: &str, inference_server_id: &str, cluster_id: &str) -> ListModelsEntry {
+        ListModelsEntry {
+            model_id: model_id.to_string(),
+            cluster_id: cluster_id.to_string(),
+            inference_server_id: inference_server_id.to_string(),
+        }
+    }
+
+    async fn call_list_models(
+        service: &StargateService,
+        routing_key: Option<&str>,
+        model_ids: &[&str],
+    ) -> Result<ListModelsResponse, Status> {
+        StargateModelDiscovery::list_models(
+            service,
+            Request::new(list_models_request(routing_key, model_ids)),
+        )
+        .await
+        .map(Response::into_inner)
+    }
+
+    #[tokio::test]
+    async fn list_models_service_returns_model_ids_and_per_server_entries() {
+        use InferenceServerStatus::{Active, Inactive};
+        let rtt = Some(Duration::from_millis(5));
+        let state = Arc::new(StargateState::default());
+        let spark = register_backend(
+            &state,
+            "spark-1",
+            "cluster-spark",
+            &[("model-b", Active), ("model-a", Active)],
+            rtt,
+        )
+        .await;
+        let _station = register_backend(
+            &state,
+            "station-1",
+            "station-1",
+            &[("model-a", Active), ("model-inactive", Inactive)],
+            rtt,
+        )
+        .await;
+        let _without_rtt =
+            register_backend(&state, "no-rtt", "no-rtt", &[("model-a", Active)], None).await;
+        let (service, tasks, _critical_failure_rx) = test_service(state.clone());
+
+        let listed = call_list_models(&service, None, &[])
+            .await
+            .expect("ListModels should succeed");
+        assert_eq!(
+            listed,
+            ListModelsResponse {
+                model_ids: vec!["model-a".to_string(), "model-b".to_string()],
+                entries: vec![
+                    entry("model-a", "spark-1", "cluster-spark"),
+                    entry("model-a", "station-1", "station-1"),
+                    entry("model-b", "spark-1", "cluster-spark"),
+                ],
+            }
+        );
+
+        let filtered = call_list_models(&service, None, &[" model-b ", "model-inactive"])
+            .await
+            .expect("filtered ListModels should succeed");
+        assert_eq!(
+            filtered,
+            ListModelsResponse {
+                model_ids: vec!["model-b".to_string()],
+                entries: vec![entry("model-b", "spark-1", "cluster-spark")],
+            }
+        );
+
+        let other_key = call_list_models(&service, Some("tenant-a"), &[])
+            .await
+            .expect("keyed ListModels should succeed");
+        assert_eq!(other_key, ListModelsResponse::default());
+
+        let error = call_list_models(&service, None, &[" "])
+            .await
+            .expect_err("blank model filter should be rejected");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), "model_ids must not contain empty values");
+
+        state.end_registration(spark).await;
+        let after_end = call_list_models(&service, None, &[])
+            .await
+            .expect("ListModels should succeed after a registration ends");
+        assert_eq!(
+            after_end,
+            ListModelsResponse {
+                model_ids: vec!["model-a".to_string()],
+                entries: vec![entry("model-a", "station-1", "station-1")],
+            }
+        );
+
+        tasks.begin_shutdown();
+    }
 
     fn list_models_request(routing_key: Option<&str>, model_ids: &[&str]) -> ListModelsRequest {
         ListModelsRequest {

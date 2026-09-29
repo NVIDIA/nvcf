@@ -90,10 +90,7 @@ func (h *Handlers) requireFunctionRequestContext(
 	if c.RequestContext() != nil {
 		return c.RequestContext(), nil
 	}
-	return nil, echo.NewHTTPError(
-		http.StatusBadRequest,
-		"model prefix is required",
-	)
+	return nil, h.missingRequestContextError()
 }
 
 func (h *OpenAIProxyHandlers) dispatchProxyRequest(

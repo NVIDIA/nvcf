@@ -42,7 +42,7 @@ pub use model_discovery::{
 };
 pub use model_lifecycle::{
     ModelInitialization, ModelLifecycleConfig, ModelLifecycleError, ModelLifecycleHandle,
-    ModelSource, start_model_lifecycle,
+    ModelSource, StartupHealthWait, start_model_lifecycle,
 };
 pub use queue_admission::{
     DEFAULT_QUEUE_MISMATCH_MIN_DELTA_MS, DEFAULT_QUEUE_MISMATCH_TOLERANCE_FACTOR,

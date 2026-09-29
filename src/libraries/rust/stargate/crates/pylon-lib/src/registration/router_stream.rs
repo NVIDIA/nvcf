@@ -22,7 +22,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime_state::PylonRuntimeState;
-use crate::stats::PylonMetrics;
+use crate::stats::{PylonMetrics, RegistrationStreamClosure};
 use stargate_auth::AuthTokenProvider;
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
@@ -48,6 +48,8 @@ pub(super) async fn run_router_registration_stream(
 ) {
     let router_addr = router_endpoint.metric_addr();
     let mut last_certificate_failure = None;
+    let mut closures =
+        RegistrationStreamClosures::new(config.forwarding.metrics.as_deref(), &router_addr);
 
     loop {
         let connection = tokio::select! {
@@ -62,6 +64,7 @@ pub(super) async fn run_router_registration_stream(
         let (mut ack_stream, update_tx) = match connection {
             Ok(connection) => connection,
             Err(error) => {
+                closures.record_open_failure(&error);
                 last_certificate_failure = log_stargate_grpc_certificate_failure(
                     &router_endpoint,
                     "register_inference_server",
@@ -134,6 +137,9 @@ pub(super) async fn run_router_registration_stream(
         let mut advertised_reverse_connected = false;
         let advertised = advertised_model_statuses(&initial_registration);
         if !send_registration_update(&update_tx, initial_registration, &stop).await {
+            if !stop.is_cancelled() {
+                closures.record(RegistrationStreamClosure::Io);
+            }
             if let Some(task) = reverse_task {
                 task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
             }
@@ -167,6 +173,7 @@ pub(super) async fn run_router_registration_stream(
                 }
                 state_changed = reverse_state_rx.changed(), if config.reverse_tunnel => {
                     if state_changed.is_err() {
+                        closures.record(RegistrationStreamClosure::Other);
                         break false;
                     }
                     let connected = reverse_state_rx.borrow_and_update().is_connected();
@@ -209,6 +216,7 @@ pub(super) async fn run_router_registration_stream(
                                 cluster_id = %config.cluster_id,
                                 "Stargate registration response stream ended"
                             );
+                            closures.record(RegistrationStreamClosure::EndOfStream);
                             break false;
                         }
                         Err(error) => {
@@ -220,6 +228,7 @@ pub(super) async fn run_router_registration_stream(
                                 error = %grpc_error_chain(&error),
                                 "Stargate gRPC operation failed"
                             );
+                            closures.record_status(&error);
                             break false;
                         }
                     };
@@ -238,6 +247,9 @@ pub(super) async fn run_router_registration_stream(
             let registration_update = current_registration(reverse_connected);
             let advertised = advertised_model_statuses(&registration_update);
             if !send_registration_update(&update_tx, registration_update, &stop).await {
+                if !stop.is_cancelled() {
+                    closures.record(RegistrationStreamClosure::Io);
+                }
                 break false;
             }
             advertised_status.record_successful_advertisement(advertised);
@@ -394,4 +406,63 @@ pub(super) async fn open_registration_stream(
         .await?
         .into_inner();
     Ok((ack_stream, update_tx))
+}
+
+/// Counts why registration streams to one router end, so a router that keeps
+/// rejecting this Pylon shows up in metrics. The reconnect loop logs each
+/// failure itself.
+#[derive(Debug)]
+pub(super) struct RegistrationStreamClosures<'a> {
+    metrics: Option<&'a PylonMetrics>,
+    router_addr: &'a str,
+}
+
+impl<'a> RegistrationStreamClosures<'a> {
+    /// Publishes every closure reason for the router at zero.
+    pub(super) fn new(metrics: Option<&'a PylonMetrics>, router_addr: &'a str) -> Self {
+        if let Some(metrics) = metrics {
+            metrics.init_registration_stream_closures(router_addr);
+        }
+        Self {
+            metrics,
+            router_addr,
+        }
+    }
+
+    pub(super) fn record(&mut self, closure: RegistrationStreamClosure) {
+        self.observe(closure);
+    }
+
+    pub(super) fn record_status(&mut self, status: &tonic::Status) {
+        self.observe(closure_for_status(status));
+    }
+
+    pub(super) fn record_open_failure(&mut self, error: &anyhow::Error) {
+        if let Some(status) = error.downcast_ref::<tonic::Status>() {
+            self.record_status(status);
+            return;
+        }
+        let closure = if error.downcast_ref::<tonic::transport::Error>().is_some() {
+            RegistrationStreamClosure::Connect
+        } else {
+            RegistrationStreamClosure::Other
+        };
+        self.observe(closure);
+    }
+
+    fn observe(&self, closure: RegistrationStreamClosure) {
+        if let Some(metrics) = self.metrics {
+            metrics.observe_registration_stream_closure(self.router_addr, closure);
+        }
+    }
+}
+
+pub(super) fn closure_for_status(status: &tonic::Status) -> RegistrationStreamClosure {
+    match status.code() {
+        tonic::Code::Unauthenticated => RegistrationStreamClosure::Unauthenticated,
+        tonic::Code::InvalidArgument => RegistrationStreamClosure::InvalidArgument,
+        tonic::Code::PermissionDenied => RegistrationStreamClosure::PermissionDenied,
+        tonic::Code::Unavailable => RegistrationStreamClosure::Unavailable,
+        _ => RegistrationStreamClosure::Other,
+    }
 }

@@ -149,12 +149,190 @@ Generate all pod annotations
 {{- $annotations = merge $annotations .Values.llmApiGateway.podAnnotations -}}
 {{- end -}}
 
-{{- if not (and .Values.llmApiGateway.vault .Values.llmApiGateway.vault.noVaultAnnotations) -}}
+{{- if and (include "llm-api-gateway.vaultEnabled" .) (not (and .Values.llmApiGateway.vault .Values.llmApiGateway.vault.noVaultAnnotations)) -}}
 {{- $vaultAnnotations := include "llm-api-gateway.vaultAnnotations" . | fromYaml -}}
 {{- if $vaultAnnotations -}}
 {{- $annotations = merge $annotations $vaultAnnotations -}}
 {{- end -}}
 {{- end -}}
 
+{{- if $annotations -}}
 {{- toYaml $annotations -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Vault Agent integration: annotations, the vault-token and vault-config-templates
+volumes, and the agent template ConfigMap. Renders "true" or nothing.
+*/}}
+{{- define "llm-api-gateway.vaultEnabled" -}}
+{{- if dig "vault" "enabled" true .Values.llmApiGateway -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Caller authentication mode: nvcf, staticKeys or anonymous. Fails on anything
+else, so a typo cannot fall through to a mode nobody selected.
+*/}}
+{{- define "llm-api-gateway.authMode" -}}
+{{- $mode := dig "auth" "mode" "nvcf" .Values.llmApiGateway | toString -}}
+{{- if not (has $mode (list "nvcf" "staticKeys" "anonymous")) -}}
+{{- fail (printf "llmApiGateway.auth.mode must be nvcf, staticKeys or anonymous, got %q" $mode) -}}
+{{- end -}}
+{{- $mode -}}
+{{- end }}
+
+{{- define "llm-api-gateway.apiKeysMountPath" -}}
+/etc/llm-api-gateway/auth
+{{- end }}
+
+{{- define "llm-api-gateway.tlsMountPath" -}}
+/etc/llm-api-gateway/tls
+{{- end }}
+
+{{- define "llm-api-gateway.tlsEnabled" -}}
+{{- if dig "tls" "enabled" false .Values.llmApiGateway -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Reject auth and TLS settings the gateway would refuse at startup, or that would
+start a gateway nobody can reach. Renders nothing.
+*/}}
+{{- define "llm-api-gateway.validateAuthTls" -}}
+{{- $mode := include "llm-api-gateway.authMode" . -}}
+{{- $auth := .Values.llmApiGateway.auth | default dict -}}
+{{- if and (eq $mode "nvcf") (not (.Values.llmApiGateway.config.nvcfGrpcAddr | toString | trim)) -}}
+{{- fail "llmApiGateway.config.nvcfGrpcAddr is required when llmApiGateway.auth.mode is nvcf; use auth.mode staticKeys or anonymous to run without the NVCF API" -}}
+{{- end -}}
+{{- if eq $mode "staticKeys" -}}
+{{- if not (dig "staticKeys" "existingSecret" "" $auth | toString | trim) -}}
+{{- fail "llmApiGateway.auth.staticKeys.existingSecret is required when llmApiGateway.auth.mode is staticKeys: name a Secret with key api-keys.json" -}}
+{{- end -}}
+{{- $paths := dig "staticKeys" "allowedPaths" (list) $auth -}}
+{{- if not $paths -}}
+{{- fail "llmApiGateway.auth.staticKeys.allowedPaths must list at least one path when llmApiGateway.auth.mode is staticKeys" -}}
+{{- end -}}
+{{- range $paths -}}
+{{- if not (regexMatch "^/[^,[:space:]]*$" (toString .)) -}}
+{{- fail (printf "llmApiGateway.auth.staticKeys.allowedPaths entries must start with / and contain no comma or whitespace, got %q" (toString .)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if dig "serviceToken" "existingSecret" "" $auth -}}
+{{- if not (regexMatch "^[-._a-zA-Z0-9]+$" (dig "serviceToken" "key" "" $auth | toString)) -}}
+{{- fail "llmApiGateway.auth.serviceToken.key must be a Secret key name when llmApiGateway.auth.serviceToken.existingSecret is set" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (include "llm-api-gateway.tlsEnabled" .) (not (dig "tls" "existingSecret" "" .Values.llmApiGateway | toString | trim)) -}}
+{{- fail "llmApiGateway.tls.existingSecret is required when llmApiGateway.tls.enabled is true: name a kubernetes.io/tls Secret" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Container env beyond the ConfigMap. Renders list items, or nothing.
+*/}}
+{{- define "llm-api-gateway.env" -}}
+{{- $mode := include "llm-api-gateway.authMode" . -}}
+{{- $auth := .Values.llmApiGateway.auth | default dict -}}
+{{- if .Values.llmApiGateway.olric.enabled }}
+- name: POD_NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+{{- end }}
+{{- if eq $mode "staticKeys" }}
+- name: API_KEYS_PATH
+  value: {{ printf "%s/api-keys.json" (include "llm-api-gateway.apiKeysMountPath" .) | quote }}
+- name: STATIC_ALLOWED_PATHS
+  value: {{ join "," (dig "staticKeys" "allowedPaths" (list) $auth) | quote }}
+{{- else if eq $mode "anonymous" }}
+- name: ALLOW_ANONYMOUS
+  value: "true"
+{{- end }}
+{{- with dig "serviceToken" "existingSecret" "" $auth }}
+- name: STARGATE_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ . | quote }}
+      key: {{ dig "serviceToken" "key" "" $auth | quote }}
+{{- end }}
+{{- if include "llm-api-gateway.tlsEnabled" . }}
+- name: TLS_CERT_FILE
+  value: {{ printf "%s/tls.crt" (include "llm-api-gateway.tlsMountPath" .) | quote }}
+- name: TLS_KEY_FILE
+  value: {{ printf "%s/tls.key" (include "llm-api-gateway.tlsMountPath" .) | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
+Container volume mounts. Renders list items, or nothing.
+*/}}
+{{- define "llm-api-gateway.volumeMounts" -}}
+{{- if include "llm-api-gateway.vaultEnabled" . }}
+- name: vault-config-templates
+  mountPath: /vault/config/templates
+  readOnly: true
+{{- end }}
+{{- if eq (include "llm-api-gateway.authMode" .) "staticKeys" }}
+{{- /*
+No subPath: Kubernetes swaps the projected files atomically on Secret updates,
+and the gateway re-reads the key file.
+*/}}
+- name: api-keys
+  mountPath: {{ include "llm-api-gateway.apiKeysMountPath" . }}
+  readOnly: true
+{{- end }}
+{{- if include "llm-api-gateway.tlsEnabled" . }}
+- name: tls
+  mountPath: {{ include "llm-api-gateway.tlsMountPath" . }}
+  readOnly: true
+{{- end }}
+{{- end }}
+
+{{/*
+Pod volumes. Renders list items, or nothing.
+*/}}
+{{- define "llm-api-gateway.volumes" -}}
+{{- if include "llm-api-gateway.vaultEnabled" . }}
+- name: vault-token
+  projected:
+    sources:
+    - serviceAccountToken:
+        path: token
+        expirationSeconds: 3600
+        audience: {{ include "llm-api-gateway.vaultAudience" . }}
+- name: vault-config-templates
+  configMap:
+    name: {{ include "llm-api-gateway.fullname" . }}-vault-agent-tpl
+    items:
+      - key: secrets.json.tmpl
+        path: secrets.json.tmpl
+{{- end }}
+{{- if eq (include "llm-api-gateway.authMode" .) "staticKeys" }}
+- name: api-keys
+  secret:
+    secretName: {{ .Values.llmApiGateway.auth.staticKeys.existingSecret | toString | trim | quote }}
+    items:
+      - key: api-keys.json
+        path: api-keys.json
+{{- end }}
+{{- if include "llm-api-gateway.tlsEnabled" . }}
+- name: tls
+  secret:
+    secretName: {{ .Values.llmApiGateway.tls.existingSecret | toString | trim | quote }}
+    items:
+      - key: tls.crt
+        path: tls.crt
+      - key: tls.key
+        path: tls.key
+{{- end }}
+{{- end }}
+
+{{/*
+Probe scheme. Renders a scheme line only for TLS, so the plaintext probes stay
+as they were.
+*/}}
+{{- define "llm-api-gateway.probeScheme" -}}
+{{- if include "llm-api-gateway.tlsEnabled" . -}}
+scheme: HTTPS
+{{- end -}}
 {{- end }}

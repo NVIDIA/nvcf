@@ -28,6 +28,8 @@ impl RoutingTargetKey {
     }
 }
 
+/// Identity of one registration stream, fixed by its first message and
+/// compared against every later message on the stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RegistrationIdentity {
     pub(crate) inference_server_id: String,

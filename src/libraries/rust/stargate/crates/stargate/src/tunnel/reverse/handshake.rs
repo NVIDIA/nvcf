@@ -76,6 +76,7 @@ pub(super) async fn handle_reverse_handshake(
     info!(
         inference_server_id = %inference_server_id,
         routing_key = ?result.routing_key,
+        cluster_id = ?result.cluster_id,
         "reverse handshake authenticated"
     );
 
@@ -107,6 +108,24 @@ pub(super) async fn handle_reverse_handshake(
         )
         .await?;
         bail!("QUIC routing_key does not match gRPC registration: {inference_server_id}");
+    }
+
+    if let Some(cluster_id) = result.cluster_id.as_deref()
+        && cluster_id != registration.cluster_id()
+    {
+        warn!(
+            inference_server_id = %inference_server_id,
+            authenticated_cluster_id = %cluster_id,
+            registered_cluster_id = %registration.cluster_id(),
+            "reverse handshake NACK: cluster id mismatch"
+        );
+        send_handshake_nack(
+            &mut quinn_send,
+            "cluster id mismatch",
+            proxy.config.connect_timeout,
+        )
+        .await?;
+        bail!("QUIC cluster id mismatch with gRPC registration: {inference_server_id}");
     }
 
     if !proxy

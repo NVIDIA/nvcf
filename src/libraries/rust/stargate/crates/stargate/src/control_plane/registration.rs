@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::{debug, info, warn};
 
-use crate::auth::AuthResult;
+use crate::auth::{AuthResult, RegistrationAuthFailure};
 use crate::routing_state::{RegistrationIdentity, RunningRegistration, StargateState};
 use crate::tunnel::{EnsureConnectedResult, QuicHttpProxy, RegistrationTunnel};
 
@@ -31,7 +31,9 @@ use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration};
 
 mod health;
 
-use self::admission::{admit_initial_registration, validate_running_update};
+use self::admission::{
+    admit_initial_registration, is_cluster_id_mismatch, validate_running_update,
+};
 use self::health::HealthCheckHandle;
 
 mod admission;
@@ -121,6 +123,7 @@ pub(super) async fn process_registration_stream(
         state,
         connection,
         auth_result.routing_key.as_deref(),
+        auth_result.cluster_id.as_deref(),
     ) {
         Ok(session) => session,
         Err(status) => {
@@ -257,9 +260,19 @@ impl RegistrationSession {
         state: Arc<StargateState>,
         connection: RegistrationConnectionConfig,
         routing_key: Option<&str>,
+        authenticated_cluster_id: Option<&str>,
     ) -> Result<Self, Status> {
-        let identity =
-            admit_initial_registration(update, connection.reverse_tunnel.is_some(), routing_key)?;
+        let identity = admit_initial_registration(
+            update,
+            connection.reverse_tunnel.is_some(),
+            routing_key,
+            authenticated_cluster_id,
+        )
+        .inspect_err(|status| {
+            if is_cluster_id_mismatch(status) {
+                state.record_registration_auth_failure(RegistrationAuthFailure::ClusterMismatch);
+            }
+        })?;
         let registration = state.begin_registration(&identity)?;
         let generation = registration.generation();
         let tunnel = if identity.reverse_tunnel {
@@ -468,6 +481,13 @@ mod tests {
         }
     }
 
+    fn unscoped_auth_result() -> AuthResult {
+        AuthResult {
+            routing_key: None,
+            cluster_id: None,
+        }
+    }
+
     async fn process_test_stream(
         stream: impl Stream<Item = Result<InferenceServerRegistration, Status>> + Unpin,
         state: Arc<StargateState>,
@@ -480,11 +500,80 @@ mod tests {
             state,
             test_registration_connection_config(),
             responses,
-            AuthResult { routing_key: None },
+            unscoped_auth_result(),
             idle_timeout,
             stop,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn registration_for_other_cluster_than_credential_is_rejected_and_counted() {
+        let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+        let state = Arc::new(StargateState::new_with_metrics(metrics.clone()));
+        let identity = RegistrationIdentity {
+            cluster_id: "cluster-b".to_owned(),
+            ..direct_identity(TEST_SERVER_ID, TEST_SERVER_URL)
+        };
+        let (tx, rx) = flume::bounded(1);
+
+        process_registration_stream(
+            futures::stream::iter([Ok(registration_update(&identity, Some("model-a")))]),
+            state.clone(),
+            test_registration_connection_config(),
+            tx,
+            AuthResult {
+                routing_key: None,
+                cluster_id: Some("cluster-a".to_owned()),
+            },
+            None,
+            CancellationToken::new(),
+        )
+        .await;
+
+        let status = rx
+            .try_recv()
+            .expect("admission should answer the stream")
+            .expect_err("mismatched cluster id should be rejected");
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            status.message(),
+            "cluster_id does not match the authenticated credential"
+        );
+        assert_eq!(
+            metrics
+                .registration_auth_failures_total(RegistrationAuthFailure::ClusterMismatch)
+                .get(),
+            1
+        );
+        let target = crate::routing_state::RoutingTargetKey::new(None, "model-a");
+        assert!(state.candidates_for_target(&target).await.is_empty());
+        let replacement = state
+            .begin_registration(&identity)
+            .expect("a rejected registration must not hold the identity");
+        state.end_registration(replacement).await;
+    }
+
+    #[tokio::test]
+    async fn registration_under_authenticated_cluster_is_admitted() {
+        let identity = RegistrationIdentity {
+            cluster_id: "cluster-a".to_owned(),
+            ..direct_identity(TEST_SERVER_ID, TEST_SERVER_URL)
+        };
+        let update = registration_update(&identity, None);
+        let state = Arc::new(StargateState::default());
+
+        let session = RegistrationSession::start(
+            &update,
+            state,
+            test_registration_connection_config(),
+            None,
+            Some("cluster-a"),
+        )
+        .expect("matching cluster id should be admitted");
+
+        assert_eq!(session.registration.identity().cluster_id, "cluster-a");
+        session.close(Ok(())).await;
     }
 
     #[test]
@@ -546,6 +635,7 @@ mod tests {
             &update,
             state.clone(),
             test_registration_connection_config(),
+            None,
             None,
         )
         .expect("registration session should start");
@@ -625,6 +715,7 @@ mod tests {
             state.clone(),
             test_registration_connection_config(),
             None,
+            None,
         )
         .expect("registration session should start");
         let target = crate::routing_state::RoutingTargetKey::new(None, "model-lost-direct");
@@ -653,9 +744,14 @@ mod tests {
         let state = Arc::new(StargateState::default());
         let identity = direct_identity(TEST_SERVER_ID, TEST_SERVER_URL);
         let update = registration_update(&identity, None);
-        let mut session =
-            RegistrationSession::start(&update, state, test_registration_connection_config(), None)
-                .expect("registration session should start");
+        let mut session = RegistrationSession::start(
+            &update,
+            state,
+            test_registration_connection_config(),
+            None,
+            None,
+        )
+        .expect("registration session should start");
 
         tokio::time::timeout(Duration::from_secs(1), session.health_check.changed())
             .await

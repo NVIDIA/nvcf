@@ -1,0 +1,149 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Values marked required have no default and fail the render when empty.
+
+# Pylon Operator image. repository is required. tag defaults to the chart
+# appVersion; a value starting with sha256: is used as a digest.
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Name of this installation's cluster, a DNS label. Required. Transport pods
+# register under it, and the router's credentials file maps it to the sha256
+# of the cluster credential. Passed as --cluster-id.
+clusterId: ""
+
+router:
+  # gRPC address of the LLM request router that transport pods register with.
+  # Required. Passed as --router-grpc-address. A bare host:port or an http://
+  # address is plaintext; only an https:// address uses TLS, verified against
+  # trustBundle.configMap.
+  # Example: llm-request-router.nvcf.svc.cluster.local:50071
+  grpcAddress: ""
+
+pylon:
+  # Image of the Pylon transport pods the operator creates. repository and tag
+  # are required; a tag starting with sha256: is used as a digest. Passed as
+  # --pylon-image. pullPolicy is the transport container's imagePullPolicy,
+  # passed as --pylon-image-pull-policy.
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+
+# Namespaces whose InferenceEndpoints the operator watches. Empty watches all
+# namespaces. Passed as a comma-separated --watch-namespaces.
+watchNamespaces: []
+
+transport:
+  # Replicas of each transport Deployment. Passed as --transport-replicas.
+  replicas: 1
+  # Input tokens per second Pylon assumes for its queue estimate until it has
+  # measured the backend. Passed as --initial-input-tps.
+  initialInputTPS: 100
+
+# Period of the backend health probe. Passed as --probe-interval.
+probeInterval: 10s
+# Period of the transport pod metrics scrape. Passed as --scrape-interval.
+scrapeInterval: 5s
+
+# Run transport pods with --quic-insecure. For local k3d clusters only.
+# Passed as --dev-insecure-transport.
+devInsecureTransport: false
+
+leaderElection:
+  # Passed as --leader-elect. The chart creates a Role for Leases in the
+  # release namespace. When disabled, the Deployment uses the Recreate strategy
+  # so two operator pods never reconcile at once.
+  enabled: true
+
+# T0 cluster credential: the bearer token transport pods present to the router.
+# The operator reads it from a Secret in the release namespace and replicates
+# it into each namespace with an InferenceEndpoint. The router verifies it
+# against the sha256 configured in the llm-request-router chart.
+credential:
+  # Name of an existing Secret in the release namespace that holds the token.
+  # When set, the chart creates no Secret and passes this name as
+  # --cluster-credential-secret.
+  existingSecret: ""
+  # Secret key that holds the token. The operator reads only cluster-token,
+  # so the chart rejects any other value.
+  key: cluster-token
+  # When existingSecret is empty, create Secret <fullname>-cluster-credential
+  # with a random 48 character token on first install. Upgrades keep the
+  # existing value. When false and existingSecret is empty, create that Secret
+  # yourself before installing.
+  generate: true
+
+trustBundle:
+  # Name of an existing ConfigMap in the release namespace whose ca.crt key
+  # holds the CA bundle that signs the router's TLS certificate. The operator
+  # replicates it and mounts it into transport pods. Empty mounts none.
+  # Passed as --trust-bundle-configmap.
+  configMap: ""
+
+# Render the InferenceEndpoint CRD. The CRD carries
+# helm.sh/resource-policy: keep, so turning this off or uninstalling the
+# release leaves the CRD and every InferenceEndpoint in place.
+installCRDs: true
+
+# Operator log level. Passed as --zap-log-level: debug, info, error, or an
+# integer verbosity.
+logLevel: info
+
+# Additional operator arguments, appended after the chart's arguments.
+extraArgs: []
+
+serviceAccount:
+  # Create the operator ServiceAccount. The operator needs API access, so its
+  # token is mounted.
+  create: true
+  # Name of the ServiceAccount. Defaults to the release full name.
+  name: ""
+  annotations: {}
+
+metrics:
+  # Port of the controller-runtime metrics endpoint and its Service. Passed
+  # as --metrics-bind-address.
+  port: 8080
+
+healthProbe:
+  # Port of /healthz and /readyz. Passed as --health-probe-bind-address.
+  port: 8081
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  # The distroless base image runs as the non-numeric user nvs (uid 1000).
+  # runAsNonRoot needs a numeric uid to verify.
+  runAsUser: 1000
+  runAsGroup: 1000
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

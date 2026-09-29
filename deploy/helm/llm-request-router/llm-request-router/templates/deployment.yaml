@@ -56,6 +56,8 @@ The identity guard lives here, not in certificate.yaml: existingSecret mode
 renders no Certificate, so a guard in that template would never run.
 */}}
 {{- include "llm-request-router.validateTlsIdentity" . }}
+{{- $workerAuthMode := include "llm-request-router.workerAuthMode" . }}
+{{- $workerAuthMountPath := include "llm-request-router.workerAuthMountPath" . }}
 {{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
 {{- if and $backendRouterEnabled (not .Values.llmRequestRouter.transport.reverseTunnelListenAddr) }}
 {{- fail "llmRequestRouter.backendRouter.enabled requires llmRequestRouter.transport.reverseTunnelListenAddr" }}
@@ -169,12 +171,16 @@ spec:
             {{- if and .Values.llmRequestRouter.observability.tracing.enabled .Values.llmRequestRouter.observability.tracing.endpoint }}
             - --otel-endpoint={{ .Values.llmRequestRouter.observability.tracing.endpoint }}
             {{- end }}
-            {{- with .Values.llmRequestRouter.auth.workerAuthEndpoint }}
-            - --worker-auth-endpoint={{ . }}
-            {{- if not (and $.Values.llmRequestRouter.vault $.Values.llmRequestRouter.vault.noVaultAnnotations) }}
+            {{- if eq $workerAuthMode "endpoint" }}
+            - --worker-auth-endpoint={{ .Values.llmRequestRouter.auth.workerAuthEndpoint | toString | trim }}
+            {{- if not (and .Values.llmRequestRouter.vault .Values.llmRequestRouter.vault.noVaultAnnotations) }}
             - --secrets-path=/vault/secrets/secrets.json
             - --secrets-json-path=nvcfApiToken
             {{- end }}
+            {{- else if eq $workerAuthMode "credentialsSecret" }}
+            - --worker-auth-file={{ $workerAuthMountPath }}/{{ .Values.llmRequestRouter.auth.credentialsSecret.key }}
+            {{- else if eq $workerAuthMode "open" }}
+            - --allow-open-worker-auth
             {{- end }}
             {{- with .Values.llmRequestRouter.tls.certPath }}
             - --tls-cert-path={{ . }}
@@ -236,6 +242,11 @@ spec:
               mountPath: /etc/llm-request-router
               readOnly: true
             {{- end }}
+            {{- if eq $workerAuthMode "credentialsSecret" }}
+            - name: worker-auth-credentials
+              mountPath: {{ $workerAuthMountPath }}
+              readOnly: true
+            {{- end }}
             {{- $tlsSecretNameMount := include "llm-request-router.tlsSecretName" . }}
             {{- if and $tlsSecretNameMount .Values.llmRequestRouter.tls.certPath .Values.llmRequestRouter.tls.keyPath }}
             {{- include "llm-request-router.validateTlsCertKeyDir" . }}
@@ -261,6 +272,18 @@ spec:
         - name: lb-config
           configMap:
             name: {{ include "llm-request-router.fullname" . }}-lb
+        {{- end }}
+        {{- if eq $workerAuthMode "credentialsSecret" }}
+        {{- /*
+        No subPath: Kubernetes swaps the projected files atomically on Secret
+        updates, and Stargate re-reads the file every 30 seconds.
+        */}}
+        - name: worker-auth-credentials
+          secret:
+            secretName: {{ .Values.llmRequestRouter.auth.credentialsSecret.name | toString | trim | quote }}
+            items:
+              - key: {{ .Values.llmRequestRouter.auth.credentialsSecret.key | quote }}
+                path: {{ .Values.llmRequestRouter.auth.credentialsSecret.key | quote }}
         {{- end }}
         {{- $tlsSecretNameVolume := include "llm-request-router.tlsSecretName" . }}
         {{- if and $tlsSecretNameVolume .Values.llmRequestRouter.tls.certPath .Values.llmRequestRouter.tls.keyPath }}

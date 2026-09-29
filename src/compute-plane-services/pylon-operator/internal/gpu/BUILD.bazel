@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "gpu",
+    srcs = ["gpu.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/gpu",
+    visibility = ["//src/compute-plane-services/pylon-operator:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/pylon-operator/api/v1alpha1",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_api//discovery/v1:discovery",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gpu",
+    visibility = ["//src/compute-plane-services/pylon-operator:__subpackages__"],
+)
+
+go_test(
+    name = "gpu_test",
+    srcs = ["gpu_test.go"],
+    embed = [":gpu"],
+    deps = [
+        "//src/compute-plane-services/pylon-operator/api/v1alpha1",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_api//discovery/v1:discovery",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_client_go//kubernetes/scheme",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@io_k8s_sigs_controller_runtime//pkg/client/fake",
+        "@io_k8s_sigs_controller_runtime//pkg/client/interceptor",
+        "@io_k8s_utils//ptr",
+    ],
+)

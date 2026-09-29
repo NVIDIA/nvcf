@@ -43,6 +43,7 @@ use (
 	./src/compute-plane-services/worker-task
 	./src/compute-plane-services/request-trace-uploader
 	./src/compute-plane-services/worker-utils
+	./src/compute-plane-services/pylon-operator
 	./src/invocation-plane-services/grpc-proxy
 	./src/invocation-plane-services/llm-api-gateway
 	./src/invocation-plane-services/ratelimiter

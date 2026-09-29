@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +48,7 @@ type Config struct {
 	// are only counted and logged so enforcement can roll out per
 	// environment.
 	ModelURIAllowlistEnabled bool
+	Auth                     AuthConfig
 }
 
 type ServerConfig struct {
@@ -65,7 +67,115 @@ type ServerConfig struct {
 	// MaxRequestBodyBytes rejects larger request bodies with 413. Zero disables
 	// the limit.
 	MaxRequestBodyBytes int64
+	// TLSCertFile and TLSKeyFile enable TLS on the listener. Both or neither
+	// must be set.
+	TLSCertFile string
+	TLSKeyFile  string
+	// TLSReloadInterval is how often the TLS files are checked for a renewed
+	// pair while serving. A changed pair is served to new connections
+	// without a restart.
+	TLSReloadInterval time.Duration
 }
+
+// TLSEnabled reports whether the listener is configured for TLS. A
+// half-configured pair also counts, so startup fails instead of silently
+// serving plaintext.
+func (c ServerConfig) TLSEnabled() bool {
+	return c.TLSCertFile != "" || c.TLSKeyFile != ""
+}
+
+// AuthConfig selects how callers are authenticated. NVCF gRPC auth
+// (NVCFConfig.GRPCAddr) and static API keys (APIKeysPath) are mutually
+// exclusive; with neither, the gateway starts only when AllowAnonymous is set.
+type AuthConfig struct {
+	// APIKeysPath is the static API key file. Setting it selects static key
+	// mode: bare model names, no routing-key prefix and no NVCF API.
+	APIKeysPath string
+	// AllowAnonymous lets the gateway start without any authenticator. Every
+	// request is then accepted unauthenticated.
+	AllowAnonymous bool
+	// StaticAllowedPaths are the request paths served in static key mode.
+	// Other paths are refused with 403 after authentication. The read-only
+	// discovery endpoints (GET /v1/models and GET /v1/registry) are always
+	// allowed and need not be listed.
+	StaticAllowedPaths []string
+	// PublicReadEndpoints is the PUBLIC_READ_ENDPOINTS override. Nil derives
+	// the value from the auth mode; see Config.PublicReadEndpointsEnabled.
+	PublicReadEndpoints *bool
+}
+
+// AuthMode names how the gateway authenticates callers.
+type AuthMode string
+
+const (
+	AuthModeNVCF       AuthMode = "nvcf"
+	AuthModeStaticKeys AuthMode = "static-keys"
+	AuthModeAnonymous  AuthMode = "anonymous"
+)
+
+// ErrNoAuthConfigured is returned by AuthMode when no authenticator is
+// configured and anonymous access was not explicitly allowed.
+var ErrNoAuthConfigured = errors.New(
+	"no request authentication configured: set NVCF_GRPC_ADDR for NVCF auth, " +
+		"API_KEYS_PATH for static API keys, or ALLOW_ANONYMOUS=true to accept " +
+		"unauthenticated requests",
+)
+
+// StaticAuthMode reports whether the gateway authenticates callers with
+// static API keys. In this mode the whole request model string is the model
+// id and the routing key is always empty.
+func (c *Config) StaticAuthMode() bool {
+	return c != nil && c.Auth.APIKeysPath != ""
+}
+
+// AuthMode resolves the authentication mode. It fails closed: with no
+// authenticator configured and anonymous access not allowed it returns
+// ErrNoAuthConfigured.
+func (c *Config) AuthMode() (AuthMode, error) {
+	if c == nil {
+		return "", ErrNoAuthConfigured
+	}
+	switch {
+	case c.NVCF.GRPCAddr != "" && c.Auth.APIKeysPath != "":
+		return "", errAuthModesExclusive
+	case c.NVCF.GRPCAddr != "":
+		return AuthModeNVCF, nil
+	case c.Auth.APIKeysPath != "":
+		return AuthModeStaticKeys, nil
+	case c.Auth.AllowAnonymous:
+		return AuthModeAnonymous, nil
+	default:
+		return "", ErrNoAuthConfigured
+	}
+}
+
+var errAuthModesExclusive = errors.New("NVCF_GRPC_ADDR and API_KEYS_PATH are mutually exclusive")
+
+// PublicReadEndpointsEnabled reports whether the read-only discovery
+// endpoints, GET /v1/models and GET /v1/registry, are served without caller
+// authentication. An explicit PUBLIC_READ_ENDPOINTS wins. Otherwise they are
+// public in static key and anonymous mode and authenticated in NVCF mode,
+// where the router's model list spans every tenant. A config whose auth mode
+// does not resolve fails closed.
+func (c *Config) PublicReadEndpointsEnabled() bool {
+	if c == nil {
+		return false
+	}
+	if c.Auth.PublicReadEndpoints != nil {
+		return *c.Auth.PublicReadEndpoints
+	}
+	mode, err := c.AuthMode()
+	if err != nil {
+		return false
+	}
+	return mode != AuthModeNVCF
+}
+
+// DefaultTLSReloadInterval is the TLS_RELOAD_INTERVAL default.
+const DefaultTLSReloadInterval = 30 * time.Second
+
+// DefaultStaticAllowedPaths is the STATIC_ALLOWED_PATHS default.
+var DefaultStaticAllowedPaths = []string{"/v1/chat/completions"}
 
 type TelemetryConfig struct {
 	ServiceName        string
@@ -77,6 +187,9 @@ type StargateConfig struct {
 	URL            string
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
+	// ServiceToken, when set, is sent to the router as the Authorization
+	// bearer. The caller's own credentials are never forwarded.
+	ServiceToken string
 }
 
 type NVCFConfig struct {
@@ -205,6 +318,7 @@ func Default() *Config {
 			InferenceWriteTimeout: 60 * time.Second,
 			IdleTimeout:           60 * time.Second,
 			Region:                "global",
+			TLSReloadInterval:     DefaultTLSReloadInterval,
 		},
 		Stargate: StargateConfig{
 			URL:            "http://127.0.0.1:8000",
@@ -235,6 +349,9 @@ func Default() *Config {
 			},
 		},
 		DefaultServiceTier: servicetier.Auto,
+		Auth: AuthConfig{
+			StaticAllowedPaths: slices.Clone(DefaultStaticAllowedPaths),
+		},
 	}
 }
 
@@ -255,10 +372,13 @@ func LoadFromEnv() (*Config, error) {
 	applyOlricRuntimeEnv(cfg, &errs)
 	applyRateLimitEnv(cfg, &errs)
 	applyDefaultModelEnv(cfg, &errs)
+	applyAuthTLSEnv(cfg, &errs)
 
 	if v, ok := errs.boolean("MODEL_URI_ALLOWLIST_ENABLED"); ok {
 		cfg.ModelURIAllowlistEnabled = v
 	}
+
+	validateAuthTLS(cfg, &errs)
 
 	// SecretsPath is populated by applyStargateNVCFEnv above.
 	cfg.Telemetry.TracingAccessToken = loadTracingAccessToken(cfg.NVCF.SecretsPath)
@@ -505,6 +625,69 @@ func applyDefaultModelEnv(cfg *Config, errs *envErrs) {
 		} else {
 			cfg.ModelCapabilities = caps
 		}
+	}
+}
+
+func applyAuthTLSEnv(cfg *Config, errs *envErrs) {
+	if path := os.Getenv("API_KEYS_PATH"); path != "" {
+		cfg.Auth.APIKeysPath = path
+	}
+
+	if v, ok := errs.boolean("ALLOW_ANONYMOUS"); ok {
+		cfg.Auth.AllowAnonymous = v
+	}
+
+	if raw := os.Getenv("STATIC_ALLOWED_PATHS"); raw != "" {
+		paths := splitAndTrim(raw, ",")
+		switch {
+		case len(paths) == 0:
+			errs.add("STATIC_ALLOWED_PATHS", raw, errors.New("must list at least one path"))
+		case slices.ContainsFunc(paths, func(p string) bool { return !strings.HasPrefix(p, "/") }):
+			errs.add("STATIC_ALLOWED_PATHS", raw, errors.New("every path must start with /"))
+		default:
+			cfg.Auth.StaticAllowedPaths = paths
+		}
+	}
+
+	if v, ok := errs.boolean("PUBLIC_READ_ENDPOINTS"); ok {
+		cfg.Auth.PublicReadEndpoints = &v
+	}
+
+	if token := os.Getenv("STARGATE_SERVICE_TOKEN"); token != "" {
+		cfg.Stargate.ServiceToken = token
+	}
+
+	if certFile := os.Getenv("TLS_CERT_FILE"); certFile != "" {
+		cfg.Server.TLSCertFile = certFile
+	}
+
+	if keyFile := os.Getenv("TLS_KEY_FILE"); keyFile != "" {
+		cfg.Server.TLSKeyFile = keyFile
+	}
+
+	if interval, ok := errs.duration("TLS_RELOAD_INTERVAL"); ok {
+		if interval <= 0 {
+			errs.add("TLS_RELOAD_INTERVAL", os.Getenv("TLS_RELOAD_INTERVAL"), errors.New("must be > 0"))
+		} else {
+			cfg.Server.TLSReloadInterval = interval
+		}
+	}
+}
+
+// validateAuthTLS rejects combinations that are individually well-formed but
+// contradictory. The fail-closed "no authenticator" decision is not made here
+// because the rate-limit sync worker loads the same config without serving
+// requests; the gateway enforces it at startup through Config.AuthMode.
+func validateAuthTLS(cfg *Config, errs *envErrs) {
+	if cfg.NVCF.GRPCAddr != "" && cfg.Auth.APIKeysPath != "" {
+		errs.add("API_KEYS_PATH", cfg.Auth.APIKeysPath, errAuthModesExclusive)
+	}
+
+	switch {
+	case cfg.Server.TLSCertFile != "" && cfg.Server.TLSKeyFile == "":
+		errs.add("TLS_KEY_FILE", "", errors.New("must be set together with TLS_CERT_FILE"))
+	case cfg.Server.TLSCertFile == "" && cfg.Server.TLSKeyFile != "":
+		errs.add("TLS_CERT_FILE", "", errors.New("must be set together with TLS_KEY_FILE"))
 	}
 }
 

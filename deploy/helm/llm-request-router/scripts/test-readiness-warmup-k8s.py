@@ -227,6 +227,8 @@ class KubernetesTest:
                 "llmRequestRouter.vault.noVaultAnnotations=true",
                 "--set-string",
                 "llmRequestRouter.auth.workerAuthEndpoint=",
+                "--set",
+                "llmRequestRouter.auth.allowOpen=true",
             ]
         )
         self.kubectl(

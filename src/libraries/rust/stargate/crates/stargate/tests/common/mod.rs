@@ -79,6 +79,7 @@ impl WorkerAuthenticator for TokenMapAuthenticator {
             .clone();
         Ok(AuthResult {
             routing_key: Some(routing_key),
+            cluster_id: None,
         })
     }
 }
@@ -1314,7 +1315,7 @@ pub async fn start_and_register_backend_with_bringup(
             initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
             bringup,
             health_paths: pylon_lib::UpstreamHealthPaths::default(),
-            startup_health_wait: std::time::Duration::ZERO,
+            startup_health_wait: pylon_lib::StartupHealthWait::Deadline(std::time::Duration::ZERO),
         },
         runtime_state.clone(),
         &stats_collector,
