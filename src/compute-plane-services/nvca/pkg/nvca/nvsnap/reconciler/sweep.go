@@ -82,6 +82,21 @@ func (r *Reconciler) SweepOnce(ctx context.Context) {
 			continue // no usable capture yet — leave for a future tick
 		}
 
+		// An in-flight capture is not recovered over. A live claim whose
+		// owner pod is alive is left alone (unknown liveness counts as
+		// alive); a dead or expired claim is taken over, fenced on the
+		// claim as observed so a newer claimant cannot be released.
+		token := claimToken{ExpectUnclaimed: true}
+		if st.CaptureOwner != "" {
+			leaseLive := st.CaptureLeaseExpiry != nil && time.Now().Before(st.CaptureLeaseExpiry.Time)
+			if leaseLive && r.claimOwnerAlive(ctx, st.CaptureOwner, st.CaptureOwnerUID) {
+				log.WithFields(logrus.Fields{"functionVersionID": fvID, "owner": st.CaptureOwner}).
+					Debug("sweep: capture in flight with a live owner; not recovering over it")
+				continue
+			}
+			token = claimToken{Owner: st.CaptureOwner, UID: st.CaptureOwnerUID}
+		}
+
 		now := time.Now()
 		if err := writeStatus(ctx, r.DynClient, fvID, statusUpdate{
 			CheckpointHash:  hash,
@@ -91,7 +106,7 @@ func (r *Reconciler) SweepOnce(ctx context.Context) {
 			AttemptCount:    0,
 			LastError:       "",
 			LastAttemptAt:   now,
-		}, claimToken{}); err != nil {
+		}, token); err != nil {
 			log.WithError(err).WithField("functionVersionID", fvID).
 				Warn("sweep: writeStatus Warm failed; will retry next tick")
 			continue

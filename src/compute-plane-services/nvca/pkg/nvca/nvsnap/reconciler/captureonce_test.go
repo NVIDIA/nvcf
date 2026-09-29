@@ -244,6 +244,20 @@ func TestWriteStatusRejectsSupersededClaim(t *testing.T) {
 	if err := writeStatus(ctx, dyn, fvID, warm, claimToken{}); err != nil {
 		t.Fatalf("an unfenced write is never rejected: %v", err)
 	}
+	// After a terminal write the claim is gone: a late write from the
+	// former owner is superseded, not applied.
+	if err := writeStatus(ctx, dyn, fvID, statusUpdate{LocalCacheState: nvsnapv1alpha1.LocalCacheStateFailed, LastError: "late"}, claimToken{Owner: "ns1/podB"}); !errors.Is(err, ErrClaimSuperseded) {
+		t.Fatalf("a writer whose claim was already closed must be rejected: %v", err)
+	}
+	// A path that observed no claim is rejected once a claim appeared.
+	dyn2 := newFakeDynamic(capturingCFS("fv-claimed", "ns1/podC", time.Now().Add(30*time.Minute)))
+	if err := writeStatus(ctx, dyn2, "fv-claimed", warm, claimToken{ExpectUnclaimed: true}); !errors.Is(err, ErrClaimSuperseded) {
+		t.Fatalf("ExpectUnclaimed must reject a write over a live claim: %v", err)
+	}
+	cur2, _ := dyn2.Resource(CFSResource).Get(ctx, "fv-claimed", metav1.GetOptions{})
+	if st := readStatus(cur2); st.CaptureOwner != "ns1/podC" {
+		t.Errorf("claim must survive: %+v", st)
+	}
 }
 
 func TestWriteStatusReleasesClaim(t *testing.T) {

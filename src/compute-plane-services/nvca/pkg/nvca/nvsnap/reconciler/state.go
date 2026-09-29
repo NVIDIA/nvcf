@@ -259,9 +259,14 @@ type statusUpdate struct {
 type claimToken struct {
 	Owner string
 	UID   string
+	// ExpectUnclaimed fences a write from a path that holds no claim but
+	// observed none on the object (the sweep): the write is rejected if a
+	// claim appeared in between, so a fresh capture is never released by
+	// a recovery that read stale state.
+	ExpectUnclaimed bool
 }
 
-func (t claimToken) empty() bool { return t.Owner == "" }
+func (t claimToken) empty() bool { return t.Owner == "" && !t.ExpectUnclaimed }
 
 // ErrClaimSuperseded is returned by writeStatus when the caller's claim
 // token no longer matches the claim on the object: another reconcile owns
@@ -271,8 +276,17 @@ var ErrClaimSuperseded = errors.New("capture claim superseded by another owner")
 // supersedes reports whether the claim recorded on the object belongs to
 // someone other than token. An object with no claim never supersedes.
 func (st cfsStatus) supersedes(token claimToken) bool {
-	if token.empty() || st.CaptureOwner == "" {
+	if token.empty() {
 		return false
+	}
+	if token.ExpectUnclaimed {
+		return st.CaptureOwner != ""
+	}
+	if st.CaptureOwner == "" {
+		// The writer's claim is gone: another terminal write (a recovery
+		// or a takeover that finished) already closed this capture, so
+		// the writer's outcome must not replace it.
+		return true
 	}
 	if st.CaptureOwner != token.Owner {
 		return true
