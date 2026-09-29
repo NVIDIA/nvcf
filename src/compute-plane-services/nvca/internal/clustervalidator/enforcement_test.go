@@ -296,7 +296,13 @@ func hangingClient(t *testing.T) kubernetes.Interface {
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
-	t.Cleanup(srv.Close)
+	// Close waits for in-flight handlers, and a hung Get that outlived
+	// finishesWithin would hold this one forever. Dropping the connections
+	// first cancels the request context the handler is blocked on.
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
 	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
 	require.NoError(t, err)
 	return client

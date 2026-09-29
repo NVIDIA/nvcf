@@ -501,7 +501,7 @@ networkPolicy:
 ## @param clusterValidator.openBaoNamespace Namespace holding OpenBao, when it is not vault-system; without it the Tier-2 quorum check skips its StatefulSet
 ## @param clusterValidator.envoyGatewayNamespace Namespace holding Envoy Gateway, when it is not envoy-gateway-system
 ## @param clusterValidator.gatewayNames Override for the NVCF Gateways ("name" or "namespace/name") the LoadBalancer check inspects; replaces discovery from the NVCF routes
-## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc. Defaults to busybox:1.36 from Docker Hub
+## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. Defaults to busybox:1.36 from Docker Hub
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
 ## @param clusterValidator.configMapName ConfigMap name for user-defined network checks (reachability + network policy validation)
 ## @param clusterValidator.resources.limits.cpu CPU limit for the cluster-validator container
