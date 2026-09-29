@@ -297,6 +297,119 @@ func TestNVLinkDomainSchedulingParametersNarrowRequiredNodeAffinity(t *testing.T
 	}
 }
 
+func TestPreferredNVLinkDomainSchedulingParametersWorkloadCliqueAffinity(t *testing.T) {
+	nvlinkDomainPartitionKeyFoo := "x2c26b46b68ffc68ff9x"
+	gangTerm := func(topologyKey string) corev1.PodAffinityTerm {
+		return corev1.PodAffinityTerm{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"gang": "0"}},
+			TopologyKey:   topologyKey,
+		}
+	}
+	functionWideTerm := corev1.WeightedPodAffinityTerm{
+		Weight: 100,
+		PodAffinityTerm: corev1.PodAffinityTerm{
+			LabelSelector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{
+						Key:      NVLinkDomainPartitionLabel,
+						Operator: metav1.LabelSelectorOpExists,
+					},
+					{
+						Key:      NVLinkDomainPartitionLabel,
+						Operator: metav1.LabelSelectorOpIn,
+						Values:   []string{nvlinkDomainPartitionKeyFoo},
+					},
+				},
+			},
+			TopologyKey: GPUCliqueNodeLabel,
+		},
+	}
+	workloadLabels := map[string]string{"gang": "0"}
+	partitionedLabels := map[string]string{"gang": "0", NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFoo}
+	cliqueNodeAffinity := &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key:      GPUCliqueNodeLabel,
+					Operator: corev1.NodeSelectorOpExists,
+				}},
+			}},
+		},
+	}
+
+	tests := []struct {
+		name            string
+		podAffinity     *corev1.PodAffinity
+		applyN          int
+		wantLabels      map[string]string
+		wantPodAffinity *corev1.PodAffinity
+	}{
+		{
+			name: "required clique affinity skips the function-wide preference",
+			podAffinity: &corev1.PodAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{gangTerm(GPUCliqueNodeLabel)},
+			},
+			applyN:     1,
+			wantLabels: workloadLabels,
+			wantPodAffinity: &corev1.PodAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{gangTerm(GPUCliqueNodeLabel)},
+			},
+		},
+		{
+			name: "preferred clique affinity skips the function-wide preference",
+			podAffinity: &corev1.PodAffinity{
+				PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
+					Weight:          50,
+					PodAffinityTerm: gangTerm(GPUCliqueNodeLabel),
+				}},
+			},
+			applyN:     1,
+			wantLabels: workloadLabels,
+			wantPodAffinity: &corev1.PodAffinity{
+				PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
+					Weight:          50,
+					PodAffinityTerm: gangTerm(GPUCliqueNodeLabel),
+				}},
+			},
+		},
+		{
+			name: "affinity on another topology key keeps the function-wide preference",
+			podAffinity: &corev1.PodAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{gangTerm("kubernetes.io/hostname")},
+			},
+			applyN:     1,
+			wantLabels: partitionedLabels,
+			wantPodAffinity: &corev1.PodAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution:  []corev1.PodAffinityTerm{gangTerm("kubernetes.io/hostname")},
+				PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{functionWideTerm},
+			},
+		},
+		{
+			name:       "repeated mutation adds the function-wide preference once",
+			applyN:     3,
+			wantLabels: partitionedLabels,
+			wantPodAffinity: &corev1.PodAffinity{
+				PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{functionWideTerm},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"gang": "0"}},
+				Spec:       corev1.PodSpec{Affinity: &corev1.Affinity{PodAffinity: tt.podAffinity.DeepCopy()}},
+			}
+			for i := 0; i < tt.applyN; i++ {
+				SetPreferredNVLinkDomainSchedulingParameters("foo", pod)
+			}
+			assert.Equal(t, tt.wantLabels, pod.Labels)
+			assert.Equal(t, tt.wantPodAffinity, pod.Spec.Affinity.PodAffinity)
+			assert.Equal(t, cliqueNodeAffinity, pod.Spec.Affinity.NodeAffinity)
+		})
+	}
+}
+
 func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 	type spec struct {
 		name       string

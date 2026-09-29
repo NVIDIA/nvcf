@@ -1576,3 +1576,66 @@ func TestMiniserviceOperatorWebhook_NVLinkComputeDomain_DisableViaWorkloadConfig
 		assert.True(t, warned, "expected a warning log entry for the conflicting annotation and feature flag")
 	})
 }
+
+func TestMiniserviceOperatorWebhook_NVLinkAffinity_WorkloadCliqueAffinity(t *testing.T) {
+	meta := nvcatypes.MiniserviceMetadata{
+		MessageAction: common.FunctionCreationAction,
+		Labels: map[string]string{
+			nvcatypes.FunctionIDKey:        testFunctionID,
+			nvcatypes.FunctionVersionIDKey: testVersionID,
+			nvcatypes.MiniserviceNameLabel: testInstanceID,
+		},
+	}
+	wh := makeWebhook(t, createConfigMapFromMeta(t, testNamespace, meta))
+	wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
+
+	// A gang member that pins its own gang to one GPU clique, as multi-node DGD workers do.
+	gangTerm := corev1.PodAffinityTerm{
+		LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"gang": "0"}},
+		TopologyKey:   nvcfdra.GPUCliqueNodeLabel,
+	}
+	labels := miniserviceNameLabels()
+	labels["gang"] = "0"
+	pod := &corev1.Pod{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gang-pod", Namespace: testNamespace, Labels: labels},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "app",
+				Image: "app:latest",
+				Resources: corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("4")},
+				},
+			}},
+			Affinity: &corev1.Affinity{
+				PodAffinity: &corev1.PodAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{gangTerm},
+				},
+			},
+		},
+	}
+
+	raw, err := json.Marshal(pod)
+	require.NoError(t, err)
+	req := admission.Request{}
+	req.Namespace = testNamespace
+	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+	req.Operation = admissionv1.Create
+	req.Object = runtime.RawExtension{Raw: raw}
+
+	resp := wh.Handle(core.WithDefaultLogger(context.Background()), req)
+	require.True(t, resp.Allowed, "expected create Allowed, got: %v", resp.Result)
+	var got corev1.Pod
+	require.NoError(t, json.Unmarshal(applyPatches(t, raw, resp.Patches), &got))
+
+	require.Len(t, got.Spec.ResourceClaims, 1)
+	require.Len(t, got.Spec.Containers[0].Resources.Claims, 1)
+	require.NotNil(t, got.Spec.Affinity.NodeAffinity)
+	assert.Contains(t,
+		got.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions,
+		corev1.NodeSelectorRequirement{Key: nvcfdra.GPUCliqueNodeLabel, Operator: corev1.NodeSelectorOpExists})
+	assert.NotContains(t, got.Labels, nvcfdra.NVLinkDomainPartitionLabel)
+	assert.Equal(t, &corev1.PodAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{gangTerm},
+	}, got.Spec.Affinity.PodAffinity)
+}

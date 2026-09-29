@@ -142,12 +142,18 @@ rack or clique:
 
 On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
 
-- It adds the generated `dra.nvcf.nvidia.io/nvlink-domain-partition` label.
+- It adds the generated `dra.nvcf.nvidia.io/nvlink-domain-partition` label,
+  except on a Pod that declares its own clique affinity as described below.
   Do not set this label in the chart.
 - For an annotated Pod, it adds required Pod affinity so Pods in the same
   logical group use one value of the `nvidia.com/gpu.clique` topology key.
 - For an unannotated Pod, it adds preferred Pod affinity with weight 100. The
   scheduler can spread these Pods when it cannot satisfy the preference.
+- For an unannotated Pod that already declares required or preferred Pod
+  affinity on the `nvidia.com/gpu.clique` topology key, it keeps that affinity
+  and adds neither the label nor the preferred Pod affinity. A chart that pins
+  each multi-node group to one clique then controls its own placement, and the
+  groups are not all pulled toward the same clique.
 - It requires placement on a node that has the `nvidia.com/gpu.clique` label.
 - It adds the function's `ComputeDomain` resource claim to containers that
   request `nvidia.com/gpu`, `nvidia.com/pgpu`, `nvidia.com/gpu.shared`, or an

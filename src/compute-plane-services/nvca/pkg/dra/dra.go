@@ -184,6 +184,17 @@ func SetComputeDomainToGPUPodResourceClaims(
 	iterPodSpecs(mf, objs...)
 }
 
+// SetPreferredNVLinkDomainSchedulingParameters steers the Pods of objs toward
+// the GPU clique that holds the function's other Pods. Each Pod gets a
+// partition label derived from keyToHash, a preferred Pod affinity term for
+// that label on the GPU clique topology, and a GPU clique node requirement.
+//
+// A Pod that already declares Pod affinity on the GPU clique topology, such as
+// a multi-node gang pinned to one clique, manages its own NVLink placement and
+// only gets the GPU clique node requirement. A function-wide preference would
+// pull every gang toward one clique and strand the gangs that no longer fit
+// there. The partition label is withheld too, because schedulers also score
+// the preferred terms of already-placed Pods against an incoming Pod.
 func SetPreferredNVLinkDomainSchedulingParameters(keyToHash string, objs ...client.Object) {
 	nvlinkDomainPartitionLabelVal := newPartitionKey([]byte(keyToHash))
 
@@ -206,13 +217,18 @@ func SetPreferredNVLinkDomainSchedulingParameters(keyToHash string, objs ...clie
 
 	itrf := func(pts *corev1.PodTemplateSpec) {
 		ps := &pts.Spec
+		if ps.Affinity == nil {
+			ps.Affinity = &corev1.Affinity{}
+		}
+		requireGPUCliqueNode(ps.Affinity)
+		if hasGPUCliquePodAffinity(ps.Affinity.PodAffinity) {
+			return
+		}
+
 		if pts.Labels == nil {
 			pts.Labels = map[string]string{}
 		}
 		pts.Labels[NVLinkDomainPartitionLabel] = nvlinkDomainPartitionLabelVal
-		if ps.Affinity == nil {
-			ps.Affinity = &corev1.Affinity{}
-		}
 		if ps.Affinity.PodAffinity == nil {
 			ps.Affinity.PodAffinity = &corev1.PodAffinity{}
 		}
@@ -223,7 +239,6 @@ func SetPreferredNVLinkDomainSchedulingParameters(keyToHash string, objs ...clie
 				PodAffinityTerm: podAffinityTerm,
 			},
 		)
-		requireGPUCliqueNode(ps.Affinity)
 	}
 	iterPodSpecs(itrf, objs...)
 }
@@ -313,6 +328,25 @@ func requireGPUCliqueNode(a *corev1.Affinity) {
 func hasGPUCliqueRequirement(reqs []corev1.NodeSelectorRequirement) bool {
 	for _, req := range reqs {
 		if req.Key == GPUCliqueNodeLabel && req.Operator == corev1.NodeSelectorOpExists {
+			return true
+		}
+	}
+	return false
+}
+
+// hasGPUCliquePodAffinity reports whether a Pod declares a required or
+// preferred Pod affinity term on the GPU clique topology.
+func hasGPUCliquePodAffinity(pa *corev1.PodAffinity) bool {
+	if pa == nil {
+		return false
+	}
+	for _, term := range pa.RequiredDuringSchedulingIgnoredDuringExecution {
+		if term.TopologyKey == GPUCliqueNodeLabel {
+			return true
+		}
+	}
+	for _, term := range pa.PreferredDuringSchedulingIgnoredDuringExecution {
+		if term.PodAffinityTerm.TopologyKey == GPUCliqueNodeLabel {
 			return true
 		}
 	}
