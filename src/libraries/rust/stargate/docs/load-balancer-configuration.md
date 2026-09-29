@@ -460,7 +460,7 @@ for status, replay, and retry-budget rules.
 Stargate records algorithm and fallback choices, proxy attempts and retries,
 admission rejections, upstream latency, and active backend counts. The prefix
 is configurable with `--metrics-prefix`. See the
-[NVCF request-router metrics reference](../../../../../docs/user/metrics/llm-request-router/metrics.md)
+[NVCF request-router metrics reference](../../../../../docs/observability/metrics/llm-request-router/metrics.md)
 for metric names, labels, and descriptions.
 
 The proxy request span records the effective comparator in `routing.comparator`.

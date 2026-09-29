@@ -247,9 +247,7 @@ func TestManifestMetadataClassifiesAllArtifacts(t *testing.T) {
 		t.Fatalf("manifest classification mismatch: missing=%v extra=%v", missing, extra)
 	}
 
-	sort.Strings(eaCVE)
-	wantEACVE := []string{"nvcf-cassandra-migrations"}
-	if strings.Join(eaCVE, ",") != strings.Join(wantEACVE, ",") {
-		t.Fatalf("EA-CVE entries = %v, want %v", eaCVE, wantEACVE)
+	if len(eaCVE) != 0 {
+		t.Fatalf("EA-CVE entries = %v, want none: the latest release has no CVE-impacted EA artifacts", eaCVE)
 	}
 }

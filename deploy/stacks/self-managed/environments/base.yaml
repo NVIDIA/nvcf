@@ -79,8 +79,9 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
-    # Optional LLM request-router address override advertised to LLM worker
-    # sidecars. Empty uses llm-request-router.nvcf.svc.cluster.local:50071.
+    # Pylon discovery endpoint. Empty uses
+    # llm-request-router-backend-router.nvcf.svc.cluster.local:50071 when backend
+    # routing is enabled, otherwise llm-request-router.nvcf.svc.cluster.local:50071.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
@@ -401,6 +402,8 @@ addons:
         # enabled: defaults to addons.llm.enabled
         # replicaCount defaults to the request-router chart value.
         # replicaCount: 2
+        # service:
+        #   grpcPort: 50071
         # Addresses workers dial to reach the router. Both default to the
         # backend-router Service in-cluster, which is correct when workers run
         # alongside the control plane. Set both to externally reachable

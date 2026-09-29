@@ -5,6 +5,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "storage",
+    embedsrcs = ["nvcf-storage-capabilities-v1alpha1.yaml"],
     srcs = [
         "modelcache_selection.go",
         "cachebackend.go",
@@ -20,6 +21,7 @@ go_library(
         "sharedstorage.go",
         "smbcsidriver.go",
         "storage_capabilities.go",
+        "storage_capabilities_builtin.go",
         "storage_request_api.go",
         "storagerequest.go",
         "translate_workload.go",

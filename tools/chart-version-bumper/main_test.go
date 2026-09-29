@@ -809,6 +809,58 @@ func TestValuesPathDistinguishesRepeatedLeafKeysByFullAncestry(t *testing.T) {
 	}
 }
 
+func TestValuesFilesBumpATargetThatHasNoChartYAML(t *testing.T) {
+	// Stacks pin the same images charts do, but they are helmfile trees with no
+	// Chart.yaml of their own. Requiring one skipped them without a word, which
+	// is how deploy/stacks/nvcf-compute-plane sat on a collector release the
+	// nvca-operator chart had auto-bumped away from months earlier.
+	f := newFixture(t, `{"services":[
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"stack","path":"deploy/stacks/s","deploys":[{"service":"sidecar","values_files":[{"file":"environments/base.yaml","paths":["global.otelCollector.imageTag"]}]}]}
+	]}`)
+	f.source(t, "deploy/stacks/s/environments/base.yaml",
+		"global:\n  otelCollector:\n    enabled: false\n    imageTag: \"0.157.0-nv-0.2.1\"\n")
+
+	if code, _, errOut := f.run(t, "src/sidecar/v0.160.0-nv-0.2.5", true); code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s", code, errOut)
+	}
+
+	b, err := os.ReadFile(filepath.Join(f.root, "deploy/stacks/s/environments/base.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `imageTag: "0.160.0-nv-0.2.5"`) {
+		t.Fatalf("the declared stack pin did not move:\n%s", b)
+	}
+}
+
+func TestChartlessTargetStillRefusesWhenItDeclaresAValuesPath(t *testing.T) {
+	// values_paths resolve against the chart's own values.yaml, so without a
+	// Chart.yaml there is nothing to resolve them against. That has to stay a
+	// skip rather than silently becoming a no-op success.
+	f := newFixture(t, `{"services":[
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"stack","path":"deploy/stacks/s","deploys":[{"service":"sidecar","values_paths":["global.otelCollector.imageTag"]}]}
+	]}`)
+	f.source(t, "deploy/stacks/s/environments/base.yaml", "global:\n  otelCollector:\n    imageTag: \"0.157.0-nv-0.2.1\"\n")
+
+	code, out, errOut := f.run(t, "src/sidecar/v0.160.0-nv-0.2.5", true)
+	if code != 0 {
+		t.Fatalf("a skip is not a failure, got %d\n%s", code, errOut)
+	}
+	if !strings.Contains(out+errOut, "nothing to do") {
+		t.Fatalf("want the run to report it did nothing:\n%s%s", out, errOut)
+	}
+
+	b, err := os.ReadFile(filepath.Join(f.root, "deploy/stacks/s/environments/base.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `imageTag: "0.157.0-nv-0.2.1"`) {
+		t.Fatalf("nothing was resolvable, so nothing may be rewritten:\n%s", b)
+	}
+}
+
 func TestValuesPathRerunIsANoOp(t *testing.T) {
 	f := newFixture(t, `{"services":[
 	 {"id":"sidecar","path":"src/sidecar"},

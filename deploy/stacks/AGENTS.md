@@ -13,6 +13,11 @@ resource.
 - `nvcf-compute-plane/` owns the NVCF compute-plane stack.
 - `observability/` owns shared observability infrastructure.
 - Each stack owns its own `release-inventory.yaml` and release asset.
+- Each stack releases from its own `release-deploy/stacks/<stack>/vX.Y`
+  branch and advances its trains independently. All three started at `1.0.0`.
+- Each stack has its own documentation tree (`docs/self-managed/`,
+  `docs/compute-plane/`, `docs/observability/`) published as a Fern product
+  with its own version list. Shared pages live in `docs/overview/`.
 - Do not reference another stack's Helmfile state from an inventory config.
 - Keep a dependency in the stack that installs or creates it.
 - Follow the nearest nested `AGENTS.md` when it adds stack-specific guidance.
@@ -27,9 +32,14 @@ For every dependency change:
 4. Add registry and repository overrides for images that customers must mirror.
 5. Record images that do not appear in rendered Kubernetes `image` fields.
 6. Update the artifact classification in `docs/version-catalog/main.yaml`.
-7. Run the stack tests and the inventory and documentation checks described in
+7. If the change alters which trains of another stack this stack works with,
+   whether the minimum is raised, lowered, or a train entry changes, update
+   the `compatibility:` block in `docs/version-catalog/main.yaml` in the same
+   change (for example `compute-plane: "1.2+"`). It generates
+   `docs/overview/compatibility-matrix.md`.
+8. Run the stack tests and the inventory and documentation checks described in
    [`INVENTORY.md`](INVENTORY.md).
-8. After the stack release publishes its inventory asset, update the catalog
+9. After the stack release publishes its inventory asset, update the catalog
    and generated manifest in a documentation sync change.
 
 A dependency is not fully distributed when the released inventory or generated
@@ -60,7 +70,9 @@ go run -C tools/docs-version-sync . --target main
 git diff --check
 ```
 
-Do not hand-edit generated blocks in `docs/user/manifest.md`. The CI check
+Do not hand-edit generated blocks in `docs/overview/manifest.md`,
+`docs/overview/compatibility-matrix.md`, or any other generated block under
+the product docs trees. The CI check
 against the latest released inventory is warn-only for now. Generated-document
 consistency remains blocking. Treat a release-drift warning as follow-up work
 and keep the local checks clean for a dependency change.

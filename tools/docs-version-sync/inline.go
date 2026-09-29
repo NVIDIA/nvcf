@@ -22,11 +22,11 @@ import (
 
 func SyncInlineVersions(path, content string, catalog *Catalog) (string, bool, error) {
 	switch path {
-	case "docs/user/image-mirroring.md":
+	case "docs/overview/image-mirroring.md":
 		return syncImageMirroring(content, catalog)
-	case "docs/user/cluster-management/self-managed.md":
+	case "docs/compute-plane/cluster-management/self-managed.md":
 		return syncClusterManagementSelfManaged(content, catalog)
-	case "docs/user/cluster-management/reference.md":
+	case "docs/compute-plane/cluster-management/reference.md":
 		return syncClusterManagementReference(content, catalog)
 	default:
 		return content, false, nil

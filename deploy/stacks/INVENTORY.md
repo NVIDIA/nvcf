@@ -9,8 +9,9 @@ to pull. Release automation publishes those inventories as separate assets,
 then the documentation sync combines them into one customer-facing manifest.
 
 This split keeps ownership close to the stack that installs the dependency.
-Each stack is packaged, tagged, and inventoried independently. Customer support
-and qualification apply to one three-stack release set after joint QA.
+Each stack is packaged, tagged, inventoried, and documented independently, on
+its own release trains. Which trains run together is recorded in the
+compatibility matrix, not implied by a shared version.
 
 ## Architecture
 
@@ -21,14 +22,18 @@ The flow has three layers:
    under that stack directory.
 1. The release workflow checks out an immutable stack tag, renders the profiles
    named by that stack, and publishes one resolved JSON inventory with the
-   matching GitHub Release.
+   matching GitHub Release. The publishing stack is resolved from the tag
+   alone, so a tag cut from a `release-deploy/stacks/<stack>/vX.Y` branch
+   attaches its inventory the same way.
 1. `tools/docs-version-sync` downloads all three released inventories. It
    validates their plane boundaries, merges compatible artifacts, updates
    `docs/version-catalog/main.yaml`, and generates the inventory blocks in
-   `docs/user/manifest.md`.
-1. The catalog records the exact control-plane, compute-plane, and
-   observability versions. A development release set follows the newest stack
-   releases. A qualified release set uses three versions selected by QA.
+   `docs/overview/manifest.md` and the compatibility matrix in
+   `docs/overview/compatibility-matrix.md`.
+1. The catalog records the latest released control-plane, compute-plane, and
+   observability versions, and the `compatibility:` block records which trains
+   run together. Each stack's documentation is frozen on its own when its
+   train first releases.
 
 The version catalog is the handoff between release facts and public
 documentation. Released inventories provide immutable versions and source
@@ -72,12 +77,10 @@ sequenceDiagram
     Sync->>Catalog: Open reviewable development docs update
     Catalog->>Manifest: Generate ownership and optionality
 
-    QA->>QA: Qualify one exact three-stack set
-    QA->>Sync: Approve exact versions and docs version
-    Sync->>Assets: Download the three selected inventories
-    Sync->>Catalog: Record qualified release_set
-    Catalog->>Stable: Snapshot docs and catalog
-    Stable->>Stable: Make qualified docs the default
+    QA->>QA: Confirm the minimum train of each other stack this train works with
+    QA->>Catalog: Update the compatibility block
+    Catalog->>Stable: Freeze that stack's docs and catalog for the train
+    Stable->>Stable: Make the train the stack's default docs version
 ```
 
 ## Ownership Model
@@ -89,11 +92,12 @@ Keep each fact in one source:
   configuration that cannot be derived from an ordinary render.
 - The resolved JSON inventory records the artifacts found at an immutable stack
   tag. Release automation publishes it with the stack release.
-- The catalog `release_set` records the exact three stack releases represented
-  by the generated documentation.
+- The catalog records the latest released version of each stack and, in the
+  `compatibility:` block, which trains run together.
 - `docs/version-catalog/main.yaml` records public distribution locations and
   human-authored descriptions and source links.
-- Generated blocks in `docs/user/manifest.md` present the catalog to users.
+- Generated blocks in `docs/overview/manifest.md` and
+  `docs/overview/compatibility-matrix.md` present the catalog to users.
 
 Do not maintain a second hand-written list of versions in the documentation.
 
@@ -213,9 +217,9 @@ go test -C tools/docs-version-sync ./...
 ./tools/ci/check-docs
 ```
 
-By default the update selects the latest stable release of each stack and marks
-the release set as `development`. The update is reviewable and does not imply
-that QA qualified the selected combination.
+By default the update selects the latest stable release of each stack. The
+update is reviewable and does not by itself change the `compatibility:` block,
+which is maintained by hand when qualification results change.
 
 The catalog update retains an exact publication only when its artifact name,
 type, and version still match. Leave an artifact in `publication_pending` until
@@ -227,27 +231,23 @@ release-drift warning does not block a merge. Generated-document consistency
 remains blocking, and local validation should still return success before a
 dependency change is complete.
 
-## Qualified Documentation Promotion
+## Per-Stack Documentation Freeze
 
-After QA approves one exact three-stack set and every customer artifact is
-published, run:
+After a train's first release for one stack, and after its customer artifacts
+are published, update the `compatibility:` block if the qualification result
+changed, sync, then freeze that stack's docs alone:
 
 ```bash
-go run -C tools/docs-version-sync . \
-  --target main \
-  --update-catalog \
-  --qualification-version X.Y.Z \
-  --stack-version A.B.C \
-  --compute-stack-version D.E.F \
-  --observability-stack-version G.H.I
+go run -C tools/docs-version-sync . --target main --update-catalog
 go run -C tools/docs-version-sync . --target main
-./tools/scripts/cut-docs-version.sh vX.Y.Z
+./tools/scripts/cut-docs-version.sh --stack <self-managed|compute-plane|observability> --train X.Y
 ```
 
-Qualification requires all three exact stack versions. The snapshot command
-copies the generated docs and catalog. It updates the version dropdown with the
-documentation version and all three stack versions. A later development sync
-can move `docs/user/` forward without changing the versioned snapshot.
+The freeze copies only that stack's documentation tree and catalog snapshot
+and adds the train to that stack's version list. The other two stacks are not
+touched. A later development sync moves `docs/<stack>/` forward without
+changing the frozen tree. See `tools/docs-version-sync/README.md` for the
+exact flags.
 
 ## Compare Release Sets
 
