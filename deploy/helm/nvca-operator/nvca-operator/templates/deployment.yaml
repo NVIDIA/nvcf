@@ -95,20 +95,22 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        # Same role and namespace wiring as the CronJob. This init container
-        # writes the same summary ConfigMap, so without it every operator pod
-        # restart republishes a compute-plane summary over a control-plane
-        # one: the GPU keys reappear and all the control-plane keys are pruned
-        # until the next CronJob tick.
+        # Deliberately pinned to the compute-plane check set, and deliberately
+        # NOT wired to clusterValidator.role. This chart is only installed on
+        # compute-plane clusters, and a failed validation is fatal here, so
+        # running the control-plane set would gate operator startup on
+        # control-plane HA: a single OpenBao pod stuck Terminating, or the
+        # Gateway API CRDs simply being absent on a compute-only cluster, would
+        # leave the operator in Init:CrashLoopBackOff.
         - name: VALIDATOR_ROLE
-          value: {{ $cv.role | quote }}
-        {{- if $cv.openBaoNamespace }}
-        - name: NVCF_OPENBAO_NAMESPACE
-          value: {{ $cv.openBaoNamespace | quote }}
-        {{- end }}
-        {{- if $cv.envoyGatewayNamespace }}
-        - name: NVCF_ENVOY_GATEWAY_NAMESPACE
-          value: {{ $cv.envoyGatewayNamespace | quote }}
+          value: "compute-plane"
+        {{- if eq $cv.role "control-plane" }}
+        # The CronJob owns the summary under the control-plane role, so this
+        # container must not republish a compute-plane summary over it: the GPU
+        # keys would reappear and the control-plane keys be pruned on every
+        # operator restart. Preflight mode keeps the checks and drops the write.
+        - name: VALIDATOR_PREFLIGHT
+          value: "true"
         {{- end }}
         resources:
           requests:

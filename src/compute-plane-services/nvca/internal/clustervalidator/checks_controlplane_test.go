@@ -536,8 +536,11 @@ func TestCheckTier1Deployments_RollingOutEmitsWarningNotFailure(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkTier1Deployments(context.Background(), client, state)
 
-	assert.Nil(t, state.Tier1DeploymentsOK,
-		"the only Deployment is mid-rollout, so readiness is unknown, not a pass or a failure")
+	// Tolerated, not unknown: nil is reserved for "did not observe", and a
+	// rollout at full ready count hides nothing. Reporting it as an unobserved
+	// critical check made every control-plane upgrade NVCF-Not-Ready.
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK)
 	require.NotEmpty(t, state.Warnings, "rollout in progress must emit a warning")
 	assert.Contains(t, state.Warnings[0], "rollout in progress")
 }
@@ -705,10 +708,12 @@ func TestCheckTier2StatefulSets_RollingUpdateWarnsNotFails(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkTier2StatefulSets(context.Background(), client, state)
 
-	assert.Nil(t, state.Tier2StatefulSetsOK,
-		"the only quorum StatefulSet is mid-rollout, so quorum is unknown, not failed")
+	// Tolerated, not unknown: rolling one pod at a time is what an upgrade
+	// looks like, and nil is reserved for "did not observe".
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
 	require.NotEmpty(t, state.Warnings)
-	assert.Contains(t, state.Warnings[0], "revision mismatch")
+	assert.Contains(t, state.Warnings[0], "rolling update in progress")
 }
 
 // Requiring exactly 3 silently drops an operator-scaled 5-member Cassandra from
@@ -889,8 +894,9 @@ func TestCheckTier2StatefulSets_HealthyPeerDoesNotMaskRollingOne(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkTier2StatefulSets(context.Background(), client, state)
 
-	assert.Nil(t, state.Tier2StatefulSetsOK,
-		"one StatefulSet still rolling means the tier assessment is partial, not a pass")
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK,
+		"a tolerated rollout is a pass with a warning, not an unobserved check")
 	assert.NotEmpty(t, state.Warnings)
 }
 
@@ -929,7 +935,7 @@ func TestCheckTier1Deployments_RollingAtFullReplicasStillPasses(t *testing.T) {
 
 // A mid-rollout Deployment that is ALSO below its ready target is the case
 // that can hide a real outage, so the tier assessment is partial.
-func TestCheckTier1Deployments_RollingAndUnderReplicatedIsUnknown(t *testing.T) {
+func TestCheckTier1Deployments_RollingAndUnderReplicatedIsTolerated(t *testing.T) {
 	two := int32(2)
 	client := fake.NewSimpleClientset(
 		&appsv1.Deployment{
@@ -950,8 +956,11 @@ func TestCheckTier1Deployments_RollingAndUnderReplicatedIsUnknown(t *testing.T) 
 	state := &ValidationState{Log: testLog()}
 	checkTier1Deployments(context.Background(), client, state)
 
-	assert.Nil(t, state.Tier1DeploymentsOK,
-		"a rollout below its replica target leaves the tier assessment partial")
+	// A mid-rollout Deployment below its target is what rolling one pod at a
+	// time looks like, so it is tolerated with a warning rather than reported
+	// as unobserved.
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK)
 	require.NotEmpty(t, state.Warnings)
 }
 
@@ -991,7 +1000,7 @@ func TestCheckTier1Deployments_ScaledToZeroIsNotReady(t *testing.T) {
 }
 
 // Alongside a healthy peer the scale-down is a warning, not a silent pass.
-func TestCheckTier1Deployments_ScaledToZeroWarnsAlongsideHealthy(t *testing.T) {
+func TestCheckTier1Deployments_ScaledToZeroFailsAlongsideHealthy(t *testing.T) {
 	zero, two := int32(0), int32(2)
 	client := fake.NewSimpleClientset(
 		&appsv1.Deployment{
@@ -1010,9 +1019,12 @@ func TestCheckTier1Deployments_ScaledToZeroWarnsAlongsideHealthy(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkTier1Deployments(context.Background(), client, state)
 
+	// A failure, not a warning. This is the replicaCount:0 values error, and
+	// the same Deployment at 2/3 already fails, so warning here made "fully
+	// down" score better than "degraded".
 	require.NotNil(t, state.Tier1DeploymentsOK)
-	assert.True(t, *state.Tier1DeploymentsOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "nvcf/scaled-down")
+	assert.False(t, *state.Tier1DeploymentsOK,
+		"a Deployment scaled to zero is down, so the tier is not ready")
 }
 
 // An OnDelete StatefulSet never advances CurrentRevision, so a revision
@@ -1349,10 +1361,10 @@ func TestCheckTier2StatefulSets_PodListDenialIsUnknownNotFailure(t *testing.T) {
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "placement check")
 }
 
-// wantCount comes from DesiredNumberScheduled, which counts NotReady and
-// cordoned nodes, so requiring every pod fails the check on one NotReady node.
-// Two nodes is enough to prove the overlay carries cross-node traffic.
-func TestWaitForDaemonSetPods_ReturnsPartialCoverageOnTimeout(t *testing.T) {
+// Every scheduled pod must come up. Accepting a subset reported the overlay as
+// Verified while a Ready node's pod sat in ContainerCreating with no IP, which
+// is the one fault this check exists to catch.
+func TestWaitForDaemonSetPods_RequiresEveryScheduledPod(t *testing.T) {
 	labels := map[string]string{"app": "n2n"}
 	mk := func(name, node string) *corev1.Pod {
 		return &corev1.Pod{
@@ -1361,23 +1373,21 @@ func TestWaitForDaemonSetPods_ReturnsPartialCoverageOnTimeout(t *testing.T) {
 			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0." + node[len(node)-1:]},
 		}
 	}
+	// Three scheduled, two Running: the third node's CNI never gave it an IP.
 	client := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"))
 	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
 
-	// Three scheduled (one node NotReady), two Running, minNodes=2.
-	pods, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 3, 2, time.Second)
-	require.NoError(t, err, "two nodes is enough to exercise the overlay")
-	assert.Len(t, pods, 2)
+	_, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 3, time.Second)
+	require.Error(t, err, "a node whose probe pod never started must not be silently skipped")
+	assert.Contains(t, err.Error(), "timed out waiting for 3 Running pods")
 
-	// One node is not enough: there is no cross-node path to probe.
-	client2 := fake.NewSimpleClientset(mk("a", "node-1"))
-	_, err = waitForDaemonSetPods(context.Background(), client2, "probe", selector, 3, 2, time.Second)
-	assert.Error(t, err, "a single node cannot demonstrate cross-node connectivity")
+	// All three up: the wait succeeds.
+	client2 := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"), mk("c", "node-3"))
+	pods, err := waitForDaemonSetPods(context.Background(), client2, "probe", selector, 3, time.Second)
+	require.NoError(t, err)
+	assert.Len(t, pods, 3)
 }
 
-// A transient error must not burn the whole deadline budget: client-go defaults
-// to 5 QPS and this run issues ~22 namespaced LISTs, so a 429 early in the
-// window would otherwise fail a critical check with most of its budget unspent.
 func TestWaitForDaemonSetPods_RetriesTransientErrors(t *testing.T) {
 	labels := map[string]string{"app": "n2n"}
 	client := fake.NewSimpleClientset(
@@ -1402,7 +1412,7 @@ func TestWaitForDaemonSetPods_RetriesTransientErrors(t *testing.T) {
 	})
 	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
 
-	pods, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 2, 2, 30*time.Second)
+	pods, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 2, 30*time.Second)
 	require.NoError(t, err, "a single 429 must not abort a 30s wait")
 	assert.Len(t, pods, 2)
 	assert.Greater(t, calls, 1, "the loop must have retried")
@@ -1416,7 +1426,7 @@ func TestWaitForDaemonSetPods_ForbiddenIsTerminal(t *testing.T) {
 			schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("denied"))
 	})
 	start := time.Now()
-	_, err := waitForDaemonSetPods(context.Background(), client, "probe", "app=n2n", 2, 2, 30*time.Second)
+	_, err := waitForDaemonSetPods(context.Background(), client, "probe", "app=n2n", 2, 30*time.Second)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "a denial must return immediately")
 }
@@ -1474,4 +1484,107 @@ func TestCheckNodeToNode_DaemonSetDenialStaysUnknown(t *testing.T) {
 	assert.Nil(t, state.NodeToNodeOK,
 		"a denial is not evidence the overlay works, so it must not pass")
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "RBAC denied")
+}
+
+// A relocated component's namespace REPLACES the default. Appending left the
+// default in the set, so after moving OpenBao the Tier checks still assessed
+// whatever foreign workload now occupies vault-system.
+func TestControlPlaneNamespaceSet_OverrideReplacesRatherThanAdds(t *testing.T) {
+	t.Setenv(openBaoNamespaceEnv, "openbao")
+	t.Setenv(envoyGatewayNamespaceEnv, "gateway")
+	got := controlPlaneNamespaceSet()
+
+	assert.Contains(t, got, "openbao")
+	assert.Contains(t, got, "gateway")
+	assert.NotContains(t, got, "vault-system",
+		"a foreign Vault in the default namespace must not be assessed as ours")
+	assert.NotContains(t, got, envoyGatewayNamespace,
+		"a foreign Envoy in the default namespace must not be assessed as ours")
+	assert.Contains(t, got, "nvcf", "unrelated namespaces are untouched")
+}
+
+func TestControlPlaneNamespaceSet_DefaultsWhenUnset(t *testing.T) {
+	t.Setenv(openBaoNamespaceEnv, "")
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	got := controlPlaneNamespaceSet()
+	assert.Contains(t, got, "vault-system")
+	assert.Contains(t, got, envoyGatewayNamespace)
+}
+
+// A reconciled desired=0 means no node tolerates the probe. That is an answer,
+// not a failure to observe one: requiring > 0 turned a fully tainted cluster
+// into a blocking critical UNKNOWN after a 30s wait.
+func TestWaitForDaemonSetDesiredCount_ReconciledZeroIsAnAnswer(t *testing.T) {
+	client := fake.NewSimpleClientset(&appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "n2n", Namespace: "probe", Generation: 1},
+		Status:     appsv1.DaemonSetStatus{ObservedGeneration: 1, DesiredNumberScheduled: 0},
+	})
+	got, err := waitForDaemonSetDesiredCount(context.Background(), client, "probe", "n2n", time.Second)
+	require.NoError(t, err, "a reconciled zero target must not be reported as never published")
+	assert.Equal(t, 0, got)
+}
+
+// An Envoy controller with no Ready pods must add a warning, or printSummary
+// prints the green "meets all requirements" banner above its own failing row.
+func TestCheckEnvoyGateway_NoReadyPodsAddsWarning(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespaceName()}},
+	)
+	state := &ValidationState{Log: testLog()}
+	checkEnvoyGateway(context.Background(), client, state)
+
+	require.NotNil(t, state.EnvoyGatewayOK)
+	assert.False(t, *state.EnvoyGatewayOK)
+	assert.NotEmpty(t, state.Warnings,
+		"the banner is chosen from len(state.Warnings), so a failing row must add one")
+}
+
+// A known quorum component below three replicas has lost quorum and must fail
+// rather than vanishing from the critical row.
+func TestCheckTier2StatefulSets_KnownQuorumComponentBelowThreeFails(t *testing.T) {
+	objs := makeQuorumSTS("nats", "nats-system", 0, 0, nil)
+	objs = append(objs, makeQuorumSTS("openbao", "vault-system", 3, 3,
+		[]string{"node-1", "node-2", "node-3"})...)
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK,
+		"NATS scaled to zero is the message bus down, not a shape to skip")
+}
+
+// OnDelete never advances CurrentRevision, so a mismatch there is the steady
+// state and says nothing about readiness. It must not mask a down peer.
+func TestCheckTier2StatefulSets_OnDeleteMismatchIsNotARollout(t *testing.T) {
+	objs := makeQuorumSTS("openbao", "vault-system", 3, 2, []string{"node-1", "node-2"})
+	sts := objs[0].(*appsv1.StatefulSet)
+	sts.Spec.UpdateStrategy.Type = appsv1.OnDeleteStatefulSetStrategyType
+	sts.Status.CurrentRevision = "rev-1"
+	sts.Status.UpdateRevision = "rev-2"
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK,
+		"a CrashLooping OpenBao peer must be reported, not tolerated as a rollout")
+}
+
+// At full ready count an OnDelete mismatch must not warn on every run.
+func TestCheckTier2StatefulSets_OnDeleteAtFullReadyIsClean(t *testing.T) {
+	objs := makeQuorumSTS("openbao", "vault-system", 3, 3,
+		[]string{"node-1", "node-2", "node-3"})
+	sts := objs[0].(*appsv1.StatefulSet)
+	sts.Spec.UpdateStrategy.Type = appsv1.OnDeleteStatefulSetStrategyType
+	sts.Status.CurrentRevision = "rev-1"
+	sts.Status.UpdateRevision = "rev-2"
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "rolling update in progress",
+		"an OnDelete mismatch is the steady state, not an in-flight rollout")
 }

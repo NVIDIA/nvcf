@@ -1092,8 +1092,13 @@ func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *
 	log.Infof("  Controller pods in %s: %d total, %d ready", envoyNS, len(pods.Items), ready)
 
 	if ready == 0 {
-		printError(log, fmt.Sprintf("No Ready Envoy Gateway controller pods in %s (%d found)",
-			envoyNS, len(pods.Items)))
+		msg := fmt.Sprintf("No Ready Envoy Gateway controller pods in %s (%d found)",
+			envoyNS, len(pods.Items))
+		printError(log, msg)
+		// printSummary chooses the banner from len(state.Warnings), so without
+		// this a CrashLooping controller printed the green "meets all
+		// requirements" box above its own failing row.
+		state.Warnings = append(state.Warnings, "Envoy Gateway: "+msg)
 		ok := false
 		state.EnvoyGatewayOK = &ok
 		return
@@ -1519,35 +1524,28 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 			"Node-to-Node: status unknown (DaemonSet status never reported a scheduling target)")
 		return
 	}
-	// wantPods is >= 1 here: waitForDaemonSetDesiredCount only returns a nil
-	// error once DesiredNumberScheduled is positive, so a zero target arrives
-	// as the error above rather than reaching this branch.
+	// Not applicable is about the cluster's shape, and that was already decided
+	// above from the schedulable node count. Reaching here means the cluster
+	// has two or more schedulable nodes but the probe landed on fewer, so a
+	// taint it does not tolerate kept it off them. That is unobserved, not
+	// inapplicable: reporting N/A dropped the critical row and its series on a
+	// multi-node cluster, with no warning to explain the absence.
 	if wantPods < 2 {
-		printInfo(log, "  Probe DaemonSet schedulable on 1 node; node-to-node check not applicable")
-		state.NodeToNodeNotApplicable = "probe DaemonSet schedulable on a single node"
+		msg := fmt.Sprintf("probe DaemonSet scheduled on %d of %d schedulable node(s); "+
+			"the rest carry a taint it does not tolerate", wantPods, len(schedulable))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Node-to-Node: status unknown ("+msg+")")
 		return
 	}
 
 	log.Infof("  Waiting for server DaemonSet pods on %d nodes...", wantPods)
 	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: dsLabels})
-	// minNodes=2: two nodes is the smallest set that proves cross-node
-	// traffic, so a NotReady or cordoned node counted in wantPods degrades
-	// coverage rather than failing the check.
-	serverPods, err := waitForDaemonSetPods(ctx, client, ns, selector, wantPods, 2, nodeToNodeDSTimeout)
+	serverPods, err := waitForDaemonSetPods(ctx, client, ns, selector, wantPods, nodeToNodeDSTimeout)
 	if err != nil {
 		printError(log, fmt.Sprintf("Server DaemonSet pods did not become ready: %v", err))
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
-	}
-
-	// Partial coverage is a real result, but the operator has to be told the
-	// probe did not reach every node it was scheduled onto.
-	if len(serverPods) < wantPods {
-		msg := fmt.Sprintf("probe covered %d of %d scheduled node(s); the rest never reported a Running pod",
-			len(serverPods), wantPods)
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Node-to-Node: "+msg)
 	}
 
 	// Select checkerNode from a Running server pod so it is guaranteed to be
@@ -1633,7 +1631,11 @@ func waitForDaemonSetDesiredCount(
 				return 0, err
 			}
 			lastStatus = err.Error()
-		case ds.Status.ObservedGeneration >= ds.Generation && ds.Status.DesiredNumberScheduled > 0:
+		case ds.Status.ObservedGeneration >= ds.Generation:
+			// Reconciled, so the target is published even when it is zero: that
+			// means no node tolerates the probe, which is an answer rather than
+			// a failure to observe one. Requiring > 0 turned a fully tainted
+			// cluster into a blocking critical UNKNOWN after a 30s wait.
 			return int(ds.Status.DesiredNumberScheduled), nil
 		default:
 			lastStatus = fmt.Sprintf("desired=%d, observedGeneration=%d, generation=%d",
@@ -1650,19 +1652,16 @@ func waitForDaemonSetDesiredCount(
 	}
 }
 
-// waitForDaemonSetPods waits for the DaemonSet's pods to come up. It returns as
-// soon as wantCount pods are Running, and on timeout still returns whatever it
-// has if that covers minNodes distinct nodes.
+// waitForDaemonSetPods waits until every one of the DaemonSet's wantCount pods
+// is Running with an IP.
 //
-// The partial return matters because wantCount comes from
-// DesiredNumberScheduled, which includes NotReady and cordoned nodes: the
-// DaemonSet controller auto-tolerates those taints. Requiring every pod would
-// fail this critical check on one NotReady node, contradicting the same run's
-// non-blocking "Worker Nodes: N NotReady" policy. Two nodes are enough to
-// prove the overlay carries cross-node traffic.
+// All of them, not a quorum: wantCount comes from DesiredNumberScheduled, which
+// counts only nodes the pod actually tolerates, so each missing pod is a node
+// whose kubelet or CNI could not bring the probe up. Accepting a subset made
+// exactly that fault invisible.
 func waitForDaemonSetPods(
 	ctx context.Context, client kubernetes.Interface, ns, selector string,
-	wantCount, minNodes int, timeout time.Duration,
+	wantCount int, timeout time.Duration,
 ) ([]corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -1692,9 +1691,11 @@ func waitForDaemonSetPods(
 			if lastErr != nil {
 				return nil, fmt.Errorf("listing DaemonSet pods: %w", lastErr)
 			}
-			if distinctNodeCount(running) >= minNodes {
-				return running, nil
-			}
+			// Every scheduled pod must come up. Returning a partial set here
+			// reported the overlay as Verified while a Ready node's pod sat in
+			// ContainerCreating with no IP (VPC-CNI IP exhaustion, a missing
+			// flannel subnet.env): the checker never probed that node, so the
+			// one fault this check exists to catch was the one it skipped.
 			return nil, fmt.Errorf("timed out waiting for %d Running pods (got %d on %d node(s))",
 				wantCount, len(running), distinctNodeCount(running))
 		}
@@ -1822,21 +1823,31 @@ const openBaoNamespaceEnv = "NVCF_OPENBAO_NAMESPACE"
 // controlPlaneNamespaceSet returns controlPlaneNamespaces plus any
 // runtime-configured OpenBao and Envoy Gateway namespaces, de-duplicated.
 func controlPlaneNamespaceSet() []string {
-	out := append([]string(nil), controlPlaneNamespaces...)
-	for _, env := range []string{openBaoNamespaceEnv, envoyGatewayNamespaceEnv} {
-		extra := strings.TrimSpace(os.Getenv(env))
-		if extra == "" {
-			continue
+	// Each override RELOCATES a component, so it replaces that component's
+	// default namespace rather than adding to it. Appending left the defaults
+	// in the set, so after relocating OpenBao to "openbao" the Tier-2 check
+	// still assessed whatever foreign workload now occupies vault-system, and
+	// a sealed third-party Vault there failed the whole run.
+	relocations := []struct{ env, defaultNS string }{
+		{openBaoNamespaceEnv, "vault-system"},
+		{envoyGatewayNamespaceEnv, envoyGatewayNamespace},
+	}
+	replaced := make(map[string]string, len(relocations))
+	for _, r := range relocations {
+		if v := strings.TrimSpace(os.Getenv(r.env)); v != "" && v != r.defaultNS {
+			replaced[r.defaultNS] = v
 		}
-		seen := false
-		for _, ns := range out {
-			if ns == extra {
-				seen = true
-				break
-			}
+	}
+
+	out := make([]string, 0, len(controlPlaneNamespaces))
+	seen := make(map[string]bool, len(controlPlaneNamespaces))
+	for _, ns := range controlPlaneNamespaces {
+		if to, ok := replaced[ns]; ok {
+			ns = to
 		}
-		if !seen {
-			out = append(out, extra)
+		if !seen[ns] {
+			seen[ns] = true
+			out = append(out, ns)
 		}
 	}
 	return out
@@ -1924,6 +1935,10 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			// maintenance scale-down or a replicaCount:0 values error publish
 			// the critical row as All Ready. Report it instead of counting it.
 			if want == 0 {
+				// A failure, not a warning: this is the replicaCount:0 values
+				// error, and the same Deployment at 2/3 is already a critical
+				// failure. Warning here made "fully down" score better than
+				// "degraded".
 				scaledToZero = append(scaledToZero, ns+"/"+d.Name)
 				continue
 			}
@@ -1968,9 +1983,19 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			return
 		}
 		if rollingCount > 0 {
-			// Deployments exist but every one is mid-rollout, so readiness
-			// cannot be assessed yet. Reporting "pre-install" here would be wrong.
-			printWarning(log, fmt.Sprintf("All %d Deployment(s) are mid-rollout; readiness not assessed", rollingCount))
+			// A tolerated rollout is a pass with a warning, not UNKNOWN. A lone
+			// paused Deployment at its full ready count would otherwise pin
+			// this critical row to UNKNOWN forever, and adding one unrelated
+			// healthy Deployment would flip the same object to a pass.
+			// Must agree with the rollingUnderReplicated branch below: a
+			// rollout below target is tolerated there, so it is tolerated
+			// here too. A stalled rollout is already excluded upstream by
+			// deploymentRolloutStalled and reaches the failure path instead.
+			msg := fmt.Sprintf("all %d Deployment(s) are mid-rollout; re-run after the rollout completes", rollingCount)
+			printWarning(log, msg)
+			state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
+			ok := true
+			state.Tier1DeploymentsOK = &ok
 			return
 		}
 		if len(scaledToZero) > 0 {
@@ -1992,10 +2017,8 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 	// a legitimate operator action, but it must not be invisible on a row that
 	// claims every Deployment is ready.
 	if len(scaledToZero) > 0 {
-		msg := fmt.Sprintf("%d Deployment(s) scaled to zero replicas: %s",
-			len(scaledToZero), strings.Join(scaledToZero, ", "))
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
+		underReplicated = append(underReplicated,
+			fmt.Sprintf("scaled to zero replicas: %s", strings.Join(scaledToZero, ", ")))
 	}
 
 	if len(underReplicated) > 0 {
@@ -2023,14 +2046,15 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 	}
 
 	if rollingUnderReplicated > 0 {
-		// Only skipped Deployments that are also below their ready target make
-		// the tier unknown. A paused or sentinel-deadline Deployment serving
-		// its full replica count is skipped but hides nothing, so it must not
-		// pin this critical row to UNKNOWN indefinitely.
-		printWarning(log, fmt.Sprintf("%d Deployment(s) ready, but %d are mid-rollout and under-replicated; assessment is partial",
-			checkedCount, rollingUnderReplicated))
-		state.Warnings = append(state.Warnings,
-			"Tier-1 Deployments: status unknown (one or more Deployments are mid-rollout and below their replica target)")
+		// Tolerated, not unknown. Rolling one pod at a time is what an upgrade
+		// looks like; reporting it as an unobserved critical check made every
+		// control-plane upgrade NVCF-Not-Ready with a non-zero exit.
+		msg := fmt.Sprintf("%d Deployment(s) ready, %d mid-rollout and below their replica target",
+			checkedCount, rollingUnderReplicated)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
+		ok := true
+		state.Tier1DeploymentsOK = &ok
 		return
 	}
 
@@ -2104,6 +2128,19 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			}
 			want := *sts.Spec.Replicas
 			if want < minQuorumSize {
+				// A known quorum component below three has lost quorum, so it
+				// fails rather than vanishing from the row. Anything else is
+				// recorded so an all-sub-quorum cluster cannot reach the
+				// trivial-pass exit having examined nothing.
+				if isKnownQuorumComponent(sts.Name) {
+					failures = append(failures,
+						fmt.Sprintf("%s/%s: spec.replicas=%d, below the quorum minimum of %d",
+							ns, sts.Name, want, minQuorumSize))
+					checkedCount++
+					continue
+				}
+				skippedParity = append(skippedParity,
+					fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
 				continue
 			}
 			if want%2 == 0 {
@@ -2127,8 +2164,15 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			// StatefulSet equivalent of ProgressDeadlineExceeded, so bound the
 			// tolerance by readiness instead: a StatefulSet at its full ready
 			// count is not hiding anything, and one below it is reported.
-			if sts.Status.UpdateRevision != "" && sts.Status.CurrentRevision != sts.Status.UpdateRevision {
-				msg := fmt.Sprintf("%s/%s: revision mismatch (ready: %d/%d)",
+			// Only a RollingUpdate can have a rollout in flight. Under
+			// OnDelete the controller never advances CurrentRevision on its
+			// own, so a mismatch is the permanent steady state and says
+			// nothing about readiness: treating it as a rollout both hid a
+			// CrashLooping peer at 2/3 and warned on every run at 3/3.
+			rollingUpdate := sts.Spec.UpdateStrategy.Type != appsv1.OnDeleteStatefulSetStrategyType
+			if rollingUpdate && sts.Status.UpdateRevision != "" &&
+				sts.Status.CurrentRevision != sts.Status.UpdateRevision {
+				msg := fmt.Sprintf("%s/%s: rolling update in progress (ready: %d/%d)",
 					ns, sts.Name, sts.Status.ReadyReplicas, want)
 				printWarning(log, msg)
 				state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
@@ -2136,20 +2180,17 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 
 				switch {
 				case sts.Status.ReadyReplicas >= want:
-					// Full ready count despite the mismatch: nothing is hidden,
-					// so assess it normally and let the placement scan run.
-					// This is the steady state for OnDelete and for a non-zero
-					// rollingUpdate.partition, where the mismatch never clears.
+					// Full ready count: assess normally and let the placement
+					// scan run.
 				case sts.Status.ReadyReplicas == want-1:
-					// Exactly one pod down is what rolling one at a time looks
-					// like, so tolerate it but do not claim the tier is clean.
+					// One pod down is what rolling one at a time looks like.
 					rollingUnderReplicated++
 					continue
 				default:
 					// More than one peer down is beyond what a rolling update
-					// explains, mismatch or not.
+					// explains.
 					failures = append(failures,
-						fmt.Sprintf("%s/%s: readyReplicas=%d (need %d, revision mismatch)",
+						fmt.Sprintf("%s/%s: readyReplicas=%d (need %d, rolling update in progress)",
 							ns, sts.Name, sts.Status.ReadyReplicas, want))
 					checkedCount++
 					continue
@@ -2206,7 +2247,15 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			return
 		}
 		if rollingCount > 0 {
-			printWarning(log, fmt.Sprintf("All %d quorum StatefulSet(s) are mid-rollout; quorum not assessed", rollingCount))
+			// rollingUnderReplicated only ever holds the one-pod-down case:
+			// anything worse already went to failures above. So this is a
+			// tolerated rollout either way, and must agree with the
+			// rollingUnderReplicated branch further down.
+			msg := fmt.Sprintf("all %d quorum StatefulSet(s) are mid-rollout; re-run after the rollout completes", rollingCount)
+			printWarning(log, msg)
+			state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
+			ok := true
+			state.Tier2StatefulSetsOK = &ok
 			return
 		}
 		if len(skippedParity) > 0 {
@@ -2260,10 +2309,16 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 	}
 
 	if rollingUnderReplicated > 0 {
-		printWarning(log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d are mid-rollout and below target; assessment is partial",
-			checkedCount, rollingUnderReplicated))
-		state.Warnings = append(state.Warnings,
-			"Tier-2 StatefulSets: status unknown (one or more StatefulSets are mid-rollout and below their replica target)")
+		// Tolerated, not unknown: same rule as Tier-1. A NATS StatefulSet at
+		// 2/3 mid-RollingUpdate is what an upgrade looks like, and reporting
+		// it as an unobserved critical check made every control-plane upgrade
+		// NVCF-Not-Ready with a non-zero exit.
+		msg := fmt.Sprintf("%d quorum StatefulSet(s) healthy, %d mid-rollout and below target",
+			checkedCount, rollingUnderReplicated)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
+		ok := true
+		state.Tier2StatefulSetsOK = &ok
 		return
 	}
 
@@ -2453,4 +2508,18 @@ func parseVersion(v string) []int {
 		result[i] = n
 	}
 	return result
+}
+
+// knownQuorumComponents are the Tier-2 StatefulSets whose whole purpose is a
+// quorum. Below three replicas they have lost it, so they fail rather than
+// being skipped as an unrecognised shape.
+var knownQuorumComponents = []string{"nats", "openbao", "cassandra"}
+
+func isKnownQuorumComponent(name string) bool {
+	for _, c := range knownQuorumComponents {
+		if name == c || strings.HasPrefix(name, c+"-") {
+			return true
+		}
+	}
+	return false
 }

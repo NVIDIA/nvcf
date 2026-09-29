@@ -202,8 +202,16 @@ func TestPrintSummary_ControlPlaneRole(t *testing.T) {
 			DefaultStorageClassOK:    &fail, // critical: no default StorageClass
 			GatewayAPICRDsOK:         &ok,
 			EnvoyGatewayOK:           &ok,
-			K8sVersion:               "v1.30.0",
-			TotalNodes:               "2",
+			// Every other critical pointer must be set, or an unknown critical
+			// check blocks the verdict on its own and the subtest passes
+			// without the StorageClass failure doing any work.
+			GatewayRoutesOK:     &ok,
+			ExternalLBOK:        &ok,
+			NodeToNodeOK:        &ok,
+			Tier1DeploymentsOK:  &ok,
+			Tier2StatefulSetsOK: &ok,
+			K8sVersion:          "v1.30.0",
+			TotalNodes:          "2",
 		}
 		err := printSummary(state)
 		assert.Error(t, err, "missing default StorageClass must block control-plane readiness")
