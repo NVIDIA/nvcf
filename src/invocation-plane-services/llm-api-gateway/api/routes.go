@@ -47,6 +47,7 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 		return c.NoContent(http.StatusMethodNotAllowed)
 	})
 
+	installWriteDeadlineFinalizer(e)
 	group := e.Group(
 		"",
 		rejectClientSuppliedPriority,

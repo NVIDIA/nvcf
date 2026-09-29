@@ -148,14 +148,16 @@ func TestInferenceWriteTimeoutDisabled(t *testing.T) {
 func TestInferenceWriteDeadlineOnlyBoundsWrites(t *testing.T) {
 	t.Parallel()
 
-	const timeout = 300 * time.Millisecond
+	// Writes to a healthy local client take microseconds, so the timeout
+	// leaves ample slack for a loaded CI runner.
+	const timeout = 500 * time.Millisecond
 	for _, proto := range protocols {
 		for _, pace := range []struct {
 			name string
 			gaps []time.Duration
 		}{
-			{name: "steady events", gaps: repeatGap(100*time.Millisecond, 15)},
-			{name: "upstream pause", gaps: []time.Duration{50 * time.Millisecond, 4 * timeout, 50 * time.Millisecond}},
+			{name: "steady events", gaps: repeatGap(150*time.Millisecond, 12)},
+			{name: "upstream pause", gaps: []time.Duration{50 * time.Millisecond, 3 * timeout, 50 * time.Millisecond}},
 		} {
 			for _, route := range []struct {
 				name    string

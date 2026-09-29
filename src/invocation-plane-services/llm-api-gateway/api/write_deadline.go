@@ -54,13 +54,37 @@ func newInferenceWriteDeadlineMiddleware(timeout time.Duration) echo.MiddlewareF
 			if timeout > 0 {
 				response.Writer = w
 			}
-			// After the handler returns, Echo's error handler may still write
-			// through w, and net/http flushes the rest of the response without
-			// it. Keep a deadline armed from here on so those writes are
-			// bounded too.
-			defer w.finish()
 			return next(ec)
 		}
+	}
+}
+
+// installWriteDeadlineFinalizer arms the write deadline one last time when
+// Echo is done with a request, so the flush net/http performs after the
+// handler returns is bounded. On success that is when the outermost (pre)
+// middleware returns; on error it is after HTTPErrorHandler has written the
+// error response. Arming any earlier would let the deadline run while outer
+// middleware or the error handler is still working.
+func installWriteDeadlineFinalizer(e *echo.Echo) {
+	e.Pre(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			err := next(c)
+			if err == nil {
+				finishWriteDeadline(c)
+			}
+			return err
+		}
+	})
+	handleError := e.HTTPErrorHandler
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		handleError(err, c)
+		finishWriteDeadline(c)
+	}
+}
+
+func finishWriteDeadline(c echo.Context) {
+	if w, ok := c.Response().Writer.(*deadlineWriter); ok {
+		w.finish()
 	}
 }
 
@@ -80,7 +104,6 @@ type deadlineWriter struct {
 	timeout    time.Duration
 	ctx        context.Context
 	gc         *GatewayContext
-	deadline   time.Time
 	finished   bool
 	logged     bool
 }
@@ -128,7 +151,6 @@ func (w *deadlineWriter) afterWrite(err error) {
 }
 
 func (w *deadlineWriter) setDeadline(deadline time.Time) {
-	w.deadline = deadline
 	// ErrNotSupported covers recorders and writers without a connection;
 	// other errors mean the connection is already gone and the next write
 	// reports it.
@@ -136,12 +158,9 @@ func (w *deadlineWriter) setDeadline(deadline time.Time) {
 }
 
 // logTimeout logs the first write that failed because its deadline passed.
-// HTTP/1.1 reports os.ErrDeadlineExceeded; HTTP/2 reports a reset stream, so
-// the armed deadline is checked as well.
+// Both HTTP/1.1 and HTTP/2 report that cause as os.ErrDeadlineExceeded.
 func (w *deadlineWriter) logTimeout(err error) {
-	timedOut := errors.Is(err, os.ErrDeadlineExceeded) ||
-		(!w.deadline.IsZero() && !time.Now().Before(w.deadline))
-	if w.logged || !timedOut {
+	if w.logged || !errors.Is(err, os.ErrDeadlineExceeded) {
 		return
 	}
 	w.logged = true

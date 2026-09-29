@@ -63,7 +63,7 @@ func (r *deadlineRecorder) Flush() {
 	r.events = append(r.events, "flush")
 }
 
-func runDeadlineMiddleware(
+func serveWithWriteDeadline(
 	t *testing.T,
 	timeout time.Duration,
 	recorder *deadlineRecorder,
@@ -73,24 +73,30 @@ func runDeadlineMiddleware(
 	t.Helper()
 
 	e := echo.New()
+	installWriteDeadlineFinalizer(e)
+	withRequestContext := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			gc := NewGatewayContext(c)
+			gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
+				RequestID:  "request-a",
+				RoutingKey: "fn-alpha",
+				OrgID:      "org-alpha",
+			})
+			return next(gc)
+		}
+	}
+	e.POST("/v1/responses", handler, withRequestContext, newInferenceWriteDeadlineMiddleware(timeout))
+
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	req = req.WithContext(zerolog.New(logs).WithContext(req.Context()))
-	gc := NewGatewayContext(e.NewContext(req, recorder))
-	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:  "request-a",
-		RoutingKey: "fn-alpha",
-		OrgID:      "org-alpha",
-	})
-	if err := newInferenceWriteDeadlineMiddleware(timeout)(handler)(gc); err != nil {
-		t.Fatalf("handler error = %v", err)
-	}
+	e.ServeHTTP(recorder, req)
 }
 
 func TestInferenceWriteDeadlineArmsOnlyDuringWrites(t *testing.T) {
 	t.Parallel()
 
 	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-	runDeadlineMiddleware(t, time.Second, recorder, &bytes.Buffer{}, func(c echo.Context) error {
+	serveWithWriteDeadline(t, time.Second, recorder, &bytes.Buffer{}, func(c echo.Context) error {
 		c.Response().WriteHeader(http.StatusOK)
 		for range 2 {
 			if _, err := c.Response().Write([]byte("data: x\n\n")); err != nil {
@@ -105,6 +111,7 @@ func TestInferenceWriteDeadlineArmsOnlyDuringWrites(t *testing.T) {
 		"clear",
 		"arm", "write", "clear", "arm", "flush", "clear",
 		"arm", "write", "clear", "arm", "flush", "clear",
+		// Armed once more when Echo is done, for net/http's final flush.
 		"arm",
 	}
 	if got := strings.Join(recorder.events, " "); got != strings.Join(want, " ") {
@@ -112,23 +119,20 @@ func TestInferenceWriteDeadlineArmsOnlyDuringWrites(t *testing.T) {
 	}
 }
 
-func TestInferenceWriteDeadlineStaysArmedAfterHandlerReturns(t *testing.T) {
+func TestInferenceWriteDeadlineBoundsErrorResponse(t *testing.T) {
 	t.Parallel()
 
 	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-	var w http.ResponseWriter
-	runDeadlineMiddleware(t, time.Second, recorder, &bytes.Buffer{}, func(c echo.Context) error {
-		w = c.Response().Writer
-		return nil
+	serveWithWriteDeadline(t, time.Second, recorder, &bytes.Buffer{}, func(echo.Context) error {
+		return echo.NewHTTPError(http.StatusBadGateway, "upstream failed")
 	})
-	recorder.events = nil
 
-	// Echo's error handler writes through the wrapper after the middleware
-	// returns; the deadline must stay armed for net/http's final flush.
-	if _, err := w.Write([]byte(`{"error":"x"}`)); err != nil {
-		t.Fatal(err)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", recorder.Code)
 	}
-	if got, want := strings.Join(recorder.events, " "), "arm write"; got != want {
+	// No deadline may run between the handler returning and Echo's error
+	// handler writing; the final arm comes only after the error response.
+	if got, want := strings.Join(recorder.events, " "), "clear arm write clear arm"; got != want {
 		t.Fatalf("deadline events = %s, want %s", got, want)
 	}
 }
@@ -137,7 +141,7 @@ func TestInferenceWriteDeadlineDisabled(t *testing.T) {
 	t.Parallel()
 
 	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-	runDeadlineMiddleware(t, 0, recorder, &bytes.Buffer{}, func(c echo.Context) error {
+	serveWithWriteDeadline(t, 0, recorder, &bytes.Buffer{}, func(c echo.Context) error {
 		_, err := c.Response().Write([]byte("ok"))
 		return err
 	})
@@ -152,31 +156,35 @@ func TestInferenceWriteTimeoutLogsOncePerRequest(t *testing.T) {
 
 	for _, tc := range []struct {
 		name    string
+		timeout time.Duration
 		err     error
 		wantLog bool
 	}{
-		{name: "deadline exceeded", err: fmt.Errorf("write tcp: %w", os.ErrDeadlineExceeded), wantLog: true},
-		{name: "client closed", err: fmt.Errorf("write tcp: broken pipe"), wantLog: false},
+		{name: "deadline exceeded", timeout: time.Minute, err: fmt.Errorf("write tcp: %w", os.ErrDeadlineExceeded), wantLog: true},
+		{name: "client closed", timeout: time.Minute, err: fmt.Errorf("write tcp: broken pipe")},
+		// A disconnect noticed after the armed deadline passed is still a
+		// disconnect, not a write timeout.
+		{name: "client closed after deadline", timeout: time.Nanosecond, err: fmt.Errorf("http2: stream closed")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder(), writeErr: tc.err}
 			var logs bytes.Buffer
-			runDeadlineMiddleware(t, time.Minute, recorder, &logs, func(c echo.Context) error {
+			serveWithWriteDeadline(t, tc.timeout, recorder, &logs, func(c echo.Context) error {
 				for range 3 {
 					_, _ = c.Response().Write([]byte("data: x\n\n"))
 				}
 				return nil
 			})
 
-			lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 			if !tc.wantLog {
 				if logs.Len() != 0 {
 					t.Fatalf("unexpected log: %s", logs.String())
 				}
 				return
 			}
+			lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 			if len(lines) != 1 {
 				t.Fatalf("log lines = %d, want 1: %s", len(lines), logs.String())
 			}
