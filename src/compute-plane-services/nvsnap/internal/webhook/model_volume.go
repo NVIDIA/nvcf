@@ -138,7 +138,7 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		log.WithField("complete", st.Complete).Info("model volume: reader on block storage references the read-only claim")
 	}
 	patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
-	patches = append(patches, m.modelCacheEnvPatches(pod, main, land, uri)...)
+	patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
 	return patches, nil
 }
 
@@ -437,7 +437,7 @@ func tokenEnv(main *corev1.Container) []corev1.EnvVar {
 // local cachedir (captured after Ready by the existing path). The model
 // entries of the template are dropped: the model lives in the landing
 // volume now, not under the cachedir.
-func (m *Mutator) modelCacheEnvPatches(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
+func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
 	root := ""
 	switch {
 	case m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX:
@@ -463,8 +463,12 @@ func (m *Mutator) modelCacheEnvPatches(pod *corev1.Pod, main *corev1.Container, 
 		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: e.Name, Value: root + rel}))
 	}
 	if m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.CacheDir != "" {
-		// Block mode keeps the local cachedir emptyDir the capture reads.
-		patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
+		// Block mode keeps the local cachedir emptyDir the capture reads,
+		// and shares the compile caches through a per-key cache volume.
+		cd := m.cacheDirVolumeOnly(pod, main)
+		patches = append(patches, cd...)
+		initCreated := len(cd) > 0 && pod.Spec.InitContainers == nil
+		patches = append(patches, m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), initCreated)...)
 	}
 	return patches
 }

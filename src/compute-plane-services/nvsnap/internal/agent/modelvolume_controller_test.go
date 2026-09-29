@@ -483,3 +483,117 @@ func TestModelVolumeController_RWXJobCompletesInPlace(t *testing.T) {
 		t.Error("RWX shared claim labelled complete in place")
 	}
 }
+
+func cacheFixture(t *testing.T, node string, ready bool) (*fake.Clientset, *modelvolume.Provisioner, *corev1.Pod) {
+	t.Helper()
+	kc, model, _ := stagingFixture(t, node)
+	ccfg := model.Cfg
+	ccfg.Kind = modelvolume.KindCache
+	cache := &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3-0", Namespace: "sr-fn", UID: "reader-uid",
+			Labels:      map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "reader", cacheCaptureLabel: "true"},
+			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI, cacheURIAnnotation: "cache://abc123/0", cacheVolumeAnnotation: "nvsnap-cachedir", cacheSubpathAnnotation: "cache"}},
+		Spec: corev1.PodSpec{NodeName: node},
+	}
+	if ready {
+		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	}
+	return kc, cache, pod
+}
+
+// The first Ready pod of a key on this node becomes the source: its cache
+// subtree is measured, a sized claim is created in the nvsnap namespace,
+// copied, and the PV is labelled complete under the cache label.
+func TestModelVolumeController_CacheCapturedFromReadyPod(t *testing.T) {
+	ctx := context.Background()
+	kc, cache, pod := cacheFixture(t, "node-a", true)
+	c := &ModelVolumeController{Kube: kc, Provisioner: &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock}}, Cache: cache, NodeName: "node-a", CacheWarmup: time.Millisecond, CacheSettle: time.Millisecond, Log: logrus.New()}
+	var measured, copied string
+	c.treeStat = func(path string) (int64, int64, error) { measured = path; return 31 << 20, 194, nil }
+	c.copyStaging = func(_ context.Context, ns, claim, src string) error {
+		copied = ns + "/" + claim + "<-" + src
+		return nil
+	}
+	c.Handle(ctx, pod)
+	waitUntil(t, "cache complete", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123/0"); return st.Complete })
+	want := "/var/lib/kubelet/pods/reader-uid/volumes/kubernetes.io~empty-dir/nvsnap-cachedir/cache"
+	if measured != "/host"+want || copied != "nvsnap-system/"+cache.Cfg.ClaimName("cache://abc123/0")+"<-"+want {
+		t.Errorf("measured %q copied %q", measured, copied)
+	}
+	pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-staged", metav1.GetOptions{})
+	if pv.Labels[modelvolume.CacheLabel] != modelvolume.Key("cache://abc123/0") || pv.Labels[modelvolume.IdentityLabel] != "" {
+		t.Errorf("cache PV labelled under the cache label only: %v", pv.Labels)
+	}
+	if size := pv.Spec.Capacity[corev1.ResourceStorage]; size.String() != "1Gi" {
+		t.Errorf("31 MiB cache rounds up to the 1Gi floor, got %s", size.String())
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, cache.Cfg.ClaimName("cache://abc123/0"), metav1.GetOptions{}); err == nil {
+		t.Error("primary cache claim released after the copy")
+	}
+	if _, err := kc.CoreV1().Pods("sr-fn").Get(ctx, pod.Name, metav1.GetOptions{}); err == nil {
+		// the fixture never created the pod; a source pod is never touched
+		t.Log("pod untouched")
+	}
+}
+
+func TestModelVolumeController_CacheCaptureSkipsNotReadyOtherNodeAndClaimedKeys(t *testing.T) {
+	ctx := context.Background()
+	kc, cache, pod := cacheFixture(t, "node-a", false)
+	c := &ModelVolumeController{Kube: kc, Provisioner: &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock}}, Cache: cache, NodeName: "node-a", CacheWarmup: time.Millisecond, CacheSettle: time.Millisecond, Log: logrus.New()}
+	calls := 0
+	c.treeStat = func(string) (int64, int64, error) { calls++; return 1 << 20, 3, nil }
+	c.copyStaging = func(context.Context, string, string, string) error { t.Error("no copy expected"); return nil }
+	c.Handle(ctx, pod) // not Ready
+	other := pod.DeepCopy()
+	other.Spec.NodeName = "node-b"
+	other.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	c.Handle(ctx, other) // Ready, other node
+	time.Sleep(30 * time.Millisecond)
+	if calls != 0 {
+		t.Errorf("nothing measured for a not-Ready pod or another node's pod, got %d", calls)
+	}
+	// Another agent already owns the key: the claim exists.
+	if _, err := cache.EnsureSizedClaim(ctx, "cache://abc123/0", "nvsnap-system", resource.MustParse("1Gi")); err != nil {
+		t.Fatal(err)
+	}
+	ready := pod.DeepCopy()
+	ready.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	c.Handle(ctx, ready)
+	waitUntil(t, "measured twice (settle check)", func() bool { return calls == 2 })
+	time.Sleep(30 * time.Millisecond)
+	if st, _ := cache.Lookup(ctx, "cache://abc123/0"); st.Complete {
+		t.Error("a key claimed elsewhere is not copied by this agent")
+	}
+}
+
+// A cache tree that is still growing (a worker that reports Ready before
+// its compile finishes) is not captured; the next pod event retries.
+func TestModelVolumeController_CacheWaitsForTreeToSettle(t *testing.T) {
+	ctx := context.Background()
+	kc, cache, pod := cacheFixture(t, "node-a", true)
+	c := &ModelVolumeController{Kube: kc, Provisioner: &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock}}, Cache: cache, NodeName: "node-a", CacheWarmup: time.Millisecond, CacheSettle: time.Millisecond, Log: logrus.New()}
+	sizes := []int64{748, 20 << 20, 31 << 20, 31 << 20}
+	calls := 0
+	c.treeStat = func(string) (int64, int64, error) {
+		b := sizes[min(calls, len(sizes)-1)]
+		calls++
+		return b, b / 1000, nil
+	}
+	copies := 0
+	c.copyStaging = func(context.Context, string, string, string) error { copies++; return nil }
+	c.Handle(ctx, pod)
+	waitUntil(t, "first pass measured twice", func() bool { return calls == 2 })
+	time.Sleep(20 * time.Millisecond)
+	if copies != 0 {
+		t.Fatal("a changing tree must not be captured")
+	}
+	if claims, _ := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").List(ctx, metav1.ListOptions{}); len(claims.Items) != 0 {
+		t.Error("no claim is created before the tree settles")
+	}
+	c.Handle(ctx, pod) // next event: 31 MiB twice
+	waitUntil(t, "captured once settled", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123/0"); return st.Complete })
+	if copies != 1 {
+		t.Errorf("copies %d", copies)
+	}
+}

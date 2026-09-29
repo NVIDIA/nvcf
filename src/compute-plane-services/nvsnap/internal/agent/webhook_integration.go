@@ -157,6 +157,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		Elector: a.elector,
 		// Write-once model volume for Helm functions; nil when off.
 		ModelVolume:       a.modelVolume,
+		CacheVolume:       a.cacheVolume,
 		ModelWaitDeadline: a.config.ModelVolume.WaitDeadline,
 		ModelHostRoot:     a.modelHostRoot(),
 		ReadOnlyMinter:    a.modelReadOnlyMinter(),

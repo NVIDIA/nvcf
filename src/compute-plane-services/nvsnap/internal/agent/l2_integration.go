@@ -181,6 +181,11 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 			log.WithError(err).Warn("model volume disabled")
 		} else {
 			a.modelVolume, a.modelMinter = mv, minter
+			if mv.Cfg.Mode == modelvolume.ModeBlock {
+				ccfg := mv.Cfg
+				ccfg.Kind = modelvolume.KindCache
+				a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+			}
 		}
 	}
 

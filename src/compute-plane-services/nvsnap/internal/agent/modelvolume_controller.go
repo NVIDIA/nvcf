@@ -26,6 +26,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
 
 // ModelVolumeController is the agent half of
@@ -82,6 +83,18 @@ type ModelVolumeController struct {
 	// StagingAttempts bounds the copy retries per identity before the
 	// staged Job is dropped and readers are left to their fallback.
 	StagingAttempts int
+	// Cache is the KindCache provisioner for compile-cache volumes
+	// captured from Ready pods; nil disables.
+	Cache *modelvolume.Provisioner
+	// CacheWarmup is the wait after a pod is Ready before its cachedir is
+	// looked at. Zero means 30 seconds.
+	CacheWarmup time.Duration
+	// CacheSettle is how long the cache tree must stay unchanged (bytes
+	// and file count) before it is captured. Readiness is not "compiled":
+	// a tensor-parallel worker reports Ready before its torch.compile
+	// finishes (748-byte capture on dev1 2026-09-29) and some engines
+	// compile lazily. Zero means 20 seconds.
+	CacheSettle time.Duration
 
 	// Seams for tests: attach returns the host path a claim is mounted at
 	// on this node; bind bind-mounts src onto dst read-only; unbind undoes
@@ -95,6 +108,7 @@ type ModelVolumeController struct {
 	// copies host path src into claim ns/name and returns when the
 	// volume is detached again.
 	stageSize   func(path string) (int64, error)
+	treeStat    func(path string) (bytes, files int64, err error)
 	copyStaging func(ctx context.Context, ns, claim, src string) error
 
 	mu       sync.Mutex
@@ -158,6 +172,9 @@ func (c *ModelVolumeController) init() {
 	if c.stageSize == nil {
 		c.stageSize = stagedSize
 	}
+	if c.treeStat == nil {
+		c.treeStat = treeStatFS
+	}
 	if c.copyStaging == nil {
 		c.copyStaging = c.copyThroughHolder
 	}
@@ -203,6 +220,11 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 			c.promoteStaging(ctx, pod, uri, staging, c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName}))
 		}
 		return
+	}
+	if pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
+		if pod.Spec.NodeName == c.NodeName && rootfsonly.IsPodReady(pod) && pod.DeletionTimestamp == nil {
+			c.captureCache(ctx, pod)
+		}
 	}
 	if pod.Labels[modelvolume.RoleLabel] != "reader" {
 		return
@@ -334,6 +356,128 @@ func (c *ModelVolumeController) giveUp(ctx context.Context, uri, jobNS, reason s
 	c.mu.Unlock()
 }
 
+// Labels and annotations the webhook stamps on a pod whose cachedir is to
+// be captured (mirrors internal/webhook/cache_volume.go).
+const (
+	cacheCaptureLabel      = "nvsnap.io/cache-capture"
+	cacheURIAnnotation     = "nvsnap.io/cache-uri"
+	cacheVolumeAnnotation  = "nvsnap.io/cache-volume"
+	cacheSubpathAnnotation = "nvsnap.io/cache-subpath"
+)
+
+// captureCache turns a Ready pod's compile-cache subtree into the completed
+// cache volume for its key. The pod keeps serving; its emptyDir lives as
+// long as it does. Atomic claim creation decides which pod, of all those
+// sharing the key across the cluster, is the source.
+func (c *ModelVolumeController) captureCache(ctx context.Context, pod *corev1.Pod) {
+	if c.Cache == nil {
+		return
+	}
+	uri := pod.Annotations[cacheURIAnnotation]
+	vol := pod.Annotations[cacheVolumeAnnotation]
+	sub := pod.Annotations[cacheSubpathAnnotation]
+	if vol == "" {
+		return
+	}
+	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "cache": uri, "node": c.NodeName})
+	key := "cache:" + uri
+	c.mu.Lock()
+	if c.inflight[key] || c.attempts[key] >= c.StagingAttempts {
+		c.mu.Unlock()
+		return
+	}
+	c.inflight[key] = true
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.inflight, key)
+			c.mu.Unlock()
+		}()
+		warm := c.CacheWarmup
+		if warm == 0 {
+			warm = 30 * time.Second
+		}
+		select {
+		case <-time.After(warm):
+		case <-ctx.Done():
+			return
+		}
+		st, err := c.Cache.Lookup(ctx, uri)
+		if err != nil {
+			log.WithError(err).Warn("cache volume: lookup failed")
+			return
+		}
+		if st.Complete || st.Failed {
+			return
+		}
+		src := filepath.Join(c.KubeletPodsDir, string(pod.UID), "volumes", "kubernetes.io~empty-dir", vol, sub)
+		bytes, files, err := c.treeStat(filepath.Join(c.HostFSRoot, src))
+		if err != nil || bytes <= 0 {
+			log.WithError(err).WithField("bytes", bytes).Info("cache volume: nothing to capture yet")
+			return
+		}
+		settle := c.CacheSettle
+		if settle == 0 {
+			settle = 20 * time.Second
+		}
+		select {
+		case <-time.After(settle):
+		case <-ctx.Done():
+			return
+		}
+		again, filesAgain, err := c.treeStat(filepath.Join(c.HostFSRoot, src))
+		if err != nil || again != bytes || filesAgain != files {
+			log.WithFields(logrus.Fields{"bytes": bytes, "bytes_after": again, "files": files, "files_after": filesAgain}).Info("cache volume: tree still changing; retrying on the next event")
+			return
+		}
+		sysNS := c.Cache.Cfg.SystemNamespace()
+		claim, created, err := c.Cache.ClaimSizedClaim(ctx, uri, sysNS, c.Cache.Cfg.VolumeSize(bytes))
+		if err != nil {
+			log.WithError(err).Warn("cache volume: claim failed")
+			return
+		}
+		if !created {
+			return // another pod is the source for this key
+		}
+		start := time.Now()
+		if err := c.copyCache(ctx, uri, sysNS, claim, src); err != nil {
+			c.mu.Lock()
+			c.attempts[key]++
+			n := c.attempts[key]
+			c.mu.Unlock()
+			log.WithError(err).WithField("attempt", n).Warn("cache volume: capture failed")
+			// Release the claim so another pod can become the source; on
+			// the last attempt record the failure so admissions stop
+			// waiting for this key for a while.
+			if derr := c.Kube.CoreV1().PersistentVolumeClaims(sysNS).Delete(ctx, claim, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				log.WithError(derr).Warn("cache volume: delete claim after failure failed")
+			}
+			if n >= c.StagingAttempts {
+				if rerr := c.Cache.RecordFailure(ctx, uri, err.Error()); rerr != nil {
+					log.WithError(rerr).Warn("cache volume: record failure failed")
+				}
+			}
+			return
+		}
+		log.WithFields(logrus.Fields{"bytes": bytes, "claim": sysNS + "/" + claim, "elapsed": time.Since(start).Round(time.Second).String()}).Info("cache volume: captured; later pods of this key seed from it")
+	}()
+}
+
+// copyCache waits for the claim, copies the subtree in, marks it complete.
+func (c *ModelVolumeController) copyCache(ctx context.Context, uri, sysNS, claim, src string) error {
+	if _, err := c.Cache.WaitBound(ctx, sysNS, claim, stagingBindTimeout); err != nil {
+		return err
+	}
+	if err := c.copyStaging(ctx, sysNS, claim, src); err != nil {
+		return err
+	}
+	if err := c.Cache.MarkComplete(ctx, uri, sysNS); err != nil {
+		return err
+	}
+	return c.Cache.ClearFailure(ctx, uri)
+}
+
 // copyStaged is one attempt: measure, claim, copy, complete.
 func (c *ModelVolumeController) copyStaged(ctx context.Context, uri, src string, log logrus.FieldLogger) error {
 	start := time.Now()
@@ -371,10 +515,26 @@ func (c *ModelVolumeController) copyStaged(ctx context.Context, uri, src string,
 
 // stagedSize measures a staged tree; a missing tree is an error, not zero.
 func stagedSize(path string) (int64, error) {
-	if _, err := os.Stat(path); err != nil {
-		return 0, err
+	b, _, err := treeStatFS(path)
+	return b, err
+}
+
+// treeStatFS returns the regular-file bytes and file count under path.
+func treeStatFS(path string) (bytes, files int64, err error) {
+	if _, err = os.Stat(path); err != nil {
+		return 0, 0, err
 	}
-	return dirSizeBytes(path), nil
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.Mode().IsRegular() {
+			bytes += info.Size()
+			files++
+		}
+		return nil
+	})
+	return bytes, files, nil
 }
 
 // copyThroughHolder attaches the claim on this node with a one-shot

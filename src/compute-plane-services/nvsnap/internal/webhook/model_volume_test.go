@@ -522,3 +522,133 @@ func TestModelVolume_RecentFailureLeavesPodAlone(t *testing.T) {
 		t.Error("no download Job while the failure record is fresh")
 	}
 }
+
+func cacheMutator(t *testing.T, kc *fake.Clientset) *Mutator {
+	t.Helper()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	ccfg := m.ModelVolume.Cfg
+	ccfg.Kind = modelvolume.KindCache
+	m.CacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+	return m
+}
+
+func completeModelPV(t *testing.T, kc *fake.Clientset, uri string) {
+	t.Helper()
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-" + modelvolume.Key(uri),
+		Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true"}},
+		Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-m:v"}}}}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), pv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// No cache volume for this engine configuration and ordinal yet: the pod
+// keeps its local cachedir and is marked for capture after Ready, with the
+// identity (config hash + ordinal) and the emptyDir location stamped.
+func TestCacheVolume_FirstPodMarkedForCapture(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	completeModelPV(t, kc, uri)
+	m := cacheMutator(t, kc)
+	pod := ngcFunctionPod()
+	pod.Name = "mini-service-kimi-k3-1"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.labels[CacheCaptureLabel] != "true" || !strings.HasPrefix(v.annotations[CacheURIAnnotation], "cache://") || !strings.HasSuffix(v.annotations[CacheURIAnnotation], "/1") ||
+		v.annotations[CacheVolumeAnnotation] != cacheDirVolumeName || v.annotations[CacheSubpathAnnotation] != "cache" {
+		t.Errorf("capture stamp: labels=%v ann=%v", v.labels, v.annotations)
+	}
+	for _, c := range v.newInits {
+		if c.Name == cacheSeedInitName {
+			t.Error("no seed init without a complete cache volume")
+		}
+	}
+	// Same config, ordinal 0 is a different key.
+	pod0 := ngcFunctionPod()
+	pod0.Name = "mini-service-kimi-k3-0"
+	p0, _ := m.Mutate(context.Background(), pod0)
+	if a := viewMV(pod0, p0).annotations[CacheURIAnnotation]; !strings.HasSuffix(a, "/0") || strings.TrimSuffix(a, "/0") != strings.TrimSuffix(v.annotations[CacheURIAnnotation], "/1") {
+		t.Errorf("ordinal 0 shares the config hash and differs in ordinal: %s vs %s", a, v.annotations[CacheURIAnnotation])
+	}
+}
+
+// Cache volume complete: the read-only claim is minted at admission and a
+// seed init copies it into the pod's cachedir before the engine starts.
+func TestCacheVolume_CompleteSeedsCachedir(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	completeModelPV(t, kc, uri)
+	m := cacheMutator(t, kc)
+	pod := ngcFunctionPod()
+	pod.Name = "mini-service-kimi-k3-0"
+	curi, ok := m.cacheURI(pod)
+	if !ok {
+		t.Fatal("cache uri")
+	}
+	cpv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-cache",
+		Labels: map[string]string{modelvolume.CacheLabel: modelvolume.Key(curi), modelvolume.CompleteLabel: "true"}},
+		Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-c:v"}}}}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), cpv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.labels[CacheCaptureLabel] != "" {
+		t.Error("a pod seeded from a complete cache is not a capture candidate")
+	}
+	claim := m.CacheVolume.Cfg.ReadOnlyClaimName(curi)
+	vol, ok := v.volumes[cacheSeedVolumeName]
+	if !ok || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != claim || !vol.PersistentVolumeClaim.ReadOnly {
+		t.Errorf("cache seed volume must reference the read-only cache claim: %+v", vol)
+	}
+	pvc, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), claim, metav1.GetOptions{})
+	if err != nil || pvc.Labels[modelvolume.CacheLabel] != modelvolume.Key(curi) || pvc.Spec.AccessModes[0] != corev1.ReadOnlyMany {
+		t.Errorf("read-only cache claim minted at admission with the cache label: %v %v", err, pvc)
+	}
+	var seed *corev1.Container
+	for i := range v.newInits {
+		if v.newInits[i].Name == cacheSeedInitName {
+			seed = &v.newInits[i]
+		}
+	}
+	if seed == nil {
+		t.Fatalf("seed init missing: %v", v.newInits)
+	}
+	if seed.Image != pod.Spec.Containers[0].Image || !strings.Contains(seed.Args[0], "cp -a /nvsnap-cache-seed/. /opt/nvsnap/cache/") || !strings.HasSuffix(seed.Args[0], "exit 0") ||
+		seed.SecurityContext == nil || seed.SecurityContext.Capabilities == nil || seed.Resources.Limits.Cpu().IsZero() {
+		t.Errorf("seed init copies best effort with the baselines: %+v", seed)
+	}
+	mounts := map[string]string{}
+	for _, vm := range seed.VolumeMounts {
+		mounts[vm.Name] = vm.MountPath
+	}
+	if mounts[cacheSeedVolumeName] != cacheSeedMount || mounts[cacheDirVolumeName] != "/opt/nvsnap" {
+		t.Errorf("seed mounts: %v", mounts)
+	}
+}
+
+func TestPodOrdinal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lbl  string
+		want int
+	}{{"mini-service-kimi-k3-7", "", 7}, {"vllm-7c9f8b5d4-x2k9q", "", 0}, {"lws-0-3", "", 3}, {"lws-0-3", "5", 5}, {"", "", 0}} {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: tc.name}}
+		if tc.lbl != "" {
+			p.Labels = map[string]string{lwsWorkerIndexLabel: tc.lbl}
+		}
+		if got := podOrdinal(p); got != tc.want {
+			t.Errorf("%q/%q: %d want %d", tc.name, tc.lbl, got, tc.want)
+		}
+	}
+}

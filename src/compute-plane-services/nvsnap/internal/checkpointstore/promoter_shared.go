@@ -559,6 +559,16 @@ func (p *SharedVolumePromoter) MintReadOnly(ctx context.Context, writerNS, write
 // MintReadOnlyFromPV is MintReadOnly for a retained primary PV whose claim
 // has already been released (the model volume after its download Job).
 func (p *SharedVolumePromoter) MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error {
+	extra := map[string]string{}
+	if labelKey != "" {
+		extra["nvsnap.io/model"] = labelKey
+	}
+	return p.MintReadOnlyFromPVLabels(ctx, primaryPV, roPVName, roClaim, ns, extra)
+}
+
+// MintReadOnlyFromPVLabels is MintReadOnlyFromPV with caller-chosen
+// identity labels on the minted PV and claim (model or cache volumes).
+func (p *SharedVolumePromoter) MintReadOnlyFromPVLabels(ctx context.Context, primaryPV, roPVName, roClaim, ns string, extra map[string]string) error {
 	p.applyDefaults()
 	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, primaryPV, metav1.GetOptions{})
 	if err != nil {
@@ -574,8 +584,8 @@ func (p *SharedVolumePromoter) MintReadOnlyFromPV(ctx context.Context, primaryPV
 		}
 	}
 	labels := map[string]string{labelNamespace: ns}
-	if labelKey != "" {
-		labels["nvsnap.io/model"] = labelKey
+	for k, v := range extra {
+		labels[k] = v
 	}
 	if err := p.ensureSecondaryPV(ctx, primary, roPVName, roClaim, ns, labels); err != nil {
 		return err
@@ -586,10 +596,14 @@ func (p *SharedVolumePromoter) MintReadOnlyFromPV(ctx context.Context, primaryPV
 		return fmt.Errorf("get ro claim %s/%s: %w", ns, roClaim, err)
 	}
 	sc := p.StorageClass
+	pvcLabels := map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": "reader", labelNamespace: ns}
+	for k, v := range extra {
+		pvcLabels[k] = v
+	}
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: roClaim, Namespace: ns,
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": "reader", labelNamespace: ns, "nvsnap.io/model": labelKey},
+			Labels: pvcLabels,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},

@@ -318,6 +318,8 @@ type Agent struct {
 	// modelVolume and modelMinter are built with the L2 backend when
 	// ModelVolume.Enabled; the webhook and the controller share them.
 	modelVolume *modelvolume.Provisioner
+	// cacheVolume is the KindCache twin of modelVolume (block mode only).
+	cacheVolume *modelvolume.Provisioner
 	modelMinter *checkpointstore.SharedVolumePromoter
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
@@ -679,6 +681,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			HolderImage:       a.config.L2.WriterImage,
 			HolderPullSecrets: l2PullSecrets(a.config.L2),
 			Copier:            NewAgentCopier("/host", a.log.WithField("subsys", "modelvolume.copy")),
+			Cache:             a.cacheVolume,
 			Log:               a.log.WithField("subsys", "modelvolume"),
 		}
 		go func() {

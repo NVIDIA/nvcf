@@ -112,3 +112,48 @@ func TestReaper_Sweep(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestReaper_OrphanReadOnlyClaims(t *testing.T) {
+	ctx := context.Background()
+	key := Key(uri)
+	old := metav1.NewTime(time.Now().Add(-time.Hour))
+	young := metav1.NewTime(time.Now().Add(-time.Minute))
+	roLabels := func() map[string]string {
+		return map[string]string{"nvsnap.io/role": "reader", IdentityLabel: key, "app.kubernetes.io/managed-by": "nvsnap"}
+	}
+	mk := func(ns, name string, ts metav1.Time) *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: roLabels(), CreationTimestamp: ts}}
+	}
+	reader := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "sr-live"}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "m", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "ro-used"}}}}}}
+	holder := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nvsnap-model-holder-x", Namespace: "nvsnap-system", Labels: map[string]string{"app.kubernetes.io/component": "mount-holder"}},
+		Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "m", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "ro-holder-only"}}}}}}
+	kc := fake.NewSimpleClientset(reader, holder,
+		mk("sr-live", "ro-used", old),              // referenced by a reader: keep
+		mk("sr-live", "ro-idle", old),              // nobody references it: delete
+		mk("sr-live", "ro-young", young),           // too young to judge: keep
+		mk("nvsnap-system", "ro-holder-only", old), // only a mount-holder holds it: delete (holder is owned by it)
+	)
+	res, err := (&Reaper{Kube: kc}).Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OrphanClaims != 2 {
+		t.Errorf("orphan claims removed: %d", res.OrphanClaims)
+	}
+	left := map[string]bool{}
+	claims, _ := kc.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
+	for _, c := range claims.Items {
+		left[c.Name] = true
+	}
+	if !left["ro-used"] || !left["ro-young"] || left["ro-idle"] || left["ro-holder-only"] {
+		t.Errorf("claims left: %v", left)
+	}
+	// The holder is deleted explicitly: pvc-protection keeps the claim
+	// Terminating while a pod mounts it, and owner GC waits for the claim.
+	if _, err := kc.CoreV1().Pods("nvsnap-system").Get(ctx, "nvsnap-model-holder-x", metav1.GetOptions{}); err == nil {
+		t.Error("mount-holder must be deleted with its orphan claim")
+	}
+	if _, err := kc.CoreV1().Pods("sr-live").Get(ctx, "r", metav1.GetOptions{}); err != nil {
+		t.Error("reader pods are never touched by the claim reaper")
+	}
+}

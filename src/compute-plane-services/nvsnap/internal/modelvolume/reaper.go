@@ -45,7 +45,14 @@ type Reaper struct {
 type Result struct {
 	ReadOnlyPVs        int
 	AbandonedPrimaries int
+	OrphanClaims       int
 }
+
+// OrphanClaimAfter is how long a read-only claim may go without any pod
+// in its namespace referencing it before it is deleted. Mount-holder pods
+// are owned by the claim and go with it, so hostPath-mode attachments end
+// when the last reader leaves.
+const OrphanClaimAfter = 10 * time.Minute
 
 // Sweep runs one pass. Errors on individual objects are logged and do
 // not stop the pass; the returned error covers only the listing.
@@ -63,6 +70,11 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 	if err != nil {
 		return res, fmt.Errorf("list model volumes: %w", err)
 	}
+	caches, err := r.Kube.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: CacheLabel})
+	if err != nil {
+		return res, fmt.Errorf("list cache volumes: %w", err)
+	}
+	pvs.Items = append(pvs.Items, caches.Items...)
 	// A PV deleted while a VolumeAttachment still references it stays
 	// behind the attacher's finalizer and the detach never completes
 	// (dev1 2026-09-29: readers gone, node not yet unstaged). Wait for the
@@ -94,7 +106,7 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 	}
 	for i := range pvs.Items {
 		pv := &pvs.Items[i]
-		fields := logrus.Fields{"pv": pv.Name, "model": pv.Labels[IdentityLabel], "phase": pv.Status.Phase}
+		fields := logrus.Fields{"pv": pv.Name, "model": pv.Labels[IdentityLabel], "cache": pv.Labels[CacheLabel], "phase": pv.Status.Phase}
 		switch {
 		case isReadOnlyModelPV(pv):
 			orphan := pv.Status.Phase == corev1.VolumeReleased
@@ -126,6 +138,7 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 			log.WithFields(fields).Info("model volume reaper: removed abandoned primary and its storage")
 		}
 	}
+	res.OrphanClaims = r.reapOrphanClaims(ctx, log)
 	// Primaries the provisioner created for a claim that was deleted
 	// before completion carry no labels yet (labels arrive with
 	// completion); find them by the claim name they were bound to.
@@ -135,10 +148,13 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 	}
 	for i := range unlabelled.Items {
 		pv := &unlabelled.Items[i]
-		if _, labelled := pv.Labels[IdentityLabel]; labelled || pv.Spec.ClaimRef == nil {
+		_, isModel := pv.Labels[IdentityLabel]
+		_, isCache := pv.Labels[CacheLabel]
+		if isModel || isCache || pv.Spec.ClaimRef == nil {
 			continue
 		}
-		if !strings.HasPrefix(pv.Spec.ClaimRef.Name, "nvsnap-model-") || strings.HasSuffix(pv.Spec.ClaimRef.Name, "-ro") || pv.Status.Phase != corev1.VolumeReleased {
+		name := pv.Spec.ClaimRef.Name
+		if (!strings.HasPrefix(name, "nvsnap-model-") && !strings.HasPrefix(name, "nvsnap-cache-")) || strings.HasSuffix(name, "-ro") || pv.Status.Phase != corev1.VolumeReleased {
 			continue
 		}
 		if r.now().Sub(pv.CreationTimestamp.Time) < abandonAfter || attached[pv.Name] {
@@ -155,6 +171,86 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
+// reapOrphanClaims deletes read-only claims (model or cache) that no pod
+// in their namespace references. PVC-mode claims normally die with their
+// namespace; hostPath-mode claims and the stock-chart tests in the nvsnap
+// namespace do not, and their mount-holders kept volumes attached for
+// days (dev1 2026-09-29). Owner references take the holders down with
+// the claim; the PV goes Released and the sweep above removes it after
+// the detach.
+func (r *Reaper) reapOrphanClaims(ctx context.Context, log logrus.FieldLogger) int {
+	n := 0
+	for _, sel := range []string{"nvsnap.io/role=reader," + IdentityLabel, "nvsnap.io/role=reader," + CacheLabel} {
+		claims, err := r.Kube.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: sel})
+		if err != nil {
+			log.WithError(err).Warn("model volume reaper: list read-only claims failed")
+			continue
+		}
+		byNS := map[string]*corev1.PodList{}
+		for i := range claims.Items {
+			pvc := &claims.Items[i]
+			if r.now().Sub(pvc.CreationTimestamp.Time) < OrphanClaimAfter {
+				continue
+			}
+			pods, ok := byNS[pvc.Namespace]
+			if !ok {
+				pods, err = r.Kube.CoreV1().Pods(pvc.Namespace).List(ctx, metav1.ListOptions{})
+				if err != nil {
+					log.WithError(err).WithField("namespace", pvc.Namespace).Warn("model volume reaper: list pods failed; keeping claims")
+					continue
+				}
+				byNS[pvc.Namespace] = pods
+			}
+			if claimReferenced(pods, pvc.Name) {
+				continue
+			}
+			if err := r.Kube.CoreV1().PersistentVolumeClaims(pvc.Namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				log.WithError(err).WithField("claim", pvc.Namespace+"/"+pvc.Name).Warn("model volume reaper: delete orphan claim failed")
+				continue
+			}
+			// The claim's own mount-holders keep it Terminating behind
+			// pvc-protection, and owner-reference GC only fires once the
+			// claim is gone: a deadlock unless the holders go first.
+			for j := range pods.Items {
+				h := &pods.Items[j]
+				if h.Labels["app.kubernetes.io/component"] != "mount-holder" || !podMountsClaim(h, pvc.Name) {
+					continue
+				}
+				if err := r.Kube.CoreV1().Pods(h.Namespace).Delete(ctx, h.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+					log.WithError(err).WithField("holder", h.Namespace+"/"+h.Name).Warn("model volume reaper: delete mount-holder failed")
+				}
+			}
+			n++
+			log.WithField("claim", pvc.Namespace+"/"+pvc.Name).Info("model volume reaper: removed read-only claim no pod references")
+		}
+	}
+	return n
+}
+
+// claimReferenced reports whether any pod other than a mount-holder
+// mounts the claim.
+func claimReferenced(pods *corev1.PodList, claim string) bool {
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Labels["app.kubernetes.io/component"] == "mount-holder" {
+			continue
+		}
+		if podMountsClaim(p, claim) {
+			return true
+		}
+	}
+	return false
+}
+
+func podMountsClaim(p *corev1.Pod, claim string) bool {
+	for j := range p.Spec.Volumes {
+		if pvc := p.Spec.Volumes[j].PersistentVolumeClaim; pvc != nil && pvc.ClaimName == claim {
+			return true
+		}
+	}
+	return false
+}
+
 // Run sweeps at interval until ctx is done. Every agent may run one; the
 // deletes are idempotent and NotFound is not an error.
 func (r *Reaper) Run(ctx context.Context, interval time.Duration) {
@@ -166,8 +262,8 @@ func (r *Reaper) Run(ctx context.Context, interval time.Duration) {
 	for {
 		if res, err := r.Sweep(ctx); err != nil {
 			r.log().WithError(err).Warn("model volume reaper: sweep failed")
-		} else if res.ReadOnlyPVs+res.AbandonedPrimaries > 0 {
-			r.log().WithFields(logrus.Fields{"read_only_pvs": res.ReadOnlyPVs, "abandoned_primaries": res.AbandonedPrimaries}).Info("model volume reaper: sweep done")
+		} else if res.ReadOnlyPVs+res.AbandonedPrimaries+res.OrphanClaims > 0 {
+			r.log().WithFields(logrus.Fields{"read_only_pvs": res.ReadOnlyPVs, "abandoned_primaries": res.AbandonedPrimaries, "orphan_claims": res.OrphanClaims}).Info("model volume reaper: sweep done")
 		}
 		select {
 		case <-ctx.Done():

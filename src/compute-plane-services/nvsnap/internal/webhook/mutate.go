@@ -265,7 +265,10 @@ type Mutator struct {
 	// gate-and-promote election above. Groups resolves identity for
 	// group members that name no model (LWS workers); may be nil.
 	// ModelWaitDeadline bounds a reader's wait before it downloads itself.
-	ModelVolume       *modelvolume.Provisioner
+	ModelVolume *modelvolume.Provisioner
+	// CacheVolume shares compile caches between Helm pods on block storage
+	// (KindCache provisioner); nil disables.
+	CacheVolume       *modelvolume.Provisioner
 	Groups            modelid.GroupResolver
 	ModelWaitDeadline time.Duration
 	// ModelHostRoot is the host directory where hostPath-mode readers get
@@ -1128,4 +1131,5 @@ func (m *Mutator) logger() logrus.FieldLogger {
 // a namespace (checkpointstore.SharedVolumePromoter implements it).
 type ReadOnlyMinter interface {
 	MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error
+	MintReadOnlyFromPVLabels(ctx context.Context, primaryPV, roPVName, roClaim, ns string, labels map[string]string) error
 }

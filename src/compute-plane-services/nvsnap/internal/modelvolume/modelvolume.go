@@ -65,6 +65,8 @@ const (
 const (
 	// IdentityLabel is the short identity key on claims, PVs and pods.
 	IdentityLabel = "nvsnap.io/model"
+	// CacheLabel is the identity key of a compile-cache volume (KindCache).
+	CacheLabel = "nvsnap.io/cache"
 	// IdentityAnnotation is the full model URI.
 	IdentityAnnotation = "nvsnap.io/model-uri"
 	// RoleLabel is writer | reader on pods.
@@ -131,6 +133,54 @@ type Config struct {
 	Namespace string
 	// MinSize is the floor for a sized Block-mode claim. Empty means 1Gi.
 	MinSize resource.Quantity
+	// Kind selects what the volumes hold: KindModel (default) or
+	// KindCache, the compile caches captured from a running pod. The two
+	// kinds share every mechanism and differ in names and labels only.
+	Kind Kind
+}
+
+// Kind of volume a Provisioner manages.
+type Kind string
+
+// Kinds.
+const (
+	KindModel Kind = "model"
+	KindCache Kind = "cache"
+)
+
+// Label is the identity label for this kind.
+func (c Config) Label() string {
+	if c.Kind == KindCache {
+		return CacheLabel
+	}
+	return IdentityLabel
+}
+
+func (c Config) prefix() string {
+	if c.Kind == KindCache {
+		return "nvsnap-cache-"
+	}
+	return "nvsnap-model-"
+}
+
+// ClaimName is the primary claim for uri.
+func (c Config) ClaimName(uri string) string { return c.prefix() + Key(uri) }
+
+// ReadOnlyClaimName is the per-namespace read-only claim for uri.
+func (c Config) ReadOnlyClaimName(uri string) string { return c.prefix() + Key(uri) + "-ro" }
+
+// ReadOnlyPVName is the static PV behind ReadOnlyClaimName in ns.
+func (c Config) ReadOnlyPVName(uri, ns string) string {
+	sum := sha256.Sum256([]byte(ns))
+	return c.prefix() + Key(uri) + "-ro-" + hex.EncodeToString(sum[:4])
+}
+
+// FailureRecordName is the ConfigMap that records a given-up attempt.
+func (c Config) FailureRecordName(uri string) string { return c.prefix() + "failed-" + Key(uri) }
+
+// ReadOnlyLabels are the labels a minted read-only PV and claim carry.
+func (c Config) ReadOnlyLabels(uri string) map[string]string {
+	return map[string]string{c.Label(): Key(uri)}
 }
 
 // SystemNamespace returns the namespace Block-mode primaries live in.
@@ -177,17 +227,14 @@ func Key(uri string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// ClaimName is the writer claim in RWX mode and the shared claim in both.
-func ClaimName(uri string) string { return "nvsnap-model-" + Key(uri) }
+// ClaimName is the model writer claim in RWX mode and the primary in both.
+func ClaimName(uri string) string { return Config{}.ClaimName(uri) }
 
-// ReadOnlyClaimName is the Block-mode read-only claim minted after completion.
-func ReadOnlyClaimName(uri string) string { return "nvsnap-model-" + Key(uri) + "-ro" }
+// ReadOnlyClaimName is the Block-mode read-only model claim minted after completion.
+func ReadOnlyClaimName(uri string) string { return Config{}.ReadOnlyClaimName(uri) }
 
 // ReadOnlyPVName is the static PV behind ReadOnlyClaimName in ns.
-func ReadOnlyPVName(uri, ns string) string {
-	sum := sha256.Sum256([]byte(ns))
-	return "nvsnap-model-" + Key(uri) + "-ro-" + hex.EncodeToString(sum[:4])
-}
+func ReadOnlyPVName(uri, ns string) string { return Config{}.ReadOnlyPVName(uri, ns) }
 
 // State of an identity on the cluster, as the webhook needs it.
 type State struct {
@@ -206,8 +253,8 @@ type State struct {
 	Failed bool
 }
 
-// FailureRecordName is the ConfigMap that records a given-up download.
-func FailureRecordName(uri string) string { return "nvsnap-model-failed-" + Key(uri) }
+// FailureRecordName is the ConfigMap that records a given-up model download.
+func FailureRecordName(uri string) string { return Config{}.FailureRecordName(uri) }
 
 // FailureTTL is how long a failure record keeps pods on their own path.
 const FailureTTL = time.Hour
@@ -230,7 +277,7 @@ func (p *Provisioner) EnsureWriterClaim(ctx context.Context, uri, ns string) (st
 // a ReadWriteOnce claim that is released after the copy, leaving the
 // retained PV as the artifact.
 func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (string, error) {
-	name := ClaimName(uri)
+	name := p.Cfg.ClaimName(uri)
 	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		return name, nil
 	} else if !apierrors.IsNotFound(err) {
@@ -246,7 +293,7 @@ func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size
 			Name: name, Namespace: ns,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": managedBy,
-				IdentityLabel:                  Key(uri),
+				p.Cfg.Label():                  Key(uri),
 			},
 			Annotations: map[string]string{IdentityAnnotation: uri},
 		},
@@ -260,6 +307,22 @@ func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size
 		return "", fmt.Errorf("create claim %s/%s: %w", ns, name, err)
 	}
 	return name, nil
+}
+
+// ClaimSizedClaim is EnsureSizedClaim that also reports whether this call
+// created the claim. Create is atomic, so the caller that sees created is
+// the one that owns the copy into it; others back off.
+func (p *Provisioner) ClaimSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (name string, created bool, err error) {
+	name = p.Cfg.ClaimName(uri)
+	if _, gerr := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
+		return name, false, nil
+	} else if !apierrors.IsNotFound(gerr) {
+		return "", false, fmt.Errorf("get claim %s/%s: %w", ns, name, gerr)
+	}
+	if _, err = p.EnsureSizedClaim(ctx, uri, ns, size); err != nil {
+		return "", false, err
+	}
+	return name, true, nil
 }
 
 // WaitBound polls until the claim in ns has a bound volume and returns
@@ -293,14 +356,14 @@ func (p *Provisioner) WaitBound(ctx context.Context, ns, name string, timeout ti
 func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 	st := State{}
 	if p.Cfg.Mode == ModeBlock {
-		if cm, err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Get(ctx, FailureRecordName(uri), metav1.GetOptions{}); err == nil {
+		if cm, err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Get(ctx, p.Cfg.FailureRecordName(uri), metav1.GetOptions{}); err == nil {
 			if at, perr := time.Parse(time.RFC3339, cm.Data["failedAt"]); perr == nil && time.Since(at) < FailureTTL {
 				st.Failed = true
 			}
 		} else if !apierrors.IsNotFound(err) {
 			return State{}, fmt.Errorf("get failure record for %s: %w", uri, err)
 		}
-		pvs, err := p.Kube.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: IdentityLabel + "=" + Key(uri) + "," + CompleteLabel + "=true"})
+		pvs, err := p.Kube.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: p.Cfg.Label() + "=" + Key(uri) + "," + CompleteLabel + "=true"})
 		if err != nil {
 			return State{}, fmt.Errorf("list volumes for %s: %w", uri, err)
 		}
@@ -313,13 +376,13 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 			return st, nil
 		}
 	}
-	list, err := p.Kube.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: IdentityLabel + "=" + Key(uri)})
+	list, err := p.Kube.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: p.Cfg.Label() + "=" + Key(uri)})
 	if err != nil {
 		return State{}, fmt.Errorf("list claims for %s: %w", uri, err)
 	}
 	for i := range list.Items {
 		c := &list.Items[i]
-		if c.Name != ClaimName(uri) {
+		if c.Name != p.Cfg.ClaimName(uri) {
 			continue
 		}
 		st.Exists = true
@@ -339,7 +402,7 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 // Job's node, and NVMesh refuses read-only attaches elsewhere until that
 // attachment is gone (dev1 2026-09-26). Idempotent.
 func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
-	name := ClaimName(uri)
+	name := p.Cfg.ClaimName(uri)
 	pvc, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) && p.Cfg.Mode == ModeBlock {
@@ -362,7 +425,7 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 				pv.Labels = map[string]string{}
 			}
 			pv.Labels["app.kubernetes.io/managed-by"] = managedBy
-			pv.Labels[IdentityLabel] = Key(uri)
+			pv.Labels[p.Cfg.Label()] = Key(uri)
 			pv.Labels[CompleteLabel] = "true"
 			pv.Labels[SourceNamespaceLabel] = ns
 			if pv.Annotations == nil {
@@ -463,7 +526,7 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 		landing = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
 		annotations[StagingAnnotation] = step.VolumeName
 	}
-	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, IdentityLabel: Key(uri)}
+	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, p.Cfg.Label(): Key(uri)}
 	c := step.Container
 	c.Name = DownloadContainer
 	// The container keeps every mount the chart's init had (registry keys
@@ -556,8 +619,8 @@ func (p *Provisioner) JobSucceeded(ctx context.Context, uri, ns string) (bool, e
 func (p *Provisioner) RecordFailure(ctx context.Context, uri, reason string) error {
 	ns := p.Cfg.SystemNamespace()
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: FailureRecordName(uri), Namespace: ns,
-			Labels:      map[string]string{"app.kubernetes.io/managed-by": managedBy, IdentityLabel: Key(uri)},
+		ObjectMeta: metav1.ObjectMeta{Name: p.Cfg.FailureRecordName(uri), Namespace: ns,
+			Labels:      map[string]string{"app.kubernetes.io/managed-by": managedBy, p.Cfg.Label(): Key(uri)},
 			Annotations: map[string]string{IdentityAnnotation: uri, FailedAnnotation: reason}},
 		Data: map[string]string{"failedAt": time.Now().UTC().Format(time.RFC3339)},
 	}
@@ -574,7 +637,7 @@ func (p *Provisioner) RecordFailure(ctx context.Context, uri, reason string) err
 
 // ClearFailure removes the failure record for uri. Idempotent.
 func (p *Provisioner) ClearFailure(ctx context.Context, uri string) error {
-	if err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Delete(ctx, FailureRecordName(uri), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Delete(ctx, p.Cfg.FailureRecordName(uri), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("clear failure record for %s: %w", uri, err)
 	}
 	return nil
