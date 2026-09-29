@@ -400,3 +400,30 @@ func TestCompose_RoleNeutral_LiveDynamoOperatorPods(t *testing.T) {
 		t.Errorf("two replicas of one component must hash the same: %s vs %s", hd[:8], hr[:8])
 	}
 }
+
+// nvsnap.io/cache-salt folds an operator-chosen value into the identity, so
+// an engine change inside an unchanged image (a wheel installed at start,
+// a floating tag re-pointed) can start a fresh cache. Absent, nothing
+// changes, so existing captures stay valid.
+func TestCompose_CacheSalt(t *testing.T) {
+	c := HashInputComposer{CUDADriverMajor: 580}
+	mk := func(salt string) *corev1.Pod {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Image: "vllm/vllm-openai:v0.20.0", Args: []string{"vllm serve --model m"},
+		}}}}
+		if salt != "" {
+			p.Annotations = map[string]string{CacheSaltAnnotation: salt}
+		}
+		return p
+	}
+	plain := checkpointstore.ComputeHash(c.Compose(mk(""), 0))
+	again := checkpointstore.ComputeHash(c.Compose(mk(""), 0))
+	salted := checkpointstore.ComputeHash(c.Compose(mk("flashinfer-0.6.9"), 0))
+	resalted := checkpointstore.ComputeHash(c.Compose(mk("flashinfer-0.7.0"), 0))
+	if plain != again {
+		t.Fatal("identity must be stable without a salt")
+	}
+	if salted == plain || resalted == salted {
+		t.Fatalf("each salt value must yield its own identity: plain=%s salted=%s resalted=%s", plain, salted, resalted)
+	}
+}

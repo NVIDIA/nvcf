@@ -174,6 +174,16 @@ not.
    another pod can be the source; after the last attempt a failure record
    stops admissions from waiting for the key for an hour.
 
+   The identity covers the image reference, model, arguments, cache
+   env, driver major and GPU class, so a new engine image starts a new
+   cache. It cannot see a change inside an unchanged image (a wheel
+   installed at start from a mounted volume, a floating tag re-pointed):
+   the pod then seeds the old cache, which the engines' own versioned
+   layouts (FlashInfer per version directory, vLLM config hash, Triton
+   and Inductor source hashes) ignore rather than misuse. For that case
+   a chart sets `nvsnap.io/cache-salt` on the pod template and bumps it
+   with the change; the salt is folded into the identity.
+
    Measured on dev1 (Qwen2.5-0.5B, TP=2 across two pods, H100): cold
    torch.compile 23 s per pod; seeded from the cache volume 2.9 s; Ready
    +131 s instead of +183 s. The 31 MB cache copies in a few seconds.
