@@ -353,12 +353,12 @@ func TestManagedPullSecret_IsScopedPerRole(t *testing.T) {
 	cfg := dockerConfigBlob(t, "private.registry.test", "user", "pass")
 	client := fake.NewSimpleClientset()
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		cpName, clusterValidatorControlPlaneRole, cfg, false))
+		cpName, clusterValidatorControlPlaneRole, "run1", cfg, false))
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		gpuName, "compute-plane", cfg, false))
+		gpuName, "compute-plane", "run1", cfg, false))
 	// Our labels, but not a name we generate: must survive.
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		"operator-owned-secret", clusterValidatorControlPlaneRole, cfg, false))
+		"operator-owned-secret", clusterValidatorControlPlaneRole, "run1", cfg, false))
 
 	sweepManagedPullSecrets(ctx, client, clusterValidatorControlPlaneRole, "runid")
 
@@ -381,7 +381,7 @@ func TestManagedPullSecret_LabelsMatchOnlyItsOwnRole(t *testing.T) {
 	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
 	name := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid")
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		name, clusterValidatorControlPlaneRole, cfg, false))
+		name, clusterValidatorControlPlaneRole, "run1", cfg, false))
 
 	own, err := client.CoreV1().Secrets(clusterValidatorNamespace).List(ctx,
 		metav1.ListOptions{LabelSelector: validatorRoleSelector(clusterValidatorControlPlaneRole)})
@@ -449,24 +449,28 @@ func TestScanAndMirrorPullSecret_AdoptsOperatorSuppliedSecret(t *testing.T) {
 	assert.Equal(t, "operator-pull", got)
 }
 
-// This role's own Secret is still adopted rather than re-minted.
-func TestScanAndMirrorPullSecret_AdoptsOwnRoleSecret(t *testing.T) {
+// No Secret another run minted is adopted, even one of the same role: it may
+// hold a stale key, may be deleted by its own run's sweep mid-pull, and a
+// --no-cleanup one would otherwise be adopted by every later run.
+func TestScanAndMirrorPullSecret_NeverAdoptsAnotherRunsSecret(t *testing.T) {
 	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
-	own := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      validatorPullSecretRunName(clusterValidatorComputePlaneRole, "runid"),
-			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorRoleLabels(clusterValidatorComputePlaneRole),
-		},
-		Type: corev1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	secret := func(runID string, preserve bool) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      validatorPullSecretRunName(clusterValidatorComputePlaneRole, runID),
+				Namespace: clusterValidatorNamespace,
+				Labels:    clusterValidatorRunLabels(clusterValidatorComputePlaneRole, runID, preserve),
+			},
+			Type: corev1.SecretTypeDockerConfigJson,
+			Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+		}
 	}
-	client := fake.NewSimpleClientset(own)
+	client := fake.NewSimpleClientset(secret("earlier", false), secret("kept", true))
 
 	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
 		clusterValidatorComputePlaneRole, "runid", false)
 	require.NoError(t, err)
-	assert.Equal(t, own.Name, got)
+	assert.Empty(t, got, "a managed Secret from another run must not be adopted")
 }
 
 // writeDockerConfigSecret is create-only. The name carries this run's
@@ -480,7 +484,7 @@ func TestWriteDockerConfigSecret_CreatesUnderTheRunScopedName(t *testing.T) {
 	name := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid")
 
 	require.NoError(t, writeDockerConfigSecret(context.Background(), client,
-		clusterValidatorNamespace, name, clusterValidatorControlPlaneRole, cfg, false))
+		clusterValidatorNamespace, name, clusterValidatorControlPlaneRole, "run1", cfg, false))
 
 	s, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(
 		context.Background(), name, metav1.GetOptions{})
@@ -505,7 +509,7 @@ func TestWriteDockerConfigSecret_RefusesAnyCollision(t *testing.T) {
 	client := fake.NewSimpleClientset(squatter)
 
 	err := writeDockerConfigSecret(context.Background(), client,
-		clusterValidatorNamespace, name, clusterValidatorControlPlaneRole, cfg, false)
+		clusterValidatorNamespace, name, clusterValidatorControlPlaneRole, "run1", cfg, false)
 	require.Error(t, err, "a collision on an unguessable name must never be adopted")
 	assert.Contains(t, err.Error(), "refusing to overwrite")
 

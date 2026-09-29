@@ -50,9 +50,9 @@ after the run, so the kubeconfig context needs permission to manage those.
 |---|---|---|
 | `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. Unset everywhere skips the probe with a warning | - |
 | `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. `nvcr.io` is always probed. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | `nvcr.io` only |
-| `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and falls back to minting one from `NGC_API_KEY` | auto-detect |
+| `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and copies it into `default` for the run. Failing that, and only for an image on an NGC registry, it mints one from `NGC_API_KEY` | auto-detect |
 | `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |
-| `--no-cleanup` | Keep the validator Job (and its RBAC) after the run for debugging. The next run still sweeps prior Jobs | `false` |
+| `--no-cleanup` | Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging. A later check reclaims them after 24 hours; the result prints the `kubectl delete` command that removes them now | `false` |
 | `--show-logs` | Print the validator transcript to stderr after the check events. The transcript is not JSON, and `--json` also writes to stderr, so leave this off when a parser is reading the stream | `false` |
 
 ## `up`-specific

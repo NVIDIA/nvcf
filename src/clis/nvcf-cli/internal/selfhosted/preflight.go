@@ -613,6 +613,11 @@ func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret s
 			})
 			r.Logs = result.Logs
 			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)
+			if noCleanup {
+				if hint := validatorCleanupHint(kubeContext, result.RunID); hint != "" {
+					r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + hint
+				}
+			}
 
 			if result.Err != nil {
 				r.Severity = "warning"
@@ -631,6 +636,20 @@ func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret s
 			return r
 		},
 	}
+}
+
+// validatorCleanupHint is the command that removes everything one --no-cleanup
+// run kept. Everything it created carries the run label, so one selector
+// covers the namespaced objects and one the cluster-scoped RBAC.
+func validatorCleanupHint(kubeContext, runID string) string {
+	if runID == "" {
+		return ""
+	}
+	sel := clusterValidatorRunLabel + "=" + runID
+	ctx := kubectlContextArg(kubeContext)
+	return fmt.Sprintf("kept with --no-cleanup; remove with: kubectl%s delete -n %s job,serviceaccount,secret,configmap -l %s && "+
+		"kubectl%s delete clusterrole,clusterrolebinding -l %s",
+		ctx, clusterValidatorNamespace, sel, ctx, sel)
 }
 
 func clusterValidatorDetail(kubeContext, jobName string) string {

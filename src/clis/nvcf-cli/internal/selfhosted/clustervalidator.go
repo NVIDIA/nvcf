@@ -21,6 +21,8 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -36,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -50,6 +53,18 @@ const (
 	// orphanValidatorRBACTTL is the minimum age before leftover validator RBAC
 	// is reclaimed. Must exceed the validator timeout so a live run is never hit.
 	orphanValidatorRBACTTL = 30 * time.Minute
+	// preservedValidatorTTL bounds how long --no-cleanup artifacts survive.
+	// Exempting them outright left a cluster-wide ClusterRole and an NGC-key
+	// Secret in place forever once nobody ran the check again.
+	preservedValidatorTTL = 24 * time.Hour
+	// clusterValidatorManagedBy tells this CLI's per-run objects apart from the
+	// fixed-name set released CLIs create. Those releases DeleteCollection on
+	// managed-by=nvcf-cli, so sharing the value let each version delete the
+	// other's in-flight Jobs, Secrets and RBAC.
+	clusterValidatorManagedBy = "nvcf-cli-validator"
+	// clusterValidatorRunLabel carries the run ID on everything one run
+	// creates, so the cleanup hint can address exactly that run's objects.
+	clusterValidatorRunLabel = "nvcf.nvidia.com/validator-run"
 )
 
 // Vars (not consts) so tests can shorten without the full production budget.
@@ -99,7 +114,9 @@ type ClusterValidatorResult struct {
 	ExitCode int32
 	Logs     string
 	JobName  string
-	Err      error
+	// RunID labels every object the run created (clusterValidatorRunLabel).
+	RunID string
+	Err   error
 }
 
 type ClusterValidator func(ctx context.Context, params ClusterValidatorParams) ClusterValidatorResult
@@ -212,25 +229,36 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 		}
 	}
 
-	// Skipped under --no-cleanup: this runs before the new Job is created, so
-	// otherwise the next same-role run destroys the Job the operator asked to
-	// keep. The singleton guarantee is worth less than the artifact they kept.
-	if !noCleanup {
-		sweepPriorClusterValidatorJobs(vctx, client, role)
-	}
-
+	// No sweep of earlier Jobs: every Job now carries a deadline and a TTL,
+	// so a role-wide sweep could only ever hit an overlapping run's live Job.
 	jobName := fmt.Sprintf("%s-%d", clusterValidatorName, time.Now().UnixNano())
-	if _, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
+	job, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
 		vctx, buildClusterValidatorJob(jobName, image, pullSecret, role, runID, noCleanup), metav1.CreateOptions{},
-	); err != nil {
-		return ClusterValidatorResult{Err: fmt.Errorf("creating validator Job: %w", err)}
+	)
+	if err != nil {
+		return ClusterValidatorResult{RunID: runID, Err: fmt.Errorf("creating validator Job: %w", err)}
 	}
 	podMayBeRunning = true
 
+	// The Job owns this run's pull secret and ConfigMap, so they go when its
+	// TTL (or, for --no-cleanup, the preserved-object sweep) removes it, even
+	// on paths where the deferred sweeps are suppressed. The ServiceAccount is
+	// deliberately not owned: the ClusterRole and binding are cluster-scoped
+	// and cannot be, and deleting the account alone would leave a binding
+	// that anyone able to recreate that ServiceAccount name could inherit.
+	var owned []ownedArtifact
+	if pullSecret == validatorPullSecretRunName(role, runID) {
+		owned = append(owned, ownedArtifact{kind: "Secret", name: pullSecret})
+	}
+	if role == clusterValidatorControlPlaneRole && configNote == "" {
+		owned = append(owned, ownedArtifact{kind: "ConfigMap", name: clusterValidatorConfigRunName(runID)})
+	}
+	ownByJob(vctx, client, job, owned)
+
 	final, waitErr := waitForClusterValidatorJob(vctx, client, jobName)
 	// A clean wait means the pod reached a terminal state, so the RBAC can go.
-	// A timeout or pull failure leaves it running: pulling the RBAC then fills
-	// the surviving transcript with "forbidden" and masks the real cause.
+	// A timeout leaves it running: pulling the RBAC then fills the surviving
+	// transcript with "forbidden" and masks the real cause.
 	podMayBeRunning = waitErr != nil
 
 	// Fetch logs under a fresh ctx from the parent: vctx is expired on the
@@ -243,9 +271,21 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 		cleaned = configNote + "\n" + cleaned
 	}
 
+	// A pull failure is different: the container never started, so nothing
+	// uses the RBAC, the pull secret or the ConfigMap. Delete the Job so its
+	// pod stops retrying, and let the deferred sweeps run now rather than
+	// leaving a cluster-wide ClusterRole and an NGC-key Secret for a later
+	// run's orphan sweep, or for nobody.
+	var pullErr *validatorImagePullError
+	if errors.As(waitErr, &pullErr) && !noCleanup {
+		deleteValidatorJob(context.Background(), client, jobName)
+		podMayBeRunning = false
+	}
+
 	if waitErr != nil {
 		return ClusterValidatorResult{
 			JobName: jobName,
+			RunID:   runID,
 			Logs:    cleaned,
 			Err:     waitErr,
 		}
@@ -260,14 +300,69 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 		ExitCode: containerExitCode(exitCtx, client, jobName),
 		Logs:     cleaned,
 		JobName:  jobName,
+		RunID:    runID,
 	}
+}
+
+// ownedArtifact names a namespaced object the validator Job should own.
+type ownedArtifact struct{ kind, name string }
+
+// ownByJob sets the Job as the controller-less owner of each artifact, so
+// garbage collection removes them with it. Best-effort: a failure only means
+// the artifact waits for the deferred or orphan sweep, as before.
+func ownByJob(ctx context.Context, client kubernetes.Interface, job *batchv1.Job, artifacts []ownedArtifact) {
+	if job == nil || job.UID == "" {
+		return
+	}
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{
+		"ownerReferences": []metav1.OwnerReference{{
+			APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID,
+		}},
+	}})
+	if err != nil {
+		return
+	}
+	for _, a := range artifacts {
+		switch a.kind {
+		case "Secret":
+			_, _ = client.CoreV1().Secrets(clusterValidatorNamespace).Patch(
+				ctx, a.name, types.MergePatchType, patch, metav1.PatchOptions{})
+		case "ConfigMap":
+			_, _ = client.CoreV1().ConfigMaps(clusterValidatorNamespace).Patch(
+				ctx, a.name, types.MergePatchType, patch, metav1.PatchOptions{})
+		}
+	}
+}
+
+// deleteValidatorJob removes this run's Job and its pod, but only a Job
+// carrying our labels.
+func deleteValidatorJob(ctx context.Context, client kubernetes.Interface, name string) {
+	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	jobs := client.BatchV1().Jobs(clusterValidatorNamespace)
+	job, err := jobs.Get(dctx, name, metav1.GetOptions{})
+	if err != nil || !hasValidatorManagedLabels(job.Labels) {
+		return
+	}
+	propagation := metav1.DeletePropagationBackground
+	opts := deleteExactly(job)
+	opts.PropagationPolicy = &propagation
+	_ = jobs.Delete(dctx, name, opts)
+}
+
+// validatorImagePullError reports that the validator pod could not pull its
+// image, so its container never started.
+type validatorImagePullError struct{ reason, message string }
+
+func (e *validatorImagePullError) Error() string {
+	return fmt.Sprintf("validator pod cannot pull image (%s): %s", e.reason, e.message)
 }
 
 // Creates the SA/ClusterRole/ClusterRoleBinding the validator pod runs under,
 // idempotent via AlreadyExists tolerance. ClusterRole uses update-or-create so
 // newer CLI versions replace stale rules without the operator needing to delete.
 func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role, runID string, preserve bool) error {
-	roleLabels := clusterValidatorRoleLabelsPreserved(role, preserve)
+	roleLabels := clusterValidatorRunLabels(role, runID, preserve)
 	name := clusterValidatorRBACName(role, runID)
 
 	sa := &corev1.ServiceAccount{
@@ -338,7 +433,7 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 func clusterValidatorLabels() map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       clusterValidatorAppLabel,
-		"app.kubernetes.io/managed-by": "nvcf-cli",
+		"app.kubernetes.io/managed-by": clusterValidatorManagedBy,
 		"app.kubernetes.io/component":  "preflight",
 	}
 }
@@ -348,14 +443,21 @@ func clusterValidatorLabels() map[string]string {
 // role's Job mid-command, including under --no-cleanup, which makes the
 // printed `kubectl logs job/...` hint 404.
 func clusterValidatorRoleLabels(role string) map[string]string {
-	return clusterValidatorRoleLabelsPreserved(role, false)
+	return clusterValidatorRunLabels(role, "", false)
 }
 
-// clusterValidatorRoleLabelsPreserved adds the preserve marker when the run was
-// asked to keep its artifacts, so the orphan sweeper leaves them alone.
-func clusterValidatorRoleLabelsPreserved(role string, preserve bool) map[string]string {
+// clusterValidatorRunLabels are the labels for one run's objects: the managed
+// labels, the role, the run ID, and the preserve marker when the run was asked
+// to keep its artifacts (which the orphan sweeper then keeps for
+// preservedValidatorTTL instead of orphanValidatorRBACTTL).
+func clusterValidatorRunLabels(role, runID string, preserve bool) map[string]string {
 	l := clusterValidatorLabels()
-	l[clusterValidatorRoleLabel] = role
+	if role != "" {
+		l[clusterValidatorRoleLabel] = role
+	}
+	if runID != "" {
+		l[clusterValidatorRunLabel] = runID
+	}
 	if preserve {
 		l[clusterValidatorPreserveLabel] = "true"
 	}
@@ -379,12 +481,8 @@ func validatorConfigNameForRole(role, runID string) string {
 // ConfigMap once it is older than the TTL, and an operator re-running a Job
 // they deliberately kept gets a validator that silently skips the configurable
 // reachability and enforcement checks.
-func clusterValidatorConfigLabels(preserve bool) map[string]string {
-	l := clusterValidatorLabels()
-	if preserve {
-		l[clusterValidatorPreserveLabel] = "true"
-	}
-	return l
+func clusterValidatorConfigLabels(runID string, preserve bool) map[string]string {
+	return clusterValidatorRunLabels("", runID, preserve)
 }
 
 // clusterValidatorConfigRunName scopes the network-checks ConfigMap to one run.
@@ -409,44 +507,35 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 	// cannot drift from the labels. All three managed labels are required: the
 	// component label is part of what identifies these as ours.
 	opts := metav1.ListOptions{LabelSelector: labels.SelectorFromSet(clusterValidatorLabels()).String()}
-	cutoff := metav1.Time{Time: time.Now().Add(-ttl)}
+	now := time.Now()
 
-	// reclaimable requires the generated name as well as the labels and the
-	// age. Labels alone are three public constants and can be copied onto
+	// stale applies the TTL for the object's kind of run. A --no-cleanup run's
+	// objects are kept longer, not forever: exempting them left a cluster-wide
+	// ClusterRole and an NGC-key Secret behind permanently.
+	stale := func(o metav1.Object) bool {
+		limit := ttl
+		if o.GetLabels()[clusterValidatorPreserveLabel] == "true" {
+			limit = preservedValidatorTTL
+		}
+		ts := o.GetCreationTimestamp()
+		return ts.Time.Before(now.Add(-limit))
+	}
+
+	// Each reclaimable test requires the generated name as well as the labels
+	// and the age. Labels alone are public constants and can be copied onto
 	// anything, and this deletes cluster-scoped objects with errors swallowed.
-	// Network-check ConfigMaps carry their own generated-name prefix.
+	// Network-check ConfigMaps and pull secrets carry their own name prefixes.
 	reclaimableConfig := func(o metav1.Object) bool {
-		if !strings.HasPrefix(o.GetName(), clusterValidatorConfigName) {
-			return false
-		}
-		if o.GetLabels()[clusterValidatorPreserveLabel] == "true" {
-			return false
-		}
-		ts := o.GetCreationTimestamp()
-		return ts.Before(&cutoff)
+		return strings.HasPrefix(o.GetName(), clusterValidatorConfigName) && stale(o)
 	}
-
-	// Pull secrets carry the other generated-name prefix.
 	reclaimableSecret := func(o metav1.Object) bool {
-		if !strings.HasPrefix(o.GetName(), validatorPullSecretName) {
-			return false
-		}
-		if o.GetLabels()[clusterValidatorPreserveLabel] == "true" {
-			return false
-		}
-		ts := o.GetCreationTimestamp()
-		return ts.Before(&cutoff)
+		return strings.HasPrefix(o.GetName(), validatorPullSecretName) && stale(o)
 	}
-
+	// The bare legacy name is the fixed-name set released CLIs keep and reuse.
+	// Its labels no longer match this selector, but exclude it by name too so
+	// a released CLI's pod never loses its binding mid-run.
 	reclaimable := func(o metav1.Object) bool {
-		if !strings.HasPrefix(o.GetName(), clusterValidatorName) {
-			return false
-		}
-		if o.GetLabels()[clusterValidatorPreserveLabel] == "true" {
-			return false
-		}
-		ts := o.GetCreationTimestamp()
-		return ts.Before(&cutoff)
+		return strings.HasPrefix(o.GetName(), clusterValidatorName+"-") && stale(o)
 	}
 
 	if l, err := client.RbacV1().ClusterRoleBindings().List(ctx, opts); err == nil {
@@ -496,6 +585,24 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 			}
 		}
 	}
+
+	// Jobs only need this for --no-cleanup runs: every other Job carries a
+	// deadline and a TTL. A preserved Job has neither, so without this arm it
+	// and its pod would stay forever. Background propagation removes the pod,
+	// and the Job's ownerReferences take its Secret and ConfigMap with it.
+	jobs := client.BatchV1().Jobs(clusterValidatorNamespace)
+	if l, err := jobs.List(ctx, opts); err == nil {
+		propagation := metav1.DeletePropagationBackground
+		for i := range l.Items {
+			o := &l.Items[i]
+			if o.Labels[clusterValidatorPreserveLabel] != "true" || !reclaimable(o) {
+				continue
+			}
+			del := deleteExactly(o)
+			del.PropagationPolicy = &propagation
+			_ = jobs.Delete(ctx, o.Name, del)
+		}
+	}
 }
 
 // sweepClusterValidatorRBAC removes the SA, ClusterRole, and ClusterRoleBinding
@@ -525,38 +632,6 @@ func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface,
 	}
 }
 
-// Errors are swallowed: a stale Job is preferable to blocking the new run.
-func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Interface, role string) {
-	// Scope to this role: in ModeSingle both roles run against the same
-	// cluster, so an unscoped selector deletes the other role's Job mid-command.
-	//
-	// List-then-delete rather than DeleteCollection: the name has to be checked
-	// too, which a collection selector cannot express, and the labels alone are
-	// public constants that anything could carry.
-	jobs := client.BatchV1().Jobs(clusterValidatorNamespace)
-	l, err := jobs.List(ctx, metav1.ListOptions{LabelSelector: validatorRoleSelector(role)})
-	if err != nil {
-		return
-	}
-	propagation := metav1.DeletePropagationBackground
-	for i := range l.Items {
-		if !strings.HasPrefix(l.Items[i].Name, clusterValidatorName) {
-			continue
-		}
-		// A Job an operator kept with --no-cleanup survives later ordinary
-		// runs too. The current run already skips this sweep under that flag,
-		// but without the marker the next run of the same role deletes the Job
-		// while its ConfigMap, RBAC and pull secret survive, leaving the
-		// preserved artifacts pointing at a Job that no longer exists.
-		if l.Items[i].Labels[clusterValidatorPreserveLabel] == "true" {
-			continue
-		}
-		opts := deleteExactly(&l.Items[i])
-		opts.PropagationPolicy = &propagation
-		_ = jobs.Delete(ctx, l.Items[i].Name, opts)
-	}
-}
-
 // sweepManagedPullSecrets removes any docker-registry secrets in
 // clusterValidatorNamespace that we previously created (mirrored from
 // another namespace or minted from NGC_API_KEY). Called after the Job
@@ -566,8 +641,8 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 // labeled by us and are skipped by the selector. Errors are swallowed:
 // failing to clean up is preferable to failing the check itself.
 func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, role, runID string) {
-	// Same reasoning as sweepPriorClusterValidatorJobs: the generated name is
-	// part of the ownership test, not just the labels.
+	// The generated name is part of the ownership test, not just the labels,
+	// which are public constants anything could carry.
 	secrets := client.CoreV1().Secrets(clusterValidatorNamespace)
 	l, err := secrets.List(ctx, metav1.ListOptions{LabelSelector: validatorRoleSelector(role)})
 	if err != nil {
@@ -683,7 +758,7 @@ func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interfa
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterValidatorConfigRunName(runID),
 			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorConfigLabels(preserve),
+			Labels:    clusterValidatorConfigLabels(runID, preserve),
 		},
 		Data: map[string]string{"config.yaml": content},
 	}
@@ -782,7 +857,6 @@ func parseRegistryHostPort(s string) (host string, port int) {
 // write. VALIDATOR_ROLE selects the check set (control-plane vs compute-plane).
 func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCleanup bool) *batchv1.Job {
 	backoff := int32(0)
-	activeDeadline := int64(clusterValidatorTimeout/time.Second) + 60
 	// Pod shape mirrors deployments/nvca-operator/templates/cronjob.yaml, which
 	// runs this same image. Two producers of one pod spec now exist in two
 	// languages, so they are kept deliberately in step: without the security
@@ -837,25 +911,27 @@ func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCle
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorRoleLabelsPreserved(role, noCleanup),
+			Labels:    clusterValidatorRunLabels(role, runID, noCleanup),
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: &backoff,
-			// Without a deadline an ImagePullBackOff Job never reaches a
-			// terminal state, so TTLSecondsAfterFinished never fires and the
-			// Job, its RBAC and its pull secret persist indefinitely. The
-			// deferred sweeps are suppressed on that path by design, because
-			// the pod may still be running, so this is the only reclaim.
-			// Sized above the runner's own budget so it never truncates a wait
-			// that is still making progress.
-			ActiveDeadlineSeconds: &activeDeadline,
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: clusterValidatorRoleLabels(role)},
+				ObjectMeta: metav1.ObjectMeta{Labels: clusterValidatorRunLabels(role, runID, false)},
 				Spec:       podSpec,
 			},
 		},
 	}
 	if !noCleanup {
+		// Without a deadline a Job whose pod never finishes never becomes
+		// terminal, so its TTL never fires. The deadline plus the TTL remove
+		// the Job and its pod, and through ownerReferences its pull secret and
+		// ConfigMap. The ServiceAccount, ClusterRole and binding are left to
+		// the deferred sweeps, or to a later run's orphan sweep. Sized above
+		// the runner's own budget so it never truncates a wait that is still
+		// making progress. A --no-cleanup Job gets neither, so the pod and its
+		// logs survive for debugging until the preserved-object sweep.
+		activeDeadline := int64(clusterValidatorTimeout/time.Second) + 60
+		job.Spec.ActiveDeadlineSeconds = &activeDeadline
 		ttl := clusterValidatorTTLSeconds
 		job.Spec.TTLSecondsAfterFinished = &ttl
 	}
@@ -882,7 +958,7 @@ func waitForClusterValidatorJob(ctx context.Context, client kubernetes.Interface
 			return job, nil
 		}
 		if reason, msg := podPullFailureReason(ctx, client, jobName); reason != "" {
-			return job, fmt.Errorf("validator pod cannot pull image (%s): %s", reason, msg)
+			return job, &validatorImagePullError{reason: reason, message: msg}
 		}
 		select {
 		case <-ctx.Done():

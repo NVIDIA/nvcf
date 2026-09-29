@@ -107,12 +107,13 @@ func init() {
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-image"))
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorPullSecret, "cluster-validator-pull-secret", "",
 		"Name of a docker-registry Secret in the 'default' namespace to pull the validator image. "+
-			"When empty, the runner scans NVCF namespaces for a matching secret (mirroring it into "+
-			"'default' if found elsewhere) and falls back to auto-creating one from NGC_API_KEY. "+
-			"Set to force a specific name.")
+			"When empty, the runner scans NVCF namespaces for a matching secret and copies it into "+
+			"'default' for the run if it lives elsewhere. Failing that, and only when the image is on "+
+			"an NGC registry, it mints one from NGC_API_KEY. Set to force a specific name.")
 	selfHostedCheckCmd.Flags().BoolVar(&checkClusterValidatorNoCleanup, "no-cleanup", false,
-		"Disable the validator Job's TTL so the Job persists for debugging. "+
-			"The next run still deletes prior Jobs via the singleton sweep.")
+		"Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging instead of "+
+			"removing them after the run. They are reclaimed by a later check after 24 hours; the "+
+			"result prints the kubectl command that removes them now.")
 	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorRegistries, "cluster-validator-registries", nil,
 		"Additional container registries to probe for reachability in the control-plane validator. "+
 			"Format: host:port (e.g. harbor.company.internal:443,ghcr.io:443). "+

@@ -479,8 +479,13 @@ func TestBuildClusterValidatorJobShape(t *testing.T) {
 
 	labels := job.Labels
 	assert.Equal(t, clusterValidatorAppLabel, labels["app.kubernetes.io/name"])
-	assert.Equal(t, "nvcf-cli", labels["app.kubernetes.io/managed-by"])
+	assert.NotEqual(t, "nvcf-cli", labels["app.kubernetes.io/managed-by"],
+		"released CLIs DeleteCollection on managed-by=nvcf-cli, so a shared value lets each version delete the other's objects")
 	assert.Equal(t, "preflight", labels["app.kubernetes.io/component"])
+	assert.Equal(t, "runid", labels[clusterValidatorRunLabel])
+	assert.Equal(t, "runid", job.Spec.Template.Labels[clusterValidatorRunLabel])
+	require.NotNil(t, job.Spec.ActiveDeadlineSeconds,
+		"without a deadline a Job whose pod never finishes never becomes terminal, so its TTL never fires")
 
 	// The validator must run in preflight mode so it skips the summary
 	// ConfigMap write (the metrics path needs the NVCA agent, which is not
@@ -519,6 +524,9 @@ func TestBuildClusterValidatorJobShape_NoCleanup(t *testing.T) {
 	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", true)
 	assert.Nil(t, job.Spec.TTLSecondsAfterFinished,
 		"--no-cleanup must omit TTLSecondsAfterFinished so the Job persists for debugging")
+	assert.Nil(t, job.Spec.ActiveDeadlineSeconds,
+		"a deadline would kill the kept pod, and its logs, shortly after the CLI gives up")
+	assert.Equal(t, "true", job.Labels[clusterValidatorPreserveLabel])
 }
 
 func TestCleanValidatorOutput_StripsANSI(t *testing.T) {
@@ -763,42 +771,6 @@ func TestParseRegistryHostPort_RejectsMalformedExplicitPort(t *testing.T) {
 	host, port := parseRegistryHostPort("registry.example")
 	assert.Equal(t, "registry.example", host, "no explicit port keeps the default")
 	assert.Equal(t, 443, port)
-}
-
-// The prior-run Job sweep deletes by label plus generated name. Labels alone
-// are three public constants, so a Job carrying them under an unrelated name is
-// not ours to delete.
-func TestSweepPriorClusterValidatorJobs_RequiresGeneratedName(t *testing.T) {
-	ctx := context.Background()
-	const role = clusterValidatorControlPlaneRole
-	ours := clusterValidatorName + "-1700000000"
-
-	client := fake.NewSimpleClientset(
-		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-			Name: ours, Namespace: clusterValidatorNamespace,
-			Labels: clusterValidatorRoleLabels(role),
-		}},
-		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-			Name: "operator-owned-job", Namespace: clusterValidatorNamespace,
-			Labels: clusterValidatorRoleLabels(role),
-		}},
-		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-			Name: clusterValidatorName + "-9999999999", Namespace: clusterValidatorNamespace,
-			Labels: clusterValidatorRoleLabels("compute-plane"),
-		}},
-	)
-
-	sweepPriorClusterValidatorJobs(ctx, client, role)
-
-	jobs := client.BatchV1().Jobs(clusterValidatorNamespace)
-	_, err := jobs.Get(ctx, ours, metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "this role's prior Job must be swept")
-
-	_, err = jobs.Get(ctx, "operator-owned-job", metav1.GetOptions{})
-	assert.NoError(t, err, "matching labels alone must not authorize deleting someone else's Job")
-
-	_, err = jobs.Get(ctx, clusterValidatorName+"-9999999999", metav1.GetOptions{})
-	assert.NoError(t, err, "the other role's Job must survive")
 }
 
 // The network-checks ConfigMap was the one object a run created with no
@@ -1110,24 +1082,4 @@ func TestBuildClusterValidatorJob_MarksPreservedRun(t *testing.T) {
 		clusterValidatorControlPlaneRole, "runid", false)
 	assert.NotContains(t, ordinary.Labels, clusterValidatorPreserveLabel,
 		"an ordinary run must stay sweepable")
-}
-
-func TestSweepPriorClusterValidatorJobs_SparesPreservedJob(t *testing.T) {
-	preserved := buildClusterValidatorJob(clusterValidatorName+"-kept", "nvcr.io/x/v:1", "",
-		clusterValidatorControlPlaneRole, "runid", true)
-	preserved.Namespace = clusterValidatorNamespace
-	ordinary := buildClusterValidatorJob(clusterValidatorName+"-old", "nvcr.io/x/v:1", "",
-		clusterValidatorControlPlaneRole, "runid", false)
-	ordinary.Namespace = clusterValidatorNamespace
-
-	client := fake.NewSimpleClientset(preserved, ordinary)
-	sweepPriorClusterValidatorJobs(context.Background(), client, clusterValidatorControlPlaneRole)
-
-	_, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(
-		context.Background(), preserved.Name, metav1.GetOptions{})
-	assert.NoError(t, err, "a Job kept with --no-cleanup must survive a later run's sweep")
-
-	_, err = client.BatchV1().Jobs(clusterValidatorNamespace).Get(
-		context.Background(), ordinary.Name, metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "an ordinary prior Job must still be swept")
 }

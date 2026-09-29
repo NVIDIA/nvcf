@@ -197,15 +197,15 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 				continue
 			}
 			if s.Namespace == clusterValidatorNamespace {
-				// Adopt an operator-supplied Secret (no managed labels, so no
-				// sweep touches it) or this role's own. Never the other
-				// role's: in ModeSplit both kubecontexts can resolve to one
-				// cluster, and that role's deferred sweep would delete the
-				// Secret while this role's pod is still pulling, which the
-				// kubelet reports as FailedToRetrieveImagePullSecret. That is
-				// the exact failure per-role naming was introduced to prevent.
-				if hasValidatorManagedLabels(s.Labels) &&
-					s.Labels[clusterValidatorRoleLabel] != role {
+				// Adopt only an operator-supplied Secret (no managed labels, so
+				// no sweep touches it). Never one another run minted: those
+				// are per-run now, so adopting one reuses a possibly stale
+				// NGC key (a run with a bad key keeps its Secret while its pod
+				// may still be pulling), can outlive this run, and can be
+				// deleted by its own run's sweep mid-pull, which the kubelet
+				// reports as FailedToRetrieveImagePullSecret. A --no-cleanup
+				// Secret would otherwise be adopted by every later run.
+				if hasValidatorManagedLabels(s.Labels) {
 					continue
 				}
 				return s.Name, nil
@@ -216,7 +216,7 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 			// the destination namespace, and writeDockerConfigSecret's
 			// delete-and-recreate path would otherwise destroy that
 			// secret on type mismatch.
-			if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, cfg, preserve); err != nil {
+			if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, runID, cfg, preserve); err != nil {
 				return "", fmt.Errorf("mirror pull secret %s/%s to %s/%s: %w",
 					s.Namespace, s.Name, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), err)
 			}
@@ -255,7 +255,7 @@ func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interfac
 	if err != nil {
 		return "", fmt.Errorf("encode dockerconfigjson for %s: %w", registry, err)
 	}
-	if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, cfg, preserve); err != nil {
+	if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, runID, cfg, preserve); err != nil {
 		return "", fmt.Errorf("auto-create pull secret %s/%s: %w",
 			clusterValidatorNamespace, validatorPullSecretRunName(role, runID), err)
 	}
@@ -295,12 +295,14 @@ func buildDockerConfigJSON(registry, username, password string) ([]byte, error) 
 // which label-based ownership cannot prevent: the managed labels are three
 // public constants anyone can copy onto a Secret they pre-create under a
 // predictable name.
-func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, namespace, name, role string, dockerConfig []byte, preserve bool) error {
+func writeDockerConfigSecret(
+	ctx context.Context, client kubernetes.Interface, namespace, name, role, runID string, dockerConfig []byte, preserve bool,
+) error {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    clusterValidatorRoleLabelsPreserved(role, preserve),
+			Labels:    clusterValidatorRunLabels(role, runID, preserve),
 		},
 		Type: corev1.SecretTypeDockerConfigJson,
 		Data: map[string][]byte{corev1.DockerConfigJsonKey: dockerConfig},
