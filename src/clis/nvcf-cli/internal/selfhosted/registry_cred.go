@@ -233,17 +233,92 @@ type RegistryEntry struct {
 	Critical bool
 }
 
+// StackValues are the stack settings preflight needs, read from the stack's
+// environment values with the same layering helmfile uses.
+type StackValues struct {
+	// Found is true when at least one values file was read.
+	Found bool
+	// ImageRegistry is global.image.registry. The stack renders
+	// registry + "/" + repository, so it may carry a path.
+	ImageRegistry string
+	// ACMESolverRepository is certManager.acmesolver.image.repository. When
+	// unset the ACME solver keeps the chart's quay.io/jetstack default.
+	ACMESolverRepository string
+	// EnvoyGatewayNamespace is ingress.gatewayApi.controllerNamespace.
+	EnvoyGatewayNamespace string
+}
+
+// LoadStackValues reads files in order and layers each over the previous,
+// the way helmfile layers an environment file over base.yaml. Unreadable or
+// malformed files are skipped.
+func LoadStackValues(files []string) StackValues {
+	merged := map[string]any{}
+	found := false
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			continue
+		}
+		found = true
+		mergeValues(merged, doc)
+	}
+	return StackValues{
+		Found:                 found,
+		ImageRegistry:         digString(merged, "global", "image", "registry"),
+		ACMESolverRepository:  digString(merged, "certManager", "acmesolver", "image", "repository"),
+		EnvoyGatewayNamespace: digString(merged, "ingress", "gatewayApi", "controllerNamespace"),
+	}
+}
+
+// mergeValues deep-merges src into dst: maps merge key by key, anything else
+// in src replaces what dst held.
+func mergeValues(dst, src map[string]any) {
+	for k, v := range src {
+		if sv, ok := v.(map[string]any); ok {
+			if dv, ok := dst[k].(map[string]any); ok {
+				mergeValues(dv, sv)
+				continue
+			}
+		}
+		dst[k] = v
+	}
+}
+
+func digString(m map[string]any, keys ...string) string {
+	var cur any = m
+	for _, k := range keys {
+		mm, ok := cur.(map[string]any)
+		if !ok {
+			return ""
+		}
+		cur = mm[k]
+	}
+	s, _ := cur.(string)
+	return strings.TrimSpace(s)
+}
+
 // EnumerateRegistries builds the deduplicated list of registries to credential-
-// check from the image ref, cert-manager (quay.io), the stack values file
-// (global.image.registry), and operator-supplied extras.
-func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []RegistryEntry {
+// check from the image ref, cert-manager (quay.io), the stack values
+// (global.image.registry), and operator-supplied extras. stackValuesFiles are
+// layered in order (base.yaml first, then the environment file).
+func EnumerateRegistries(imageRef string, stackValuesFiles []string, extras []string) []RegistryEntry {
 	seen := make(map[string]bool)
 	var out []RegistryEntry
+	stack := LoadStackValues(stackValuesFiles)
 
-	add := func(registry, repoHint string, critical bool) {
+	// add reports whether the registry is in the list, so a source only counts
+	// as having named a registry once its value passed validation.
+	add := func(registry, repoHint string, critical bool) bool {
 		registry = strings.TrimSpace(registry)
-		if registry == "" || seen[registry] {
-			return
+		if registry == "" {
+			return false
+		}
+		if seen[registry] {
+			return true
 		}
 		// Every source goes through the same host validation. The probe builds
 		// "https://" + registry + "/v2/", so a value carrying "/" or "@" moves
@@ -253,10 +328,11 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 		// parseRegistryHostPort; the image ref and the values file were not.
 		if !isBareRegistryHost(strings.TrimSuffix(strings.TrimPrefix(registry, "["), "]")) &&
 			!isBareRegistryHost(registry) {
-			return
+			return false
 		}
 		seen[registry] = true
 		out = append(out, RegistryEntry{Registry: registry, RepoHint: repoHint, Critical: critical})
+		return true
 	}
 
 	// Source 1: base registry from the configured validator image.
@@ -269,28 +345,27 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	// contacts this registry at pull time (ImagePullPolicy is IfNotPresent).
 	imageNamedRegistry := false
 	if reg, repo, _, ok := parseImageRef(imageRef); ok && reg != "" {
-		imageNamedRegistry = true
-		add(reg, repo, isNGCRegistry(reg))
+		imageNamedRegistry = add(reg, repo, isNGCRegistry(reg))
 	}
 
-	// Source 2: read global.image.registry from the environment values file.
-	// This catches cases where the operator points at a custom NGC org or a
-	// staging environment that differs from the validator image's registry.
-	stackRegistry := ""
-	if stackValuesFile != "" {
-		stackRegistry = readGlobalImageRegistry(stackValuesFile)
-		if stackRegistry != "" {
-			// If it's an NGC registry, mark critical; customer mirrors are non-critical.
-			add(stackRegistry, "", isNGCRegistry(stackRegistry))
-		}
+	// Source 2: global.image.registry from the stack values. This catches an
+	// operator pointing at a custom NGC org or a staging registry that differs
+	// from the validator image's. The stack renders registry + "/" + repository,
+	// so "harbor.corp.example/nvcf" is a valid value: probe its host and carry
+	// the path as the scope hint rather than rejecting the whole value.
+	stackNamedRegistry := false
+	if host, path, _ := strings.Cut(stack.ImageRegistry, "/"); host != "" {
+		// If it's an NGC registry, mark critical; customer mirrors are non-critical.
+		stackNamedRegistry = add(host, path, isNGCRegistry(host))
 	}
 
-	// Source 3: cert-manager, but only when the stack is not mirroring it.
-	// deploy/stacks/self-managed/global.yaml.gotmpl rewrites every cert-manager
-	// image to global.image.registry, so on a configured stack quay.io is never
-	// contacted and probing it is a pointless round trip. It is only reachable
-	// when no stack values file resolved.
-	if stackRegistry == "" {
+	// Source 3: cert-manager's ACME solver. global.yaml.gotmpl moves the
+	// controller images to the mirror, but the solver keeps the chart's
+	// quay.io/jetstack default unless certManager.acmesolver.image is set, so
+	// a mirrored site still pulls it from quay.io at its first HTTP-01 order.
+	// Probe quay.io unless the stack points the solver somewhere else.
+	if acme := stack.ACMESolverRepository; !stack.Found || acme == "" ||
+		strings.HasPrefix(acme, certManagerRegistry+"/") {
 		add(certManagerRegistry, "", false)
 	}
 
@@ -306,12 +381,9 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 		reg := host
 		if port != 0 && port != 443 {
 			reg = net.JoinHostPort(host, strconv.Itoa(port))
-		} else if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-			// Bare IPv6 literal on the default port. parseRegistryHostPort
-			// returns the input verbatim when SplitHostPort fails, and it
-			// fails on an already-bracketed "[fd00::1]" with missingPort, so
-			// without the prefix guard that arrives here still bracketed and
-			// becomes "[[fd00::1]]", which is not a parseable URL host.
+		} else if strings.Contains(host, ":") {
+			// IPv6 literal on the default port. parseRegistryHostPort returns
+			// it unbracketed, so bracket it once for the URL host.
 			reg = "[" + host + "]"
 		}
 		add(reg, "", false)
@@ -331,30 +403,9 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	//
 	// Non-critical, unlike an NGC registry a source actually named. A guess
 	// must not hard-fail the run, and this category has no opt-out flag.
-	if !imageNamedRegistry && stackRegistry == "" {
+	if !imageNamedRegistry && !stackNamedRegistry {
 		add(ngcRegistry, "", false)
 	}
 
 	return out
-}
-
-// readGlobalImageRegistry reads the global.image.registry key from an
-// environment values YAML file (e.g. environments/local.yaml). Returns ""
-// on any error so the caller can safely ignore missing or malformed files.
-func readGlobalImageRegistry(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var vals struct {
-		Global struct {
-			Image struct {
-				Registry string `json:"registry" yaml:"registry"`
-			} `json:"image" yaml:"image"`
-		} `json:"global" yaml:"global"`
-	}
-	if err := yaml.Unmarshal(data, &vals); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(vals.Global.Image.Registry)
 }

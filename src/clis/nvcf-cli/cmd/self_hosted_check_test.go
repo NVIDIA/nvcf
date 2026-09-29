@@ -40,6 +40,7 @@ import (
 //   - prints a deprecation warning to stderr, AND
 //   - falls through to JSONL streaming behaviour on stderr (same as --json).
 func TestCheck_LegacyOutputJSONWarnsAndStreams(t *testing.T) {
+	resetCheckFlags(t)
 	// Reset global flag state left over from other tests.
 	t.Cleanup(func() {
 		selfHostedJSON = false
@@ -65,6 +66,7 @@ func TestCheck_LegacyOutputJSONWarnsAndStreams(t *testing.T) {
 // the §6.6.3 schema: schemaVersion header, then check_started/check_completed/
 // category_completed events per check, then a final event with verdict fields.
 func TestCheck_NewJSON(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -114,6 +116,7 @@ func TestCheck_NewJSON(t *testing.T) {
 
 // TestCheck_WaitTimesOutCleanly verifies that --wait honors the timeout duration.
 func TestSelfHostedCheck_WaitTimesOutCleanly(t *testing.T) {
+	resetCheckFlags(t)
 	t.Setenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY", "1")
 	t.Setenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL", "1") // seam: forces a failing check
 	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--wait", "2s"})
@@ -162,6 +165,7 @@ func TestCheck_OneShotTTYUsesStaticRenderer(t *testing.T) {
 // TestCheck_PreflightStreamingOrder verifies that for each tool the events arrive
 // in CheckStarted → CheckCompleted order, and CategoryCompleted follows all checks.
 func TestCheck_PreflightStreamingOrder(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -221,6 +225,7 @@ func TestCheck_PreflightStreamingOrder(t *testing.T) {
 // TestCheck_LocalOnlyFlag verifies that --local-only causes only local-host-tools
 // events (no control-plane-cluster or compute-plane-cluster events).
 func TestCheck_LocalOnlyFlag(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -256,6 +261,7 @@ func TestCheck_LocalOnlyFlag(t *testing.T) {
 // TestCheck_SingleClusterMode verifies that without context flags, both
 // control-plane-cluster and compute-plane-cluster category events appear.
 func TestCheck_SingleClusterMode(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -287,6 +293,7 @@ func TestCheck_SingleClusterMode(t *testing.T) {
 }
 
 func TestCheck_PreDoesNotProbeSISReachability(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -311,6 +318,7 @@ func TestCheck_PreDoesNotProbeSISReachability(t *testing.T) {
 // TestCheck_SplitClusterMode verifies that providing both context flags causes
 // both control-plane and compute-plane category events (run in parallel).
 func TestCheck_SplitClusterMode(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -423,6 +431,7 @@ func TestControlPlaneIsTargeted(t *testing.T) {
 // produces compute-plane-cluster category events. Before the gating fix this
 // flag was a complete no-op and produced no check events at all.
 func TestCheck_ComputePlaneFlagRunsChecks(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -455,6 +464,7 @@ func TestCheck_ComputePlaneFlagRunsChecks(t *testing.T) {
 // TestCheck_ControlPlaneFlagRunsChecks verifies that --control-plane alone
 // produces control-plane-cluster category events.
 func TestCheck_ControlPlaneFlagRunsChecks(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -489,6 +499,7 @@ func TestCheck_ControlPlaneFlagRunsChecks(t *testing.T) {
 // used with --skip-cluster-validation (compute plane is targeted, validator is
 // suppressed).
 func TestCheck_ValidatorSkipNoteAppearsOnComputePlane(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -519,6 +530,7 @@ func TestCheck_ValidatorSkipNoteAppearsOnComputePlane(t *testing.T) {
 // "no validator row vs validator silently dropped" confusion the note exists
 // to prevent.
 func TestCheck_ValidatorSkipNotePresentForPreInSplitMode(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -608,6 +620,7 @@ func TestPlaneIsVisited(t *testing.T) {
 // compute cluster must not be contacted at all, so no compute-plane-cluster
 // category is emitted.
 func TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -647,6 +660,7 @@ func TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster(t *testing.T) {
 // are checked on the operator's machine, so running them for both roles
 // repeats the same check IDs in --json and double-counts them in the totals.
 func TestCheck_HostLocalChecksRunOnce(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"

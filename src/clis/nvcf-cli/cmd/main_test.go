@@ -19,8 +19,13 @@ package cmd
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 
 	"nvcf-cli/internal/selfhosted"
 )
@@ -51,5 +56,73 @@ func TestMain(m *testing.M) {
 	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
 		return func(context.Context, string, string, bool) error { return nil }
 	}
-	os.Exit(m.Run())
+	// No validator Job. A developer with NVCF_CLI_CLUSTER_VALIDATOR_IMAGE
+	// exported, or cluster_validator_image in ~/.nvcf-cli.yaml, would
+	// otherwise have every check test create RBAC, Secrets and Jobs in the
+	// current kube context and wait up to five minutes per role.
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(context.Context, selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			return selfhosted.ClusterValidatorResult{Passed: true}
+		}
+	}
+	for _, k := range []string{
+		"NVCF_CLI_CLUSTER_VALIDATOR_IMAGE", "NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES",
+		"NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE",
+	} {
+		_ = os.Unsetenv(k)
+	}
+	// The SIS reachability check has no seam, but it resolves its URL from
+	// NVCF_ICMS_URL, so resetCheckFlags points check tests at this local
+	// server instead of the real SIS. Scoped per test: setting it for the
+	// whole package would change what the ICMS URL resolution tests resolve.
+	sis := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	testSISURL = sis.URL
+	code := m.Run()
+	sis.Close()
+	os.Exit(code)
+}
+
+// testSISURL is a local stand-in for SIS, set by TestMain.
+var testSISURL string
+
+// resetCheckFlags returns every `self-hosted check` flag to its default,
+// including cobra's Changed marker, now and when the test ends. The flag
+// variables are package globals that survive rootCmd.Execute, so without this
+// a test that passes --pre leaks it into whichever test runs next, and a
+// regression guard can pass or fail on test order alone.
+func resetCheckFlags(t *testing.T) {
+	t.Helper()
+	if testSISURL != "" {
+		t.Setenv("NVCF_ICMS_URL", testSISURL)
+	}
+	reset := func() {
+		checkPre, checkControlPlane, checkComputePlane, checkAll = false, false, false, false
+		checkClusterName = ""
+		checkLocalOnly, checkSkipInotifyCheck, checkSkipClusterValidation = false, false, false
+		checkClusterValidatorImage, checkClusterValidatorPullSecret = "", ""
+		checkClusterValidatorNoCleanup = false
+		checkClusterValidatorRegistries = nil
+		checkClusterValidatorProbeImage = ""
+		checkShowLogs = false
+		selfHostedJSON, selfHostedPlain = false, false
+		selfHostedOutput = "text"
+		selfHostedWait = ""
+		selfHostedControlPlaneContext, selfHostedComputePlaneContext = "", ""
+		for _, fs := range []*pflag.FlagSet{selfHostedCheckCmd.Flags(), selfHostedCmd.PersistentFlags()} {
+			fs.VisitAll(func(f *pflag.Flag) { f.Changed = false })
+		}
+		// Other tests call viper.Reset(), which drops the bindings made at
+		// init, so a flag passed to check would silently not be read.
+		for key, flag := range map[string]string{
+			"cluster_validator_image":       "cluster-validator-image",
+			"cluster_validator_registries":  "cluster-validator-registries",
+			"cluster_validator_probe_image": "cluster-validator-probe-image",
+		} {
+			_ = viper.BindPFlag(key, selfHostedCheckCmd.Flags().Lookup(flag))
+		}
+	}
+	reset()
+	t.Cleanup(reset)
 }

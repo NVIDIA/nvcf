@@ -125,7 +125,7 @@ func TestProbeRegistryCredential_ECRSkipped(t *testing.T) {
 // -- EnumerateRegistries --
 
 func TestEnumerateRegistries_FromImageRef(t *testing.T) {
-	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", "", nil)
+	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", nil, nil)
 	require.NotEmpty(t, entries)
 
 	found := false
@@ -141,7 +141,7 @@ func TestEnumerateRegistries_FromImageRef(t *testing.T) {
 func TestEnumerateRegistries_RepoHintFromImageRef(t *testing.T) {
 	// The RepoHint must be the repo path from the image ref so the token
 	// exchange uses the operator's actual org, not a fake one.
-	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", "", nil)
+	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", nil, nil)
 	for _, e := range entries {
 		if e.Registry == "nvcr.io" {
 			assert.Equal(t, "nvidia/nvcf-byoc/cluster-validator", e.RepoHint,
@@ -155,7 +155,7 @@ func TestEnumerateRegistries_RepoHintFromImageRef(t *testing.T) {
 func TestEnumerateRegistries_IncludesCertManagerWhenStackIsNotMirroring(t *testing.T) {
 	// With no stack values file there is no global.image.registry to mirror
 	// cert-manager to, so its upstream registry is genuinely contacted.
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", "", nil)
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil, nil)
 	found := false
 	for _, e := range entries {
 		if e.Registry == "quay.io" {
@@ -167,7 +167,7 @@ func TestEnumerateRegistries_IncludesCertManagerWhenStackIsNotMirroring(t *testi
 }
 
 func TestEnumerateRegistries_ExtrasAppended(t *testing.T) {
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", "",
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil,
 		[]string{"harbor.company.internal:443", "ghcr.io:443"})
 
 	registries := make(map[string]bool, len(entries))
@@ -180,7 +180,7 @@ func TestEnumerateRegistries_ExtrasAppended(t *testing.T) {
 
 func TestEnumerateRegistries_NoDuplicates(t *testing.T) {
 	// Pass nvcr.io both as the image registry and as an extra - must not dedup.
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", "",
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil,
 		[]string{"nvcr.io"})
 
 	count := 0
@@ -202,7 +202,7 @@ global:
     registry: stg.nvcr.io
 `)))
 
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", valuesPath, nil)
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", []string{valuesPath}, nil)
 	found := false
 	for _, e := range entries {
 		if e.Registry == "stg.nvcr.io" {
@@ -222,12 +222,12 @@ global:
     registry: nvcr.io
     repository: nvidia/nvcf-byoc
 `)))
-	got := readGlobalImageRegistry(path)
+	got := LoadStackValues([]string{path}).ImageRegistry
 	assert.Equal(t, "nvcr.io", got)
 }
 
 func TestReadGlobalImageRegistry_MissingFile(t *testing.T) {
-	got := readGlobalImageRegistry("/nonexistent/path/values.yaml")
+	got := LoadStackValues([]string{"/nonexistent/path/values.yaml"}).ImageRegistry
 	assert.Empty(t, got, "missing file must return empty string, not error")
 }
 
@@ -235,7 +235,7 @@ func TestReadGlobalImageRegistry_MissingKey(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/values.yaml"
 	require.NoError(t, writeFile(path, []byte(`other: value`)))
-	got := readGlobalImageRegistry(path)
+	got := LoadStackValues([]string{path}).ImageRegistry
 	assert.Empty(t, got, "missing global.image.registry must return empty string")
 }
 
@@ -289,19 +289,22 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// The stack rewrites every cert-manager image to global.image.registry, so on
-// a configured stack quay.io is never contacted at pull time and probing it is
-// a pointless 10-second round trip on every invocation.
-func TestEnumerateRegistries_SkipsCertManagerWhenStackMirrors(t *testing.T) {
+// When the stack also mirrors the ACME solver, nothing it installs is pulled
+// from quay.io, so probing it is a pointless 10-second round trip.
+func TestEnumerateRegistries_SkipsCertManagerWhenSolverIsMirrored(t *testing.T) {
 	dir := t.TempDir()
 	valuesPath := dir + "/base.yaml"
 	require.NoError(t, writeFile(valuesPath, []byte(`
 global:
   image:
     registry: mirror.company.internal
+certManager:
+  acmesolver:
+    image:
+      repository: mirror.company.internal/jetstack/cert-manager-acmesolver
 `)))
 
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", valuesPath, nil)
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", []string{valuesPath}, nil)
 	for _, e := range entries {
 		assert.NotEqual(t, certManagerRegistry, e.Registry,
 			"a stack mirroring images must not trigger a quay.io probe")
@@ -310,7 +313,7 @@ global:
 
 // A bare IPv6 literal must stay bracketed or the probe URL is malformed.
 func TestEnumerateRegistries_BracketsIPv6Extras(t *testing.T) {
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", "", []string{"[::1]:5000"})
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil, []string{"[::1]:5000"})
 
 	found := false
 	for _, e := range entries {
@@ -327,7 +330,7 @@ func TestEnumerateRegistries_BracketsIPv6Extras(t *testing.T) {
 // other source. Forcing it true makes an air-gapped install fail preflight for
 // a registry that is never contacted (ImagePullPolicy is IfNotPresent).
 func TestEnumerateRegistries_NonNGCImageRegistryIsNotCritical(t *testing.T) {
-	entries := EnumerateRegistries("mirror.company.internal/nvcf/cluster-validator:1.0", "", nil)
+	entries := EnumerateRegistries("mirror.company.internal/nvcf/cluster-validator:1.0", nil, nil)
 	for _, e := range entries {
 		if e.Registry == "mirror.company.internal" {
 			assert.False(t, e.Critical, "a non-NGC mirror must not be forced critical")
@@ -341,7 +344,7 @@ func TestEnumerateRegistries_NonNGCImageRegistryIsNotCritical(t *testing.T) {
 // and the run would report on quay.io alone, leaving the operator's NGC
 // credentials unchecked in what is the default configuration.
 func TestEnumerateRegistries_FallsBackToNGCWhenNothingNamesARegistry(t *testing.T) {
-	got := EnumerateRegistries("", "", nil)
+	got := EnumerateRegistries("", nil, nil)
 
 	var ngc *RegistryEntry
 	for i := range got {
@@ -362,7 +365,7 @@ func TestEnumerateRegistries_NoNGCFallbackForAMirroredStack(t *testing.T) {
 	require.NoError(t, os.WriteFile(values,
 		[]byte("global:\n  image:\n    registry: harbor.example.com\n"), 0o600))
 
-	got := EnumerateRegistries("", values, nil)
+	got := EnumerateRegistries("", []string{values}, nil)
 	for _, e := range got {
 		assert.NotEqual(t, "nvcr.io", e.Registry,
 			"a stack that named its own registry must not be probed against NGC")
@@ -372,7 +375,7 @@ func TestEnumerateRegistries_NoNGCFallbackForAMirroredStack(t *testing.T) {
 // The fallback must not shadow or duplicate an NGC registry a source named,
 // which carries a repo hint and is critical.
 func TestEnumerateRegistries_FallbackDoesNotDuplicateNamedNGC(t *testing.T) {
-	got := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0", "", nil)
+	got := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0", nil, nil)
 
 	n := 0
 	for _, e := range got {
@@ -391,7 +394,7 @@ func TestEnumerateRegistries_FallbackDoesNotDuplicateNamedNGC(t *testing.T) {
 // which http.NewRequest rejects. The documented bracketed form must work.
 func TestEnumerateRegistries_DoesNotDoubleBracketIPv6(t *testing.T) {
 	for _, in := range []string{"[fd00::1]", "fd00::1"} {
-		got := EnumerateRegistries("", "", []string{in})
+		got := EnumerateRegistries("", nil, []string{in})
 		var found string
 		for _, e := range got {
 			if strings.Contains(e.Registry, "fd00") {
@@ -403,7 +406,7 @@ func TestEnumerateRegistries_DoesNotDoubleBracketIPv6(t *testing.T) {
 }
 
 func TestEnumerateRegistries_KeepsBracketedIPv6WithPort(t *testing.T) {
-	got := EnumerateRegistries("", "", []string{"[fd00::1]:5000"})
+	got := EnumerateRegistries("", nil, []string{"[fd00::1]:5000"})
 	var found string
 	for _, e := range got {
 		if strings.Contains(e.Registry, "fd00") {
@@ -422,9 +425,123 @@ func TestEnumerateRegistries_RejectsHostMovingRegistryStrings(t *testing.T) {
 	require.NoError(t, os.WriteFile(values,
 		[]byte("global:\n  image:\n    registry: nvcr.io@attacker.example.com\n"), 0o600))
 
-	for _, e := range EnumerateRegistries("nvcr.io@evil.test/x/y:1", values, nil) {
+	for _, e := range EnumerateRegistries("nvcr.io@evil.test/x/y:1", []string{values}, nil) {
 		assert.NotContains(t, e.Registry, "@", "a host-moving string must not be probed")
 		assert.NotContains(t, e.Registry, "attacker.example.com")
 		assert.NotContains(t, e.Registry, "evil.test")
 	}
+}
+
+// helmfile layers the environment file over base.yaml, so an env file that
+// overrides only the repository keeps base.yaml's registry, and an env file
+// that sets a mirror replaces it.
+func TestLoadStackValues_LayersEnvOverBase(t *testing.T) {
+	dir := t.TempDir()
+	base, env := dir+"/base.yaml", dir+"/airgap.yaml"
+	require.NoError(t, writeFile(base, []byte(`
+global:
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf-byoc
+ingress:
+  gatewayApi:
+    controllerNamespace: envoy-gateway-system
+`)))
+	require.NoError(t, writeFile(env, []byte(`
+global:
+  image:
+    repository: other/repo
+`)))
+	got := LoadStackValues([]string{base, env})
+	assert.True(t, got.Found)
+	assert.Equal(t, "nvcr.io", got.ImageRegistry, "an env file that only overrides the repository keeps the base registry")
+	assert.Equal(t, "envoy-gateway-system", got.EnvoyGatewayNamespace)
+
+	require.NoError(t, writeFile(env, []byte(`
+global:
+  image:
+    registry: harbor.corp.example
+`)))
+	assert.Equal(t, "harbor.corp.example", LoadStackValues([]string{base, env}).ImageRegistry)
+}
+
+// A registry value carrying a path is valid for the stack, which renders
+// registry + "/" + repository. It must still be probed, and it must still
+// suppress the nvcr.io guess, rather than dropping the whole category.
+func TestEnumerateRegistries_StackRegistryWithPath(t *testing.T) {
+	dir := t.TempDir()
+	values := dir + "/base.yaml"
+	require.NoError(t, writeFile(values, []byte(`
+global:
+  image:
+    registry: harbor.corp.example/nvcf
+certManager:
+  acmesolver:
+    image:
+      repository: harbor.corp.example/jetstack/cert-manager-acmesolver
+`)))
+	got := EnumerateRegistries("", []string{values}, nil)
+	require.Len(t, got, 1)
+	assert.Equal(t, "harbor.corp.example", got[0].Registry)
+	assert.Equal(t, "nvcf", got[0].RepoHint)
+}
+
+// A rejected registry value must not count as a source naming a registry:
+// otherwise it suppresses the nvcr.io fallback and the category vanishes.
+func TestEnumerateRegistries_RejectedValueDoesNotSuppressFallback(t *testing.T) {
+	dir := t.TempDir()
+	values := dir + "/base.yaml"
+	require.NoError(t, writeFile(values, []byte("global:\n  image:\n    registry: \"nvcr.io@evil.test\"\n")))
+	got := EnumerateRegistries("", []string{values}, nil)
+	var names []string
+	for _, e := range got {
+		names = append(names, e.Registry)
+	}
+	assert.Contains(t, names, ngcRegistry)
+	assert.NotContains(t, names, "nvcr.io@evil.test")
+}
+
+// quay.io depends on the ACME solver image, which the stack leaves on
+// quay.io/jetstack unless it is overridden, not on whether a values file was
+// found.
+func TestEnumerateRegistries_QuayFollowsTheACMESolverImage(t *testing.T) {
+	dir := t.TempDir()
+	values := dir + "/base.yaml"
+	names := func() []string {
+		var out []string
+		for _, e := range EnumerateRegistries("", []string{values}, nil) {
+			out = append(out, e.Registry)
+		}
+		return out
+	}
+	require.NoError(t, writeFile(values, []byte("global:\n  image:\n    registry: harbor.corp.example\n")))
+	assert.Contains(t, names(), certManagerRegistry, "a mirrored stack still pulls the default ACME solver from quay.io")
+
+	require.NoError(t, writeFile(values, []byte(
+		"global:\n  image:\n    registry: harbor.corp.example\ncertManager:\n  acmesolver:\n    image:\n      repository: harbor.corp.example/jetstack/acmesolver\n")))
+	assert.NotContains(t, names(), certManagerRegistry, "a mirrored ACME solver never reaches quay.io")
+}
+
+// "[fd00::1]" with no port must reach the ConfigMap unbracketed; the validator
+// brackets it itself, and a double bracket is never reachable.
+func TestParseRegistryHostPort_StripsIPv6Brackets(t *testing.T) {
+	host, port := parseRegistryHostPort("[fd00::1]")
+	assert.Equal(t, "fd00::1", host)
+	assert.Equal(t, 443, port)
+	got := EnumerateRegistries("", nil, []string{"[fd00::1]"})
+	var names []string
+	for _, e := range got {
+		names = append(names, e.Registry)
+	}
+	assert.Contains(t, names, "[fd00::1]")
+}
+
+// A validator image whose registry fails validation must not count as naming
+// a registry either, or the nvcr.io fallback is suppressed with nothing probed.
+func TestEnumerateRegistries_RejectedImageRegistryDoesNotSuppressFallback(t *testing.T) {
+	var names []string
+	for _, e := range EnumerateRegistries("user@evil.test/nvidia/validator:1", nil, nil) {
+		names = append(names, e.Registry)
+	}
+	assert.Contains(t, names, ngcRegistry)
 }

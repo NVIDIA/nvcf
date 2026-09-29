@@ -286,6 +286,7 @@ func initConfig() {
 	// NVCF_CLI_CLUSTER_VALIDATOR_IMAGE override.
 	viper.BindEnv("cluster_validator_image", "NVCF_CLI_CLUSTER_VALIDATOR_IMAGE")
 	viper.BindEnv("cluster_validator_registries", "NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES")
+	viper.BindEnv("cluster_validator_probe_image", "NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE")
 
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil && viper.GetBool("debug") {

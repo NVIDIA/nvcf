@@ -27,6 +27,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -99,11 +100,13 @@ type ClusterValidatorParams struct {
 	// "compute-plane" (empty = compute-plane default). Passed to the Job as
 	// VALIDATOR_ROLE. See clustervalidator.RoleControlPlane / RoleComputePlane.
 	Role string
-	// Registries is a list of additional "host:port" registry endpoints to
-	// probe for reachability in the control-plane validator ConfigMap (in
-	// addition to nvcr.io which is always included). Ignored for the
-	// compute-plane role.
-	Registries []string
+	// Registries are probed for reachability by the control-plane validator:
+	// the same list, with the same criticality, the local credential check
+	// uses. Ignored for the compute-plane role.
+	Registries []RegistryEntry
+	// Env is passed to the validator container: namespace overrides, the
+	// probe image, and whether the control plane is expected to be installed.
+	Env map[string]string
 }
 
 // Err is non-nil only when the run failed to execute (RBAC bootstrap,
@@ -133,12 +136,15 @@ func NewClusterValidator() ClusterValidator {
 		if err != nil {
 			return ClusterValidatorResult{Err: fmt.Errorf("building kubernetes client: %w", err)}
 		}
-		return runClusterValidator(ctx, client, p.Image, p.PullSecret, p.NoCleanup, p.Role, p.Registries)
+		return runClusterValidator(ctx, client, p.Image, p.PullSecret, p.NoCleanup, p.Role, p.Registries, p.Env)
 	}
 }
 
 // Testable core. Pass a fake clientset to unit-test without a real cluster.
-func runClusterValidator(ctx context.Context, client kubernetes.Interface, image, pullSecret string, noCleanup bool, role string, registries []string) ClusterValidatorResult {
+func runClusterValidator(
+	ctx context.Context, client kubernetes.Interface, image, pullSecret string, noCleanup bool, role string,
+	registries []RegistryEntry, env map[string]string,
+) ClusterValidatorResult {
 	if image == "" {
 		// Defensive: callers gate on configured image before invoking the
 		// validator, so this branch shouldn't fire in normal use.
@@ -233,7 +239,7 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	// so a role-wide sweep could only ever hit an overlapping run's live Job.
 	jobName := fmt.Sprintf("%s-%d", clusterValidatorName, time.Now().UnixNano())
 	job, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
-		vctx, buildClusterValidatorJob(jobName, image, pullSecret, role, runID, noCleanup), metav1.CreateOptions{},
+		vctx, buildClusterValidatorJob(jobName, image, pullSecret, role, runID, noCleanup, env), metav1.CreateOptions{},
 	)
 	if err != nil {
 		return ClusterValidatorResult{RunID: runID, Err: fmt.Errorf("creating validator Job: %w", err)}
@@ -302,6 +308,28 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 		JobName:  jobName,
 		RunID:    runID,
 	}
+}
+
+// extraValidatorEnv returns env as container variables in a stable order,
+// skipping empty values and any name the Job already sets, so an override can
+// never change the role, the config name or preflight mode.
+func extraValidatorEnv(base []corev1.EnvVar, env map[string]string) []corev1.EnvVar {
+	set := map[string]bool{}
+	for _, e := range base {
+		set[e.Name] = true
+	}
+	names := make([]string, 0, len(env))
+	for k, v := range env {
+		if v != "" && !set[k] {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	out := make([]corev1.EnvVar, 0, len(names))
+	for _, k := range names {
+		out = append(out, corev1.EnvVar{Name: k, Value: env[k]})
+	}
+	return out
 }
 
 // ownedArtifact names a namespaced object the validator Job should own.
@@ -398,8 +426,12 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 			// DaemonSets: create/delete for the node-to-node DaemonSet probe; list to watch pod readiness.
 			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"get", "list"}},
 			{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"get", "list", "create", "delete"}},
-			// Gateway API: control-plane gateway and route health checks.
-			{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{"gatewayclasses", "gateways", "httproutes", "grpcroutes"}, Verbs: []string{"get", "list"}},
+			// Gateway API: control-plane gateway and route health checks. The
+			// validator follows every NVCF route kind's parentRefs to learn
+			// which Gateways are NVCF's, so all four route kinds are read.
+			{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{
+				"gatewayclasses", "gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes",
+			}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/version", "/healthz"}, Verbs: []string{"get"}},
 		},
 	}
@@ -729,14 +761,9 @@ func newValidatorRunID() (string, error) {
 // controlPlaneValidatorConfigTemplate is the baseline network-check ConfigMap for
 // control-plane preflight: nvcr.io reachability (critical) and NetworkPolicy
 // enforcement (non-critical). Extra registries are appended as non-critical probes.
-const controlPlaneValidatorConfigTemplate = `reachability:
-  endpoints:
-    - name: nvcr.io
-      host: nvcr.io
-      port: 443
-      protocol: tcp+tls
-      critical: true
-enforcement:
+// controlPlaneValidatorEnforcementConfig follows the generated reachability
+// section in the control-plane validator ConfigMap.
+const controlPlaneValidatorEnforcementConfig = `enforcement:
   # Disabled for preflight. VALIDATOR_PREFLIGHT only suppresses the summary
   # write, so enforcement would still run: it creates netpol-validation
   # namespaces, server and client pods and NetworkPolicies, and pulls
@@ -750,10 +777,9 @@ enforcement:
 `
 
 // ensureClusterValidatorConfig creates or updates the network-check ConfigMap.
-// extraRegistries are added as non-critical tcp+tls probes. Best-effort: the
-// validator skips configurable checks when the ConfigMap is absent.
-func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interface, extraRegistries []string, runID string, preserve bool) error {
-	content := buildControlPlaneValidatorConfig(extraRegistries)
+// Best-effort: the validator skips configurable checks when it is absent.
+func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interface, registries []RegistryEntry, runID string, preserve bool) error {
+	content := buildControlPlaneValidatorConfig(registries)
 	desired := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterValidatorConfigRunName(runID),
@@ -789,36 +815,33 @@ func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interfa
 	return nil
 }
 
-// buildControlPlaneValidatorConfig assembles the network-check ConfigMap YAML
-// from the baseline template plus any operator-supplied extra registries.
-func buildControlPlaneValidatorConfig(extraRegistries []string) string {
-	if len(extraRegistries) == 0 {
-		return controlPlaneValidatorConfigTemplate
-	}
-
-	// Parse host:port entries and append as non-critical tcp+tls endpoints.
-	var extra strings.Builder
-	for _, reg := range extraRegistries {
-		host, port := parseRegistryHostPort(reg)
+// buildControlPlaneValidatorConfig assembles the network-check ConfigMap YAML.
+// The reachability endpoints are the registries the install pulls from, as
+// EnumerateRegistries resolved them for the local credential check, with the
+// same criticality, so the two checks cannot disagree. A fixed critical
+// nvcr.io entry failed every mirrored or air-gapped control plane, the exact
+// install shape EnumerateRegistries deliberately does not send to nvcr.io.
+// With no registries the section is omitted and the validator runs without
+// configured reachability endpoints.
+func buildControlPlaneValidatorConfig(registries []RegistryEntry) string {
+	var b strings.Builder
+	for _, reg := range registries {
+		host, port := parseRegistryHostPort(reg.Registry)
 		if host == "" {
 			continue
 		}
-		// Append under the existing reachability.endpoints list. Quote the host:
-		// it comes from operator input, and parseRegistryHostPort passes a value
-		// it cannot split through verbatim. An unquoted "[" or embedded newline
-		// would make the whole ConfigMap unparseable, and the validator then
-		// silently drops every reachability and enforcement check.
-		fmt.Fprintf(&extra,
-			"    - name: %q\n      host: %q\n      port: %d\n      protocol: tcp+tls\n      critical: false\n",
-			host, host, port)
+		if b.Len() == 0 {
+			b.WriteString("reachability:\n  endpoints:\n")
+		}
+		// Quote the values: they come from operator input and the stack
+		// values. An unquoted "[" or embedded newline would make the whole
+		// ConfigMap unparseable, and the validator then silently drops every
+		// reachability and enforcement check.
+		fmt.Fprintf(&b,
+			"    - name: %q\n      host: %q\n      port: %d\n      protocol: tcp+tls\n      critical: %t\n",
+			reg.Registry, host, port, reg.Critical)
 	}
-	if extra.Len() == 0 {
-		return controlPlaneValidatorConfigTemplate
-	}
-
-	// Insert extra endpoints after the nvcr.io entry (before the enforcement block).
-	return strings.Replace(controlPlaneValidatorConfigTemplate,
-		"enforcement:", extra.String()+"enforcement:", 1)
+	return b.String() + controlPlaneValidatorEnforcementConfig
 }
 
 // parseRegistryHostPort splits a "host:port" string using net.SplitHostPort,
@@ -835,8 +858,11 @@ func parseRegistryHostPort(s string) (host string, port int) {
 	}
 	h, p, err := net.SplitHostPort(s)
 	if err != nil {
-		// No port present (e.g. "nvcr.io") - return the input as-is.
-		return s, 443
+		// No port present (e.g. "nvcr.io"). Strip IPv6 brackets: the value
+		// goes into the validator ConfigMap as a bare host, and the validator
+		// brackets it itself with net.JoinHostPort, so "[fd00::1]" would be
+		// dialled as "[[fd00::1]]:443" and reported unreachable.
+		return strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"), 443
 	}
 	if p == "" {
 		// Trailing colon with no port digit (e.g. "nvcr.io:") is the same typo.
@@ -855,7 +881,7 @@ func parseRegistryHostPort(s string) (host string, port int) {
 // buildClusterValidatorJob creates the validator Job. PullIfNotPresent reuses
 // locally-imported images. VALIDATOR_PREFLIGHT=true skips the summary ConfigMap
 // write. VALIDATOR_ROLE selects the check set (control-plane vs compute-plane).
-func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCleanup bool) *batchv1.Job {
+func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCleanup bool, env map[string]string) *batchv1.Job {
 	backoff := int32(0)
 	// Pod shape mirrors deployments/nvca-operator/templates/cronjob.yaml, which
 	// runs this same image. Two producers of one pod spec now exist in two
@@ -904,6 +930,7 @@ func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCle
 			},
 		}},
 	}
+	podSpec.Containers[0].Env = append(podSpec.Containers[0].Env, extraValidatorEnv(podSpec.Containers[0].Env, env)...)
 	if pullSecret != "" {
 		podSpec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: pullSecret}}
 	}

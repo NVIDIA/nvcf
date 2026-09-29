@@ -104,7 +104,7 @@ func TestRunClusterValidator_EmptyImage(t *testing.T) {
 	// branch is defensive. Verify it returns a clear error and makes
 	// no API calls.
 	client := fake.NewSimpleClientset()
-	res := runClusterValidator(context.Background(), client, "", "", false, "", nil)
+	res := runClusterValidator(context.Background(), client, "", "", false, "", nil, nil)
 	require.Error(t, res.Err)
 	assert.Contains(t, res.Err.Error(), "image is empty")
 	assert.False(t, res.Passed)
@@ -115,7 +115,7 @@ func TestClusterValidatorCheck_OrchestratorErrorStaysWarning(t *testing.T) {
 	cv := func(_ context.Context, _ ClusterValidatorParams) ClusterValidatorResult {
 		return ClusterValidatorResult{Err: fmt.Errorf("transient: API server unreachable")}
 	}
-	r := clusterValidatorCheck(cv, "", "", "", false, "", nil).Run(context.Background())
+	r := clusterValidatorCheck(cv, "", "", "", false, "", nil, nil).Run(context.Background())
 	assert.False(t, r.Passed)
 	assert.Equal(t, "warning", r.Severity,
 		"transient orchestrator failures should not fail the overall preflight")
@@ -179,7 +179,7 @@ func TestRunClusterValidator_HappyPath(t *testing.T) {
 		}, nil
 	})
 
-	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil)
+	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil, nil)
 	require.NoError(t, res.Err, "happy path must not surface an error")
 	assert.True(t, res.Passed, "Succeeded>0 maps to Passed=true")
 	assert.Equal(t, int32(0), res.ExitCode)
@@ -215,7 +215,7 @@ func TestRunClusterValidator_JobFailed(t *testing.T) {
 	})
 	client.PrependReactor("list", "pods", podListReactor(""))
 
-	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil)
+	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil, nil)
 	require.NoError(t, res.Err, "a clean Passed=false verdict must not set Err")
 	assert.False(t, res.Passed, "Failed>0 maps to Passed=false")
 	assert.NotEmpty(t, res.JobName, "JobName must be populated on failure for kubectl-logs follow-up")
@@ -235,7 +235,7 @@ func TestRunClusterValidator_RBACNameCollisionIsNotAdopted(t *testing.T) {
 	})
 
 	res := runClusterValidator(context.Background(), client, "nvcr.io/x/validator:1",
-		"", false, clusterValidatorControlPlaneRole, nil)
+		"", false, clusterValidatorControlPlaneRole, nil, nil)
 	require.Error(t, res.Err, "a pre-existing object under our generated name must not be adopted")
 	assert.Contains(t, res.Err.Error(), "bootstrapping validator RBAC")
 }
@@ -360,7 +360,7 @@ func TestRunClusterValidator_ImagePullBackOffShortCircuits(t *testing.T) {
 	})
 
 	start := time.Now()
-	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil)
+	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil, nil)
 	elapsed := time.Since(start)
 
 	require.Error(t, res.Err, "ImagePullBackOff must short-circuit the wait with an error")
@@ -398,7 +398,7 @@ func TestRunClusterValidator_LogFetchSurvivesValidatorTimeout(t *testing.T) {
 	client.PrependReactor("list", "pods", podListReactor(""))
 
 	// Parent ctx stays alive for the entire run; only vctx expires.
-	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil)
+	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil, nil)
 
 	require.Error(t, res.Err, "wait must surface the deadline-exceeded error")
 	assert.Contains(t, res.Err.Error(), "waiting for job",
@@ -451,13 +451,13 @@ func TestRunClusterValidator_ContextCanceled(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	res := runClusterValidator(ctx, client, "test-image:1.0", "", false, "", nil)
+	res := runClusterValidator(ctx, client, "test-image:1.0", "", false, "", nil, nil)
 	require.Error(t, res.Err)
 	assert.Contains(t, res.Err.Error(), "context")
 }
 
 func TestBuildClusterValidatorJobShape(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false, nil)
 
 	assert.Equal(t, "test-job", job.Name)
 	assert.Equal(t, clusterValidatorNamespace, job.Namespace)
@@ -499,7 +499,7 @@ func TestBuildClusterValidatorJobShape(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape_ValidatorRoleInEnv(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", clusterValidatorControlPlaneRole, "runid", false)
+	job := buildClusterValidatorJob("test-job", "img:1", "", clusterValidatorControlPlaneRole, "runid", false, nil)
 	env := map[string]string{}
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
 		env[e.Name] = e.Value
@@ -509,19 +509,19 @@ func TestBuildClusterValidatorJobShape_ValidatorRoleInEnv(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape_WithPullSecret(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", "", "runid", false)
+	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", "", "runid", false, nil)
 	require.Len(t, job.Spec.Template.Spec.ImagePullSecrets, 1)
 	assert.Equal(t, "nvcr-pull-secret", job.Spec.Template.Spec.ImagePullSecrets[0].Name)
 }
 
 func TestBuildClusterValidatorJobShape_NoPullSecret(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false, nil)
 	assert.Empty(t, job.Spec.Template.Spec.ImagePullSecrets,
 		"empty pull-secret arg must not produce an empty-name ImagePullSecrets entry")
 }
 
 func TestBuildClusterValidatorJobShape_NoCleanup(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", true)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", true, nil)
 	assert.Nil(t, job.Spec.TTLSecondsAfterFinished,
 		"--no-cleanup must omit TTLSecondsAfterFinished so the Job persists for debugging")
 	assert.Nil(t, job.Spec.ActiveDeadlineSeconds,
@@ -598,32 +598,41 @@ func TestKubectlLogsHint_EmptyJob(t *testing.T) {
 		"empty jobName must produce empty hint so callers can compose detail without conditionals")
 }
 
-func TestBuildControlPlaneValidatorConfig_NoExtras(t *testing.T) {
+// With no registries the reachability section is omitted rather than filled
+// with a guess.
+func TestBuildControlPlaneValidatorConfig_NoRegistries(t *testing.T) {
 	got := buildControlPlaneValidatorConfig(nil)
-	assert.Equal(t, controlPlaneValidatorConfigTemplate, got,
-		"no extra registries must return the template unchanged")
-	assert.Contains(t, got, "nvcr.io", "nvcr.io must always be present")
+	assert.NotContains(t, got, "reachability:")
+	assert.NotContains(t, got, "nvcr.io", "no hardcoded nvcr.io endpoint")
 	assert.Contains(t, got, "enforcement:", "enforcement block must be present")
 }
 
-func TestBuildControlPlaneValidatorConfig_WithExtras(t *testing.T) {
-	got := buildControlPlaneValidatorConfig([]string{"harbor.company.internal:443", "ghcr.io:443"})
-	assert.Contains(t, got, "harbor.company.internal")
-	assert.Contains(t, got, "ghcr.io")
-	assert.Contains(t, got, "nvcr.io", "nvcr.io must still be present alongside extras")
-	assert.Contains(t, got, "enforcement:", "enforcement block must still be present after extras")
-	// Extra registries must appear BEFORE enforcement.
-	harborIdx := strings.Index(got, "harbor.company.internal")
-	enforcementIdx := strings.Index(got, "enforcement:")
-	assert.Less(t, harborIdx, enforcementIdx, "extra registry endpoints must appear before the enforcement block")
+// The endpoints are exactly the enumerated registries, with the same
+// criticality. A mirrored install whose list has no nvcr.io must not be made
+// to dial it: a fixed critical nvcr.io failed every such control plane.
+func TestBuildControlPlaneValidatorConfig_FollowsEnumeratedRegistries(t *testing.T) {
+	got := buildControlPlaneValidatorConfig([]RegistryEntry{
+		{Registry: "harbor.company.internal", Critical: false},
+		{Registry: "registry.example:5000", Critical: true},
+	})
+	assert.NotContains(t, got, "nvcr.io")
+	assert.Contains(t, got, `host: "harbor.company.internal"`)
+	assert.Contains(t, got, `host: "registry.example"`)
+	assert.Contains(t, got, "port: 5000")
+	assert.Contains(t, got, "host: \"harbor.company.internal\"\n      port: 443\n      protocol: tcp+tls\n      critical: false\n")
+	assert.Contains(t, got, "host: \"registry.example\"\n      port: 5000\n      protocol: tcp+tls\n      critical: true\n")
+	assert.Less(t, strings.Index(got, "harbor.company.internal"), strings.Index(got, "enforcement:"),
+		"endpoints must appear before the enforcement block")
+
+	ngc := buildControlPlaneValidatorConfig([]RegistryEntry{{Registry: "nvcr.io", Critical: true}})
+	assert.Contains(t, ngc, `host: "nvcr.io"`)
+	assert.Contains(t, ngc, "critical: true", "an NGC install keeps nvcr.io critical")
 }
 
 func TestBuildControlPlaneValidatorConfig_InvalidRegistrySkipped(t *testing.T) {
-	// A blank entry is parsed as host="" -> skipped; only the valid entry appears.
-	got := buildControlPlaneValidatorConfig([]string{"  ", "valid.registry.internal:5000"})
+	got := buildControlPlaneValidatorConfig([]RegistryEntry{{Registry: "  "}, {Registry: "valid.registry.internal:5000"}})
 	assert.Contains(t, got, "valid.registry.internal", "valid registry must appear")
-	// The blank entry must not add an empty host: line.
-	assert.NotContains(t, got, "host: \n", "blank entry must not produce an empty host line")
+	assert.NotContains(t, got, "host: \"\"", "blank entry must not produce an empty host")
 }
 
 func TestParseRegistryHostPort(t *testing.T) {
@@ -821,7 +830,7 @@ func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
 	driveJobToSuccess(client)
 
 	runClusterValidator(context.Background(), client, "nvcr.io/x/validator:1",
-		"", true /* noCleanup */, clusterValidatorControlPlaneRole, nil)
+		"", true /* noCleanup */, clusterValidatorControlPlaneRole, nil, nil)
 
 	_, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(
 		context.Background(), prior.Name, metav1.GetOptions{})
@@ -839,7 +848,7 @@ func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
 // Either way the wait burns its full budget and the run leaks.
 func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
 	job := buildClusterValidatorJob("j", "nvcr.io/x/validator:1", "",
-		clusterValidatorControlPlaneRole, "runid", false)
+		clusterValidatorControlPlaneRole, "runid", false, nil)
 	spec := job.Spec.Template.Spec
 
 	require.NotNil(t, spec.SecurityContext, "pod security context is required under restricted")
@@ -875,7 +884,7 @@ func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
 // suppressed on that path by design, so the deadline is the only reclaim.
 func TestBuildClusterValidatorJob_SetsActiveDeadline(t *testing.T) {
 	job := buildClusterValidatorJob("j", "nvcr.io/x/validator:1", "",
-		clusterValidatorControlPlaneRole, "runid", false)
+		clusterValidatorControlPlaneRole, "runid", false, nil)
 	require.NotNil(t, job.Spec.ActiveDeadlineSeconds,
 		"a Job with no deadline cannot terminate itself on a pull failure")
 	assert.Greater(t, *job.Spec.ActiveDeadlineSeconds, int64(clusterValidatorTimeout/time.Second),
@@ -1075,11 +1084,11 @@ func TestEnsureClusterValidatorConfig_NoPreserveMarkerByDefault(t *testing.T) {
 // the same role deletes it, while its ConfigMap, RBAC and pull secret survive.
 func TestBuildClusterValidatorJob_MarksPreservedRun(t *testing.T) {
 	kept := buildClusterValidatorJob("j", "nvcr.io/x/v:1", "",
-		clusterValidatorControlPlaneRole, "runid", true)
+		clusterValidatorControlPlaneRole, "runid", true, nil)
 	assert.Equal(t, "true", kept.Labels[clusterValidatorPreserveLabel])
 
 	ordinary := buildClusterValidatorJob("j", "nvcr.io/x/v:1", "",
-		clusterValidatorControlPlaneRole, "runid", false)
+		clusterValidatorControlPlaneRole, "runid", false, nil)
 	assert.NotContains(t, ordinary.Labels, clusterValidatorPreserveLabel,
 		"an ordinary run must stay sweepable")
 }

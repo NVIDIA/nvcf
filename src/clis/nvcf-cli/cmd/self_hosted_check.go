@@ -48,6 +48,7 @@ var (
 	checkClusterValidatorPullSecret string
 	checkClusterValidatorNoCleanup  bool
 	checkClusterValidatorRegistries []string
+	checkClusterValidatorProbeImage string
 	checkShowLogs                   bool
 )
 
@@ -117,10 +118,18 @@ func init() {
 	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorRegistries, "cluster-validator-registries", nil,
 		"Additional container registries to probe for reachability in the control-plane validator. "+
 			"Format: host:port (e.g. harbor.company.internal:443,ghcr.io:443). "+
-			"nvcr.io is always included. Env: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES. "+
+			"Added to the registries the install pulls from, which are probed with the same "+
+			"criticality as the local credential check. Env: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES. "+
 			"Can also be set in nvcf-cli config as cluster_validator_registries (list).")
 	_ = viper.BindPFlag("cluster_validator_registries",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-registries"))
+	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorProbeImage, "cluster-validator-probe-image", "",
+		"Image for the control-plane validator's node-to-node overlay probe (needs sh and busybox-style nc). "+
+			"Defaults to busybox:1.36 from Docker Hub; set a mirror for air-gapped clusters. "+
+			"Env: NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE. "+
+			"Can also be set in nvcf-cli config as cluster_validator_probe_image.")
+	_ = viper.BindPFlag("cluster_validator_probe_image",
+		selfHostedCheckCmd.Flags().Lookup("cluster-validator-probe-image"))
 	selfHostedCheckCmd.Flags().BoolVar(&checkShowLogs, "show-logs", false,
 		"Print the cleaned cluster-validator transcript to stderr after the check events. "+
 			"Useful when piping --json output to a script that also wants the transcript.")
@@ -212,9 +221,8 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// --cluster-validator-registries extras independently of the image config.
 	if !localOnly {
 		extraRegistries := configuredValidatorRegistries()
-		stackValuesFile := resolveStackValuesFile()
 		credEntries = selfhosted.EnumerateRegistries(
-			clusterValidatorImage, stackValuesFile, extraRegistries,
+			clusterValidatorImage, resolveStackValuesFiles(), extraRegistries,
 		)
 		if len(credEntries) > 0 {
 			registryChecker = newRegistryCredentialCheckerForSelfHosted()
@@ -299,16 +307,14 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 }
 
-// resolveStackValuesFile returns the environment values YAML to read
-// global.image.registry from, or "" when none is available.
+// resolveStackValuesFiles returns the stack values files preflight reads, in
+// the order helmfile layers them: base.yaml first, then the environment file
+// over it. Returns nil when no stack is found.
 //
 // It prefers --control-plane-stack, the same source every sibling command uses,
-// and only falls back to walking up from the working directory. Within a stack
-// it tries HELMFILE_ENV (default "default") and then base.yaml, which is where
-// global.image.registry actually lives. The previous version looked only for
-// environments/local.yaml, which is not a tracked file, so on any clean
-// checkout os.Stat never succeeded and this whole lookup was dead.
-func resolveStackValuesFile() string {
+// and only falls back to walking up from the working directory. The
+// environment follows resolveStackEnv.
+func resolveStackValuesFiles() []string {
 	var roots []string
 	if selfHostedControlPlaneStack != "" {
 		roots = append(roots, selfHostedControlPlaneStack)
@@ -325,32 +331,45 @@ func resolveStackValuesFile() string {
 		}
 	}
 
-	// selfHostedEnv (--env, default "local"), not HELMFILE_ENV: that variable
-	// is only ever injected into the helmfile subprocess, so reading it here
-	// always returned "" and fell through to base.yaml. An operator whose
-	// local.yaml points global.image.registry at their mirror would get
-	// base.yaml's nvcr.io, and the preflight would credential-check a registry
-	// the install never pulls from.
-	env := strings.TrimSpace(selfHostedEnv)
-	if env == "" {
-		env = "local"
-	}
-	names := []string{env + ".yaml", "base.yaml"}
-
+	env := resolveStackEnv()
 	for _, root := range roots {
 		for _, sub := range [][]string{
 			{"deploy", "stacks", "self-managed", "environments"},
 			{"environments"}, // a stack dir passed directly
 		} {
-			for _, name := range names {
-				candidate := filepath.Join(append(append([]string{root}, sub...), name)...)
+			dir := filepath.Join(append([]string{root}, sub...)...)
+			var files []string
+			for _, name := range []string{"base.yaml", env + ".yaml"} {
+				candidate := filepath.Join(dir, name)
 				if _, err := os.Stat(candidate); err == nil {
-					return candidate
+					files = append(files, candidate)
 				}
+			}
+			if len(files) > 0 {
+				return files
 			}
 		}
 	}
-	return ""
+	return nil
+}
+
+// resolveStackEnv picks the helmfile environment preflight reads: an explicit
+// --env, then HELMFILE_ENV for an operator who exports it and runs helmfile
+// directly, then --env's default. When the CLI runs helmfile itself it passes
+// --env as HELMFILE_ENV, so an explicit flag must win.
+func resolveStackEnv() string {
+	if f := selfHostedCmd.PersistentFlags().Lookup("env"); f != nil && f.Changed {
+		if env := strings.TrimSpace(selfHostedEnv); env != "" {
+			return env
+		}
+	}
+	if env := strings.TrimSpace(os.Getenv("HELMFILE_ENV")); env != "" {
+		return env
+	}
+	if env := strings.TrimSpace(selfHostedEnv); env != "" {
+		return env
+	}
+	return "local"
 }
 
 // localStackDir returns src when it points at a readable local directory.
@@ -533,9 +552,11 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 
 	staleNSProber := newStaleNamespaceProberForSelfHosted()
 
-	// Additional registries to probe in the control-plane validator ConfigMap.
-	// Priority: flag > env > config file.
-	registries := configuredValidatorRegistries()
+	// The control-plane validator probes the same registries, with the same
+	// criticality, as the local credential check, extras included.
+	registries := cfg.Registries
+	validatorEnv := clusterValidatorJobEnv(
+		selfhosted.LoadStackValues(resolveStackValuesFiles()))
 
 	// The cluster-validator image is the same for both roles; VALIDATOR_ROLE
 	// in the Job env selects which check set runs inside the binary.
@@ -578,6 +599,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 					ClusterValidatorImage:      clusterValidatorImage,
 					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+					ClusterValidatorEnv:        validatorEnv,
 					ClusterValidatorRegistries: registries,
 					StaleNamespaceProber:       staleNSProber,
 					StackDir:                   localStackDir(selfHostedControlPlaneStack),
@@ -596,6 +618,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 					ClusterValidatorImage:      clusterValidatorImage,
 					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+					ClusterValidatorEnv:        validatorEnv,
 					StaleNamespaceProber:       staleNSProber,
 					StackDir:                   localStackDir(selfHostedComputePlaneStack),
 				}
@@ -639,6 +662,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorImage:      clusterValidatorImage,
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+				ClusterValidatorEnv:        validatorEnv,
 				ClusterValidatorRegistries: registries,
 				StaleNamespaceProber:       staleForControlPlane,
 				StackDir:                   localStackDir(selfHostedControlPlaneStack),
@@ -655,6 +679,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorImage:      clusterValidatorImage,
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+				ClusterValidatorEnv:        validatorEnv,
 				StaleNamespaceProber:       staleForComputePlane,
 				StackDir:                   localStackDir(selfHostedComputePlaneStack),
 				ExtraStaleNamespaces:       gpuExtraNamespaces,
@@ -664,6 +689,55 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		}
 		return results
 	}
+}
+
+// clusterValidatorJobEnv is what the validator container needs from the CLI's
+// resolved configuration, matching what the chart CronJob forwards:
+//   - VALIDATOR_POST_INSTALL on every run except --pre, so an empty control
+//     plane fails after install instead of passing as pre-install;
+//   - relocated OpenBao and Envoy Gateway namespaces, without which the Tier
+//     rows assess the defaults and miss the real components;
+//   - NVCF_GATEWAY_NAMES, the override for the NVCF Gateway discovery;
+//   - the overlay probe image, so a mirrored cluster does not pull busybox
+//     from Docker Hub.
+func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
+	env := map[string]string{}
+	if !checkPre {
+		env["VALIDATOR_POST_INSTALL"] = "true"
+	}
+	if ns := configValue("NVCF_OPENBAO_NAMESPACE"); ns != "" {
+		env["NVCF_OPENBAO_NAMESPACE"] = ns
+	}
+	envoyNS := configValue("NVCF_ENVOY_GATEWAY_NAMESPACE")
+	if envoyNS == "" {
+		envoyNS = stack.EnvoyGatewayNamespace
+	}
+	if envoyNS != "" {
+		env["NVCF_ENVOY_GATEWAY_NAMESPACE"] = envoyNS
+	}
+	if names := configValue("NVCF_GATEWAY_NAMES"); names != "" {
+		env["NVCF_GATEWAY_NAMES"] = names
+	}
+	probe := strings.TrimSpace(viper.GetString("cluster_validator_probe_image"))
+	if probe == "" {
+		probe = configValue("NVCF_N2N_PROBE_IMAGE")
+	}
+	if probe != "" {
+		env["NVCF_N2N_PROBE_IMAGE"] = probe
+	}
+	return env
+}
+
+// configValue reads a setting the way the CLI's cluster configuration does
+// (environment, then the nvcf-cli config file).
+func configValue(key string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	if viper.IsSet(key) {
+		return strings.TrimSpace(viper.GetString(key))
+	}
+	return ""
 }
 
 // resolveClusterValidatorImage resolves the validator image from flag > env >

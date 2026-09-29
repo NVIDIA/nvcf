@@ -335,10 +335,13 @@ type RoleConfig struct {
 	// scanned on the one topology where they sit on the same cluster.
 	ExtraStaleNamespaces []string
 
-	// ClusterValidatorRegistries is an optional list of "host:port" registry
-	// endpoints added to the control-plane validator ConfigMap alongside the
-	// built-in nvcr.io probe. Ignored for the compute-plane validator.
-	ClusterValidatorRegistries []string
+	// ClusterValidatorRegistries are the registries the control-plane
+	// validator probes for reachability: the EnumerateRegistries result the
+	// local credential check also uses. Ignored for the compute-plane validator.
+	ClusterValidatorRegistries []RegistryEntry
+
+	// ClusterValidatorEnv is passed to the validator container for both roles.
+	ClusterValidatorEnv map[string]string
 }
 
 // categorySpec groups a set of checks under a named category. Categories run
@@ -444,6 +447,7 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 			rc.ClusterValidatorNoCleanup,
 			validatorRoleControlPlane,
 			rc.ClusterValidatorRegistries,
+			rc.ClusterValidatorEnv,
 		))
 	}
 	return cat
@@ -485,6 +489,7 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 			rc.ClusterValidatorNoCleanup,
 			validatorRoleComputePlane,
 			nil, // registries: compute-plane doesn't use the ConfigMap reachability list
+			rc.ClusterValidatorEnv,
 		))
 	}
 	return cat
@@ -593,7 +598,10 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 // clusterValidatorCheck runs the validator Job. Runner errors (RBAC/timeout)
 // are warning severity; validator failures are error. role selects the check
 // set via VALIDATOR_ROLE; registries extends the ConfigMap reachability list.
-func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool, role string, registries []string) binaryCheckSpec {
+func clusterValidatorCheck(
+	cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool, role string,
+	registries []RegistryEntry, env map[string]string,
+) binaryCheckSpec {
 	const id = "cluster-validator"
 	return binaryCheckSpec{
 		ID:         id,
@@ -610,6 +618,7 @@ func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret s
 				NoCleanup:   noCleanup,
 				Role:        role,
 				Registries:  registries,
+				Env:         env,
 			})
 			r.Logs = result.Logs
 			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)

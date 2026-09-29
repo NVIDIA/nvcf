@@ -137,7 +137,7 @@ func TestRunClusterValidator_HappyPathLeavesNothingBehind(t *testing.T) {
 	client := lifecycleClient(succeeded, "")
 
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
-		"", false, clusterValidatorControlPlaneRole, nil)
+		"", false, clusterValidatorControlPlaneRole, nil, nil)
 	require.NoError(t, res.Err)
 	require.NotEmpty(t, res.RunID)
 	assert.Empty(t, leftovers(t, client, res.RunID))
@@ -152,7 +152,7 @@ func TestRunClusterValidator_FailedBootstrapLeavesNothingBehind(t *testing.T) {
 	})
 
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
-		"", false, clusterValidatorComputePlaneRole, nil)
+		"", false, clusterValidatorComputePlaneRole, nil, nil)
 	require.Error(t, res.Err)
 	sas, err := client.CoreV1().ServiceAccounts(clusterValidatorNamespace).List(context.Background(), metav1.ListOptions{})
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestRunClusterValidator_PullFailureLeavesNothingBehind(t *testing.T) {
 	client := lifecycleClient(running, "ImagePullBackOff")
 
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
-		"", false, clusterValidatorControlPlaneRole, nil)
+		"", false, clusterValidatorControlPlaneRole, nil, nil)
 	require.Error(t, res.Err)
 	assert.Empty(t, leftovers(t, client, res.RunID))
 	deleted := false
@@ -189,7 +189,7 @@ func TestRunClusterValidator_RunningPodKeepsRBACAndJobOwnsArtifacts(t *testing.T
 	defer cancel()
 
 	res := runClusterValidator(ctx, client, "nvcr.io/nvidia/validator:1",
-		"", false, clusterValidatorControlPlaneRole, nil)
+		"", false, clusterValidatorControlPlaneRole, nil, nil)
 	require.Error(t, res.Err)
 	left := leftovers(t, client, res.RunID)
 	assert.Len(t, left["ServiceAccount"], 1, "a running pod must keep its RBAC")
@@ -226,7 +226,7 @@ func TestRunClusterValidator_SparesConcurrentSameRoleSecret(t *testing.T) {
 	require.NoError(t, err)
 
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
-		"", false, clusterValidatorComputePlaneRole, nil)
+		"", false, clusterValidatorComputePlaneRole, nil, nil)
 	require.NoError(t, res.Err)
 	_, err = client.CoreV1().Secrets(clusterValidatorNamespace).Get(context.Background(), other.Name, metav1.GetOptions{})
 	assert.NoError(t, err, "another run's Secret must survive this run's sweep")
@@ -239,7 +239,7 @@ func TestRunClusterValidator_NoCleanupKeepsRunAndPrintsTheCommand(t *testing.T) 
 	client := lifecycleClient(succeeded, "")
 
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
-		"", true, clusterValidatorControlPlaneRole, nil)
+		"", true, clusterValidatorControlPlaneRole, nil, nil)
 	require.NoError(t, res.Err)
 	left := leftovers(t, client, res.RunID)
 	for _, kind := range []string{"ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Secret", "ConfigMap"} {
@@ -295,4 +295,67 @@ func TestSweepOrphanClusterValidatorRBAC_PreservedExpireAndLegacyIsSpared(t *tes
 	assert.True(t, apierrors.IsNotFound(err), "a preserved Job older than a day is reclaimed")
 	_, err = client.BatchV1().Jobs(clusterValidatorNamespace).Get(ctx, clusterValidatorName+"-2", metav1.GetOptions{})
 	assert.NoError(t, err)
+}
+
+// Forwarded settings reach the container in a stable order, empty values are
+// dropped, and nothing forwarded can override what the Job itself sets.
+func TestBuildClusterValidatorJob_ForwardsEnvWithoutOverridingCore(t *testing.T) {
+	job := buildClusterValidatorJob("j", "img:1", "", clusterValidatorControlPlaneRole, "runid", false, map[string]string{
+		"NVCF_OPENBAO_NAMESPACE": "openbao",
+		"VALIDATOR_POST_INSTALL": "true",
+		"VALIDATOR_ROLE":         "compute-plane",
+		"NVCF_GATEWAY_NAMES":     "",
+	})
+	env := map[string]string{}
+	var order []string
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+		order = append(order, e.Name)
+	}
+	assert.Equal(t, "openbao", env["NVCF_OPENBAO_NAMESPACE"])
+	assert.Equal(t, "true", env["VALIDATOR_POST_INSTALL"])
+	assert.Equal(t, clusterValidatorControlPlaneRole, env["VALIDATOR_ROLE"], "a forwarded value must not override the role")
+	_, hasEmpty := env["NVCF_GATEWAY_NAMES"]
+	assert.False(t, hasEmpty, "empty values are not forwarded")
+	assert.Equal(t, []string{"VALIDATOR_CONFIG_NAMESPACE", "VALIDATOR_CONFIG_NAME", "VALIDATOR_PREFLIGHT",
+		"VALIDATOR_ROLE", "NVCF_OPENBAO_NAMESPACE", "VALIDATOR_POST_INSTALL"}, order)
+}
+
+// The validator discovers NVCF Gateways from every route kind and reads the
+// Gateways' classes, so the CLI's ClusterRole must allow all of them.
+func TestEnsureClusterValidatorRBAC_GrantsGatewayAPIReads(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client, clusterValidatorControlPlaneRole, "runid", false))
+	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
+		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
+	require.NoError(t, err)
+	granted := map[string]bool{}
+	for _, r := range cr.Rules {
+		for _, g := range r.APIGroups {
+			if g != "gateway.networking.k8s.io" {
+				continue
+			}
+			for _, res := range r.Resources {
+				granted[res] = true
+			}
+		}
+	}
+	for _, res := range []string{"gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes"} {
+		assert.True(t, granted[res], res)
+	}
+}
+
+// The control-plane validator receives the enumerated registries and the
+// forwarded env; the compute-plane one gets the env but no registries.
+func TestClusterValidatorCheck_PassesRegistriesAndEnv(t *testing.T) {
+	var got ClusterValidatorParams
+	cv := func(_ context.Context, p ClusterValidatorParams) ClusterValidatorResult {
+		got = p
+		return ClusterValidatorResult{Passed: true}
+	}
+	regs := []RegistryEntry{{Registry: "harbor.corp.example"}}
+	env := map[string]string{"VALIDATOR_POST_INSTALL": "true"}
+	clusterValidatorCheck(cv, "", "img:1", "", false, validatorRoleControlPlane, regs, env).Run(context.Background())
+	assert.Equal(t, regs, got.Registries)
+	assert.Equal(t, env, got.Env)
 }
