@@ -9,7 +9,7 @@ local ConfigMap and authenticates through the local OpenBao (Vault) instance.
 
 <Info>
 A running NVCF control plane (SIS, OpenBao, NATS, Cassandra, and all core
-services) is required. The [Quickstart](../quickstart.md) can install the
+services) is required. The [Quickstart](/nvcf/overview/quickstart) can install the
 control plane and register a GPU cluster in one flow. Use this page when you
 need to install or operate the NVCA Operator after using the Helmfile
 installation path.
