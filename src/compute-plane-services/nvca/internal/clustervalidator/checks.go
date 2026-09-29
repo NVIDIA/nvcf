@@ -1772,7 +1772,9 @@ func waitForDaemonSetDesiredCount(
 	deadline := time.Now().Add(timeout)
 	var lastStatus string
 	for {
-		ds, err := client.AppsV1().DaemonSets(ns).Get(ctx, name, metav1.GetOptions{})
+		getCtx, cancel := attemptContext(ctx, deadline)
+		ds, err := client.AppsV1().DaemonSets(ns).Get(getCtx, name, metav1.GetOptions{})
+		cancel()
 		switch {
 		case err != nil:
 			// Retry inside the deadline rather than aborting. client-go defaults
@@ -1819,7 +1821,9 @@ func waitForDaemonSetPods(
 	var lastErr error
 	var lastPods []corev1.Pod
 	for {
-		pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		listCtx, cancel := attemptContext(ctx, deadline)
+		pods, err := client.CoreV1().Pods(ns).List(listCtx, metav1.ListOptions{LabelSelector: selector})
+		cancel()
 		if err != nil {
 			// Same reasoning as waitForDaemonSetDesiredCount: retry transient
 			// errors inside the deadline instead of failing the check outright.
@@ -2407,6 +2411,15 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 	}
 
 	if checkedCount == 0 {
+		if len(scaledToZero) > 0 {
+			// An observed failure wins over unreadable namespaces and tolerated
+			// rollouts, as it does on the checkedCount > 0 path below.
+			printError(log, fmt.Sprintf("%d Deployment(s) are scaled to zero replicas: %s",
+				len(scaledToZero), strings.Join(scaledToZero, ", ")))
+			ok := false
+			state.Tier1DeploymentsOK = &ok
+			return
+		}
 		if deniedCount > 0 {
 			// Leave nil: nothing was assessed and at least one namespace could
 			// not be read, so an empty result is not evidence of pre-install.
@@ -2432,24 +2445,14 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			state.Tier1DeploymentsOK = &ok
 			return
 		}
-		if len(scaledToZero) > 0 {
-			// Every Deployment present is scaled to zero: the namespaces are
-			// populated but nothing is running, which is not a pass.
-			printError(log, fmt.Sprintf("All %d Deployment(s) are scaled to zero replicas: %s",
-				len(scaledToZero), strings.Join(scaledToZero, ", ")))
-			ok := false
-			state.Tier1DeploymentsOK = &ok
-			return
-		}
 		printInfo(log, "  No Deployments found in control-plane namespaces (pre-install state)")
 		ok := true
 		state.Tier1DeploymentsOK = &ok
 		return
 	}
 
-	// Surfaced as a warning rather than a failure: scaling a component down is
-	// a legitimate operator action, but it must not be invisible on a row that
-	// claims every Deployment is ready.
+	// A Deployment scaled to zero fails the row: a fully down component must
+	// not score better than the same component at 2/3, which already fails.
 	if len(scaledToZero) > 0 {
 		underReplicated = append(underReplicated,
 			fmt.Sprintf("scaled to zero replicas: %s", strings.Join(scaledToZero, ", ")))

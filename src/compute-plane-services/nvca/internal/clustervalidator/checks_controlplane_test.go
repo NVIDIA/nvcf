@@ -449,8 +449,11 @@ func TestCheckNodeToNode_CleansUpProbeResources(t *testing.T) {
 
 	// Fail the DaemonSet status poll fast so the test does not wait out the
 	// real timeout; cleanup must still run on this path.
+	// Forbidden is terminal for the poll; a generic error is retried for the
+	// full 30s status timeout.
 	client.PrependReactor("get", "daemonsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, fmt.Errorf("simulated status read failure")
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "apps", Resource: "daemonsets"}, "", fmt.Errorf("simulated status read failure"))
 	})
 
 	state := &ValidationState{Log: testLog()}
@@ -2128,4 +2131,42 @@ func TestCheckTier1Deployments_ListFailureIsNotCalledRBAC(t *testing.T) {
 	joined := strings.Join(state.Warnings, "; ")
 	assert.NotContains(t, joined, "RBAC denied")
 	assert.Contains(t, joined, "denied or failed")
+}
+
+// A Deployment scaled to zero is an observed failure, so it must not be hidden
+// behind a tolerated rollout or an unreadable namespace when nothing else was
+// assessed.
+func TestCheckTier1Deployments_ScaledToZeroWinsWhenNothingAssessed(t *testing.T) {
+	zero, two := int32(0), int32(2)
+	scaled := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvcf-api", Namespace: "nvcf", Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: &zero},
+		Status:     appsv1.DeploymentStatus{ObservedGeneration: 1},
+	}
+
+	t.Run("beside a rolling Deployment", func(t *testing.T) {
+		rolling := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "rolling", Namespace: "sis", Generation: 3},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status:     appsv1.DeploymentStatus{ObservedGeneration: 2, UpdatedReplicas: 1, ReadyReplicas: 2},
+		}
+		state := &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), fake.NewSimpleClientset(scaled.DeepCopy(), rolling), state)
+		require.NotNil(t, state.Tier1DeploymentsOK)
+		assert.False(t, *state.Tier1DeploymentsOK)
+	})
+
+	t.Run("beside an unreadable namespace", func(t *testing.T) {
+		client := fake.NewSimpleClientset(scaled.DeepCopy())
+		client.PrependReactor("list", "deployments", func(a ktesting.Action) (bool, runtime.Object, error) {
+			if a.GetNamespace() == "sis" {
+				return true, nil, apierrors.NewTooManyRequestsError("slow down")
+			}
+			return false, nil, nil
+		})
+		state := &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), client, state)
+		require.NotNil(t, state.Tier1DeploymentsOK)
+		assert.False(t, *state.Tier1DeploymentsOK)
+	})
 }

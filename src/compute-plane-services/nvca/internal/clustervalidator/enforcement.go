@@ -560,6 +560,19 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 	}
 }
 
+// pollAttemptTimeout caps one API call inside a poll loop. The loops check
+// their deadline only between attempts and the client sets no request timeout,
+// so a single hung call could otherwise outlive the whole budget.
+const pollAttemptTimeout = 10 * time.Second
+
+// attemptContext bounds one poll attempt by pollAttemptTimeout and by the
+// time left before deadline. The one-second floor keeps a final attempt from
+// being cancelled before it is sent. An attempt that times out is an ordinary
+// transient error to the caller's retry loop.
+func attemptContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, max(min(pollAttemptTimeout, time.Until(deadline)), time.Second))
+}
+
 // waitForPodDone polls until the named pod reaches Succeeded or Failed.
 // Returns true for Succeeded, false for Failed.
 func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) (bool, error) {
@@ -574,7 +587,9 @@ func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name s
 			return false, fmt.Errorf("pod %s/%s did not complete within %v", ns, name, timeout)
 		}
 
-		pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		getCtx, cancel := attemptContext(ctx, deadline)
+		pod, err := client.CoreV1().Pods(ns).Get(getCtx, name, metav1.GetOptions{})
+		cancel()
 		switch {
 		case err == nil:
 			lastErr = nil

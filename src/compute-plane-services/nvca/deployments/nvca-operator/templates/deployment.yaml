@@ -104,7 +104,9 @@ spec:
         # leave the operator in Init:CrashLoopBackOff.
         - name: VALIDATOR_ROLE
           value: "compute-plane"
-        {{- if eq $cv.role "control-plane" }}
+        {{- /* Normalized like the validator's own parseRole, so a role of
+               "Control-Plane" still keeps this container off the summary. */}}
+        {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
         # The CronJob owns the summary under the control-plane role, so this
         # container must not republish a compute-plane summary over it: the GPU
         # keys would reappear and the control-plane keys be pruned on every

@@ -537,3 +537,18 @@ func TestSweepOrphanTestNamespaces_MixedAges(t *testing.T) {
 	assert.NoError(t, err3, "new-1 should remain")
 	assert.NoError(t, err4, "new-2 should remain")
 }
+
+// One poll attempt is bounded by the per-attempt cap and by the time left, but
+// never below the floor, so the final attempt still gets sent.
+func TestAttemptContext_BoundsEachCall(t *testing.T) {
+	remaining := func(deadline time.Time) time.Duration {
+		ctx, cancel := attemptContext(context.Background(), deadline)
+		defer cancel()
+		d, ok := ctx.Deadline()
+		require.True(t, ok)
+		return time.Until(d)
+	}
+	assert.LessOrEqual(t, remaining(time.Now().Add(time.Hour)), pollAttemptTimeout)
+	assert.Less(t, remaining(time.Now().Add(3*time.Second)), 4*time.Second)
+	assert.Greater(t, remaining(time.Now().Add(-time.Minute)), 500*time.Millisecond)
+}
