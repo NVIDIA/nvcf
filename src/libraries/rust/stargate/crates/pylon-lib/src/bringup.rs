@@ -86,6 +86,7 @@ pub(crate) struct BringupTaskConfig {
 mod tests {
     use super::*;
     use super::{calibration::*, lifecycle::*, upstream::*};
+    use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1010,6 +1011,163 @@ mod tests {
             .expect("bringup task should not panic");
     }
 
+    #[tokio::test]
+    async fn active_canary_failures_enter_recovery_by_failure_kind() {
+        use CanaryReply::{Hang, Pass, Runaway, StallStream, Status};
+        let busy = Status(StatusCode::SERVICE_UNAVAILABLE);
+        let clear = Status(StatusCode::INTERNAL_SERVER_ERROR);
+        // Expected canaries sent before recovery starts; None means the model stays in monitoring.
+        let cases: Vec<(&str, Vec<CanaryReply>, Option<usize>)> = vec![
+            ("clear http error", vec![clear], Some(1)),
+            ("runaway generation", vec![Runaway], Some(1)),
+            ("busy then clear", vec![busy, clear], Some(2)),
+            ("two busy then pass", vec![busy, busy], None),
+            ("three busy 503", vec![busy; 3], Some(3)),
+            (
+                "three busy 429",
+                vec![Status(StatusCode::TOO_MANY_REQUESTS); 3],
+                Some(3),
+            ),
+            ("three response timeouts", vec![Hang; 3], Some(3)),
+            ("three stalled streams", vec![StallStream; 3], Some(3)),
+            (
+                "pass resets busy count",
+                vec![busy, busy, Pass, busy, busy],
+                None,
+            ),
+        ];
+        for (label, replies, expected) in cases {
+            let events = canary_events_until_recovery(replies).await;
+
+            assert_eq!(
+                events.iter().position(|event| *event == "health"),
+                expected,
+                "{label}: {events:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn active_canary_is_skipped_while_requests_complete() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let base_url = spawn_test_server(TestServerState {
+            events: Some(events.clone()),
+            ..TestServerState::default()
+        })
+        .await;
+        let runtime_state = test_runtime_state();
+        runtime_state.set_model_bringup_ready("test-model", true);
+        record_completed_request(&runtime_state, 0);
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(run_bringup_task(
+            test_task_config(
+                base_url.to_string(),
+                BringupConfig {
+                    active_canary_interval: Duration::from_millis(50),
+                    canary_timeout: Duration::from_secs(1),
+                    canary_max_generation_threshold: 7,
+                    ..BringupConfig::default()
+                },
+            ),
+            runtime_state.clone(),
+            stop.clone(),
+        ));
+
+        for request in 1..=30 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            record_completed_request(&runtime_state, request);
+        }
+        assert!(
+            events.lock().await.is_empty(),
+            "canaries should be skipped while requests complete"
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while events.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("canaries should resume once requests stop completing");
+
+        stop.cancel();
+        task.await.unwrap();
+    }
+
+    fn record_completed_request(runtime_state: &PylonRuntimeState, request: usize) {
+        let mut observation = crate::RequestObservation {
+            endpoint: crate::RequestObservationEndpoint::ChatCompletions,
+            request_id: format!("real-request-{request}"),
+            routing_key: None,
+            model_id: "test-model".to_string(),
+            priority: 0,
+            input_tokens: 1,
+            embedding_items: 0,
+            embedding_items_observed: false,
+            upstream_status: None,
+            output_messages: 0,
+            output_tokens: 0,
+            output_tokens_explicit: false,
+            output_tokens_from_chunk_usage: false,
+            state: crate::RequestObservationState::UpstreamConnecting,
+            time_to_response_headers: None,
+            time_to_first_output: None,
+            time_to_first_token: None,
+            total_duration: Duration::ZERO,
+        };
+        runtime_state.observe_request_for_test(observation.clone());
+        observation.state = crate::RequestObservationState::Complete;
+        observation.upstream_status = Some(200);
+        runtime_state.observe_request_for_test(observation);
+    }
+
+    /// Records canary and health-check requests in order until the loop starts recovery (a
+    /// health check) or sends six monitoring canaries.
+    async fn canary_events_until_recovery(replies: Vec<CanaryReply>) -> Vec<&'static str> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let base_url = spawn_test_server(TestServerState {
+            events: Some(events.clone()),
+            canary_replies: Some(Arc::new(Mutex::new(replies.into()))),
+            ..TestServerState::default()
+        })
+        .await;
+        let runtime_state = test_runtime_state();
+        runtime_state.set_model_bringup_ready("test-model", true);
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(run_bringup_task(
+            test_task_config(
+                base_url.to_string(),
+                BringupConfig {
+                    active_canary_interval: Duration::from_millis(10),
+                    canary_timeout: Duration::from_millis(100),
+                    canary_max_generation_threshold: 7,
+                    ..BringupConfig::default()
+                },
+            ),
+            runtime_state,
+            stop.clone(),
+        ));
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                {
+                    let events = events.lock().await;
+                    let canaries = events.iter().filter(|event| **event == "canary").count();
+                    if events.contains(&"health") || canaries >= 6 {
+                        return;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("canary loop should start recovery or keep monitoring");
+
+        stop.cancel();
+        task.await.unwrap();
+        events.lock().await.clone()
+    }
+
     #[derive(Clone)]
     struct TestServerState {
         completion_tokens: u32,
@@ -1027,6 +1185,17 @@ mod tests {
         request_ids: Option<Arc<Mutex<Vec<String>>>>,
         prompt_lengths: Option<Arc<Mutex<Vec<usize>>>>,
         prompt_rejections: Option<Arc<Mutex<Vec<usize>>>>,
+        events: Option<Arc<Mutex<Vec<&'static str>>>>,
+        canary_replies: Option<Arc<Mutex<VecDeque<CanaryReply>>>>,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CanaryReply {
+        Pass,
+        Status(StatusCode),
+        Runaway,
+        Hang,
+        StallStream,
     }
 
     impl Default for TestServerState {
@@ -1047,6 +1216,8 @@ mod tests {
                 request_ids: None,
                 prompt_lengths: None,
                 prompt_rejections: None,
+                events: None,
+                canary_replies: None,
             }
         }
     }
@@ -1104,6 +1275,9 @@ mod tests {
         if let Some(health_requests) = &state.health_requests {
             health_requests.fetch_add(1, Ordering::SeqCst);
         }
+        if let Some(events) = &state.events {
+            events.lock().await.push("health");
+        }
         "ok".into_response()
     }
 
@@ -1128,6 +1302,37 @@ mod tests {
             .and_then(|value| value.as_str())
             .unwrap_or_default();
         let prompt_len = prompt.len();
+        let mut force_runaway = false;
+        if prompt == "1+1=" {
+            if let Some(events) = &state.events {
+                events.lock().await.push("canary");
+            }
+            let reply = match &state.canary_replies {
+                Some(replies) => replies.lock().await.pop_front(),
+                None => None,
+            };
+            match reply {
+                Some(CanaryReply::Status(status)) => {
+                    return (
+                        status,
+                        Json(serde_json::json!({"error": {"message": "canary rejected"}})),
+                    )
+                        .into_response();
+                }
+                Some(CanaryReply::Hang) => std::future::pending::<()>().await,
+                Some(CanaryReply::StallStream) => {
+                    return (
+                        [("content-type", "text/event-stream")],
+                        axum::body::Body::from_stream(futures::stream::pending::<
+                            Result<bytes::Bytes, std::io::Error>,
+                        >()),
+                    )
+                        .into_response();
+                }
+                Some(CanaryReply::Runaway) => force_runaway = true,
+                Some(CanaryReply::Pass) | None => {}
+            }
+        }
         if let Some(prompt_lengths) = &state.prompt_lengths {
             prompt_lengths.lock().await.push(prompt_len);
         }
@@ -1229,6 +1434,9 @@ mod tests {
             }
         }
 
+        if force_runaway {
+            completion_tokens = 1_000;
+        }
         if prompt == "1+1=" {
             if request.get("stream").and_then(Value::as_bool) != Some(true) {
                 return StatusCode::BAD_REQUEST.into_response();

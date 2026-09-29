@@ -23,6 +23,7 @@ use super::upstream::{check_upstream_health, send_canary_request};
 use super::{BringupConfig, BringupTaskConfig};
 
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const BUSY_CANARY_FAILURE_THRESHOLD: u32 = 3;
 
 pub(crate) async fn run_bringup_task(
     task_config: BringupTaskConfig,
@@ -43,6 +44,7 @@ pub(crate) async fn run_bringup_task(
             &upstream_http_base_url,
             &generation,
             &config,
+            &runtime_state,
             &stop,
         )
         .await
@@ -109,6 +111,7 @@ async fn wait_for_active_canary_failure(
     upstream_http_base_url: &str,
     generation: &crate::runtime_state::ModelGeneration,
     config: &BringupConfig,
+    runtime_state: &PylonRuntimeState,
     stop: &CancellationToken,
 ) -> bool {
     if config.active_canary_interval.is_zero() {
@@ -116,33 +119,58 @@ async fn wait_for_active_canary_failure(
         return false;
     }
 
+    let recent_completion_window = config.active_canary_interval.saturating_mul(2);
     let mut canary_interval = tokio::time::interval(config.active_canary_interval);
     canary_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     canary_interval.tick().await;
+    let mut busy_failures = 0_u32;
 
     loop {
         tokio::select! {
             _ = stop.cancelled() => return false,
             _ = canary_interval.tick() => {
-                let Some(canary_result) = stop
-                    .run_until_cancelled(send_canary_request(
-                        http_client,
-                        upstream_http_base_url,
-                        generation,
-                        config.canary_timeout,
-                        config.canary_max_generation_threshold,
-                    ))
-                    .await
-                else {
-                    return false;
-                };
-                if let Err(error) = canary_result {
-                    tracing::warn!(
+                if runtime_state.generation_completed_within(generation, recent_completion_window) {
+                    tracing::debug!(
                         model_id = generation.model_id(),
-                        error = %error,
-                        "active canary failed"
+                        "skipping active canary after a recently completed request"
                     );
-                    return true;
+                    busy_failures = 0;
+                } else {
+                    let Some(canary_result) = stop
+                        .run_until_cancelled(send_canary_request(
+                            http_client,
+                            upstream_http_base_url,
+                            generation,
+                            config.canary_timeout,
+                            config.canary_max_generation_threshold,
+                        ))
+                        .await
+                    else {
+                        return false;
+                    };
+                    match canary_result {
+                        Ok(()) => busy_failures = 0,
+                        Err(error) if error.is_busy() => {
+                            busy_failures += 1;
+                            tracing::warn!(
+                                model_id = generation.model_id(),
+                                error = %error,
+                                consecutive_busy_failures = busy_failures,
+                                "active canary failed"
+                            );
+                            if busy_failures >= BUSY_CANARY_FAILURE_THRESHOLD {
+                                return true;
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                model_id = generation.model_id(),
+                                error = %error,
+                                "active canary failed"
+                            );
+                            return true;
+                        }
+                    }
                 }
             }
         }

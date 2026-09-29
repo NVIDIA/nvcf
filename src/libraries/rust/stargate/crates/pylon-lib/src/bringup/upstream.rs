@@ -22,7 +22,7 @@ use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
 };
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
-use crate::sse_message_stream::{RelayOutcome, upstream_sse_message_stream};
+use crate::sse_message_stream::{RelayOutcome, UpstreamSseReadError, upstream_sse_message_stream};
 use crate::upstream_health::UpstreamHealthPaths;
 use crate::upstream_url::upstream_endpoint;
 use futures::StreamExt;
@@ -157,7 +157,7 @@ pub(super) async fn send_canary_request(
     let mut observed_tokens = 0_u64;
     let mut completed = false;
     while let Some(message) = messages.next().await {
-        let message = message.map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
+        let message = message.map_err(canary_stream_error)?;
         if let Some(generated_output) = message.facts.generated_output {
             observed_tokens = output_tokens
                 .observe_generated_characters(generated_output.characters)
@@ -191,6 +191,21 @@ pub(super) async fn send_canary_request(
         ));
     }
     Ok(())
+}
+
+fn canary_stream_error(error: UpstreamSseReadError) -> BringupError {
+    let is_timeout = match &error {
+        UpstreamSseReadError::Timeout(_) => true,
+        UpstreamSseReadError::Upstream(source) => source
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout),
+        _ => false,
+    };
+    if is_timeout {
+        BringupError::Timeout(error.to_string())
+    } else {
+        BringupError::InvalidResponse(error.to_string())
+    }
 }
 
 pub(super) async fn send_completion_request(
@@ -322,12 +337,32 @@ pub enum BringupError {
     RunawayGeneration { tokens: u32 },
     #[error("invalid completion response: {0}")]
     InvalidResponse(String),
+    #[error("upstream response timed out: {0}")]
+    Timeout(String),
     #[error("calibration saturated before measuring positive input throughput")]
     InsufficientCalibrationData,
     #[error("stats collector stopped during model initialization")]
     StatsCollectorStopped,
     #[error("model generation retired during initialization")]
     RetiredGeneration,
+}
+
+impl BringupError {
+    /// Busy failures match an overloaded but healthy upstream, so a single one is not
+    /// evidence that the model is broken.
+    pub(crate) fn is_busy(&self) -> bool {
+        match self {
+            Self::Timeout(_) => true,
+            Self::Http(error) => error.is_timeout(),
+            Self::Api { status, .. } => {
+                matches!(
+                    *status,
+                    StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+                )
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
