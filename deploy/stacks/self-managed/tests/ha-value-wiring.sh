@@ -105,6 +105,11 @@ if grep -q "NATS_PROPERTIES__REPLICAS:" "$work_dir/invocation-off.yaml"; then
   fail "invocation: JetStream RF env leaked while highAvailability.mode=none"
 fi
 
+# HA off keeps base.yaml's disabled OpenBao server budget.
+render_chart_values openbao-server "$work_dir/openbao-off.yaml" "$deps" || fail "render openbao (ha none)"
+grep -A3 "disruptionBudget:" "$work_dir/openbao-off.yaml" | grep -q "enabled: false" ||
+  fail "openbao: server.ha.disruptionBudget must stay disabled when highAvailability.mode=none"
+
 echo "== highAvailability preferred: stateless / quorum sizing =="
 write_env <<'EOF'
 highAvailability:
@@ -164,6 +169,10 @@ grep -q "podAntiAffinity:" "$work_dir/openbao-on.yaml" ||
   fail "openbao: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
 grep -A3 "disruptionBudget:" "$work_dir/openbao-on.yaml" | grep -q "maxUnavailable: 1" ||
   fail "openbao: expected server.ha.disruptionBudget maxUnavailable=1 when highAvailability.mode=preferred"
+# base.yaml disables the budget for single-node installs; HA must turn it on,
+# or the chart renders no PDB for the Raft peers.
+grep -A3 "disruptionBudget:" "$work_dir/openbao-on.yaml" | grep -q "enabled: true" ||
+  fail "openbao: expected server.ha.disruptionBudget enabled when highAvailability.mode=preferred"
 awk '/^openbao:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/openbao-on.yaml" | grep -q "topology.kubernetes.io/zone" ||
   fail "openbao: expected Tier-2 zone spread when highAvailability.mode=preferred"
 # The agent injector shares instance=openbao-server; placement must select servers only.

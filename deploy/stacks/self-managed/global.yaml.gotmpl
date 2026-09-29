@@ -445,12 +445,14 @@ openbao:
       enabled: true
       replicas: {{ max 3 (dig "openbao" "server" "ha" "replicas" 3 .Values | int) }}
       {{- end }}
-      {{- $openbaoDisruptionBudget := dict }}
+      {{- $openbaoDisruptionBudget := dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
       {{- if $haEnabled }}
-      {{/* Allow at most 1 of 3 Raft peers disrupted at a time. */}}
-      {{- $openbaoDisruptionBudget = dict "enabled" true "maxUnavailable" 1 }}
+      {{/* HA always protects the Raft peers: at most 1 disrupted at a time unless
+           configured otherwise. base.yaml disables the budget for single-node
+           installs, so the configured enabled flag is not honoured here. */}}
+      {{- $openbaoDisruptionBudget = dict "enabled" true "maxUnavailable" (dig "maxUnavailable" 1 $openbaoDisruptionBudget) }}
       {{- end }}
-      {{- with dig "openbao" "server" "ha" "disruptionBudget" $openbaoDisruptionBudget .Values }}
+      {{- with $openbaoDisruptionBudget }}
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
       {{- end }}
