@@ -104,7 +104,8 @@ struct Args {
     /// Output-token estimate calibration. single-pylon asserts one active Pylon per cluster ID
     #[arg(long, value_enum, default_value = "off", value_name = "MODE")]
     output_token_calibration: OutputTokenCalibrationMode,
-    /// Interval between active canary requests in milliseconds. `0` disables active canaries
+    /// Interval between active canary requests in milliseconds. A model skips its canary while a
+    /// real request completed within the last two intervals. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
     /// Treat canary responses that generate this many tokens as runaway generation

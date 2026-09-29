@@ -24,7 +24,7 @@ use crate::queue_admission::{
     LiveRequestState, PylonQueueMismatchRetryConfig, QueueAdmissionDecision, QueueModelSnapshot,
     QueueTrackedRequestGuard,
 };
-use crate::request_observer::{RequestObservation, RequiredTunnelHeaders};
+use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
 use crate::stats::PylonMetrics;
 use reqwest::header::HeaderMap;
 
@@ -151,6 +151,29 @@ struct RuntimeModelState {
     generation: u64,
     stats: CurrentModelStats,
     publication: ModelPublication,
+    last_complete_at: Option<Instant>,
+}
+
+impl RuntimeModelState {
+    fn observe_request_outcome(&mut self, observation: &RequestObservation) {
+        match observation.state {
+            RequestObservationState::Complete => self.last_complete_at = Some(Instant::now()),
+            // Failures without an upstream status include Pylon's own admission rejections.
+            RequestObservationState::Failed
+                if observation
+                    .upstream_status
+                    .is_some_and(is_backend_failure_status) =>
+            {
+                self.last_complete_at = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 503 is excluded because it also signals an overloaded but healthy backend.
+fn is_backend_failure_status(status: u16) -> bool {
+    (200..300).contains(&status) || ((500..600).contains(&status) && status != 503)
 }
 
 #[derive(Debug, Default)]
@@ -373,6 +396,18 @@ impl PylonRuntimeState {
         true
     }
 
+    pub(crate) fn generation_completed_within(
+        &self,
+        generation: &ModelGeneration,
+        window: Duration,
+    ) -> bool {
+        self.advertised
+            .lock()
+            .current(generation)
+            .and_then(|model| model.last_complete_at)
+            .is_some_and(|completed_at| completed_at.elapsed() < window)
+    }
+
     #[cfg(test)]
     pub(crate) fn model_bringup_ready(&self, model_id: &str) -> Option<bool> {
         self.advertised
@@ -522,7 +557,7 @@ impl PylonRuntimeState {
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
         // currency check would let a retired generation reinsert queue state.
-        let advertised = self.advertised.lock();
+        let mut advertised = self.advertised.lock();
         if let Some(owner) = event.generation.as_ref() {
             let current_generation = advertised
                 .models
@@ -538,6 +573,13 @@ impl PylonRuntimeState {
                 );
                 return event;
             }
+        }
+        if let Some(model) = event
+            .generation
+            .as_ref()
+            .and_then(|owner| advertised.current_mut(owner))
+        {
+            model.observe_request_outcome(&event.observation);
         }
         let mut live_observation = event.observation.clone();
         live_observation.input_tokens = request_input_tokens;
@@ -746,6 +788,80 @@ mod tests {
             time_to_first_output: None,
             time_to_first_token: None,
             total_duration: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn request_outcomes_update_recent_completion() {
+        use RequestObservationState::{Complete, Failed};
+        type Outcome = (RequestObservationState, Option<u16>);
+        type Case<'a> = (&'a str, &'a [Outcome], Duration, bool);
+        let long_window = Duration::from_secs(60);
+        let cases: &[Case] = &[
+            ("no requests", &[], long_window, false),
+            ("completion", &[(Complete, Some(200))], long_window, true),
+            (
+                "completion outside window",
+                &[(Complete, Some(200))],
+                Duration::ZERO,
+                false,
+            ),
+            (
+                "backend 500 clears",
+                &[(Complete, Some(200)), (Failed, Some(500))],
+                long_window,
+                false,
+            ),
+            (
+                "broken stream clears",
+                &[(Complete, Some(200)), (Failed, Some(200))],
+                long_window,
+                false,
+            ),
+            (
+                "overload 503 keeps",
+                &[(Complete, Some(200)), (Failed, Some(503))],
+                long_window,
+                true,
+            ),
+            (
+                "client error keeps",
+                &[(Complete, Some(200)), (Failed, Some(400))],
+                long_window,
+                true,
+            ),
+            (
+                "no upstream status keeps",
+                &[(Complete, Some(200)), (Failed, None)],
+                long_window,
+                true,
+            ),
+            ("failure alone", &[(Failed, Some(500))], long_window, false),
+        ];
+        for (label, outcomes, window, expected) in cases {
+            let runtime_state =
+                PylonRuntimeState::new(InferenceServerStatus::Active, &["model-a".to_string()]);
+            let generation = runtime_state
+                .current_generation("model-a")
+                .expect("model should exist");
+            for (index, (state, upstream_status)) in outcomes.iter().enumerate() {
+                let request_id = format!("req-{index}");
+                transition_for_generation(
+                    &runtime_state,
+                    observation(&request_id, "model-a", None),
+                    generation.clone(),
+                );
+                let mut terminal = observation(&request_id, "model-a", None);
+                terminal.state = *state;
+                terminal.upstream_status = *upstream_status;
+                transition_for_generation(&runtime_state, terminal, generation.clone());
+            }
+
+            assert_eq!(
+                runtime_state.generation_completed_within(&generation, *window),
+                *expected,
+                "{label}"
+            );
         }
     }
 
