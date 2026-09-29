@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+defaults:
+  maxTokens: 256
+  timeoutSeconds: 30
+  requestSloMs: 10000
+  maxWaitMs: 10000
+  cooldownSeconds: 0
+algorithms:
+  wait-and-widen:
+    routingHeader: null
+  power-of-n:
+    routingHeader: powerOfN
+suites:
+  session-ramp: [session-ramp]
+scenarios:
+  session-ramp:
+    kind: session-ramp
+    sessions: 768
+    stablePrefixBytes: 24576
+    turnBytes: 2048
+    steps:
+    - {rate: 160, durationSeconds: 180}
+    - {rate: 180, durationSeconds: 180}
+    - {rate: 200, durationSeconds: 180}
+    - {rate: 180, durationSeconds: 180}
+    - {rate: 160, durationSeconds: 180}

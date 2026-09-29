@@ -7,6 +7,7 @@ mod cluster;
 mod pod;
 mod process;
 mod report;
+mod schedule;
 mod suite;
 mod workload;
 

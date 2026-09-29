@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-use crate::suite::{Algorithm, RequestLimits, RunLimit};
+use crate::suite::{Algorithm, RateStep, RequestLimits, RunLimit};
 use crate::workload::Workload;
 
 const DEFINITIONS: &str = concat!(
     "Successful throughput is successful completed requests divided by reported wall time. ",
     "Fixed-duration runs exclude window-end in-flight cancellations from recorded request/failure counts and latency quantiles. ",
+    "Rate schedules instead stop admissions at the final step and drain all admitted requests; whole-run throughput includes this drain. ",
     "Latency quantiles describe successful requests, include client retry time, and are histogram bucket lower bounds. ",
     "Cache percentages use reported KV observations, which can include failed requests and multiple responses per logical request; zero observations mean unknown. ",
     "Ratios compare matched algorithm pairs. Repeat ranges are observed minima and maxima, not confidence intervals. ",
@@ -65,7 +66,9 @@ pub struct Row {
     pub case: String,
     pub pair_id: String,
     pub algorithm: Algorithm,
+    #[serde(rename = "initialRate")]
     pub rate: usize,
+    pub rate_steps: Vec<RateStep>,
     pub workers: usize,
     pub limit: RunLimit,
     pub limits: RequestLimits,
@@ -295,6 +298,7 @@ fn matching_workloads(left: &Workload, right: &Workload) -> bool {
 fn matching_conditions(left: &Row, right: &Row) -> bool {
     left.case == right.case
         && left.rate == right.rate
+        && left.rate_steps == right.rate_steps
         && left.workers == right.workers
         && left.limit == right.limit
         && left.limits == right.limits
@@ -306,7 +310,9 @@ fn matching_conditions(left: &Row, right: &Row) -> bool {
 struct Comparison<'a> {
     pair_id: &'a str,
     case: &'a str,
+    #[serde(rename = "initialRate")]
     rate: usize,
+    rate_steps: &'a [RateStep],
     workers: usize,
     wait_and_widen_source: &'a Path,
     power_of_n_source: &'a Path,
@@ -352,7 +358,9 @@ impl RatioSummary {
 #[serde(rename_all = "camelCase")]
 struct Aggregate<'a> {
     case: &'a str,
+    #[serde(rename = "initialRate")]
     rate: usize,
+    rate_steps: &'a [RateStep],
     workers: usize,
     pairs: usize,
     goodput_ratio: RatioSummary,
@@ -442,6 +450,7 @@ fn summarize(rows: &[Row]) -> Result<Summary<'_>> {
             pair_id,
             case: &waw.case,
             rate: waw.rate,
+            rate_steps: &waw.rate_steps,
             workers: waw.workers,
             wait_and_widen_source: &waw.source,
             power_of_n_source: &power.source,
@@ -458,9 +467,10 @@ fn summarize(rows: &[Row]) -> Result<Summary<'_>> {
     }
     let aggregates = groups
         .into_iter()
-        .map(|((case, rate, workers), (_, indices))| Aggregate {
+        .map(|((case, rate, workers), (row, indices))| Aggregate {
             case,
             rate,
+            rate_steps: &row.rate_steps,
             workers,
             pairs: indices.len(),
             goodput_ratio: RatioSummary::new(
@@ -536,7 +546,8 @@ fn write_csv(file: &mut File, rows: &[Row]) -> Result<()> {
         "case",
         "pair_id",
         "algorithm",
-        "rate",
+        "initial_rate",
+        "rate_steps",
         "workers",
         "requested_count",
         "duration_seconds",
@@ -571,6 +582,7 @@ fn write_csv(file: &mut File, rows: &[Row]) -> Result<()> {
             row.pair_id.clone(),
             row.algorithm.to_string(),
             row.rate.to_string(),
+            serde_json::to_string(&row.rate_steps)?,
             row.workers.to_string(),
             count,
             duration,
@@ -637,10 +649,20 @@ fn write_text(file: &mut File, summary: &Summary<'_>) -> Result<()> {
         )?;
     }
     for aggregate in &summary.aggregates {
+        let load = if aggregate.rate_steps.is_empty() {
+            format!("{} RPS", aggregate.rate)
+        } else {
+            aggregate
+                .rate_steps
+                .iter()
+                .map(|step| format!("{} RPS for {} s", step.rate, step.duration_seconds))
+                .collect::<Vec<_>>()
+                .join(" -> ")
+        };
         writeln!(
             file,
-            "\n{} at {} RPS / {} workers: {} matched pairs",
-            aggregate.case, aggregate.rate, aggregate.workers, aggregate.pairs
+            "\n{} at {} / {} workers: {} matched pairs",
+            aggregate.case, load, aggregate.workers, aggregate.pairs
         )?;
         for (name, ratio) in [
             ("Successful throughput", &aggregate.goodput_ratio),
@@ -717,6 +739,7 @@ mod tests {
             pair_id: pair.into(),
             algorithm,
             rate: 8,
+            rate_steps: Vec::new(),
             workers: 16,
             limit: RunLimit::DurationSeconds(10),
             limits: RequestLimits {

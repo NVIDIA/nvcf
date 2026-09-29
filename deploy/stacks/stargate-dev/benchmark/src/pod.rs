@@ -627,7 +627,15 @@ impl<'a> Runner<'a> {
             self.identity(&launch.target).await? == launch.identity,
             "Spark container changed before report download"
         );
-        let remote = format!("{}/spark.json", launch.directory);
+        let name = local_report
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("Spark artifact has no filename")?;
+        ensure!(
+            matches!(name, "spark.json" | "spark.requests.jsonl"),
+            "unsupported Spark artifact"
+        );
+        let remote = format!("{}/{name}", launch.directory);
         let expected = self.remote_hash(&launch.target, &remote).await?;
         let parent = local_report.parent().context("report has no parent")?;
         fs::create_dir_all(parent)?;

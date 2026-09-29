@@ -73,9 +73,35 @@ pub struct Stream {
     pub name: Option<String>,
     pub workload: String,
     pub rate: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rate_steps: Vec<RateStep>,
     pub workers: usize,
     pub limit: RunLimit,
     pub limits: RequestLimits,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RateStep {
+    pub rate: NonZeroUsize,
+    pub duration_seconds: NonZeroU64,
+}
+
+fn schedule_seconds(steps: &[RateStep]) -> Result<u64> {
+    ensure!(!steps.is_empty(), "rate schedule must contain steps");
+    let seconds = steps.iter().try_fold(0_u64, |total, step| {
+        ensure!(
+            step.rate.get() <= 1_000_000_000,
+            "scheduled rate exceeds Spark's limit"
+        );
+        total
+            .checked_add(step.duration_seconds.get())
+            .context("rate schedule duration overflow")
+    })?;
+    seconds
+        .checked_mul(1_000_000_000)
+        .context("rate schedule exceeds Spark's nanosecond range")?;
+    Ok(seconds)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +192,12 @@ enum Scenario {
         request_slo_ms: Option<NonZeroU64>,
         max_wait_ms: Option<NonZeroU64>,
         timeout_seconds: Option<NonZeroU64>,
+    },
+    SessionRamp {
+        sessions: NonZeroUsize,
+        stable_prefix_bytes: NonZeroUsize,
+        turn_bytes: NonZeroUsize,
+        steps: Vec<RateStep>,
     },
     MixedSessions {
         duration_seconds: NonZeroU64,
@@ -320,6 +352,21 @@ impl Scenario {
             return workload.validate();
         }
         match self {
+            Self::SessionRamp {
+                sessions,
+                stable_prefix_bytes,
+                turn_bytes,
+                steps,
+            } => {
+                schedule_seconds(steps)?;
+                Workload::Sessions {
+                    sessions: sessions.get(),
+                    turns: 1,
+                    stable_prefix_bytes: stable_prefix_bytes.get(),
+                    turn_bytes: turn_bytes.get(),
+                }
+                .validate()
+            }
             Self::Requests {
                 requests,
                 prompt_bytes,
@@ -447,7 +494,7 @@ impl Suite {
                 .get(scenario_name)
                 .with_context(|| format!("unknown scenario {scenario_name}"))?;
             let pairs = match scenario {
-                Scenario::Requests { .. } => 1,
+                Scenario::Requests { .. } | Scenario::SessionRamp { .. } => 1,
                 Scenario::Sweep { rates, .. } => rates.len(),
                 Scenario::SessionAffinity { repeats, .. }
                 | Scenario::SessionWorkers { repeats, .. }
@@ -508,6 +555,43 @@ impl Suite {
                 .with_context(|| format!("unknown scenario {scenario_name}"))?;
             let limits = scenario.limits(&self.defaults);
             match scenario {
+                Scenario::SessionRamp {
+                    sessions,
+                    stable_prefix_bytes,
+                    turn_bytes,
+                    steps,
+                } => {
+                    let file = format!("{scenario_name}.yaml");
+                    plan.add_workload(
+                        file.clone(),
+                        Workload::Sessions {
+                            sessions: sessions.get(),
+                            turns: 1,
+                            stable_prefix_bytes: stable_prefix_bytes.get(),
+                            turn_bytes: turn_bytes.get(),
+                        },
+                    )?;
+                    for algorithm in algorithm_order(algorithms, false) {
+                        plan.arms.push(Arm {
+                            kind: ArmKind::Affinity,
+                            directory: Path::new(scenario_name).join(algorithm.as_str()),
+                            algorithm,
+                            scenario: scenario_name.clone(),
+                            reset_cache: true,
+                            cooldown_seconds: 0,
+                            warmup: None,
+                            streams: vec![Stream {
+                                name: None,
+                                workload: file.clone(),
+                                rate: steps[0].rate.get(),
+                                rate_steps: steps.clone(),
+                                workers: sessions.get(),
+                                limit: RunLimit::DurationSeconds(schedule_seconds(steps)?),
+                                limits,
+                            }],
+                        });
+                    }
+                }
                 Scenario::Requests {
                     requests,
                     rate,
@@ -527,6 +611,7 @@ impl Suite {
                                 name: None,
                                 workload: format!("{scenario_name}.yaml"),
                                 rate: rate.get(),
+                                rate_steps: Vec::new(),
                                 workers: workers.get(),
                                 limit: RunLimit::Requests(requests.get()),
                                 limits,
@@ -583,6 +668,7 @@ impl Suite {
                                         .remove(&algorithm)
                                         .context("missing sweep workload")?,
                                     rate: rate.get(),
+                                    rate_steps: Vec::new(),
                                     workers,
                                     limit: RunLimit::DurationSeconds(duration_seconds.get()),
                                     limits,
@@ -625,6 +711,7 @@ impl Suite {
                                     name: None,
                                     workload: file.clone(),
                                     rate: rate.get(),
+                                    rate_steps: Vec::new(),
                                     workers: workers.get(),
                                     limit: RunLimit::Requests(requests),
                                     limits,
@@ -671,6 +758,7 @@ impl Suite {
                                     name: Some("warm".into()),
                                     workload: hot_file.clone(),
                                     rate: 1,
+                                    rate_steps: Vec::new(),
                                     workers: 1,
                                     limit: RunLimit::Requests(1),
                                     limits,
@@ -680,6 +768,7 @@ impl Suite {
                                         name: Some("hot".into()),
                                         workload: hot_file.clone(),
                                         rate: hot.rate.get(),
+                                        rate_steps: Vec::new(),
                                         workers: hot.workers.get(),
                                         limit: RunLimit::DurationSeconds(duration_seconds.get()),
                                         limits,
@@ -688,6 +777,7 @@ impl Suite {
                                         name: Some("short".into()),
                                         workload: short_file.clone(),
                                         rate: short.rate.get(),
+                                        rate_steps: Vec::new(),
                                         workers: short.workers.get(),
                                         limit: RunLimit::DurationSeconds(duration_seconds.get()),
                                         limits,
@@ -715,6 +805,13 @@ impl Suite {
 
 impl Stream {
     fn validate(&self) -> Result<()> {
+        if !self.rate_steps.is_empty() {
+            ensure!(
+                self.limit == RunLimit::DurationSeconds(schedule_seconds(&self.rate_steps)?)
+                    && self.rate == self.rate_steps[0].rate.get(),
+                "scheduled stream rate and duration must match its steps"
+            );
+        }
         ensure!(
             self.workers > 0 && self.rate > 0,
             "workers and rate must be positive"
@@ -832,6 +929,15 @@ impl Plan {
                     "unknown workload {}",
                     stream.workload
                 );
+                if !stream.rate_steps.is_empty() {
+                    ensure!(
+                        arm.kind == ArmKind::Affinity
+                            && arm.reset_cache
+                            && arm.warmup.is_none()
+                            && matches!(self.workloads[&stream.workload], Workload::Sessions { sessions, turns: 1, .. } if sessions == stream.workers),
+                        "session ramps require one serial worker per fixed session and one initial cache reset"
+                    );
+                }
             }
         }
         Ok(())
@@ -870,6 +976,51 @@ mod tests {
     use super::*;
 
     const CANONICAL: &str = include_str!("../../loadtest/suite.yaml");
+
+    #[test]
+    fn session_ramp_preserves_steps_and_uses_one_cache_reset_per_algorithm() -> Result<()> {
+        let source = include_str!("../../loadtest/session-ramp.yaml");
+        let plan = Suite::from_yaml(source)?.plan("session-ramp", &Algorithm::ALL)?;
+        assert_eq!(plan.arms.len(), 2);
+        assert_eq!(plan.minimum_measured_minutes(), 30.0);
+        for arm in &plan.arms {
+            assert!(arm.reset_cache && arm.warmup.is_none());
+            assert_eq!(arm.streams.len(), 1);
+            let stream = &arm.streams[0];
+            assert_eq!(stream.workers, 768);
+            assert_eq!(stream.limit, RunLimit::DurationSeconds(900));
+            assert_eq!(
+                stream
+                    .rate_steps
+                    .iter()
+                    .map(|step| step.rate.get())
+                    .collect::<Vec<_>>(),
+                [160, 180, 200, 180, 160]
+            );
+            assert_eq!(plan.workloads[&stream.workload].prompt_count()?, 768);
+        }
+        for invalid in [
+            "[]",
+            "[{rate: 0, durationSeconds: 1}]",
+            "[{rate: 1000000001, durationSeconds: 1}]",
+            "[{rate: 1, durationSeconds: 0}]",
+            "[{rate: 1, durationSeconds: 18446744073709551615}]",
+        ] {
+            let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(source)?;
+            value["scenarios"]["session-ramp"]["steps"] = serde_yaml_ng::from_str(invalid)?;
+            assert!(
+                Suite::from_yaml(&serde_yaml_ng::to_string(&value)?).is_err(),
+                "{invalid}"
+            );
+        }
+        let mut invalid = plan.clone();
+        invalid.arms[0].streams[0].workers -= 1;
+        assert!(invalid.validate().is_err());
+        let mut invalid = plan.clone();
+        invalid.arms[0].streams[0].limit = RunLimit::DurationSeconds(899);
+        assert!(invalid.validate().is_err());
+        Ok(())
+    }
 
     #[test]
     fn canonical_plan_preserves_order_and_execution_controls() -> Result<()> {

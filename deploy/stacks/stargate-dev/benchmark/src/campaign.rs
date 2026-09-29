@@ -569,6 +569,12 @@ async fn execute(
         let reports = execution
             .streams(arm, &arm.streams, &attempt, false, resources)
             .await?;
+        for (stream, report) in arm.streams.iter().zip(&reports) {
+            if !stream.rate_steps.is_empty() {
+                let path = report.path.with_extension("requests.jsonl");
+                evidence.insert(path.clone(), hash_file(&output.join(path))?);
+            }
+        }
         let ended_at = now()?;
         let after = topology.pod_state().await?;
         evidence_file(output, &attempt, "pods.after.json", &after, &mut evidence)?;
@@ -824,6 +830,7 @@ struct PreparedStream {
     directory: PathBuf,
     arguments: Vec<String>,
     timeout: Duration,
+    scheduled: bool,
 }
 
 impl Execution<'_> {
@@ -856,6 +863,7 @@ impl Execution<'_> {
                 directory,
                 arguments,
                 timeout: deadline(stream)?,
+                scheduled: !stream.rate_steps.is_empty(),
             });
         }
         match &resources.engine {
@@ -881,6 +889,7 @@ impl Execution<'_> {
                     stream.limit,
                     arm.kind == ArmKind::Capacity,
                 )?;
+                crate::schedule::verify(&self.output.join(&path), stream, &verified.metrics)?;
                 if warmup || arm.kind == ArmKind::Smoke {
                     ensure!(
                         verified.metrics.failed == 0,
@@ -1134,6 +1143,17 @@ impl Execution<'_> {
                     &self.output.join(&stream.directory).join("spark.json"),
                 )
                 .await?;
+            if stream.scheduled {
+                runner
+                    .download(
+                        launch,
+                        &self
+                            .output
+                            .join(&stream.directory)
+                            .join("spark.requests.jsonl"),
+                    )
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -1162,14 +1182,10 @@ fn spark_arguments(
         stream.limits.request_slo_ms.to_string(),
         "--workers".into(),
         stream.workers.to_string(),
-        "--rate-limit".into(),
-        stream.rate.to_string(),
         "--timeout".into(),
         format!("{}s", stream.limits.timeout_seconds),
         "--max-tokens".into(),
         stream.limits.max_tokens.to_string(),
-        "--warmup".into(),
-        "0".into(),
         "--quiet".into(),
         "--output".into(),
         artifact_root
@@ -1186,10 +1202,27 @@ fn spark_arguments(
         "--scenario".into(),
         "normal".into(),
     ];
-    match stream.limit {
-        RunLimit::Requests(requests) => args.extend(["--requests".into(), requests.to_string()]),
-        RunLimit::DurationSeconds(seconds) => {
-            args.extend(["--duration".into(), format!("{seconds}s")])
+    if stream.rate_steps.is_empty() {
+        args.extend([
+            "--rate-limit".into(),
+            stream.rate.to_string(),
+            "--warmup".into(),
+            "0".into(),
+        ]);
+        match stream.limit {
+            RunLimit::Requests(requests) => {
+                args.extend(["--requests".into(), requests.to_string()])
+            }
+            RunLimit::DurationSeconds(seconds) => {
+                args.extend(["--duration".into(), format!("{seconds}s")])
+            }
+        }
+    } else {
+        for step in &stream.rate_steps {
+            args.extend([
+                "--rate-step".into(),
+                format!("{}:{}s", step.rate, step.duration_seconds),
+            ]);
         }
     }
     if let Some(header) = plan
@@ -1203,6 +1236,18 @@ fn spark_arguments(
 }
 
 fn deadline(stream: &Stream) -> Result<Duration> {
+    let drain = if stream.rate_steps.is_empty() {
+        600
+    } else {
+        // Spark permits an initial attempt and three retries, with up to 5s backoff each.
+        // Retain the normal 600s controller allowance for launch and polling overhead.
+        stream
+            .limits
+            .timeout_seconds
+            .checked_mul(4)
+            .and_then(|seconds| seconds.checked_add(615))
+            .context("scheduled request drain allowance exceeds u64")?
+    };
     let seconds = match stream.limit {
         RunLimit::DurationSeconds(seconds) => seconds,
         RunLimit::Requests(requests) => {
@@ -1213,7 +1258,7 @@ fn deadline(stream: &Stream) -> Result<Duration> {
             rate_bound.max(worker_bound)
         }
     }
-    .checked_add(600)
+    .checked_add(drain)
     .context("Spark timeout exceeds u64")?;
     let duration = Duration::from_secs(seconds);
     ensure!(
@@ -1424,6 +1469,7 @@ pub fn render(output: &Path) -> Result<()> {
                 pair_id: pair_id.display().to_string(),
                 algorithm: arm.algorithm,
                 rate: stream.rate,
+                rate_steps: stream.rate_steps.clone(),
                 workers: stream.workers,
                 limit: stream.limit,
                 limits: stream.limits,
@@ -1475,6 +1521,15 @@ fn load_receipt(output: &Path, arm: &Arm) -> Result<Option<AcceptedArm>> {
             stream.limit,
             arm.kind == ArmKind::Capacity,
         )?;
+        crate::schedule::verify(&below(output, &accepted.path)?, stream, &verified.metrics)?;
+        if !stream.rate_steps.is_empty() {
+            ensure!(
+                receipt
+                    .evidence
+                    .contains_key(&accepted.path.with_extension("requests.jsonl")),
+                "accepted rate schedule lacks request timeline evidence"
+            );
+        }
         Ok(verified.metrics)
     };
     if let (Some(stream), Some(accepted)) = (&arm.warmup, &receipt.warmup) {
@@ -1863,6 +1918,43 @@ mod tests {
         let mut impossible = smoke.streams[0].clone();
         impossible.limits.timeout_seconds = u64::MAX;
         assert!(deadline(&impossible).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn rate_schedule_arguments_omit_conflicting_flags_and_allow_final_drain() -> Result<()> {
+        let topology = Topology::load("us-west-2", &[])?;
+        let plan = Suite::from_yaml(include_str!("../../loadtest/session-ramp.yaml"))?
+            .plan("session-ramp", &Algorithm::ALL)?;
+        for arm in &plan.arms {
+            let stream = &arm.streams[0];
+            let arguments = spark_arguments(
+                stream,
+                arm,
+                &plan,
+                Path::new("attempts/id/main"),
+                Path::new("/campaign"),
+                "http://test.invalid/v1",
+                topology.primary(),
+            )?;
+            for flag in ["--requests", "--duration", "--rate-limit", "--warmup"] {
+                assert!(!arguments.iter().any(|argument| argument == flag));
+            }
+            assert_eq!(
+                arguments
+                    .windows(2)
+                    .filter(|pair| pair[0] == "--rate-step")
+                    .map(|pair| pair[1].as_str())
+                    .collect::<Vec<_>>(),
+                ["160:180s", "180:180s", "200:180s", "180:180s", "160:180s"]
+            );
+            assert_eq!(deadline(stream)?, Duration::from_secs(1635));
+            let mut slow = stream.clone();
+            slow.limits.timeout_seconds = 1000;
+            assert_eq!(deadline(&slow)?, Duration::from_secs(5515));
+            slow.limits.timeout_seconds = u64::MAX;
+            assert!(deadline(&slow).is_err());
+        }
         Ok(())
     }
 

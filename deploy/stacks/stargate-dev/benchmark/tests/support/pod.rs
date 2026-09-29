@@ -40,6 +40,13 @@ pub fn run(root: &Path, arguments: &[OsString]) -> io::Result<bool> {
                 "docker-report.json"
             };
             fs::copy(root.join(report), output)?;
+            let timeline = root.join("spark.requests.jsonl");
+            if timeline.exists() {
+                fs::copy(
+                    timeline,
+                    std::path::Path::new(output).with_extension("requests.jsonl"),
+                )?;
+            }
         }
         return Ok(true);
     }

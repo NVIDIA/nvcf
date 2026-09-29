@@ -538,6 +538,54 @@ fn dead_port_forward_rejects_measurement_and_stops_owned_traffic() {
 }
 
 #[test]
+fn scheduled_pod_pair_retains_timeline_and_rejects_changed_evidence_before_resume() {
+    let directory = tempfile::tempdir().unwrap();
+    let fake = FakeCommand::new();
+    let root = pod_environment(&fake);
+    let suite = SUITE.split("scenarios:").next().unwrap().to_owned()
+        + "scenarios:\n  session: {kind: session-ramp, sessions: 1, stablePrefixBytes: 64, turnBytes: 64, steps: [{rate: 2, durationSeconds: 1}]}\n";
+    fs::write(directory.path().join("suite.yaml"), suite).unwrap();
+    let steps = json!([{"rate_limit":2.0,"duration_ms":1000}]);
+    let report_path = root.join("docker-report.json");
+    let mut report: Value = serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+    report["config"] = json!({"workers":1,"rate_steps":steps,"duration_ms":1000});
+    fs::write(report_path, report.to_string()).unwrap();
+    let mut timeline = json!({"kind":"schedule","workers":1,"rate_steps":steps}).to_string() + "\n";
+    for id in 1..=2 {
+        timeline.push_str(&json!({"id":id,"timing":{"admitted_offset_ms":(id-1)*500,"completed_offset_ms":(id-1)*500+250},"success":true,"http_error_status":null,"retries":0,"ttft_ms":1.0,"latency_ms":2.0,"cached_tokens":0,"cache_observations":1,"cache_hits":0}).to_string());
+        timeline.push('\n');
+    }
+    fs::write(root.join("spark.requests.jsonl"), &timeline).unwrap();
+    let run = |resume| {
+        run_command(&fake, directory.path(), resume)
+            .args(["--spark-pod", "spark-test"])
+            .output()
+            .unwrap()
+    };
+    successful(run(false));
+    let count_starts = || {
+        fake.calls()
+            .iter()
+            .filter(|args| args.first().is_some_and(|arg| arg == "--endpoint"))
+            .count()
+    };
+    assert_eq!(count_starts(), 2);
+    successful(run(true));
+    assert_eq!(count_starts(), 2);
+    let output = directory.path().join("results");
+    let receipt_path = output.join("accepted/session/wait-and-widen/receipt.json");
+    let receipt: Value = serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+    let path =
+        Path::new(receipt["reports"][0]["path"].as_str().unwrap()).with_extension("requests.jsonl");
+    assert!(receipt["evidence"][path.to_str().unwrap()].is_string());
+    assert_eq!(fs::read_to_string(output.join(&path)).unwrap(), timeline);
+    fs::write(output.join(&path), timeline + "\n").unwrap();
+    let rejected = run(true);
+    assert!(!rejected.status.success());
+    assert_eq!(count_starts(), 2);
+}
+
+#[test]
 fn interrupted_unacknowledged_pod_batch_reconciles_both_live_streams() {
     use rustix::fd::OwnedFd;
     use rustix::process::{Pid, PidfdFlags, Signal, kill_process, pidfd_open, pidfd_send_signal};
