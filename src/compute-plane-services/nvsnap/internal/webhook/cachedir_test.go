@@ -231,3 +231,25 @@ func TestCacheDirCapturePatches_Idempotent(t *testing.T) {
 		t.Errorf("expected no re-inject when cache mount present, got %d patches", len(p))
 	}
 }
+
+// A container function whose model is already on the NVCA model cache
+// claim keeps its pod untouched even when labelled for capture: the
+// cachedir env would make the engine download the model again and the
+// capture would duplicate it next to the cache claim.
+func TestCacheDir_ModelFromClusterCacheNotInjected(t *testing.T) {
+	m := &Mutator{Backend: newBackend(t), CacheDir: "/opt/nvsnap"}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fn", Name: "w-0", Labels: map[string]string{CaptureLabel: "true"}},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "nim", Image: "nvcr.io/nim/x:1", VolumeMounts: []corev1.VolumeMount{{Name: "model-data", MountPath: "/model-store", ReadOnly: true}}}},
+			Volumes:    []corev1.Volume{{Name: "model-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "abc-ro", ReadOnly: true}}}},
+		},
+	}
+	if patches := m.cacheDirCapturePatches(pod); len(patches) != 0 {
+		t.Errorf("no cachedir injection for a cluster-cached model, got %d patches", len(patches))
+	}
+	pod.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	if patches := m.cacheDirCapturePatches(pod); len(patches) == 0 {
+		t.Error("an emptyDir model volume is still captured")
+	}
+}

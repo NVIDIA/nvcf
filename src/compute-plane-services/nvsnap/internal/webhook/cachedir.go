@@ -224,6 +224,14 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 	if m.MainContainer < 0 || m.MainContainer >= len(pod.Spec.Containers) {
 		return nil
 	}
+	// A model already served from a cluster model cache (NVCA rewrites the
+	// pod's model volume to its read-only claim) is left alone: the
+	// cachedir env would point the engine at a second download and the
+	// capture would hold a second copy of the model next to that claim.
+	if modelServedFromClusterCache(pod) {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).Info("cachedir: model served from a cluster model cache; not injecting the capture cachedir")
+		return nil
+	}
 	main := pod.Spec.Containers[m.MainContainer]
 
 	// Idempotency: if the cache volume/mount is already present (re-admit,
@@ -561,4 +569,21 @@ const prewarmChunkBytes = 256 << 20
 // Best-effort: every failure is swallowed, a restore never fails here.
 func prewarmCommand(root string, workers int) string {
 	return fmt.Sprintf(`{ find -L %[1]s -type f -size +64M ! -path '*/original/*' ! -path '*/blobs/*' -printf '%%s|%%p\n' 2>/dev/null | awk -F'|' -v c=%[2]d '{ n=int(($1+c-1)/c); for (i=0;i<n;i++) printf "%%d|%%s\n", i, $2 }' | xargs -d '\n' -r -P %[3]d -n 1 sh -c 'i=${0%%%%|*}; f=${0#*|}; dd if="$f" of=/dev/null bs=16M skip=$((i*16)) count=16 2>/dev/null'; find -L %[1]s -type f ! -size +64M ! -path '*/original/*' ! -path '*/blobs/*' -print0 2>/dev/null | xargs -0 -r -P %[3]d -n 16 cat > /dev/null 2>&1; } || true`, root, prewarmChunkBytes, workers)
+}
+
+// nvcaModelVolumeName is the volume NVCA gives a container function's
+// model; when its source is a PersistentVolumeClaim the model comes from
+// the NVCA model cache.
+const nvcaModelVolumeName = "model-data"
+
+// modelServedFromClusterCache reports whether the pod's model volume is a
+// claim rather than pod-local storage.
+func modelServedFromClusterCache(pod *corev1.Pod) bool {
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Name == nvcaModelVolumeName && v.PersistentVolumeClaim != nil {
+			return true
+		}
+	}
+	return false
 }
