@@ -423,43 +423,26 @@ validate them instead of forwarding public caller values.
 
 ### Routing expressions
 
-Append parameters to a configured method to override its settings for a request:
+Append parameters to a configured method to override its fields for a request:
 
 ```text
-x-routing-method: pulsar-wait-and-widen;seed=stable-a;n=2;max_queue_time_floor_ms=100;max_queue_time_ceil_ms=500
+x-routing-method: pulsar;seed=stable-a;consider_kv_free_tokens=true
 ```
 
-The method uses the same configuration lookup as a method-only override. Parameters
-replace individual fields; omitted fields keep their configured values. Parameter
-names match the configuration fields documented above and must apply to the selected
-algorithm. Common parameters include `require_cache_affinity_key`,
-`require_input_tokens`, and `max_input_work_seconds`.
+Parameter names are the configuration fields above and must apply to the
+selected algorithm. Omitted fields keep their configured values. The value is
+an RFC 8941 Item with Parameters, at most 1024 bytes and 32 parameters, with
+every parameter written as `key=value` and no commas. Quote a number that needs
+more than three fractional digits, such as `next_bucket_unlock_factor="0.0625"`.
 
-Expressions follow an RFC 8941 Item-with-Parameters profile, limited to 1024 bytes
-and 32 unique parameters. Every parameter needs `=value`. Spaces may follow `;`
-but cannot surround `=`. Use `true` or `false` for booleans. Strings may be quoted
-but cannot contain commas or semicolons; commas are forbidden anywhere. Quote
-numbers requiring more than three fractional digits, such as
-`next_bucket_unlock_factor="0.0625"`. Quoted numbers must be plain finite numbers,
-without exponents.
+An invalid header returns HTTP `400` before backend selection, with
+`x-stargate-error-code: <class>` and body
+`{"error":"<message>","code":"<class>"}`. The message names the rejected
+parameter or value.
 
-Expression values for `n`, `ttft_bucket_size_ms`, `max_input_work_seconds`,
-`cache_affinity_virtual_nodes`, and `cache_affinity_backend_selection_count` must
-be positive. Setting either queue-time bound requires both bounds in the resulting
-configuration. Static configuration behavior is unchanged.
-
-Unchanged expression bytes reuse the configuration and load balancer for the same
-routing key and model. Changed bytes replace that entry. Entries expire after
-15 minutes without access; cleanup occurs during cache operations. Each router
-process keeps at most 16384 entries. Past that limit, a request for an uncached
-target still routes, but its configuration is rebuilt for each request.
-
-Invalid routing headers return HTTP `400` before backend selection, with
-`content-type: application/json`, `x-stargate-error-code: <class>`, and body
-`{"error":"<message>","code":"<class>"}`. Classes are `malformed_expression`,
-`unknown_method`, `unavailable`, `unknown_parameter`, `not_applicable`,
-`invalid_value`, `inert_combination`, and `inert_value`. Method-only rejections
-use the same response shape.
+Each routing key and model reuses one configuration and load balancer while its
+expression bytes are unchanged. Entries expire after 15 idle minutes, and each
+router process keeps at most 16384.
 
 ## Load-balancer request headers
 
