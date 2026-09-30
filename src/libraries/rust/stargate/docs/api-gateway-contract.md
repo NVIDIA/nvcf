@@ -213,15 +213,19 @@ metadata and does not forward the upstream header downstream.
 
 Queued requests can wait a long time before their first output. Stargate waits
 up to `--quic-request-timeout-ms` (default 300000) for response headers from
-Pylon. Pylon waits up to `--pylon-first-output-timeout-ms` (default 300000)
-for the first streamed output and `--pylon-output-chunk-timeout-ms` (default
-30000) between outputs.
+Pylon. After the engine returns headers, Pylon waits up to
+`--pylon-first-output-timeout-ms` (default 300000) for the first streamed output
+and `--pylon-output-chunk-timeout-ms` (default 30000) between outputs. The two
+waits run one after the other, so a single attempt can wait for their sum before
+its first output, and each retry can wait that long again.
 
 Gateway rules:
 
 - Set `x-stargate-max-wait-ms` from the remaining request deadline.
-- Keep gateway request timeouts at or above these router timeouts, or requests
-  that are still queued fail at the gateway first.
+- Size any gateway request deadline for the whole path: the header wait plus the
+  first-output wait, for every attempt and retry delay allowed. A shorter
+  deadline fails requests that are still queued. The LLM API gateway sets no
+  deadline toward Stargate by default.
 - Avoid blind external retries after a streaming request may have reached an
   upstream.
 - Keep the same `x-request-id` only for convergence retries that did not reach
