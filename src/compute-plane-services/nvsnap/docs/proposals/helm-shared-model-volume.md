@@ -6,24 +6,38 @@ and the compile artifacts (torch.compile, Triton, FlashInfer, DeepGEMM, CUDA
 JIT) are built once per cluster, and every other pod consumes them. No chart
 change. No pod is ever held back from scheduling.
 
-Status: design, 2026-09-26. Supersedes the gate-and-promote path of
-`helm-chart-cache-election.md` for Helm functions. Issue #2099.
+Status: mechanisms 1 to 4 built and verified on dev1 (H100) and on an
+18 node GB300 cluster (arm64), 2026-09-30. Mechanism 5 is redesigned
+below as one cache-set volume per configuration and not yet built.
+Supersedes the gate-and-promote path of `helm-chart-cache-election.md`
+for Helm functions. Issue #2099. Diagrams are checked with
+`scripts/check-mermaid.sh`.
 
 ```mermaid
 sequenceDiagram
-    participant J as Job nvsnap-model-dl-<key>
-    participant P as pods 0..N (readers, any node, any namespace)
-    participant WH as webhook
-    participant A as agent
-    participant V as model volume nvsnap-model-<key>
-    WH->>WH: identity, landing path, group
-    WH->>J: create (idempotent): the chart's download step, into V
-    WH-->>P: landing path -> V (DFS) or hostPath + wait init (NVMesh)
-    Note over P: all pods schedule immediately
-    J->>V: download; touch .nvsnap-complete; exit 0, volume released
-    A->>V: complete: label claim; NVMesh: ro PV + bind into P's hostPath
-    P->>P: wait init sees marker, engine starts
-    Note over P: engines start together; multi-node groups form as today
+    participant WH as webhook (in agent)
+    participant P as rank pods 0..N
+    participant J as download Job (staging pod)
+    participant A as agents (one per node)
+    participant V as model volume
+    participant CS as cache set volume
+
+    Note over WH,CS: cold: no model volume, no cache set for this configuration
+    WH->>J: create once per model (idempotent): chart download step into an emptyDir
+    WH-->>P: admit as readers of the read-only model claim, cachedir emptyDir, cache stamps
+    J->>J: download finishes, hold container keeps the emptyDir
+    A->>V: size claim from the staged bytes, copy in, label complete, release
+    A-->>P: mint read-only model claim in the namespace, pods bind and start
+    P->>P: engines compile and tune, reach Ready
+    A->>A: each agent: rank Ready and tree settled, annotate rank-ready and bytes
+    A->>CS: one agent wins the election: create the set claim sized from all ranks
+    A->>A: collector streams the other ranks over the agent API
+    A->>CS: copy every rank into its ordinal directory, label complete, release
+
+    Note over WH,CS: warm: model volume and cache set complete
+    WH-->>P: admit with two claims: model volume and cache set, both read-only
+    P->>P: seed init copies its ordinal directory into the cachedir, engine starts
+    Note over P: no download, no compile, no tuning
 ```
 
 ## Two artifacts, two lifecycles
