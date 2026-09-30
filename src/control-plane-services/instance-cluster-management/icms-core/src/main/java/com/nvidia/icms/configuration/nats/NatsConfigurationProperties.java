@@ -35,6 +35,7 @@ public class NatsConfigurationProperties {
     private String natsUrl;
     private int maxPoolSize = 8;
     private boolean createNatsStreams;
+    private int replicas = 1;
     private Duration connectionTimeout = Duration.ZERO;
     private Duration pingInterval = Duration.ZERO;
     private Duration reconnectWait = Duration.ZERO;

@@ -281,17 +281,20 @@ Beyond placement, HA also raises the data-durability settings:
 Streams default to a single replica. When NATS runs more than one server, the
 stack derives the JetStream replica factor (RF) from the server count, capped
 at **3** as the NATS documentation recommends, so the HA cluster of 3 servers
-gets RF=3. It is set on the two services that create streams: `nvcf-api` (via
-`NVCF_NATS_REPLICAS`) and `invocation-service` (via `NATS_PROPERTIES__REPLICAS`).
-To override it for one service, set that variable in `api.env` or
-`invocation.env`. JetStream streams use Raft quorum: RF=3 tolerates the loss of
+gets RF=3. It is set on the three services that create streams: `nvcf-api` (via
+`NVCF_NATS_REPLICAS`), `invocation-service` (via `NATS_PROPERTIES__REPLICAS`), and
+`icms` (the `sis` release, via `ICMS_NATS_REPLICAS`, for `CreateNvcaFunctionTaskStream` and
+`TerminateNvcaStream`). To override it for nvcf-api or invocation-service, set
+that variable in `api.env` or `invocation.env`. JetStream streams use Raft quorum: RF=3 tolerates the loss of
 one replica. **RF=2 is not sufficient** — a 2-member Raft group loses quorum
 the moment either replica is unavailable, so it provides no resilience benefit
 over RF=1.
 
 RF applies when a stream is **created**. Streams already created at RF=1 are not
 rewritten by changing this value — after enabling HA, recreate or edit those
-streams (for example `nats stream edit`) to raise their replica factor.
+streams (for example `nats stream edit`) to raise their replica factor. The
+exception is `icms`, which raises its two streams to the configured RF when it
+starts and on its periodic stream validation.
 
 #### Cassandra replication and consistency
 
