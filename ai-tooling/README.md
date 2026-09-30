@@ -8,6 +8,7 @@ Public agent skills for users and developers working with NVIDIA Cloud Functions
 |-------|-------------|
 | [documentation-style](dev/skills/documentation-style/SKILL.md) | Public docs, AGENTS, and skill-writing style |
 | [nvcf-explore-stack](dev/skills/nvcf-explore-stack/SKILL.md) | Navigate the self-hosted stack topology, helmfile dependency graph, chart ownership, and deployment order |
+| [nvcf-self-hosted-local-dev](dev/skills/nvcf-self-hosted-local-dev/SKILL.md) | Select and validate local single-cluster or split-cluster self-hosted topology with real worker traffic |
 | [nvcf-self-managed-installation](user/skills/nvcf-self-managed-installation/SKILL.md) | Install and deploy the nvcf-self-managed-stack helmfile bundle: installation, teardown, values overrides, pull secrets, debugging |
 | [nvcf-self-managed-cli](user/skills/nvcf-self-managed-cli/SKILL.md) | Standalone NVCF CLI (`nvcf-cli`) for self-managed/self-hosted deployments: install, status, add compute plane, teardown, function lifecycle, invocation, and API keys |
 | [nvcf-self-managed-prerequisite](user/skills/nvcf-self-managed-prerequisite/SKILL.md) | Install the cluster-level prerequisites NVCA needs: KAI Scheduler (with queue-quota patch) and the SMB CSI driver. Cloud-neutral helm installs pinned to NVCF-validated versions |
