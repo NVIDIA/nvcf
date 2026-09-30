@@ -56,14 +56,20 @@ public class CreationBucketPopulationTask {
                     PAUSE_BETWEEN_PAGES_IN_MS,
                     0,
                     configuration.getDatabaseReadPageSize());
+        } catch (Exception exception) {
+            error = exception.getMessage();
+            log.error("Job: {} scan failed with error: {} on processing requests",
+                    CREATION_BUCKET_POPULATION_TASK_NAME, error, exception);
+        }
 
+        try {
             instanceRepository.findAllInstancesAndApplyAction(
                     instance -> populateInstance(instance, instancesUpdated, instancesFailed),
                     PAUSE_BETWEEN_PAGES_IN_MS);
         } catch (Exception exception) {
             error = exception.getMessage();
-            log.error("Job: {} scan failed with error: {}",
-                    CREATION_BUCKET_POPULATION_TASK_NAME, error, exception);
+            log.error("Job: {} scan failed with error: {} on processing instances",
+                      CREATION_BUCKET_POPULATION_TASK_NAME, error, exception);
         }
 
         PopulationResult result = new PopulationResult(
