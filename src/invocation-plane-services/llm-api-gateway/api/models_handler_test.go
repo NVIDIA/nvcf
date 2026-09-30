@@ -77,7 +77,10 @@ func (r *stubRouter) serveHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mu.Unlock()
 
 	if received != nil {
-		received <- struct{}{}
+		select {
+		case received <- struct{}{}:
+		default:
+		}
 	}
 	if gate != nil {
 		<-gate
@@ -111,10 +114,17 @@ func (r *stubRouter) callCount() int {
 	return r.calls
 }
 
+// modelsTestGateway also serves as the model catalog's clock.
 type modelsTestGateway struct {
 	engine *echo.Echo
 	now    time.Time
 }
+
+func (g *modelsTestGateway) Now() time.Time { return g.now }
+
+func (g *modelsTestGateway) NowNano() int64 { return g.now.UnixNano() }
+
+func (g *modelsTestGateway) Tick(time.Duration) <-chan time.Time { return nil }
 
 func newModelsTestGateway(t *testing.T, routerURL string, cacheTTL time.Duration) *modelsTestGateway {
 	t.Helper()
@@ -127,7 +137,7 @@ func newModelsTestGateway(t *testing.T, routerURL string, cacheTTL time.Duration
 
 	gateway := &modelsTestGateway{engine: echo.New(), now: time.Unix(modelsTestStart, 0)}
 	handlers := NewHandlers(cfg, stargate, ratelimit.AllowAll)
-	handlers.modelCatalog.now = func() time.Time { return gateway.now }
+	handlers.modelCatalog = newModelCatalog(stargate, cacheTTL, gateway)
 	gateway.engine.Use(NewContextMiddleware(cfg))
 	RegisterRoutes(gateway.engine, handlers)
 	return gateway
@@ -330,28 +340,30 @@ func TestModelsEndpoints_RouterFailsAfterCacheExpires_ReturnsBadGateway(t *testi
 	}
 }
 
-func TestModelsEndpoints_CallerCancelsDuringRefresh_StopsWaitingAndOthersShareTheCall(t *testing.T) {
+func TestModelsEndpoints_FirstCallerCancelsDuringRefresh_RefreshStillCompletes(t *testing.T) {
 	t.Parallel()
 	router := newStubRouter(t, "meta/llama-3.1-8b-instruct")
 	router.gate = make(chan struct{})
 	router.received = make(chan struct{}, 1)
+	releaseRouter := sync.OnceFunc(func() { close(router.gate) })
+	t.Cleanup(releaseRouter)
 	gateway := newModelsTestGateway(t, router.server.URL, time.Minute)
 
+	ctx, cancel := context.WithCancel(context.Background())
 	first := make(chan *httptest.ResponseRecorder)
-	go func() { first <- gateway.get(t, "/v1/models") }()
+	go func() { first <- gateway.getWithContext(t, ctx, "/v1/models") }()
 	<-router.received
+	cancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	waitStart := time.Now()
-	rec := gateway.getWithContext(t, ctx, "/v1/models/meta/llama-3.1-8b-instruct")
-	require.Less(t, time.Since(waitStart), time.Second, "cancelled caller kept waiting for the refresh")
-	require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+	select {
+	case rec := <-first:
+		t.Fatalf("refresh ended when its first caller cancelled: %d %s", rec.Code, rec.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseRouter()
+	<-first
 
-	close(router.gate)
-	rec = <-first
+	rec := gateway.get(t, "/v1/models/meta/llama-3.1-8b-instruct")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	rec = gateway.get(t, "/v1/models/meta/llama-3.1-8b-instruct")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, 1, router.callCount())
+	require.Equal(t, 1, router.callCount(), "the refreshed listing was not cached")
 }

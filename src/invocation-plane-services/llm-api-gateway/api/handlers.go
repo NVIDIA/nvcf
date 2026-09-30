@@ -101,7 +101,7 @@ func NewHandlers(
 		listingCacheTTL = cfg.Stargate.ListingCacheTTL
 	}
 	modelLister, _ := any(p).(provider.ModelLister)
-	h.modelCatalog = newModelCatalog(modelLister, listingCacheTTL)
+	h.modelCatalog = newModelCatalog(modelLister, listingCacheTTL, systemClock{})
 	for _, opt := range opts {
 		if opt != nil {
 			opt(h)
