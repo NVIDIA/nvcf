@@ -484,3 +484,53 @@ func TestStaleNamespaceCheck_HintsOneCommandPerNamespace(t *testing.T) {
 	assert.Contains(t, r.Message, "get -n api-keys --show-kind")
 	assert.Contains(t, r.Message, "get -n ess --show-kind")
 }
+
+// The documented install pre-creates each namespace holding only a registry
+// pull Secret, so before the first install none has a release. That is not a
+// leftover and must not be flagged, while a namespace that still holds data,
+// as `down` leaves them, is.
+func TestProbeStaleNamespaces_PreCreatedNamespaceIsNotStale(t *testing.T) {
+	ns := func(name string) *corev1.Namespace {
+		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name},
+			Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}
+	}
+	pull := func(ns string) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nvcr-pull-secret", Namespace: ns},
+			Type: corev1.SecretTypeDockerConfigJson}
+	}
+	client := fake.NewSimpleClientset(
+		ns("nvcf"), pull("nvcf"),
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "kube-root-ca.crt", Namespace: "nvcf"}},
+		ns("cassandra-system"), pull("cassandra-system"),
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data-cassandra-0", Namespace: "cassandra-system"}},
+		ns("vault-system"), pull("vault-system"),
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "vault-unseal", Namespace: "vault-system"},
+			Type: corev1.SecretTypeOpaque},
+		ns("sis"), pull("sis"),
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "sis-config", Namespace: "sis"}},
+	)
+	stale, err := probeStaleNamespaces(context.Background(), client,
+		[]string{"nvcf", "cassandra-system", "vault-system", "sis"})
+	require.NoError(t, err)
+	var names []string
+	for _, s := range stale {
+		names = append(names, s.Name)
+	}
+	assert.ElementsMatch(t, []string{"cassandra-system", "vault-system", "sis"}, names,
+		"only the namespaces that still hold data")
+}
+
+// An install rendered with `helm template` (Argo CD) records no Helm release
+// but runs pods. That is a live install, not a leftover.
+func TestProbeStaleNamespaces_NamespaceRunningPodsIsNotStale(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nats-system"},
+			Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nats-0", Namespace: "nats-system"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nats-auth", Namespace: "nats-system"},
+			Type: corev1.SecretTypeOpaque},
+	)
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nats-system"})
+	require.NoError(t, err)
+	assert.Empty(t, stale)
+}

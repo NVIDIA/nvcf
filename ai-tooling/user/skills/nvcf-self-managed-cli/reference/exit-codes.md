@@ -8,7 +8,7 @@ Stable across subcommands. Use these to drive agent retry / surfacing logic.
 | `1` | Generic error | Helm render failed; network unreachable; file not found; YAML parse error |
 | `2` | Pre-flight check failed | A `check` result at error severity: Gateway API CRDs missing; kubectl not on PATH; default StorageClass absent; a cluster-validator that could not run (RBAC denied, image pull failure, timeout). Warning-severity results exit `0` |
 | `3` | Admin auth failed | No token + `--non-interactive` set; ICMS rejected JWT; init endpoint unreachable |
-| `5` | Manifest apply or `--wait` timed out | Helm install timeout; check polled but didn't pass before duration |
+| `5` | Manifest apply or `--wait` timed out | Helm install timeout; check polled but didn't pass before duration; the check's time budget ran out before every check ran (those report as not run) |
 | `130` | Cancelled by SIGINT/SIGTERM | User Ctrl-C; CI budget exceeded; pod evicted |
 
 ## How an agent should react

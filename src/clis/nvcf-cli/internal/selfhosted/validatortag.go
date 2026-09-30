@@ -94,6 +94,16 @@ func ResolveLatestValidatorTag(ctx context.Context, baseImage string) (string, b
 	return fmt.Sprintf("%s/%s:%s", registry, repo, best), true
 }
 
+// ImageRefIsPinned reports whether ref names a tag or a digest. An unpinned
+// reference is pulled as :latest, which a registry need not have.
+func ImageRefIsPinned(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if strings.Contains(ref, "@") {
+		return true
+	}
+	return strings.Contains(ref[strings.LastIndex(ref, "/")+1:], ":")
+}
+
 // parseImageRef splits "registry/repo:tag" or "registry/repo@digest" into
 // its parts. The registry must contain a '.' or ':' to distinguish a
 // real hostname from a Docker Hub library shorthand. Returns ok=false on
@@ -497,32 +507,28 @@ func isNGCRegistry(registry string) bool {
 	return false
 }
 
-// credentialsForRegistry resolves (username, password) for any registry.
-// Checks ~/.docker/config.json first, then falls back to NGC_API_KEY only
-// for NGC-domain registries to avoid sending NGC creds to unrelated registries.
+// credentialsForRegistry resolves (username, password) for any registry. For
+// an NGC registry NGC_API_KEY comes first when it is set, because that is the
+// key up and the validator pull secret mint from: checking a keychain login
+// instead validated a different credential from the one the install uses.
+// NGC_API_KEY is never sent to any other registry. Without it, or for any
+// other registry, ~/.docker/config.json is used.
 func credentialsForRegistry(registry string) (string, string, bool) {
-	if u, p, ok := credsFromDockerConfig(registry); ok {
-		return u, p, true
-	}
 	if isNGCRegistry(registry) {
 		if key := firstNonEmptyEnv(ngcAPIKeyEnvNames...); key != "" {
 			return "$oauthtoken", key, true
 		}
 	}
-	return "", "", false
+	return credsFromDockerConfig(registry)
 }
 
-// ngcCredentials resolves (username, password) for an NGC-hosted registry.
-// Checks ~/.docker/config.json first; falls back to NGC_API_KEY env vars
-// with the literal "$oauthtoken" sentinel username NGC expects.
+// ngcCredentials resolves (username, password) for an NGC-hosted registry, in
+// the same order: NGC_API_KEY, then ~/.docker/config.json.
 func ngcCredentials(registry string) (string, string, bool) {
-	if u, p, ok := credsFromDockerConfig(registry); ok {
-		return u, p, true
-	}
 	if key := firstNonEmptyEnv(ngcAPIKeyEnvNames...); key != "" {
 		return "$oauthtoken", key, true
 	}
-	return "", "", false
+	return credsFromDockerConfig(registry)
 }
 
 func credsFromDockerConfig(registry string) (string, string, bool) {

@@ -169,3 +169,25 @@ func TestSelectAuthChallenge_JoinedInOneHeader(t *testing.T) {
 	assert.Equal(t, `Basic realm="bearer thing"`, selectAuthChallenge([]string{`Basic realm="bearer thing"`}),
 		"a quoted word is not a challenge")
 }
+
+// For an NGC registry the check uses NGC_API_KEY when it is set, the key the
+// install mints its pull secrets from, even when a credential store also has a
+// login for it. Without the key, the store is used. Other registries never
+// get the key.
+func TestCredentialsForRegistry_NGCKeyMatchesWhatTheInstallUses(t *testing.T) {
+	dockerHome(t, `{"auths":{"nvcr.io":{}},"credsStore":"store"}`, "store")
+	t.Setenv("NGC_API_KEY", "env-key")
+	u, p, ok := credentialsForRegistry("nvcr.io")
+	require.True(t, ok)
+	assert.Equal(t, "$oauthtoken", u)
+	assert.Equal(t, "env-key", p)
+
+	t.Setenv("NGC_API_KEY", "")
+	u, _, ok = credentialsForRegistry("nvcr.io")
+	require.True(t, ok)
+	assert.Equal(t, "u-store", u, "without the key the store's login is used")
+
+	t.Setenv("NGC_API_KEY", "env-key")
+	_, p, _ = credentialsForRegistry("quay.io")
+	assert.NotEqual(t, "env-key", p, "the NGC key is never sent to another registry")
+}

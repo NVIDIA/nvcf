@@ -41,6 +41,14 @@ import (
 // cluster from a unit test, and it is why the package took minutes and failed
 // on a proxied kubeconfig rather than seconds and deterministically.
 func TestMain(m *testing.M) {
+	// Every command reads ~/.nvcf-cli.yaml and some tests save
+	// ~/.nvcf-cli.state, so a developer's real config would steer results and
+	// a test run would overwrite their saved credentials.
+	home, err := os.MkdirTemp("", "nvcf-cli-cmd-test-home-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
 	resolveLatestValidatorTagForSelfHosted = func(_ context.Context, _ string) (string, bool) {
 		return "", false
 	}
@@ -81,11 +89,23 @@ func TestMain(m *testing.M) {
 	testSISURL = sis.URL
 	code := m.Run()
 	sis.Close()
+	_ = os.RemoveAll(home)
 	os.Exit(code)
 }
 
 // testSISURL is a local stand-in for SIS, set by TestMain.
 var testSISURL string
+
+// resetFlag returns f to its default value and clears its Changed marker. A
+// slice flag is replaced, since Set appends once the flag has been set.
+func resetFlag(f *pflag.Flag) {
+	if sv, ok := f.Value.(pflag.SliceValue); ok {
+		_ = sv.Replace(nil)
+	} else {
+		_ = f.Value.Set(f.DefValue)
+	}
+	f.Changed = false
+}
 
 // resetCheckFlags returns every `self-hosted check` flag to its default,
 // including cobra's Changed marker, now and when the test ends. The flag
@@ -110,8 +130,10 @@ func resetCheckFlags(t *testing.T) {
 		selfHostedOutput = "text"
 		selfHostedWait = ""
 		selfHostedControlPlaneContext, selfHostedComputePlaneContext = "", ""
+		// Values too, not only the Changed marker: a test that passes
+		// --icms-url would otherwise point every later check at its URL.
 		for _, fs := range []*pflag.FlagSet{selfHostedCheckCmd.Flags(), selfHostedCmd.PersistentFlags()} {
-			fs.VisitAll(func(f *pflag.Flag) { f.Changed = false })
+			fs.VisitAll(resetFlag)
 		}
 		// Other tests call viper.Reset(), which drops the bindings made at
 		// init, so a flag passed to check would silently not be read.

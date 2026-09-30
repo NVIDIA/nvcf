@@ -158,8 +158,10 @@ api_keys_owner_id: svc@nvcf-api.local
 # Command-line flag: --cluster-validator-image
 #
 # When the value has no tag, the latest tag is discovered from the
-# registry (preferring stable releases over rc). If unset everywhere,
-# the validator probe is skipped with a note on stderr.
+# registry (preferring stable releases over rc). If discovery fails, the
+# validator is skipped with a note rather than pulled as :latest; pin a tag
+# to avoid depending on discovery. If unset everywhere, the validator probe
+# is skipped with a note on stderr.
 #
 # Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # Prod:    nvcr.io/nvidia/nvcf-byoc/cluster-validator
@@ -178,6 +180,18 @@ api_keys_owner_id: svc@nvcf-api.local
 # cluster_validator_registries:
 #   - harbor.example.com:443
 #   - ghcr.io:443
+
+# Image for the control-plane validator's node-to-node overlay probe, which
+# needs sh and a busybox-style nc. Defaults to busybox:1.36 from Docker Hub.
+# Set a mirror for air-gapped clusters. The probe pods get no imagePullSecrets,
+# so the image must be pullable anonymously or through node-level registry
+# credentials.
+#
+# Config key: cluster_validator_probe_image
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE
+# Command-line flag: --cluster-validator-probe-image
+#
+# cluster_validator_probe_image: harbor.example.com/library/busybox:1.36
 
 # ==============================================================================
 # General Settings

@@ -138,6 +138,51 @@ func helmReleaseExists(
 	return false, fmt.Errorf("gave up after %d pages scanning for Helm releases", helmReleaseListMaxPages)
 }
 
+// hasPods reports whether namespace ns runs any pod. A read error reports
+// false, so the namespace is still flagged.
+func hasPods(ctx context.Context, client kubernetes.Interface, ns string) bool {
+	pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{Limit: 1})
+	return err == nil && len(pods.Items) > 0
+}
+
+// onlyInstallPreparation reports whether namespace ns holds a registry pull
+// Secret and nothing else an operator or an install would create: only the
+// tokens and CA ConfigMap Kubernetes adds to every namespace, and no PVCs. An
+// empty namespace, or a read error, reports false, so it is still flagged.
+func onlyInstallPreparation(ctx context.Context, client kubernetes.Interface, ns string) bool {
+	pvcs, err := client.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{Limit: 1})
+	if err != nil || len(pvcs.Items) > 0 {
+		return false
+	}
+	secrets, err := client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false
+	}
+	pullSecrets := 0
+	for i := range secrets.Items {
+		switch secrets.Items[i].Type {
+		case corev1.SecretTypeDockerConfigJson, corev1.SecretTypeDockercfg:
+			pullSecrets++
+		case corev1.SecretTypeServiceAccountToken:
+		default:
+			return false
+		}
+	}
+	if pullSecrets == 0 {
+		return false
+	}
+	cms, err := client.CoreV1().ConfigMaps(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false
+	}
+	for i := range cms.Items {
+		if cms.Items[i].Name != "kube-root-ca.crt" {
+			return false
+		}
+	}
+	return true
+}
+
 // helmReleasesAreInCluster reports whether Helm stores release state as
 // in-cluster Secrets or ConfigMaps, the drivers this probe can see.
 func helmReleasesAreInCluster() bool {
@@ -192,6 +237,15 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 			return stale, fmt.Errorf("list Helm configmaps in %s: %w", name, err)
 		}
 		if found {
+			continue
+		}
+		// No release is not yet a leftover. The documented install pre-creates
+		// the namespaces holding only a registry pull Secret, so before the
+		// first install none has a release; and an install rendered with
+		// `helm template` (Argo CD) never records one but runs pods. What
+		// `down` leaves behind runs nothing and still holds data (PVCs,
+		// Secrets, ConfigMaps).
+		if hasPods(ctx, client, name) || onlyInstallPreparation(ctx, client, name) {
 			continue
 		}
 		noRelease = append(noRelease, name)

@@ -942,12 +942,12 @@ func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interfa
 
 // buildControlPlaneValidatorConfig assembles the network-check ConfigMap YAML.
 // The reachability endpoints are the registries the install pulls from, as
-// EnumerateRegistries resolved them for the local credential check, with the
-// same criticality, so the two checks cannot disagree. A fixed critical
-// nvcr.io entry failed every mirrored or air-gapped control plane, the exact
-// install shape EnumerateRegistries deliberately does not send to nvcr.io.
-// With no registries the section is omitted and the validator runs without
-// configured reachability endpoints.
+// EnumerateRegistries resolved them for the local credential check, and all of
+// them are non-critical. The validator dials them from a pod with no proxy
+// support, but nodes pull through the container runtime, often via an
+// HTTPS_PROXY or a registry mirror that pods cannot use: a failed in-pod dial
+// is worth a warning, not proof that the nodes cannot pull. With no
+// registries the section is omitted.
 func buildControlPlaneValidatorConfig(registries []RegistryEntry) string {
 	var b strings.Builder
 	for _, reg := range registries {
@@ -963,8 +963,8 @@ func buildControlPlaneValidatorConfig(registries []RegistryEntry) string {
 		// ConfigMap unparseable, and the validator then silently drops every
 		// reachability and enforcement check.
 		fmt.Fprintf(&b,
-			"    - name: %q\n      host: %q\n      port: %d\n      protocol: tcp+tls\n      critical: %t\n",
-			reg.Registry, host, port, reg.Critical)
+			"    - name: %q\n      host: %q\n      port: %d\n      protocol: tcp+tls\n      critical: false\n",
+			reg.Registry, host, port)
 	}
 	return b.String() + controlPlaneValidatorEnforcementConfig
 }

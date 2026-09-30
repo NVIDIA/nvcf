@@ -605,7 +605,7 @@ func TestBuildControlPlaneValidatorConfig_NoRegistries(t *testing.T) {
 // The endpoints are exactly the enumerated registries, with the same
 // criticality. A mirrored install whose list has no nvcr.io must not be made
 // to dial it: a fixed critical nvcr.io failed every such control plane.
-func TestBuildControlPlaneValidatorConfig_FollowsEnumeratedRegistries(t *testing.T) {
+func TestBuildControlPlaneValidatorConfig_EndpointsAreNotCritical(t *testing.T) {
 	got := buildControlPlaneValidatorConfig([]RegistryEntry{
 		{Registry: "harbor.company.internal", Critical: false},
 		{Registry: "registry.example:5000", Critical: true},
@@ -615,13 +615,16 @@ func TestBuildControlPlaneValidatorConfig_FollowsEnumeratedRegistries(t *testing
 	assert.Contains(t, got, `host: "registry.example"`)
 	assert.Contains(t, got, "port: 5000")
 	assert.Contains(t, got, "host: \"harbor.company.internal\"\n      port: 443\n      protocol: tcp+tls\n      critical: false\n")
-	assert.Contains(t, got, "host: \"registry.example\"\n      port: 5000\n      protocol: tcp+tls\n      critical: true\n")
+	assert.Contains(t, got, "host: \"registry.example\"\n      port: 5000\n      protocol: tcp+tls\n      critical: false\n",
+		"an in-pod dial is not evidence the nodes cannot pull, so no endpoint is critical")
 	assert.Less(t, strings.Index(got, "harbor.company.internal"), strings.Index(got, "enforcement:"),
 		"endpoints must appear before the enforcement block")
 
+	// Nodes can pull nvcr.io through a runtime proxy or mirror that pods have
+	// no route to, so even an NGC install's nvcr.io is only a warning.
 	ngc := buildControlPlaneValidatorConfig([]RegistryEntry{{Registry: "nvcr.io", Critical: true}})
 	assert.Contains(t, ngc, `host: "nvcr.io"`)
-	assert.Contains(t, ngc, "critical: true", "an NGC install keeps nvcr.io critical")
+	assert.NotContains(t, ngc, "critical: true")
 }
 
 func TestBuildControlPlaneValidatorConfig_InvalidRegistrySkipped(t *testing.T) {

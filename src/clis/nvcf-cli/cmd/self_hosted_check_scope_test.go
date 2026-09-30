@@ -95,6 +95,8 @@ func TestCheck_SISReachabilityScope(t *testing.T) {
 	assert.NotZero(t, hits)
 	_, hits = runCheckRecording(t, "--control-plane")
 	assert.Zero(t, hits, "SIS is a compute-plane check")
+	_, hits = runCheckRecording(t, "--pre", "--control-plane")
+	assert.Zero(t, hits, "--pre visits the compute plane but --control-plane does not ask for SIS")
 }
 
 // --local-only overrides the required scope flag; the run says so on stderr.
@@ -251,4 +253,29 @@ func passingPreflightTools() []selfhosted.BinarySpec {
 		specs[i].Version = func(context.Context, string) (*semver.Version, error) { return v, nil }
 	}
 	return specs
+}
+
+// An unpinned validator image whose tag cannot be discovered is not launched:
+// the kubelet would pull :latest, which the repository does not publish. The
+// run skips the validator and says to pin a tag.
+func TestCheck_UnresolvedValidatorTagIsSkippedWithANote(t *testing.T) {
+	calls := 0
+	_, stderr := runCheckWithBudget(t, time.Minute, func(context.Context) selfhosted.ClusterValidatorResult {
+		calls++
+		return selfhosted.ClusterValidatorResult{Passed: true}
+	}, "--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator")
+	assert.Zero(t, calls, "the untagged image must not be launched")
+	assert.Contains(t, stderr, "could not resolve a tag for nvcr.io/nvidia/nvcf-byoc/cluster-validator")
+}
+
+func TestImageRefIsPinned(t *testing.T) {
+	for ref, want := range map[string]bool{
+		"nvcr.io/nvidia/validator:3.2.26":         true,
+		"nvcr.io/nvidia/validator@sha256:abcd":    true,
+		"localhost:5000/validator":                false,
+		"nvcr.io/nvidia/validator":                false,
+		"registry.example.com:443/team/validator": false,
+	} {
+		assert.Equal(t, want, selfhosted.ImageRefIsPinned(ref), ref)
+	}
 }

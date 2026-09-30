@@ -29,7 +29,7 @@ Notes:
 
 ## GitOps (Argo / Flux) pattern
 
-CI doesn't `kubectl apply` — instead, render manifests, commit them, let the controller apply.
+CI doesn't `kubectl apply`. Instead, render manifests, commit them, let the controller apply.
 
 ```yaml
 render:

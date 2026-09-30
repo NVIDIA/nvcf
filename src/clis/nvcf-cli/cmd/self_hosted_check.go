@@ -166,11 +166,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// note explaining why.
 	anyValidatorIsTargeted := !localOnly && !skipClusterValidation &&
 		(computePlaneIsVisited() || controlPlaneIsVisited())
-	clusterValidatorImage := ""
+	clusterValidatorImage, unresolvedImage := "", ""
 	if anyValidatorIsTargeted {
-		if img, ok := resolveClusterValidatorImage(c.Context()); ok {
-			clusterValidatorImage = img
-		}
+		clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(c.Context())
 	}
 	clusterValidatorWillRun := anyValidatorIsTargeted && clusterValidatorImage != ""
 
@@ -231,6 +229,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		switch {
 		case skipClusterValidation:
 			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (--skip-cluster-validation)")
+		case unresolvedImage != "":
+			fmt.Fprintf(c.ErrOrStderr(), "note: cluster-validator skipped (could not resolve a tag for %s; "+
+				"pin cluster_validator_image to a tag)\n", unresolvedImage)
 		case clusterValidatorImage == "":
 			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (cluster_validator_image not set in nvcf-cli config)")
 		}
@@ -593,13 +594,12 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
 	}
 
-	// SIS reachability is a compute-plane concern. A bare --pre skips it
-	// because SIS is not up before install, but an explicit --all or
-	// --compute-plane still asks for it, as it always has. Requiring the
-	// compute plane to be targeted stops a --control-plane run from probing
-	// SIS, which the older `|| !checkPre` form did.
+	// SIS reachability is a compute-plane, post-install concern: only an
+	// explicit --all or --compute-plane asks for it. A bare --pre skips it
+	// because SIS is not up before install, and --control-plane does not
+	// target the compute plane.
 	icmsURL := ""
-	if computePlaneIsTargeted(mode) && (checkAll || checkComputePlane || !checkPre) {
+	if checkAll || checkComputePlane {
 		icmsURL = resolveICMSURL(selfHostedICMSURL)
 	}
 
@@ -633,6 +633,8 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	registries := cfg.Registries
 	validatorEnv := clusterValidatorJobEnv(
 		selfhosted.LoadStackValues(resolveStackValuesFiles()))
+	cpValidatorEnv := validatorEnvForRole(validatorEnv, checkControlPlane)
+	gpuValidatorEnv := validatorEnvForRole(validatorEnv, checkComputePlane)
 
 	// The cluster-validator image is the same for both roles; VALIDATOR_ROLE
 	// in the Job env selects which check set runs inside the binary.
@@ -675,7 +677,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 					ClusterValidatorImage:      clusterValidatorImage,
 					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-					ClusterValidatorEnv:        validatorEnv,
+					ClusterValidatorEnv:        cpValidatorEnv,
 					ClusterValidatorRegistries: registries,
 					StaleNamespaceProber:       staleNSProber,
 					StackDir:                   localStackDir(selfHostedControlPlaneStack),
@@ -694,7 +696,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 					ClusterValidatorImage:      clusterValidatorImage,
 					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-					ClusterValidatorEnv:        validatorEnv,
+					ClusterValidatorEnv:        gpuValidatorEnv,
 					StaleNamespaceProber:       staleNSProber,
 					StackDir:                   localStackDir(selfHostedComputePlaneStack),
 				}
@@ -741,7 +743,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorImage:      clusterValidatorImage,
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-				ClusterValidatorEnv:        validatorEnv,
+				ClusterValidatorEnv:        cpValidatorEnv,
 				ClusterValidatorRegistries: registries,
 				StaleNamespaceProber:       staleForControlPlane,
 				StackDir:                   localStackDir(selfHostedControlPlaneStack),
@@ -758,7 +760,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorImage:      clusterValidatorImage,
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-				ClusterValidatorEnv:        validatorEnv,
+				ClusterValidatorEnv:        gpuValidatorEnv,
 				StaleNamespaceProber:       staleForComputePlane,
 				StackDir:                   localStackDir(selfHostedComputePlaneStack),
 			}
@@ -769,10 +771,27 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	}
 }
 
+// validatorEnvForRole returns env for one role's validator. A role whose own
+// flag is passed alongside --pre (--pre --control-plane) is checked as
+// installed, the way --all is, so its validator is told the run is
+// post-install. env itself is not modified.
+func validatorEnvForRole(env map[string]string, roleFlag bool) map[string]string {
+	if !roleFlag || env["VALIDATOR_POST_INSTALL"] != "" {
+		return env
+	}
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		out[k] = v
+	}
+	out["VALIDATOR_POST_INSTALL"] = "true"
+	return out
+}
+
 // clusterValidatorJobEnv is what the validator container needs from the CLI's
 // resolved configuration, matching what the chart CronJob forwards:
-//   - VALIDATOR_POST_INSTALL on every run except --pre, so an empty control
-//     plane fails after install instead of passing as pre-install;
+//   - VALIDATOR_POST_INSTALL on every run except a bare --pre, so an empty
+//     control plane fails after install instead of passing as pre-install
+//     (validatorEnvForRole adds it for a role its own flag targets);
 //   - relocated OpenBao and Envoy Gateway namespaces, without which the Tier
 //     rows assess the defaults and miss the real components;
 //   - NVCF_GATEWAY_NAMES, the override for the NVCF Gateway discovery;
@@ -780,7 +799,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 //     from Docker Hub.
 func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	env := map[string]string{}
-	if !checkPre {
+	if !checkPre || checkAll {
 		env["VALIDATOR_POST_INSTALL"] = "true"
 	}
 	if ns := configValue("NVCF_OPENBAO_NAMESPACE"); ns != "" {
@@ -844,15 +863,22 @@ func configValue(key string) string {
 // resolveClusterValidatorImage resolves the validator image from flag > env >
 // config-file. Returns ("", false) when unconfigured. When only a repo is
 // given, discovers the latest stable tag (1h cached; falls back on failure).
-func resolveClusterValidatorImage(ctx context.Context) (string, bool) {
-	image := viper.GetString("cluster_validator_image")
-	if image == "" {
-		return "", false
+//
+// An unpinned image whose tag could not be discovered is not launched: the
+// kubelet would pull it as :latest, which the validator repository does not
+// publish, and fail the run on a pull error instead of saying why.
+func resolveClusterValidatorImage(ctx context.Context) (image string, unresolved string) {
+	configured := viper.GetString("cluster_validator_image")
+	if configured == "" {
+		return "", ""
 	}
-	if discovered, ok := resolveLatestValidatorTagForSelfHosted(ctx, image); ok {
-		return discovered, true
+	if discovered, ok := resolveLatestValidatorTagForSelfHosted(ctx, configured); ok {
+		return discovered, ""
 	}
-	return image, true
+	if !selfhosted.ImageRefIsPinned(configured) {
+		return "", configured
+	}
+	return configured, ""
 }
 
 // emitCheckFinal emits a Final event with check-mode verdict fields derived

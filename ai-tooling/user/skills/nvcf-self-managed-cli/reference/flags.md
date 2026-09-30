@@ -12,15 +12,15 @@
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--control-plane-stack=…` | Control-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
-| `--compute-plane-stack=…` | Compute-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
-| `--env=local\|prd\|…` | Helmfile environment name | `local` for dev builds, `prd` for releases |
+| `--control-plane-stack=...` | Control-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
+| `--compute-plane-stack=...` | Compute-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
+| `--env=local\|prd\|...` | Helmfile environment name | `local` for dev builds, `prd` for releases |
 | `--non-interactive` | Disable all stdin prompts | `false` |
 | `--token=$JWT` | Admin JWT, overrides stored session | - |
 | `--no-apply` | `install` only - emit YAML, do not kubectl apply | `false` |
 | `--output=text\|json` | Legacy alias for `--json` (deprecated, removed in next major) | `text` |
 | `--plain` | Force plain streaming output | auto-detect |
-| `--wait DURATION` | `check` only; block until pass | - |
+| `--wait DURATION` | `check` only; poll until the check passes or DURATION runs out (exit `5`). A warning that is expected to clear, such as a rollout in progress, keeps it polling. Cannot be combined with `--no-cleanup` | - |
 | `--control-plane-context CTX` | kubectl context for control plane (REQ-20) | current context |
 | `--compute-plane-context CTX` | kubectl context for compute plane (REQ-20) | current context |
 | `--icms-url URL` | Public ICMS URL; required when contexts differ | derived from `base_http_url` |
@@ -33,7 +33,7 @@ required. Each selects a role; only the selected roles contact a cluster.
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--pre` | Pre-flight: local-host tools plus cluster readiness. Skips SIS reachability, since SIS is not installed yet, unless `--all` or `--compute-plane` is also passed | `false` |
+| `--pre` | Pre-flight: local-host tools plus cluster readiness. Skips SIS reachability, since SIS is not installed yet, unless `--all` or `--compute-plane` is also passed. With `--all`, or with a role's own flag, that role's validator checks the cluster as installed | `false` |
 | `--control-plane` | Control-plane checks | `false` |
 | `--compute-plane` | Compute-plane checks | `false` |
 | `--all` | Every category, including SIS reachability when combined with `--pre` | `false` |
@@ -48,8 +48,8 @@ after the run, so the kubeconfig context needs permission to manage those.
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. Unset everywhere skips the probe with a warning | - |
-| `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry`, and `quay.io` for the cert-manager ACME solver unless the stack sets `certManager.acmesolver.image`. `nvcr.io` is probed, as non-critical, only when neither the image nor the stack names a registry. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | - |
+| `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry; if no tag can be discovered, the probe is skipped with a note to pin one. Unset everywhere skips the probe with a warning | - |
+| `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry`, and `quay.io` for the cert-manager ACME solver unless the stack sets `certManager.acmesolver.image`. `nvcr.io` is probed only when neither the image nor the stack names a registry. The validator dials from a pod with no proxy, so an unreachable registry is a warning; the local credential check is what fails a registry the install cannot pull from. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | - |
 | `--cluster-validator-probe-image REF` | Image for the control-plane validator's node-to-node overlay probe. Needs `sh` and a busybox-style `nc`. Set a mirror for air-gapped clusters. Env: `NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE`; config key `cluster_validator_probe_image` | `busybox:1.36` from Docker Hub |
 | `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and copies it into `default` for the run. Failing that, and only for an image on an NGC registry, it mints one from `NGC_API_KEY` | auto-detect |
 | `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. A validator that is configured but cannot run fails the check, so use this to opt out explicitly, for example when the cluster cannot pull the image. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |

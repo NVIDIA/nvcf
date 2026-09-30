@@ -34,11 +34,7 @@ import (
 // every run but --pre, relocated namespaces, the Gateway override and the
 // probe image.
 func TestClusterValidatorJobEnv(t *testing.T) {
-	prevPre := checkPre
-	t.Cleanup(func() {
-		checkPre = prevPre
-		viper.Set("cluster_validator_probe_image", "")
-	})
+	resetCheckFlags(t)
 	for _, k := range []string{"NVCF_OPENBAO_NAMESPACE", "NVCF_ENVOY_GATEWAY_NAMESPACE", "NVCF_GATEWAY_NAMES", "NVCF_N2N_PROBE_IMAGE"} {
 		t.Setenv(k, "")
 	}
@@ -53,7 +49,7 @@ func TestClusterValidatorJobEnv(t *testing.T) {
 	t.Setenv("NVCF_OPENBAO_NAMESPACE", "openbao")
 	t.Setenv("NVCF_ENVOY_GATEWAY_NAMESPACE", "edge")
 	t.Setenv("NVCF_GATEWAY_NAMES", "gateway/shared-gw")
-	viper.Set("cluster_validator_probe_image", "mirror.example/busybox:1.36")
+	require.NoError(t, selfHostedCheckCmd.Flags().Set("cluster-validator-probe-image", "mirror.example/busybox:1.36"))
 	env = clusterValidatorJobEnv(selfhosted.StackValues{EnvoyGatewayNamespace: "gateway"})
 	assert.NotContains(t, env, "VALIDATOR_POST_INSTALL", "--pre is pre-install")
 	assert.Equal(t, "openbao", env["NVCF_OPENBAO_NAMESPACE"])
@@ -110,41 +106,56 @@ func TestClusterValidatorJobEnv_GatewayNamesYAMLList(t *testing.T) {
 }
 
 // --pre in split mode visits both clusters, so each gets its own validator
-// role against its own context, both marked pre-install.
+// role against its own context. A bare --pre is pre-install for both; --all
+// checks both as installed, and a role's own flag checks that role as
+// installed while the other stays pre-install.
 func TestCheck_PreSplitRunsBothValidatorRoles(t *testing.T) {
-	resetCheckFlags(t)
-	var mu sync.Mutex
-	got := map[string]selfhosted.ClusterValidatorParams{}
-	prev := newClusterValidatorForSelfHosted
-	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
-		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+	for _, tc := range []struct {
+		name            string
+		extra           []string
+		cpPost, gpuPost bool
+	}{
+		{name: "bare pre", extra: []string{"--icms-url", "https://sis.example.invalid"}},
+		{name: "pre all", extra: []string{"--all", "--cluster-name", "gpu"}, cpPost: true, gpuPost: true},
+		{name: "pre control-plane", extra: []string{"--control-plane"}, cpPost: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetCheckFlags(t)
+			var mu sync.Mutex
+			got := map[string]selfhosted.ClusterValidatorParams{}
+			prev := newClusterValidatorForSelfHosted
+			newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+				return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+					mu.Lock()
+					defer mu.Unlock()
+					got[p.Role] = p
+					return selfhosted.ClusterValidatorResult{Passed: true}
+				}
+			}
+			t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
+			t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+
+			var errBuf bytes.Buffer
+			rootCmd.SetErr(&errBuf)
+			rootCmd.SetOut(&bytes.Buffer{})
+			rootCmd.SetArgs(append([]string{"self-hosted", "check", "--pre", "--json",
+				"--control-plane-context", "cp-ctx", "--compute-plane-context", "gpu-ctx",
+				"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"},
+				tc.extra...))
+			_ = rootCmd.Execute()
+
 			mu.Lock()
 			defer mu.Unlock()
-			got[p.Role] = p
-			return selfhosted.ClusterValidatorResult{Passed: true}
-		}
+			cp, ok := got["control-plane"]
+			require.True(t, ok, "the control-plane validator must run; output: %s", errBuf.String())
+			gpu, ok := got["compute-plane"]
+			require.True(t, ok, "the compute-plane validator must run; output: %s", errBuf.String())
+			assert.Equal(t, "cp-ctx", cp.KubeContext)
+			assert.Equal(t, "gpu-ctx", gpu.KubeContext)
+			assert.Equal(t, tc.cpPost, cp.Env["VALIDATOR_POST_INSTALL"] == "true", "control-plane post-install")
+			assert.Equal(t, tc.gpuPost, gpu.Env["VALIDATOR_POST_INSTALL"] == "true", "compute-plane post-install")
+		})
 	}
-	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
-	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
-
-	var errBuf bytes.Buffer
-	rootCmd.SetErr(&errBuf)
-	rootCmd.SetOut(&bytes.Buffer{})
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json",
-		"--control-plane-context", "cp-ctx", "--compute-plane-context", "gpu-ctx",
-		"--icms-url", "https://sis.example.invalid",
-		"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"})
-	_ = rootCmd.Execute()
-
-	mu.Lock()
-	defer mu.Unlock()
-	cp, ok := got["control-plane"]
-	require.True(t, ok, "the control-plane validator must run; output: %s", errBuf.String())
-	gpu, ok := got["compute-plane"]
-	require.True(t, ok, "the compute-plane validator must run; output: %s", errBuf.String())
-	assert.Equal(t, "cp-ctx", cp.KubeContext)
-	assert.Equal(t, "gpu-ctx", gpu.KubeContext)
-	assert.NotContains(t, cp.Env, "VALIDATOR_POST_INSTALL", "--pre is pre-install")
 }
 
 // NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES is read, and a comma-separated value is
