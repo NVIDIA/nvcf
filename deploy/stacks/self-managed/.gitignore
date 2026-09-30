@@ -1,1 +1,3 @@
 out/
+secrets/*-secrets.yaml
+environments/customer.yaml
