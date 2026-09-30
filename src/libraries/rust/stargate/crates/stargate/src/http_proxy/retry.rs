@@ -147,6 +147,9 @@ pub(super) fn decide_proxy_error_retry(
     ) {
         return RetryDecision::Final(FinalRetryDisposition::PassThrough);
     }
+    if request_body_started && matches!(replay_readiness, ReplayReadiness::Ready) {
+        return RetryDecision::Final(FinalRetryDisposition::AmbiguousDelivery);
+    }
     if !retry_budget_remaining {
         return retry_exhausted("retry_budget_exhausted");
     }
@@ -155,8 +158,7 @@ pub(super) fn decide_proxy_error_retry(
     }
 
     match replay_readiness {
-        ReplayReadiness::Ready if !request_body_started => RetryDecision::Retry(()),
-        ReplayReadiness::Ready => RetryDecision::Final(FinalRetryDisposition::AmbiguousDelivery),
+        ReplayReadiness::Ready => RetryDecision::Retry(()),
         ReplayReadiness::Incomplete => RetryDecision::Final(
             FinalRetryDisposition::ReplayIncomplete(RETRY_REASON_RETRYABLE_PROXY_ERROR.to_string()),
         ),
@@ -265,17 +267,32 @@ mod tests {
 
     #[test]
     fn completed_body_does_not_authorize_retry_after_submission() {
-        assert_eq!(
-            decide_proxy_error_retry(
-                StatusCode::BAD_GATEWAY,
-                &ProxyRetryConfig::default(),
-                true,
-                0,
-                true,
-                ReplayReadiness::Ready,
-            ),
-            RetryDecision::Final(FinalRetryDisposition::AmbiguousDelivery)
-        );
+        let retry = ProxyRetryConfig::default();
+        for status in [
+            StatusCode::BAD_GATEWAY,
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            for (budget_remaining, connect_retries) in [
+                (true, 0),
+                (false, 0),
+                (true, retry.max_connect_retries),
+                (false, retry.max_connect_retries),
+            ] {
+                assert_eq!(
+                    decide_proxy_error_retry(
+                        status,
+                        &retry,
+                        budget_remaining,
+                        connect_retries,
+                        true,
+                        ReplayReadiness::Ready,
+                    ),
+                    RetryDecision::Final(FinalRetryDisposition::AmbiguousDelivery),
+                    "status={status}, budget_remaining={budget_remaining}, connect_retries={connect_retries}",
+                );
+            }
+        }
     }
 
     #[test]
