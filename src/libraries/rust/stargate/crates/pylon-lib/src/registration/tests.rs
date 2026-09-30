@@ -1589,14 +1589,18 @@ async fn registration_token_errors_do_not_expose_secret_file_excerpts() {
         path: file.path().to_owned(),
         key: vec!["missing".into()],
     };
-    for contents in [
-        r#"{"secret":"do-not-log-this-secret"}"#,
-        r#"{"secret":"do-not-log-this-secret","missing":invalid}"#,
+    for (contents, category) in [
+        (r#"{"secret":"do-not-log-this-secret"}"#, "NotFound"),
+        (
+            r#"{"secret":"do-not-log-this-secret","missing":invalid}"#,
+            "Syntax",
+        ),
     ] {
         std::fs::write(file.path(), contents).unwrap();
         let error = provider.resolve_token().await.unwrap_err();
         let detail = grpc_error_chain(error.as_ref());
         assert!(detail.contains("failed to extract key"));
+        assert!(detail.contains(&format!("JSON {category}")), "{detail}");
         assert!(!detail.contains("do-not-log-this-secret"));
     }
 }

@@ -313,7 +313,8 @@ pub(super) fn grpc_error_chain(error: &(dyn Error + 'static)) -> String {
         // Parser diagnostics can include input excerpts from token files.
         let detail = if let Some(error) = error.downcast_ref::<sonic_rs::Error>() {
             format!(
-                "invalid JSON at line {} column {}",
+                "JSON {:?} at line {} column {}",
+                error.classify(),
                 error.line(),
                 error.column()
             )
