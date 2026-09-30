@@ -65,6 +65,9 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
         "@org_golang_google_protobuf//types/known/structpb",
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
         "@org_uber_go_zap//zaptest",
+        "@org_uber_go_zap//zaptest/observer",
     ],
 )
