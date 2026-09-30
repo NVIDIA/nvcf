@@ -53,8 +53,11 @@ gpu-operator:
 postInstallSmoke:
   enabled: true
   # Timeout for the whole Job (each probe has its own short timeout).
-  # 5m covers slow first-time image pulls.
-  activeDeadlineSeconds: 300
+  # The agent DaemonSet rolls one node at a time, so both must scale with
+  # the GPU node count: 18 nodes took over five minutes (2026-09-30).
+  activeDeadlineSeconds: 900
+  # kubectl rollout status timeout for the agent DaemonSet.
+  agentRolloutTimeout: 12m
   image:
     # alpine/k8s ships kubectl + curl + jq in a small image and has
     # stable tags (Bitnami deprecated bare bitnami/kubectl:<minor>).
