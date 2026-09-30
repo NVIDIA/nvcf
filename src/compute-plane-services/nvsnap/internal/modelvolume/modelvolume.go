@@ -304,12 +304,18 @@ func (p *Provisioner) EnsureWriterClaim(ctx context.Context, uri, ns string) (st
 // a ReadWriteOnce claim that is released after the copy, leaving the
 // retained PV as the artifact.
 func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (string, error) {
-	name := p.Cfg.ClaimName(uri)
-	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
-		return name, nil
-	} else if !apierrors.IsNotFound(err) {
-		return "", fmt.Errorf("get claim %s/%s: %w", ns, name, err)
-	}
+	name, _, err := p.ClaimSizedClaim(ctx, uri, ns, size)
+	return name, err
+}
+
+// ClaimSizedClaim creates the sized claim and reports whether this call
+// created it. It is the election: the API server's Create is atomic, so
+// of any number of agents racing for one identity exactly one sees
+// created and owns the copy; the rest get AlreadyExists and back off. A
+// Get before the Create is not an election (five agents once passed
+// through that gap together, ct1 2026-09-30), so there is none.
+func (p *Provisioner) ClaimSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (name string, created bool, err error) {
+	name = p.Cfg.ClaimName(uri)
 	mode := corev1.ReadWriteOnce
 	if p.Cfg.Mode == ModeRWX {
 		mode = corev1.ReadWriteMany
@@ -330,26 +336,15 @@ func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size
 			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: size}},
 		},
 	}
-	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return "", fmt.Errorf("create claim %s/%s: %w", ns, name, err)
-	}
-	return name, nil
-}
-
-// ClaimSizedClaim is EnsureSizedClaim that also reports whether this call
-// created the claim. Create is atomic, so the caller that sees created is
-// the one that owns the copy into it; others back off.
-func (p *Provisioner) ClaimSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (name string, created bool, err error) {
-	name = p.Cfg.ClaimName(uri)
-	if _, gerr := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
+	_, err = p.Kube.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{})
+	switch {
+	case err == nil:
+		return name, true, nil
+	case apierrors.IsAlreadyExists(err):
 		return name, false, nil
-	} else if !apierrors.IsNotFound(gerr) {
-		return "", false, fmt.Errorf("get claim %s/%s: %w", ns, name, gerr)
+	default:
+		return "", false, fmt.Errorf("create claim %s/%s: %w", ns, name, err)
 	}
-	if _, err = p.EnsureSizedClaim(ctx, uri, ns, size); err != nil {
-		return "", false, err
-	}
-	return name, true, nil
 }
 
 // WaitBound polls until the claim in ns has a bound volume and returns

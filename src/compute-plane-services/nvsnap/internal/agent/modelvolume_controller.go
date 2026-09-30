@@ -630,12 +630,12 @@ type rankSource struct {
 	src     string // host path of the cache subtree
 }
 
-// groupRanks lists the group's ready ranks and the group size. ok is false
-// until every ordinal 0..size-1 is ready.
-func (c *ModelVolumeController) groupRanks(ctx context.Context, uri string) ([]rankSource, int, bool, error) {
+// groupRanks lists the group's ready ranks, how many are ready, and the
+// group size. ok is false until every ordinal 0..size-1 is ready.
+func (c *ModelVolumeController) groupRanks(ctx context.Context, uri string) ([]rankSource, int, int, bool, error) {
 	pods, err := c.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: modelvolume.CacheKeyLabel + "=" + modelvolume.Key(uri)})
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, 0, false, err
 	}
 	size := 0
 	byOrdinal := map[int]rankSource{}
@@ -668,11 +668,11 @@ func (c *ModelVolumeController) groupRanks(ctx context.Context, uri string) ([]r
 	for o := 0; o < size; o++ {
 		r, ok := byOrdinal[o]
 		if !ok {
-			return nil, size, false, nil
+			return nil, len(byOrdinal), size, false, nil
 		}
 		ranks = append(ranks, r)
 	}
-	return ranks, size, true, nil
+	return ranks, len(byOrdinal), size, true, nil
 }
 
 // tryCollect runs the election for the set and, when this agent wins,
@@ -696,13 +696,13 @@ func (c *ModelVolumeController) tryCollect(ctx context.Context, uri string, log 
 		if err != nil || st.Complete || st.Failed {
 			return
 		}
-		ranks, size, ok, err := c.groupRanks(ctx, uri)
+		ranks, ready, size, ok, err := c.groupRanks(ctx, uri)
 		if err != nil {
 			log.WithError(err).Warn("cache volume: list group failed")
 			return
 		}
 		if !ok {
-			log.WithFields(logrus.Fields{"ready": len(ranks), "group_size": size}).Info("cache volume: waiting for the rest of the group")
+			log.WithFields(logrus.Fields{"ready": ready, "group_size": size}).Info("cache volume: waiting for the rest of the group")
 			return
 		}
 		var total int64

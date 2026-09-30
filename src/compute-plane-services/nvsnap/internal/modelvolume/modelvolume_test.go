@@ -5,6 +5,8 @@ package modelvolume
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,5 +318,35 @@ func TestProvisioner_FailureRecord(t *testing.T) {
 	}
 	if err := p.ClearFailure(ctx, uri); err != nil {
 		t.Errorf("clear is idempotent: %v", err)
+	}
+}
+
+// The election is the Create itself: many callers for one identity see
+// exactly one created, with no Get-then-Create gap.
+func TestClaimSizedClaim_ExactlyOneCreator(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc", Namespace: "nvsnap-system", Kind: KindCache}}
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	var created int32
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, c, err := p.ClaimSizedClaim(ctx, "cache://abc", "nvsnap-system", resource.MustParse("8Gi"))
+			if err != nil {
+				t.Error(err)
+			}
+			if c {
+				atomic.AddInt32(&created, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if created != 1 {
+		t.Fatalf("created=%d, want exactly one winner", created)
+	}
+	if _, c, _ := p.ClaimSizedClaim(ctx, "cache://abc", "nvsnap-system", resource.MustParse("8Gi")); c {
+		t.Error("an existing claim is never re-created")
 	}
 }
