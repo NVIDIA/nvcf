@@ -100,7 +100,7 @@ merge:
 {{- end -}}
 {{- end -}}
 
-{{/* JetStream stream replicas for the stream creators (nvcf-api, invocation),
+{{/* JetStream stream replicas for the stream creators (nvcf-api, invocation, icms),
      derived from the NATS server count and capped at 3 as NATS recommends. Empty
      for a single server so the services keep their own default. Override per
      service with api.env.NVCF_NATS_REPLICAS or invocation.env.NATS_PROPERTIES__REPLICAS. */}}
@@ -1335,6 +1335,9 @@ sis:
     MANAGEMENT_METRICS_ENABLE_ALL: {{ .Values.global.observability.metrics.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+    {{- with include "nvcf.natsStreamReplicas" .Values }}
+    ICMS_NATS_REPLICAS: {{ . | quote }}
     {{- end }}
 
 adminIssuerProxy:
