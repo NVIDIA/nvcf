@@ -53,6 +53,16 @@ import (
 //	"<short-hash>"   12-hex-char prefix; resolved by the backend
 const RestoreFromAnnotation = "nvsnap.io/restore-from"
 
+// InjectLabel on a pod (or, via the registration's namespaceSelector, on
+// its namespace) set to InjectDisabled opts the pod out of every nvsnap
+// mutation. The MutatingWebhookConfiguration filters on it so labelled
+// pods are never sent here; Mutate checks it again so a stale
+// registration still admits them unchanged.
+const InjectLabel = "nvsnap.io/inject"
+
+// InjectDisabled is the InjectLabel value that opts a pod out.
+const InjectDisabled = "false"
+
 // TargetNodeAnnotation overrides the auto-pin to manifest.CapturedOnNodes.
 // When set, the webhook injects nodeAffinity to this single node instead.
 // Used for cross-node restore demos (showcases tier-2/tier-3 cascade fetch)
@@ -445,6 +455,11 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	}
 	if m.Backend == nil {
 		return nil, errors.New("webhook: Mutator.Backend is nil")
+	}
+	if pod.Labels[InjectLabel] == InjectDisabled {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
+			Info("nvsnap.io/inject=false; admitting pod unchanged")
+		return nil, nil
 	}
 
 	ctx, span := tracing.Tracer().Start(ctx, "webhook.mutate")

@@ -477,6 +477,22 @@ webhook:
   # you don't have cert-manager or don't want the auto-inject webhook.
   enabled: true
 
+  # Master switch for pod mutation. Every nvsnap mechanism that touches
+  # a function pod (cachedir env + emptyDir, the one-downloader election,
+  # the shared model and cache-set volumes, checkpoint restore) runs
+  # through the one MutatingWebhookConfiguration this gates. Setting it
+  # to false removes that registration and nothing else: the Service and
+  # TLS cert stay, the agents do not roll, and pods admitted from then
+  # on are exactly what the chart declared. Flip it back to true to
+  # resume. agent.modelVolume.enabled and agent.election.enabled turn
+  # off only their own mechanism; use this to turn off nvsnap as a whole.
+  #
+  # Per-workload opt-out without touching the release: label the pod or
+  # its namespace nvsnap.io/inject=false. The registration skips such
+  # pods and the agent admits them unchanged even if the registration
+  # is stale.
+  inject: true
+
   # The dnsName the cert SAN matches and the apiserver dials.
   # Format: <service-name>.<namespace>.svc.cluster.local
   serviceName: nvsnap-webhook
