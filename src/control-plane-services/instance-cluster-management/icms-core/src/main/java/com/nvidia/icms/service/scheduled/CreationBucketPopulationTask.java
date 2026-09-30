@@ -18,6 +18,7 @@ package com.nvidia.icms.service.scheduled;
 
 import static com.nvidia.icms.scheduled.CreationBucketPopulationTaskController.CREATION_BUCKET_POPULATION_TASK_NAME;
 
+import com.nvidia.boot.migration.notification.service.DataMigration;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.outbound.cassandra.instance.InstanceV2Repository;
 import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
@@ -30,11 +31,16 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
 @AllArgsConstructor
+@DataMigration(
+        keyspace = "icms_api",
+        newColumns = {"requests.creation_bucket", "instances.creation_bucket"},
+        description = "Populate new creation_bucket columns for existing records")
 public class CreationBucketPopulationTask {
     private static final int PAUSE_BETWEEN_PAGES_IN_MS = 5;
 
@@ -49,7 +55,7 @@ public class CreationBucketPopulationTask {
         AtomicInteger instancesUpdated = new AtomicInteger();
         AtomicInteger instancesFailed = new AtomicInteger();
 
-        String error = null;
+        String requestError = null;
         try {
             requestRepository.findAllRequestsAndApplyAction(
                     request -> populateRequest(request, requestsUpdated, requestsFailed),
@@ -57,20 +63,27 @@ public class CreationBucketPopulationTask {
                     0,
                     configuration.getDatabaseReadPageSize());
         } catch (Exception exception) {
-            error = exception.getMessage();
+            requestError = exception.getMessage();
             log.error("Job: {} scan failed with error: {} on processing requests",
-                    CREATION_BUCKET_POPULATION_TASK_NAME, error, exception);
+                    CREATION_BUCKET_POPULATION_TASK_NAME, requestError, exception);
         }
 
+        String instanceError = null;
         try {
             instanceRepository.findAllInstancesAndApplyAction(
                     instance -> populateInstance(instance, instancesUpdated, instancesFailed),
                     PAUSE_BETWEEN_PAGES_IN_MS);
         } catch (Exception exception) {
-            error = exception.getMessage();
+            instanceError = exception.getMessage();
             log.error("Job: {} scan failed with error: {} on processing instances",
-                      CREATION_BUCKET_POPULATION_TASK_NAME, error, exception);
+                      CREATION_BUCKET_POPULATION_TASK_NAME, instanceError, exception);
         }
+
+        var error = StringUtils.isNotBlank(requestError) ?
+                StringUtils.isNotBlank(instanceError) ?
+                        requestError + "/" + instanceError
+                        : requestError
+                : instanceError;
 
         PopulationResult result = new PopulationResult(
                 requestsUpdated.get(), requestsFailed.get(),
