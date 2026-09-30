@@ -18,6 +18,7 @@ stream when available, and OpenAI chunk metadata only as fallback.
 client -> stargate -> QUIC tunnel -> pylon -> runtime
 runtime -> /pylon/v1/stats/stream -> pylon -> registration -> stargate routing
 runtime -> /kv-cache/stats ---------> pylon -> registration -> stargate routing
+CLI concurrency fallback ----------> pylon -> registration -> stargate routing
 ```
 
 The stream reports request counters. `/kv-cache/stats` is optional machine
@@ -56,6 +57,37 @@ Ping:
 {"v":1,"type":"ping"}
 ```
 
+An engine can report its maximum concurrent requests for a model in a ping:
+
+```json
+{"v":1,"type":"ping","model":"llama","max_engine_concurrency":25}
+```
+
+`model` is required when `max_engine_concurrency` is present. A positive limit
+overrides the configured fallback for that model. Zero withdraws the engine
+limit and restores the fallback. Omitting the field leaves the current limit
+unchanged. Stream disconnects also retain the last reported limit.
+
+## Concurrency Fallback
+
+For an engine without a stats endpoint, set Pylon's fallback concurrency:
+
+```text
+pylon --upstream-http-base-url=http://127.0.0.1:8090 --model-name=llama --max-engine-concurrency=25
+```
+
+`--max-engine-concurrency N` accepts a positive integer and has no default.
+Pylon uses it for each model until that model reports an engine limit, including
+models discovered after startup. It is available in every stats source mode.
+Pylon publishes the effective limit from the first registration and uses the
+same value for local queue admission. If neither source supplies a limit, Pylon
+publishes zero, meaning unknown.
+
+Set this value to the engine's actual request capacity. It informs queue
+estimates and routing capacity checks; it does not configure the engine's
+scheduler or create a Pylon request semaphore. `--calibration-max-concurrency`
+only controls calibration traffic and does not supply this fallback.
+
 ## Source Modes
 
 ```text
@@ -92,8 +124,10 @@ Use it only when the runtime has reliable KV state.
 Pylon publishes:
 
 - sticky completed-request input throughput: `last_mean_input_tps`
+- generation maximum input throughput: optional `max_input_tps`
 - volatile generation throughput: `output_tps` and `max_output_tps`
 - request phase counts and queue sizes
+- effective maximum engine concurrency
 - optional KV capacity/used/free tokens
 - source and capability labels
 
@@ -105,13 +139,28 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
+The maximum retains the greatest valid input-throughput observation until the
+model generation is replaced. Calibration, engine observations, and fallback
+request intervals update it; a configured initial TPS seeds it. Invalid samples
+and lower observations do not reduce it. It is absent before the first valid
+initialization or observation.
+
+Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
+the series when the model is removed or replaced with unknown maximum state.
+The additive protobuf field preserves older messages as an absent maximum.
 
 Shared clusters sum backend-local live load and union labels. Effective input
 capacity is:
 
 ```text
-sum(active_runtime_reports)
+mean input capacity = sum(active runtime mean reports)
+maximum input capacity = max(active generation peak reports)
 ```
+
+Maximum capacity is available only when every active backend in the shared
+engine cluster reports a valid maximum. Historical per-observer peaks are not
+additive. Pulsar uses maximum capacity by default; queue estimates still use
+mean capacity.
 
 Before registration, Pylon initializes each model generation from exactly one
 source. `--initial-input-tps` installs the configured value. Local calibration

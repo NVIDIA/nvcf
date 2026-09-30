@@ -21,9 +21,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
-	"gopkg.in/square/go-jose.v2"
 	"strconv"
 )
 

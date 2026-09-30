@@ -50,7 +50,7 @@ public interface IcmsStubService {
         UUID requestId;
     }
 
-    @PostExchange(value = "/v1/si?Action=RequestInstances",
+    @PostExchange(value = "/v1/si?Action=RequestInstancesForTask",
             accept = "application/json",
             contentType = "application/x-www-form-urlencoded")
     CreateInstancesResponse createInstance(
@@ -340,7 +340,7 @@ public interface IcmsStubService {
     }
 
     @GetExchange(
-            "/v1/si/accounts/{ncaId}/clusters?includeAuthorizedClusters=true&includeGfnInAuthorizedClusters=true")
+            "/v1/si/accounts/{ncaId}/clusters?includeAuthorizedClusters=true&includeNonByocInAuthorizedClusters=true")
     List<ClusterResponse> getClusters(
             @PathVariable("ncaId") String ncaId,
             @RequestParam("instanceTypeUsage") InstanceUsageTypeEnum instanceUsage);

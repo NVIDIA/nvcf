@@ -43,7 +43,7 @@ public record AccountDto(
         @Nullable List<TelemetryDto> telemetries,
 
         @Schema(description = "Registry credentials associated with the account")
-        @Nullable List<RegistryCredentialDto> registryCredentials,
+        @Nullable List<RegistryCredentialDetailsDto> registryCredentials,
 
         @Schema(description = "Maximum number of tasks allowed for Account")
         @NotNull Integer maxTasksAllowed,

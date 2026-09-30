@@ -45,6 +45,10 @@ func resetInstallFlags(t *testing.T) {
 	selfHostedToken = ""
 	selfHostedControlPlaneContext = ""
 	selfHostedComputePlaneContext = ""
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm3Legacy, nil
+	}
 	prevFetchRootCA := fetchControlPlaneRootCAPEM
 	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
 		return "", nil
@@ -60,6 +64,7 @@ func resetInstallFlags(t *testing.T) {
 		selfHostedToken = ""
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
+		resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver
 		fetchControlPlaneRootCAPEM = prevFetchRootCA
 	})
 }
@@ -89,7 +94,7 @@ func TestSelfHostedInstall_ControlPlane_NoApply(t *testing.T) {
 	assert.Contains(t, stdout.String(), "kind: ConfigMap")
 }
 
-func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
+func TestSelfHostedInstall_ControlPlane_Helm4AppliesStateFilesSequentially(t *testing.T) {
 	resetInstallFlags(t)
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
@@ -97,7 +102,7 @@ func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
 
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	require.NoError(t, os.WriteFile(fakeBin,
-		[]byte("#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf 'verb=%s\\n' \"$last\"\n"),
+		[]byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"),
 		0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
 	t.Setenv("HOME", t.TempDir())
@@ -119,12 +124,17 @@ func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
 	}
 	require.NoError(t, sm.Save())
 
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
 	prevAuthProbe := authProbe
 	prevInit := runSelfHostedInit
 	t.Cleanup(func() {
+		resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver
 		authProbe = prevAuthProbe
 		runSelfHostedInit = prevInit
 	})
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm4Compat, nil
+	}
 	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
 		return &auth.Fingerprint{IssuerURL: "http://api.localhost:8080", JWKSKid: "kid", APIKeysEndpoint: "http://api-keys.localhost:8080"}, nil
 	}
@@ -141,7 +151,9 @@ func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
 	})
 	require.NoError(t, rootCmd.Execute())
 
-	assert.Contains(t, stdout.String(), "verb=apply")
+	assert.Contains(t, stdout.String(), "--sequential-helmfiles")
+	assert.Contains(t, stdout.String(), "apply")
+	assert.Contains(t, stdout.String(), "--skip-diff-on-install")
 	assert.Equal(t, 1, initCalls)
 }
 
@@ -295,11 +307,11 @@ func TestSelfHostedInstall_ComputePlane_AppliesByDefault(t *testing.T) {
 
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
-	// Fake helmfile echoes the verb passed as its last arg so the test can assert
-	// that 'apply' (not 'template') ran when --no-apply is omitted.
+	// Fake helmfile echoes every argument so the test can assert that apply runs
+	// with the first-install diff guard when --no-apply is omitted.
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	require.NoError(t, os.WriteFile(fakeBin,
-		[]byte("#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf 'verb=%s\\n' \"$last\"\n"),
+		[]byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"),
 		0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
 
@@ -314,7 +326,8 @@ func TestSelfHostedInstall_ComputePlane_AppliesByDefault(t *testing.T) {
 	require.NoError(t, rootCmd.Execute())
 
 	assert.Equal(t, 1, fakeCC.registerCalls)
-	assert.Contains(t, stdout.String(), "verb=apply")
+	assert.Contains(t, stdout.String(), "apply")
+	assert.Contains(t, stdout.String(), "--skip-diff-on-install")
 }
 
 func TestSelfHostedInstall_ComputePlane_LocalSplitWritesExternalControlPlaneEndpoints(t *testing.T) {

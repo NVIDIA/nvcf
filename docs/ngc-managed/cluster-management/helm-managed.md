@@ -2,7 +2,8 @@
 
 By default, NVCA clusters are managed through the NGC UI (NGC-managed mode), where configuration changes are applied directly through the web interface. However, advanced users can switch to Helm-managed mode to control the NVCA backend configuration through Helm charts and GitOps practices.
 
-By default, NVCA clusters are managed through the NGC UI (NGC-managed mode), where configuration changes are applied directly through the web interface. However, advanced users can switch to Helm-managed mode to control the NVCA backend configuration through Helm charts and GitOps practices.
+To register an external-organization cluster with a SAK and a UI-free workflow,
+see [Register a Cluster with GitOps](./gitops-registration.md).
 
 <Warning>
 When using Helm-managed mode, you must save the cluster key provided during cluster registration. This key is only shown once during the registration process and is not auto-filled in UI-generated commands. You will need to manually replace `<API-KEY>` placeholders with your saved key in all Helm commands.
@@ -53,7 +54,7 @@ The `ngcConfig.clusterSource` parameter decides the cluster management mode.
     --set helmManaged.nvcaVersion="<NVCA-VERSION>"
 ```
 
-4. Click *"Switch Management Mode"* and see the management mode switched to *"Helm Chart"* successfully.
+1. Click *"Switch Management Mode"* and see the management mode switched to *"Helm Chart"* successfully.
 ![3-helm-managed-success.png](../images/3-helm-managed-success.png)
 
 ## Configuration Parameters
@@ -148,7 +149,7 @@ The following is an example command. Always use the command generated in the NGC
     --set ngcConfig.clusterSource="ngc-managed"
 ```
 
-4. Click *"Switch Management Mode"* and see the management mode switched to *"NGC"* successfully.
+1. Click *"Switch Management Mode"* and see the management mode switched to *"NGC"* successfully.
 ![3-ngc-managed-success.png](../images/3-ngc-managed-success.png)
 
 <Note>

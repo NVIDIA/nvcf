@@ -84,6 +84,29 @@ func TestHelmMessageEnvironment(t *testing.T) {
 	}
 }
 
+func TestCollectorImageAltOverride(t *testing.T) {
+	// The alternate collector image must flow through the CollectorImage
+	// override into the launch spec for both workload shapes.
+	for _, shape := range []Shape{ShapeContainer, ShapeHelm} {
+		t.Run(string(shape), func(t *testing.T) {
+			o := DefaultOptions()
+			o.CollectorImage = CollectorImageAlt
+
+			msg, err := Message(shape, o)
+			if err != nil {
+				t.Fatalf("Message: %v", err)
+			}
+			got, err := common.GetEncodedVarByKey(msg.LaunchSpecification.EnvironmentB64, common.BYOOOTelCollectorImageEnv)
+			if err != nil {
+				t.Fatalf("decode collector image env: %v", err)
+			}
+			if got != CollectorImageAlt {
+				t.Errorf("collector image env = %q, want %q", got, CollectorImageAlt)
+			}
+		})
+	}
+}
+
 func TestUnknownShapeErrors(t *testing.T) {
 	if _, err := Message("bogus", DefaultOptions()); err == nil {
 		t.Error("expected error for unknown shape")

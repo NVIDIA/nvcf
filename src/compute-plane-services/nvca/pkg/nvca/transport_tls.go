@@ -37,11 +37,11 @@ func (c K8sComputeBackend) prepareTransportTLSForPod(ctx context.Context, pod *c
 		return nil
 	}
 	cfg := transporttls.NormalizeConfig(*c.bk8s.cfg.Workload.TransportTLS)
-	if cfg.TrustMode != transporttls.TrustModeBundle || !transporttls.PodSpecHasLLMWorker(&pod.Spec) {
-		return nil
-	}
 	if err := transporttls.ValidateConfig(cfg); err != nil {
 		return nvcaerrors.TerminalError(err)
+	}
+	if cfg.TrustMode != transporttls.TrustModeBundle || !transporttls.PodSpecHasLLMWorker(&pod.Spec) {
+		return nil
 	}
 	if err := c.ensureTransportTLSConfigMap(ctx, pod.Namespace, cfg); err != nil {
 		return err

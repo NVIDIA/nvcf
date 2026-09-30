@@ -15,36 +15,54 @@ ML-framework operators (Grove, Dynamo) onto GPU clusters registered with an NVCF
 ## Quickstart
 
 ```sh
-# 1. Register the cluster with ICMS (idempotent)
+# 1. Export the control-plane profile from the self-managed control-plane stack.
+nvcf-cli self-hosted \
+  --control-plane-stack ../self-managed \
+  control-plane profile export
+
+# 2. Initialize the CLI config used for registration.
+nvcf-cli --config <path-to-config> init
+
+# 3. Register the cluster with the generated profile.
 make register-cluster \
   CLUSTER_NAME=gpu-east \
-  NCA_ID=nvcf-default \
   CLUSTER_REGION=us-west-1 \
-  ICMS_URL=https://sis.your-nvcf.example.com
+  NVCF_CLI_CONFIG=<path-to-config>
 
-# 2. Deploy the compute plane
+# 4. Deploy the compute plane.
 make install \
   CLUSTER_NAME=gpu-east \
   HELMFILE_ENV=<env>
 ```
 
-Repeat steps 1-2 for each GPU cluster (see [this example](#multi-cluster-example)).
+Repeat steps 1 and 3 for each GPU cluster (see [this example](#multi-cluster-example)).
 The `CLUSTER_NAME` variable scopes all state to
 that cluster so multiple clusters can be managed from a single checkout.
 `register-cluster` writes `registration/<cluster>-register-values.yaml`.
 `install`, `apply`, and `template` copy that file into `out/` before running
 Helmfile.
 
-`HELMFILE_ENV` maps to `environments/<env>.yaml`. Source checkouts include a
-`local` environment for development. Release archives ship `base.yaml`; create
-an environment file for your registry and service endpoints, then pass its name
-without the `.yaml` suffix.
+By default, `register-cluster` reads
+`../self-managed/out/control-plane-profile.yaml`. Set
+`CONTROL_PLANE_PROFILE=/path/to/control-plane-profile.yaml` when the control
+and compute stacks are not sibling directories. The profile is the canonical
+handoff for account identity, service endpoints, Host overrides, and transport
+trust. Set `NVCF_CLI_CONFIG` when registration must use a non-default CLI
+config. The Makefile forwards the path to `nvcf-cli` but does not run `init`.
+
+`HELMFILE_ENV` maps to `environments/<env>.yaml`. Create that environment file
+with the artifact registry and any deployment-specific overrides before
+installing. Local-development guides provide canonical fixtures rather than an
+implicit `local.yaml`. Release archives ship `base.yaml`; pass the environment
+name without the `.yaml` suffix.
 
 ## Observability
 
 The stack defaults `observability.profile` to `compute`. The `compute` and
-`all` profiles enable the NVCA collector and `BYOObservability` feature gate.
-The `control` and `disabled` profiles leave both off.
+`all` profiles enable the `BYOObservability` feature gate. The optional NVCA
+collector stays disabled for every profile until the operator opts in. This
+prevents a self-hosted install from depending on an image that was not mirrored
+into its registry.
 
 One value selects the normal behavior:
 
@@ -53,16 +71,27 @@ observability:
   profile: compute
 ```
 
-Explicit NVCA values override the profile defaults:
+Enable the collector after publishing it under `global.image`. Its repository
+defaults to `${global.image.registry}/${global.image.repository}/nvcf-otel-collector`:
 
 ```yaml
 global:
   nvcaOperator:
     selfManaged:
       otelCollector:
-        enabled: false
-      featureGateValues:
-        - "-BYOObservability"
+        enabled: true
+```
+
+If the collector is published outside that global image path, set its explicit
+repository override while opting in:
+
+```yaml
+global:
+  nvcaOperator:
+    selfManaged:
+      otelCollector:
+        enabled: true
+        imageRepository: nvcr.io/example/collectors/nvcf-otel-collector
 ```
 
 ## Chart and Image Sources
@@ -118,6 +147,19 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
+Dynamo's bundled NATS server defaults to
+`docker.io/library/nats:2.10.21-alpine`. Redirect it to a private mirror with:
+
+```yaml
+addons:
+  dynamoOperator:
+    nats:
+      image:
+        registry: nvcr.io
+        repository: YOUR_ORG/YOUR_TEAM/nats
+        tag: 2.10.21-alpine
+```
+
 `addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
 resources from `topologyAwareScheduling.topologies` when KAI is enabled.
 When Grove is also enabled, the same toggle sets Grove
@@ -129,11 +171,11 @@ Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
 adds the matching NVCA feature gate. Enabling KAI, Grove, or Dynamo permits
 their workload resource types in the NVCA validation policy.
 
-See [Gang Scheduling](../../../docs/user/cluster-management/gang-scheduling.md)
+See [Gang Scheduling](../../../docs/compute-plane/cluster-management/gang-scheduling.md)
 for atomic workload placement and
-[Topology-Aware Scheduling](../../../docs/user/cluster-management/topology-aware-scheduling.md)
+[Topology-Aware Scheduling](../../../docs/compute-plane/cluster-management/topology-aware-scheduling.md)
 for GPU clique placement. See
-[KAI Scheduler](../../../docs/user/cluster-management/kai-scheduler.md) for
+[KAI Scheduler](../../../docs/compute-plane/cluster-management/kai-scheduler.md) for
 queue configuration and standalone installation.
 
 ## Multi-Cluster Example

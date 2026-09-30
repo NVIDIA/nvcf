@@ -10,7 +10,7 @@ User says NVCA stopped authenticating, or PSAT auth is 401-ing against ICMS. The
 
 ## Steps
 
-1. **Confirm the cluster ID.** `nvcf-cli cluster list` (against the control plane). Identify the row matching the user's compute plane.
+1. Confirm the cluster ID. Run `nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS`. Identify the row matching the user's compute plane.
 
 2. **Rotate.** From a context that can reach the compute plane's K8s API (because rotation re-fetches the K8s API's `/openid/v1/jwks`):
 
@@ -30,6 +30,7 @@ User says NVCA stopped authenticating, or PSAT auth is 401-ing against ICMS. The
 ## If rotation doesn't fix it
 
 The auth failure may be at a different layer — check:
+
 - NATS auth-callout health (`kubectl logs -n nats-system -l app=nats-auth-callout-service`)
 - Cluster row exists in `cluster_oidc_by_cluster_id` Cassandra table
 - `helm-reval-service` configmap has `authz.oidc.enabled=true`

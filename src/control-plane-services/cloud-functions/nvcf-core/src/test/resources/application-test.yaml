@@ -23,9 +23,7 @@ server:
     enabled: true
   forward-headers-strategy: framework
 
-grpc:
-  server:
-    port: 0
+spring.grpc.server.port: 0
 
 management:
   tracing:
@@ -185,7 +183,7 @@ nvcf:
   request:
     timeout: 1s # only whole seconds
   fqdn: http://localhost:${server.port}
-  global-fqdn-grpc: http://localhost:${grpc.server.port}
+  global-fqdn-grpc: http://localhost:${spring.grpc.server.port}
   llm-request-router:
     worker-address: llm-request-router.example.com:50071
   sidecars:
@@ -226,15 +224,8 @@ nvcf:
   account:
     max-functions-allowed: 50
     max-tasks-allowed: 50
-  scheduled-tasks:
+  scheduler:
     enabled: false
-    lock-consistency: QUORUM
-    deployment-tasks:
-      fixed-delay: PT2S
-      graceful-clean-deployment-task:
-        enabled: false
-    clean-nats-streams-task:
-      enabled: false
   notary:
     jwt:
       issuer-uri: http://localhost:9097

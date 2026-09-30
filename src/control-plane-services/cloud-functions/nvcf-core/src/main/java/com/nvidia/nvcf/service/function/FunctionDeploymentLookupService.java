@@ -147,4 +147,12 @@ public class FunctionDeploymentLookupService {
     public Stream<FunctionDeploymentEntity> lookupDeploymentsByNcaId(String ncaId) {
         return functionsDeploymentRepository.findAllByNcaId(ncaId);
     }
+
+    /**
+     * Streams all function deployments. The caller must close the returned stream before
+     * submitting deployment contexts to another thread.
+     */
+    public Stream<FunctionDeploymentEntity> lookupAllDeployments() {
+        return functionsDeploymentRepository.findAllBy();
+    }
 }

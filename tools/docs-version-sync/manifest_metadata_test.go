@@ -194,7 +194,7 @@ func TestCatalogRefreshPreservesManifestMetadata(t *testing.T) {
 		Description: "Routes OpenAI-compatible LLM requests.",
 	}}}
 
-	updated := BuildCatalogFromArtifactsWithBase("0.6.0-rc.99", base.Artifacts, base)
+	updated := refreshCatalogFromArtifacts("0.6.0-rc.99", base.Artifacts, base)
 	if len(updated.Manifest.Entries) != 1 || updated.Manifest.Entries[0].ArtifactID != "llm-api-gateway" {
 		t.Fatalf("manifest metadata = %#v, want preserved entry", updated.Manifest)
 	}
@@ -247,9 +247,7 @@ func TestManifestMetadataClassifiesAllArtifacts(t *testing.T) {
 		t.Fatalf("manifest classification mismatch: missing=%v extra=%v", missing, extra)
 	}
 
-	sort.Strings(eaCVE)
-	wantEACVE := []string{"bitnami-cassandra", "nvcf-cassandra-migrations"}
-	if strings.Join(eaCVE, ",") != strings.Join(wantEACVE, ",") {
-		t.Fatalf("EA-CVE entries = %v, want %v", eaCVE, wantEACVE)
+	if len(eaCVE) != 0 {
+		t.Fatalf("EA-CVE entries = %v, want none: the latest release has no CVE-impacted EA artifacts", eaCVE)
 	}
 }

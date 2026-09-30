@@ -20,6 +20,8 @@ package render
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
 	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
@@ -140,4 +142,64 @@ func TestBenchPodPropagatesOwnerMetadata(t *testing.T) {
 			t.Error("mutating pod.Annotations mutated Result.OwnerAnnotations (maps are aliased)")
 		}
 	}
+}
+
+func envValue(env []corev1.EnvVar, key string) (corev1.EnvVar, bool) {
+	for _, e := range env {
+		if e.Name == key {
+			return e, true
+		}
+	}
+	return corev1.EnvVar{}, false
+}
+
+func TestEnsureNonEmptyEnv(t *testing.T) {
+	const key = "OTEL_EXPORTER_OTLP_ENDPOINT"
+	const fallback = "http://localhost:4317"
+
+	t.Run("empty literal is filled", func(t *testing.T) {
+		c := &corev1.Container{Env: []corev1.EnvVar{{Name: key, Value: ""}}}
+		ensureNonEmptyEnv(c, key, fallback)
+		got, ok := envValue(c.Env, key)
+		if !ok || got.Value != fallback {
+			t.Fatalf("empty literal not filled: %+v", c.Env)
+		}
+		if len(c.Env) != 1 {
+			t.Errorf("env should not grow, got %d entries", len(c.Env))
+		}
+	})
+
+	t.Run("non-empty literal is preserved", func(t *testing.T) {
+		c := &corev1.Container{Env: []corev1.EnvVar{{Name: key, Value: "http://real:4317"}}}
+		ensureNonEmptyEnv(c, key, fallback)
+		got, _ := envValue(c.Env, key)
+		if got.Value != "http://real:4317" {
+			t.Errorf("existing value overwritten: %q", got.Value)
+		}
+	})
+
+	t.Run("valueFrom is left untouched", func(t *testing.T) {
+		ref := &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}
+		c := &corev1.Container{Env: []corev1.EnvVar{{Name: key, ValueFrom: ref}}}
+		ensureNonEmptyEnv(c, key, fallback)
+		got, _ := envValue(c.Env, key)
+		if got.Value != "" {
+			t.Errorf("valueFrom var got a literal value %q", got.Value)
+		}
+		if got.ValueFrom != ref {
+			t.Errorf("valueFrom source was modified")
+		}
+	})
+
+	t.Run("missing var is appended", func(t *testing.T) {
+		c := &corev1.Container{Env: []corev1.EnvVar{{Name: "OTHER", Value: "x"}}}
+		ensureNonEmptyEnv(c, key, fallback)
+		got, ok := envValue(c.Env, key)
+		if !ok || got.Value != fallback {
+			t.Fatalf("missing var not appended: %+v", c.Env)
+		}
+		if len(c.Env) != 2 {
+			t.Errorf("expected 2 env entries, got %d", len(c.Env))
+		}
+	})
 }

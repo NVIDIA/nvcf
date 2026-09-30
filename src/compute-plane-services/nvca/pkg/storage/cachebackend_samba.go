@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
@@ -37,11 +38,13 @@ import (
 
 // Samba-on-NVMesh model cache backend (HelmCacheBackendSamba).
 //
-// Selected when CachingSupport is on, neither nvcf-sc-30 (NVMesh 3.x) nor an
-// operator-provided nvcf-miniservice-sc exists, and HelmSharedStorage is enabled.
+// Selected when CachingSupport is on, the model cache class is not provisioned
+// by NVMesh, no operator-provided nvcf-miniservice-sc exists, and
+// HelmSharedStorage is enabled.
 //
 // Each cacheHandle gets its OWN Samba server (Deployment + Service) backed by
-// its OWN nvcf-sc (NVMesh) data PVC, sized to the function's cacheSize, and
+// its OWN block-storage data PVC on the model cache storage class
+// (ModelCacheStorageClassName), sized to the function's cacheSize, and
 // exporting a single SMB share. There is no shared/global data PVC: a single
 // fixed-size volume cannot be sized for an unknown set of models, and hot-adding
 // per-handle volumes to one shared server would force pod restarts that drop
@@ -62,9 +65,6 @@ const (
 	SambaModelCacheReadOnlySecretName = "nvcf-helm-cache-smb-ro-creds"
 	// SambaModelCacheShareName is the SMB share each per-handle server exports.
 	SambaModelCacheShareName = "cache"
-	// SambaModelCacheDataStorageClassName is the NVMesh block-storage class
-	// backing each per-handle Samba data PVC (Samba over NVMesh; never ephemeral).
-	SambaModelCacheDataStorageClassName = "nvcf-sc"
 
 	sambaModelCacheDataMountPath = "/shared-data"
 	sambaModelCacheServerPort    = 445
@@ -95,8 +95,8 @@ const (
 )
 
 // defaultSambaModelCacheDataSize backs the per-handle data PVC only when the
-// request carries no cacheSize. nvcf-sc supports expansion, so this is a
-// starting point, not a ceiling.
+// request carries no cacheSize. The model cache class supports expansion, so
+// this is a starting point, not a ceiling.
 var defaultSambaModelCacheDataSize = resource.MustParse("100Gi")
 
 // sambaModelCacheResourceName derives the per-cacheHandle name shared by the
@@ -113,8 +113,9 @@ func sambaModelCacheResourceName(cacheHandle string) string {
 	return fmt.Sprintf("samba-%s-%08x", cacheHandle[:48], h.Sum32())
 }
 
-// SambaModelCacheBackingPVCName is the per-handle nvcf-sc data PVC that holds
-// the cache bytes behind the Samba share. Its existence is the reuse signal.
+// SambaModelCacheBackingPVCName is the per-handle block-storage data PVC that
+// holds the cache bytes behind the Samba share. Its existence is the reuse
+// signal.
 func SambaModelCacheBackingPVCName(cacheHandle string) string {
 	return sambaModelCacheResourceName(cacheHandle)
 }
@@ -125,60 +126,91 @@ func sambaModelCacheWriterPVName(cacheHandle string) string {
 	return "samba-rw-pv-" + cacheHandle
 }
 
+// SambaModelCacheInfraState reports the bootstrap state of a handle's Samba
+// server.
+type SambaModelCacheInfraState struct {
+	// Ready is true once the per-handle Samba Deployment has an available
+	// replica.
+	Ready bool
+	// CreatedAt is when the per-handle Samba Deployment was created. Callers
+	// bound how long a bootstrap may stay unready with it: the backing PVC can
+	// fail to bind for good (no capacity, provisioner down) and nothing else on
+	// the Samba path ever fails that wait.
+	CreatedAt time.Time
+}
+
 // EnsureSambaModelCacheInfra performs the idempotent bootstrap of the per-handle
 // Samba model cache server in the model cache control namespace: the shared
-// RW/RO credentials Secrets, the per-handle nvcf-sc data PVC (sized to size),
-// the per-handle Samba Deployment, its fronting Service, and an ingress
-// NetworkPolicy. It returns ready=true once that Deployment is available. It
+// RW/RO credentials Secrets, the per-handle data PVC on dataStorageClass (sized
+// to size), the per-handle Samba Deployment, its fronting Service, and an
+// ingress NetworkPolicy. It reports Ready once that Deployment is available. It
 // intentionally creates NO StorageClass; cache volumes are static SMB PVs bound
 // to the per-handle share (see newSambaModelCachePV).
+//
+// dataStorageClass must be the class SelectHelmCacheBackend verified exists
+// before choosing this backend; empty resolves to the default.
 func EnsureSambaModelCacheInfra(
 	ctx context.Context,
 	c client.Client,
 	cacheHandle string,
 	image string,
+	dataStorageClass string,
 	resources corev1.ResourceRequirements,
 	size resource.Quantity,
-) (ready bool, err error) {
+) (state SambaModelCacheInfraState, err error) {
 	log := logf.FromContext(ctx).WithValues("backend", HelmCacheBackendSamba,
 		"namespace", ModelCacheInitNamespace, "cacheHandle", cacheHandle)
 
 	if image == "" {
-		return false, fmt.Errorf("samba model cache server image is not configured")
+		return state, fmt.Errorf("samba model cache server image is not configured")
 	}
 	if cacheHandle == "" {
-		return false, fmt.Errorf("samba model cache cacheHandle is not set")
+		return state, fmt.Errorf("samba model cache cacheHandle is not set")
 	}
 	if size.IsZero() {
 		size = defaultSambaModelCacheDataSize
 	}
 
 	rwSecret, roSecret := newSambaModelCacheSecrets()
+
+	// Ensure the namespace first and patch required labels onto it if it already
+	// exists. ensureCreated treats AlreadyExists as success without updating, so
+	// pre-existing namespaces (e.g. from a previous NVCA version that did not
+	// set WorkloadInstanceTypeLabel) must be patched explicitly.
+	ns := NewModelCacheInitNamespace()
+	if err := ensureCreated(ctx, c, ns); err != nil {
+		return state, fmt.Errorf("ensure samba model cache %T: %w", ns, err)
+	}
+	if err := ensureNamespaceLabels(ctx, c, ns); err != nil {
+		return state, fmt.Errorf("patch samba model cache %T labels: %w", ns, err)
+	}
+
 	objs := []client.Object{
-		NewModelCacheInitNamespace(),
 		rwSecret,
 		roSecret,
-		newSambaModelCacheDataPVC(cacheHandle, size),
+		newSambaModelCacheDataPVC(cacheHandle, ModelCacheStorageClassName(dataStorageClass), size),
 		newSambaModelCacheDeployment(cacheHandle, image, resources),
 		newSambaModelCacheService(cacheHandle),
 		newSambaModelCacheNetworkPolicy(cacheHandle),
 	}
 	for _, obj := range objs {
 		if err := ensureCreated(ctx, c, obj); err != nil {
-			return false, fmt.Errorf("ensure samba model cache %T: %w", obj, err)
+			return state, fmt.Errorf("ensure samba model cache %T: %w", obj, err)
 		}
 	}
 
 	dep := &appsv1.Deployment{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: sambaModelCacheResourceName(cacheHandle)}, dep); err != nil {
-		return false, fmt.Errorf("get samba deployment: %w", err)
+		return state, fmt.Errorf("get samba deployment: %w", err)
 	}
+	state.CreatedAt = dep.CreationTimestamp.Time
 	if dep.Status.AvailableReplicas < 1 {
 		log.V(1).Info("Samba model cache server not yet available, waiting")
-		return false, nil
+		return state, nil
 	}
 	log.V(1).Info("Samba model cache server ready")
-	return true, nil
+	state.Ready = true
+	return state, nil
 }
 
 // ensureCreated creates obj, treating AlreadyExists as success so the bootstrap
@@ -188,6 +220,40 @@ func ensureCreated(ctx context.Context, c client.Client, obj client.Object) erro
 		return err
 	}
 	return nil
+}
+
+// ensureNamespaceLabels patches the labels from want onto the live namespace.
+// It is a no-op when all required labels are already present with the correct
+// values, so it is safe to call on every reconcile. NotFound is treated as a
+// no-op: the namespace was just created by ensureCreated with the correct
+// labels and does not need patching.
+func ensureNamespaceLabels(ctx context.Context, c client.Client, want *corev1.Namespace) error {
+	live := &corev1.Namespace{}
+	if err := c.Get(ctx, client.ObjectKey{Name: want.Name}, live); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	// Check whether all required labels are already present with correct values.
+	allPresent := true
+	for k, v := range want.Labels {
+		if live.Labels[k] != v {
+			allPresent = false
+			break
+		}
+	}
+	if allPresent {
+		return nil
+	}
+	patched := live.DeepCopy()
+	if patched.Labels == nil {
+		patched.Labels = make(map[string]string, len(want.Labels))
+	}
+	for k, v := range want.Labels {
+		patched.Labels[k] = v
+	}
+	return c.Patch(ctx, patched, client.MergeFrom(live))
 }
 
 // sambaModelCacheSelector is the unique pod selector for a handle's Samba server.
@@ -226,12 +292,16 @@ func newSambaModelCacheSecrets() (rw, ro *corev1.Secret) {
 		mk(SambaModelCacheReadOnlySecretName, sambaModelCacheROUsername, sambaModelCacheROUID)
 }
 
-// newSambaModelCacheDataPVC builds the per-handle nvcf-sc data PVC. The PVC is
-// not labeled with modelCacheHandleLabelKey on purpose: cleanupInitModelCache
-// deletes the (handle-labeled) ephemeral writer RW PVC, and labeling the durable
-// backing PVC with the same handle would collide with that single-PVC cleanup.
-func newSambaModelCacheDataPVC(cacheHandle string, size resource.Quantity) *corev1.PersistentVolumeClaim {
-	storageClassName := SambaModelCacheDataStorageClassName
+// newSambaModelCacheDataPVC builds the per-handle data PVC on the model cache
+// storage class. The PVC is not labeled with modelCacheHandleLabelKey on
+// purpose: cleanupInitModelCache deletes the (handle-labeled) ephemeral writer
+// RW PVC, and labeling the durable backing PVC with the same handle would
+// collide with that single-PVC cleanup.
+func newSambaModelCacheDataPVC(
+	cacheHandle string,
+	storageClassName string,
+	size resource.Quantity,
+) *corev1.PersistentVolumeClaim {
 	labels := sambaModelCacheSelector(cacheHandle)
 	labels[sambaModelCacheComponentLabelKey] = sambaModelCacheComponentLabelValue
 	return &corev1.PersistentVolumeClaim{

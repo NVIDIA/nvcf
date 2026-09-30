@@ -30,6 +30,7 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use stargate_proto::pb::InferenceServerStatus;
+use stargate_tls::{SERVER_IDENTITY_MATERIAL, TlsIdentityStatus, TlsReloadOutcome};
 
 use crate::queue_admission::{ObservedRequestState, RequestObservationTransition};
 use crate::{CurrentModelStats, RequestObservation, RequestObservationState};
@@ -88,6 +89,7 @@ macro_rules! metrics {
         #[derive(Debug)]
         pub struct PylonMetrics {
             registry: Arc<Registry>,
+            tls_identity: Arc<TlsIdentityStatus>,
             $($($field: metric_type!($kind),)*)*
         }
 
@@ -102,7 +104,17 @@ macro_rules! metrics {
                     $(, $buckets)?
                 )?;
                 registry.register(Box::new($field.clone()))?;)*)*
-                Ok(Arc::new(Self { registry, $($($field,)*)* }))
+                let metrics = Arc::new(Self {
+                    registry,
+                    tls_identity: TlsIdentityStatus::new(),
+                    $($($field,)*)*
+                });
+                for outcome in TlsReloadOutcome::ALL {
+                    metrics.tls_reloads_total
+                        .with_label_values(&[SERVER_IDENTITY_MATERIAL, outcome.as_str()])
+                        .inc_by(0);
+                }
+                Ok(metrics)
             }
         }
     };
@@ -116,6 +128,8 @@ metrics! {
         plain_gauge target_info("target_info", "Target metadata", ["service_version", "service_name", "commit"]);
         gauge registration_stream_connected("registration_stream_connected", "Binary gauge: 1 when a stargate registration stream is connected", ["router"]);
         gauge reverse_tunnel_connected("reverse_tunnel_connected", "Binary gauge: 1 when a reverse QUIC tunnel is connected to a stargate router", ["router"]);
+        counter tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
+        gauge tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
     request {
         gauge inflight("requests_inflight", "Current number of observed requests in flight", ["model"]);
@@ -163,6 +177,7 @@ metrics! {
         gauge stats_source("model_stats_source", "Binary gauge for observed stats source labels by model", ["model", "source"]);
         gauge advertised_status("model_advertised_status", "Current model status advertised to each stargate router; the active status label is 1 and other status labels are 0", ["router", "model", "status"]);
         histogram calibration_duration_ms("model_calibration_duration_ms", "Per-generation calibration traffic-ramp duration in milliseconds by model and outcome", ["model", "outcome"], CALIBRATION_BUCKETS);
+        counter canary_results_total("model_canary_results_total", "Health canary decisions by model, bringup phase, and result", ["model", "phase", "result"]);
     }
     retry {
         counter retryable_responses_total("retryable_responses_total", "Total number of retryable responses emitted or relayed by pylon", ["inference_server_id", "reason", "status"]);
@@ -202,6 +217,31 @@ macro_rules! metric_observer {
 }
 
 impl PylonMetrics {
+    pub fn observe_server_identity_reload(&self, outcome: TlsReloadOutcome) {
+        self.tls_reloads_total
+            .with_label_values(&[SERVER_IDENTITY_MATERIAL, outcome.as_str()])
+            .inc();
+    }
+
+    /// Returns the expiry state the TLS reload task publishes to.
+    pub fn tls_identity(&self) -> Arc<TlsIdentityStatus> {
+        self.tls_identity.clone()
+    }
+
+    /// Republishes the active expiry to the gauge from the shared status.
+    ///
+    /// The reload task publishes to the status before it reports an outcome, so
+    /// calling this from the outcome hook keeps the gauge and readiness aligned.
+    /// A component serving a generated identity has no expiry, so it publishes
+    /// no series rather than a placeholder timestamp.
+    pub fn refresh_tls_certificate_expiry(&self) {
+        if let Some(not_after) = self.tls_identity.active_expiry_unix_seconds() {
+            self.tls_certificate_expiry_seconds
+                .with_label_values(&[SERVER_IDENTITY_MATERIAL])
+                .set(not_after);
+        }
+    }
+
     pub fn registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }
@@ -385,6 +425,15 @@ impl PylonMetrics {
                 .state_input_tokens
                 .remove_label_values(&[model_id, state]);
         }
+        for phase in CanaryPhase::ALL {
+            for result in CanaryResult::ALL {
+                let _ = self.canary_results_total.remove_label_values(&[
+                    model_id,
+                    phase.as_str(),
+                    result.as_str(),
+                ]);
+            }
+        }
         if let Some(stats) = stats {
             for capability in &stats.stats_capabilities {
                 let _ = self
@@ -406,6 +455,27 @@ impl PylonMetrics {
         self.calibration_duration_ms
             .with_label_values(&[model_id, outcome.as_str()])
             .observe(duration.as_secs_f64() * 1_000.0);
+    }
+
+    pub(crate) fn init_model_canary_results(&self, model_id: &str) {
+        for phase in CanaryPhase::ALL {
+            for result in phase.results() {
+                self.canary_results_total
+                    .with_label_values(&[model_id, phase.as_str(), result.as_str()])
+                    .inc_by(0);
+            }
+        }
+    }
+
+    pub(crate) fn observe_model_canary_result(
+        &self,
+        model_id: &str,
+        phase: CanaryPhase,
+        result: CanaryResult,
+    ) {
+        self.canary_results_total
+            .with_label_values(&[model_id, phase.as_str(), result.as_str()])
+            .inc();
     }
 
     metric_observer!(bool_gauge observe_registration_stream_connected(
@@ -559,6 +629,61 @@ impl CalibrationOutcome {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanaryPhase {
+    Active,
+    Recovery,
+}
+
+impl CanaryPhase {
+    const ALL: [Self; 2] = [Self::Active, Self::Recovery];
+
+    /// Results each phase can record; recovery canaries never skip and must pass.
+    fn results(self) -> &'static [CanaryResult] {
+        match self {
+            Self::Active => &CanaryResult::ALL,
+            Self::Recovery => &[CanaryResult::Passed, CanaryResult::Failed],
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Recovery => "recovery",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanaryResult {
+    /// The canary completed within its limits.
+    Passed,
+    /// Recent request progress on the model made the canary unnecessary.
+    SkippedRecentProgress,
+    /// The canary timed out while the upstream made progress on other requests.
+    TimedOutUpstreamBusy,
+    /// The canary failed and counted against the model.
+    Failed,
+}
+
+impl CanaryResult {
+    const ALL: [Self; 4] = [
+        Self::Passed,
+        Self::SkippedRecentProgress,
+        Self::TimedOutUpstreamBusy,
+        Self::Failed,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::SkippedRecentProgress => "skipped_recent_progress",
+            Self::TimedOutUpstreamBusy => "timed_out_upstream_busy",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 const QUEUE_ADMISSION_BUCKETS: &[f64] = &[
     0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0,
     30_000.0, 60_000.0,
@@ -625,16 +750,57 @@ pub async fn start_metrics_server(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use stargate_proto::pb::InferenceServerStatus;
 
-    use super::CalibrationOutcome;
+    use super::{CalibrationOutcome, CanaryPhase, CanaryResult};
 
     use crate::{
         CurrentModelStats, PylonMetrics, PylonRuntimeState, RequestObservation,
         RequestObservationEndpoint, RequestObservationState,
     };
+
+    #[test]
+    fn tls_reload_metrics_are_preinitialized() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+        assert!(
+            !metrics
+                .gather_text()
+                .expect("metrics should encode")
+                .contains("pylon_tls_certificate_expiry_seconds"),
+            "a component with no mounted identity publishes no expiry series"
+        );
+        metrics.observe_server_identity_reload(stargate_tls::TlsReloadOutcome::Success);
+
+        let now: i64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after the Unix epoch")
+            .as_secs()
+            .try_into()
+            .expect("current time should fit in i64");
+        let future_expiry = now.saturating_add(60);
+        metrics
+            .tls_identity()
+            .set_validity(Some(stargate_tls::CertificateValidity {
+                not_before_unix_seconds: now.saturating_sub(60),
+                not_after_unix_seconds: future_expiry,
+            }));
+        metrics.refresh_tls_certificate_expiry();
+        let body = metrics.gather_text().expect("metrics should encode");
+
+        assert!(body.contains(
+            r#"pylon_tls_reloads_total{material_type="server_identity",result="success"} 1"#
+        ));
+        assert!(body.contains(
+            r#"pylon_tls_reloads_total{material_type="server_identity",result="rejected"} 0"#
+        ));
+        assert!(body.contains(
+            &format!(
+                r#"pylon_tls_certificate_expiry_seconds{{material_type="server_identity"}} {future_expiry}"#
+            )
+        ));
+    }
 
     fn observation(
         request_id: &str,
@@ -1008,6 +1174,44 @@ mod tests {
                 r#"pylon_model_calibration_duration_ms_count{model="model-a",outcome="cancelled"} 1"#,
                 r#"pylon_model_calibration_duration_ms_sum{model="model-a",outcome="cancelled"} 3"#,
             ],
+        );
+    }
+
+    #[test]
+    fn canary_results_are_preinitialized_recorded_and_removed() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+
+        metrics.init_model_canary_results("model-a");
+        metrics.observe_model_canary_result(
+            "model-a",
+            CanaryPhase::Active,
+            CanaryResult::TimedOutUpstreamBusy,
+        );
+
+        let body = assert_metrics(
+            &metrics,
+            &[
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="passed"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="skipped_recent_progress"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="timed_out_upstream_busy"} 1"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="failed"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="recovery",result="passed"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="recovery",result="failed"} 0"#,
+            ],
+        );
+        assert!(
+            !body.contains(r#"phase="recovery",result="skipped_recent_progress""#)
+                && !body.contains(r#"phase="recovery",result="timed_out_upstream_busy""#),
+            "unreachable recovery results should not be pre-initialized"
+        );
+
+        metrics.remove_model_gauges("model-a", None);
+        assert!(
+            !metrics
+                .gather_text()
+                .expect("metrics should render")
+                .contains("pylon_model_canary_results_total"),
+            "retired models should drop their canary result series"
         );
     }
 

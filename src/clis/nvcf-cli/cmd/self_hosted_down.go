@@ -331,6 +331,10 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 	extra := []string{
 		"CLUSTER_NAME=" + clusterName,
 		"NCA_ID=" + downNCAID,
+		// The worker helmfile also requires OUTPUT_DIR to resolve
+		// $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml, the same
+		// directory readRegisterValuesYAML reads from below.
+		"OUTPUT_DIR=" + filepath.Join(resolved.Path, "out"),
 	}
 	unregisterClusterID := clusterName
 	if rv, err := readRegisterValuesYAML(resolved.Path, clusterName); err == nil {

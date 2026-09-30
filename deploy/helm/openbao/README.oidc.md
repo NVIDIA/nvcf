@@ -25,14 +25,14 @@ This script is the primary driver of the discovery process. It is sourced at the
 
 This script contains the `configure_auth_jwt` function, which consumes the environment variables and executes the `bao write` command. A key design decision was to implement two distinct configuration paths to maximize robustness:
 
-* **Default Issuer Path**: If the discovered issuer is the standard in-cluster one (`https://kubernetes.default.svc.cluster.local`), the function configures OpenBao using the `jwt_validation_pubkeys` parameter. It reads the public key directly from a secret that is pre-mounted into the pod by the Helm chart. This approach is more resilient for standard clusters as it removes any dependency on the OpenBao server pod having network access to the JWKS endpoint.
-* **Custom Issuer Path**: For any other issuer (e.g., EKS, GKE), the function configures OpenBao using the discovered `jwks_url`. This is the correct approach for public OIDC providers as it delegates the responsibility of fetching, caching, and rotating the signing keys to the OpenBao server, ensuring long-term operational stability.
+- **Default Issuer Path**: If the discovered issuer is the standard in-cluster one (`https://kubernetes.default.svc.cluster.local`), the function configures OpenBao using the `jwt_validation_pubkeys` parameter. It reads the public key directly from a secret that is pre-mounted into the pod by the Helm chart. This approach is more resilient for standard clusters as it removes any dependency on the OpenBao server pod having network access to the JWKS endpoint.
+- **Custom Issuer Path**: For any other issuer (e.g., EKS, GKE), the function configures OpenBao using the discovered `jwks_url`. This is the correct approach for public OIDC providers as it delegates the responsibility of fetching, caching, and rotating the signing keys to the OpenBao server, ensuring long-term operational stability.
 
 ### Helm Chart (`values.yaml` and Templates)
 
 The feature is controlled via the `openbao.migrations.issuerDiscovery` section in `values.yaml`.
 
-* `enabled`: A boolean to enable or disable the discovery feature. If `false`, the system gracefully falls back to the robust "Default Issuer Path".
-* `urlOverride`: Allows operators to point the discovery script at a non-standard or private OIDC provider.
-* `caBundleSecretName`: Provides a mechanism for the discovery script to trust private CAs, which is a critical feature for enterprise environments that use TLS-intercepting proxies or internal identity providers.
-* `insecure`: A flag to disable TLS verification for development and testing purposes only.
+- `enabled`: A boolean to enable or disable the discovery feature. If `false`, the system gracefully falls back to the robust "Default Issuer Path".
+- `urlOverride`: Allows operators to point the discovery script at a non-standard or private OIDC provider.
+- `caBundleSecretName`: Provides a mechanism for the discovery script to trust private CAs, which is a critical feature for enterprise environments that use TLS-intercepting proxies or internal identity providers.
+- `insecure`: A flag to disable TLS verification for development and testing purposes only.

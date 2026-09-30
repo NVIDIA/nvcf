@@ -21,6 +21,14 @@ import "net/http"
 
 func EnableCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// /info is a build-metadata endpoint, not a browser-facing API. It must
+		// enforce its own GET-only contract (405 for every other method,
+		// including OPTIONS) instead of being short-circuited as a CORS preflight.
+		if r.URL.Path == "/info" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 

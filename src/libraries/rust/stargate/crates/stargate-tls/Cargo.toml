@@ -31,4 +31,12 @@ anyhow = { workspace = true }
 quinn = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
+rustls-webpki = { workspace = true }
 rustls-pemfile = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+x509-parser = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

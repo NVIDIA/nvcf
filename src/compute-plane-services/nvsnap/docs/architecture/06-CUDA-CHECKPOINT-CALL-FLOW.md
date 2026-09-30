@@ -4,7 +4,7 @@ How a GPU checkpoint actually gets created from `kubectl` → cuda-checkpoint su
 
 ## End-to-end flow
 
-```
+```text
 test-e2e.sh (host)
   │
   ▼
@@ -89,6 +89,7 @@ Both eventually run the same `cuda-checkpoint.real` binary. They differ in **who
 | Used for | Lock / get-restore-tid / unlock — agent-driven state transitions | The actual GPU state dump during CRIU's freeze stage |
 
 Failure modes diverge by path:
+
 - **Direct path fails** if the agent's path-probing in `findHostNvidiaLibs` doesn't find a matching directory on the host. Logged as `"Could not find NVIDIA libs on host, cuda-checkpoint may fail"`.
 - **CRIU-plugin path fails** if the wrapper's hardcoded list doesn't cover the cluster's driver layout. Surfaces as `cuda_plugin: cuda-checkpoint output ===> ... libcuda.so.1: cannot open shared object file` in CRIU's dump.log.
 
@@ -111,7 +112,7 @@ This silent-fall-through is what we observed on GCP-H100-a 2026-05-23: 4.4 GB ch
 
 For an env var to reach `cuda-checkpoint.real` on the CRIU-plugin path, it must traverse:
 
-```
+```text
 agent process  --[cmd.Env in rpc_dump.go]-->  criu swrk
 criu swrk      --[inherited]-->                cuda_plugin (loaded inside criu)
 cuda_plugin    --[execvp inherits env]-->      cuda-checkpoint (wrapper)

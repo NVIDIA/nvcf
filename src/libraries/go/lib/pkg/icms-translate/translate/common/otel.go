@@ -263,12 +263,12 @@ func getCommonOTelEnvs(allEnvSet map[string]string, otelPodIPOverride string) []
 func GetDefaultContainerResourcesBYOO() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI), // 500m
-			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),     // 2Gi
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI), // 1000m
+			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),      // 2Gi
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI), // 500m
-			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),     // 2Gi
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI), // 1000m
+			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),      // 2Gi
 		},
 	}
 }
@@ -294,8 +294,8 @@ func getOTelContainerBase(
 					Scheme: corev1.URISchemeHTTP,
 				},
 			},
-			InitialDelaySeconds: 30,
-			PeriodSeconds:       30,
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       5,
 			FailureThreshold:    3,
 			SuccessThreshold:    1,
 			TimeoutSeconds:      1,

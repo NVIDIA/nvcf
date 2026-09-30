@@ -21,8 +21,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
+	"time"
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
@@ -188,7 +190,6 @@ like { "secrets": [{"name": "...", "value": "..."}] }.`,
 	RunE: runTaskUpdateSecrets,
 }
 
-
 // ============================================================================
 // Configuration structs
 // ============================================================================
@@ -197,23 +198,23 @@ like { "secrets": [{"name": "...", "value": "..."}] }.`,
 // near 1:1 mapping of CreateTaskRequest with secret values typed loosely so
 // users can drop in either strings or objects.
 type TaskCreateConfig struct {
-	Name                           string                             `json:"name"`
-	GpuSpecification               *TaskGpuSpecificationInput         `json:"gpuSpecification,omitempty"`
-	ContainerImage                 string                             `json:"containerImage,omitempty"`
-	ContainerArgs                  string                             `json:"containerArgs,omitempty"`
-	ContainerEnvironment           []ContainerEnvironmentEntry        `json:"containerEnvironment,omitempty"`
-	Models                         []ArtifactConfig                   `json:"models,omitempty"`
-	Resources                      []ArtifactConfig                   `json:"resources,omitempty"`
-	Tags                           []string                           `json:"tags,omitempty"`
-	Description                    string                             `json:"description,omitempty"`
-	MaxRuntimeDuration             string                             `json:"maxRuntimeDuration,omitempty"`
-	MaxQueuedDuration              string                             `json:"maxQueuedDuration,omitempty"`
-	TerminationGracePeriodDuration string                             `json:"terminationGracePeriodDuration,omitempty"`
-	ResultHandlingStrategy         string                             `json:"resultHandlingStrategy,omitempty"`
-	ResultsLocation                string                             `json:"resultsLocation,omitempty"`
-	HelmChart                      string                             `json:"helmChart,omitempty"`
-	Telemetries                    *TaskTelemetriesInput              `json:"telemetries,omitempty"`
-	Secrets                        interface{}                        `json:"secrets,omitempty"` // []string or []SecretConfig
+	Name                           string                      `json:"name"`
+	GpuSpecification               *TaskGpuSpecificationInput  `json:"gpuSpecification,omitempty"`
+	ContainerImage                 string                      `json:"containerImage,omitempty"`
+	ContainerArgs                  string                      `json:"containerArgs,omitempty"`
+	ContainerEnvironment           []ContainerEnvironmentEntry `json:"containerEnvironment,omitempty"`
+	Models                         []ArtifactConfig            `json:"models,omitempty"`
+	Resources                      []ArtifactConfig            `json:"resources,omitempty"`
+	Tags                           []string                    `json:"tags,omitempty"`
+	Description                    string                      `json:"description,omitempty"`
+	MaxRuntimeDuration             string                      `json:"maxRuntimeDuration,omitempty"`
+	MaxQueuedDuration              string                      `json:"maxQueuedDuration,omitempty"`
+	TerminationGracePeriodDuration string                      `json:"terminationGracePeriodDuration,omitempty"`
+	ResultHandlingStrategy         string                      `json:"resultHandlingStrategy,omitempty"`
+	ResultsLocation                string                      `json:"resultsLocation,omitempty"`
+	HelmChart                      string                      `json:"helmChart,omitempty"`
+	Telemetries                    *TaskTelemetriesInput       `json:"telemetries,omitempty"`
+	Secrets                        interface{}                 `json:"secrets,omitempty"` // []string or []SecretConfig
 }
 
 // TaskGpuSpecificationInput maps to GpuSpecificationDto.
@@ -228,8 +229,8 @@ type TaskGpuSpecificationInput struct {
 
 // TaskHelmValidationInput maps to HelmValidationPolicyDto.
 type TaskHelmValidationInput struct {
-	Name                 string                  `json:"name"`
-	ExtraKubernetesTypes []TaskKubernetesTypeIn  `json:"extraKubernetesTypes,omitempty"`
+	Name                 string                 `json:"name"`
+	ExtraKubernetesTypes []TaskKubernetesTypeIn `json:"extraKubernetesTypes,omitempty"`
 }
 
 // TaskKubernetesTypeIn maps to KubernetesType.
@@ -263,11 +264,11 @@ type TaskBulkConfig struct {
 var taskCreateFlags struct {
 	inputFile string
 
-	name           string
-	gpu            string
-	instanceType   string
-	backend        string
-	clusters       []string
+	name         string
+	gpu          string
+	instanceType string
+	backend      string
+	clusters     []string
 
 	containerImage       string
 	containerArgs        string
@@ -307,23 +308,25 @@ var taskBulkFlags struct {
 
 var taskGetFlags struct {
 	includeSecrets bool
+	timeoutSeconds int
 }
 
 var taskPaginationFlags struct {
-	limit  int
-	cursor string
+	limit          int
+	cursor         string
+	timeoutSeconds int
 }
 
 var taskResultsPaginationFlags struct {
-	limit  int
-	cursor string
+	limit          int
+	cursor         string
+	timeoutSeconds int
 }
 
 var taskUpdateSecretsFlags struct {
 	inputFile string
 	secrets   []string
 }
-
 
 // ============================================================================
 // Init
@@ -385,14 +388,17 @@ func init() {
 
 	// task get flags
 	taskGetCmd.Flags().BoolVar(&taskGetFlags.includeSecrets, "include-secrets", false, "Include secret values in the response (subject to authorization)")
+	taskGetCmd.Flags().IntVar(&taskGetFlags.timeoutSeconds, "timeout", 0, "Maximum request duration in seconds (default client timeout)")
 
 	// task events flags
 	taskEventsCmd.Flags().IntVar(&taskPaginationFlags.limit, "limit", 0, "Maximum number of events to return")
 	taskEventsCmd.Flags().StringVar(&taskPaginationFlags.cursor, "cursor", "", "Pagination cursor returned by previous response")
+	taskEventsCmd.Flags().IntVar(&taskPaginationFlags.timeoutSeconds, "timeout", 0, "Maximum request duration in seconds (default client timeout)")
 
 	// task results flags
 	taskResultsCmd.Flags().IntVar(&taskResultsPaginationFlags.limit, "limit", 0, "Maximum number of results to return")
 	taskResultsCmd.Flags().StringVar(&taskResultsPaginationFlags.cursor, "cursor", "", "Pagination cursor returned by previous response")
+	taskResultsCmd.Flags().IntVar(&taskResultsPaginationFlags.timeoutSeconds, "timeout", 0, "Maximum request duration in seconds (default client timeout)")
 
 	// task update-secrets flags
 	taskUpdateSecretsCmd.Flags().StringVar(&taskUpdateSecretsFlags.inputFile, "input-file", "", "JSON file with { secrets: [{name, value}, ...] } payload")
@@ -433,6 +439,24 @@ func HasCurrentTask() bool {
 func SetCurrentTask(taskID, taskName string) {
 	sm := GetStateManagerForCurrentCommand()
 	sm.SetTask(taskID, taskName)
+}
+
+const maxTaskRequestTimeoutSeconds = math.MaxInt64 / int64(time.Second)
+
+func newTaskRequestContext(timeoutSeconds int) (context.Context, context.CancelFunc, error) {
+	if timeoutSeconds < 0 || int64(timeoutSeconds) > maxTaskRequestTimeoutSeconds {
+		return nil, nil, fmt.Errorf("timeout must be a non-negative integer")
+	}
+	if timeoutSeconds == 0 {
+		ctx, cancel := context.WithCancel(context.Background())
+		return ctx, cancel, nil
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Duration(timeoutSeconds)*time.Second,
+	)
+	return ctx, cancel, nil
 }
 
 // parseSecretsList converts CLI/JSON `name=value` style entries (or a slice of
@@ -734,6 +758,9 @@ func runTaskCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create task: %w", err)
 	}
+	if resp.Task.ID == "" {
+		return fmt.Errorf("task create response did not include a task ID")
+	}
 
 	SetCurrentTask(resp.Task.ID, resp.Task.Name)
 	if err := SaveStateForCurrentCommand(); err != nil {
@@ -876,7 +903,13 @@ func runTaskGet(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	resp, err := c.GetTask(context.Background(), taskID, taskGetFlags.includeSecrets)
+	ctx, cancel, err := newTaskRequestContext(taskGetFlags.timeoutSeconds)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	resp, err := c.GetTask(ctx, taskID, taskGetFlags.includeSecrets)
 	if err != nil {
 		return fmt.Errorf("failed to get task: %w", err)
 	}
@@ -1027,7 +1060,13 @@ func runTaskEvents(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	resp, err := c.GetTaskEvents(context.Background(), taskID, &client.PaginationOptions{
+	ctx, cancel, err := newTaskRequestContext(taskPaginationFlags.timeoutSeconds)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	resp, err := c.GetTaskEvents(ctx, taskID, &client.PaginationOptions{
 		Limit:  taskPaginationFlags.limit,
 		Cursor: taskPaginationFlags.cursor,
 	})
@@ -1069,7 +1108,13 @@ func runTaskResults(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	resp, err := c.GetTaskResults(context.Background(), taskID, &client.PaginationOptions{
+	ctx, cancel, err := newTaskRequestContext(taskResultsPaginationFlags.timeoutSeconds)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	resp, err := c.GetTaskResults(ctx, taskID, &client.PaginationOptions{
 		Limit:  taskResultsPaginationFlags.limit,
 		Cursor: taskResultsPaginationFlags.cursor,
 	})
@@ -1143,4 +1188,3 @@ func runTaskUpdateSecrets(cmd *cobra.Command, args []string) error {
 	logging.Success("Updated %d secret(s) for task %s.", len(secrets), taskID)
 	return nil
 }
-

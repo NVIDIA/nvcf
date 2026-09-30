@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -364,8 +365,9 @@ type ICMSClientInterface interface {
 type Agent struct {
 	*AgentOptions
 
-	metricsName    string
-	newKubeClients func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+	metricsName               string
+	newKubeClients            func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+	newBackendK8sCacheBuilder func() *BackendK8sCacheBuilder
 
 	// clientMetricsShutdown releases the OTel MeterProvider that backs outbound
 	// client metrics. It is a no-op when client metrics are disabled.
@@ -381,9 +383,10 @@ type Agent struct {
 	backendk8scache    *BackendK8sCache
 	backendHealthCache health.StatusCache
 
-	// gpuMonitor monitors GPU availability and controls queue processing
-	// when GracefulNoGPU feature flag is enabled.
-	gpuMonitor *GPUMonitor
+	// gpuRegistration coordinates GPU availability, ICMS registration, and
+	// queue readiness when GracefulNoGPU is enabled. It also serializes all
+	// registration and credential-refresh operations.
+	gpuRegistration gpuRegistrationManager
 
 	startControllerManager func(context.Context, *kubeclients.KubeClients) error
 
@@ -598,6 +601,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	}
 
 	a.newKubeClients = defaultNewKubeClients
+	a.newBackendK8sCacheBuilder = NewBackendk8sCacheBuilder
 	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer, icmsHTTPOpts...)
 	a.instStatusThreadPool = pool.New().WithMaxGoroutines(ICMSInstanceRequestStatusUpdatesMaxGoroutines)
 	a.ackThreadPool = pool.New().WithMaxGoroutines(ICMSRequestAckMaxGoroutines)
@@ -787,7 +791,17 @@ func (a *Agent) startEventProcessDispatchers(ctx context.Context, events <-chan 
 		for {
 			select {
 			// Pull from the ticker queue and push to the event-specific queue.
-			case ev := <-events:
+			case ev, open := <-events:
+				// A closed channel yields a nil event immediately and forever.
+				// Without this the dispatcher dereferences that nil, panicking
+				// the agent, and spins on the closed channel until it does.
+				if !open {
+					log.Info("Event channel closed, stopping event dispatcher")
+					return
+				}
+				if ev == nil {
+					continue
+				}
 				if queue, ok := a.resourceEventWorkerQueues[ev.Kind]; ok {
 					if ev.ObjectMetaKey != "" {
 						queue.Add(ev.ObjectMetaKey)
@@ -1069,6 +1083,8 @@ func (a *Agent) Start(ctx context.Context) error {
 	health.HTTPAddReadinessRoute(server.Router, a.readinessCheckGetter)
 	// Provides /version
 	server.AddVersionRoute(ctx)
+	// Provides /info
+	server.AddInfoRoute(ctx)
 	// Provides /metrics
 	nvcametrics.AddMetricsRoute(server.Router, log, nvcametrics.FromContext(ctx).GetDefaultLabelPairs(), "nvca")
 	// Provides /livez
@@ -1127,7 +1143,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	infraOverheadGetter := enforce.NewInfraOverheadGetter(a.FeatureFlagFetcher, a.Config, enforce.GetRuntimeClassK8sClient(k8sclients.K8s))
 
 	log.Info("Configuring backendk8scache")
-	backendk8scache, _, err := NewBackendk8sCacheBuilder().
+	backendk8scache, _, err := a.newBackendK8sCacheBuilder().
 		WithConfig(a.Config).
 		WithClusterProvider(a.CloudProvider).
 		WithClusterRegion(a.ClusterRegion).
@@ -1161,6 +1177,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithInfraOverheadGetter(infraOverheadGetter).
 		WithSecretMirrorConfig(a.SecretMirrorSourceNamespace, a.SecretMirrorLabelSelector).
 		WithEnvOverrides(a.FunctionEnvOverrides, a.TaskEnvOverrides).
+		WithNotFoundInstanceStatusReporter(func(ctx context.Context, reqID, instanceID string) error {
+			return a.handleNotFoundInstanceStatusSyncAction(ctx, reqID, instanceID, ICMSInstanceReconcileTerminateAndUpdate)
+		}).
 		Start(ctx)
 	if err != nil {
 		log.WithError(err).Error("Failed to configure the Backend K8s Cache")
@@ -1189,11 +1208,20 @@ func (a *Agent) Start(ctx context.Context) error {
 			if nodeInformer := a.backendk8scache.GetNodeInformer(); nodeInformer != nil {
 				gpuMonitorOpts = append(gpuMonitorOpts, WithNodeInformer(nodeInformer))
 			}
-			a.gpuMonitor = NewGPUMonitor(nfClient, gpuMonitorOpts...)
+			gpuMonitor := NewGPUMonitor(nfClient, gpuMonitorOpts...)
 			// Check initial GPU availability
 			gpus, gpuErr := nfClient.GetAllBackendGPUs(ctx)
 			hasGPUs := gpuErr == nil && len(gpus) > 0
-			a.gpuMonitor.SetHasGPUs(hasGPUs)
+			gpuMonitor.SetHasGPUs(hasGPUs)
+			a.gpuRegistration.configureGracefulNoGPU(
+				gpuMonitor,
+				hasGPUs,
+				a.GPUPollInterval,
+				func(registrationCtx context.Context) error {
+					_, registrationErr := a.RegisterWithICMS(registrationCtx)
+					return registrationErr
+				},
+			)
 			if hasGPUs {
 				log.Info("GPUs found during startup, proceeding normally")
 			} else {
@@ -1206,8 +1234,10 @@ func (a *Agent) Start(ctx context.Context) error {
 	statusUpdaters := []health.ComponentStatusGetter{a.backendk8scache}
 
 	// Add GPU monitor to status updaters for readiness checks when GracefulNoGPU is enabled
-	if a.gpuMonitor != nil {
-		statusUpdaters = append(statusUpdaters, a.gpuMonitor)
+	if a.gpuRegistration.enabled() {
+		statusUpdaters = append(statusUpdaters, a.gpuRegistration.monitor)
+		statusUpdaters = append(statusUpdaters,
+			health.GetComponentStatusFunc(a.gpuRegistration.getRegistrationStatus))
 	}
 	if a.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrHostIsolation) {
 		statusUpdaters = append(statusUpdaters, hostisolation.NewStatusGetter(
@@ -1235,10 +1265,13 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// Skip waiting for healthy status when GracefulNoGPU is enabled with no GPUs.
 	// In this case, readiness will report not-ready until GPUs appear, but liveness will pass.
-	skipHealthWait := a.gpuMonitor != nil && !a.gpuMonitor.HasGPUs()
+	skipHealthWait := a.gpuRegistration.enabled() && !a.gpuRegistration.hasGPUs()
 
 	if skipHealthWait {
 		log.Warn("GracefulNoGPU enabled with no GPUs - skipping health wait, readiness will report not-ready")
+		if _, refreshErr := a.backendHealthCache.RefreshStatus(ctx); refreshErr != nil {
+			log.WithError(refreshErr).Warn("Failed to prime health status while waiting for GPUs; continuing startup")
+		}
 	} else {
 		log.WithFields(logrus.Fields{
 			"interval": healthInterval,
@@ -1251,7 +1284,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	// Check if we should defer ICMS registration (no GPUs with GracefulNoGPU enabled).
-	skipInitialRegistration := a.gpuMonitor != nil && !a.gpuMonitor.HasGPUs()
+	skipInitialRegistration := a.gpuRegistration.enabled() && !a.gpuRegistration.hasGPUs()
 	var res *types.ICMSRegistrationResponse
 	if skipInitialRegistration {
 		log.Warn("No GPUs available - deferring ICMS registration until GPUs are detected")
@@ -1397,35 +1430,15 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// If GracefulNoGPU is enabled and we started without GPUs, pause the queue manager
 	// and set up callbacks to handle GPU availability changes
-	if a.gpuMonitor != nil {
-		if !a.gpuMonitor.HasGPUs() {
+	if a.gpuRegistration.enabled() {
+		a.gpuRegistration.setQueueManager(a.queueManager)
+		if !a.gpuRegistration.hasGPUs() {
 			log.Warn("Starting with queue manager paused due to no GPUs")
 			a.queueManager.Pause()
 		}
 
-		// Set up GPU state change callback
-		a.gpuMonitor.SetOnGPUStateChange(func(callbackCtx context.Context, hasGPUs bool) {
-			callbackLog := core.GetLogger(callbackCtx)
-			if hasGPUs {
-				callbackLog.Info("GPUs detected - resuming queue manager and registering with ICMS")
-				// Resume queue processing
-				a.queueManager.Resume()
-				// Register/re-register with ICMS to update GPU inventory.
-				if _, regErr := a.RegisterWithICMS(callbackCtx); regErr != nil {
-					callbackLog.WithError(regErr).Error("Failed to register with ICMS after GPUs became available")
-				} else {
-					callbackLog.Info("Successfully registered with ICMS after GPUs became available")
-				}
-			} else {
-				callbackLog.Warn("GPUs no longer available - pausing queue manager")
-				// Pause queue processing (allows termination messages, blocks creation)
-				a.queueManager.Pause()
-			}
-		})
-
-		// Start the GPU monitor polling loop
 		log.Info("Starting GPU monitor")
-		a.gpuMonitor.Start(ctx)
+		a.gpuRegistration.start(ctx)
 	}
 
 	// Evict all workloads once during startup if in CordonAndDrainMaintenance mode
@@ -1670,8 +1683,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 			req.Spec.CreationMsgInfo.InstanceCount,
 			req.Spec.GetTraceContext())
 		if err != nil {
-			a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", err)
+			a.backendk8scache.EmitICMSEventf(req, v1.EventTypeWarning,
+				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", nil, err)
 			log.WithError(err).Error("Failed to acknowledge request")
 
 			// If it has only been five minutes since the request was created, and a 404 is return, retry
@@ -1735,8 +1748,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 				if !ackSR(ctx, req) {
 					return
 				}
-				a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-					"Request accepted for processing")
+				a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+					"Request accepted for processing", nil)
 
 				// If ACK is successful, purge the message now
 				err = a.queueManager.DeleteCreationMessageV2(ctx, req.Spec.MessageReceipt, req.Spec.CreationMsgInfo.QueueURL)
@@ -1796,8 +1809,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 			if !ackSR(ctx, req) {
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-				"Request accepted for processing")
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+				"Request accepted for processing", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastACKTimestamp = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -1845,8 +1858,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 				}
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
-				"Message visibility extended")
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
+				"Message visibility extended", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -2102,8 +2115,8 @@ func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error 
 					}
 					continue
 				}
-				a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeNormal,
-					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", ru.InstanceID, ruPayload.InstanceState)
+				a.backendk8scache.EmitICMSEventf(req, v1.EventTypeNormal,
+					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", &ru, ru.InstanceID, ruPayload.InstanceState)
 				// successfully posted this update so this has to be updated to Status
 				postedInstanceStatus[ru.InstanceID] = getPostedInstanceStatus(ctx, ru)
 			}
@@ -2156,24 +2169,51 @@ func (a *Agent) RenewICMSQueueCreds(ctx context.Context) error {
 		return nil
 	}
 
-	credRes, err := a.icmsClient.GetCreds(ctx)
-	nvcametrics.FromContext(ctx).RecordUpstreamRequest(nvcametrics.UpstreamOperationCredentials, err)
+	return a.gpuRegistration.withRegistrationOperation(ctx, func() error {
+		credRes, err := a.icmsClient.GetCreds(ctx)
+		nvcametrics.FromContext(ctx).RecordUpstreamRequest(nvcametrics.UpstreamOperationCredentials, err)
+		if err != nil {
+			return fmt.Errorf("failed to GetCreds from ICMS, err: %v", err)
+		}
+
+		// TODO: this is a hack remove this once ICMS properly sends back the queue credentials
+		queueCreds := a.postProcessQueueCredentials(ctx, credRes.QueueCredentials)
+
+		err = a.backendk8scache.StoreUpdatedCredentials(ctx, queueCreds)
+		if err != nil {
+			return fmt.Errorf("failed to store renewed Queue Credentials, err: %v", err)
+		}
+
+		a.queueManager.updateQueues(queueCreds)
+
+		log.Debugf("refreshed queueManager with new Creds")
+		return nil
+	})
+}
+
+// allWorkloadsConfirmedTerminated reports whether every active ICMSRequest's instances have
+// been confirmed terminated (backing Pod/MiniService actually gone, not just deletion
+// requested) and reported. It mirrors evictAllWorkloads' request filtering so the two stay
+// in sync on what counts as "still needs eviction".
+func (a *Agent) allWorkloadsConfirmedTerminated(ctx context.Context) bool {
+	allReqs, err := a.backendk8scache.icmsRequestLister.List(labels.Everything())
 	if err != nil {
-		return fmt.Errorf("failed to GetCreds from ICMS, err: %v", err)
+		return false
 	}
 
-	// TODO: this is a hack remove this once ICMS properly sends back the queue credentials
-	queueCreds := a.postProcessQueueCredentials(ctx, credRes.QueueCredentials)
-
-	err = a.backendk8scache.StoreUpdatedCredentials(ctx, queueCreds)
-	if err != nil {
-		return fmt.Errorf("failed to store renewed Queue Credentials, err: %v", err)
+	for _, req := range allReqs {
+		if req.Status.RequestStatus == nvcav2beta1.ICMSRequestStatusFailed ||
+			req.Status.RequestStatus == nvcav2beta1.ICMSRequestStatusFailureAcknowledged {
+			continue
+		}
+		if len(req.Status.Instances) == 0 {
+			continue
+		}
+		if !a.backendk8scache.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
+			return false
+		}
 	}
-
-	a.queueManager.updateQueues(queueCreds)
-
-	log.Debugf("refreshed queueManager with new Creds")
-	return nil
+	return true
 }
 
 // evictAllWorkloads directly purges all workload instances and sends termination status updates to ICMS.
@@ -2216,17 +2256,21 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			instanceIDs = append(instanceIDs, instanceID)
 		}
 
-		// Initialize terminatedInstances map with existing instances
+		// terminatedInstances tracks instances PurgeInstanceID confirms terminated in this
+		// pass. It must start empty: PurgeInstanceID treats any pre-existing entry for an
+		// instance ID as "already handled" and skips it, so seeding this from
+		// req.Status.Instances (which holds each instance's current, non-terminated status)
+		// would make every instance look already-terminated and PurgeInstanceID would never
+		// report success for any of them.
 		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
-		if len(req.Status.Instances) != 0 {
-			terminatedInstances = req.Status.Instances
-		}
 
 		// Use PurgeInstanceID to directly terminate each instance
 		var terminatedCount int
+		var purgedInstanceIDs []string
 		for _, instanceID := range instanceIDs {
 			if a.backendk8scache.icmsRequestHelper.PurgeInstanceID(ctx, req, terminatedInstances, instanceID) {
 				terminatedCount++
+				purgedInstanceIDs = append(purgedInstanceIDs, instanceID)
 			}
 		}
 
@@ -2237,8 +2281,13 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 				"totalInstances":  len(instanceIDs),
 			}).Info("Successfully terminated instances during maintenance eviction")
 
-			// Update the request status with the terminated instances
-			req.Status.Instances = terminatedInstances
+			// Update the request status: overlay the newly terminated instances onto the
+			// existing set so instances not yet confirmed terminated in this pass (e.g.
+			// still blocked by a finalizer) are preserved rather than dropped.
+			updatedInstances := make(map[string]nvcav2beta1.InstanceStatus, len(req.Status.Instances))
+			maps.Copy(updatedInstances, req.Status.Instances)
+			maps.Copy(updatedInstances, terminatedInstances)
+			req.Status.Instances = updatedInstances
 			req.Status.RequestStatus = nvcav2beta1.ICMSRequestStatusInProgress
 			req.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
 
@@ -2255,8 +2304,10 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			}
 		}
 
-		// Send termination status updates to ICMS for each terminated instance.
-		for _, instanceID := range instanceIDs {
+		// Send termination status updates to ICMS only for instances PurgeInstanceID
+		// actually confirmed terminated; an instance whose backing Pod/MiniService is
+		// still present must not be reported as terminated.
+		for _, instanceID := range purgedInstanceIDs {
 			updateRequest := &types.ICMSInstanceStatusUpdateRequest{
 				Status:           types.ICMSRequestInstanceTerminatedByService,
 				InstanceState:    types.ICMSInstanceTerminated,
@@ -2288,6 +2339,14 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 	return nil
 }
 
+const (
+	// selfDestructEvictionRetries bounds how many times handleSelfDestruct retries
+	// evictAllWorkloads before giving up on confirming every instance terminated.
+	selfDestructEvictionRetries = 3
+	// selfDestructEvictionRetryInterval is the delay between eviction retry attempts.
+	selfDestructEvictionRetryInterval = 2 * time.Second
+)
+
 // handleSelfDestruct implements the self-destruct sequence when instructed by ICMS.
 // It evicts all workloads and stops ICMS communication (except termination updates during eviction).
 func (a *Agent) handleSelfDestruct(ctx context.Context) error {
@@ -2298,12 +2357,34 @@ func (a *Agent) handleSelfDestruct(ctx context.Context) error {
 	log.Warn("Starting self-destruct sequence - evicting workloads and stopping ICMS communication")
 
 	// Step 1: Evict all existing workloads (termination updates will still be sent to ICMS).
+	// evictAllWorkloads only reports an instance terminated once its backing Pod/MiniService
+	// is confirmed gone, so a single pass can leave instances unconfirmed if deletion hasn't
+	// converged yet (e.g. still blocked by a finalizer). Retry a bounded number of times,
+	// stopping as soon as everything is confirmed, so those instances get more chances to be
+	// reported while ICMS communication is still active below. This is a best-effort bound,
+	// not a guarantee: self-destruct proceeds regardless once retries are exhausted, since it
+	// was explicitly instructed by ICMS and must not hang indefinitely.
 	log.Info("Evicting all existing workloads")
-	if err := a.evictAllWorkloads(ctx); err != nil {
-		log.WithError(err).Error("Failed to evict workloads during self-destruct")
-		// Continue with self-destruct even if eviction fails partially
-	} else {
-		log.Info("Successfully evicted all workloads")
+	for attempt := 1; attempt <= selfDestructEvictionRetries; attempt++ {
+		if err := a.evictAllWorkloads(ctx); err != nil {
+			log.WithError(err).WithField("attempt", attempt).Warn("Failed to evict workloads during self-destruct")
+		}
+
+		if a.allWorkloadsConfirmedTerminated(ctx) {
+			log.Info("Successfully evicted all workloads")
+			break
+		}
+
+		if attempt == selfDestructEvictionRetries {
+			log.Warn("Exhausted eviction retries during self-destruct; some instances may not be confirmed terminated")
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			log.WithError(ctx.Err()).Warn("Context canceled while retrying eviction during self-destruct")
+		case <-time.After(selfDestructEvictionRetryInterval):
+		}
 	}
 
 	// Step 2: Mark agent as self-destructed (this will stop further ICMS communication).

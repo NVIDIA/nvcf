@@ -5,10 +5,12 @@ An LD_PRELOAD library for intercepting io_uring and libuv to enable CRIU checkpo
 ## Purpose
 
 CRIU (Checkpoint/Restore In Userspace) has limited support for:
+
 - **io_uring**: Kernel-side state, SQPOLL threads, registered buffers
 - **libuv/uvloop**: Internal C pointers that become stale after restore
 
 This library intercepts these subsystems to:
+
 1. Track io_uring instances and drain them before checkpoint
 2. Track libuv loops and reinitialize them after restore
 3. Enable checkpoint/restore of applications using uvloop (vLLM, SGLang, etc.)
@@ -39,7 +41,7 @@ LD_PRELOAD=/path/to/libnvsnap_intercept.so your_application
 
 ### io_uring Interception
 
-```
+```text
 Application → io_uring_setup() syscall
                     ↓
          Our intercept (via syscall hook)
@@ -52,7 +54,7 @@ Application → io_uring_setup() syscall
 
 ### libuv Interception
 
-```
+```text
 Application (uvloop) → uv_loop_init()
                             ↓
                     Our intercept (via dlsym)
@@ -66,6 +68,7 @@ Application (uvloop) → uv_loop_init()
 ### Restore Detection
 
 The library detects restore via a marker file:
+
 - `restore-entrypoint` creates `/var/run/nvsnap/.restored`
 - Library checks for this file and triggers reinitialization
 
@@ -96,7 +99,7 @@ This library is bundled in the NVSNAP agent image and injected into containers v
 
 ## Files
 
-```
+```text
 lib/nvsnap_intercept/
 ├── include/
 │   └── nvsnap_intercept.h    # Public API

@@ -228,8 +228,20 @@ agent:
     checkpoints: /var/lib/containerd/nvsnap-checkpoints
     containerdSock: /run/containerd/containerd.sock
     containerdStorage: /var/lib/containerd
-    nvsnapCache: /var/lib/nvsnap/cache
-    nvsnapStaging: /var/lib/nvsnap/staging
+    # Cache, staging and overlays sit under the containerd root on purpose.
+    # They are the bulk writers -- a 70B cachedir capture is ~132 GB -- and on
+    # a typical GPU node /var/lib is the boot volume (network-backed, ~125
+    # MB/s) while containerd lives on the instance-local NVMe array. Writing
+    # captures to the boot volume was both slow (~28 min for that 132 GB) and
+    # a node-stability risk, since filling the root disk triggers kubelet disk
+    # pressure. Keeping these on containerd's filesystem also puts source and
+    # destination on one filesystem, which is what makes reflink possible.
+    # Override per-cluster if containerd is not on the fastest local disk.
+    nvsnapCache: /var/lib/containerd/nvsnap-cache
+    nvsnapStaging: /var/lib/containerd/nvsnap-staging
+    # Same reasoning, plus overlayfs needs an upperdir on a filesystem with
+    # d_type support -- containerd's own snapshotter filesystem qualifies.
+    nvsnapOverlays: /var/lib/containerd/nvsnap-overlays
     nvidiaRun: /run/nvidia
     hostUsr: /usr
 
@@ -351,7 +363,12 @@ agent:
     # mirrored by the nvsnap-bundle-stage initContainer + the
     # host-bundle hostPath volume in the DaemonSet template (Helm
     # threads the same value into all three).
-    hostBundleRoot: ""
+    # Restore-bundle staging. Same reasoning as agent.hostPaths above: this is
+    # a bulk path on the restore side, so it belongs on containerd's local
+    # disk rather than the boot volume. Set explicitly (not left empty) so the
+    # chart passes --webhook-host-bundle-root and the agent, the DaemonSet
+    # mount and the webhook-injected function-pod mounts all agree on one path.
+    hostBundleRoot: "/var/lib/containerd/nvsnap-bundle"
 
   # Opt-in cross-cluster replication to a managed object store (provider:
   # gcs today, s3 planned). Empty provider/homeBucket disables it entirely.

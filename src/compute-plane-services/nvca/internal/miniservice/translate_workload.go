@@ -19,6 +19,7 @@ package mscontroller
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
@@ -51,7 +52,10 @@ func (r *Reconciler) translateWorkload(
 		InstanceTypeLabelSelectorKey: nodefeatures.UniformInstanceTypeLabelKey,
 		WorkloadResources:            corev1.ResourceRequirements{},
 		Tolerations:                  append([]corev1.Toleration(nil), r.cfg.Workload.Tolerations...),
-		OTelResources:                k8sutil.GetContainerResourcesBYOO(r.cfg),
+		OTelResources: mergeBYOOResources(
+			k8sutil.GetContainerResourcesBYOO(r.cfg),
+			ms.Spec.WorkloadConfig.GetBYOOResources(),
+		),
 		FluentbitResources:           k8sutil.GetContainerResourcesFluentBit(r.cfg),
 		FluentbitEnabled:             r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.BYOOFluentBit),
 		ClusterRegion:                r.ClusterRegion,
@@ -125,6 +129,40 @@ func (r *Reconciler) translateTaskWorkload(
 		return nil, err
 	}
 	return metaToClientObjs(objs), nil
+}
+
+// mergeBYOOResources overlays a per-workload BYOO collector resource override on top of
+// the cluster-level default. Only the resource keys present in the override are replaced,
+// so a function can bump e.g. memory while keeping the default CPU. A nil override returns
+// the base unchanged. As a safety net, any limit that ends up below its request is raised
+// to the request so the resulting container spec stays valid.
+func mergeBYOOResources(
+	base corev1.ResourceRequirements,
+	override *corev1.ResourceRequirements,
+) corev1.ResourceRequirements {
+	if override == nil {
+		return base
+	}
+	out := *base.DeepCopy()
+	ov := *override.DeepCopy()
+	if len(ov.Requests) > 0 {
+		if out.Requests == nil {
+			out.Requests = corev1.ResourceList{}
+		}
+		maps.Copy(out.Requests, ov.Requests)
+	}
+	if len(ov.Limits) > 0 {
+		if out.Limits == nil {
+			out.Limits = corev1.ResourceList{}
+		}
+		maps.Copy(out.Limits, ov.Limits)
+	}
+	for name, req := range out.Requests {
+		if lim, ok := out.Limits[name]; ok && req.Cmp(lim) > 0 {
+			out.Limits[name] = req.DeepCopy()
+		}
+	}
+	return out
 }
 
 func metaToClientObjs(mobjs []metav1.Object) (cobjs []client.Object) {

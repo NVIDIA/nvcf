@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "registrations",
+    srcs = ["registrations.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/data_access",
+        "//src/control-plane-services/event-ledger/internal/db_client/cassandra",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":registrations",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+)

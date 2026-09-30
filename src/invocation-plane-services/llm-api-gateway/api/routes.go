@@ -47,7 +47,11 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 		return c.NoContent(http.StatusMethodNotAllowed)
 	})
 
-	group := e.Group("", rejectClientSuppliedPriority)
+	group := e.Group(
+		"",
+		rejectClientSuppliedPriority,
+		newInferenceWriteDeadlineMiddleware(handlers.inferenceWriteTimeout()),
+	)
 	handlers.AsOpenAIChatHandlers().RegisterRoutes(group)
 	handlers.AsResponsesHandlers().RegisterRoutes(group)
 	// proxy handlers only contain embedding route for now, but could be extended to other routes in the future

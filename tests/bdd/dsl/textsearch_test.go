@@ -103,3 +103,42 @@ func writeRenderedManifest(t *testing.T, root, relativePath, body string) {
 		t.Fatalf("write rendered manifest: %v", err)
 	}
 }
+
+func TestOutputMatchesDetectsDashedPodIPAlias(t *testing.T) {
+	const pattern = `([0-9]{1,3}-){3}[0-9]{1,3}\.`
+	matched, err := OutputMatches("10-42-0-7.llm-request-router-region-b-headless.nvcf.svc.cluster.local", pattern)
+	if err != nil {
+		t.Fatalf("match output: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected dashed pod-IP alias to match")
+	}
+
+	matched, err = OutputMatches("llm-request-router-region-b-0.nvcf.svc.cluster.local", pattern)
+	if err != nil {
+		t.Fatalf("match output: %v", err)
+	}
+	if matched {
+		t.Fatal("expected a stable StatefulSet identity not to match")
+	}
+}
+
+func TestDistinctOutputMatchesCountsUniqueIdentities(t *testing.T) {
+	output := "llm-request-router-region-b-0 llm-request-router-region-b-1 llm-request-router-region-b-0"
+	got, err := DistinctOutputMatches(output, "llm-request-router-region-b-[0-9]+")
+	if err != nil {
+		t.Fatalf("count distinct matches: %v", err)
+	}
+	if got != 2 {
+		t.Fatalf("distinct matches = %d, want 2", got)
+	}
+}
+
+func TestOutputPatternRejectsEmptyAndInvalidPatterns(t *testing.T) {
+	if _, err := OutputMatches("output", "   "); err == nil {
+		t.Fatal("expected empty pattern error")
+	}
+	if _, err := DistinctOutputMatches("output", "llm-request-router-["); err == nil {
+		t.Fatal("expected invalid pattern error")
+	}
+}

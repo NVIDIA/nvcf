@@ -202,14 +202,11 @@ server:
 
 nvcf:
   fqdn: http://localhost:${server.port}
-  global-fqdn-grpc: http://localhost:${grpc.server.port}
+  global-fqdn-grpc: http://localhost:${spring.grpc.server.port}
   sidecars:
     tracing-key: ${kv.worker-tracing}
     hostname: stg.nvcr.io
     image-pull-secret: ${kv.sidecars.image-pull-secret}
-  aws:
-    access-key-id: ${kv.aws.accessKeyId}
-    secret-access-key: ${kv.aws.secretAccessKey}
   registries:
     recognized:
       container:
@@ -302,8 +299,14 @@ nvcf:
   account:
     max-functions-allowed: 50
     max-tasks-allowed: 50
-  scheduled-tasks:
+  scheduler:
     enabled: true
+    function-deployments:
+      current-region: ${spring.application.region}
+      # Default to the current region for single-region deployments. Multi-region
+      # environments must override this with the same ordered list in every region.
+      regions:
+        - ${spring.application.region}
   icms:
     allocator:
       maximum-target-latency: PT10S
@@ -337,19 +340,25 @@ nvcf:
       policy: LEGACY
       allowed-invocations-per-second: 200
 
-grpc:
+spring.grpc:
   server:
     port: 9090
-    # enable keep alive pings to all live connections with client to check if they are still connected.
-    enable-keep-alive: true
-    # frequency of sending keep alive pings.
-    keep-alive-time: 15m
-    # duration within which the keep alive ack ping is expected before disconnecting.
-    keep-alive-timeout: 10s
-    # worst keep alive pings frequency the client can set. No client can send keep alive pings with frequency lesser than this.
-    permit-keep-alive-time: 1s
-    # whether keepalive will be performed when there are no outstanding RPC on a connection
-    permit-keep-alive-without-calls: true
-    # support large worker responses
-    max-inbound-message-size: ${spring.codec.max-in-memory-size}
-    shutdown-grace-period: 20m
+    health:
+      # Preserve static gRPC health for callers that gate routing on SERVING.
+      include-overall-health: false
+    keepalive:
+      # frequency of sending keep alive pings.
+      time: 15m
+      # duration within which the keep alive ack ping is expected before disconnecting.
+      timeout: 10s
+      permit:
+        # worst keep alive pings frequency the client can set. No client can send keep alive pings with frequency lesser than this.
+        time: 1s
+        # whether keepalive will be performed when there are no outstanding RPC on a connection
+        without-calls: true
+    inbound:
+      message:
+        # support large worker responses
+        max-size: ${spring.codec.max-in-memory-size}
+    shutdown:
+      grace-period: 20m

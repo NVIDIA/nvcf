@@ -29,7 +29,14 @@ box "Dynamo Instance" #fdf5e6
 end box
 
 == Registration Stream ==
-BackendCli -> Service: RegisterInferenceServer(stream open)\nmetadata: Authorization: Bearer <token>
+note over BackendCli,Service
+  HTTPS gRPC trust precedence:
+  1. gRPC-specific CA bundle override
+  2. reverse-mode QUIC trust bundle
+  3. enabled system and public roots
+  Custom roots augment system roots.
+end note
+BackendCli -> Service: TLS/h2 using dial-host SNI\nRegisterInferenceServer(stream open)\nHTTP/2 authority identifies router\nmetadata: Authorization: Bearer <token>
 
 Service -> NVCF: AuthLlmWorker(worker_token)
 NVCF --> Service: routing_key

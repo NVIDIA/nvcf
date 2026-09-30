@@ -32,6 +32,7 @@ type resolvedManifestEntry struct {
 	Description  string
 	GitHubURL    string
 	UpstreamURL  string
+	Stacks       []string
 }
 
 type manifestSection struct {
@@ -46,6 +47,10 @@ var manifestSections = []manifestSection{
 	{Heading: "Control plane services and images", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage},
 	{Heading: "Compute plane Helm charts", Plane: ManifestPlaneCompute, Kind: ManifestKindChart},
 	{Heading: "Compute plane services and images", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage},
+	{Heading: "Observability Helm charts", Plane: ManifestPlaneObservability, Kind: ManifestKindChart},
+	{Heading: "Observability services and images", Plane: ManifestPlaneObservability, Kind: ManifestKindServiceImage},
+	{Heading: "Cross-stack Helm charts", Plane: ManifestPlaneShared, Kind: ManifestKindChart},
+	{Heading: "Cross-stack services and images", Plane: ManifestPlaneShared, Kind: ManifestKindServiceImage},
 	{
 		Heading:     "EA-only CVE-impacted artifacts",
 		Description: "These Early Access artifacts have known CVE impact. Use only the QA-qualified versions listed for this EA stack.",
@@ -87,7 +92,7 @@ func resolveManifestEntries(catalog *Catalog) ([]resolvedManifestEntry, error) {
 			if !ok {
 				return nil, fmt.Errorf("manifest metadata references unknown artifact %s", metadata.ArtifactID)
 			}
-			path, err := catalog.artifactPath(artifact)
+			path, err := catalog.artifactDistribution(artifact)
 			if err != nil {
 				return nil, err
 			}
@@ -95,6 +100,16 @@ func resolveManifestEntries(catalog *Catalog) ([]resolvedManifestEntry, error) {
 			entry.Name = artifact.Name
 			entry.Version = artifact.Version
 			entry.Distribution = path
+			entry.Stacks = append([]string(nil), artifact.Stacks...)
+			if len(entry.Stacks) == 0 {
+				entry.Stacks = inferredManifestStacks(metadata, artifact)
+			}
+			if plane := manifestPlaneForStacks(entry.Stacks); plane != "" {
+				entry.Plane = plane
+			}
+			if artifact.Requirement != "" {
+				entry.Requirement = artifact.Requirement
+			}
 			classified[metadata.ArtifactID] = struct{}{}
 		}
 		if entry.Name == "load_tester_supreme" {
@@ -116,41 +131,111 @@ func resolveManifestEntries(catalog *Catalog) ([]resolvedManifestEntry, error) {
 	return entries, nil
 }
 
+func manifestPlaneForStacks(stacks []string) ManifestPlane {
+	if len(stacks) != 1 {
+		if len(stacks) > 1 {
+			return ManifestPlaneShared
+		}
+		return ""
+	}
+	switch stacks[0] {
+	case selfManagedStackKey:
+		return ManifestPlaneControl
+	case computePlaneStackKey:
+		return ManifestPlaneCompute
+	case observabilityStackKey:
+		return ManifestPlaneObservability
+	default:
+		return ""
+	}
+}
+
+func inferredManifestStacks(metadata ManifestEntry, artifact Artifact) []string {
+	switch artifact.Name {
+	case controlStackResourceName:
+		return []string{selfManagedStackKey}
+	case computeStackResourceName:
+		return []string{computePlaneStackKey}
+	case observabilityStackResourceName:
+		return []string{observabilityStackKey}
+	}
+	switch metadata.Plane {
+	case ManifestPlaneControl:
+		return []string{selfManagedStackKey}
+	case ManifestPlaneCompute:
+		return []string{computePlaneStackKey}
+	case ManifestPlaneObservability:
+		return []string{observabilityStackKey}
+	}
+	return nil
+}
+
 func renderManifestArtifactRegistryPaths(catalog *Catalog) (string, error) {
 	entries, err := resolveManifestEntries(catalog)
 	if err != nil {
 		return "", err
 	}
-	return renderManifestTables(entries), nil
+	return renderReleaseSetSummary(catalog.ReleaseSet) + renderManifestTables(entries), nil
+}
+
+func renderReleaseSetSummary(releaseSet ReleaseSetMetadata) string {
+	if releaseSet == (ReleaseSetMetadata{}) {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("### Stack releases\n\n")
+	b.WriteString("| Stack | Version | Source tag |\n| --- | --- | --- |\n")
+	for _, stack := range releaseSetStackNames {
+		metadata, _ := releaseSet.Stacks.byName(stack)
+		slug, _ := documentationProductSlug(stack)
+		b.WriteString(fmt.Sprintf("| [%s](/nvcf/%s/) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), slug, metadata.Version, metadata.SourceTag))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func renderManifestTables(entries []resolvedManifestEntry) string {
 	var b strings.Builder
 	for _, section := range manifestSections {
+		sectionEntries := manifestEntriesForSection(entries, section)
+		if section.Kind == ManifestKindEACVE && len(sectionEntries) == 0 {
+			continue
+		}
 		b.WriteString("### " + section.Heading + "\n\n")
 		if section.Description != "" {
 			b.WriteString(section.Description + "\n\n")
 		}
-		sectionEntries := manifestEntriesForSection(entries, section)
 		if section.Kind == ManifestKindResource {
-			b.WriteString("| Artifact | Version | Description | Distribution | Source code |\n")
-			b.WriteString("| --- | --- | --- | --- | --- |\n")
-			for _, entry := range sectionEntries {
-				b.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | `%s` | %s |\n",
-					entry.Name, entry.Version, entry.Description, entry.Distribution, formatManifestSources(entry)))
-			}
-		} else {
-			b.WriteString("| Artifact | Version | Required | Description | Distribution | Source code |\n")
+			b.WriteString("| Artifact | Version | Stack | Description | Distribution | Source code |\n")
 			b.WriteString("| --- | --- | --- | --- | --- | --- |\n")
 			for _, entry := range sectionEntries {
 				b.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s | `%s` | %s |\n",
-					entry.Name, entry.Version, formatManifestRequirement(entry.Requirement), entry.Description,
+					entry.Name, entry.Version, formatManifestStacks(entry.Stacks), entry.Description, entry.Distribution, formatManifestSources(entry)))
+			}
+		} else {
+			b.WriteString("| Artifact | Version | Stack | Required | Description | Distribution | Source code |\n")
+			b.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
+			for _, entry := range sectionEntries {
+				b.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s | %s | `%s` | %s |\n",
+					entry.Name, entry.Version, formatManifestStacks(entry.Stacks), formatManifestRequirement(entry.Requirement), entry.Description,
 					entry.Distribution, formatManifestSources(entry)))
 			}
 		}
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func formatManifestStacks(stacks []string) string {
+	if len(stacks) == 0 {
+		return "Independent"
+	}
+	formatted := make([]string, len(stacks))
+	for index, stack := range stacks {
+		formatted[index] = "`" + stack + "`"
+	}
+	return strings.Join(formatted, " / ")
 }
 
 func manifestEntriesForSection(entries []resolvedManifestEntry, section manifestSection) []resolvedManifestEntry {

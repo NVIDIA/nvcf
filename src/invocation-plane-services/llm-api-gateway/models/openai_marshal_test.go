@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-// The gateway forwards a re-marshalled request, so marshaller output is wire output.
+// Requests without a raw client body are forwarded re-marshalled, so marshaller output is wire output.
 func TestChatCompletionRequestRoundTrip(t *testing.T) {
 	tests := []struct {
 		name    string

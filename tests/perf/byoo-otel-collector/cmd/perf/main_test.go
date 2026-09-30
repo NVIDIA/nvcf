@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -551,5 +552,43 @@ func TestTakeSnapshotReturnsScrapeError(t *testing.T) {
 	}
 	if len(snap.Collector) != 0 || len(snap.Sink) != 1 {
 		t.Errorf("samples = coll %d sink %d, want 0 and 1", len(snap.Collector), len(snap.Sink))
+	}
+}
+
+func TestApplyLoadOverridesValidation(t *testing.T) {
+	base := profile.Nemotron()
+
+	valid := []struct {
+		name string
+		cfg  runConfig
+	}{
+		{"defaults untouched", runConfig{logsPerSec: -1, workers: -1, payloadBytes: -1, largeRecordFraction: -1}},
+		{"fraction lower bound", runConfig{logsPerSec: -1, workers: -1, payloadBytes: -1, largeRecordFraction: 0}},
+		{"fraction upper bound", runConfig{logsPerSec: -1, workers: -1, payloadBytes: -1, largeRecordFraction: 1}},
+		{"payload at max", runConfig{logsPerSec: -1, workers: -1, payloadBytes: loadgen.MaxLogPayloadBytes, largeRecordFraction: -1}},
+	}
+	for _, tc := range valid {
+		t.Run("ok/"+tc.name, func(t *testing.T) {
+			if _, err := applyLoadOverrides(base, tc.cfg); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name string
+		cfg  runConfig
+	}{
+		{"fraction above one", runConfig{logsPerSec: -1, workers: -1, payloadBytes: -1, largeRecordFraction: 1.5}},
+		{"fraction NaN", runConfig{logsPerSec: -1, workers: -1, payloadBytes: -1, largeRecordFraction: math.NaN()}},
+		{"fraction +Inf", runConfig{logsPerSec: -1, workers: -1, payloadBytes: -1, largeRecordFraction: math.Inf(1)}},
+		{"payload above max", runConfig{logsPerSec: -1, workers: -1, payloadBytes: loadgen.MaxLogPayloadBytes + 1, largeRecordFraction: -1}},
+	}
+	for _, tc := range invalid {
+		t.Run("err/"+tc.name, func(t *testing.T) {
+			if _, err := applyLoadOverrides(base, tc.cfg); err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+		})
 	}
 }

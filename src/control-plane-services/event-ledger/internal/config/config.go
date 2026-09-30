@@ -26,19 +26,22 @@ import (
 )
 
 var (
-	ErrMissingAuthProvider               = errors.New("auth: provider is required when auth is enabled")
-	ErrInvalidAuthProvider               = errors.New("auth: invalid provider specified")
-	ErrMissingJWKSetURL                  = errors.New("auth: jwk-set-url is required")
-	ErrMissingJWTIssuer                  = errors.New("auth: issuer is required for the jwt provider")
-	ErrMissingJWTAudience                = errors.New("auth: audience is required for the jwt provider")
-	ErrMissingJWTTenantClaim             = errors.New("auth: tenant-claim is required for the jwt provider")
-	ErrJWTLegacyEndpointsUnsupported     = errors.New("auth: jwt provider requires deprecate-endpoints to disable legacy routes without tenant partition keys")
-	ErrMissingPolicyCredsFile            = errors.New("policy: creds-file is required for hot-reload support")
-	ErrMissingPolicyTokenIssuerAddr      = errors.New("policy: token-issuer-addr is required")
-	ErrMissingPolicyEvaluatorAddr        = errors.New("policy: policy-evaluator-addr is required")
-	ErrMissingPolicyNamespace            = errors.New("policy: namespace is required")
-	ErrMissingPolicyFQDN                 = errors.New("policy: policy-fqdn is required")
-	ErrInvalidPolicyCredsRefreshInterval = errors.New("policy: creds-refresh-interval must be greater than 0")
+	ErrMissingAuthProvider                 = errors.New("auth: provider is required when auth is enabled")
+	ErrInvalidAuthProvider                 = errors.New("auth: invalid provider specified")
+	ErrMissingJWKSetURL                    = errors.New("auth: jwk-set-url is required")
+	ErrMissingJWTIssuer                    = errors.New("auth: issuer is required for the jwt provider")
+	ErrMissingJWTAudience                  = errors.New("auth: audience is required for the jwt provider")
+	ErrMissingJWTTenantClaim               = errors.New("auth: tenant-claim is required for the jwt provider")
+	ErrJWTLegacyEndpointsUnsupported       = errors.New("auth: jwt provider requires deprecate-endpoints to disable legacy routes without tenant partition keys")
+	ErrMissingPolicyCredsFile              = errors.New("policy: creds-file is required for hot-reload support")
+	ErrMissingPolicyTokenIssuerAddr        = errors.New("policy: token-issuer-addr is required")
+	ErrMissingPolicyEvaluatorAddr          = errors.New("policy: policy-evaluator-addr is required")
+	ErrMissingPolicyNamespace              = errors.New("policy: namespace is required")
+	ErrMissingPolicyFQDN                   = errors.New("policy: policy-fqdn is required")
+	ErrInvalidPolicyCredsRefreshInterval   = errors.New("policy: creds-refresh-interval must be greater than 0")
+	ErrMissingIntrospectionURL             = errors.New("auth: introspection.url is required when introspection is enabled")
+	ErrIntrospectionRequiresSelfManaged    = errors.New("auth: introspection is only supported in self-managed deployments")
+	ErrIntrospectionRequiresPolicyProvider = errors.New("auth: introspection is only supported with the policy provider")
 )
 
 // Top-level config
@@ -69,13 +72,38 @@ type PublisherConfig struct {
 
 type AuthConfig struct {
 	Enabled              bool
-	Provider             string       `mapstructure:"provider"`
-	JWKSetUrl            string       `mapstructure:"jwk-set-url"`
-	Issuer               string       `mapstructure:"issuer"`
-	Audience             string       `mapstructure:"audience"`
-	TenantClaim          string       `mapstructure:"tenant-claim"`
-	CacheRefreshInterval int          `mapstructure:"cache-refresh-interval"`
-	Policy               PolicyConfig `mapstructure:"policy"`
+	Provider             string              `mapstructure:"provider"`
+	JWKSetUrl            string              `mapstructure:"jwk-set-url"`
+	Issuer               string              `mapstructure:"issuer"`
+	Audience             string              `mapstructure:"audience"`
+	TenantClaim          string              `mapstructure:"tenant-claim"`
+	CacheRefreshInterval int                 `mapstructure:"cache-refresh-interval"`
+	Policy               PolicyConfig        `mapstructure:"policy"`
+	Introspection        IntrospectionConfig `mapstructure:"introspection"`
+}
+
+// IntrospectionConfig configures the SIS call used to verify NVCA's PSAT for
+// callers that do not hold an OpenBao-issued JWT. It is deliberately separate
+// from stack-level deployment gating (addons.eventLedger.enabled): a stack
+// can enable the Event Ledger release without wiring introspection, and that
+// must fail startup rather than silently accept unverified NVCA callers.
+type IntrospectionConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	URL             string `mapstructure:"url"`
+	TimeoutSeconds  int    `mapstructure:"timeout-seconds"`
+	CacheTTLSeconds int    `mapstructure:"cache-ttl-seconds"`
+}
+
+// WithDefaults fills in the timeout and cache TTL the design calls for: a
+// 10-second SIS call timeout and a 5-minute introspection cache.
+func (i IntrospectionConfig) WithDefaults() IntrospectionConfig {
+	if i.TimeoutSeconds <= 0 {
+		i.TimeoutSeconds = 10
+	}
+	if i.CacheTTLSeconds <= 0 {
+		i.CacheTTLSeconds = 300
+	}
+	return i
 }
 
 type PolicyConfig struct {
@@ -122,6 +150,9 @@ func ValidateAuthConfig(cfg AuthConfig, selfManaged bool) error {
 		if cfg.TenantClaim == "" {
 			return ErrMissingJWTTenantClaim
 		}
+		if cfg.Introspection.Enabled {
+			return ErrIntrospectionRequiresPolicyProvider
+		}
 	case "policy":
 		if cfg.JWKSetUrl == "" {
 			return ErrMissingJWKSetURL
@@ -144,6 +175,14 @@ func ValidateAuthConfig(cfg AuthConfig, selfManaged bool) error {
 			}
 			if cfg.Policy.CredentialsRefreshInterval <= 0 {
 				return ErrInvalidPolicyCredsRefreshInterval
+			}
+		}
+		if cfg.Introspection.Enabled {
+			if !selfManaged {
+				return ErrIntrospectionRequiresSelfManaged
+			}
+			if cfg.Introspection.URL == "" {
+				return ErrMissingIntrospectionURL
 			}
 		}
 	case "":
@@ -180,8 +219,10 @@ type CassandraConfig struct {
 	NumConns           int      `mapstructure:"num-conns"`
 	PubKeyB64          string   `mapstructure:"pub-key-b64"`
 	PrivKeyB64         string   `mapstructure:"priv-key-b64"`
+	CACertB64          string   `mapstructure:"ca-cert-b64"`
 	PubKeyPath         string   `mapstructure:"pub-key-path"`
 	PrivKeyPath        string   `mapstructure:"priv-key-path"`
+	CACertPath         string   `mapstructure:"ca-cert-path"`
 	InsecureSkipVerify bool     `mapstructure:"insecure-skip-verify"`
 }
 

@@ -18,7 +18,7 @@ notary:
     registry: "" # must be supplied
     repository: "" # must be supplied
     pullPolicy: IfNotPresent
-    tag: "1.8.1"
+    tag: "1.14.1"
 
   # Namespace to deploy the resources. The default value is the release name.
   namespace: ""
@@ -107,6 +107,16 @@ notary:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+  # HA hooks; set by the HA value layer, off by default.
+  topologySpreadConstraints: []
+  strategy: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
 
   ports:
     - name: http

@@ -68,8 +68,6 @@ management:
 
 nvcf:
   aws:
-    access-key-id: unused
-    secret-access-key: unused
     region: ncp
     s3:
       provisioned-region: us-west-2  # Unused
@@ -167,5 +165,3 @@ nvcf:
   account:
     max-functions-allowed: 2147483647 # Integer.MAX_VALUE — no cap for self-hosted
     max-tasks-allowed: 2147483647 # Integer.MAX_VALUE — no cap for self-hosted
-  scheduled-tasks:
-    executor-thread-count: 8

@@ -30,6 +30,8 @@ import (
 
 const (
 	LLMWorkerContainerName = "llm-worker"
+	// llmMetricsPort is the TCP port exposed by Pylon for Prometheus metrics.
+	llmMetricsPort int32 = 9089
 
 	//nolint:gosec
 	llmCredentialManagerImageEnv = "LLM_CREDENTIAL_MANAGER_IMAGE"
@@ -39,9 +41,13 @@ const (
 	llmRouterClientImageDefault      = "nvcr.io/0651155215864979/ncp-dev/stargate-client:0.4.0"
 	llmRequestRouterAddressEnv       = "LLM_REQUEST_ROUTER_ADDRESS"
 	legacyStargateAddressEnv         = "STARGATE_ADDRESS"
+	maxRequestConcurrencyEnv         = "MAX_REQUEST_CONCURRENCY"
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
+
+	essAssertionTokenPathEnv = "ESS_ASSERTION_TOKEN_PATH"
+	essAssertionTokenPath    = common.EssConfigDir + "/jwt.token"
 )
 
 func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
@@ -78,6 +84,7 @@ func upstreamHealthPath(allEnvSet map[string]string) string {
 	return path
 }
 
+// newLLMRouterClientContainer builds the Pylon sidecar for an LLM worker.
 func newLLMRouterClientContainer(
 	ls *LaunchSpecification,
 	allEnvSet map[string]string,
@@ -148,6 +155,15 @@ func newLLMRouterClientContainer(
 		"--backend-connectivity=reverse",
 		"--initial-input-tps=100",
 	}
+	maxRequestConcurrency := ""
+	if ls.MaxRequestConcurrency > 0 {
+		maxRequestConcurrency = strconv.Itoa(ls.MaxRequestConcurrency)
+	} else {
+		maxRequestConcurrency = allEnvSet[maxRequestConcurrencyEnv]
+	}
+	if maxRequestConcurrency != "" {
+		args = append(args, fmt.Sprintf("--max-engine-concurrency=%s", maxRequestConcurrency))
+	}
 	if healthPath := upstreamHealthPath(allEnvSet); healthPath != "" {
 		args = append(args, fmt.Sprintf("--upstream-health-path=%s", healthPath))
 	}
@@ -166,8 +182,13 @@ func newLLMRouterClientContainer(
 		Name:            LLMWorkerContainerName,
 		Image:           llmRouterClientImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Args:            args,
-		Env:             common.SortEnvs(envs),
+		Ports: []corev1.ContainerPort{{
+			Name:          common.WorkerMetricsPortName,
+			ContainerPort: llmMetricsPort,
+			Protocol:      corev1.ProtocolTCP,
+		}},
+		Args: args,
+		Env:  common.SortEnvs(envs),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI),
@@ -235,6 +256,28 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 			Value: llmWorkerTokenPath,
 		},
 	)
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "llm",
+			MountPath: llmDirMountPath,
+		},
+		// config-data backs SHARED_CONFIG_DIR. The credential manager
+		// creates and caches the worker token here, so it must be mounted.
+		{
+			Name:      "config-data",
+			MountPath: ConfigDirPath,
+		},
+	}
+	if allEnvSet[common.SecretsAssertionTokenEnv] != "" {
+		envs = append(envs, corev1.EnvVar{
+			Name:  essAssertionTokenPathEnv,
+			Value: essAssertionTokenPath,
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      common.EssDataVolumeName,
+			MountPath: common.EssConfigDir,
+		})
+	}
 
 	c := corev1.Container{
 		Name:            "llm-credential-manager",
@@ -251,18 +294,7 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 				corev1.ResourceMemory: *resource.NewQuantity(128*1<<20, resource.BinarySI),
 			},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "llm",
-				MountPath: llmDirMountPath,
-			},
-			// config-data backs SHARED_CONFIG_DIR. The credential manager
-			// creates and caches the worker token here, so it must be mounted.
-			{
-				Name:      "config-data",
-				MountPath: ConfigDirPath,
-			},
-		},
+		VolumeMounts: volumeMounts,
 	}
 	return c, nil
 }

@@ -53,7 +53,7 @@ func BuildRootCmd(logger *otelzap.Logger) *cobra.Command {
 	var cfgFiles []string
 	sugarLog := logger.Sugar()
 
-	v := viper.New()
+	v := newConfigViper()
 	rootCmd := &cobra.Command{
 		Use:           "event-ledger-api",
 		Short:         "Event Ledger API service",
@@ -128,6 +128,12 @@ func BuildRootCmd(logger *otelzap.Logger) *cobra.Command {
 
 	rootCmd.AddCommand(toolbox.NewGenerateConfigCmd(sugarLog, constants.ApiSvcName))
 	return rootCmd
+}
+
+func newConfigViper() *viper.Viper {
+	v := viper.New()
+	v.SetDefault("auth.enabled", true)
+	return v
 }
 
 func applyRuntimeFlagOverrides(cmd *cobra.Command, cfg *config.Config) error {

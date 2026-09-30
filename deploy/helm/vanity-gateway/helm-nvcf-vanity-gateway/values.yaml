@@ -48,6 +48,7 @@ vanityGateway:
   config:
     mappingPath: /etc/vanity-gateway/config/config.yaml
     nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
+    llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
     otelExporterOtlpEndpoint: ""
     secretsPath: ""
     privateModelNameRegexPattern: ""

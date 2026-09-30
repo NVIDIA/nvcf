@@ -12,28 +12,25 @@
 # does not resolve, which is the intended failure mode.
 
 global:
-  nodeSelectors:
-    enabled: false
-
   helm:
     sources:
-      registry: "nvcr.io"
       repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
 
   image:
-    registry: nvcr.io
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   nvcaOperator:
     selfManaged:
+      # The simulated GPU density exceeds laptop CPU and memory ratios. Keep
+      # dynamic discovery's 1x type so NVCA can report local GPU capacity.
+      featureGateValues:
+        - -InfraResourceOverhead
+        - -EnforceContainerFunctionResourceLimits
+        - -EnforceContainerTaskResourceLimits
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 
-agentConfig:
-  mergeConfig: |
-    cluster:
-      validationPolicy:
-        name: Unrestricted
-    workload:
-      stargateQUICInsecure: true
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled

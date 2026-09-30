@@ -259,7 +259,7 @@ func installFakeHelmfile(t *testing.T) string {
 	logPath := filepath.Join(dir, "helmfile.log")
 	binPath := filepath.Join(dir, "helmfile")
 	script := `#!/bin/sh
-printf '%s\n' "$PWD|$*|CLUSTER_NAME=${CLUSTER_NAME}" >> "$NVCF_TEST_HELMFILE_LOG"
+printf '%s\n' "$PWD|$*|CLUSTER_NAME=${CLUSTER_NAME}|OUTPUT_DIR=${OUTPUT_DIR}" >> "$NVCF_TEST_HELMFILE_LOG"
 `
 	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
 	t.Setenv("NVCF_TEST_HELMFILE_LOG", logPath)
@@ -348,6 +348,9 @@ func TestDown_ClusterNameCleansControlPlaneWhenLastClusterRemoved(t *testing.T) 
 	require.Len(t, invocations, 2, "last cluster removal must destroy compute and control planes")
 	assert.Contains(t, invocations[0], filepath.Join(computePlaneStack, "helmfile.d")+"/")
 	assert.Contains(t, invocations[0], "CLUSTER_NAME=test-cluster")
+	// The worker helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml
+	// at render time, so destroy must export it like install does.
+	assert.Contains(t, invocations[0], "OUTPUT_DIR="+filepath.Join(computePlaneStack, "out"))
 	assert.Contains(t, invocations[1], filepath.Join(controlPlaneStack, "helmfile.d")+"/")
 	assert.Contains(t, invocations[1], "--sequential-helmfiles")
 }

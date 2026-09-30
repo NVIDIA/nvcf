@@ -1,6 +1,16 @@
 {
     "title": "Chart Values",
     "type": "object",
+    "definitions": {
+        "resourceQuantity": {
+            "type": "string",
+            "pattern": "^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        },
+        "optionalResourceQuantity": {
+            "type": "string",
+            "pattern": "^$|^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        }
+    },
     "properties": {
         "image": {
             "type": "object",
@@ -53,7 +63,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.157.9"
+                    "default": "0.160.0-nv-0.2.5"
                 },
                 "resources": {
                     "type": "object",
@@ -63,11 +73,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the OTel collector container",
                                     "default": "1000m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the OTel collector container",
                                     "default": "1Gi"
                                 }
@@ -78,11 +90,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the OTel collector container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the OTel collector container",
                                     "default": "256Mi"
                                 }
@@ -132,6 +146,57 @@
             "type": "number",
             "description": "Replica count for the operator deployment",
             "default": 1
+        },
+        "podDisruptionBudget": {
+            "type": "object",
+            "description": "PodDisruptionBudget configuration for the NVCA Operator.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable a PodDisruptionBudget for the NVCA Operator.",
+                    "default": false
+                },
+                "minAvailable": {
+                    "description": "Minimum available pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                },
+                "maxUnavailable": {
+                    "description": "Maximum unavailable pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                }
+            }
         },
         "systemNamespace": {
             "type": "string",
@@ -201,8 +266,251 @@
             "properties": {
                 "mergeConfig": {
                     "type": "string",
-                    "description": "Merge fields into the generated NVCA config. Must be a string.",
+                    "description": "Merge fields into the generated NVCA config. Must be a string. Deprecated for BYOO settings; use byoo instead.",
                     "default": ""
+                }
+            }
+        },
+        "byoo": {
+            "type": "object",
+            "description": "First-class BYOO OTel collector and capacity configuration.",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/resourceQuantity"
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/resourceQuantity"
+                            }
+                        }
+                    }
+                },
+                "logChunking": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "maxPayloadBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "dryRun": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "otelCollector": {
+                    "type": "object",
+                    "description": "Structured BYOO OTel collector rendering overrides."
+                },
+                "additionalResourceOverhead": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/resourceQuantity"
+                    }
+                },
+                "fluentbit": {
+                    "type": "object",
+                    "properties": {
+                        "resources": {
+                            "type": "object",
+                            "properties": {
+                                "limits": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "$ref": "#/definitions/resourceQuantity"
+                                    }
+                                },
+                                "requests": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "$ref": "#/definitions/resourceQuantity"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "utils": {
+            "type": "object",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "description": "Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/resourceQuantity"
+                    }
+                }
+            }
+        },
+        "storage": {
+            "type": "object",
+            "description": "First-class shared-storage and internal persistent storage configuration.",
+            "properties": {
+                "sharedStorage": {
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "object",
+                            "properties": {
+                                "image": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "resources": {
+                                    "type": "object",
+                                    "properties": {
+                                        "limits": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "$ref": "#/definitions/resourceQuantity"
+                                            }
+                                        },
+                                        "requests": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "$ref": "#/definitions/resourceQuantity"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "taskData": {
+                            "type": "object",
+                            "properties": {
+                                "storageClassName": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "mountOptions": {
+                                    "type": "array",
+                                    "default": [],
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                },
+                                "storageCapacity": {
+                                    "type": "string",
+                                    "$ref": "#/definitions/optionalResourceQuantity",
+                                    "default": ""
+                                }
+                            }
+                        }
+                    }
+                },
+                "internalPersistentStorage": {
+                    "type": "object",
+                    "properties": {
+                        "storageClassName": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "hardResourceQuota": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/resourceQuantity"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "worker": {
+            "type": "object",
+            "description": "First-class worker/agent behavior, scheduling, and timeout configuration.",
+            "properties": {
+                "minHealthcheckRefreshWait": {
+                    "type": "string",
+                    "default": ""
+                },
+                "staticGPUCapacity": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0
+                },
+                "computeBackend": {
+                    "type": "string",
+                    "default": ""
+                },
+                "requestsNamespace": {
+                    "type": "string",
+                    "default": ""
+                },
+                "namespaceLabels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "featureFlags": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "skipSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "forceSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "csiVolumeMountOptions": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "timeouts": {
+                    "type": "object",
+                    "properties": {
+                        "credRenewInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "heartbeatInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncQueueInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncRequestStatusInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncAcknowledgeRequestInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "periodicInstanceStatusInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "icmsRequestAckInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "icmsRequestAckRetryTimeout": {
+                            "type": "string",
+                            "default": ""
+                        }
+                    }
                 }
             }
         },
@@ -259,11 +567,13 @@
                     "properties": {
                         "cpu": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "CPU limit for the nvca-operator container",
                             "default": "500m"
                         },
                         "memory": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "Memory limit for the nvca-operator container",
                             "default": "500Mi"
                         }
@@ -274,11 +584,13 @@
                     "properties": {
                         "cpu": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "CPU request for the nvca-operator container",
                             "default": "50m"
                         },
                         "memory": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "Memory request for the nvca-operator container",
                             "default": "50Mi"
                         }
@@ -297,11 +609,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the nvca agent container",
                                     "default": "1000m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the nvca agent container",
                                     "default": "4Gi"
                                 }
@@ -312,11 +626,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the nvca agent container",
                                     "default": "100m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the nvca agent container",
                                     "default": "200Mi"
                                 }
@@ -387,7 +703,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "BYOO OpenTelemetry Collector image tag.",
-                            "default": "0.157.11"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 },
@@ -518,11 +834,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the nvca webhook container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the nvca webhook container",
                                     "default": "200Mi"
                                 }
@@ -533,11 +851,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the nvca webhook container",
                                     "default": "50m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the nvca webhook container",
                                     "default": "50Mi"
                                 }
@@ -673,7 +993,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.10.2"
+                            "default": "0.11.1"
                         }
                     }
                 },
@@ -693,7 +1013,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.157.9"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 }
@@ -728,6 +1048,11 @@
                     "default": [],
                     "items": {}
                 },
+                "region": {
+                    "type": "string",
+                    "description": "Region reported for a self-managed cluster.",
+                    "default": "us-west-1"
+                },
                 "imageCredHelper": {
                     "type": "object",
                     "properties": {
@@ -739,7 +1064,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.10.2"
+                            "default": "0.11.1"
                         }
                     }
                 },
@@ -759,7 +1084,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.157.9"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 },
@@ -1081,11 +1406,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the cluster-validator container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the cluster-validator container",
                                     "default": "128Mi"
                                 }
@@ -1096,11 +1423,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the cluster-validator container",
                                     "default": "100m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the cluster-validator container",
                                     "default": "64Mi"
                                 }

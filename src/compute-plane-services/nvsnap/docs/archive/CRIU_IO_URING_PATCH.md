@@ -11,7 +11,7 @@ CRIU's `dump_io_uring()` groups VMAs by inode, but Linux uses a **shared anon_in
 
 ## Evidence from Logs
 
-```
+```text
 Pre-scan: fd=4 sq_entries=1 expected_sqe_size=64
 Pre-scan: fd=5 sq_entries=1 expected_sqe_size=64
 SQE VMA size=16384 -> NO MATCH FOUND
@@ -28,18 +28,21 @@ The `sq_entries=1` is wrong because we're reading `sq_mask + 1` where `sq_mask=0
 ## Required Changes
 
 ### 1. Add fields to `struct io_uring_fdinfo`
+
 ```c
 uint32_t sq_entries;  /* From SqSize in fdinfo */
 uint32_t cq_entries;  /* From CqSize in fdinfo */
 ```
 
 ### 2. Update `parse_io_uring_fdinfo()` to read SqSize/CqSize
+
 ```c
 else if (!strcmp(buf, "SqSize")) info->sq_entries = strtoul(value, NULL, 0);
 else if (!strcmp(buf, "CqSize")) info->cq_entries = strtoul(value, NULL, 0);
 ```
 
 ### 3. Update size calculation in prescan
+
 ```c
 if (fdinfo.sq_entries > 0) {
     fd_info[count].sq_entries = fdinfo.sq_entries;
@@ -51,6 +54,7 @@ fd_info[count].expected_sqe_size = fd_info[count].sq_entries * 64;
 ```
 
 ### 4. Match VMAs by size
+
 ```c
 if (vma->e->pgoff == IORING_OFF_SQES) {
     matched_fd = find_fd_by_sqe_size(fd_info, num_fds, vma_size);

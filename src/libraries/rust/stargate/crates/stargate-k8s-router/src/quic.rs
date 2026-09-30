@@ -21,11 +21,11 @@ use anyhow::{Context, Result};
 use quinn::{ClientConfig, Endpoint};
 use stargate_forwarding::{
     HostnameMatcher, PeerTarget, RelayEndpointConfig, RelayEndpoints, build_relay_endpoints,
-    forward_quic_connection,
+    forward_quic_connection_until_shutdown,
 };
 use tokio::sync::watch;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::endpoints::{TargetSnapshot, ready_target_for_sni};
 use crate::metrics::RouterMetrics;
@@ -41,6 +41,11 @@ pub struct QuicRouterConfig {
     pub relay_keep_alive_interval: Option<Duration>,
     pub tls_cert_pem: Option<Vec<u8>>,
     pub tls_key_pem: Option<Vec<u8>>,
+    /// Dedicated upstream trust bundle. The serving certificate remains a
+    /// compatibility fallback when this is absent.
+    pub upstream_tls_cert_pem: Option<Vec<u8>>,
+    pub server_identity_reloader: Option<stargate_tls::ServerIdentityReloader>,
+    pub tls_reload_interval: Duration,
     pub quic_insecure: bool,
 }
 
@@ -56,6 +61,15 @@ struct QuicRouterRuntime {
     relay_config: RelayEndpointConfig,
     relay: Arc<QuicRelay>,
     connection_tasks: TaskTracker,
+    server_identity_reloader: Option<stargate_tls::ServerIdentityReloader>,
+    tls_reload_interval: Duration,
+}
+
+fn upstream_trust_pem(config: &QuicRouterConfig) -> Option<&[u8]> {
+    config
+        .upstream_tls_cert_pem
+        .as_deref()
+        .or(config.tls_cert_pem.as_deref())
 }
 
 impl QuicRouterRuntime {
@@ -64,13 +78,21 @@ impl QuicRouterRuntime {
             max_idle_timeout: config.relay_max_idle_timeout,
             keep_alive_interval: config.relay_keep_alive_interval,
         };
-        let client_config =
-            build_client_config(config.tls_cert_pem.as_deref(), config.quic_insecure)?;
-        let server_config = build_server_config(
-            config.tls_cert_pem.as_deref(),
-            config.tls_key_pem.as_deref(),
-            relay_config,
-        )?;
+        let client_config = build_client_config(upstream_trust_pem(&config), config.quic_insecure)?;
+        let server_config = match &config.server_identity_reloader {
+            // Serve the identity the reloader validated and owns. Reading the
+            // mounted files a second time here could pick up a different
+            // generation, which would leave the reloader treating the served
+            // identity as already current and never installing the replacement.
+            Some(reloader) => {
+                build_router_server_config(reloader.current_identity(), Vec::new(), relay_config)?
+            }
+            None => build_server_config(
+                config.tls_cert_pem.as_deref(),
+                config.tls_key_pem.as_deref(),
+                relay_config,
+            )?,
+        };
         let endpoint = Endpoint::server(server_config, config.listen_addr)?;
         let bound_addr = endpoint.local_addr()?;
         let relay = Arc::new(QuicRelay {
@@ -88,6 +110,8 @@ impl QuicRouterRuntime {
             relay_config,
             relay,
             connection_tasks,
+            server_identity_reloader: config.server_identity_reloader,
+            tls_reload_interval: config.tls_reload_interval,
         })
     }
 
@@ -104,10 +128,30 @@ impl QuicRouterRuntime {
                 self.relay_config.keep_alive_interval.map(|duration| duration.as_millis()),
             "QUIC router listening"
         );
+        let reload_task = server_identity_reload_task(
+            self.server_identity_reloader,
+            self.endpoint.clone(),
+            self.relay_config,
+            self.tls_reload_interval,
+            metrics.clone(),
+            shutdown.clone(),
+        );
+        tokio::pin!(reload_task);
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    self.endpoint.close(0u32.into(), b"shutdown");
+                    self.endpoint.set_server_config(None);
+                    info!(
+                        active_connections = self.endpoint.open_connections(),
+                        "QUIC router stopped accepting new connections; draining active streams"
+                    );
+                    return Ok(());
+                }
+                result = &mut reload_task => {
+                    if let Err(error) = result {
+                        error!(component = "stargate-k8s-router-quic", %error, "TLS reload task stopped");
+                    }
+                    self.endpoint.close(0u32.into(), b"TLS reload task stopped");
                     return Ok(());
                 }
                 incoming = self.endpoint.accept() => {
@@ -136,6 +180,39 @@ impl QuicRouterRuntime {
     }
 }
 
+/// Reloads the router listener identity, or waits forever when none is mounted.
+async fn server_identity_reload_task(
+    reloader: Option<stargate_tls::ServerIdentityReloader>,
+    endpoint: Endpoint,
+    relay_config: RelayEndpointConfig,
+    poll_interval: Duration,
+    metrics: Arc<RouterMetrics>,
+    shutdown: CancellationToken,
+) -> Result<()> {
+    let Some(reloader) = reloader else {
+        return std::future::pending().await;
+    };
+    let status = metrics.tls_identity();
+    status.set_validity(reloader.current_validity());
+    metrics.refresh_tls_certificate_expiry();
+    let outcome_metrics = metrics.clone();
+    stargate_tls::ServerIdentityReloadTask {
+        component: "stargate-k8s-router-quic",
+        reloader,
+        endpoint,
+        build_server_config: Box::new(move |identity| {
+            build_router_server_config(identity, Vec::new(), relay_config)
+        }),
+        poll_interval,
+        status,
+    }
+    .run(shutdown, move |outcome| {
+        outcome_metrics.observe_server_identity_reload(outcome);
+        outcome_metrics.refresh_tls_certificate_expiry();
+    })
+    .await
+}
+
 pub async fn serve_quic_router(
     config: QuicRouterConfig,
     targets: watch::Receiver<TargetSnapshot>,
@@ -156,6 +233,7 @@ async fn dispatch_incoming(
     shutdown: CancellationToken,
 ) -> Result<()> {
     let connection = tokio::select! {
+        biased;
         _ = shutdown.cancelled() => return Ok(()),
         connection = incoming => connection.context("accept QUIC connection")?,
     };
@@ -196,20 +274,14 @@ async fn dispatch_incoming(
             return Ok(());
         }
     };
-    let relay = forward_quic_connection(
-        connection.clone(),
+    let relay_result = forward_quic_connection_until_shutdown(
+        connection,
         &peer,
         &relay.endpoints,
         relay.connect_timeout,
-    );
-    tokio::pin!(relay);
-    let relay_result = tokio::select! {
-        _ = shutdown.cancelled() => {
-            connection.close(0u32.into(), b"router shutdown");
-            return Ok(());
-        }
-        result = &mut relay => result,
-    };
+        shutdown.cancelled_owned(),
+    )
+    .await;
     metrics.observe_quic_connection(if relay_result.is_ok() {
         "completed"
     } else {
@@ -281,8 +353,31 @@ mod tests {
             relay_keep_alive_interval: Some(Duration::from_secs(5)),
             tls_cert_pem: None,
             tls_key_pem: None,
+            upstream_tls_cert_pem: None,
+            server_identity_reloader: None,
+            tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
             quic_insecure: true,
         }
+    }
+
+    #[test]
+    fn explicit_upstream_trust_precedes_serving_certificate() {
+        let mut config = test_config();
+        config.tls_cert_pem = Some(b"serving certificate".to_vec());
+        config.upstream_tls_cert_pem = Some(b"upstream CA".to_vec());
+
+        assert_eq!(upstream_trust_pem(&config), Some(b"upstream CA".as_slice()));
+    }
+
+    #[test]
+    fn serving_certificate_remains_upstream_trust_fallback() {
+        let mut config = test_config();
+        config.tls_cert_pem = Some(b"serving certificate".to_vec());
+
+        assert_eq!(
+            upstream_trust_pem(&config),
+            Some(b"serving certificate".as_slice())
+        );
     }
 
     fn snapshot_with_quic_target(pod_name: &str, quic_addr: SocketAddr) -> TargetSnapshot {
@@ -593,6 +688,102 @@ mod tests {
             build_client_config(None, true).expect("insecure relay client config"),
         )
         .await;
+    }
+
+    #[cfg(unix)]
+    async fn handshake_trusting(addr: SocketAddr, server_name: &str, trusted: &[u8]) -> Result<()> {
+        let mut client = Endpoint::client("127.0.0.1:0".parse().expect("client bind address"))?;
+        client.set_default_client_config(build_client_config(Some(trusted), false)?);
+        let connection = client.connect(addr, server_name)?.await?;
+        connection.close(0u32.into(), b"test complete");
+        Ok(())
+    }
+
+    /// Drives the Raw QUIC listener reload task end to end: a rotated generation
+    /// is served to new handshakes, and an inconsistent generation is rejected
+    /// while the last-known-good identity keeps serving.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn quic_router_reloads_projected_server_identity() {
+        install_crypto_provider();
+        let server_name = "stargate-1.stargate.external";
+        let root = tempfile::TempDir::new().expect("create TLS test directory");
+        let (first_cert, first_key) = cert_and_key_for_names(vec![server_name.to_string()]);
+        let (second_cert, second_key) = cert_and_key_for_names(vec![server_name.to_string()]);
+        crate::tls::install_projected_identity(root.path(), "..2026_01", &first_cert, &first_key);
+
+        // A black-hole relay target keeps each downstream connection open while
+        // its upstream dial hangs, so the assertions only observe the handshake.
+        let black_hole = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("black-hole upstream socket should bind");
+        let (_targets_tx, targets_rx) = watch::channel(snapshot_with_quic_target(
+            "stargate-1",
+            black_hole
+                .local_addr()
+                .expect("black-hole upstream address should be readable"),
+        ));
+
+        let mut config = test_config();
+        config.connect_timeout = Duration::from_secs(30);
+        config.tls_reload_interval = Duration::from_millis(20);
+        config.server_identity_reloader = Some(
+            stargate_tls::ServerIdentityReloader::load(
+                root.path().join("tls.crt"),
+                root.path().join("tls.key"),
+            )
+            .expect("initial identity should load"),
+        );
+
+        let metrics = Arc::new(RouterMetrics::new().expect("router metrics"));
+        let shutdown = CancellationToken::new();
+        let runtime = QuicRouterRuntime::bind(config, TaskTracker::new())
+            .expect("router should bind with a mounted identity");
+        let addr = runtime.bound_addr;
+        let router = tokio::spawn(runtime.serve(targets_rx, metrics.clone(), shutdown.clone()));
+
+        handshake_trusting(addr, server_name, &first_cert)
+            .await
+            .expect("initial identity should serve");
+
+        crate::tls::install_projected_identity(root.path(), "..2026_02", &second_cert, &second_key);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if handshake_trusting(addr, server_name, &second_cert)
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "rotated identity was never served"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            handshake_trusting(addr, server_name, &first_cert)
+                .await
+                .is_err(),
+            "the replaced identity must stop being served"
+        );
+
+        // A certificate that does not match its key is an inconsistent
+        // generation. It must be rejected and leave the active identity alone.
+        crate::tls::install_projected_identity(root.path(), "..2026_bad", &first_cert, &second_key);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        handshake_trusting(addr, server_name, &second_cert)
+            .await
+            .expect("a rejected generation must retain the last-known-good identity");
+        assert!(
+            metrics.gather().expect("metrics should encode").contains(
+                r#"tls_reloads_total{material_type="server_identity",result="rejected"} 1"#
+            ),
+            "a rejected generation must be counted"
+        );
+
+        shutdown.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), router).await;
     }
 
     #[tokio::test]

@@ -18,6 +18,7 @@ written, no caches warmed. Any file the source container created at runtime
 fails the CRIU stat check because it doesn't exist on the placeholder.
 
 Concrete failures we've hit on `feat/crio-support` (vLLM small, OCI CRI-O):
+
 - `Can't open file usr/bin/python3.12` (was actually a different bug — fixed
   by the `nvsnap-restore-helper` C binary; included for completeness because
   it surfaced the same architectural gap initially).
@@ -59,7 +60,7 @@ upperdir.**
 
 Both layers are visible in `/proc/<pid>/mountinfo` for the source container:
 
-```
+```text
 17554 14398 0:1070 / / rw,nodev,relatime - overlay overlay rw,
   lowerdir=…/l/SIUEV4…:…/l/WGAFZV…:…,
   upperdir=/var/lib/containers/storage/overlay/132e4d9f…/diff,
@@ -75,7 +76,7 @@ runtime can read/write it.
 **At checkpoint time**, alongside the CRIU dump, persist the source
 container's overlay upperdir as part of the checkpoint artefact:
 
-```
+```text
 /var/lib/nvsnap/checkpoints/<id>/
   ├── *.img             # CRIU dump
   ├── pages-*.img
@@ -159,11 +160,12 @@ if err == nil && upper != "" {
 
 `mirrorUpperdir` is a single rsync invocation:
 
-```
+```bash
 rsync -aHAX --numeric-ids --sparse --delete <upper>/ <dst>/
 ```
 
 Flags:
+
 - `-a` — archive (preserves perms, ownership, timestamps, symlinks).
 - `-H` — preserve hardlinks (overlay upperdir can have them).
 - `-A -X` — ACLs and xattrs (xattrs matter for overlayfs whiteouts; see
@@ -193,6 +195,7 @@ in `sleep infinity` and isn't writing to its overlay; the rsync can't
 race anything.
 
 After rsync:
+
 - Patched uvloop is at the right path with the right size.
 - `/root/.cache/flashinfer/.../jit.log` exists.
 - `/var/run/vllm/` exists.
@@ -234,6 +237,7 @@ because the files actually exist.
 ## What this lets us delete
 
 After this lands:
+
 - `internal/agent/restore.go::ensurePlaceholderRuntimeFiles` —
   delete entirely. It hardcodes `/root/.cache/flashinfer/...` and
   `/var/run/vllm`. The mirror covers both.

@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroU64;
+
 use anyhow::Result;
 use pylon_lib::{
     EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol, UpstreamBackend,
@@ -25,6 +27,13 @@ const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = HEADER_STARGATE_UPSTREAM_RETRY
 const DEFAULT_OTEL_SERVICE_NAME: &str = "pylon";
 
 mod startup;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+enum OutputTokenCalibrationMode {
+    #[default]
+    Off,
+    SinglePylon,
+}
 
 #[derive(clap::Parser, Debug)]
 #[command(name = "pylon")]
@@ -59,6 +68,9 @@ struct Args {
     /// Path to the QUIC server identity in direct mode or trust anchor in reverse mode
     #[arg(long, env = "STARGATE_TLS_CERT_PATH", value_name = "PATH")]
     tls_cert_path: Option<String>,
+    /// Optional PEM CA bundle override used to verify Stargate gRPC HTTPS endpoints
+    #[arg(long, env = "STARGATE_GRPC_TLS_CA_CERT_PATH", value_name = "PATH")]
+    grpc_tls_ca_cert_path: Option<String>,
     /// Path to the QUIC server private key in direct mode
     #[arg(long, env = "STARGATE_TLS_KEY_PATH", value_name = "PATH")]
     tls_key_path: Option<String>,
@@ -86,7 +98,13 @@ struct Args {
     /// Bootstrap input TPS for every configured model instead of running calibration
     #[arg(long, value_name = "TPS")]
     initial_input_tps: Option<f64>,
-    /// Interval between active canary requests in milliseconds. `0` disables active canaries
+    /// Force exact usage in streaming Chat Completions requests sent upstream
+    #[arg(long, default_value_t = false)]
+    force_chat_completions_include_usage: bool,
+    /// Output-token estimate calibration. single-pylon asserts one active Pylon per cluster ID
+    #[arg(long, value_enum, default_value = "off", value_name = "MODE")]
+    output_token_calibration: OutputTokenCalibrationMode,
+    /// Interval between active canary requests in milliseconds. Models with request progress within the interval skip the canary. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
     /// Treat canary responses that generate this many tokens as runaway generation
@@ -101,7 +119,7 @@ struct Args {
     /// Maximum concurrent requests used during calibration
     #[arg(long, default_value_t = 4, value_name = "N")]
     calibration_max_concurrency: usize,
-    /// Timeout for canary requests in milliseconds
+    /// Timeout for canary requests in milliseconds. An active canary that times out while other requests make progress does not mark the model unavailable
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     bringup_canary_timeout_ms: u64,
     /// Timeout for calibration requests in milliseconds
@@ -116,6 +134,9 @@ struct Args {
     /// Upstream HTTP path for the engine stats stream
     #[arg(long, default_value = "/pylon/v1/stats/stream", value_name = "PATH")]
     engine_stats_stream_path: String,
+    /// Fallback maximum engine concurrency for every model until the engine reports a limit
+    #[arg(long, value_name = "N")]
+    max_engine_concurrency: Option<NonZeroU64>,
     /// Minimum interval between registration/stat updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
@@ -309,6 +330,36 @@ mod tests {
         let args = parse_args("");
 
         assert_eq!(args.inference_server_id, "pylon");
+    }
+
+    #[test]
+    fn grpc_and_quic_tls_paths_are_independent_cli_inputs() {
+        let args = parse_argv(&[
+            "--tls-cert-path",
+            "/trust/quic.pem",
+            "--grpc-tls-ca-cert-path",
+            "/trust/grpc.pem",
+        ]);
+
+        assert_eq!(args.tls_cert_path.as_deref(), Some("/trust/quic.pem"));
+        assert_eq!(
+            args.grpc_tls_ca_cert_path.as_deref(),
+            Some("/trust/grpc.pem")
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_path_declares_environment_binding() {
+        let command = <Args as clap::CommandFactory>::command();
+        let argument = command
+            .get_arguments()
+            .find(|argument| argument.get_id() == "grpc_tls_ca_cert_path")
+            .expect("gRPC TLS CA argument should exist");
+
+        assert_eq!(
+            argument.get_env(),
+            Some(std::ffi::OsStr::new("STARGATE_GRPC_TLS_CA_CERT_PATH"))
+        );
     }
 
     #[test]
@@ -540,6 +591,7 @@ mod tests {
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
         assert_eq!(args.engine_stats_stream_path, "/pylon/v1/stats/stream");
+        assert!(metrics_config.fallback_max_engine_concurrency.is_none());
         assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(
             !metrics_config.openai_fallback_stats_enabled,
@@ -556,6 +608,31 @@ mod tests {
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Off);
         assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(metrics_config.openai_fallback_stats_enabled);
+    }
+
+    #[test]
+    fn max_engine_concurrency_fallback_is_configured_in_every_stats_mode() {
+        for mode in ["auto", "off", "required"] {
+            let args = parse_argv(&[
+                "--engine-stats-stream",
+                mode,
+                "--max-engine-concurrency",
+                "25",
+            ]);
+            let config = stats_collector_config_from_args(&args, &args.upstream_http_base_url);
+
+            assert_eq!(config.fallback_max_engine_concurrency, NonZeroU64::new(25));
+        }
+    }
+
+    #[test]
+    fn invalid_max_engine_concurrency_is_rejected() {
+        for value in ["0", "-1", "1.5", "18446744073709551616"] {
+            assert!(
+                try_parse_argv(&[&format!("--max-engine-concurrency={value}")]).is_err(),
+                "{value} must be rejected"
+            );
+        }
     }
 
     #[test]

@@ -2,7 +2,10 @@ module byoo
 
 go 1.25.0
 
-require gopkg.in/yaml.v3 v3.0.1
+require (
+	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260909200940-19c20e004ec9
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/kr/pretty v0.3.1 // indirect

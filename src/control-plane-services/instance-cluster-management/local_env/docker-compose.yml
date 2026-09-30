@@ -38,6 +38,37 @@ services:
       - |
         chmod +x /entrypoint.sh
         nohup /entrypoint.sh & cassandra -f -R
+    # Healthy once entrypoint.sh has applied the cql init scripts. The
+    # cassandra-populate profile service waits for this before seeding.
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /opt/cassandra/.schema-init-done"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 90s
+  # Optional one-shot seeder: load CSV exports (cqlsh COPY TO format, one
+  # <table>.csv per table) into Cassandra after the schema init entrypoint.
+  # Not started by a plain `docker compose up`. To seed:
+  #   ICMS_CSV_DIR=/path/to/csv-exports docker compose --profile populate up
+  cassandra-populate:
+    image: cassandra:5
+    profiles:
+      - populate
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+      - KEYSPACE=test
+      - CSV_DIR=/csv
+    volumes:
+      - ${ICMS_CSV_DIR:-./csv}:/csv:ro
+      - ./cassandra/populate-data.sh:/populate-data.sh:ro
+    command:
+      - /bin/bash
+      - /populate-data.sh
+    restart: "no"
   aws:
     image: localstack/localstack:4.3
     environment:

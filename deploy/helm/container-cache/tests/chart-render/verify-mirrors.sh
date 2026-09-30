@@ -31,6 +31,16 @@ assert_not_has() {
   fi
 }
 
+echo "Checking minted leaf certificate extensions..."
+# RFC 5280 4.2.1.1. OpenSSL rejects a certificate without authorityKeyIdentifier
+# when X509_V_FLAG_X509_STRICT is set, and Python 3.13 enables that flag by
+# default, so omitting this fails TLS verification for every such client.
+assert_has 'x509_extension.new("authorityKeyIdentifier", "keyid,issuer"'
+assert_has 'x509_extension.new("subjectKeyIdentifier", "hash"'
+# "keyid:always" fails outright on a signing CA with no SKID; "keyid,issuer"
+# falls back to issuer name and serial.
+assert_not_has 'x509_extension.new("authorityKeyIdentifier", "keyid:always"'
+
 echo "Checking Service shape..."
 assert_has 'kind: Service'
 assert_has 'name: nvcf-container-cache'
@@ -38,6 +48,73 @@ assert_has 'name: nvcf-container-cache'
 # nodes without a local cache pod (kube-proxy drops NodePort traffic).
 assert_not_has 'externalTrafficPolicy: Local'
 assert_not_has 'internalTrafficPolicy: Local'
+# The registry mirror endpoint is ${NODE_IP}:${port}, so the port must be
+# published on every node. A ClusterIP service renders no nodePort and the
+# mirror then points at a closed port, which fails as a silent fallback to the
+# upstream registry rather than a visible error.
+assert_has 'type: NodePort'
+
+echo "Checking service.type cannot be overridden..."
+# Capture rather than pipe: `set -o pipefail` would otherwise report helm's
+# intentional non-zero exit as the pipeline's failure.
+override_out="$(helm template container-cache ./deploy --set service.type=ClusterIP 2>&1 || true)"
+if ! printf '%s' "${override_out}" | grep -F -q -- 'is not supported'; then
+  echo "FAILED: service.type=ClusterIP should fail the render with an explanation" >&2
+  echo "${override_out}" >&2
+  exit 1
+fi
+# NodePort is still accepted, so existing values files keep working.
+helm template container-cache ./deploy --set service.type=NodePort >/dev/null
+
+echo "Checking containerd pending-restart reporting..."
+# containerd reads registry.config_path only at daemon start and has no config
+# reload, so correcting config.toml does not take effect on its own. Report the
+# node; never restart containerd, which would be disruptive on nodes running
+# function workloads.
+assert_has 'before="$(sha256sum /host/etc/containerd/config.toml | cut -d'"'"' '"'"' -f1)"'
+assert_has 'if [ "${before}" != "${after}" ]; then'
+assert_not_has 'systemctl restart containerd'
+assert_not_has 'nsenter'
+# The hash diff is a log signal only. Readiness derived from it reports
+# false-ready after a pod restart, because update_config.py is idempotent and
+# the hashes match even while the running containerd holds the stale config.
+assert_not_has 'containerd_restart_pending'
+
+echo "Checking the configure container stays simple: no readiness gating, no runtime probing..."
+# Holding the pod not-ready on an inactive containerd config kept the ArgoCD
+# Application Progressing forever (NVIDIA/nvcf#2017). The DaemonSet writes the
+# node's registry config and certificates, logs a WARNING if this run had to
+# correct containerd's config.toml, and then only stays alive. It does not
+# probe the runtime, keep a marker, or gate readiness on anything.
+assert_not_has 'nvcf-cc-ready'
+assert_not_has 'reconcile_ready_marker'
+assert_not_has 'report_registry_config_state'
+assert_not_has 'containerd_config_active'
+assert_not_has 'proc_start_epoch'
+assert_not_has 'NOT READY:'
+assert_has 'WARNING: corrected containerd registry config on this node.'
+assert_has 'WARNING: Restart containerd or cycle this node to activate it.'
+assert_has 'while true; do sleep 86400; done'
+# Rewriting host config repeatedly races with the OS / container toolkit, so
+# the updater must be invoked exactly once in the one-shot setup phase.
+updater_calls="$(grep -F -c -- 'python3 update_config.py' "${OUT_FILE}" || true)"
+if [ "${updater_calls}" != "1" ]; then
+  echo "FAILED: expected update_config.py to be invoked once, found ${updater_calls}" >&2
+  exit 1
+fi
+
+echo "Checking CRI-O reload..."
+# SIGHUP is a documented CRI-O reload, not a kill, so it is safe to signal.
+# Needed because auto_reload_registries only applies once CRI-O has read the
+# crio.conf.d drop-in this DaemonSet writes.
+assert_has 'kill -HUP "${crio_pid}"'
+assert_has 'pgrep -x crio'
+# Readiness must not depend on CRI-O. It reloads registry config in place and
+# auto_reload_registries makes it watch the drop-in, so it has no equivalent of
+# containerd's read-once config_path gap. A SIGHUP we could not deliver is
+# logged, not folded into the readiness marker.
+assert_not_has 'CRIO_RELOAD_MARKER'
+assert_not_has 'crio_config_active'
 
 echo "Checking multi-domain NodePort listeners..."
 assert_has 'nodePort: 30346'

@@ -3,6 +3,7 @@
 This assumes there is a MicroK8s cluster running locally or a [BYOC NVCF dev](https://nvb.nvidia.com/nvcf-dev) setup, and we want to deploy `byoo-otel-collector` to the cluster. These instructions also assume you are running commands from the `test/local/microk8s` directory.
 
 Prerequisite:
+
 ```bash
 # Enable required microk8s addons
 microk8s install && microk8s enable gpu
@@ -24,17 +25,18 @@ docker login registry.example.invalid:5005
 ```
 
 and verify that the image can be pulled with this command
+
 ```bash
 docker pull registry.example.invalid:5005/example-org/byoo-otel-collector:<image_tag>
 ```
 
-2. Create a Kubernetes Secret.
+1. Create a Kubernetes Secret.
 
 ```bash
 microk8s kubectl create secret docker-registry gitlab-secret --from-file=.dockerconfigjson=$HOME/.docker/config.json
 ```
 
-3. Create `accounts-secrets.json` with Consul-Template. 
+1. Create `accounts-secrets.json` with Consul-Template.
 
     a. To install Consul-Template, set the `ARCH` variable based on your system:
     - For Linux (amd64): `ARCH=linux_amd64`
@@ -43,6 +45,7 @@ microk8s kubectl create secret docker-registry gitlab-secret --from-file=.docker
     - For macOS (Apple Silicon): `ARCH=darwin_arm64`
 
     Run these commands:
+
     ```bash
     VERSION=0.39.1
     ARCH=<choose appropriate ARCH>
@@ -57,6 +60,7 @@ microk8s kubectl create secret docker-registry gitlab-secret --from-file=.docker
     b. Login to NVault
 
     Login to a NVault namespace you own; for example, `gfn-cds` for CDS Team.
+
     ```bash
     export VAULT_ADDR=https://vault.example.invalid
     export VAULT_NAMESPACE=<your_vault_namespace>
@@ -77,7 +81,8 @@ microk8s kubectl create secret docker-registry gitlab-secret --from-file=.docker
     vault kv get kv/grafana-cloud/nvidiacloudfunctions/access-policies/stack-919931-integration/token/stack-919931-integration-otlp-byoo
     ```
 
-    Edit the outputted `accounts-secrets.json` to use 
+    Edit the outputted `accounts-secrets.json` to use
+
     ```json
     "grafana-cloud-nvcf": {
         "instanceId": "919931",
@@ -87,7 +92,7 @@ microk8s kubectl create secret docker-registry gitlab-secret --from-file=.docker
 
     For more information, please refer to the `Grafana cloud account for testing` section in this [Testing BYOO document](https://docs.google.com/document/d/1WN11BJIsQ4mzHpZImmcRlKCiticIAVyDyIAozsW68u0/edit?tab=t.ykrjtlri612j#heading=h.ldtpviweb8mz).
 
-4. If a rendered OTelConfig [config.yaml](config.yaml) already exists, skip this step. Otherwise, render an OtelConfig.
+2. If a rendered OTelConfig [config.yaml](config.yaml) already exists, skip this step. Otherwise, render an OtelConfig.
 
     a. Clone the NVCF nvcf-otelconfig repository (internal), which holds the logic for OTelConfig creation.
 
@@ -108,7 +113,7 @@ microk8s kubectl create secret docker-registry gitlab-secret --from-file=.docker
       username: ${file:/etc/byoo-otel-collector/secrets/grafana-cloud-nvcf-instanceId}
     ```
 
-5. Create the configMaps required by the Pod - [otel-config](pod.yaml#L47) and [accounts-secrets](pod.yaml#L50).
+3. Create the configMaps required by the Pod - [otel-config](pod.yaml#L47) and [accounts-secrets](pod.yaml#L50).
 
 ```bash
 # Creates otel-config configMap
@@ -118,7 +123,7 @@ microk8s kubectl create configmap otel-config --from-file=config.yaml=<path_to_r
 microk8s kubectl create configmap accounts-secrets --from-file=accounts-secrets.json
 ```
 
-6. Deploy the `byoo-otel-collector` Pod.
+1. Deploy the `byoo-otel-collector` Pod.
 
 ```bash
 microk8s kubectl apply -f pod.yaml
@@ -128,7 +133,7 @@ A successfully deployed `byoo-otel-collector` will display these logs (in K9s):
 
 ![IMAGE_DESCRIPTION](../../images/localByooOtelCollector.png)
 
-7. Send test POST curl
+1. Send test POST curl
 
 ```bash
 # Portforward onto port 4358 (for metrics)
@@ -139,11 +144,12 @@ sh test-grafana-cloud-metrics-check.sh
 ```
 
 The following returned response indicates that the metrics were accepted and that no error message was returned.
+
 ```bash
 {"partialSuccess":{}}
 ```
 
-8. Cleanup
+1. Cleanup
 
 ```bash
 # Delete the pod
@@ -158,9 +164,7 @@ microk8s kubectl delete secret gitlab-secret
 ```
 
 Note: If you need to modify the config.yaml to remove the Grafana exporter section, you should edit the file and remove these sections:
+
 - The `otlp_http/GRAFANA_CLOUD-Grafana_prd-metrics` from the exporters section
 - The `basicauth/GRAFANA_CLOUD-Grafana_prd-metrics` from the extensions section
 - Any references to these exporters in the pipelines section
-
-
-

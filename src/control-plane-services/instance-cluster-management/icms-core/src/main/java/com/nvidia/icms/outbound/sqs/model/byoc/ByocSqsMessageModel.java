@@ -220,6 +220,12 @@ public class ByocSqsMessageModel {
         @Schema(description = "NVCF GPU Specification Id", nullable = true)
         private UUID gpuSpecificationId;
 
+        @Nullable
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        @Schema(description = "Maximum concurrent requests configured for each function instance",
+                nullable = true)
+        private Integer maxRequestConcurrency;
+
         // Bring Your Own Observability (BYOO) fields
         @Nullable
         @JsonInclude(JsonInclude.Include.NON_NULL)

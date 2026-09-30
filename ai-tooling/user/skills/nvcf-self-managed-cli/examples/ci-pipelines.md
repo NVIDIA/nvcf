@@ -18,6 +18,7 @@ deploy_nvcf:
 ```
 
 Notes:
+
 - `--non-interactive --token=$JWT` is required in CI; never use interactive `init`.
 - Always `--json` for machine-parsing.
 - Final status check gates downstream stages on `verdict == "healthy"`.

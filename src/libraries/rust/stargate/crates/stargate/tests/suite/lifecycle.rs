@@ -598,7 +598,7 @@ async fn exercise_active_canary_failure(case: TunnelTestCase, stargates: Stargat
 
     let successful_canaries = backend.canary_requests();
     let next_canary = successful_canaries + 1;
-    backend.set_completion_tokens(CANARY_FAILURE_TOKEN_THRESHOLD);
+    backend.set_completion_tokens(CANARY_FAILURE_TOKEN_THRESHOLD + 1);
     wait_requests!(backend.canary_requests(); reaches next_canary, "failing active canary requests");
     case.wait_for_unroutable(STATUS_TIMEOUT).await;
 

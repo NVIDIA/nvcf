@@ -13,18 +13,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::DEFAULT_MAX_SSE_BUFFER_BYTES;
 use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
+use crate::output_token_parser::{ExactOutputUpdate, OutputTokenParser};
 use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
 };
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
+use crate::sse_message_stream::{RelayOutcome, UpstreamSseReadError, upstream_sse_message_stream};
 use crate::upstream_health::UpstreamHealthPaths;
 use crate::upstream_url::upstream_endpoint;
+use futures::StreamExt;
 use reqwest::StatusCode;
+use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
 use stargate_protocol::tunnel_contract::{HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_REQUEST_ID};
+
+const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
 
 pub(crate) async fn check_upstream_health(
     http_client: &reqwest::Client,
@@ -45,6 +52,59 @@ pub(crate) async fn check_upstream_health(
     false
 }
 
+async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, BringupError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    // Keep the status when the error body stalls or breaks: a rejection must
+    // not turn into a transport timeout.
+    let (body, truncated) = match read_error_body(response).await {
+        Ok(body) => body,
+        Err(error) => {
+            return Err(BringupError::Api {
+                status,
+                message: format!(
+                    "upstream returned HTTP status {status}; reading the error body failed: {error}"
+                ),
+            });
+        }
+    };
+    let message = (!truncated).then(|| extract_error_message(&body)).flatten();
+    if is_prompt_too_long(status, &message) {
+        Err(BringupError::PromptTooLong)
+    } else {
+        Err(BringupError::Api {
+            status,
+            message: message.unwrap_or_else(|| {
+                if truncated {
+                    format!(
+                        "upstream returned HTTP status {status} with an error body exceeding {MAX_UPSTREAM_ERROR_BODY_BYTES} bytes"
+                    )
+                } else {
+                    format!("upstream returned HTTP status {status} without a JSON error message")
+                }
+            }),
+        })
+    }
+}
+
+async fn read_error_body(response: reqwest::Response) -> Result<(Vec<u8>, bool), reqwest::Error> {
+    let mut body = Vec::with_capacity(MAX_UPSTREAM_ERROR_BODY_BYTES);
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let remaining = MAX_UPSTREAM_ERROR_BODY_BYTES.saturating_sub(body.len());
+        if chunk.len() > remaining {
+            body.extend_from_slice(&chunk[..remaining]);
+            return Ok((body, true));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok((body, false))
+}
+
 pub(super) async fn send_canary_request(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
@@ -59,23 +119,88 @@ pub(super) async fn send_canary_request(
         "seed": 33,
         "temperature": 0.7,
         "top_p": 1.0,
-        "stream": false,
+        "stream": true,
+        "stream_options": {"include_usage": true},
     });
 
-    let completion = send_completion_request(
-        http_client,
-        upstream_http_base_url,
-        Some(timeout),
-        &request,
-        GeneratedRequestKind::Canary,
-        generation,
-        None,
+    let request_id = next_generated_request_id(GeneratedRequestKind::Canary, generation);
+    let input_tokens = request
+        .pointer("/messages/0/content")
+        .and_then(serde_json::Value::as_str)
+        .map_or(1, str::len);
+    let response = ensure_success(
+        http_client
+            .post(upstream_endpoint(
+                upstream_http_base_url,
+                "/v1/chat/completions",
+            ))
+            .header(HEADER_REQUEST_ID, request_id)
+            .header(HEADER_MODEL, generation.model_id())
+            .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
+            .timeout(timeout)
+            .json(&request)
+            .send()
+            .await?,
     )
     .await?;
-    if completion.usage.completion_tokens == canary_max_generation_threshold {
-        return Err(BringupError::RunawayGeneration {
-            tokens: completion.usage.completion_tokens,
+    let is_event_stream = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(';').next().is_some_and(|media_type| {
+                media_type.trim().eq_ignore_ascii_case("text/event-stream")
+            })
         });
+    if !is_event_stream {
+        return Err(BringupError::InvalidResponse(
+            "canary response is not an SSE stream".to_string(),
+        ));
+    }
+
+    let mut messages = upstream_sse_message_stream(
+        response.bytes_stream(),
+        timeout,
+        timeout,
+        DEFAULT_MAX_SSE_BUFFER_BYTES,
+        false,
+    );
+    let mut output_tokens = OutputTokenParser::new();
+    let mut observed_tokens = 0_u64;
+    let mut completed = false;
+    while let Some(message) = messages.next().await {
+        let message = message.map_err(canary_stream_error)?;
+        if let Some(generated_output) = message.facts.generated_output {
+            observed_tokens = output_tokens
+                .observe_generated_characters(generated_output.characters)
+                .displayed_tokens;
+        }
+        if let Some(tokens) = message
+            .facts
+            .exact_usage
+            .and_then(|usage| usage.output_tokens)
+            && output_tokens.observe_exact_output_tokens(tokens) == ExactOutputUpdate::Applied
+        {
+            observed_tokens = tokens;
+        }
+        if observed_tokens > u64::from(canary_max_generation_threshold) {
+            return Err(BringupError::RunawayGeneration {
+                tokens: u32::try_from(observed_tokens).unwrap_or(u32::MAX),
+            });
+        }
+        match message.facts.terminal {
+            Some(RelayOutcome::Complete) => {
+                completed = true;
+                break;
+            }
+            Some(RelayOutcome::Failed) => break,
+            None => {}
+        }
+    }
+    if !completed || observed_tokens == 0 {
+        return Err(BringupError::InvalidResponse(
+            "canary stream must contain output and end with [DONE]".to_string(),
+        ));
     }
     Ok(())
 }
@@ -110,50 +235,51 @@ pub(super) async fn send_completion_request(
             runtime_state.clone(),
         )
     });
-    let request = http_client
-        .post(upstream_endpoint(
-            upstream_http_base_url,
-            "/v1/chat/completions",
-        ))
-        .header(HEADER_REQUEST_ID, &request_id)
-        .header(HEADER_MODEL, model_id)
-        .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
-        .json(request);
-    let response = match timeout {
-        Some(timeout) => request.timeout(timeout),
-        None => request,
-    }
-    .send()
-    .await?;
+    let result = async {
+        let request = http_client
+            .post(upstream_endpoint(
+                upstream_http_base_url,
+                "/v1/chat/completions",
+            ))
+            .header(HEADER_REQUEST_ID, &request_id)
+            .header(HEADER_MODEL, model_id)
+            .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
+            .json(request);
+        let request = match timeout {
+            Some(timeout) => request.timeout(timeout),
+            None => request,
+        }
+        .build()?;
+        if let Some(observer) = observer.as_mut() {
+            observer.on_backend_submission(Instant::now());
+        }
+        let response = http_client.execute(request).await?;
 
-    let status = response.status();
-    observe_response_headers(&mut observer, &response, status);
-    let body = response.bytes().await?;
-    if status.is_success() {
-        let completion = serde_json::from_slice::<ChatCompletionResponse>(&body)
-            .map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
-        finish_observation(&mut observer, &completion);
-        Ok(completion)
-    } else {
-        let message = extract_error_message(&body);
-        if is_prompt_too_long(status, &message) {
-            Err(BringupError::PromptTooLong)
-        } else {
-            Err(BringupError::Api {
-                status,
-                message: message.unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
-            })
+        let status = response.status();
+        observe_response_headers(&mut observer, status);
+        let response = ensure_success(response).await?;
+        let body = response.bytes().await?;
+        serde_json::from_slice::<ChatCompletionResponse>(&body)
+            .map_err(|error| BringupError::InvalidResponse(error.to_string()))
+    }
+    .await;
+    match result {
+        Ok(completion) => {
+            finish_observation(&mut observer, &completion);
+            Ok(completion)
+        }
+        Err(error) => {
+            if let Some(observer) = observer.as_mut() {
+                observer.fail();
+            }
+            Err(error)
         }
     }
 }
 
-fn observe_response_headers(
-    observer: &mut Option<TunnelRequestObserver>,
-    response: &reqwest::Response,
-    status: StatusCode,
-) {
+fn observe_response_headers(observer: &mut Option<TunnelRequestObserver>, status: StatusCode) {
     if let Some(observer) = observer {
-        observer.on_upstream_response_headers(response.headers(), status.as_u16());
+        observer.on_upstream_response_headers(status.as_u16());
     }
 }
 
@@ -165,9 +291,14 @@ fn finish_observation(
         let generation = observer
             .generation_mut()
             .expect("chat completion observer should expose generation progress");
-        generation.observe_output_message();
+        generation.observe_generated_output(
+            Instant::now(),
+            completion.usage.completion_tokens > 0,
+            0,
+            false,
+        );
         generation.observe_output_tokens_total(u64::from(completion.usage.completion_tokens));
-        observer.finish();
+        observer.complete();
     }
 }
 
@@ -175,6 +306,21 @@ fn extract_error_message(body: &[u8]) -> Option<String> {
     serde_json::from_slice::<ErrorResponse>(body)
         .ok()
         .map(|error| error.error.message)
+}
+
+fn canary_stream_error(error: UpstreamSseReadError) -> BringupError {
+    let timed_out = match &error {
+        UpstreamSseReadError::Timeout(_) => true,
+        UpstreamSseReadError::Upstream(source) => source
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout),
+        _ => false,
+    };
+    if timed_out {
+        BringupError::Timeout(error.to_string())
+    } else {
+        BringupError::InvalidResponse(error.to_string())
+    }
 }
 
 pub(super) fn is_prompt_too_long(status: StatusCode, message: &Option<String>) -> bool {
@@ -203,12 +349,28 @@ pub enum BringupError {
     RunawayGeneration { tokens: u32 },
     #[error("invalid completion response: {0}")]
     InvalidResponse(String),
+    #[error("completion response timed out: {0}")]
+    Timeout(String),
     #[error("calibration saturated before measuring positive input throughput")]
     InsufficientCalibrationData,
     #[error("stats collector stopped during model initialization")]
     StatsCollectorStopped,
     #[error("model generation retired during initialization")]
     RetiredGeneration,
+}
+
+impl BringupError {
+    /// Returns whether the request timed out after the connection was
+    /// established, while waiting for response headers or the body.
+    pub(crate) fn is_timeout(&self) -> bool {
+        match self {
+            Self::Timeout(_) => true,
+            // A connection that cannot be established is a failure, not
+            // queueing behind other requests.
+            Self::Http(error) => error.is_timeout() && !error.is_connect(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

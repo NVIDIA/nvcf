@@ -24,6 +24,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -192,4 +193,42 @@ func FilesDoNotContain(root string, needles []string) error {
 		return fmt.Errorf("rendered manifests directory %q contains no regular files", root)
 	}
 	return nil
+}
+
+// OutputMatches reports whether the interpolated regular expression
+// matches anywhere in text.
+func OutputMatches(text, pattern string) (bool, error) {
+	expression, err := compileOutputPattern(pattern)
+	if err != nil {
+		return false, err
+	}
+	return expression.MatchString(text), nil
+}
+
+// DistinctOutputMatches counts the unique substrings of text matched by
+// the interpolated regular expression. Repeated occurrences of the same
+// substring count once, so a feature can assert how many distinct
+// identities an observation advertises.
+func DistinctOutputMatches(text, pattern string) (int, error) {
+	expression, err := compileOutputPattern(pattern)
+	if err != nil {
+		return 0, err
+	}
+	unique := make(map[string]struct{})
+	for _, match := range expression.FindAllString(text, -1) {
+		unique[match] = struct{}{}
+	}
+	return len(unique), nil
+}
+
+func compileOutputPattern(pattern string) (*regexp.Regexp, error) {
+	resolved := strings.TrimSpace(Interpolate(pattern))
+	if resolved == "" {
+		return nil, fmt.Errorf("expected output pattern resolves to an empty value")
+	}
+	expression, err := regexp.Compile(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("invalid output pattern %q: %w", resolved, err)
+	}
+	return expression, nil
 }

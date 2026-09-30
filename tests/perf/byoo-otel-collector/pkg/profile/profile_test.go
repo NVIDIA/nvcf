@@ -60,6 +60,25 @@ func TestBaselineDefaults(t *testing.T) {
 	}
 }
 
+func TestNemotronDefaults(t *testing.T) {
+	p := Nemotron()
+	if p.Name != "nemotron" {
+		t.Errorf("Name = %q, want nemotron", p.Name)
+	}
+	// Rate is the modest 40 logs/s the profile targets.
+	if p.LogRecordsPerSec != 40 {
+		t.Errorf("LogRecordsPerSec = %d, want 40", p.LogRecordsPerSec)
+	}
+	// The large-record shape lives in a payload attribute over the 256 KB chunk
+	// threshold, on a minority of records.
+	if p.LogPayloadBytes <= 256*1024 {
+		t.Errorf("LogPayloadBytes = %d, want > 256KiB to exceed the chunk threshold", p.LogPayloadBytes)
+	}
+	if p.LargeRecordFraction <= 0 || p.LargeRecordFraction >= 1 {
+		t.Errorf("LargeRecordFraction = %v, want a bimodal fraction in (0,1)", p.LargeRecordFraction)
+	}
+}
+
 func TestLookup(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -68,6 +87,7 @@ func TestLookup(t *testing.T) {
 	}{
 		{"dev", "dev", false},
 		{"baseline", "baseline", false},
+		{"nemotron", "nemotron", false},
 		{"unknown", "", true},
 	}
 	for _, tt := range tests {

@@ -59,6 +59,140 @@ func TestDeploySinkCreatesResources(t *testing.T) {
 	}
 }
 
+func TestDeletePodRemovesPodAndToleratesMissing(t *testing.T) {
+	c := NewClientForClientset(fake.NewSimpleClientset())
+	ctx := context.Background()
+
+	dep, err := c.DeploySink(ctx, "byoo-perf", sink.DefaultOptions())
+	if err != nil {
+		t.Fatalf("DeploySink: %v", err)
+	}
+
+	// Deleting the sink pod removes it while leaving its Service in place, which
+	// is exactly the backpressure setup: the export target still resolves but
+	// has no backing pod.
+	if err := c.DeletePod(ctx, "byoo-perf", dep.PodName); err != nil {
+		t.Fatalf("DeletePod: %v", err)
+	}
+	if _, err := c.cs.CoreV1().Pods("byoo-perf").Get(ctx, dep.PodName, metav1.GetOptions{}); err == nil {
+		t.Errorf("sink pod still present after DeletePod")
+	}
+	if _, err := c.cs.CoreV1().Services("byoo-perf").Get(ctx, dep.ServiceName, metav1.GetOptions{}); err != nil {
+		t.Errorf("sink service should survive pod deletion: %v", err)
+	}
+
+	// A second delete (pod already gone) must be a no-op, so retries and reruns
+	// do not error out.
+	if err := c.DeletePod(ctx, "byoo-perf", dep.PodName); err != nil {
+		t.Errorf("DeletePod on missing pod returned error: %v", err)
+	}
+}
+
+func TestDeletePodWaitsUntilPodIsGone(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	c := NewClientForClientset(cs)
+	ctx := context.Background()
+
+	dep, err := c.DeploySink(ctx, "byoo-perf", sink.DefaultOptions())
+	if err != nil {
+		t.Fatalf("DeploySink: %v", err)
+	}
+
+	// Simulate a terminating pod: the first readiness poll still sees the pod
+	// (as during a real termination grace period), later polls fall through to
+	// the tracker, which returns NotFound once the delete has taken effect.
+	var getCount int
+	cs.PrependReactor("get", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		ga := action.(ktesting.GetAction)
+		if ga.GetName() == dep.PodName {
+			getCount++
+			if getCount == 1 {
+				return true, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: dep.PodName, Namespace: "byoo-perf"}}, nil
+			}
+		}
+		return false, nil, nil
+	})
+
+	if err := c.DeletePod(ctx, "byoo-perf", dep.PodName); err != nil {
+		t.Fatalf("DeletePod: %v", err)
+	}
+	// More than one poll proves DeletePod blocked until the pod disappeared
+	// rather than returning as soon as the delete request was accepted.
+	if getCount < 2 {
+		t.Errorf("DeletePod polled %d time(s); expected it to wait for the pod to disappear", getCount)
+	}
+}
+
+func TestSetEnv(t *testing.T) {
+	t.Run("appends a new variable", func(t *testing.T) {
+		c := &corev1.Container{Env: []corev1.EnvVar{{Name: "EXISTING", Value: "keep"}}}
+		setEnv(c, "NEW", "v")
+		if len(c.Env) != 2 {
+			t.Fatalf("expected 2 env entries, got %d", len(c.Env))
+		}
+		if c.Env[0].Name != "EXISTING" || c.Env[0].Value != "keep" {
+			t.Errorf("existing entry was disturbed: %+v", c.Env[0])
+		}
+		if c.Env[1].Name != "NEW" || c.Env[1].Value != "v" {
+			t.Errorf("new entry = %+v, want NEW=v", c.Env[1])
+		}
+	})
+
+	t.Run("replaces an existing literal value", func(t *testing.T) {
+		c := &corev1.Container{Env: []corev1.EnvVar{{Name: "KEY", Value: "old"}}}
+		setEnv(c, "KEY", "new")
+		if len(c.Env) != 1 {
+			t.Fatalf("env should not grow, got %d entries", len(c.Env))
+		}
+		if c.Env[0].Value != "new" {
+			t.Errorf("value = %q, want new", c.Env[0].Value)
+		}
+	})
+
+	t.Run("replaces a ValueFrom source and clears it", func(t *testing.T) {
+		c := &corev1.Container{Env: []corev1.EnvVar{{
+			Name:      "KEY",
+			ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}},
+		}}}
+		setEnv(c, "KEY", "literal")
+		if c.Env[0].Value != "literal" {
+			t.Errorf("value = %q, want literal", c.Env[0].Value)
+		}
+		if c.Env[0].ValueFrom != nil {
+			t.Errorf("ValueFrom should be cleared, got %+v", c.Env[0].ValueFrom)
+		}
+	})
+}
+
+func TestApplyCollectorOverridesRejectsNonPositiveMemory(t *testing.T) {
+	newPod := func() *corev1.Pod {
+		return &corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: render.CollectorContainerName}},
+			},
+		}
+	}
+
+	for _, bad := range []string{"0", "-10Mi", "not-a-quantity"} {
+		if err := applyCollectorOverrides(newPod(), deploySettings{collectorMemoryLimit: bad}); err == nil {
+			t.Errorf("collector memory limit %q: expected error, got nil", bad)
+		}
+	}
+
+	// A valid positive limit is applied to both request and limit.
+	pod := newPod()
+	if err := applyCollectorOverrides(pod, deploySettings{collectorMemoryLimit: "256Mi"}); err != nil {
+		t.Fatalf("valid memory limit rejected: %v", err)
+	}
+	c := pod.Spec.Containers[0]
+	if got := c.Resources.Limits.Memory().String(); got != "256Mi" {
+		t.Errorf("memory limit = %q, want 256Mi", got)
+	}
+	if got := c.Resources.Requests.Memory().String(); got != "256Mi" {
+		t.Errorf("memory request = %q, want 256Mi", got)
+	}
+}
+
 // stringDataToDataReactor mirrors the API server: on create it folds a Secret's
 // StringData into Data (as raw bytes) and clears StringData, so tests observe
 // the same shape a real cluster would return on read.

@@ -17,6 +17,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,6 +32,7 @@ import (
 	"github.com/sirupsen/logrus"
 	logrutest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -230,6 +232,44 @@ func TestHTTPAddVersionRoute(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	body, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, string(body), "2.0.0")
+}
+
+func TestHTTPAddInfoRoute(t *testing.T) {
+	ctx := WithDefaultLogger(context.Background())
+	version.Service = "nvca"
+	version.Version = "3.0.9"
+	version.GitHash = "711e45b0f1a2c3d4e5f60718293a4b5c6d7e8f90"
+	defer func() { version.Service, version.Version, version.GitHash = "", "", "" }()
+
+	r := mux.NewRouter()
+	HTTPAddInfoRoute(ctx, r)
+
+	req := httptest.NewRequest("GET", "/info", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	resp := w.Result()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+
+	var got version.Info
+	body, _ := io.ReadAll(resp.Body)
+	require.NoError(t, json.Unmarshal(body, &got))
+	assert.Equal(t, "nvca", got.Service)
+	assert.Equal(t, "3.0.9", got.Version)
+	assert.Equal(t, "711e45b0f1a2c3d4e5f60718293a4b5c6d7e8f90", got.Commit)
+}
+
+func TestHTTPAddInfoRouteRejectsNonGET(t *testing.T) {
+	ctx := WithDefaultLogger(context.Background())
+	r := mux.NewRouter()
+	HTTPAddInfoRoute(ctx, r)
+
+	req := httptest.NewRequest("POST", "/info", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Result().StatusCode)
 }
 
 func TestHTTPAddMetricsRoute(t *testing.T) {

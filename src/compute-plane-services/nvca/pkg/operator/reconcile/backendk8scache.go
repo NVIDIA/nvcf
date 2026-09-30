@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"reflect"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -61,6 +62,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/metrics"
 	nvcaopotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
 const (
@@ -176,6 +178,10 @@ type BackendK8sCache struct {
 	// When true, the reconciliation loop will skip cleanup of NVCFBackend resources
 	// and let the shutdown handler manage the cleanup instead.
 	gracefulShutdown atomic.Bool
+
+	legacyFirstClassConfigWarningMu              sync.Mutex
+	legacyFirstClassConfigWarningResourceVersion string
+	legacyFirstClassConfigWarningSeen            bool
 }
 
 // BackendK8sCacheBuilder builds Backendk8sCache and start related K8s
@@ -575,8 +581,21 @@ func configMapUpdateForcesNVCAReconcile(name string) bool {
 		nvcfCustomAnnotationsConfigMapName,
 		nvcfGPUProfilingConfigMapName,
 		nvcfBackendChartDefaultsConfigMapName,
-		nvcaOperatorConfigMapName:
+		agentConfigMergeConfigMapName,
+		nvcaOperatorConfigMapName,
+		nvcastorage.StorageCapabilityConfigMapName:
 		return true
+	default:
+		return false
+	}
+}
+
+func (c *BackendK8sCache) isBackendConfigMapMatchesClusterSource(name string) bool {
+	switch c.clusterSource {
+	case nvcaoptypes.ClusterSourceHelmManaged:
+		return name == nvcfBackendHelmManagedConfigMapName
+	case nvcaoptypes.ClusterSourceSelfHosted:
+		return name == nvcfBackendSelfManagedConfigMapName
 	default:
 		return false
 	}
@@ -623,8 +642,7 @@ func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{
 	case configMapUpdateForcesNVCAReconcile(cm.Name):
 		log.Info("configmap recreated after informer sync, forcing rollout")
 		return c.syncCurrentBackendForConfigMapChange(ctx, log)
-	case cm.Name == nvcfBackendHelmManagedConfigMapName,
-		cm.Name == nvcfBackendSelfManagedConfigMapName:
+	case c.isBackendConfigMapMatchesClusterSource(cm.Name):
 		log.Info("backend configmap recreated after informer sync, dispatching cluster reconcile event")
 		c.dispatchReconcileClusterFunc(ctx)
 	case cm.Name == cleanup.ShutdownSentinelConfigMapName:
@@ -663,8 +681,7 @@ func (c *BackendK8sCache) handleConfigMapUpdate(ctx context.Context, oldObj, new
 		}
 		log.Debug("configmap data unchanged, skipping sync of current NVCFBackend")
 		return nil
-	case newCM.Name == nvcfBackendHelmManagedConfigMapName,
-		newCM.Name == nvcfBackendSelfManagedConfigMapName:
+	case c.isBackendConfigMapMatchesClusterSource(newCM.Name):
 		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
 		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
 		log.WithField("diff", diff).Debugf("configmap data diff")
@@ -679,6 +696,37 @@ func (c *BackendK8sCache) handleConfigMapUpdate(ctx context.Context, oldObj, new
 	case newCM.Name == cleanup.ShutdownSentinelConfigMapName:
 		log.Debugf("found %s configmap update, skipping", newCM.Name)
 		return nil
+	}
+	return nil
+}
+
+func (c *BackendK8sCache) handleConfigMapDelete(ctx context.Context, obj interface{}) error {
+	log := core.GetLogger(ctx)
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		var tombstone cache.DeletedFinalStateUnknown
+		switch deleted := obj.(type) {
+		case cache.DeletedFinalStateUnknown:
+			tombstone = deleted
+		case *cache.DeletedFinalStateUnknown:
+			tombstone = *deleted
+		default:
+			return fmt.Errorf("invalid object received in ConfigMap Delete handler: %T", obj)
+		}
+		cm, ok = tombstone.Obj.(*corev1.ConfigMap)
+		if !ok {
+			return fmt.Errorf("invalid tombstone object received in ConfigMap Delete handler: %T", tombstone.Obj)
+		}
+	}
+
+	log = log.WithField("configmapName", cm.Name)
+	switch {
+	case configMapUpdateForcesNVCAReconcile(cm.Name):
+		log.Info("configmap deleted, forcing rollout")
+		return c.syncCurrentBackendForConfigMapChange(ctx, log)
+	case c.isBackendConfigMapMatchesClusterSource(cm.Name):
+		log.Info("backend configmap deleted, dispatching cluster reconcile event")
+		c.dispatchReconcileClusterFunc(ctx)
 	}
 	return nil
 }
@@ -708,6 +756,14 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 					return c.handleConfigMapUpdate(ctx, oldObj, newObj)
 				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer)); err != nil {
 				log.WithError(err).Error("failed to handle ConfigMap update")
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			if err := cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.DeleteHandler",
+				func(ctx context.Context) error {
+					return c.handleConfigMapDelete(ctx, obj)
+				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer)); err != nil {
+				log.WithError(err).Error("failed to handle ConfigMap delete")
 			}
 		},
 	})
@@ -895,6 +951,19 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 	} else {
 		evType = corev1.EventTypeWarning
 	}
+	if nvcaHealthResp.Status == nvidiaiov1.AgentStatusHealthy && nb.Spec.ClusterConfig.GPUDiscovery.Dynamic != nil {
+		mergeCfg, _, configErr := bc.getRawAgentConfigToMerge(ctx)
+		if configErr == nil {
+			configErr = validateGPUDiscoveryConfig(nb, mergeCfg)
+		}
+		if isInvalidAgentConfigError(configErr) {
+			log.WithError(configErr).Warn("NVCA agent configuration is invalid for dynamic GPU discovery")
+			nvcaHealthResp.Status = nvidiaiov1.AgentStatusUnhealthy
+			evType = corev1.EventTypeWarning
+		} else if configErr != nil {
+			log.WithError(configErr).Warn("Could not check GPU discovery configuration during health sync")
+		}
+	}
 
 	if shouldUpdateNVCFStatus(nb.Status, nvcaHealthResp) {
 		bc.eventRecorder.Eventf(nb, evType,
@@ -1001,13 +1070,59 @@ func (bc *BackendK8sCache) SyncNVCFCurrentBackend(ctx context.Context, forceRoll
 }
 
 func (bc *BackendK8sCache) SyncNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend, forceRollout bool) error {
-	return cmnotel.InvokeWithSpan(ctx, bc.tracer,
+	err := cmnotel.InvokeWithSpan(ctx, bc.tracer,
 		"nvca-operator.BackendK8sCache.SyncNVCFBackend",
 		func(ctx context.Context) error {
 			return bc.syncNVCFBackend(ctx, nb, forceRollout)
 		},
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 		oteltrace.WithAttributes(nvcaopotel.GetOTelAttributesFromNVCFBackend(nb)...))
+	if err == nil || !isInvalidAgentConfigError(err) {
+		return err
+	}
+
+	if statusErr := bc.markNVCFBackendUnhealthy(ctx, nb); statusErr != nil {
+		core.GetLogger(ctx).WithError(statusErr).Errorf(
+			"failed to mark NVCFBackend %v/%v unhealthy after invalid agent configuration",
+			nb.Namespace, nb.Name,
+		)
+	}
+	return err
+}
+
+func (bc *BackendK8sCache) markNVCFBackendUnhealthy(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+	if !nb.ObjectMeta.DeletionTimestamp.IsZero() {
+		return nil
+	}
+
+	updated := false
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		nbLatest, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(bc.operatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get latest version of backend: %w", err)
+		}
+		if nbLatest.Status.AgentStatus == nvidiaiov1.AgentStatusUnhealthy {
+			return nil
+		}
+
+		nbLatest.Status.AgentStatus = nvidiaiov1.AgentStatusUnhealthy
+		nbLatest.Status.LastUpdatedAgentStatus = &metav1.Time{Time: core.GetCurrentTime(ctx)}
+		if _, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(bc.operatorNamespace).UpdateStatus(ctx, nbLatest, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	if retryErr != nil {
+		return fmt.Errorf("failed to update health status for %v/%v: %w", nb.Namespace, nb.Name, retryErr)
+	}
+	if updated && bc.eventRecorder != nil {
+		bc.eventRecorder.Eventf(nb, corev1.EventTypeWarning,
+			string(nvcaoptypes.EventCategoryHealth),
+			"%v health changed to '%v' because the agent configuration is invalid",
+			AgentName, nvidiaiov1.AgentStatusUnhealthy)
+	}
+	return nil
 }
 
 func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend, forceRollout bool) error {

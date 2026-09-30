@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -65,6 +65,20 @@ var (
 			Namespace: NatsNamespace,
 			Name:      "error_total",
 			Help:      "total nats errors on a nats connection",
+		})
+
+	NatsFailureCounter = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: NatsNamespace,
+			Name:      "failure_total",
+			Help:      "total nats failures, by reason",
+		}, []string{"reason"})
+
+	NatsDisconnectCounter = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: NatsNamespace,
+			Name:      "disconnect_total",
+			Help:      "total nats disconnect events",
 		})
 
 	NatsReconnectCounter = promauto.NewCounter(
@@ -164,6 +178,17 @@ var (
 			Help:      "total worker tunnel connections closed, by reason",
 		}, []string{"reason"})
 
+	// Complements worker_connection_closed_total. That reports which side tore
+	// the tunnel down; this reports what the transport said while it happened,
+	// which is what distinguishes a deliberate peer close from an idle timeout
+	// from a reset. Label values come from worker.CloseCodes and are bounded.
+	WorkerConnectionCloseCodeTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "worker_connection_close_code_total",
+			Help:      "total worker tunnel connections closed, by transport close code",
+		}, []string{"code"})
+
 	// Buckets deliberately straddle the two timers that can close a tunnel:
 	// the worker-side QUIC idle timeout (8s) and this service's worker
 	// connection cache TTL (consts.Timeout, 30s). A hard cliff at either
@@ -177,6 +202,43 @@ var (
 			Buckets:   []float64{1, 5, 8, 10, 15, 30, 45, 60, 120, 300, 600, 1800, 3600},
 		})
 )
+
+// Outcomes of the shutdown purge of queued stateful work requests.
+const (
+	PurgeSucceeded = "succeeded"
+	PurgeFailed    = "failed"
+
+	// What caused a purge. Kept as a label rather than separate deployments so
+	// one image can say which trigger actually did the work.
+	//
+	// PurgeTriggerShutdown drops work whose token existed only in a departing
+	// pod's memory. PurgeTriggerClientDeparted drops work whose client stopped
+	// waiting before any worker attached, which is the larger population under
+	// load: measured token age at CONNECT runs well past the client timeout,
+	// so the work is fetched, attempted and rejected for a client that has
+	// already been sent a gateway timeout.
+	PurgeTriggerShutdown       = "shutdown"
+	PurgeTriggerClientDeparted = "client_departed"
+
+	// Reasons the shutdown purge did no work. Without these a reading of
+	// zero purged and zero failed is ambiguous: it cannot distinguish a
+	// purge that ran and found nothing from one that never ran at all.
+	PurgeSkipUnsupported     = "invoker_unsupported"
+	PurgeSkipNothing         = "nothing_pending"
+	PurgeSkipShuttingDown    = "shutting_down"
+	PurgeSkipBudgetExhausted = "budget_exhausted"
+)
+
+var PurgeResults = []string{PurgeSucceeded, PurgeFailed}
+
+var PurgeTriggers = []string{PurgeTriggerShutdown, PurgeTriggerClientDeparted}
+
+var PurgeSkipReasons = []string{
+	PurgeSkipUnsupported,
+	PurgeSkipNothing,
+	PurgeSkipShuttingDown,
+	PurgeSkipBudgetExhausted,
+}
 
 // Close reasons reported when a worker tunnel goes away. The three "deleted"
 // variants matter: a bare `deleted` cannot distinguish the client hanging up
@@ -204,6 +266,75 @@ const (
 	CloseReasonUnknown = "unknown"
 )
 
+// Transport-level close codes. Deliberately a small, bounded set so they are
+// safe as a metric label; anything unrecognised lands on CloseCodeUnknown
+// rather than growing the label space. Classification lives in
+// worker.ClassifyCloseError; the constants live here alongside the other label
+// values.
+const (
+	// CloseCodeNone means no transport error was seen. The connection closed
+	// locally without the peer or the stack reporting a fault.
+	CloseCodeNone = "none"
+	// CloseCodeEOF is a clean peer close.
+	CloseCodeEOF = "eof"
+	// CloseCodeReset is a TCP RST or equivalent abrupt teardown.
+	CloseCodeReset = "reset"
+	// CloseCodeTimeout is a read or write deadline expiring.
+	CloseCodeTimeout = "timeout"
+	// CloseCodeClosedConn is use of an already-closed connection, normally our
+	// own teardown racing the transport.
+	CloseCodeClosedConn = "closed_conn"
+	// CloseCodeContextCanceled is the session context ending.
+	CloseCodeContextCanceled = "context_canceled"
+
+	// CloseCodeQUICIdleTimeout is QUIC's own idle timer expiring.
+	CloseCodeQUICIdleTimeout = "quic_idle_timeout"
+	// CloseCodeQUICApplication is a CONNECTION_CLOSE carrying an application
+	// error code. The informative one: it has both a code and a peer-supplied
+	// reason string.
+	CloseCodeQUICApplication = "quic_application"
+	// CloseCodeQUICTransport is a CONNECTION_CLOSE at the transport layer.
+	CloseCodeQUICTransport = "quic_transport"
+	// CloseCodeQUICStreamReset is RESET_STREAM; the connection survives.
+	CloseCodeQUICStreamReset = "quic_stream_reset"
+	// CloseCodeQUICHandshakeTimeout is the handshake failing to complete.
+	CloseCodeQUICHandshakeTimeout = "quic_handshake_timeout"
+	// CloseCodeQUICStatelessReset means the peer lost connection state.
+	CloseCodeQUICStatelessReset = "quic_stateless_reset"
+
+	// CloseCodeH2GoAway is an HTTP/2 GOAWAY frame.
+	CloseCodeH2GoAway = "h2_goaway"
+	// CloseCodeH2Stream is an HTTP/2 stream-level error.
+	CloseCodeH2Stream = "h2_stream"
+	// CloseCodeH2Connection is an HTTP/2 connection-level error.
+	CloseCodeH2Connection = "h2_connection"
+
+	// CloseCodeUnknown is an error the classifier does not recognise. The
+	// detail field still carries the original text.
+	CloseCodeUnknown = "unknown"
+)
+
+// CloseCodes enumerates every value the classifier can return, so the metric
+// can be pre-initialised and appear on the first scrape.
+var CloseCodes = []string{
+	CloseCodeNone,
+	CloseCodeEOF,
+	CloseCodeReset,
+	CloseCodeTimeout,
+	CloseCodeClosedConn,
+	CloseCodeContextCanceled,
+	CloseCodeQUICIdleTimeout,
+	CloseCodeQUICApplication,
+	CloseCodeQUICTransport,
+	CloseCodeQUICStreamReset,
+	CloseCodeQUICHandshakeTimeout,
+	CloseCodeQUICStatelessReset,
+	CloseCodeH2GoAway,
+	CloseCodeH2Stream,
+	CloseCodeH2Connection,
+	CloseCodeUnknown,
+}
+
 // WorkerConnectionCloseReasons enumerates every reason the proxy reports when
 // closing a worker tunnel. Kept here so the counter can be pre-initialised to
 // zero for each one: uninitialised counters produce gaps in rate() and make
@@ -221,15 +352,15 @@ var WorkerConnectionCloseReasons = []string{
 // Outcomes of a worker CONNECT to /v1/proxy. Every terminal path in
 // HijackHandler maps to exactly one of these.
 const (
-	ConnectAccepted            = "accepted"
-	ConnectNotHijackable       = "rejected_not_hijackable"    // 500
-	ConnectMissingAuth         = "rejected_missing_auth"      // 401
-	ConnectMissingRequestID    = "rejected_missing_requestid" // 400
-	ConnectInvalidRequestID    = "rejected_invalid_requestid" // 400
-	ConnectTokenExpired        = "rejected_token_expired"     // 403, token was issued but has aged out
-	ConnectTokenUnknown        = "rejected_token_unknown"     // 403, token was never issued by this pod
-	ConnectRequestIDMismatch   = "rejected_requestid_mismatch"// 403, token valid but bound to another request
-	ConnectHijackFailed        = "rejected_hijack_failed"     // 500
+	ConnectAccepted          = "accepted"
+	ConnectNotHijackable     = "rejected_not_hijackable"     // 500
+	ConnectMissingAuth       = "rejected_missing_auth"       // 401
+	ConnectMissingRequestID  = "rejected_missing_requestid"  // 400
+	ConnectInvalidRequestID  = "rejected_invalid_requestid"  // 400
+	ConnectTokenExpired      = "rejected_token_expired"      // 403, token was issued but has aged out
+	ConnectTokenUnknown      = "rejected_token_unknown"      // 403, token was never issued by this pod
+	ConnectRequestIDMismatch = "rejected_requestid_mismatch" // 403, token valid but bound to another request
+	ConnectHijackFailed      = "rejected_hijack_failed"      // 500
 )
 
 var ConnectResults = []string{
@@ -295,6 +426,35 @@ var (
 			Buckets:   []float64{1, 5, 8, 10, 15, 30, 45, 60, 120, 300, 600, 1800, 3600},
 		})
 
+	// PendingWorkPurgeSkippedTotal records a purge that did nothing and why,
+	// per attempt rather than per shutdown. Paired with PendingWorkPurgedTotal
+	// it makes the zero case legible: an unexplained zero means the purge did
+	// not run, which is a different problem from an empty queue.
+	//
+	// budget_exhausted and shutting_down are per request, so under saturation
+	// or during a drain they count once per abandoned tunnel, not once overall.
+	// PendingWorkPurgeSkippedTotal records a shutdown that purged nothing and
+	// why. Paired with PendingWorkPurgedTotal it makes the zero case legible:
+	// an unexplained zero means the purge did not run, which is a different
+	// problem from an empty queue.
+	PendingWorkPurgeSkippedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "pending_work_purge_skipped_total",
+			Help:      "pending work purges that did nothing, by reason",
+		}, []string{"reason"})
+
+	// PendingWorkPurgedTotal counts queued stateful work requests dropped from
+	// the work queue, by outcome and by which trigger dropped them. A
+	// persistent failed count usually means this service lacks purge rights on
+	// the work queue rather than a transient NATS error.
+	PendingWorkPurgedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "pending_work_purged_total",
+			Help:      "queued stateful work requests dropped, by outcome and trigger",
+		}, []string{"result", "trigger"})
+
 	// ClientConnectionWorkerTunnelsAtClose records how many worker tunnels a
 	// client connection was still holding when it closed. Anything above zero
 	// means that close tore down live tunnels.
@@ -306,6 +466,26 @@ var (
 			Buckets:   []float64{0, 1, 2, 3, 5, 10, 25, 50, 100},
 		})
 )
+
+const (
+	NatsErrorReasonCertificateExpired = "certificate_expired"
+	NatsErrorReasonTLSVerification    = "tls_verification"
+	NatsErrorReasonTLS                = "tls"
+	NatsErrorReasonAuthentication     = "authentication"
+	NatsErrorReasonTimeout            = "timeout"
+	NatsErrorReasonConnection         = "connection"
+	NatsErrorReasonOther              = "other"
+)
+
+var NatsErrorReasons = []string{
+	NatsErrorReasonCertificateExpired,
+	NatsErrorReasonTLSVerification,
+	NatsErrorReasonTLS,
+	NatsErrorReasonAuthentication,
+	NatsErrorReasonTimeout,
+	NatsErrorReasonConnection,
+	NatsErrorReasonOther,
+}
 
 func init() {
 	// Set up OpenTelemetry metrics with Prometheus exporter
@@ -322,6 +502,20 @@ func init() {
 	}
 	for _, result := range ConnectResults {
 		WorkerConnectTotal.WithLabelValues(result)
+	}
+	for _, code := range CloseCodes {
+		WorkerConnectionCloseCodeTotal.WithLabelValues(code)
+	}
+	for _, reason := range NatsErrorReasons {
+		NatsFailureCounter.WithLabelValues(reason)
+	}
+	for _, result := range PurgeResults {
+		for _, trigger := range PurgeTriggers {
+			PendingWorkPurgedTotal.WithLabelValues(result, trigger)
+		}
+	}
+	for _, reason := range PurgeSkipReasons {
+		PendingWorkPurgeSkippedTotal.WithLabelValues(reason)
 	}
 }
 

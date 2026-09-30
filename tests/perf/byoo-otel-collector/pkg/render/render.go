@@ -111,6 +111,22 @@ func Render(shape spec.Shape, o spec.Options) (*Result, error) {
 	return res, nil
 }
 
+// ensureNonEmptyEnv guarantees the collector container carries a non-empty
+// literal value for key. If the env var is present but empty (and not sourced
+// from a fieldRef/secret), its value is set to fallback; if absent, it is
+// appended. A value the translator already populated is left untouched.
+func ensureNonEmptyEnv(c *corev1.Container, key, fallback string) {
+	for i := range c.Env {
+		if c.Env[i].Name == key {
+			if c.Env[i].Value == "" && c.Env[i].ValueFrom == nil {
+				c.Env[i].Value = fallback
+			}
+			return
+		}
+	}
+	c.Env = append(c.Env, corev1.EnvVar{Name: key, Value: fallback})
+}
+
 // copyStringMap returns a shallow copy of m, always non-nil so callers can
 // safely write into the result.
 func copyStringMap(m map[string]string) map[string]string {
@@ -167,6 +183,15 @@ func (r *Result) BenchPod(namespace string) *corev1.Pod {
 	pod.Labels[common.BYOOMetricsEgressTargetLabelKey] = common.BYOOMetricsEgressTargetLabelValue
 
 	collector := *r.Collector.DeepCopy()
+	// The translator leaves the collector's self-telemetry OTLP env empty when
+	// no real tracing backend is configured. Collector v0.157.x nil-derefs
+	// while unmarshaling service::telemetry::traces with an empty OTLP exporter
+	// endpoint, so the pod crash-loops before it can serve /health. These traces
+	// are not part of what the suite measures, so harmless placeholders are
+	// enough: the collector starts and reports healthy; its own trace export
+	// simply no-ops against an unused local endpoint.
+	ensureNonEmptyEnv(&collector, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+	ensureNonEmptyEnv(&collector, "OTEL_TRACING_ACCESS_TOKEN", "perf-suite-disabled")
 	pod.Spec.Containers = []corev1.Container{collector}
 	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
 

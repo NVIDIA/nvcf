@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for tools/ci/check-go-tools.
+#
+# A check that only ever passes is indistinguishable from one that does nothing,
+# so every case below asserts a specific failure or a specific classification.
+# The important one is the malformed go.mod: `go list ./...` exits non-zero and
+# prints nothing both for a module with no source and for one it cannot read, so
+# an implementation that looks at either alone reports a broken module as
+# "declaration only" and passes it.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+check="${here}/check-go-tools"
+fail=0
+
+# Each case runs the check against a fixture repository, not the real one, so
+# the assertions do not move when a tool is added to tools/.
+scratch="$(mktemp -d)"
+trap 'rm -rf "${scratch}"' EXIT
+
+# new_repo <name> -> echoes a repo root with tools/ci/check-go-tools in place
+new_repo() {
+  local root="${scratch}/$1"
+  mkdir -p "${root}/tools/ci"
+  cp "${check}" "${root}/tools/ci/check-go-tools"
+  chmod +x "${root}/tools/ci/check-go-tools"
+  echo "${root}"
+}
+
+# add_module <root> <name> <go.mod body> [main.go body] [test body]
+add_module() {
+  local root="$1" name="$2"
+  mkdir -p "${root}/tools/${name}"
+  printf '%s\n' "$3" > "${root}/tools/${name}/go.mod"
+  [ -n "${4:-}" ] && printf '%s\n' "$4" > "${root}/tools/${name}/main.go"
+  [ -n "${5:-}" ] && printf '%s\n' "$5" > "${root}/tools/${name}/main_test.go"
+  return 0
+}
+
+GOOD_MOD='module good
+
+go 1.26'
+GOOD_MAIN='package main
+
+func main() {}'
+GOOD_TEST='package main
+
+import "testing"
+
+func TestPasses(t *testing.T) {}'
+
+run() { # run <root> -> sets $out, returns the check's exit code
+  out="$(cd "$1" && ./tools/ci/check-go-tools 2>&1)"
+}
+
+expect_exit() { # expect_exit <desc> <want> <root>
+  local desc="$1" want="$2" root="$3"
+  run "${root}"; local got=$?
+  if [ "${got}" = "${want}" ]; then
+    printf 'ok   %s\n' "${desc}"
+  else
+    printf 'FAIL %s: want exit %s, got %s\n%s\n' "${desc}" "${want}" "${got}" "${out}"
+    fail=1
+  fi
+}
+
+expect_output() { # expect_output <desc> <pattern> <root>
+  local desc="$1" pat="$2" root="$3"
+  run "${root}"
+  case "${out}" in
+    *"${pat}"*) printf 'ok   %s\n' "${desc}" ;;
+    *) printf 'FAIL %s: output lacked %s\n%s\n' "${desc}" "${pat}" "${out}"; fail=1 ;;
+  esac
+}
+
+# A healthy module passes and is reported as tested.
+r="$(new_repo healthy)"
+add_module "${r}" good "${GOOD_MOD}" "${GOOD_MAIN}" "${GOOD_TEST}"
+expect_exit   "a healthy module passes"            0 "${r}"
+expect_output "and is counted as tested"           "1 modules: 1 tested" "${r}"
+
+# A module with a valid go.mod and no source is declaration only, not a failure.
+# tools/go-toolchain is exactly this shape.
+r="$(new_repo declonly)"
+add_module "${r}" decl "module decl
+
+go 1.26"
+expect_exit   "a module with no Go source is not a failure" 0 "${r}"
+expect_output "and is reported as declaration only"         "declaration only, no Go source" "${r}"
+
+# The case that motivates the whole discriminator. `go list ./...` behaves
+# identically here and above; only reading go.mod separates them.
+r="$(new_repo malformed)"
+add_module "${r}" broken "this is not a valid go.mod" "${GOOD_MAIN}"
+expect_exit   "a malformed go.mod fails"                    1 "${r}"
+expect_output "and is named as unreadable, not skipped"     "go.mod is not readable" "${r}"
+
+# A failing test must fail the check.
+r="$(new_repo failingtest)"
+add_module "${r}" bad "${GOOD_MOD}" "${GOOD_MAIN}" 'package main
+
+import "testing"
+
+func TestFails(t *testing.T) { t.Fatal("injected") }'
+expect_exit   "a failing test fails the check"  1 "${r}"
+expect_output "and says which module"           "FAIL  tools/bad: tests" "${r}"
+
+# A build break must fail the check.
+r="$(new_repo buildbreak)"
+add_module "${r}" bad "${GOOD_MOD}" 'package main
+
+func main() { undefinedSymbol() }'
+expect_exit   "a build break fails the check"   1 "${r}"
+expect_output "and says which module"           "FAIL  tools/bad: build" "${r}"
+
+# A vet-only problem must fail: building is not enough.
+r="$(new_repo vetbreak)"
+add_module "${r}" bad "${GOOD_MOD}" 'package main
+
+import "fmt"
+
+func main() { fmt.Printf("%d\n", "not a number") }'
+expect_exit   "a vet-only problem fails the check" 1 "${r}"
+expect_output "and says which module"              "FAIL  tools/bad: vet" "${r}"
+
+# A module without tests is built and vetted, and counted separately. Reporting
+# it as "tested" would overstate what the check proved.
+r="$(new_repo notests)"
+add_module "${r}" bare "${GOOD_MOD}" "${GOOD_MAIN}"
+expect_exit   "a module without tests passes"        0 "${r}"
+expect_output "and is not counted as tested"         "1 modules: 0 tested, 1 without tests" "${r}"
+
+# Tests one directory down still count. A ** glob would miss these, because bash
+# needs globstar and has it off by default.
+r="$(new_repo nested)"
+mkdir -p "${r}/tools/nest/sub"
+printf 'module nest\n\ngo 1.26\n' > "${r}/tools/nest/go.mod"
+printf 'package sub\n' > "${r}/tools/nest/sub/sub.go"
+printf 'package sub\n\nimport "testing"\n\nfunc TestNested(t *testing.T) { t.Fatal("injected") }\n' \
+  > "${r}/tools/nest/sub/sub_test.go"
+expect_exit   "a test one directory down is found and run" 1 "${r}"
+expect_output "and is reported"                            "FAIL  tools/nest: tests" "${r}"
+
+# No modules at all means the layout moved; passing silently would hide it.
+r="$(new_repo empty)"
+expect_exit   "no modules found is an error"  1 "${r}"
+expect_output "and says the layout may have changed" "no Go modules found" "${r}"
+
+# The check must not leave build output behind. `go build ./...` writes each
+# main package's executable into the working directory.
+r="$(new_repo clean)"
+add_module "${r}" good "${GOOD_MOD}" "${GOOD_MAIN}"
+run "${r}"
+if [ -e "${r}/tools/good/good" ]; then
+  printf 'FAIL the check left a binary in the module directory\n'; fail=1
+else
+  printf 'ok   the check leaves no build output behind\n'
+fi
+
+[ "${fail}" -eq 0 ] && echo "check-go-tools: all checks passed" || {
+  echo "check-go-tools: FAILED" >&2; exit 1; }

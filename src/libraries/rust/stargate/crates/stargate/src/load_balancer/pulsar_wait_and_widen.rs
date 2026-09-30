@@ -26,13 +26,13 @@ pub(super) struct PulsarWaitAndWidenLoadBalancer {
 }
 
 impl PulsarWaitAndWidenLoadBalancer {
-    pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> Self {
-        Self {
+    pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
+        Ok(Self {
             wait_and_widen: WaitAndWidenLoadBalancer::new(
-                WaitAndWidenConfig::from_algorithm_config(&config),
+                WaitAndWidenConfig::from_algorithm_config(&config)?,
             ),
             ranking: PulsarLoadBalancer::new(config),
-        }
+        })
     }
 
     fn choose_band(
@@ -52,7 +52,14 @@ impl PulsarWaitAndWidenLoadBalancer {
             })
             .collect::<Vec<_>>();
         self.wait_and_widen
-            .choose_from_candidate_indices(request, candidates, &eligible)
+            .decide_from_candidate_indices(
+                request,
+                candidates,
+                &eligible,
+                1.0,
+                request.received_at.elapsed(),
+            )
+            .selected()
             .map(|choice| {
                 let rank_depth = ranked_indices
                     .iter()
@@ -196,6 +203,7 @@ mod tests {
             stats: ModelStats {
                 output_tps: 0.0,
                 last_mean_input_tps: 100.0,
+                max_input_tps: Some(100.0),
                 max_output_tps: 100.0,
                 queue_size: 0,
                 queued_input_size: 0,
@@ -268,7 +276,8 @@ mod tests {
             |settings| {
                 settings.n = Some(2);
             },
-        ));
+        ))
+        .expect("valid hybrid config");
 
         let chosen = hybrid
             .choose_for_test(&hybrid_request, &candidates)
@@ -309,7 +318,8 @@ mod tests {
             |settings| {
                 settings.n = Some(2);
             },
-        ));
+        ))
+        .expect("valid hybrid config");
         let first_band_choice = hybrid
             .choose_for_test(&request, &candidates)
             .expect("first ranked fallback band should contain a usable candidate");
@@ -342,7 +352,8 @@ mod tests {
                 settings.ttft_bucket_size_ms = Some(100);
                 settings.n = Some(2);
             }),
-        );
+        )
+        .expect("valid hybrid config");
         let composed_choice = hybrid_with_slo
             .choose_for_test(&request, &candidates)
             .expect("the remaining eligible fallback should serve SLO rejection");
@@ -396,7 +407,8 @@ mod tests {
                 settings.ttft_bucket_size_ms = Some(100);
                 settings.n = Some(2);
             },
-        ));
+        ))
+        .expect("valid hybrid config");
         let hybrid_request = request(&target, Some(affinity_key), Some(0));
 
         let warm_choice = hybrid
