@@ -392,6 +392,7 @@ mod tests {
             request_slo_ms: None,
             cache_affinity_key: None,
             routing_algorithm_override: None,
+            routing_expression: None,
         }
     }
 
