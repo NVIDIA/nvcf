@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/assert"
@@ -715,4 +716,35 @@ func TestCountResults_OneRule(t *testing.T) {
 	assert.Equal(t, 1, p)
 	assert.Equal(t, 1, f)
 	assert.Equal(t, 2, w)
+}
+
+// When the budget runs out, the checks not yet started are error rows rather
+// than silently dropped, so a partial run cannot grade as a pass. An
+// interrupt ends the run without them: the command reports the interrupt.
+func TestRunPreflight_BudgetSpentChecksAreNotRunErrors(t *testing.T) {
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0"), passingToolSpec("helm", "3.15.0")}}
+
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	res := RunPreflightForRole(expired, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{})
+	require.NotEmpty(t, res)
+	for _, r := range res {
+		assert.True(t, r.IsBlockingFailure(), r.ID)
+		assert.Contains(t, r.Message, "not run", r.ID)
+	}
+
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	assert.Empty(t, RunPreflightForRole(cancelled, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{}))
+
+	// A check cut short by the interrupt is not a finding either.
+	midRun, stopMidRun := context.WithCancel(context.Background())
+	defer stopMidRun()
+	interrupting := passingToolSpec("kubectl", "1.30.0")
+	interrupting.Version = func(context.Context, string) (*semver.Version, error) {
+		stopMidRun()
+		return nil, context.Canceled
+	}
+	cfg = PreflightConfig{Tools: []BinarySpec{interrupting}}
+	assert.Empty(t, RunPreflightForRole(midRun, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{}))
 }

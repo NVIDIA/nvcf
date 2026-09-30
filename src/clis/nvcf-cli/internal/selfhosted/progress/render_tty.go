@@ -192,6 +192,12 @@ type ModelOpts struct {
 	// Leave both empty (the default) for single-cluster mode.
 	ControlPlaneContext string
 	ComputePlaneContext string
+
+	// OnQuit runs when the operator presses a quit key. Bubbletea reads the
+	// terminal in raw mode, so Ctrl-C arrives as a key press, not a signal:
+	// without this, quitting closed the dashboard while the command kept
+	// running behind it.
+	OnQuit func()
 }
 
 // checkCategoryState holds the accumulated state for one pre-flight check
@@ -229,6 +235,7 @@ type Model struct {
 	controlCtx string // M+9: control-plane kubeconfig context (empty → single-cluster)
 	computeCtx string // M+9: compute-plane kubeconfig context (empty → single-cluster)
 	nowFunc    func() time.Time
+	onQuit     func()
 
 	// dynamic state (mutated by Update)
 	started  time.Time
@@ -354,6 +361,7 @@ func NewModel(opts ModelOpts) Model {
 		asciiOnly:   opts.AsciiOnly,
 		mode:        opts.Mode,
 		totalChecks: opts.TotalChecks,
+		onQuit:      opts.OnQuit,
 	}
 
 	switch opts.Mode {
@@ -437,6 +445,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
+			if m.onQuit != nil {
+				m.onQuit()
+			}
 			return m, tea.Quit
 		}
 		return m, nil

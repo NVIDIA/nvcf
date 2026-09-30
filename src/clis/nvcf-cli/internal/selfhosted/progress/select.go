@@ -105,6 +105,9 @@ type RenderOpts struct {
 	// (7-phase teardown) and ModeUninstall (3-5 phase per-plane teardown).
 	// Zero leaves the renderer's default in place.
 	TotalPhases int
+
+	// OnQuit is passed to the TTY renderer; see ModelOpts.OnQuit.
+	OnQuit func()
 }
 
 // SelectRenderer picks an EventSink based on opts and ambient state. The
@@ -180,6 +183,7 @@ func SelectRenderer(stderr io.Writer, opts RenderOpts) (EventSink, RendererKind,
 			ControlPlaneContext: opts.ControlPlaneContext,
 			ComputePlaneContext: opts.ComputePlaneContext,
 			NowFunc:             func() time.Time { return time.Now().UTC() },
+			OnQuit:              opts.OnQuit,
 		}), RendererTTYCompact, nil
 	}
 
@@ -194,6 +198,7 @@ func SelectRenderer(stderr io.Writer, opts RenderOpts) (EventSink, RendererKind,
 		ControlPlaneContext: opts.ControlPlaneContext,
 		ComputePlaneContext: opts.ComputePlaneContext,
 		NowFunc:             func() time.Time { return time.Now().UTC() },
+		OnQuit:              opts.OnQuit,
 	}), RendererTTYFull, nil
 }
 

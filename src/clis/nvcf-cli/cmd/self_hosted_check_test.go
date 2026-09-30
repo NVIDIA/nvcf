@@ -140,7 +140,7 @@ func TestCheck_OneShotTTYUsesStaticRenderer(t *testing.T) {
 	checkWriterIsTTY = func(io.Writer) bool { return true }
 	var stderr bytes.Buffer
 
-	sink, err := selectCheckRenderer(&stderr, false)
+	sink, err := selectCheckRenderer(&stderr, false, nil)
 	require.NoError(t, err)
 	require.IsType(t, &progress.CheckOneShotRenderer{}, sink)
 

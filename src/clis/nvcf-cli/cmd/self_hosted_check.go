@@ -141,6 +141,11 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if !checkPre && !checkControlPlane && !checkComputePlane && !checkAll {
 		return fmt.Errorf("at least one of --pre, --control-plane, --compute-plane, or --all is required")
 	}
+	if checkClusterValidatorNoCleanup && selfHostedWait != "" {
+		// Each poll is a new validator run, so --no-cleanup would keep a full
+		// set of RBAC, Secret, ConfigMap and Job for every poll.
+		return fmt.Errorf("--no-cleanup keeps one run's objects for debugging and cannot be combined with --wait")
+	}
 
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
 	skipClusterValidation := checkSkipClusterValidation || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION") != ""
@@ -204,7 +209,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// interrupted is an explicit cancel, not the timeout below, which is a
 	// child of sigCtx and leaves it live.
 	interrupted := func() bool { return sigCtx.Err() != nil }
-	ctx, cancel := context.WithTimeout(sigCtx, outerTimeout)
+	ctx, cancel := context.WithTimeout(sigCtx, checkBudget(outerTimeout))
 	defer cancel()
 
 	// Legacy --output=json: warn and treat as --json.
@@ -254,12 +259,13 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 	cfg := selfhosted.PreflightConfig{
 		LocalOnly:       localOnly,
-		Tools:           selfHostedPreflightTools(),
+		Tools:           checkPreflightTools(),
 		Registries:      credEntries,
 		RegistryChecker: registryChecker,
 	}
 
-	sink, err := selectCheckRenderer(c.ErrOrStderr(), selfHostedWait != "")
+	// A quit key in the dashboard cancels the run the way a signal does.
+	sink, err := selectCheckRenderer(c.ErrOrStderr(), selfHostedWait != "", stop)
 	if err != nil {
 		return err
 	}
@@ -295,11 +301,23 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		return results
 	}
 
+	// The outer budget ran out during a run: the checks it did not reach are
+	// already error rows, so the verdict is a timeout rather than whatever
+	// the partial set would grade as.
+	exitBudgetSpent := func() error {
+		emitCheckFinal(context.Background(), sink, lastResults)
+		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
+		return &ExitCodeError{Code: 5, Msg: "timed out: the check budget ran out before every check ran"}
+	}
+
 	if selfHostedWait == "" {
 		// Single-shot mode.
 		lastResults = runOnce()
 		if interrupted() {
 			return exitInterrupted()
+		}
+		if ctx.Err() != nil {
+			return exitBudgetSpent()
 		}
 		emitCheckFinal(ctx, sink, lastResults)
 		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
@@ -319,29 +337,45 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	waitTimeout := func() error {
+		emitCheckFinal(context.Background(), sink, lastResults)
+		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
+		return &ExitCodeError{Code: 5, Msg: "wait timeout: checks still failing after " + selfHostedWait}
+	}
 	for {
 		lastResults = runOnce()
 		if interrupted() {
 			return exitInterrupted()
 		}
-		if !anyFailed(lastResults) {
+		// An iteration that overran the budget ran on a dead context, and its
+		// results are incomplete: never a pass.
+		if ctx.Err() != nil {
+			return exitBudgetSpent()
+		}
+		if !anyFailed(lastResults) && !anyWarningToWaitOn(lastResults) {
 			emitCheckFinal(ctx, sink, lastResults)
 			maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
 			return nil
 		}
 
+		// The deadline is checked first: with several cases ready, select
+		// picks at random, and the ticker then re-ran the checks on a spent
+		// budget.
 		select {
 		case <-deadline:
-			emitCheckFinal(ctx, sink, lastResults)
-			maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
-			return &ExitCodeError{Code: 5, Msg: "wait timeout: checks still failing after " + selfHostedWait}
+			return waitTimeout()
+		default:
+		}
+		select {
+		case <-deadline:
+			return waitTimeout()
 		case <-ticker.C:
 			// continue polling
 		case <-ctx.Done():
 			if interrupted() {
 				return exitInterrupted()
 			}
-			return ctx.Err()
+			return waitTimeout()
 		}
 	}
 }
@@ -518,7 +552,7 @@ func maybeShowClusterValidatorLogs(w io.Writer, results []selfhosted.CheckResult
 	}
 }
 
-func selectCheckRenderer(w io.Writer, wait bool) (progress.EventSink, error) {
+func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventSink, error) {
 	if !wait && !selfHostedJSON && !selfHostedPlain && !selfHostedAccessible && checkWriterIsTTY(w) {
 		return progress.NewCheckOneShotRenderer(w, progress.ModelOpts{
 			Mode:                progress.ModeCheck,
@@ -526,6 +560,7 @@ func selectCheckRenderer(w io.Writer, wait bool) (progress.EventSink, error) {
 			Cluster:             checkClusterName,
 			ControlPlaneContext: selfHostedControlPlaneContext,
 			ComputePlaneContext: selfHostedComputePlaneContext,
+			OnQuit:              onQuit,
 		}), nil
 	}
 
@@ -537,6 +572,7 @@ func selectCheckRenderer(w io.Writer, wait bool) (progress.EventSink, error) {
 		Cluster:             checkClusterName,
 		ControlPlaneContext: selfHostedControlPlaneContext,
 		ComputePlaneContext: selfHostedComputePlaneContext,
+		OnQuit:              onQuit,
 	})
 	return sink, err
 }
@@ -853,6 +889,25 @@ func isBlockingFailure(r selfhosted.CheckResult) bool {
 // not trigger non-zero exit per spec §6.3.
 // isBlockingFailure is the single definition of "this fails the run". Both the
 // exit code and the JSON verdict derive from it, so they cannot disagree.
+// checkPreflightTools is a test seam over the local tool checks, so command
+// tests do not depend on what is installed on the machine running them.
+var checkPreflightTools = selfHostedPreflightTools
+
+// checkBudget is a test seam over the command's outer time budget.
+var checkBudget = func(d time.Duration) time.Duration { return d }
+
+// anyWarningToWaitOn reports a warning expected to clear by itself, such as a
+// rollout the validator saw in progress. --wait keeps polling on it; a single
+// run still exits 0.
+func anyWarningToWaitOn(results []selfhosted.CheckResult) bool {
+	for _, r := range results {
+		if r.Transient && !r.Passed {
+			return true
+		}
+	}
+	return false
+}
+
 func anyFailed(results []selfhosted.CheckResult) bool {
 	for _, r := range results {
 		if isBlockingFailure(r) {

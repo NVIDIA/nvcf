@@ -65,6 +65,7 @@ go_test(
         "credhelper_test.go",
         "inotify_probe_test.go",
         "main_test.go",
+        "miniapiserver_test.go",
         "orchestrator_errors_test.go",
         "output_test.go",
         "preflight_test.go",

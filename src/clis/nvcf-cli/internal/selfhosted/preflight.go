@@ -94,6 +94,9 @@ type CheckResult struct {
 	HintURL  string
 	Err      error  // populated only when the check itself failed to execute
 	Logs     string // optional: full check transcript for --show-logs; not emitted to JSON
+	// Transient marks a warning expected to clear by itself, such as a
+	// rollout in progress. --wait keeps polling while one remains.
+	Transient bool
 }
 
 // BinarySpec defines a tool that must be on PATH and a version constraint.
@@ -651,8 +654,16 @@ func clusterValidatorCheck(
 			})
 			r.Logs = result.Logs
 			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)
-			if noCleanup {
+			switch {
+			case noCleanup:
 				if hint := validatorCleanupHint(kubeContext, result.RunID); hint != "" {
+					r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + hint
+				}
+			case result.LeftBehind:
+				// The pod could still be running, so its RBAC was kept rather
+				// than pulled out from under it. Say how to remove it once it
+				// ends, instead of leaving it for a later check's sweep.
+				if hint := validatorLeftBehindHint(kubeContext, result.RunID); hint != "" {
 					r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + hint
 				}
 			}
@@ -673,6 +684,16 @@ func clusterValidatorCheck(
 			// role-aware image that fails before printing it (say, building its
 			// Kubernetes client) must still fail the run.
 			if role == validatorRoleControlPlane && isLegacyComputePlaneTranscript(result.Logs) {
+				// Downgrade only the failure the old image causes by itself: its
+				// GPU check on a CPU-only control plane. Its checks common to both
+				// roles (the control plane's /readyz, admission webhooks, critical
+				// registry reachability) still see real failures, and those fail.
+				if others := legacyCriticalFailures(result.Logs); len(others) > 0 {
+					r.Severity = SeverityError
+					r.Message = "cluster-validator reported failures (" + strings.Join(others, "; ") +
+						"); the image predates validator roles, so only its checks common to both roles ran"
+					return r
+				}
 				r.Severity = SeverityWarning
 				r.Message = "cluster-validator image does not support the control-plane checks (it ran the " +
 					"compute-plane set); use an image from an NVCA release that supports validator roles, " +
@@ -680,6 +701,19 @@ func clusterValidatorCheck(
 				return r
 			}
 			r.Passed = result.Passed
+			if result.Passed && strings.Contains(result.Logs, validatorReadyWithWarnings) {
+				// The Job succeeding is not a clean pass when the validator
+				// itself reported warnings. A rollout in progress is expected
+				// to clear, so --wait keeps polling on it.
+				r.Passed = false
+				r.Severity = SeverityWarning
+				r.Transient = isRolloutTranscript(result.Logs)
+				r.Message = "cluster-validator passed with warnings; run with --show-logs for details"
+				if r.Transient {
+					r.Message = "cluster-validator passed with a rollout in progress; --wait polls until it completes"
+				}
+				return r
+			}
 			if result.Passed {
 				r.Severity = SeverityInfo
 				r.Message = "cluster passed cluster-validator built-in checks"
@@ -696,6 +730,57 @@ func clusterValidatorCheck(
 // the check set it runs. Must match RoleMarker in
 // nvca/internal/clustervalidator/validator.go.
 const validatorRoleMarker = "Validator role: "
+
+// validatorReadyWithWarnings is in the verdict line of a run that passed every
+// critical check with warnings. Must match printSummary in
+// nvca/internal/clustervalidator/validator.go.
+const validatorReadyWithWarnings = "NVCF-Ready (with warnings)"
+
+// validatorRolloutMarkers are in the validator's warnings for a Deployment or
+// StatefulSet rollout in progress (checks.go, Tier-1 and Tier-2).
+var validatorRolloutMarkers = []string{"rollout in progress", "rolling update in progress", "mid-rollout"}
+
+func isRolloutTranscript(logs string) bool {
+	for _, m := range validatorRolloutMarkers {
+		if strings.Contains(logs, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// validatorSummaryStart and validatorFailIcon locate the failed critical rows
+// the validator prints in its summary. Must match printSummary and printError
+// in nvca/internal/clustervalidator.
+const (
+	validatorSummaryStart = "Check Results:"
+	validatorFailIcon     = "\u2717"
+)
+
+// legacyCriticalFailures returns the failed critical summary rows of a
+// pre-role transcript other than GPU Resources, the one row the compute-plane
+// set fails on any CPU-only control plane. A transcript without a summary
+// returns a row saying so: nothing shows the run was otherwise clean.
+func legacyCriticalFailures(logs string) []string {
+	i := strings.LastIndex(logs, validatorSummaryStart)
+	if i < 0 {
+		return []string{"the validator printed no summary"}
+	}
+	var out []string
+	for _, line := range strings.Split(logs[i:], "\n") {
+		if strings.Contains(line, "Cluster is") {
+			break
+		}
+		_, row, ok := strings.Cut(line, validatorFailIcon)
+		if !ok {
+			continue
+		}
+		if row = strings.TrimSpace(row); row != "" && !strings.HasPrefix(row, "GPU Resources") {
+			out = append(out, row)
+		}
+	}
+	return out
+}
 
 // legacyComputePlaneHeader is a section header only the compute-plane check
 // set prints. A validator that predates roles always runs that set.
@@ -718,6 +803,20 @@ func validatorCleanupHint(kubeContext, runID string) string {
 	sel := clusterValidatorRunLabel + "=" + runID
 	ctx := kubectlContextArg(kubeContext)
 	return fmt.Sprintf("kept with --no-cleanup; remove with: kubectl%s delete -n %s job,serviceaccount,secret,configmap -l %s && "+
+		"kubectl%s delete clusterrole,clusterrolebinding -l %s",
+		ctx, clusterValidatorNamespace, sel, ctx, sel)
+}
+
+// validatorLeftBehindHint is the removal command for a run whose pod outlived
+// the wait, so its RBAC was kept.
+func validatorLeftBehindHint(kubeContext, runID string) string {
+	if runID == "" {
+		return ""
+	}
+	sel := clusterValidatorRunLabel + "=" + runID
+	ctx := kubectlContextArg(kubeContext)
+	return fmt.Sprintf("the validator pod was still running, so its objects were kept; once it ends remove them "+
+		"with: kubectl%s delete -n %s job,serviceaccount,secret,configmap -l %s && "+
 		"kubectl%s delete clusterrole,clusterrolebinding -l %s",
 		ctx, clusterValidatorNamespace, sel, ctx, sel)
 }
@@ -1041,15 +1140,33 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 		catStart := time.Now()
 		var catResults []CheckResult
 		for _, spec := range cat.checks {
-			if ctx.Err() != nil {
+			var res CheckResult
+			switch {
+			case errors.Is(ctx.Err(), context.Canceled):
+				// Interrupted: the command reports the interrupt, not rows.
 				return all
+			case ctx.Err() != nil:
+				// The budget ran out before this check started. Dropping it
+				// let the partial set grade as the verdict, so a validator
+				// that never ran could pass the gate.
+				res = CheckResult{
+					ID: spec.ID, Severity: SeverityError,
+					Message: "not run: the check's time budget ran out before it started",
+					Err:     ctx.Err(),
+				}
+			default:
+				_ = sink.Emit(ctx, progress.CheckStarted{
+					Category: cat.name,
+					ID:       spec.ID,
+					Message:  spec.HumanLabel,
+				})
+				res = spec.Run(ctx)
+				if errors.Is(ctx.Err(), context.Canceled) {
+					// Cut short by the interrupt, so its result is not a
+					// finding; the cancelled final event says what happened.
+					return all
+				}
 			}
-			_ = sink.Emit(ctx, progress.CheckStarted{
-				Category: cat.name,
-				ID:       spec.ID,
-				Message:  spec.HumanLabel,
-			})
-			res := spec.Run(ctx)
 			res.Category = cat.name
 			all = append(all, res)
 			_ = sink.Emit(ctx, progress.CheckCompleted{

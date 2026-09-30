@@ -189,21 +189,13 @@ func TestRunClusterValidator_HappyPath(t *testing.T) {
 	assert.Equal(t, int32(0), res.ExitCode)
 	assert.NotEmpty(t, res.JobName, "JobName must be populated so operators can read logs after the run")
 
-	// Sweep must run before create so the singleton invariant holds. The sweep
-	// lists rather than issuing a DeleteCollection, because the generated name
-	// has to be checked too and a collection selector cannot express that.
-	actions := client.Actions()
-	var sweepIdx, createIdx = -1, -1
-	for i, a := range actions {
-		if a.GetVerb() == "list" && a.GetResource().Resource == "jobs" && sweepIdx == -1 {
-			sweepIdx = i
-		}
-		if a.GetVerb() == "create" && a.GetResource().Resource == "jobs" && createIdx == -1 {
-			createIdx = i
-		}
+	// No Job is deleted on a clean run: there is no sweep of earlier Jobs,
+	// which could only ever hit an overlapping run's live one. The orphan
+	// sweep lists Jobs but reclaims only preserved ones past their TTL.
+	for _, a := range client.Actions() {
+		assert.False(t, a.GetVerb() == "delete" && a.GetResource().Resource == "jobs",
+			"a clean run deletes no Job")
 	}
-	require.NotEqual(t, -1, sweepIdx, "runClusterValidator must sweep prior Jobs before creating the new one")
-	assert.Less(t, sweepIdx, createIdx, "sweep must precede create in action sequence")
 }
 
 func TestRunClusterValidator_JobFailed(t *testing.T) {
@@ -369,7 +361,7 @@ func TestRunClusterValidator_ImagePullBackOffShortCircuits(t *testing.T) {
 	require.Error(t, res.Err, "ImagePullBackOff must short-circuit the wait with an error")
 	assert.Contains(t, res.Err.Error(), "ImagePullBackOff")
 	assert.Contains(t, res.Err.Error(), "cannot pull image")
-	assert.NotEmpty(t, res.JobName, "JobName must still be populated so the operator can describe the pod")
+	assert.Empty(t, res.JobName, "the Job is deleted on a pull failure, so no logs hint may name it")
 	assert.Less(t, elapsed, clusterValidatorTimeout,
 		"short-circuit must return well before the 5-minute timeout; otherwise the early-detect path is broken")
 }

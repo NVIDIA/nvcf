@@ -130,6 +130,10 @@ type ClusterValidatorResult struct {
 	// RunID labels every object the run created (clusterValidatorRunLabel).
 	RunID string
 	Err   error
+	// LeftBehind reports that this run's RBAC and other objects were kept
+	// because its pod could still be running, so the caller can print the
+	// command that removes them rather than leave them for the orphan sweep.
+	LeftBehind bool
 }
 
 type ClusterValidator func(ctx context.Context, params ClusterValidatorParams) ClusterValidatorResult
@@ -180,9 +184,9 @@ func runClusterValidator(
 		return ClusterValidatorResult{Err: err}
 	}
 
-	// Reclaim leftovers from dead runs before resolving this run's pull secret,
-	// not after: the sweep matches on the shared name prefix, so running it
-	// later can delete the Secret this run just selected.
+	// Reclaim leftovers from dead runs before resolving this run's pull
+	// secret. The sweep only takes objects older than its TTL, so it cannot
+	// reach anything this run is about to create.
 	sweepOrphanClusterValidatorRBAC(vctx, client, orphanValidatorRBACTTL)
 
 	// Resolver errors are non-fatal: fall through to the caller's value and
@@ -260,6 +264,10 @@ func runClusterValidator(
 		vctx, buildClusterValidatorJob(jobName, image, pullSecret, role, runID, noCleanup, env), metav1.CreateOptions{},
 	)
 	if err != nil {
+		// A create cut off by an interrupt or a dropped connection may still
+		// have been applied, and a Job left behind would run with its RBAC
+		// swept. The name is this run's own, so removing it is safe.
+		podMayBeRunning = !stopValidatorJob(client, jobName)
 		return ClusterValidatorResult{RunID: runID, Err: fmt.Errorf("creating validator Job: %w", err)}
 	}
 	podMayBeRunning = true
@@ -271,6 +279,9 @@ func runClusterValidator(
 	// deliberately not owned: the ClusterRole and binding are cluster-scoped
 	// and cannot be, and deleting the account alone would leave a binding
 	// that anyone able to recreate that ServiceAccount name could inherit.
+	// Not under --no-cleanup: a kept Secret or ConfigMap owned by the kept Job
+	// would be garbage-collected the moment an operator re-runs that Job by
+	// deleting and recreating it.
 	var owned []ownedArtifact
 	if pullSecret == validatorPullSecretRunName(role, runID) {
 		owned = append(owned, ownedArtifact{kind: "Secret", name: pullSecret})
@@ -278,12 +289,15 @@ func runClusterValidator(
 	if role == clusterValidatorControlPlaneRole && configNote == "" {
 		owned = append(owned, ownedArtifact{kind: "ConfigMap", name: clusterValidatorConfigRunName(runID)})
 	}
-	ownByJob(vctx, client, job, owned)
+	if !noCleanup {
+		ownByJob(vctx, client, job, owned)
+	}
 
 	final, waitErr := waitForClusterValidatorJob(vctx, client, jobName)
 	// A clean wait means the pod reached a terminal state, so the RBAC can go.
-	// A timeout leaves it running: pulling the RBAC then fills the surviving
-	// transcript with "forbidden" and masks the real cause.
+	// Otherwise the pod may still be running: pulling the RBAC then fills its
+	// transcript with "forbidden", and cuts off the validator's own cleanup
+	// of its probe resources.
 	podMayBeRunning = waitErr != nil
 
 	// Fetch logs under a fresh ctx from the parent: vctx is expired on the
@@ -301,28 +315,43 @@ func runClusterValidator(
 	// pod stops retrying, and let the deferred sweeps run now rather than
 	// leaving a cluster-wide ClusterRole and an NGC-key Secret for a later
 	// run's orphan sweep, or for nobody.
+	// Each stop deletes the Job in the foreground and waits, bounded, for its
+	// pod to end before the deferred sweeps revoke its RBAC. The validator
+	// removes its own probe namespace and DaemonSet on SIGTERM, and needs
+	// that RBAC to do it.
 	var pullErr *validatorImagePullError
-	if errors.As(waitErr, &pullErr) && !noCleanup {
-		deleteValidatorJob(context.Background(), client, jobName)
-		podMayBeRunning = false
-	}
-	// An interrupt (Ctrl-C, SIGTERM) cancels the caller's context. The
-	// operator has abandoned the run, so stop the pod and reclaim everything
-	// now rather than leave cluster-wide RBAC for a later orphan sweep. A
-	// timeout is different: it leaves ctx itself live, and a pod that may
-	// still be running keeps its RBAC.
-	if errors.Is(ctx.Err(), context.Canceled) && !noCleanup {
-		deleteValidatorJob(context.Background(), client, jobName)
-		podMayBeRunning = false
+	interrupted := errors.Is(ctx.Err(), context.Canceled)
+	stopped := false
+	switch {
+	case errors.As(waitErr, &pullErr) && noCleanup:
+		// Kept for debugging, but a pod that cannot pull has nothing to
+		// run: suspend the Job so the pod stops retrying forever.
+		suspendValidatorJob(client, jobName)
+	case (errors.As(waitErr, &pullErr) || interrupted) && !noCleanup:
+		// A pull failure never started the container, and an interrupt means
+		// the operator abandoned the run: stop the Job and reclaim everything
+		// now rather than leave cluster-wide RBAC for a later orphan sweep.
+		podMayBeRunning = !stopValidatorJob(client, jobName)
+		stopped = true
+	case waitErr != nil && !noCleanup:
+		// A plain timeout: the Job's active deadline ends the pod shortly
+		// after this wait gave up. Wait for that, then sweep, as on success.
+		podMayBeRunning = !waitValidatorPodsDone(client, jobName, validatorDeadlineGrace)
 	}
 
 	if waitErr != nil {
-		return ClusterValidatorResult{
-			JobName: jobName,
-			RunID:   runID,
-			Logs:    cleaned,
-			Err:     waitErr,
+		res := ClusterValidatorResult{
+			JobName:    jobName,
+			RunID:      runID,
+			Logs:       cleaned,
+			Err:        waitErr,
+			LeftBehind: podMayBeRunning && !noCleanup,
 		}
+		if stopped {
+			// The Job is gone, so a hint to read its logs would 404.
+			res.JobName = ""
+		}
+		return res
 	}
 
 	// Separate short ctx so a slow log fetch can't burn the exit-code lookup's
@@ -400,10 +429,73 @@ func deleteValidatorJob(ctx context.Context, client kubernetes.Interface, name s
 	if err != nil || !hasValidatorManagedLabels(job.Labels) {
 		return
 	}
-	propagation := metav1.DeletePropagationBackground
+	// Foreground: the Job is removed only after its pod, so the pod gets its
+	// SIGTERM and grace period while its RBAC still exists.
+	propagation := metav1.DeletePropagationForeground
 	opts := deleteExactly(job)
 	opts.PropagationPolicy = &propagation
 	_ = jobs.Delete(dctx, name, opts)
+}
+
+// Vars (not consts) so tests can shorten them.
+var (
+	// validatorStopTimeout bounds the wait for a stopped Job's pod to end.
+	// It covers the pod's default 30s termination grace period.
+	validatorStopTimeout = 45 * time.Second
+	// validatorDeadlineGrace bounds the wait, after this run's own timeout,
+	// for the Job's active deadline (60s later) to end the pod.
+	validatorDeadlineGrace = 120 * time.Second
+	// validatorPullFailureGrace is how long a pull failure must persist before
+	// it is final. The kubelet retries after 10s and then 20s, so a transient
+	// registry error clears inside it.
+	validatorPullFailureGrace = 30 * time.Second
+	// validatorGetErrorLimit is how many consecutive failed Job reads end the
+	// wait. One 5xx or a refused connection during an apiserver restart is
+	// not the Job's result.
+	validatorGetErrorLimit = 5
+)
+
+// stopValidatorJob deletes the Job and reports whether its pods ended within
+// validatorStopTimeout.
+func stopValidatorJob(client kubernetes.Interface, name string) bool {
+	deleteValidatorJob(context.Background(), client, name)
+	return waitValidatorPodsDone(client, name, validatorStopTimeout)
+}
+
+// suspendValidatorJob stops a kept Job from creating or retrying its pod.
+func suspendValidatorJob(client kubernetes.Interface, name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = client.BatchV1().Jobs(clusterValidatorNamespace).Patch(ctx, name, types.MergePatchType,
+		[]byte(`{"spec":{"suspend":true}}`), metav1.PatchOptions{})
+}
+
+// waitValidatorPodsDone waits up to limit, on a fresh context, until no pod of
+// the Job is still running, and reports whether that happened.
+func waitValidatorPodsDone(client kubernetes.Interface, jobName string, limit time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	for {
+		pods, err := client.CoreV1().Pods(clusterValidatorNamespace).List(ctx,
+			metav1.ListOptions{LabelSelector: "job-name=" + jobName})
+		if err == nil && allPodsDone(pods.Items) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func allPodsDone(pods []corev1.Pod) bool {
+	for i := range pods {
+		if p := pods[i].Status.Phase; p != corev1.PodSucceeded && p != corev1.PodFailed {
+			return false
+		}
+	}
+	return true
 }
 
 // validatorImagePullError reports that the validator pod could not pull its
@@ -1005,21 +1097,40 @@ func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCle
 func waitForClusterValidatorJob(ctx context.Context, client kubernetes.Interface, jobName string) (*batchv1.Job, error) {
 	ticker := time.NewTicker(clusterValidatorPollInterval)
 	defer ticker.Stop()
+	getErrors := 0
+	var pullFailingSince time.Time
 	for {
 		job, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(ctx, jobName, metav1.GetOptions{})
-		if err != nil {
+		switch {
+		case err != nil:
 			// If the deadline fired between ticker and Get, surface the wait
 			// wording the select branch would have used.
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, fmt.Errorf("waiting for job %s: %w", jobName, ctxErr)
 			}
-			return nil, fmt.Errorf("get job %s: %w", jobName, err)
-		}
-		if job.Status.Succeeded > 0 || job.Status.Failed > 0 {
+			// A missing Job or a permission error cannot change; anything else
+			// is retried a few times before it decides the run.
+			getErrors++
+			if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) ||
+				getErrors >= validatorGetErrorLimit {
+				return nil, fmt.Errorf("get job %s: %w", jobName, err)
+			}
+		case job.Status.Succeeded > 0 || job.Status.Failed > 0:
 			return job, nil
-		}
-		if reason, msg := podPullFailureReason(ctx, client, jobName); reason != "" {
-			return job, &validatorImagePullError{reason: reason, message: msg}
+		default:
+			getErrors = 0
+			reason, msg := podPullFailureReason(ctx, client, jobName)
+			switch {
+			case reason == "":
+				pullFailingSince = time.Time{}
+			case reason == "InvalidImageName":
+				// A malformed reference never pulls.
+				return job, &validatorImagePullError{reason: reason, message: msg}
+			case pullFailingSince.IsZero():
+				pullFailingSince = time.Now()
+			case time.Since(pullFailingSince) >= validatorPullFailureGrace:
+				return job, &validatorImagePullError{reason: reason, message: msg}
+			}
 		}
 		select {
 		case <-ctx.Done():

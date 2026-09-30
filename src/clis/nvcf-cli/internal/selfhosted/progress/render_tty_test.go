@@ -930,3 +930,18 @@ func TestTTY_CheckCompleteWithWarning(t *testing.T) {
 	}
 	assert.Contains(t, model.(Model).View(), "ok with warnings  (2/3 passed, 0 failed, 1 warning(s))")
 }
+
+// Bubbletea reads the terminal in raw mode, so Ctrl-C is a key press, not a
+// signal. Each quit key must reach the run, or quitting closes the dashboard
+// while the command keeps running behind it.
+func TestModel_QuitKeysCallOnQuit(t *testing.T) {
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlC}, {Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune("q")}} {
+		called := 0
+		m := NewModel(ModelOpts{Mode: ModeCheck, OnQuit: func() { called++ }})
+		_, cmd := m.Update(key)
+		require.NotNil(t, cmd, key.String())
+		assert.Equal(t, 1, called, key.String())
+	}
+	_, cmd := NewModel(ModelOpts{Mode: ModeCheck}).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	assert.NotNil(t, cmd, "without a hook the dashboard still quits")
+}

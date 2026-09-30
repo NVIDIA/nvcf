@@ -20,6 +20,7 @@ package selfhosted
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 // TestMain points HOME at an empty directory so no test reads the developer's
@@ -34,6 +35,11 @@ func TestMain(m *testing.M) {
 	}
 	_ = os.Setenv("HOME", home)
 	_ = os.Unsetenv("HELM_DRIVER")
+	// The fake clientset has no controllers, so a pod never ends on its own:
+	// keep the waits for that short. Tests of the waits set their own.
+	validatorStopTimeout = 2 * time.Second
+	validatorDeadlineGrace = 2 * time.Second
+	validatorPullFailureGrace = 0
 	code := m.Run()
 	_ = os.RemoveAll(home)
 	os.Exit(code)
