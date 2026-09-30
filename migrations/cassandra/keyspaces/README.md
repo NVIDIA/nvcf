@@ -9,11 +9,13 @@ Migrations are applied in filename order and follow the naming convention:
 NN_description.up.sql
 ```
 
-The schemas in this directory follow a clean-slate model. There are no delta
-`ALTER TABLE` migrations. Each `03_init_tables.up.sql` represents the complete,
-canonical schema for its keyspace at the pinned upstream service version. When the
-upstream schema changes, `03_init_tables.up.sql` is updated in place and the
-pinned version reference is bumped accordingly.
+Each `03_init_tables.up.sql` is the baseline schema for its keyspace at the
+pinned version in the Schema Sources table. Fresh installations apply that file,
+then every later migration in filename order. Existing clusters apply only the
+migrations newer than their recorded version.
+
+Do not edit `03_init_tables.up.sql` when the schema changes. Add the next
+numbered migration instead.
 
 ---
 
@@ -42,19 +44,25 @@ pinned version reference is bumped accordingly.
 |---------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `01_init_keyspace.up.sql` | Creates the keyspace with `NetworkTopologyStrategy` replication. Uses `${REPLICA_COUNT}`, which the entrypoint substitutes before migration.                                                                    |
 | `02_init_roles.up.sql`    | Creates the application role, grants privileges, and sets the service login password via `${SERVICE_ROLE_PASSWORD}`.                                                                                               |
-| `03_init_tables.up.sql`   | Complete canonical schema with all UDTs, tables, and indexes at the pinned upstream version.                                                                                                                       |
-| `04_*` and later          | Incremental deltas for rolling upgrades. These add tables/columns that are not in `03_init_tables.up.sql` at the version that was applied on existing clusters. `ess_api/04_*` is a data seed (deployment-specific values). The `sis_api` and `nvcf_api` deltas are DDL. |
+| `03_init_tables.up.sql`   | Baseline schema (UDTs, tables, and indexes) at the pinned version. Later schema changes belong in a new migration file, not in this file.                                                                          |
+| `04_*` and later          | Incremental deltas for rolling upgrades. These add tables/columns that are not in `03_init_tables.up.sql` at the version that was applied on existing clusters. `ess_api/04_*` is a data seed (deployment-specific values). The `api_keys_api`, `sis_api`, and `nvcf_api` deltas are DDL. |
 
 ---
 
 ## Conventions and Rules
 
-### Clean-Slate Model
+### Baseline and later migrations
 
-This repo does not use incremental `ALTER TABLE` migrations for fresh
-installations. The `03_init_tables.up.sql` file always reflects the full desired
-schema. This avoids the complexity of replaying a long chain of deltas on new
-clusters.
+`03_init_tables.up.sql` is the baseline. Fresh installations run it, then apply
+`04_*` and later in filename order. Existing clusters skip migrations they have
+already applied.
+
+Put each later schema change in a new migration. Leave `03_init_tables.up.sql`
+unchanged so a cluster already at version 3 still receives the change.
+
+DDL migrations create or alter tables, types, and indexes. The `api_keys_api`,
+`sis_api`, and `nvcf_api` deltas are DDL. Deployment-specific data seeds, such
+as `ess_api/04_*`, load values for this deployment and stay in their own files.
 
 ### Upstream vs. Our Values
 
@@ -79,10 +87,16 @@ upstream:
      -o /tmp/upstream_schema.cql
    ```
 
-3. Diff against the current `03_init_tables.up.sql`. Identify:
+3. Diff against `03_init_tables.up.sql` and the migrations that follow it.
+   Identify:
    - Net-new tables or columns
    - Dropped tables or columns
-   - Any data/config values that must use our deployment's values
-4. Update `03_init_tables.up.sql` in place.
-5. Update the Schema Sources table in this README with the new version and
-   commit SHA.
+   - Data or config values that must use this deployment's values
+4. Add the next `NN_description.up.sql`. Do not edit `03_init_tables.up.sql`
+   in place.
+   - DDL (tables, types, columns, indexes) goes in a DDL migration.
+   - Deployment-specific data stays in a separate seed migration. Do not mix
+     seed values into a DDL file.
+5. Update the Schema Sources table in this README only when the baseline
+   `03_init_tables.up.sql` pin changes. A later migration does not change that
+   pin by itself.
