@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 	"io"
 	"net"
 	"os"
@@ -211,7 +212,7 @@ func countDistinctGPUDevices(pids []int, log *logrus.Entry) int {
 		"--format=csv,noheader")
 	// nvidia-smi needs the driver's shared libraries
 	cmd.Env = append(os.Environ(),
-		"LD_LIBRARY_PATH=/host/run/nvidia/driver/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64")
+		"LD_LIBRARY_PATH="+hostlibs.DriverDir("/host/run/nvidia/driver")+":/usr/local/nvidia/lib64")
 	out, err := cmd.Output()
 	if err != nil {
 		log.WithError(err).WithField("path", nvidiaSmi).Warn("nvidia-smi query failed, assuming single GPU")

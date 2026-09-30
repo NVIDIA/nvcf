@@ -20,6 +20,7 @@ package criu
 import (
 	"context"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,9 +216,9 @@ func (m *Manager) DumpRPC(ctx context.Context, opts DumpRPCOptions) error {
 	// killed criu swrk). libcuda.so only exists in the driver tree, so it
 	// still resolves from there.
 	ldLibraryPathOnce.Do(func() {
-		ldPath := "/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:" +
-			"/host/run/nvidia/driver/usr/lib/x86_64-linux-gnu:/host/usr/local/nvidia/lib64:" +
-			"/run/nvidia/driver/usr/lib/x86_64-linux-gnu"
+		ldPath := hostlibs.Dir() + ":/usr/local/nvidia/lib64:" +
+			hostlibs.DriverDir("/host/run/nvidia/driver") + ":/host/usr/local/nvidia/lib64:" +
+			hostlibs.DriverDir("/run/nvidia/driver")
 		if existing := os.Getenv("LD_LIBRARY_PATH"); existing != "" {
 			ldPath = ldPath + ":" + existing
 		}
