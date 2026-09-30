@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
@@ -335,6 +336,47 @@ func TestLoadFromEnvRejectsInvalidMaxRequestBodyBytes(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES") {
 				t.Fatalf("error %q does not mention NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvReadsStargateListingCacheTTL(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "default", value: "", want: 3 * time.Second},
+		{name: "override", value: "10s", want: 10 * time.Second},
+		{name: "zero refreshes every call", value: "0s", want: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("STARGATE_LISTING_CACHE_TTL", tc.value)
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+			if cfg.Stargate.ListingCacheTTL != tc.want {
+				t.Fatalf("listing cache ttl = %s, want %s", cfg.Stargate.ListingCacheTTL, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidStargateListingCacheTTL(t *testing.T) {
+	for _, value := range []string{"-1s", "3"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("STARGATE_LISTING_CACHE_TTL", value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "STARGATE_LISTING_CACHE_TTL") {
+				t.Fatalf("error %q does not mention STARGATE_LISTING_CACHE_TTL", err.Error())
 			}
 		})
 	}

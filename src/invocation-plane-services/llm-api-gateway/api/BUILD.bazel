@@ -26,6 +26,7 @@ go_library(
         "middleware.go",
         "model_ids.go",
         "model_uris.go",
+        "models_handler.go",
         "observability.go",
         "openai_endpoint_handlers.go",
         "openai_remaining_handlers.go",
@@ -71,6 +72,7 @@ go_library(
         "@io_opentelemetry_go_otel_trace//:trace",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
+        "@org_golang_x_sync//singleflight",
     ],
 )
 
@@ -92,6 +94,7 @@ go_test(
         "middleware_test.go",
         "model_ids_test.go",
         "model_uris_test.go",
+        "models_handler_test.go",
         "openai_routes_test.go",
         "overload_test.go",
         "passthrough_test.go",

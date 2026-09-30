@@ -20,6 +20,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"time"
 
 	echo "github.com/labstack/echo/v4"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -38,6 +39,7 @@ type Handlers struct {
 	rateLimiter   ratelimit.RateLimiter
 	limitResolver LimitResolver
 	observability observabilityMetrics
+	modelCatalog  *modelCatalog
 }
 
 type observabilityMetrics struct {
@@ -94,6 +96,12 @@ func NewHandlers(
 	if proxyProvider, ok := any(p).(provider.OpenAIProxyProvider); ok {
 		h.proxyProvider = proxyProvider
 	}
+	var listingCacheTTL time.Duration
+	if cfg != nil {
+		listingCacheTTL = cfg.Stargate.ListingCacheTTL
+	}
+	modelLister, _ := any(p).(provider.ModelLister)
+	h.modelCatalog = newModelCatalog(modelLister, listingCacheTTL)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(h)

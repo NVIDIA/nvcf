@@ -27,6 +27,7 @@ data:
   STARGATE_URL: {{ required "llmApiGateway.config.requestRouterUrl is required" $cfg.requestRouterUrl | quote }}
   STARGATE_CONNECT_TIMEOUT: {{ $cfg.requestRouterConnectTimeout | quote }}
   STARGATE_REQUEST_TIMEOUT: {{ $cfg.requestRouterRequestTimeout | quote }}
+  STARGATE_LISTING_CACHE_TTL: {{ $cfg.requestRouterListingCacheTtl | quote }}
   NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT: {{ $cfg.inferenceWriteTimeout | quote }}
   NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
   NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}

@@ -98,3 +98,14 @@ type OpenAIProxyProvider interface {
 		request *ProxyRequest,
 	) (*ProxyResponse, error)
 }
+
+// ModelLister reads the LLM Request Router's model listing.
+type ModelLister interface {
+	ListModels(ctx context.Context) (*ModelListing, error)
+}
+
+// ModelListing is the router's GET /v1/models response.
+type ModelListing struct {
+	// ModelIDs holds the models the router can route right now.
+	ModelIDs []string `json:"model_ids"`
+}

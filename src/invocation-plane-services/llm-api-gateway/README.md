@@ -34,6 +34,14 @@ The gateway currently serves:
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
+- `GET /v1/models` and `GET /v1/models/{id}`
+
+`GET /v1/models` lists the models the LLM Request Router can route, in OpenAI
+list format and sorted by `id`. It covers only registrations without a routing
+key. `created` is when this gateway process first saw the model, so it resets
+on restart. `GET /v1/models/{id}` accepts ids that contain slashes and returns
+404 for an unlisted model. Both return 502 when the router listing call fails
+and the cached listing has expired.
 
 ## Request Routing
 
@@ -146,6 +154,8 @@ Useful overrides:
   413 (default `0`, no limit)
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
+- `STARGATE_LISTING_CACHE_TTL` to set how long the model endpoints reuse one
+  router listing response (default `3s`, `0s` calls the router every time)
 - `NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT` to cap how long one response write
   may stall on a client that stopped reading (default `60s`, `0s` disables).
   It applies only while a write is in progress, so long streams, long

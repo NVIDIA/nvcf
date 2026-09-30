@@ -66,6 +66,9 @@ llmApiGateway:
     requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
+    # How long GET /v1/models reuses one router model listing response.
+    # 0s calls the router on every request.
+    requestRouterListingCacheTtl: 3s
     # Longest a single response write may stall on a client that stopped
     # reading. Applies only while a write is in progress, so it does not cap
     # total response time or upstream pauses. 0s disables the bound.

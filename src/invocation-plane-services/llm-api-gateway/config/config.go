@@ -81,6 +81,9 @@ type StargateConfig struct {
 	URL            string
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
+	// ListingCacheTTL is how long one router model listing response is reused
+	// by the model endpoints. Zero refreshes on every call.
+	ListingCacheTTL time.Duration
 }
 
 type NVCFConfig struct {
@@ -211,9 +214,10 @@ func Default() *Config {
 			Region:                "global",
 		},
 		Stargate: StargateConfig{
-			URL:            "http://127.0.0.1:8000",
-			ConnectTimeout: 2 * time.Second,
-			RequestTimeout: 0,
+			URL:             "http://127.0.0.1:8000",
+			ConnectTimeout:  2 * time.Second,
+			RequestTimeout:  0,
+			ListingCacheTTL: 3 * time.Second,
 		},
 		NVCF: NVCFConfig{
 			GRPCAddr:    "",
@@ -346,6 +350,14 @@ func applyStargateNVCFEnv(cfg *Config, errs *envErrs) {
 
 	if timeout, ok := errs.duration("STARGATE_REQUEST_TIMEOUT"); ok {
 		cfg.Stargate.RequestTimeout = timeout
+	}
+
+	if ttl, ok := errs.duration("STARGATE_LISTING_CACHE_TTL"); ok {
+		if ttl < 0 {
+			errs.add("STARGATE_LISTING_CACHE_TTL", ttl.String(), errors.New("must be >= 0"))
+		} else {
+			cfg.Stargate.ListingCacheTTL = ttl
+		}
 	}
 
 	if grpcAddr := os.Getenv("NVCF_GRPC_ADDR"); grpcAddr != "" {
