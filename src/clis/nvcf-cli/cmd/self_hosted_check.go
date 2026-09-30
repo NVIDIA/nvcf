@@ -174,13 +174,18 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 	outerTimeout := 2 * time.Minute
 	if clusterValidatorWillRun {
-		// Each validator Job has a 5m internal budget. ModeSingle runs both
-		// validators sequentially (two 5m runs); ModeSplit runs them in
-		// parallel so one 6m ceiling covers both.
+		// A role's share is a minute for the probes that run first, plus the
+		// longest a validator can take, which includes the wait after its own
+		// timeout for the Job's deadline to end the pod. Sizing on the
+		// validator's timeout alone ran the budget out while that wait was
+		// still in progress, reporting "not every check ran" in place of the
+		// validator's own failure. ModeSingle runs both validators in turn;
+		// ModeSplit runs them in parallel, so one share covers both.
+		perRole := time.Minute + selfhosted.ClusterValidatorRunCeiling()
 		if mode == kubectx.ModeSingle && controlPlaneIsTargeted(mode) && computePlaneIsTargeted(mode) {
-			outerTimeout = 12 * time.Minute
+			outerTimeout = 2 * perRole
 		} else {
-			outerTimeout = 6 * time.Minute
+			outerTimeout = perRole
 		}
 	}
 	// --wait polls for the declared duration. The outer ctx has to outlive
@@ -390,8 +395,10 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 // environment follows resolveStackEnv.
 func resolveStackValuesFiles() []string {
 	var roots []string
-	if selfHostedControlPlaneStack != "" {
-		roots = append(roots, selfHostedControlPlaneStack)
+	// localStackDir strips file:// and drops remote sources, which
+	// filepath.Join would otherwise turn into a path that never exists.
+	if dir := localStackDir(selfHostedControlPlaneStack); dir != "" {
+		roots = append(roots, dir)
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		dir := cwd

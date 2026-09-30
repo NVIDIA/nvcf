@@ -146,7 +146,7 @@ func runCheckWithBudget(t *testing.T, budget time.Duration, validator func(conte
 	resetCheckFlags(t)
 	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
 	prevBudget, prevCV, prevTools := checkBudget, newClusterValidatorForSelfHosted, checkPreflightTools
-	checkBudget = func(time.Duration) time.Duration { return budget }
+	checkBudget = func(d time.Duration) time.Duration { requestedBudget = d; return budget }
 	checkPreflightTools = passingPreflightTools
 	t.Cleanup(func() { checkPreflightTools = prevTools })
 	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
@@ -163,6 +163,9 @@ func runCheckWithBudget(t *testing.T, budget time.Duration, validator func(conte
 		"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"}, args...))
 	return rootCmd.Execute(), stderr.String()
 }
+
+// requestedBudget is the outer budget the last runCheckWithBudget run asked for.
+var requestedBudget time.Duration
 
 func holdUntilDone(ctx context.Context) selfhosted.ClusterValidatorResult {
 	<-ctx.Done()
@@ -277,5 +280,26 @@ func TestImageRefIsPinned(t *testing.T) {
 		"registry.example.com:443/team/validator": false,
 	} {
 		assert.Equal(t, want, selfhosted.ImageRefIsPinned(ref), ref)
+	}
+}
+
+// The budget covers each validator's longest run, including the wait after its
+// own timeout for the Job's deadline to end the pod, so a validator that times
+// out is graded as its own failure and not as a spent budget. Both roles on one
+// cluster run in turn and need a share each.
+func TestCheck_BudgetCoversEachValidatorsFullRun(t *testing.T) {
+	ceiling := selfhosted.ClusterValidatorRunCeiling()
+	passNow := func(context.Context) selfhosted.ClusterValidatorResult {
+		return selfhosted.ClusterValidatorResult{Passed: true}
+	}
+	for _, tc := range []struct {
+		args       []string
+		validators time.Duration
+	}{
+		{args: nil, validators: 1},
+		{args: []string{"--pre"}, validators: 2},
+	} {
+		_, _ = runCheckWithBudget(t, time.Minute, passNow, tc.args...)
+		assert.GreaterOrEqual(t, requestedBudget, tc.validators*ceiling+time.Minute, "args %v", tc.args)
 	}
 }

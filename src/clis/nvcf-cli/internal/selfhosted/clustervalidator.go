@@ -78,6 +78,13 @@ var (
 	validatorCleanupTimeout = 30 * time.Second
 )
 
+// ClusterValidatorRunCeiling is the longest one validator run can take: its
+// own timeout, then on a timeout the wait for the Job's deadline to end the
+// pod and the log fetch, plus a margin for the pod's termination grace period.
+func ClusterValidatorRunCeiling() time.Duration {
+	return clusterValidatorTimeout + validatorDeadlineGrace + clusterValidatorLogFetchTimeout + validatorRunMargin
+}
+
 // cleanupContext is a fresh, bounded context for one deferred sweep. It does
 // not derive from the run's ctx, which may already be cancelled.
 func cleanupContext() (context.Context, context.CancelFunc) {
@@ -445,6 +452,9 @@ var (
 	// validatorDeadlineGrace bounds the wait, after this run's own timeout,
 	// for the Job's active deadline (60s later) to end the pod.
 	validatorDeadlineGrace = 120 * time.Second
+	// validatorRunMargin is ClusterValidatorRunCeiling's allowance for the
+	// pod's termination grace period and the API round trips between waits.
+	validatorRunMargin = 30 * time.Second
 	// validatorPullFailureGrace is how long a pull failure must persist before
 	// it is final. The kubelet retries after 10s and then 20s, so a transient
 	// registry error clears inside it.

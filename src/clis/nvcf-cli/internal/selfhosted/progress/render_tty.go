@@ -196,7 +196,9 @@ type ModelOpts struct {
 	// OnQuit runs when the operator presses a quit key. Bubbletea reads the
 	// terminal in raw mode, so Ctrl-C arrives as a key press, not a signal:
 	// without this, quitting closed the dashboard while the command kept
-	// running behind it.
+	// running behind it. It is called synchronously inside Update, so it must
+	// not block: cancel a context or signal a channel, and leave the cleanup
+	// to the command.
 	OnQuit func()
 }
 

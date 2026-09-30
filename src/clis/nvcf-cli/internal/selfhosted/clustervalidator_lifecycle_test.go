@@ -787,3 +787,37 @@ func TestWaitForClusterValidatorJob_TransientErrorsAreRetried(t *testing.T) {
 	_, err = waitForClusterValidatorJob(context.Background(), invalid, "j")
 	assert.True(t, errors.As(err, &pullErr), "a malformed reference never pulls")
 }
+
+// A run that times out with a pod that will not end returns within
+// ClusterValidatorRunCeiling, which the check's budget is sized from. The
+// ceiling counts every wait the timeout path makes, so shortening one of them
+// here cannot leave the budget short in production.
+func TestClusterValidatorRunCeiling_CoversTheTimeoutPath(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "key")
+	client := lifecycleClient(running, "")
+	client.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		sel := action.(ktesting.ListAction).GetListRestrictions().Labels.String()
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "stuck", Namespace: clusterValidatorNamespace,
+				Labels: map[string]string{"job-name": strings.TrimPrefix(sel, "job-name=")}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		}}}, nil
+	})
+	// The deadline grace dominates the margin, so a ceiling that leaves it
+	// out is short of the run.
+	prevTimeout, prevGrace, prevLogs, prevMargin :=
+		clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorRunMargin
+	clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorRunMargin =
+		300*time.Millisecond, 3*time.Second, 500*time.Millisecond, time.Second
+	t.Cleanup(func() {
+		clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorRunMargin =
+			prevTimeout, prevGrace, prevLogs, prevMargin
+	})
+
+	start := time.Now()
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorComputePlaneRole, nil, nil)
+	require.Error(t, res.Err)
+	assert.True(t, res.LeftBehind, "the pod never ended, so the whole grace was spent")
+	assert.LessOrEqual(t, time.Since(start), ClusterValidatorRunCeiling())
+}

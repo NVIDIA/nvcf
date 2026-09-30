@@ -20,6 +20,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,4 +80,21 @@ func TestResolveStackEnv_Precedence(t *testing.T) {
 	t.Setenv("HELMFILE_ENV", "")
 	withEnvFlag(t, "local", false)
 	assert.Equal(t, "local", resolveStackEnv())
+}
+
+// A file:// stack source is read from its directory. Joined verbatim it named
+// a path that never exists, and the lookup fell back to the working directory.
+func TestResolveStackValuesFiles_FileURLStack(t *testing.T) {
+	stack := stackWithEnvs(t, "local")
+	prev := selfHostedControlPlaneStack
+	selfHostedControlPlaneStack = "file://" + stack
+	t.Cleanup(func() { selfHostedControlPlaneStack = prev })
+	t.Setenv("HELMFILE_ENV", "")
+	withEnvFlag(t, "local", false)
+
+	got := resolveStackValuesFiles()
+	require.Len(t, got, 2)
+	for _, f := range got {
+		assert.True(t, strings.HasPrefix(f, stack), "%s is not from the file:// stack", f)
+	}
 }
