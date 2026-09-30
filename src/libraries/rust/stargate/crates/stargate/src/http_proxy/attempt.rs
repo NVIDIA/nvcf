@@ -28,13 +28,14 @@ use tracing::{Instrument, Span, field, info, warn};
 use crate::routing_state::{RoutedInferenceServerSnapshot, RoutingReservation};
 
 use super::ProxyAppState;
+use super::request_routing::SelectedClusterRun;
 use super::retry::{
     FinalRetryDisposition, RetryDecision, UpstreamRetry, decide_proxy_error_retry,
     decide_upstream_response_retry, header_str, is_internal_capacity_rejection,
     retry_budget_has_remaining, should_release_queue_mismatch_reservation,
 };
 use super::routing::overloaded_response;
-use super::run::{ProxyRequestRun, SelectedClusterRun};
+use super::run::ProxyAttemptRun;
 use super::upstream::{
     UpstreamStreamingResponse, copy_forwardable_headers, headers_for_upstream_attempt,
     proxy_via_quic_streaming,
@@ -53,24 +54,25 @@ pub(super) struct ProxyAttemptCounters {
 pub(super) enum ProxyAttemptOutcome {
     ReturnFinal(Response<Body>),
     ProxyError(StatusCode),
-    RetrySameBackend(Arc<RoutedInferenceServerSnapshot>),
+    RetrySameBackend,
     RetryAlternateBackend(String),
     RetryAlternateCluster(String),
 }
 
-impl ProxyRequestRun<'_> {
+impl ProxyAttemptRun<'_> {
     fn routing_key(&self) -> Option<&str> {
-        self.request.request_inputs.target.routing_key.as_deref()
+        self.request_inputs.target.routing_key.as_deref()
     }
 
     fn model_id(&self) -> &str {
-        self.request.request_inputs.target.model_id.as_str()
+        self.request_inputs.target.model_id.as_str()
     }
 
     pub(super) async fn run_proxy_attempt(
         &mut self,
         selected: &SelectedClusterRun,
         chosen: &Arc<RoutedInferenceServerSnapshot>,
+        failed_backend_count: usize,
     ) -> ProxyAttemptOutcome {
         self.last_attempt_capacity_rejected = false;
         self.attempt_counters.attempt += 1;
@@ -83,10 +85,7 @@ impl ProxyRequestRun<'_> {
             "proxy.request_retries",
             self.attempt_counters.request_retries as i64,
         );
-        Span::current().record(
-            "proxy.failed_backends",
-            self.failed_backend_ids.len() as i64,
-        );
+        Span::current().record("proxy.failed_backends", failed_backend_count as i64);
 
         if !chosen.reverse_tunnel
             && self.attempt_counters.connect_retries < self.app.retry.max_connect_retries
@@ -114,8 +113,8 @@ impl ProxyRequestRun<'_> {
 
         let reservation: Option<RoutingReservation> = selected.cluster.reserve_backend(
             &chosen.registration,
-            self.request.request_inputs.input_tokens,
-            self.request.request_inputs.priority,
+            self.request_inputs.input_tokens,
+            self.request_inputs.priority,
         );
         record_proxy_attempt_start(self, selected, chosen);
 
@@ -157,7 +156,13 @@ impl ProxyRequestRun<'_> {
                     self.request.replay_body.replay_readiness(),
                 ) {
                     RetryDecision::Final(disposition) => {
-                        return finish_attempt(self, chosen, disposition, Err(status));
+                        return finish_attempt(
+                            self,
+                            chosen,
+                            failed_backend_count,
+                            disposition,
+                            Err(status),
+                        );
                     }
                     RetryDecision::Retry(()) => {}
                 }
@@ -172,7 +177,7 @@ impl ProxyRequestRun<'_> {
                                 connect_retries = self.attempt_counters.connect_retries,
                                 "reconnected QUIC upstream after proxy failure"
                             );
-                            return ProxyAttemptOutcome::RetrySameBackend(Arc::clone(chosen));
+                            return ProxyAttemptOutcome::RetrySameBackend;
                         }
                         Err(error) => warn!(
                             inference_server_id = %chosen.inference_server_id,
@@ -205,7 +210,13 @@ impl ProxyRequestRun<'_> {
             self.request.replay_body.replay_readiness(),
         ) {
             RetryDecision::Final(disposition) => {
-                return finish_attempt(self, chosen, disposition, Ok(upstream));
+                return finish_attempt(
+                    self,
+                    chosen,
+                    failed_backend_count,
+                    disposition,
+                    Ok(upstream),
+                );
             }
             RetryDecision::Retry(retry) => retry,
         };
@@ -266,14 +277,14 @@ async fn reconnect_direct(
 }
 
 fn record_proxy_attempt_start(
-    run: &ProxyRequestRun<'_>,
+    run: &ProxyAttemptRun<'_>,
     selected: &SelectedClusterRun,
     chosen: &RoutedInferenceServerSnapshot,
 ) {
     info!(
-        routing_key = ?run.request.request_inputs.target.routing_key,
+        routing_key = ?run.request_inputs.target.routing_key,
         model_id = %run.model_id(),
-        input_tokens = run.request.request_inputs.input_tokens,
+        input_tokens = run.request_inputs.input_tokens,
         requested_algorithm = selected.selection.requested_algorithm.as_deref().unwrap_or(""),
         routing_algorithm = %selected.routing_algorithm,
         inference_server_id = %chosen.inference_server_id,
@@ -285,7 +296,7 @@ fn record_proxy_attempt_start(
 }
 
 fn proxy_upstream_attempt_span(
-    run: &ProxyRequestRun<'_>,
+    run: &ProxyAttemptRun<'_>,
     selected: &SelectedClusterRun,
     chosen: &RoutedInferenceServerSnapshot,
 ) -> Span {
@@ -307,7 +318,7 @@ fn proxy_upstream_attempt_span(
 }
 
 fn record_proxy_attempt_result(
-    run: &ProxyRequestRun<'_>,
+    run: &ProxyAttemptRun<'_>,
     chosen: &RoutedInferenceServerSnapshot,
     upstream: &Result<UpstreamStreamingResponse, StatusCode>,
     upstream_span: &Span,
@@ -347,8 +358,9 @@ fn record_proxy_attempt_result(
 }
 
 fn finish_attempt(
-    run: &ProxyRequestRun<'_>,
+    run: &ProxyAttemptRun<'_>,
     chosen: &RoutedInferenceServerSnapshot,
+    failed_backend_count: usize,
     disposition: FinalRetryDisposition,
     upstream: Result<UpstreamStreamingResponse, StatusCode>,
 ) -> ProxyAttemptOutcome {
@@ -386,7 +398,7 @@ fn finish_attempt(
         )
         .inc();
     if let Some(failure) = failure {
-        failure.log(run, chosen, status);
+        failure.log(run, chosen, failed_backend_count, status);
     }
     if capacity_rejected {
         return ProxyAttemptOutcome::ReturnFinal(overloaded_response());
@@ -442,8 +454,9 @@ impl RequestFailureContext {
 
     fn log(
         &self,
-        run: &ProxyRequestRun<'_>,
+        run: &ProxyAttemptRun<'_>,
         chosen: &RoutedInferenceServerSnapshot,
+        failed_backend_count: usize,
         status: StatusCode,
     ) {
         warn!(
@@ -460,7 +473,7 @@ impl RequestFailureContext {
             attempt = run.attempt_counters.attempt,
             connect_retries = run.attempt_counters.connect_retries,
             request_retries = run.attempt_counters.request_retries,
-            failed_backends = run.failed_backend_ids.len(),
+            failed_backends = failed_backend_count,
             elapsed_ms = run.request.request_start.elapsed().as_millis() as u64,
             "proxied request failed"
         );
@@ -527,7 +540,7 @@ mod tests {
     use super::super::HEADER_STARGATE_ERROR_CODE;
     use super::super::request::ProxyRequestInputs;
     use super::super::retry::ReplayableRequestBody;
-    use super::super::run::PreparedProxyRequest;
+    use super::super::run::ProxyRequest;
     use super::super::test_support::test_proxy_app_state;
     use crate::routing_state::{
         RegistrationIdentity, RoutingTargetKey, test_registration_generation,
@@ -540,30 +553,31 @@ mod tests {
     ) -> ProxyAttemptOutcome {
         let app = test_proxy_app_state();
         let target = RoutingTargetKey::new(None, "model-a");
-        let request = PreparedProxyRequest {
-            lb_resolution: app
-                .lb_router
-                .resolve_algorithm_override(&target.model_id, None)
-                .unwrap(),
-            request_inputs: ProxyRequestInputs {
-                target,
-                input_tokens: 1,
-                priority: 0,
-                max_wait_ms: None,
-                request_slo_ms: None,
-                cache_affinity_key: None,
-                routing_algorithm_override: None,
-            },
-            endpoint_name: "chat_completions",
-            method: Method::POST,
-            path_and_query: "/v1/chat/completions".to_string(),
-            forwarded_headers: HeaderMap::new(),
-            retry_deadline: None,
-            request_start: Instant::now(),
-            replay_body: ReplayableRequestBody::new(&HeaderMap::new(), Body::empty(), 1024)
-                .unwrap(),
+        let request_inputs = ProxyRequestInputs {
+            target,
+            input_tokens: 1,
+            priority: 0,
+            max_wait_ms: None,
+            request_slo_ms: None,
+            cache_affinity_key: None,
+            routing_algorithm_override: None,
         };
-        let run = ProxyRequestRun::new(&app, request);
+        let run = ProxyAttemptRun {
+            app: &app,
+            request_inputs: &request_inputs,
+            request: ProxyRequest {
+                endpoint_name: "chat_completions",
+                method: Method::POST,
+                path_and_query: "/v1/chat/completions".to_string(),
+                forwarded_headers: HeaderMap::new(),
+                retry_deadline: None,
+                request_start: Instant::now(),
+                replay_body: ReplayableRequestBody::new(&HeaderMap::new(), Body::empty(), 1024)
+                    .unwrap(),
+            },
+            attempt_counters: ProxyAttemptCounters::default(),
+            last_attempt_capacity_rejected: false,
+        };
         let chosen = RoutedInferenceServerSnapshot {
             registration: test_registration_generation(RegistrationIdentity {
                 inference_server_id: "backend-a".to_string(),
@@ -584,6 +598,7 @@ mod tests {
         finish_attempt(
             &run,
             &chosen,
+            0,
             disposition,
             Ok(UpstreamStreamingResponse {
                 status,
