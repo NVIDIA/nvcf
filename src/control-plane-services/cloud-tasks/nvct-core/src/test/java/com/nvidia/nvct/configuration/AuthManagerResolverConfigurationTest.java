@@ -44,16 +44,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.InvalidBearerTokenException;
 import org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthenticationToken;
 
-/**
- * Covers multi-issuer support: the primary OpenBao issuer keeps resolving, every
- * {@code nvct.security.jwt.trusted-issuers[]} entry becomes resolvable too, and any other
- * issuer is still rejected.
- *
- * <p>The JWKS endpoints point at a closed local port, so a routed issuer fails while
- * fetching keys ({@link AuthenticationServiceException}) whereas an unrouted one is turned
- * away before that ({@link InvalidBearerTokenException}). The two outcomes are what
- * distinguishes "this issuer has a manager" from "this issuer has none".</p>
- */
+// Closed JWKS ports: AuthenticationServiceException = routed, InvalidBearerTokenException = not.
 class AuthManagerResolverConfigurationTest {
 
     private static final String PRIMARY_ISS = "http://nvct-api.nvcf.svc.cluster.local";
@@ -89,7 +80,6 @@ class AuthManagerResolverConfigurationTest {
                 .isInstanceOf(AuthenticationServiceException.class);
     }
 
-    /** The default: existing deployments that never set trusted-issuers are unaffected. */
     @Test
     void rejectsTokensFromAnIssuerThatIsNotConfigured() {
         var resolver = resolver(properties(trustedIssuer(EXTERNAL_ISS, EXTERNAL_JWKS)));
@@ -99,10 +89,6 @@ class AuthManagerResolverConfigurationTest {
                 .hasMessage("Invalid issuer");
     }
 
-    /**
-     * A half-filled entry is skipped rather than producing a decoder that could never verify
-     * anything — a missing JWKS must not silently disable signature checking.
-     */
     @Test
     void skipsEntriesMissingIssuerOrJwkSetUri() {
         var resolver = resolver(properties(
@@ -114,7 +100,6 @@ class AuthManagerResolverConfigurationTest {
                 .hasMessage("Invalid issuer");
     }
 
-    /** API keys never reach the issuer lookup, so extra issuers cannot affect them. */
     @Test
     void apiKeysBypassTheJwtResolver() {
         var apiKey = "nvapi-secret";
@@ -131,7 +116,6 @@ class AuthManagerResolverConfigurationTest {
         assertThat(authentication.getName()).isEqualTo("owner-id");
     }
 
-    /** An unparseable jws-algorithms value must fail at startup, not at first request. */
     @Test
     void rejectsAnInvalidSignatureAlgorithm() {
         assertThatThrownBy(() -> new AuthManagerResolverConfiguration(

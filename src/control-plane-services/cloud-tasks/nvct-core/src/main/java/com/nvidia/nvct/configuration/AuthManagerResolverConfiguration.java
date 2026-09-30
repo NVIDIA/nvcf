@@ -57,10 +57,6 @@ public class AuthManagerResolverConfiguration {
     private final String issuerUri;
     private final String jwkSetUri;
     private final SignatureAlgorithm jwsAlgorithm;
-    /**
-     * Additional trusted issuers. Held as a field rather than flattened at construction so the
-     * refresh-scoped resolver re-reads it when configuration is refreshed.
-     */
     private final TrustedJwtIssuerProperties trustedIssuerProperties;
 
 
@@ -77,10 +73,7 @@ public class AuthManagerResolverConfiguration {
         this.trustedIssuerProperties = trustedIssuerProperties;
     }
 
-    /**
-     * Refresh-scoped so {@code trusted-issuers[]} entries added, changed or removed at runtime
-     * take effect without a restart.
-     */
+    // Refresh-scoped so trusted-issuers[] changes take effect without a restart.
     @Bean
     @RefreshScope
     AuthenticationManagerResolver<HttpServletRequest> authenticationManagerResolver() {
@@ -114,14 +107,7 @@ public class AuthManagerResolverConfiguration {
         };
     }
 
-    /**
-     * The primary issuer plus any {@code nvct.security.jwt.trusted-issuers[]} entries, keyed
-     * by {@code iss}. Entries missing either value are skipped, and the primary issuer wins
-     * if configuration names it again.
-     *
-     * <p>Every issuer is built through the same {@link #jwtAuthenticationManager} so token
-     * validation is identical regardless of which issuer signed it.</p>
-     */
+    // The primary issuer wins: a trusted-issuers[] entry naming it again is ignored.
     private JwtIssuerAuthenticationManagerResolver jwtResolver() {
         Map<String, AuthenticationManager> managers = new LinkedHashMap<>();
         managers.put(issuerUri, jwtAuthenticationManager(issuerUri, jwkSetUri));

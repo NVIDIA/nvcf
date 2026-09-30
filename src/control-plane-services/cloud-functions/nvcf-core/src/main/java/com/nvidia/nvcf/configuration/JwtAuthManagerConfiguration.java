@@ -53,11 +53,7 @@ public class JwtAuthManagerConfiguration {
                 issuerUri, jwtAuthenticationManager(issuerUri, jwkSetUri));
     }
 
-    /**
-     * Shared by the primary issuer and by every
-     * {@code nvcf.security.jwt.trusted-issuers[]} entry, so token validation is identical
-     * regardless of which issuer signed the token.
-     */
+    // Package-private: reused by AuthManagerResolverConfiguration for each trusted issuer.
     AuthenticationManager jwtAuthenticationManager(String issuer, String jwkSet) {
         var provider = new JwtAuthenticationProvider(jwtDecoder(issuer, jwkSet));
         provider.setJwtAuthenticationConverter(jwtAuthenticationConverter());

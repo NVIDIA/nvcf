@@ -48,16 +48,7 @@ import org.springframework.security.authentication.AuthenticationServiceExceptio
 import org.springframework.security.oauth2.server.resource.InvalidBearerTokenException;
 import org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthenticationToken;
 
-/**
- * Covers picking up {@code nvct.security.jwt.trusted-issuers[]} changes at runtime.
- *
- * <p>Boots a real (minimal) Spring context with {@link RefreshAutoConfiguration} so
- * {@code @RefreshScope} is honoured, then drives {@link ContextRefresher#refresh()} — the same
- * entry point Spring Cloud Kubernetes ConfigMap reload and the reloadable-properties file
- * watcher both call. {@link AuthManagerResolverConfigurationTest} constructs the configuration
- * directly and so passes whether or not the {@code @RefreshScope} annotations are present;
- * this is the test that fails if one is dropped.
- */
+// Drives a real ContextRefresher.refresh(), so this fails if a @RefreshScope is dropped.
 class TrustedIssuerRefreshTest {
 
     private static final String PRIMARY_ISS = "http://nvct-api.nvcf.svc.cluster.local";
@@ -70,7 +61,7 @@ class TrustedIssuerRefreshTest {
 
     private static final String OVERRIDES_SOURCE = "trusted-issuer-overrides";
 
-    /** The property source below wraps this instance, so mutating it changes the environment. */
+    // The property source below wraps this map, so mutating it changes the environment.
     private static final Map<String, Object> OVERRIDES = new HashMap<>();
 
     private static ECKey signingKey;
@@ -90,15 +81,12 @@ class TrustedIssuerRefreshTest {
             .withBean(ApiKeysService.class, () -> mock(ApiKeysService.class))
             .withInitializer(context -> context.getEnvironment().getPropertySources()
                     .addFirst(new MapPropertySource(OVERRIDES_SOURCE, OVERRIDES)))
-            // ContextRefresher.copyEnvironment() keeps only the default sources, so everything
-            // the rebuilt environment still needs has to live in a source it is told to retain.
+            // copyEnvironment() keeps only default sources, so the overrides must be retained.
             .withPropertyValues("spring.cloud.refresh.additional-property-sources-to-retain="
                     + OVERRIDES_SOURCE);
 
-    /** Everything the rebuilt environment needs, minus the trusted issuer under test. */
     private static void resetOverrides() {
         OVERRIDES.clear();
-        // nv-boot's ValidateEnvironmentPostProcessor rejects an environment without these.
         OVERRIDES.put("spring.application.name", "nvct-api");
         OVERRIDES.put("spring.profiles.active", "test");
         OVERRIDES.put("spring.security.oauth2.resourceserver.jwt.issuer-uri", PRIMARY_ISS);
@@ -120,7 +108,6 @@ class TrustedIssuerRefreshTest {
             assertRouted(context, ADDED_ISS);
             assertRouted(context, PRIMARY_ISS);
 
-            // Revocation is the half a stale issuer set gets silently wrong.
             OVERRIDES.remove(ISSUER_URI_KEY);
             OVERRIDES.remove(JWK_SET_URI_KEY);
             context.getBean(ContextRefresher.class).refresh();
@@ -130,7 +117,6 @@ class TrustedIssuerRefreshTest {
         });
     }
 
-    /** A rotated JWKS must take effect too, not just an added or removed issuer. */
     @Test
     void jwkSetUriChangedAtRuntimeIsRebound() {
         resetOverrides();
@@ -150,7 +136,6 @@ class TrustedIssuerRefreshTest {
         });
     }
 
-    /** Reaching the (absent) JWKS server proves the issuer was routed to a manager. */
     private static void assertRouted(AssertableApplicationContext context, String issuer) {
         assertThatThrownBy(() -> authenticate(context, issuer))
                 .isInstanceOf(AuthenticationServiceException.class);

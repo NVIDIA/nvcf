@@ -47,16 +47,9 @@ public class AuthManagerResolverConfiguration {
     private final List<IssuerAuthenticationManagerEntry> jwtAuthManagers;
     private final ApiKeysService apiKeysService;
     private final JwtAuthManagerConfiguration jwtAuthManagerConfiguration;
-    /**
-     * Held as a field rather than flattened at construction so the refresh-scoped resolver
-     * re-reads it when configuration is refreshed.
-     */
     private final TrustedJwtIssuerProperties trustedIssuerProperties;
 
-    /**
-     * Refresh-scoped so {@code trusted-issuers[]} entries added, changed or removed at runtime
-     * take effect without a restart.
-     */
+    // Refresh-scoped so trusted-issuers[] changes take effect without a restart.
     @Bean
     @RefreshScope
     AuthenticationManagerResolver<HttpServletRequest> authenticationManagerResolver() {
@@ -92,11 +85,7 @@ public class AuthManagerResolverConfiguration {
         };
     }
 
-    /**
-     * The built-in issuers (primary OpenBao, notary) plus any configured trusted issuers.
-     * Built-ins win: a {@code trusted-issuers[]} entry naming one of them is ignored rather
-     * than replacing it.
-     */
+    // Built-in issuers win: a trusted-issuers[] entry naming one of them is ignored.
     private JwtIssuerAuthenticationManagerResolver jwtResolver() {
         var managers = jwtAuthManagers
                 .stream()

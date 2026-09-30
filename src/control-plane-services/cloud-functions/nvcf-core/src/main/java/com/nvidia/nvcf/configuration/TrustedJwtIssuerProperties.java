@@ -23,41 +23,20 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.annotation.Configuration;
 
-/**
- * Binds the set of trusted static JWT issuers under
- * {@code nvcf.security.jwt.trusted-issuers[]}.
- *
- * <p>Each entry is an {@code {issuer-uri, jwk-set-uri}} pair accepted <em>in addition</em> to
- * the primary {@code spring.security.oauth2.resourceserver.jwt.issuer-uri}. This lets a
- * self-managed deployment trust JWTs from its own identity provider while the built-in
- * OpenBao issuer keeps working for service-to-service traffic.</p>
- *
- * <p>An empty list (the default) preserves single-issuer behavior, so existing deployments
- * that only set {@code issuer-uri} / {@code jwk-set-uri} are unaffected.</p>
- *
- * <p>Refresh-scoped: entries can be added or removed at runtime and
- * {@code AuthManagerResolverConfiguration#authenticationManagerResolver()} is rebuilt from
- * the new value without a restart.</p>
- *
- * <p>Mirrors {@code icms.security.jwt.trusted-issuers[]} in instance-cluster-management so the
- * two services share one configuration convention.</p>
- */
+/** JWT issuers trusted in addition to the primary resource-server issuer. */
 @RefreshScope
 @Configuration
 @ConfigurationProperties(prefix = "nvcf.security.jwt")
 @Data
 public class TrustedJwtIssuerProperties {
 
-    /** Additional trusted static JWT issuers, keyed by {@code iss} at resolution time. */
     private List<TrustedIssuer> trustedIssuers = new ArrayList<>();
 
     @Data
     public static class TrustedIssuer {
 
-        /** The {@code iss} claim value to trust (must match the token exactly). */
         private String issuerUri;
 
-        /** JWKS endpoint used to verify signatures for tokens from {@link #issuerUri}. */
         private String jwkSetUri;
     }
 }
