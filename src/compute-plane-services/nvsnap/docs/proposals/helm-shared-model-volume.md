@@ -6,9 +6,9 @@ and the compile artifacts (torch.compile, Triton, FlashInfer, DeepGEMM, CUDA
 JIT) are built once per cluster, and every other pod consumes them. No chart
 change. No pod is ever held back from scheduling.
 
-Status: mechanisms 1 to 4 built and verified on dev1 (H100) and on an
-18 node GB300 cluster (arm64), 2026-09-30. Mechanism 5 is redesigned
-below as one cache-set volume per configuration and not yet built.
+Status: all five mechanisms built and verified on dev1 (H100) and on an
+18 node GB300 cluster (arm64), 2026-09-30. Mechanism 5 is one cache-set
+volume per configuration; see the results at the end.
 Supersedes the gate-and-promote path of `helm-chart-cache-election.md`
 for Helm functions. Issue #2099. Diagrams are checked with
 `scripts/check-mermaid.sh`.
@@ -437,3 +437,23 @@ Findings that changed the design during these runs:
   device and the volume handle and redone when missing or stale.
 - The agent's binds pin the volume on the node; unbinding when the last
   reader leaves is part of retention (open).
+
+## Results, GB300 cluster 2026-09-30 (NVMesh, block mode, arm64)
+
+nemoton-3-omni served by the minimax-dynamo chart, 8 workers, one GPU
+each, under live multimodal traffic.
+
+| Step | Cold (first deployment) | Warm (next deployment) |
+|---|---|---|
+| Model | download once, primary sized 37Gi, 1m47s | 0 downloads, read-only claim per namespace |
+| Compile caches | each rank compiles; all 8 ranks ready after ~10 min; one collection of 7.46 GB into one 8Gi set volume in 1m37s | each worker seeds its own rank directory (~1440 files); AOT loaded in 0.12 to 0.15 s, FlashInfer 105 configs from cache, no compile, no tuning |
+| Attaches per worker | model only (cache lands in the emptyDir) | model and set, two |
+| Cache volumes in the cluster | 1 per configuration (was 8, one per rank) | |
+| Ready | ~10 min | 136 to 273 s from creation |
+
+NVMesh shared read-only attach can take up to 30 s under 8 to 16
+concurrent clients on this cluster (IO-enable timeouts, kubelet retries);
+that is the storage layer, not this design, and it costs a few pods up to
+about a minute. The engine's own multimodal segfaults (PyNvVideoCodec on
+arm64) are unrelated to any of this and were present with and without
+nvsnap.
