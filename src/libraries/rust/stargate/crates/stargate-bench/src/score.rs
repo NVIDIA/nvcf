@@ -232,10 +232,15 @@ impl SummaryAccumulator {
 
         if result.ok {
             self.successes += 1;
+            let observed_output_tokens = result.observed_output_tokens.unwrap_or_default();
+            self.missing_successful_output_usage |= result.observed_output_tokens.is_none()
+                || self
+                    .successful_output_tokens
+                    .checked_add(observed_output_tokens)
+                    .is_none();
             self.successful_output_tokens = self
                 .successful_output_tokens
-                .saturating_add(result.observed_output_tokens.unwrap_or_default());
-            self.missing_successful_output_usage |= result.observed_output_tokens.is_none();
+                .saturating_add(observed_output_tokens);
         } else {
             let failure = (
                 result.status_code,
@@ -375,14 +380,19 @@ impl GroupAccumulator {
         self.success_count += usize::from(result.ok);
         self.input_tokens += result.input_tokens;
         self.output_tokens += result.output_tokens;
+        let observed_output_tokens = result.observed_output_tokens.unwrap_or_default();
+        self.missing_output_usage |= result.observed_output_tokens.is_none()
+            || self
+                .observed_output_tokens
+                .checked_add(observed_output_tokens)
+                .is_none();
         self.observed_output_tokens = self
             .observed_output_tokens
-            .saturating_add(result.observed_output_tokens.unwrap_or_default());
-        self.missing_output_usage |= result.observed_output_tokens.is_none();
+            .saturating_add(observed_output_tokens);
         if result.ok {
             self.successful_output_tokens = self
                 .successful_output_tokens
-                .saturating_add(result.observed_output_tokens.unwrap_or_default());
+                .saturating_add(observed_output_tokens);
         }
         self.ttlt.push(result.completion_ms);
         self.observed_cache += usize::from(result.kv_cache_hit.is_some());
@@ -784,20 +794,27 @@ mod tests {
         request.observed_output_tokens = Some(u64::MAX);
         let summary =
             summarize_with_topology(&[request.clone(), request], &RoutingTopology::default());
-        assert_eq!(
-            summary.successful_output_tokens_per_second,
-            Some(u64::MAX as f64)
-        );
+        assert_eq!(summary.successful_output_tokens_per_second, None);
+        assert_eq!(summary.backend_summaries["a"].observed_output_tokens, None);
+        assert_eq!(summary.cluster_summaries["a"].observed_output_tokens, None);
+        assert!(summary.backend_output_token_shares.is_empty());
+        assert!(summary.cluster_output_token_shares.is_empty());
+    }
+
+    #[test]
+    fn overflowing_output_total_does_not_report_invalid_backend_shares() {
+        let mut a = result("a", 10, 1000);
+        let mut b = result("b", 10, 1000);
+        a.observed_output_tokens = Some(u64::MAX);
+        b.observed_output_tokens = Some(u64::MAX);
+        let summary = summarize_with_topology(&[a, b], &RoutingTopology::default());
+        assert_eq!(summary.successful_output_tokens_per_second, None);
+        assert!(summary.backend_output_token_shares.is_empty());
+        assert!(summary.cluster_output_token_shares.is_empty());
         assert_eq!(
             summary.backend_summaries["a"].observed_output_tokens,
             Some(u64::MAX)
         );
-        assert_eq!(
-            summary.cluster_summaries["a"].observed_output_tokens,
-            Some(u64::MAX)
-        );
-        assert_eq!(summary.backend_output_token_shares["a"], 1.0);
-        assert_eq!(summary.cluster_output_token_shares["a"], 1.0);
     }
 
     #[test]
