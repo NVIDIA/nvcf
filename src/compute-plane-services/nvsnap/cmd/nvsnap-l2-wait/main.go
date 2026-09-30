@@ -363,7 +363,17 @@ func main() {
 	maxInterval := flag.Duration("max-interval", envDurationOr("NVSNAP_MAX_POLL_INTERVAL", defaultMaxInterval), "Maximum poll interval (exponential backoff cap)")
 	timeout := flag.Duration("timeout", envDurationOr("NVSNAP_WAIT_TIMEOUT", defaultTimeout), "Overall wait deadline")
 	allowEmpty := flag.Bool("allow-empty-state", envBoolOr("NVSNAP_ALLOW_EMPTY_STATE", false), "Exit 0 on empty state (L2 disabled)")
+	seedURL := flag.String("seed-url", envOr("NVSNAP_SEED_URL", ""), "Seed mode: agent URL of the compile-cache seed to fetch (exits 0 on any outcome)")
+	seedDest := flag.String("seed-dest", envOr("NVSNAP_SEED_DEST", ""), "Seed mode: directory to unpack the seed into")
+	seedTimeout := flag.Duration("seed-timeout", envDurationOr("NVSNAP_SEED_TIMEOUT", seedDefaultTimeout), "Seed mode: how long to wait for the node mirror")
 	flag.Parse()
+
+	if *seedURL != "" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		code := runSeed(ctx, seedConfig{URL: *seedURL, Dest: *seedDest, Token: os.Getenv("NVSNAP_SEED_TOKEN"), Timeout: *seedTimeout}, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
 
 	cfg := config{
 		ServerURL:       *serverURL,

@@ -237,6 +237,11 @@ type ModelVolumeConfig struct {
 	// Retention is how long a complete model or cache volume is kept
 	// after its last use before the reaper frees it. Zero keeps forever.
 	Retention time.Duration
+	// CacheSeed selects how a pod receives its compile-cache seed:
+	// "volume" attaches the read-only cache volume to the pod,
+	// "agent" fetches it from this node's agent, which keeps one mirror
+	// per key. Empty means volume.
+	CacheSeed string
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
@@ -317,6 +322,8 @@ type Agent struct {
 	// cacheVolume is the KindCache twin of modelVolume (block mode only).
 	cacheVolume *modelvolume.Provisioner
 	modelMinter *checkpointstore.SharedVolumePromoter
+	// cacheSeeds serves compile-cache seeds to pods on this node.
+	cacheSeeds *CacheSeedServer
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path
@@ -543,6 +550,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	router.HandleFunc("/v1/restore/trigger", a.triggerRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
+	// Compile-cache seeds for pods on this node; signed per pod by the
+	// webhook, so it bypasses the bearer guard (see selfAuthenticatedPrefixes).
+	router.HandleFunc("/v1/cache-seed/{key}", a.cacheSeedHandler).Methods("GET")
 	router.HandleFunc("/v1/containers", a.listContainersHandler).Methods("GET")
 	router.HandleFunc("/v1/gpu/processes", a.gpuProcessesHandler).Methods("GET")
 	router.HandleFunc("/v1/gpu/restore", a.gpuRestoreHandler).Methods("POST")
@@ -687,6 +697,18 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 		// Read-only PVs whose namespace is gone and primaries whose copy
 		// never completed; idempotent, so every agent may run it.
+		if a.cacheVolume != nil {
+			seeds := &CacheSeedServer{
+				Kube: a.kubeClient, Cache: a.cacheVolume, Minter: a.modelMinter,
+				Copier: mvc.Copier, NodeName: a.config.NodeName,
+				HolderImage: a.config.L2.WriterImage, HolderPullSecrets: l2PullSecrets(a.config.L2),
+				HostFSRoot: "/host", Root: filepath.Join(a.modelHostRoot(), "cache-seeds"),
+				Secret: a.config.AuthToken, Retention: a.config.ModelVolume.Retention,
+				Log: a.log.WithField("subsys", "cacheseed"),
+			}
+			a.cacheSeeds = seeds
+			go seeds.Run(ctx, a.config.ModelVolume.ReapInterval)
+		}
 		reaper := &modelvolume.Reaper{Kube: a.kubeClient, Log: a.log.WithField("subsys", "modelvolume.reaper"), Retention: a.config.ModelVolume.Retention}
 		go reaper.Run(ctx, a.config.ModelVolume.ReapInterval)
 	}

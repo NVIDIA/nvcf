@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -785,4 +786,79 @@ func TestModelVolume_HFHomeOnLanding_ModulesCacheMovedOffVolume(t *testing.T) {
 	if v := viewMV(plain, patches); v.env["HF_MODULES_CACHE"] != "" {
 		t.Errorf("no HF_HOME on the landing: nothing to move, got %q", v.env["HF_MODULES_CACHE"])
 	}
+}
+
+// Agent-served seeding: with cacheSeed=agent a complete cache adds a seed
+// init that fetches from the node agent with a token signed for this
+// namespace and key. No read-only cache claim is minted and no second
+// volume is attached; the cachedir is the only mount.
+func TestCacheVolume_CompleteSeedsFromNodeAgent(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	completeModelPV(t, kc, uri)
+	m := cacheMutator(t, kc)
+	m.CacheSeedMode = modelvolume.SeedModeAgent
+	m.CacheSeedImage = "nvcr.io/org/nvsnap-l2-wait:v0.0.2"
+	m.CacheSeedSecret = "agent-token"
+	m.AgentBaseURL = "http://nvsnap-agent-local.nvsnap-system.svc.cluster.local:8081"
+	pod := ngcFunctionPod()
+	pod.Name = "mini-service-kimi-k3-0"
+	curi, ok := m.cacheURI(pod)
+	if !ok {
+		t.Fatal("pod must have a cache identity")
+	}
+	cpv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-c", Labels: map[string]string{modelvolume.CacheLabel: modelvolume.Key(curi), modelvolume.CompleteLabel: "true"}},
+		Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}, PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-c:v"}}}}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), cpv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if _, ok := v.volumes[cacheSeedVolumeName]; ok {
+		t.Error("agent mode attaches no cache seed volume")
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), m.CacheVolume.Cfg.ReadOnlyClaimName(curi), metav1.GetOptions{}); err == nil {
+		t.Error("agent mode mints no read-only cache claim in the pod namespace")
+	}
+	var seed *corev1.Container
+	for i := range v.newInits {
+		if v.newInits[i].Name == cacheSeedInitName {
+			seed = &v.newInits[i]
+		}
+	}
+	if seed == nil {
+		t.Fatalf("seed init missing: %v", v.newInits)
+	}
+	args := strings.Join(seed.Args, " ")
+	wantURL := m.AgentBaseURL + "/v1/cache-seed/" + modelvolume.Key(curi) + "?uri=" + url.QueryEscape(curi) + "&ns=sr-fn"
+	if seed.Image != m.CacheSeedImage || seed.Command[0] != "/nvsnap-l2-wait" || !strings.Contains(args, "--seed-url "+wantURL) || !strings.Contains(args, "--seed-dest /opt/nvsnap/cache") {
+		t.Errorf("seed init fetches from the node agent: image=%s cmd=%v args=%q", seed.Image, seed.Command, args)
+	}
+	env := map[string]string{}
+	for _, e := range seed.Env {
+		env[e.Name] = e.Value
+	}
+	if env["NVSNAP_SEED_TOKEN"] != modelvolume.SeedToken("agent-token", "sr-fn", curi) {
+		t.Error("seed token is signed for this namespace and cache key")
+	}
+	if len(seed.VolumeMounts) != 1 || seed.VolumeMounts[0].Name != cacheDirVolumeName || seed.SecurityContext == nil || seed.Resources.Limits.Cpu().IsZero() {
+		t.Errorf("seed init mounts only the cachedir and carries the baselines: %+v", seed)
+	}
+	if got := mpvLastUsed(t, kc, "pvc-c"); got == "" {
+		t.Error("admission against a complete cache records last use")
+	}
+}
+
+func mpvLastUsed(t *testing.T, kc *fake.Clientset, pv string) string {
+	t.Helper()
+	got, err := kc.CoreV1().PersistentVolumes().Get(context.Background(), pv, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got.Annotations[modelvolume.LastUsedAnnotation]
 }

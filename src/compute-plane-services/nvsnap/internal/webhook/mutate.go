@@ -393,6 +393,16 @@ type Mutator struct {
 	// downward API in the patched pod spec.
 	AgentHostPort int
 
+	// CacheSeedMode is modelvolume.SeedModeVolume (attach the read-only
+	// cache volume to each pod) or SeedModeAgent (fetch the seed from the
+	// node agent's mirror over its API, one attach per node per key).
+	CacheSeedMode string
+	// CacheSeedImage runs the agent-mode seed init (the nvsnap-l2-wait
+	// image); empty falls back to volume mode.
+	CacheSeedImage string
+	// CacheSeedSecret signs the per-pod seed token (the agent API token).
+	CacheSeedSecret string
+
 	// AgentBaseURL overrides how the injected init container addresses the
 	// agent (GH #490). Empty keeps the hostPort form,
 	// http://$(NVSNAP_HOST_IP):<AgentHostPort>, which requires the API to be

@@ -90,6 +90,23 @@ var unauthenticatedPaths = map[string]bool{
 	"/metrics": true,
 }
 
+// selfAuthenticatedPrefixes are routes that verify their own per-request
+// signature instead of the shared bearer token: the cache seed endpoint,
+// whose callers are workload pods that never see the token.
+var selfAuthenticatedPrefixes = []string{"/v1/cache-seed/"}
+
+func bypassesTokenGuard(path string) bool {
+	if unauthenticatedPaths[path] {
+		return true
+	}
+	for _, p := range selfAuthenticatedPrefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // tokenGuard returns middleware enforcing mode against token.
 //
 // Returns nil only for AuthDisabled, where there is genuinely nothing to
@@ -115,7 +132,7 @@ func tokenGuard(mode AuthMode, token string, log *logrus.Logger) func(http.Handl
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if unauthenticatedPaths[r.URL.Path] {
+			if bypassesTokenGuard(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -149,7 +166,7 @@ func tokenGuard(mode AuthMode, token string, log *logrus.Logger) func(http.Handl
 // open.
 func denyAll(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if unauthenticatedPaths[r.URL.Path] {
+		if bypassesTokenGuard(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

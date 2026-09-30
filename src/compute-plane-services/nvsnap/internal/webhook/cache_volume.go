@@ -6,9 +6,11 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -100,6 +102,21 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 	}
 	mp := newMetaPatcher(pod)
 	switch {
+	case st.Complete && m.CacheSeedMode == modelvolume.SeedModeAgent && m.CacheSeedImage != "":
+		// Agent-served seed: no claim, no second block attach. The init
+		// fetches the mirror from the agent on its own node, signed for
+		// this namespace and key; a miss means the engine compiles
+		// locally, exactly as without nvsnap.
+		if err := m.CacheVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
+			log.WithError(err).Warn("cache volume: record last use failed")
+		}
+		patches := mp.annotation(CacheURIAnnotation, uri)
+		if pod.Spec.InitContainers == nil && !initCreated {
+			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
+		}
+		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: m.agentSeedInit(pod, main, uri)})
+		log.Info("cache volume: complete; seeding the cachedir from the node agent")
+		return patches
 	case st.Complete:
 		if m.ReadOnlyMinter == nil {
 			return nil
@@ -148,4 +165,29 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		log.Info("cache volume: none yet; pod marked for capture after Ready")
 		return patches
 	}
+}
+
+// agentSeedInit is the init container that fetches the cache seed from
+// the node agent and unpacks it into the cachedir. Best effort by
+// construction: nvsnap-l2-wait's seed mode exits 0 on any failure.
+func (m *Mutator) agentSeedInit(pod *corev1.Pod, main *corev1.Container, uri string) corev1.Container {
+	agentURL := fmt.Sprintf("http://$(NVSNAP_HOST_IP):%d", MountPrepDefaultAgentPort)
+	if m.AgentBaseURL != "" {
+		agentURL = strings.TrimRight(m.AgentBaseURL, "/")
+	}
+	seedURL := fmt.Sprintf("%s/v1/cache-seed/%s?uri=%s&ns=%s", agentURL, modelvolume.Key(uri), url.QueryEscape(uri), url.QueryEscape(pod.Namespace))
+	c := corev1.Container{
+		Name:            cacheSeedInitName,
+		Image:           m.CacheSeedImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"/nvsnap-l2-wait"},
+		Args:            []string{"--seed-url", seedURL, "--seed-dest", path.Join(m.CacheDir, cacheSubdir), "--seed-timeout", "3m"},
+		Env: []corev1.EnvVar{
+			{Name: "NVSNAP_HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}},
+			{Name: "NVSNAP_SEED_TOKEN", Value: modelvolume.SeedToken(m.CacheSeedSecret, pod.Namespace, uri)},
+		},
+		VolumeMounts: []corev1.VolumeMount{{Name: cacheDirVolumeName, MountPath: m.CacheDir}},
+	}
+	modelvolume.Harden(&c, modelvolume.HoldResources, main.SecurityContext)
+	return c
 }
