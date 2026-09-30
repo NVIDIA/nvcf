@@ -21,6 +21,7 @@ use super::snapshots::{
     RoutingTargetState,
 };
 use super::*;
+use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub(super) struct RoutingLifecycle {
@@ -128,6 +129,21 @@ impl RoutingTargetState {
                 clusters.values().cloned().collect()
             }
             RoutingTargetGeneration::Retired => Vec::new(),
+        }
+    }
+
+    fn backend_counts_by_cluster(&self) -> HashMap<String, usize> {
+        match &*self.generation.lock() {
+            RoutingTargetGeneration::Active { clusters, .. } => clusters
+                .iter()
+                .map(|(cluster_id, cluster_state)| {
+                    (
+                        cluster_id.clone(),
+                        cluster_state.generation.lock().backends.len(),
+                    )
+                })
+                .collect(),
+            RoutingTargetGeneration::Retired => HashMap::new(),
         }
     }
 
@@ -371,6 +387,17 @@ impl RoutingLifecycle {
         model_ids: &[String],
     ) -> Vec<String> {
         active_model_ids(self.matching_targets(routing_key, model_ids).await)
+    }
+
+    pub(super) async fn backend_counts_by_cluster(
+        &self,
+        target: &RoutingTargetKey,
+    ) -> HashMap<String, usize> {
+        self.target_state(target)
+            .await
+            .map_or_else(HashMap::new, |target_state| {
+                target_state.backend_counts_by_cluster()
+            })
     }
 
     pub(super) async fn list_active_models_for_debug(&self) -> Vec<String> {

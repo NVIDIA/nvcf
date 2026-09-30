@@ -332,16 +332,20 @@ pub(crate) async fn list_models_for_state(
     let model_ids = state
         .list_active_models(requested.routing_key.as_deref(), &requested.model_ids)
         .await;
+    let models = state
+        .list_registered_models(requested.routing_key.as_deref(), &requested.model_ids)
+        .await;
 
     debug!(
         routing_key = ?requested.routing_key,
         model_id_filter_count,
         return_all_models = model_id_filter_count == 0,
         returned_model_count = model_ids.len(),
+        registered_model_count = models.len(),
         "list_models completed"
     );
 
-    Ok(ListModelsResponse { model_ids })
+    Ok(ListModelsResponse { model_ids, models })
 }
 
 fn normalize_list_models_request(

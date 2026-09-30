@@ -16,7 +16,7 @@
 use super::keys::{RegistrationIdentity, RoutingTargetKey};
 use super::*;
 use parking_lot::RwLock;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{BTreeMap, HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::tunnel::RegistrationConnections;
@@ -156,6 +156,12 @@ impl RegisteredModelState {
         *self = Self::Stable(advertised);
     }
 
+    fn advertised(&self) -> &BTreeSet<String> {
+        match self {
+            Self::Stable(advertised) | Self::Applying { advertised, .. } => advertised,
+        }
+    }
+
     fn cleanup_model_ids(&self) -> BTreeSet<String> {
         match self {
             Self::Stable(advertised) => advertised.clone(),
@@ -223,6 +229,35 @@ impl RegistrationRegistry {
             .read()
             .advertised_targets
             .contains_key(target)
+    }
+
+    /// Counts open registrations per model and cluster for one routing key.
+    /// An empty `model_ids` filter keeps every advertised model.
+    pub(super) fn registered_servers_by_model(
+        &self,
+        routing_key: Option<&str>,
+        model_ids: &[String],
+    ) -> BTreeMap<String, BTreeMap<String, u32>> {
+        let membership = self.membership.read();
+        let mut counts: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
+        for record in membership.registrations_by_id.values() {
+            let identity = &record.state.identity;
+            if identity.routing_key.as_deref() != routing_key {
+                continue;
+            }
+            for model_id in record.models.advertised() {
+                if !model_ids.is_empty() && !model_ids.contains(model_id) {
+                    continue;
+                }
+                let count = counts
+                    .entry(model_id.clone())
+                    .or_default()
+                    .entry(identity.cluster_id.clone())
+                    .or_default();
+                *count = count.saturating_add(1);
+            }
+        }
+        counts
     }
 
     pub(super) fn reverse_tunnel_registration(

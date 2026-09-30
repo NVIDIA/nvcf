@@ -22,7 +22,9 @@ use tonic::Status;
 use tracing::warn;
 
 use crate::metrics::StargateMetrics;
-use stargate_proto::pb::{InferenceServerRegistration, InferenceServerStatus, ModelStats};
+use stargate_proto::pb::{
+    ClusterListing, InferenceServerRegistration, InferenceServerStatus, ModelListing, ModelStats,
+};
 
 mod cluster_snapshots;
 mod clusters;
@@ -203,6 +205,37 @@ impl StargateState {
         self.routing
             .list_active_models(routing_key, model_ids)
             .await
+    }
+
+    /// Lists every model advertised by an open registration for `routing_key`,
+    /// routable or not, with per-cluster registered and routable server counts.
+    /// Clusters present only in routing state are skipped because their
+    /// registrations have already ended.
+    pub async fn list_registered_models(
+        &self,
+        routing_key: Option<&str>,
+        model_ids: &[String],
+    ) -> Vec<ModelListing> {
+        let registered = self
+            .registrations
+            .registered_servers_by_model(routing_key, model_ids);
+        let mut listings = Vec::with_capacity(registered.len());
+        for (model_id, registered_by_cluster) in registered {
+            let target = RoutingTargetKey::new(routing_key.map(ToOwned::to_owned), &model_id);
+            let healthy_by_cluster = self.routing.backend_counts_by_cluster(&target).await;
+            let clusters = registered_by_cluster
+                .into_iter()
+                .map(|(cluster_id, registered_servers)| ClusterListing {
+                    healthy_servers: healthy_by_cluster
+                        .get(&cluster_id)
+                        .map_or(0, |&count| u32::try_from(count).unwrap_or(u32::MAX)),
+                    cluster_id,
+                    registered_servers,
+                })
+                .collect();
+            listings.push(ModelListing { model_id, clusters });
+        }
+        listings
     }
 
     pub(crate) async fn list_active_models_for_debug(&self) -> Vec<String> {
