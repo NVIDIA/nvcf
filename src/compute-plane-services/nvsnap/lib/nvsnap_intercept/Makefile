@@ -75,7 +75,7 @@ $(LIB): $(OBJS)
 # the DT_NEEDED set at libc alone; libc itself is safe because glibc is backward
 # compatible, so a library built here runs against any newer container glibc.
 # Guard it so a new dependency cannot reintroduce the failure silently.
-ALLOWED_NEEDED = libc.so.6 libdl.so.2 libpthread.so.0 ld-linux-x86-64.so.2
+ALLOWED_NEEDED = libc.so.6 libdl.so.2 libpthread.so.0 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1
 
 .PHONY: verify-deps
 verify-deps: $(LIB)
