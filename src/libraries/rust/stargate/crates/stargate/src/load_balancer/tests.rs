@@ -701,6 +701,46 @@ fn max_rendezvous_weight_keeps_mean_input_work_capacity() {
 }
 
 #[test]
+fn pulsar_input_work_capacity_excludes_backends_missing_the_selected_maximum() {
+    let target = target();
+    let request = request(&target, Some("prefix-a"), Some(100));
+    let ready = work_candidate("ready", 5, 50.0, 50);
+    let mut legacy_backend = work_candidate("legacy", 5, 10_000.0, 0);
+    legacy_backend.stats.max_input_tps = None;
+    for algorithm in [
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        let mut config = LoadBalancerAlgorithmConfig::from(algorithm);
+        assert_eq!(
+            input_work_seconds_for_request(
+                &config,
+                &request,
+                &[ready.clone(), legacy_backend.clone()]
+            ),
+            Some(3.0)
+        );
+        assert_eq!(
+            input_work_seconds_for_request(
+                &config,
+                &request,
+                std::slice::from_ref(&legacy_backend)
+            ),
+            None
+        );
+        config.rendezvous_weight = PulsarRendezvousWeight::LastMeanInputTps;
+        assert_eq!(
+            input_work_seconds_for_request(
+                &config,
+                &request,
+                &[ready.clone(), legacy_backend.clone()]
+            ),
+            Some(150.0 / 10_050.0)
+        );
+    }
+}
+
+#[test]
 fn invalid_algorithm_name_fails_during_parse() {
     assert_json_rejected::<LoadBalancerConfig>(r#"{"default":"not-a-real-lb"}"#, "not-a-real-lb");
 }

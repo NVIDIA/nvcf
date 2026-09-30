@@ -233,6 +233,7 @@ pub(super) fn input_work_admission_candidate(
     candidate: &RoutedClusterSnapshot,
 ) -> bool {
     valid_last_mean_input_tps(candidate.stats.last_mean_input_tps)
+        && ranking::pulsar_weight(config.rendezvous_weight, candidate).is_some()
         && candidate_feasibility(config, request, candidate).is_eligible()
 }
 
