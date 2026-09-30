@@ -586,6 +586,47 @@ fn scheduled_pod_pair_retains_timeline_and_rejects_changed_evidence_before_resum
 }
 
 #[test]
+fn pulsar_pod_arm_preserves_routing_header_and_reports_its_actual_algorithm() {
+    let directory = tempfile::tempdir().unwrap();
+    let fake = FakeCommand::new();
+    pod_environment(&fake);
+    let suite = SUITE.replace(
+        "  power-of-n: {routingHeader: powerOfN}",
+        "  power-of-n: {routingHeader: powerOfN}\n  pulsar-wait-and-widen: {routingHeader: pulsar-wait-and-widen}",
+    );
+    fs::write(directory.path().join("suite.yaml"), suite).unwrap();
+    successful(
+        run_command(&fake, directory.path(), false)
+            .args([
+                "--spark-pod",
+                "spark-test",
+                "--algorithm",
+                "pulsar-wait-and-widen",
+            ])
+            .output()
+            .unwrap(),
+    );
+    let calls = fake.calls();
+    let starts: Vec<_> = calls
+        .iter()
+        .filter(|args| args.first().is_some_and(|arg| arg == "--endpoint"))
+        .collect();
+    assert_eq!(starts.len(), 1);
+    assert!(starts[0].windows(2).any(|pair| pair
+        == [
+            "--stargate-load-balancing-algorithm",
+            "pulsar-wait-and-widen"
+        ]));
+    let summary: Value =
+        serde_json::from_slice(&fs::read(directory.path().join("results/summary.json")).unwrap())
+            .unwrap();
+    assert_eq!(summary["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(summary["rows"][0]["algorithm"], "pulsar-wait-and-widen");
+    assert!(summary["comparisons"].as_array().unwrap().is_empty());
+    assert_eq!(summary["unpaired"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn interrupted_unacknowledged_pod_batch_reconciles_both_live_streams() {
     use rustix::fd::OwnedFd;
     use rustix::process::{Pid, PidfdFlags, Signal, kill_process, pidfd_open, pidfd_send_signal};

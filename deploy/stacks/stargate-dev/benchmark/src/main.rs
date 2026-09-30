@@ -82,17 +82,20 @@ enum Command {
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Algorithms {
+    /// WaitAndWiden and PowerOfN; excludes Pulsar-WaW.
     Both,
     WaitAndWiden,
     PowerOfN,
+    PulsarWaitAndWiden,
 }
 
 impl Algorithms {
     fn selected(self) -> &'static [Algorithm] {
         match self {
-            Self::Both => &Algorithm::ALL,
+            Self::Both => &Algorithm::DEFAULT_PAIR,
             Self::WaitAndWiden => &[Algorithm::WaitAndWiden],
             Self::PowerOfN => &[Algorithm::PowerOfN],
+            Self::PulsarWaitAndWiden => &[Algorithm::PulsarWaitAndWiden],
         }
     }
 }
@@ -156,7 +159,7 @@ async fn execute(cli: Cli) -> Result<()> {
         Command::List => {
             let suite = suite()?;
             for (name, scenarios) in &suite.suites {
-                let plan = suite.plan(name, &Algorithm::ALL)?;
+                let plan = suite.plan(name, &Algorithm::DEFAULT_PAIR)?;
                 writeln!(
                     std::io::stdout().lock(),
                     "{name}: at least {:.1} measured minutes at rate caps: {}",

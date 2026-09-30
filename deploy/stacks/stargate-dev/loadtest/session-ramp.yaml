@@ -13,6 +13,8 @@ algorithms:
     routingHeader: null
   power-of-n:
     routingHeader: powerOfN
+  pulsar-wait-and-widen:
+    routingHeader: pulsar-wait-and-widen
 suites:
   session-ramp: [session-ramp]
 scenarios:

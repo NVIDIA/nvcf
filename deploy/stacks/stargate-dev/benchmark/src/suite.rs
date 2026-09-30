@@ -18,15 +18,18 @@ use crate::workload::Workload;
 pub enum Algorithm {
     WaitAndWiden,
     PowerOfN,
+    PulsarWaitAndWiden,
 }
 
 impl Algorithm {
-    pub const ALL: [Self; 2] = [Self::WaitAndWiden, Self::PowerOfN];
+    pub const DEFAULT_PAIR: [Self; 2] = [Self::WaitAndWiden, Self::PowerOfN];
+    pub const ALL: [Self; 3] = [Self::WaitAndWiden, Self::PowerOfN, Self::PulsarWaitAndWiden];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WaitAndWiden => "wait-and-widen",
             Self::PowerOfN => "power-of-n",
+            Self::PulsarWaitAndWiden => "pulsar-wait-and-widen",
         }
     }
 }
@@ -438,11 +441,13 @@ impl Suite {
         ensure!(suite.version == 1, "benchmark suite version must be 1");
         ensure!(!suite.suites.is_empty(), "suite must define named suites");
         ensure!(!suite.scenarios.is_empty(), "suite must define scenarios");
-        for algorithm in Algorithm::ALL {
-            let config = suite
-                .algorithms
-                .get(&algorithm)
-                .with_context(|| format!("missing algorithm {algorithm}"))?;
+        for algorithm in Algorithm::DEFAULT_PAIR {
+            ensure!(
+                suite.algorithms.contains_key(&algorithm),
+                "missing algorithm {algorithm}"
+            );
+        }
+        for (algorithm, config) in &suite.algorithms {
             ensure!(
                 config
                     .routing_header
@@ -480,6 +485,12 @@ impl Suite {
 
     pub fn plan(&self, name: &str, algorithms: &[Algorithm]) -> Result<Plan> {
         ensure!(!algorithms.is_empty(), "select at least one algorithm");
+        for algorithm in algorithms {
+            ensure!(
+                self.algorithms.contains_key(algorithm),
+                "missing algorithm {algorithm}"
+            );
+        }
         ensure!(
             algorithms.iter().collect::<BTreeSet<_>>().len() == algorithms.len(),
             "selected algorithms must be distinct"
@@ -980,7 +991,7 @@ mod tests {
     #[test]
     fn session_ramp_preserves_steps_and_uses_one_cache_reset_per_algorithm() -> Result<()> {
         let source = include_str!("../../loadtest/session-ramp.yaml");
-        let plan = Suite::from_yaml(source)?.plan("session-ramp", &Algorithm::ALL)?;
+        let plan = Suite::from_yaml(source)?.plan("session-ramp", &Algorithm::DEFAULT_PAIR)?;
         assert_eq!(plan.arms.len(), 2);
         assert_eq!(plan.minimum_measured_minutes(), 30.0);
         for arm in &plan.arms {
@@ -1025,7 +1036,7 @@ mod tests {
     #[test]
     fn canonical_plan_preserves_order_and_execution_controls() -> Result<()> {
         let suite = Suite::from_yaml(CANONICAL)?;
-        let plan = suite.plan("canonical", &Algorithm::ALL)?;
+        let plan = suite.plan("canonical", &Algorithm::DEFAULT_PAIR)?;
         assert_eq!(plan.arms.len(), 24);
         assert_eq!(plan.workloads.len(), 15);
         assert_eq!(plan.arms[0].directory, Path::new("smoke/wait-and-widen"));
@@ -1090,7 +1101,7 @@ mod tests {
     #[test]
     fn cold_prompt_ranges_are_disjoint_and_algorithm_filter_keeps_order() -> Result<()> {
         let suite = Suite::from_yaml(CANONICAL)?;
-        let plan = suite.plan("capacity", &Algorithm::ALL)?;
+        let plan = suite.plan("capacity", &Algorithm::DEFAULT_PAIR)?;
         let mut ranges = Vec::new();
         for workload in plan.workloads.values() {
             let Workload::Unique { count, start, .. } = workload else {
@@ -1166,7 +1177,7 @@ mod tests {
         );
         assert!(Suite::from_yaml(&source).is_err());
         let suite = Suite::from_yaml(CANONICAL)?;
-        assert!(suite.plan("missing", &Algorithm::ALL).is_err());
+        assert!(suite.plan("missing", &Algorithm::DEFAULT_PAIR).is_err());
         assert!(suite.plan("smoke", &[]).is_err());
         assert!(
             suite
@@ -1176,7 +1187,7 @@ mod tests {
         let source = CANONICAL.replacen("repeats: 3", &format!("repeats: {}", usize::MAX), 1);
         assert!(
             Suite::from_yaml(&source)?
-                .plan("session-affinity", &Algorithm::ALL)
+                .plan("session-affinity", &Algorithm::DEFAULT_PAIR)
                 .is_err()
         );
         Ok(())
@@ -1228,7 +1239,7 @@ mod tests {
             ),
         ] {
             let error = Suite::from_yaml(&source)?
-                .plan(suite, &Algorithm::ALL)
+                .plan(suite, &Algorithm::DEFAULT_PAIR)
                 .unwrap_err();
             assert!(format!("{error:#}").contains(field), "{error:#}");
         }
@@ -1237,9 +1248,9 @@ mod tests {
             .replacen("requests: 32", &format!("requests: {}", i32::MAX), 1)
             .replacen("maxTokens: 256", &format!("maxTokens: {}", i32::MAX), 1)
             .replacen("rate: 8", "rate: 1000000000", 1);
-        Suite::from_yaml(&source)?.plan("smoke", &Algorithm::ALL)?;
+        Suite::from_yaml(&source)?.plan("smoke", &Algorithm::DEFAULT_PAIR)?;
         let source = CANONICAL.replacen("maxTokens: 256", "maxTokens: 0", 1);
-        let plan = Suite::from_yaml(&source)?.plan("smoke", &Algorithm::ALL)?;
+        let plan = Suite::from_yaml(&source)?.plan("smoke", &Algorithm::DEFAULT_PAIR)?;
         assert_eq!(plan.arms[0].streams[0].limits.max_tokens, 0);
         Ok(())
     }
@@ -1248,9 +1259,9 @@ mod tests {
     fn measured_estimate_excludes_warmup_cooldown_and_concurrent_double_counting() -> Result<()> {
         let source = CANONICAL.replacen("cooldownSeconds: 60", "cooldownSeconds: 99999", 1);
         let suite = Suite::from_yaml(&source)?;
-        let canonical = suite.plan("canonical", &Algorithm::ALL)?;
+        let canonical = suite.plan("canonical", &Algorithm::DEFAULT_PAIR)?;
         assert!((canonical.minimum_measured_minutes() - 5192.0 / 60.0).abs() < 1e-10);
-        let capacity = suite.plan("capacity", &Algorithm::ALL)?;
+        let capacity = suite.plan("capacity", &Algorithm::DEFAULT_PAIR)?;
         assert!((capacity.minimum_measured_minutes() - 1208.0 / 60.0).abs() < 1e-10);
         let single = suite.plan("canonical", &[Algorithm::PowerOfN])?;
         assert!((single.minimum_measured_minutes() - 2596.0 / 60.0).abs() < 1e-10);
@@ -1261,7 +1272,7 @@ mod tests {
     fn scenario_names_do_not_select_behavior() -> Result<()> {
         let source = CANONICAL.replace("long-context-affinity", "screen-high-context");
         let suite = Suite::from_yaml(&source)?;
-        let plan = suite.plan("long-context", &Algorithm::ALL)?;
+        let plan = suite.plan("long-context", &Algorithm::DEFAULT_PAIR)?;
         assert_eq!(plan.arms[2].scenario, "screen-high-context");
         assert_eq!(
             plan.arms[2].directory,
@@ -1273,7 +1284,7 @@ mod tests {
 
     #[test]
     fn native_plan_loading_revalidates_paths_references_and_limits() -> Result<()> {
-        let plan = Suite::from_yaml(CANONICAL)?.plan("canonical", &Algorithm::ALL)?;
+        let plan = Suite::from_yaml(CANONICAL)?.plan("canonical", &Algorithm::DEFAULT_PAIR)?;
         let original = serde_json::to_value(&plan)?;
         serde_json::from_value::<Plan>(original.clone())?.validate()?;
         for (pointer, replacement) in [

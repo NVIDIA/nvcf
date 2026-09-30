@@ -1709,7 +1709,7 @@ mod tests {
     fn plan(name: &str) -> Plan {
         Suite::from_yaml(include_str!("../../loadtest/suite.yaml"))
             .unwrap()
-            .plan(name, &Algorithm::ALL)
+            .plan(name, &Algorithm::DEFAULT_PAIR)
             .unwrap()
     }
 
@@ -1925,7 +1925,7 @@ mod tests {
     fn rate_schedule_arguments_omit_conflicting_flags_and_allow_final_drain() -> Result<()> {
         let topology = Topology::load("us-west-2", &[])?;
         let plan = Suite::from_yaml(include_str!("../../loadtest/session-ramp.yaml"))?
-            .plan("session-ramp", &Algorithm::ALL)?;
+            .plan("session-ramp", &Algorithm::DEFAULT_PAIR)?;
         for arm in &plan.arms {
             let stream = &arm.streams[0];
             let arguments = spark_arguments(

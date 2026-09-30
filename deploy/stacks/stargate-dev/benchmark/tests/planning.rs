@@ -102,6 +102,78 @@ fn selected_algorithm_is_the_only_algorithm_in_the_plan() {
 }
 
 #[test]
+fn pulsar_ramp_selection_is_explicit_and_missing_configuration_fails_before_output() {
+    let suite =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../loadtest/session-ramp.yaml");
+    let output = benchmark()
+        .arg("--suite-file")
+        .arg(&suite)
+        .args([
+            "plan",
+            "--suite",
+            "session-ramp",
+            "--algorithm",
+            "pulsar-wait-and-widen",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(plan["arms"].as_array().unwrap().len(), 1);
+    assert_eq!(plan["arms"][0]["algorithm"], "pulsar-wait-and-widen");
+    assert_eq!(
+        plan["arms"][0]["directory"],
+        "session-ramp/pulsar-wait-and-widen"
+    );
+    assert_eq!(
+        plan["routingHeaders"]["pulsar-wait-and-widen"],
+        "pulsar-wait-and-widen"
+    );
+
+    let default = benchmark()
+        .arg("--suite-file")
+        .arg(suite)
+        .args(["plan", "--suite", "session-ramp"])
+        .output()
+        .unwrap();
+    assert!(default.status.success());
+    let default: Value = serde_json::from_slice(&default.stdout).unwrap();
+    assert_eq!(default["arms"].as_array().unwrap().len(), 2);
+    assert!(
+        default["arms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|arm| arm["algorithm"] != "pulsar-wait-and-widen")
+    );
+
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("must-not-exist");
+    let rejected = benchmark()
+        .args([
+            "plan",
+            "--suite",
+            "smoke",
+            "--algorithm",
+            "pulsar-wait-and-widen",
+            "--output",
+        ])
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("missing algorithm pulsar-wait-and-widen")
+    );
+    assert!(!output_dir.exists());
+}
+
+#[test]
 fn reduced_suite_selects_only_the_requested_pairs_and_each_pair_is_individually_available() {
     let suite = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../loadtest/reduced.yaml");
     for (name, expected_scenarios) in [
