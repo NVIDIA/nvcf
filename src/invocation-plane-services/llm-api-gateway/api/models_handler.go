@@ -28,7 +28,7 @@ import (
 	"time"
 
 	echo "github.com/labstack/echo/v4"
-	"golang.org/x/sync/singleflight"
+	"github.com/maypok86/otter/v2"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -55,30 +55,50 @@ type openAIModelList struct {
 	Data   []openAIModel `json:"data"`
 }
 
+// catalogClock drives both the cache expiry and the created timestamps, so
+// tests control them together.
+type catalogClock interface {
+	otter.Clock
+	Now() time.Time
+}
+
+type systemClock struct{}
+
+func (systemClock) Now() time.Time                        { return time.Now() }
+func (systemClock) NowNano() int64                        { return time.Now().UnixNano() }
+func (systemClock) Tick(d time.Duration) <-chan time.Time { return time.Tick(d) }
+
+// listingKey is the only key in modelCatalog.listings: the router returns one
+// listing for all callers.
+type listingKey struct{}
+
 // modelCatalog caches the router's model listing for ttl and remembers when
 // this process first saw each model. It keeps nothing past ttl: once the
 // cached listing expires, a failed refresh fails the caller.
 type modelCatalog struct {
 	lister provider.ModelLister
-	ttl    time.Duration
-	now    func() time.Time
-
-	// refreshes lets concurrent callers share one router call.
-	refreshes singleflight.Group
+	clock  catalogClock
+	// listings is nil when ttl is zero, so every call reaches the router.
+	listings *otter.Cache[listingKey, *provider.ModelListing]
 
 	mu        sync.Mutex
-	listing   *provider.ModelListing
-	expiresAt time.Time
 	firstSeen map[string]int64
 }
 
-func newModelCatalog(lister provider.ModelLister, ttl time.Duration) *modelCatalog {
-	return &modelCatalog{
+func newModelCatalog(lister provider.ModelLister, ttl time.Duration, clock catalogClock) *modelCatalog {
+	catalog := &modelCatalog{
 		lister:    lister,
-		ttl:       ttl,
-		now:       time.Now,
+		clock:     clock,
 		firstSeen: map[string]int64{},
 	}
+	if ttl > 0 {
+		catalog.listings = otter.Must(&otter.Options[listingKey, *provider.ModelListing]{
+			MaximumSize:      1,
+			ExpiryCalculator: otter.ExpiryWriting[listingKey, *provider.ModelListing](ttl),
+			Clock:            clock,
+		})
+	}
+	return catalog
 }
 
 // models returns the routable models sorted by id.
@@ -103,51 +123,38 @@ func (c *modelCatalog) models(ctx context.Context) ([]openAIModel, error) {
 	return result, nil
 }
 
-// current returns the cached listing, refreshing it once it has expired. A
-// caller stops waiting when its own context ends; the shared refresh does not
-// depend on any one caller and is bounded by the provider's timeout.
+// current returns the cached listing, loading it once it has expired.
+// Concurrent callers share one load and errors are not cached. The load
+// ignores the triggering caller's cancellation so it cannot fail the others;
+// the provider's timeout bounds it.
 func (c *modelCatalog) current(ctx context.Context) (*provider.ModelListing, error) {
-	c.mu.Lock()
-	if c.listing != nil && c.now().Before(c.expiresAt) {
-		listing := c.listing
-		c.mu.Unlock()
-		return listing, nil
+	if c.listings == nil {
+		return c.load(ctx)
 	}
-	c.mu.Unlock()
-
-	refreshCtx := context.WithoutCancel(ctx)
-	result := c.refreshes.DoChan("", func() (any, error) { return c.refresh(refreshCtx) })
-	select {
-	case refreshed := <-result:
-		if refreshed.Err != nil {
-			return nil, refreshed.Err
-		}
-		return refreshed.Val.(*provider.ModelListing), nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return c.listings.Get(ctx, listingKey{}, otter.LoaderFunc[listingKey, *provider.ModelListing](
+		func(ctx context.Context, _ listingKey) (*provider.ModelListing, error) {
+			return c.load(context.WithoutCancel(ctx))
+		},
+	))
 }
 
-func (c *modelCatalog) refresh(ctx context.Context) (*provider.ModelListing, error) {
+func (c *modelCatalog) load(ctx context.Context) (*provider.ModelListing, error) {
 	if c.lister == nil {
 		return nil, errModelListingUnsupported
 	}
 	listing, err := c.lister.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err != nil {
-		c.listing = nil
-		return nil, err
-	}
-	now := c.now()
+	seenAt := c.clock.Now().Unix()
 	for _, id := range listing.ModelIDs {
 		if _, ok := c.firstSeen[id]; !ok {
-			c.firstSeen[id] = now.Unix()
+			c.firstSeen[id] = seenAt
 		}
 	}
-	c.listing = listing
-	c.expiresAt = now.Add(c.ttl)
 	return listing, nil
 }
 
