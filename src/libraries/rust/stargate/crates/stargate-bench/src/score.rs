@@ -232,7 +232,9 @@ impl SummaryAccumulator {
 
         if result.ok {
             self.successes += 1;
-            self.successful_output_tokens += result.observed_output_tokens.unwrap_or_default();
+            self.successful_output_tokens = self
+                .successful_output_tokens
+                .saturating_add(result.observed_output_tokens.unwrap_or_default());
             self.missing_successful_output_usage |= result.observed_output_tokens.is_none();
         } else {
             let failure = (
@@ -373,10 +375,14 @@ impl GroupAccumulator {
         self.success_count += usize::from(result.ok);
         self.input_tokens += result.input_tokens;
         self.output_tokens += result.output_tokens;
-        self.observed_output_tokens += result.observed_output_tokens.unwrap_or_default();
+        self.observed_output_tokens = self
+            .observed_output_tokens
+            .saturating_add(result.observed_output_tokens.unwrap_or_default());
         self.missing_output_usage |= result.observed_output_tokens.is_none();
         if result.ok {
-            self.successful_output_tokens += result.observed_output_tokens.unwrap_or_default();
+            self.successful_output_tokens = self
+                .successful_output_tokens
+                .saturating_add(result.observed_output_tokens.unwrap_or_default());
         }
         self.ttlt.push(result.completion_ms);
         self.observed_cache += usize::from(result.kv_cache_hit.is_some());
@@ -770,6 +776,40 @@ mod tests {
             Some(2)
         );
         assert_eq!(summary.backend_summaries["a"].output_tokens, 100);
+    }
+
+    #[test]
+    fn observed_usage_totals_saturate_without_panicking_or_wrapping() {
+        let mut request = result("a", 10, 1000);
+        request.observed_output_tokens = Some(u64::MAX);
+        let summary =
+            summarize_with_topology(&[request.clone(), request], &RoutingTopology::default());
+        assert_eq!(
+            summary.successful_output_tokens_per_second,
+            Some(u64::MAX as f64)
+        );
+        assert_eq!(
+            summary.backend_summaries["a"].observed_output_tokens,
+            Some(u64::MAX)
+        );
+        assert_eq!(
+            summary.cluster_summaries["a"].observed_output_tokens,
+            Some(u64::MAX)
+        );
+        assert_eq!(summary.backend_output_token_shares["a"], 1.0);
+        assert_eq!(summary.cluster_output_token_shares["a"], 1.0);
+    }
+
+    #[test]
+    fn reported_zero_usage_remains_available() {
+        let mut request = result("a", 10, 1000);
+        request.observed_output_tokens = Some(0);
+        let summary = summarize_with_topology(&[request], &RoutingTopology::default());
+        assert_eq!(summary.successful_output_tokens_per_second, Some(0.0));
+        assert_eq!(
+            summary.backend_summaries["a"].observed_output_tokens,
+            Some(0)
+        );
     }
 
     #[test]

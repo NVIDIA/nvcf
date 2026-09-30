@@ -281,6 +281,7 @@ fn record_completion_event(
     }
     if let Some(tokens) = value
         .pointer("/usage/completion_tokens")
+        .filter(|tokens| !tokens.is_null())
         .or_else(|| value.get("output_tokens_so_far"))
         .filter(|tokens| !tokens.is_null())
     {
@@ -456,6 +457,13 @@ mod tests {
         assert!(result.ok, "{:?}", result.error);
         assert!(result.first_output_ms.is_some());
         assert_eq!(result.observed_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn null_usage_allows_cumulative_output_fallback() {
+        let (result, _) = drive_test_response("data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}],\"usage\":{\"completion_tokens\":null},\"output_tokens_so_far\":1}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.observed_output_tokens, Some(1));
     }
 
     #[tokio::test]
