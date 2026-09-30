@@ -464,7 +464,7 @@ Default task key scopes:
 
 ### Self-hosted Deployment Commands
 
-Use these commands to install and inspect self-hosted NVCF deployments. For the local k3d installation flow, see [Quickstart](./quickstart.md).
+Use these commands to install and inspect self-hosted NVCF deployments. For the local k3d installation flow, see [Quickstart](/nvcf/overview/quickstart).
 
 | Command | Description |
 | --- | --- |

@@ -68,6 +68,10 @@ drivers:
     provider: weka
     accessModes: [ReadWriteMany]
     readerMountOptions: []
+  - name: csi.trident.netapp.io
+    provider: netappTrident
+    accessModes: [ReadWriteMany]
+    readerMountOptions: []
 ```
 
 Drivers are a list named by exact provisioner, following Kubernetes API

@@ -233,10 +233,10 @@ impl WaitAndWidenLoadBalancer {
         {
             return LoadBalancerDecision::Selected(choice);
         }
-        // Non-affinity requests keep the existing explicit routing-retry policy.
+        // Return timed waits so the proxy can recheck until a later bucket
+        // with capacity unlocks. Without them, a saturated first bucket
+        // rejects the request unless the caller sent a routing wait budget.
         self.decide_from_candidate_iter(request, candidates.iter(), candidates, 1.0, elapsed)
-            .selected()
-            .into()
     }
 
     pub(super) fn new(config: WaitAndWidenConfig) -> Self {
