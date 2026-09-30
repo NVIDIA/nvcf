@@ -311,6 +311,17 @@ assert_cluster_validator_role() {
     return 1
   fi
   printf 'ok %s schema rejects an unknown clusterValidator.role\n' "${chart_label}"
+
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true --set "clusterValidator.haMode=none" >"${rendered}"
+  assert_eq "none" "$(yq "${cron_env} | select(.name == \"NVCF_HA_MODE\") | .value" "${rendered}")" \
+    "${chart_label} CronJob receives the HA mode"
+  if helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true --set "clusterValidator.haMode=ha" >/dev/null 2>&1; then
+    printf 'FAIL %s schema accepted an unknown clusterValidator.haMode\n' "${chart_label}" >&2
+    return 1
+  fi
+  printf 'ok %s schema rejects an unknown clusterValidator.haMode\n' "${chart_label}"
 }
 
 assert_cluster_validator_role "${repo_root}/deployments/nvca-operator" "service chart"

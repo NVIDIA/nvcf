@@ -111,6 +111,12 @@ spec:
                 - name: NVCF_N2N_PROBE_IMAGE
                   value: {{ $cv.nodeToNodeProbeImage | quote }}
                 {{- end }}
+                {{- if $cv.haMode }}
+                # The stack's highAvailability.mode. Under "none" a
+                # single-replica quorum component is expected, not a failure.
+                - name: NVCF_HA_MODE
+                  value: {{ $cv.haMode | quote }}
+                {{- end }}
               resources:
                 requests:
                   cpu: {{ $cv.resources.requests.cpu | quote }}

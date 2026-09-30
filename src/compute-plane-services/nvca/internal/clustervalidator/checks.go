@@ -2823,6 +2823,9 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 	const minQuorumSize = int32(3)
 	var failures []string
 	var skippedParity []string
+	// nonHA holds known quorum components running below three replicas under
+	// highAvailability.mode none, which is what that mode deploys.
+	var nonHA []string
 	checkedCount := 0
 	deniedCount := 0
 	rollingCount := 0
@@ -2860,23 +2863,34 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 				continue
 			}
 			want := *sts.Spec.Replicas
+			known := isKnownQuorumComponent(ns, sts.Name)
 			if want < minQuorumSize {
-				// A known quorum component below three has lost quorum, so it
-				// fails rather than vanishing from the row. Anything else is
-				// recorded so an all-sub-quorum cluster cannot reach the
-				// trivial-pass exit having examined nothing.
-				if isKnownQuorumComponent(sts.Name) {
-					failures = append(failures,
-						fmt.Sprintf("%s/%s: spec.replicas=%d, below the quorum minimum of %d",
-							ns, sts.Name, want, minQuorumSize))
+				// Below three, a known quorum component has lost quorum under
+				// an HA install and fails, but is the documented shape under
+				// highAvailability.mode none. Only the launcher knows which,
+				// so an unset mode records it as not assessed rather than
+				// guessing. Anything else is recorded too, so an
+				// all-sub-quorum cluster cannot reach the trivial-pass exit
+				// having examined nothing.
+				switch mode := haMode(); {
+				case known && want == 0:
+					// Scaled to zero is the component down in any mode.
+					failures = append(failures, fmt.Sprintf("%s/%s: scaled to zero replicas", ns, sts.Name))
 					checkedCount++
-					continue
+				case known && (mode == "preferred" || mode == "enforced"):
+					failures = append(failures,
+						fmt.Sprintf("%s/%s: spec.replicas=%d, below the quorum minimum of %d for highAvailability.mode %s",
+							ns, sts.Name, want, minQuorumSize, mode))
+					checkedCount++
+				case known && mode == "none":
+					nonHA = append(nonHA, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
+				default:
+					skippedParity = append(skippedParity,
+						fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
 				}
-				skippedParity = append(skippedParity,
-					fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
 				continue
 			}
-			if want%2 == 0 && !isKnownQuorumComponent(sts.Name) {
+			if want%2 == 0 && !known {
 				// Even replica counts are not a quorum shape this check can
 				// reason about for an unknown workload, so record it rather than
 				// assess it. The known components are assessed at any size: a
@@ -2897,6 +2911,7 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			// the controller never advances CurrentRevision on its own, so a
 			// mismatch says nothing and readiness is assessed directly.
 			rollingUpdate := sts.Spec.UpdateStrategy.Type != appsv1.OnDeleteStatefulSetStrategyType
+			oneDownRolling := false
 			if rollingUpdate && sts.Status.UpdateRevision != "" &&
 				sts.Status.CurrentRevision != sts.Status.UpdateRevision {
 				msg := fmt.Sprintf("%s/%s: rolling update in progress (ready: %d/%d)",
@@ -2910,9 +2925,11 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 					// Full ready count: assess normally and let the placement
 					// scan run.
 				case sts.Status.ReadyReplicas == want-1:
-					// One pod down is what rolling one at a time looks like.
-					rollingUnderReplicated++
-					continue
+					// One pod down is what rolling one at a time looks like,
+					// but only while the rollout can still finish. That is
+					// decided below from the down pod itself, once the pods
+					// are listed.
+					oneDownRolling = true
 				default:
 					// More than one peer down is beyond what a rolling update
 					// explains.
@@ -2925,7 +2942,7 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			}
 			checkedCount++
 
-			if sts.Status.ReadyReplicas < want {
+			if sts.Status.ReadyReplicas < want && !oneDownRolling {
 				failures = append(failures,
 					fmt.Sprintf("%s/%s: readyReplicas=%d (need %d)",
 						ns, sts.Name, sts.Status.ReadyReplicas, want))
@@ -2946,9 +2963,24 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 				continue
 			}
 
+			// A rollout with one pod down is tolerated only while it can still
+			// finish. With no progress deadline on a StatefulSet, the down pod
+			// is the evidence: a crash-looping new pod, or an old-revision pod
+			// held back by a partition, stays down on every run.
+			if oneDownRolling {
+				if reason := stalledRolloutPod(sts, pods.Items); reason != "" {
+					failures = append(failures, fmt.Sprintf("%s/%s: readyReplicas=%d (need %d), rolling update is not "+
+						"progressing: %s", ns, sts.Name, sts.Status.ReadyReplicas, want, reason))
+					continue
+				}
+				rollingUnderReplicated++
+			}
+
 			// Count only Ready pods owned by this StatefulSet. Phase stays
 			// Running through CrashLoopBackOff, and a surplus pod left over
 			// from a rollout would otherwise be reported as a co-location.
+			// A tolerated rollout still gets this scan: two Ready peers on
+			// one node are one node loss from losing quorum either way.
 			nodeOwner := make(map[string]string)
 			for j := range pods.Items {
 				p := &pods.Items[j]
@@ -2966,6 +2998,9 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 		}
 	}
 
+	if len(nonHA) > 0 {
+		printInfo(log, fmt.Sprintf("  Not a quorum under highAvailability.mode none: %s", strings.Join(nonHA, ", ")))
+	}
 	if len(skippedParity) > 0 {
 		msg := fmt.Sprintf("%d StatefulSet(s) not assessed (not a quorum shape this check covers): %s",
 			len(skippedParity), strings.Join(skippedParity, ", "))
@@ -2979,18 +3014,6 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			state.Warnings = append(state.Warnings, fmt.Sprintf(
 				"Tier-2 StatefulSets: status unknown (StatefulSet list denied or failed in %d control-plane namespace(s))",
 				deniedCount))
-			return
-		}
-		if rollingCount > 0 {
-			// rollingUnderReplicated only ever holds the one-pod-down case:
-			// anything worse already went to failures above. So this is a
-			// tolerated rollout either way, and must agree with the
-			// rollingUnderReplicated branch further down.
-			msg := fmt.Sprintf("all %d quorum StatefulSet(s) are mid-rollout; re-run after the rollout completes", rollingCount)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
-			ok := true
-			state.Tier2StatefulSetsOK = &ok
 			return
 		}
 		if len(skippedParity) > 0 {
@@ -3237,13 +3260,90 @@ func parseVersion(v string) []int {
 }
 
 // knownQuorumComponents are the Tier-2 StatefulSets whose whole purpose is a
-// quorum. Below three replicas they have lost it, so they fail rather than
-// being skipped as an unrecognised shape.
-var knownQuorumComponents = []string{"nats", "openbao", "cassandra"}
+// quorum, by the names the stack's releases give them in their default
+// namespaces. Matching on the namespace as well keeps a same-prefixed
+// workload such as cassandra-backup, or a nats elsewhere, out of the rule.
+var knownQuorumComponents = map[string][]string{
+	"nats-system":      {"nats"},
+	"vault-system":     {"openbao", "openbao-server"},
+	"cassandra-system": {"cassandra"},
+}
 
-func isKnownQuorumComponent(name string) bool {
-	for _, c := range knownQuorumComponents {
-		if name == c || strings.HasPrefix(name, c+"-") {
+// haModeEnv carries the stack's highAvailability.mode. Only the launcher knows
+// it: a single-replica Cassandra is correct under "none" and a lost quorum
+// under "preferred" or "enforced", and the cluster looks the same either way.
+const haModeEnv = "NVCF_HA_MODE"
+
+// haMode returns the normalized highAvailability.mode, or "" when unset.
+func haMode() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv(haModeEnv)))
+}
+
+// stuckWaitingReasons are container waiting reasons that do not clear on their
+// own, so a pod showing one is not a rollout step in progress.
+var stuckWaitingReasons = map[string]bool{
+	"CrashLoopBackOff":           true,
+	"ImagePullBackOff":           true,
+	"ErrImagePull":               true,
+	"InvalidImageName":           true,
+	"CreateContainerConfigError": true,
+	"CreateContainerError":       true,
+	"RunContainerError":          true,
+}
+
+// stalledRolloutRestarts is how many restarts mark a rolled pod as failing
+// rather than starting. A healthy replacement comes up without restarting.
+const stalledRolloutRestarts = 3
+
+// stalledRolloutPod reports why the pod a one-down StatefulSet rollout is
+// waiting on cannot become Ready, or "" when the rollout can still finish. A
+// missing pod is the controller between deleting and recreating it, which is
+// progress.
+func stalledRolloutPod(sts *appsv1.StatefulSet, pods []corev1.Pod) string {
+	for i := range pods {
+		p := &pods[i]
+		if !metav1.IsControlledBy(p, sts) || isPodReady(p) {
+			continue
+		}
+		// The controller replaces pods with the update revision. A down pod
+		// still on another revision is one the rollout is not replacing, such
+		// as an old-revision pod below a partition.
+		if rev := p.Labels[appsv1.ControllerRevisionHashLabelKey]; rev != "" && rev != sts.Status.UpdateRevision {
+			return fmt.Sprintf("pod %s is down on revision %s, not the update revision %s",
+				p.Name, rev, sts.Status.UpdateRevision)
+		}
+		if p.Status.Phase == corev1.PodFailed {
+			return fmt.Sprintf("pod %s failed", p.Name)
+		}
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+				return fmt.Sprintf("pod %s cannot be scheduled: %s", p.Name, c.Reason)
+			}
+		}
+		statuses := append(append([]corev1.ContainerStatus{}, p.Status.InitContainerStatuses...),
+			p.Status.ContainerStatuses...)
+		for _, cs := range statuses {
+			if w := cs.State.Waiting; w != nil && stuckWaitingReasons[w.Reason] {
+				return fmt.Sprintf("pod %s container %s is in %s", p.Name, cs.Name, w.Reason)
+			}
+			if cs.RestartCount >= stalledRolloutRestarts {
+				return fmt.Sprintf("pod %s container %s has restarted %d times", p.Name, cs.Name, cs.RestartCount)
+			}
+		}
+	}
+	return ""
+}
+
+// isKnownQuorumComponent reports whether the StatefulSet ns/name is one of the
+// stack's quorum components. The OpenBao namespace follows its override.
+// A relocated OpenBao is looked up under vault-system; vault-system itself is
+// then not scanned (controlPlaneNamespaceSet replaces it).
+func isKnownQuorumComponent(ns, name string) bool {
+	if v := strings.TrimSpace(os.Getenv(openBaoNamespaceEnv)); v != "" && ns == v {
+		ns = "vault-system"
+	}
+	for _, c := range knownQuorumComponents[ns] {
+		if name == c {
 			return true
 		}
 	}

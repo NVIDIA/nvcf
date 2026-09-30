@@ -2284,7 +2284,8 @@ func TestCheckTier2StatefulSets_EvenKnownQuorumComponentIsAssessed(t *testing.T)
 	}
 	natsRolling := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "nats", Namespace: "nats-system"},
-		Spec:       appsv1.StatefulSetSpec{Replicas: &three},
+		Spec: appsv1.StatefulSetSpec{Replicas: &three,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "nats"}}},
 		Status: appsv1.StatefulSetStatus{
 			ReadyReplicas: 2, CurrentRevision: "a", UpdateRevision: "b",
 		},
@@ -2307,7 +2308,8 @@ func TestCheckTier2StatefulSets_SkippedListSurvivesRolloutExit(t *testing.T) {
 	}
 	natsRolling := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "nats", Namespace: "nats-system"},
-		Spec:       appsv1.StatefulSetSpec{Replicas: &three},
+		Spec: appsv1.StatefulSetSpec{Replicas: &three,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "nats"}}},
 		Status: appsv1.StatefulSetStatus{
 			ReadyReplicas: 2, CurrentRevision: "a", UpdateRevision: "b",
 		},
@@ -2805,4 +2807,127 @@ func TestNVCFGatewayClasses_ListNotFoundIsEmpty(t *testing.T) {
 		gatewaySet{"nvcf/shared-gw": true})
 	require.NoError(t, err)
 	assert.Empty(t, got)
+}
+
+// rollingNATSWithDownPod is a 3-replica StatefulSet mid-RollingUpdate with two
+// Ready pods on the given nodes and a third, not Ready pod on revision rev.
+func rollingNATSWithDownPod(readyNodes []string, rev string, mutate func(*corev1.Pod)) []runtime.Object {
+	objs := makeQuorumSTS("nats", "nats-system", 3, 2, readyNodes)
+	sts := objs[0].(*appsv1.StatefulSet)
+	sts.Status.UpdateRevision = "nats-r2"
+	controller := true
+	down := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nats-2", Namespace: "nats-system",
+			Labels: map[string]string{"app": "nats", appsv1.ControllerRevisionHashLabelKey: rev},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "StatefulSet", Name: "nats", UID: sts.UID, Controller: &controller,
+			}},
+		},
+		Spec:   corev1.PodSpec{NodeName: "node-3"},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	if mutate != nil {
+		mutate(down)
+	}
+	return append(objs, down)
+}
+
+func runTier2(objs []runtime.Object) *ValidationState {
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(objs...), state)
+	return state
+}
+
+// A rollout is tolerated one pod down only while it can finish. A new pod that
+// crash-loops, or an old-revision pod held back by a partition, stays down on
+// every run, and there is no StatefulSet progress deadline to report it.
+func TestCheckTier2StatefulSets_StalledRolloutFails(t *testing.T) {
+	crashLoop := func(p *corev1.Pod) {
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name: "nats", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		}}
+	}
+	restarting := func(p *corev1.Pod) {
+		p.Status.Phase = corev1.PodRunning
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "nats", RestartCount: 5}}
+	}
+	for name, objs := range map[string][]runtime.Object{
+		"crash-looping new pod":   rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", crashLoop),
+		"restarting new pod":      rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", restarting),
+		"old pod below partition": rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", nil),
+	} {
+		state := runTier2(objs)
+		require.NotNil(t, state.Tier2StatefulSetsOK, name)
+		assert.False(t, *state.Tier2StatefulSetsOK, name)
+	}
+}
+
+// A replacement pod that is still being created is a rollout in progress.
+func TestCheckTier2StatefulSets_StartingRolloutPodIsTolerated(t *testing.T) {
+	creating := func(p *corev1.Pod) {
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name: "nats", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+		}}
+	}
+	state := runTier2(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", creating))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "rolling update in progress")
+}
+
+// A tolerated rollout still gets the placement scan: the two Ready peers on one
+// node are one node loss from losing quorum, as they would be at 3/3.
+func TestCheckTier2StatefulSets_TolerateRolloutStillChecksPlacement(t *testing.T) {
+	state := runTier2(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", nil))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK)
+}
+
+// Below three replicas, a known quorum component fails only under an HA mode.
+// Under highAvailability.mode none a single-replica Cassandra is the
+// documented shape; with the mode unknown it is recorded, not failed.
+func TestCheckTier2StatefulSets_SubQuorumFollowsTheHAMode(t *testing.T) {
+	run := func(mode string, objs ...runtime.Object) *ValidationState {
+		t.Setenv(haModeEnv, mode)
+		state := &ValidationState{Log: testLog()}
+		checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(objs...), state)
+		return state
+	}
+	single := func() []runtime.Object {
+		return makeQuorumSTS("cassandra", "cassandra-system", 1, 1, []string{"node-1"})
+	}
+	healthyNATS := func() []runtime.Object {
+		return makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
+	}
+
+	for _, mode := range []string{"preferred", "Enforced"} {
+		state := run(mode, append(single(), healthyNATS()...)...)
+		require.NotNil(t, state.Tier2StatefulSetsOK, mode)
+		assert.False(t, *state.Tier2StatefulSetsOK, "a lost quorum under %s", mode)
+	}
+
+	state := run("none", single()...)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "single-replica is what mode none deploys")
+
+	state = run("", append(single(), healthyNATS()...)...)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "cassandra-system/cassandra",
+		"with the mode unknown it is reported as not assessed")
+}
+
+// The rule matches the stack's own components only: by exact name, in their
+// own namespace. A same-prefixed workload, or a nats elsewhere, is not one.
+func TestIsKnownQuorumComponent(t *testing.T) {
+	assert.True(t, isKnownQuorumComponent("cassandra-system", "cassandra"))
+	assert.True(t, isKnownQuorumComponent("vault-system", "openbao-server"))
+	assert.True(t, isKnownQuorumComponent("nats-system", "nats"))
+	assert.False(t, isKnownQuorumComponent("cassandra-system", "cassandra-backup"))
+	assert.False(t, isKnownQuorumComponent("nvcf", "nvcf-nats"))
+	assert.False(t, isKnownQuorumComponent("nvcf", "nats"))
+
+	t.Setenv(openBaoNamespaceEnv, "openbao")
+	assert.True(t, isKnownQuorumComponent("openbao", "openbao-server"), "a relocated OpenBao is still OpenBao")
 }

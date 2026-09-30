@@ -1266,6 +1266,17 @@
                     "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets",
                     "default": ""
                 },
+                "haMode": {
+                    "type": "string",
+                    "description": "The stack's highAvailability.mode; a quorum component below three replicas fails only under preferred or enforced",
+                    "enum": [
+                        "",
+                        "none",
+                        "preferred",
+                        "enforced"
+                    ],
+                    "default": ""
+                },
                 "networkChecks": {
                     "type": [
                         "object",

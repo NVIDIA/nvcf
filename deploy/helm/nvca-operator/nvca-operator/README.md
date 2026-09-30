@@ -239,6 +239,7 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
 | `clusterValidator.gatewayNames`                       | Override for the NVCF Gateways (`name` or `namespace/name`); replaces discovery   | `[]` (discovered from NVCF routes)     |
 | `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets` | `""` (`busybox:1.36`)                  |
+| `clusterValidator.haMode`                             | Stack `highAvailability.mode`; sub-quorum fails only under `preferred`/`enforced` | `""` (not assessed)                    |
 | `clusterValidator.schedule`                           | CronJob schedule (cron expression)                                                | `0 */3 * * *`                          |
 | `clusterValidator.configMapName`                      | ConfigMap name for user-defined network checks                                    | `cluster-validator-network-checks`     |
 | `clusterValidator.networkChecks`                      | Network check configuration (creates the ConfigMap automatically when set)        | `{}`                                   |

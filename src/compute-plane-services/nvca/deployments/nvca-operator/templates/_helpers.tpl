@@ -434,6 +434,7 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "envoyGatewayNamespace" ""
     "gatewayNames" (list)
     "nodeToNodeProbeImage" ""
+    "haMode" ""
     "networkChecks" (dict)
     "resources" (dict
       "requests" (dict "cpu" "100m" "memory" "64Mi")
