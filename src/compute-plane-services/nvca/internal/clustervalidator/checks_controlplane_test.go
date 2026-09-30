@@ -305,95 +305,24 @@ func TestCheckNodeToNode_UnschedulableNodesSkipped(t *testing.T) {
 	assert.Nil(t, state.NodeToNodeOK, "no schedulable nodes means the probe never ran")
 }
 
-func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
-	// Three nodes: two schedulable, one with a NoSchedule taint.
-	// DesiredNumberScheduled=2 (tainted node excluded by scheduler), so
-	// waitForDaemonSetPods must converge on 2 pods, not 3. If the old
-	// len(schedulable)=3 path were used the test would block until deadline.
-	n1 := makeNode("node-1", true, 0)
-	n2 := makeNode("node-2", true, 0)
-	n3 := makeNode("node-3", true, 0)
-	n3.Spec.Taints = []corev1.Taint{{
-		Key: "dedicated", Value: "gpu", Effect: corev1.TaintEffectNoSchedule,
-	}}
-
-	client := fake.NewSimpleClientset(n1, n2, n3)
-
-	// Capture DaemonSet labels (which include a random suffix) so the pod-list
-	// reactor can return pods that survive FakePods.List label filtering.
-	// capturedLabels is set synchronously by the daemonset create reactor
-	// before any list call, so no synchronisation is needed.
-	var capturedLabels map[string]string
-	var capturedName, capturedNS string
-	// Return a ZEROED status, exactly as a real apiserver does: the DaemonSet
-	// controller populates status asynchronously, so the Create response never
-	// carries DesiredNumberScheduled. Reading it here would yield 0 and fall
-	// back to len(schedulable)=3, which is the regression this guards.
-	client.PrependReactor("create", "daemonsets", func(action ktesting.Action) (bool, runtime.Object, error) {
-		ds := action.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
-		capturedLabels = ds.Labels
-		capturedName = ds.Name
-		capturedNS = ds.Namespace
-		ds.Status = appsv1.DaemonSetStatus{}
-		return true, ds, nil
-	})
-
-	// The subsequent Get is where the reconciled status appears: 2, because the
-	// scheduler excludes the tainted node.
-	client.PrependReactor("get", "daemonsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		return true, &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:       capturedName,
-				Namespace:  capturedNS,
-				Labels:     capturedLabels,
-				Generation: 1,
-			},
-			Status: appsv1.DaemonSetStatus{
-				DesiredNumberScheduled: 2,
-				ObservedGeneration:     1,
-			},
-		}, nil
-	})
-
-	// Return 2 Running pods whose labels match the DaemonSet selector.
-	// FakePods.List filters by label after the reactor returns, so pods must
-	// carry the full label set including the random instance suffix.
-	client.PrependReactor("list", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		lbl := capturedLabels
-		return true, &corev1.PodList{Items: []corev1.Pod{
-			{
-				ObjectMeta: metav1.ObjectMeta{Name: "s-1", Namespace: capturedNS, Labels: lbl},
-				Spec:       corev1.PodSpec{NodeName: "node-1"},
-				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
-			},
-			{
-				ObjectMeta: metav1.ObjectMeta{Name: "s-2", Namespace: capturedNS, Labels: lbl},
-				Spec:       corev1.PodSpec{NodeName: "node-2"},
-				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
-			},
-		}}, nil
-	})
-
-	// Deny checker pod creation so the test exits quickly without needing to
-	// simulate full pod lifecycle (no Get/poll needed). A 403 here is also the
-	// checker-side admission guard: it must stay UNKNOWN, not fail the overlay.
-	var checkerPodCreateCalled bool
-	client.PrependReactor("create", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		checkerPodCreateCalled = true
-		return true, nil, apierrors.NewForbidden(
-			schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("exceeded quota"))
-	})
+// The probe tolerates every taint, so a GPU-tainted node is probed rather than
+// leaving the cluster UNKNOWN, while a NotReady node, which cannot run it, is
+// not expected to have a pod.
+func TestCheckNodeToNode_TaintedNodeIsProbedNotReadyIsNot(t *testing.T) {
+	n1, n2, n3 := makeNode("node-1", true, 0), makeNode("node-2", true, 0), makeNode("node-3", false, 0)
+	n2.Spec.Taints = []corev1.Taint{{Key: "nvidia.com/gpu", Effect: corev1.TaintEffectNoSchedule}}
+	f := newN2NFixture(t, []*corev1.Node{n1, n2, n3},
+		[]corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2")},
+		nil, checkerExit(0))
 
 	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
+	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
 
-	// checkerPodCreateCalled must be true: if the check had sized its wait from
-	// len(schedulable)=3 rather than polling for DesiredNumberScheduled=2, it
-	// would have timed out before reaching pod creation and this flag would
-	// stay false, catching the regression.
-	require.True(t, checkerPodCreateCalled, "check must reach checker pod creation step")
-	assert.Nil(t, state.NodeToNodeOK, "a checker that was never admitted is not evidence about the overlay")
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "checker pod was not admitted")
+	require.NotNil(t, state.NodeToNodeOK)
+	assert.True(t, *state.NodeToNodeOK)
+	assert.Contains(t, f.checkerCmd, "10.0.0.2", "the GPU-tainted node is a probe target")
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "node-3",
+		"a NotReady node is not expected to run the probe, so it is no coverage gap")
 }
 
 // Any rejection of the probe DaemonSet means the probe never ran. Classifying
@@ -449,13 +378,11 @@ func TestCheckNodeToNode_CleansUpProbeResources(t *testing.T) {
 		})
 	}
 
-	// Fail the DaemonSet status poll fast so the test does not wait out the
-	// real timeout; cleanup must still run on this path.
-	// Forbidden is terminal for the poll; a generic error is retried for the
-	// full 30s status timeout.
-	client.PrependReactor("get", "daemonsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+	// Fail the probe pod list fast so the test does not wait out the real
+	// timeout; cleanup must still run on this path. Forbidden is terminal.
+	client.PrependReactor("list", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(
-			schema.GroupResource{Group: "apps", Resource: "daemonsets"}, "", fmt.Errorf("simulated status read failure"))
+			schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("simulated pod read failure"))
 	})
 
 	state := &ValidationState{Log: testLog()}
@@ -1327,21 +1254,15 @@ func TestEnvoyGatewayNamespaceName_HonoursOverride(t *testing.T) {
 		"the relocated namespace must also be covered by the Tier checks")
 }
 
-// The probe DaemonSet needs the same tolerations the validator CronJob carries:
-// the DaemonSet controller auto-tolerates not-ready and unschedulable but not
-// the control-plane taint, so a dedicated control plane schedules zero pods.
-func TestBuildNodeToNodeDaemonSet_ToleratesControlPlaneTaint(t *testing.T) {
+// The probe tolerates every taint: a dedicated control plane, GPU nodes and any
+// other taint would otherwise keep it off nodes and leave the check UNKNOWN.
+// NodeName on the checker bypasses the scheduler but not taint admission.
+func TestBuildNodeToNodeDaemonSet_ToleratesEveryTaint(t *testing.T) {
+	everything := []corev1.Toleration{{Operator: corev1.TolerationOpExists}}
 	ds := buildNodeToNodeDaemonSet("n2n", "ns", map[string]string{"a": "b"}, "img")
-	var keys []string
-	for _, tol := range ds.Spec.Template.Spec.Tolerations {
-		keys = append(keys, tol.Key)
-	}
-	assert.Contains(t, keys, "node-role.kubernetes.io/control-plane")
-	assert.Contains(t, keys, "node-role.kubernetes.io/master")
-
+	assert.Equal(t, everything, ds.Spec.Template.Spec.Tolerations)
 	pod := buildNodeToNodeCheckerPod("checker", "ns", "node-1", []string{"10.0.0.1"}, "img")
-	assert.NotEmpty(t, pod.Spec.Tolerations,
-		"NodeName bypasses the scheduler but not taint admission")
+	assert.Equal(t, everything, pod.Spec.Tolerations)
 }
 
 // gatewayDiscoveryClient returns a fake clientset whose discovery surface
@@ -1475,88 +1396,81 @@ func TestCheckTier2StatefulSets_PodListDenialIsUnknownNotFailure(t *testing.T) {
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "placement check")
 }
 
-// Every scheduled pod must come up. Accepting a subset reported the overlay as
-// Verified while a Ready node's pod sat in ContainerCreating with no IP, which
-// is the one fault this check exists to catch.
-func TestWaitForDaemonSetPods_RequiresEveryScheduledPod(t *testing.T) {
+// The wait returns as soon as every expected node has a Running pod with an
+// IP, and otherwise returns what it last saw for the caller to classify.
+func TestWaitForProbePods_ReturnsWhatItSawAtTheDeadline(t *testing.T) {
 	labels := map[string]string{"app": "n2n"}
-	mk := func(name, node string) *corev1.Pod {
-		return &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "probe", Labels: labels},
-			Spec:       corev1.PodSpec{NodeName: node},
-			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0." + node[len(node)-1:]},
-		}
+	mk := func(name, node, ip string) *corev1.Pod {
+		p := runningProbePod(name, node, ip)
+		p.Namespace, p.Labels = "probe", labels
+		return &p
 	}
-	// Three scheduled, two Running: the third node's CNI never gave it an IP,
-	// so its pod sits in ContainerCreating.
+	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
+	nodes := []string{"node-1", "node-2", "node-3"}
+
 	stuck := probePod("node-3", "Pending", "", "ContainerCreating")
 	stuck.ObjectMeta = metav1.ObjectMeta{Name: "c", Namespace: "probe", Labels: labels}
-	client := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"), &stuck)
-	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
+	client := fake.NewSimpleClientset(mk("a", "node-1", "10.0.0.1"), mk("b", "node-2", "10.0.0.2"), &stuck)
+	pods, err := waitForProbePods(context.Background(), client, "probe", selector, nodes, time.Second)
+	require.NoError(t, err)
+	assert.Len(t, pods, 3, "the straggler is returned for classification, not dropped")
 
-	_, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 3, time.Second)
-	require.Error(t, err, "a node whose probe pod never started must not be silently skipped")
-	assert.Contains(t, err.Error(), "timed out waiting for 3 Running pods")
-
-	// All three up: the wait succeeds.
-	client2 := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"), mk("c", "node-3"))
-	pods, err := waitForDaemonSetPods(context.Background(), client2, "probe", selector, 3, time.Second)
+	client = fake.NewSimpleClientset(mk("a", "node-1", "10.0.0.1"), mk("b", "node-2", "10.0.0.2"),
+		mk("c", "node-3", "10.0.0.3"))
+	start := time.Now()
+	pods, err = waitForProbePods(context.Background(), client, "probe", selector, nodes, 30*time.Second)
 	require.NoError(t, err)
 	assert.Len(t, pods, 3)
+	assert.Less(t, time.Since(start), 5*time.Second, "all up returns at once")
 }
 
-func TestWaitForDaemonSetPods_RetriesTransientErrors(t *testing.T) {
+// A list that fails after earlier ones succeeded keeps what they showed. The
+// last attempt usually starts just past the deadline, and discarding the pods
+// already seen turned a real CNI fault into UNKNOWN.
+func TestWaitForProbePods_KeepsTheLastSuccessfulList(t *testing.T) {
 	labels := map[string]string{"app": "n2n"}
-	client := fake.NewSimpleClientset(
-		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "probe", Labels: labels},
-			Spec:       corev1.PodSpec{NodeName: "node-1"},
-			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
-		},
-		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "probe", Labels: labels},
-			Spec:       corev1.PodSpec{NodeName: "node-2"},
-			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
-		},
-	)
+	stuck := probePod("node-2", "Pending", "", "ContainerCreating")
+	stuck.ObjectMeta = metav1.ObjectMeta{Name: "b", Namespace: "probe", Labels: labels}
+	up := runningProbePod("a", "node-1", "10.0.0.1")
+	up.Namespace, up.Labels = "probe", labels
+	client := fake.NewSimpleClientset(&up, &stuck)
 	calls := 0
 	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
 		calls++
 		if calls == 1 {
-			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+			return false, nil, nil
 		}
-		return false, nil, nil
+		return true, nil, apierrors.NewTooManyRequestsError("slow down")
 	})
 	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
-
-	pods, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 2, 30*time.Second)
-	require.NoError(t, err, "a single 429 must not abort a 30s wait")
+	nodes := []string{"node-1", "node-2"}
+	pods, err := waitForProbePods(context.Background(), client, "probe", selector, nodes, time.Second)
+	require.NoError(t, err)
 	assert.Len(t, pods, 2)
-	assert.Greater(t, calls, 1, "the loop must have retried")
+	assert.Equal(t, []string{"node-2"}, classifyProbeNodes(pods, nodes, nil).networkFaults)
 }
 
-// A pod list that keeps failing until the deadline observed nothing, so it
-// must not read as pods that failed to come up.
-func TestWaitForDaemonSetPods_UnreadableListIsNotObserved(t *testing.T) {
+// A pod list that fails until the deadline observed nothing at all.
+func TestWaitForProbePods_UnreadableListIsNotObserved(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewTooManyRequestsError("slow down")
 	})
-	_, err := waitForDaemonSetPods(context.Background(), client, "probe", "app=n2n", 2, time.Second)
+	_, err := waitForProbePods(context.Background(), client, "probe", "app=n2n", []string{"a", "b"}, time.Second)
 	var unobserved *probeNotObservedError
 	require.ErrorAs(t, err, &unobserved)
-	assert.Contains(t, unobserved.reason, "listing DaemonSet pods")
+	assert.Contains(t, unobserved.reason, "listing probe pods")
 }
 
 // A permission error is terminal: retrying it just burns the deadline.
-func TestWaitForDaemonSetPods_ForbiddenIsTerminal(t *testing.T) {
+func TestWaitForProbePods_ForbiddenIsTerminal(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(
 			schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("denied"))
 	})
 	start := time.Now()
-	_, err := waitForDaemonSetPods(context.Background(), client, "probe", "app=n2n", 2, 30*time.Second)
+	_, err := waitForProbePods(context.Background(), client, "probe", "app=n2n", []string{"a", "b"}, 30*time.Second)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "a denial must return immediately")
 }
@@ -1567,29 +1481,24 @@ func TestWaitForDaemonSetPods_ForbiddenIsTerminal(t *testing.T) {
 // a critical UNKNOWN, which fails the verdict, so a k3d or single-node control
 // plane would report NVCF-Not-Ready on every tick.
 func TestCheckNodeToNode_SingleNodeIsNotApplicableNotUnknown(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "only-node"}},
-	)
+	client := fake.NewSimpleClientset(makeNode("only-node", true, 0))
 	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), client, state, "busybox:1.36")
 
-	// Not a pass: no cross-node packet was sent. Reporting Verified here is
-	// the regression Vaibhav's "sets NodeToNodeOK = true having sent zero
-	// packets" thread already closed once.
+	// Not a pass: no cross-node packet was sent.
 	assert.Nil(t, state.NodeToNodeOK, "an unexercised check must not be reported as passed")
 	assert.NotEmpty(t, state.NodeToNodeNotApplicable,
 		"one schedulable node is not applicable, not unobserved")
+	// The row has no value, so the warnings list says why, as METRICS.md
+	// tells an absent() guard to expect.
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "Node-to-Node: not applicable")
 }
 
 // A cordoned second node leaves one schedulable node: same reasoning.
 func TestCheckNodeToNode_AllButOneCordonedIsNotApplicable(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
-		&corev1.Node{
-			ObjectMeta: metav1.ObjectMeta{Name: "node-2"},
-			Spec:       corev1.NodeSpec{Unschedulable: true},
-		},
-	)
+	cordoned := makeNode("node-2", true, 0)
+	cordoned.Spec.Unschedulable = true
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0), cordoned)
 	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), client, state, "busybox:1.36")
 
@@ -1600,10 +1509,7 @@ func TestCheckNodeToNode_AllButOneCordonedIsNotApplicable(t *testing.T) {
 // An RBAC denial on the probe DaemonSet is genuinely unobserved, so it must
 // stay UNKNOWN. This is the case the operator ClusterRole now grants for.
 func TestCheckNodeToNode_DaemonSetDenialStaysUnknown(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}},
-	)
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0), makeNode("node-2", true, 0))
 	client.PrependReactor("create", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(
 			schema.GroupResource{Group: "apps", Resource: "daemonsets"}, "", fmt.Errorf("denied"))
@@ -1672,72 +1578,64 @@ func probePod(node, phase string, ip string, waiting string) corev1.Pod {
 }
 
 // Only a pod the node could not network is evidence about the overlay. A pod
-// that could not pull its image, start its container, be scheduled, or be
-// created at all says nothing about it.
-func TestClassifyUnstartedProbePods(t *testing.T) {
+// that could not pull its image, start its container, be scheduled, be
+// admitted by the kubelet, or be created at all says nothing about it.
+func TestClassifyProbeNodes(t *testing.T) {
+	nodes := []string{"node-1", "node-2"}
 	running := probePod("node-1", "Running", "10.0.0.1", "")
+	running.Name = "a"
+	second := func(p corev1.Pod) []corev1.Pod {
+		p.Name = "b"
+		return []corev1.Pod{running, p}
+	}
+	evicted := probePod("node-2", "Failed", "", "")
+	evicted.Status.Reason = "Evicted"
 	cases := []struct {
-		name       string
-		pods       []corev1.Pod
-		want       int
-		unobserved bool
-		recommend  bool
+		name      string
+		pods      []corev1.Pod
+		pulling   map[string]bool
+		fault     bool
+		gap       string
+		pullError bool
 	}{
-		{"pods never created", []corev1.Pod{running}, 3, true, false},
-		{"image pull backoff", []corev1.Pod{running, probePod("node-2", "Pending", "", "ImagePullBackOff")}, 2, true, true},
-		{"first pull error", []corev1.Pod{running, probePod("node-2", "Pending", "", "ErrImagePull")}, 2, true, true},
-		{"container cannot start", []corev1.Pod{running, probePod("node-2", "Running", "", "CrashLoopBackOff")}, 2, true, false},
-		{"cni never gave an IP", []corev1.Pod{running, probePod("node-2", "Pending", "", "ContainerCreating")}, 2, false, false},
-		{"running without IP", []corev1.Pod{running, probePod("node-2", "Running", "", "")}, 2, false, false},
-		// A slow image pull reports ContainerCreating after the sandbox, and
-		// its IP, came up: the network worked.
-		{"networked but still starting", []corev1.Pod{running, probePod("node-2", "Pending", "10.0.0.9", "ContainerCreating")}, 2, true, false},
-		{"not scheduled", []corev1.Pod{running, probePod("", "Pending", "", "")}, 2, true, false},
-		{
-			"network fault beside a pull fault still fails",
-			[]corev1.Pod{
-				running,
-				probePod("node-2", "Pending", "", "ImagePullBackOff"),
-				probePod("node-3", "Pending", "", "ContainerCreating"),
-			},
-			3, false, false,
-		},
+		{"pod never created", []corev1.Pod{running}, nil, false, "no probe pod was created", false},
+		{"image pull backoff", second(probePod("node-2", "Pending", "", "ImagePullBackOff")), nil, false, "ImagePullBackOff", true},
+		{"first pull error", second(probePod("node-2", "Pending", "", "ErrImagePull")), nil, false, "ErrImagePull", true},
+		{"container cannot start", second(probePod("node-2", "Running", "", "CrashLoopBackOff")), nil, false, "CrashLoopBackOff", false},
+		{"kubelet eviction", second(evicted), nil, false, "rejected by the kubelet (Evicted)", false},
+		{"first pull still running", second(probePod("node-2", "Pending", "", "ContainerCreating")),
+			map[string]bool{"b": true}, false, "image still pulling", false},
+		{"cni never gave an IP", second(probePod("node-2", "Pending", "", "ContainerCreating")), nil, true, "", false},
+		{"running without IP", second(probePod("node-2", "Running", "", "")), nil, true, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classifyUnstartedProbePods(tc.pods, tc.want)
-			if !tc.unobserved {
-				assert.Nil(t, got)
+			got := classifyProbeNodes(tc.pods, nodes, tc.pulling)
+			assert.Len(t, got.running, 1)
+			if tc.fault {
+				assert.Equal(t, []string{"node-2"}, got.networkFaults)
+				assert.Empty(t, got.gaps)
 				return
 			}
-			require.NotNil(t, got)
-			assert.Equal(t, tc.recommend, got.recommendation != "")
+			assert.Empty(t, got.networkFaults)
+			require.Len(t, got.gaps, 1)
+			assert.Contains(t, got.gaps[0], "node-2: "+tc.gap)
+			assert.Equal(t, tc.pullError, got.pullFailed)
 		})
 	}
-
-	unschedulable := probePod("node-2", "Pending", "", "")
-	unschedulable.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}
-	got := classifyUnstartedProbePods([]corev1.Pod{running, unschedulable}, 2)
-	require.NotNil(t, got, "a pod the scheduler could not place never ran")
-	assert.Contains(t, got.reason, "node-2: Unschedulable")
 }
 
-// A probe stuck in ImagePullBackOff is reported as not observed, with advice
-// naming the dedicated image setting, instead of "got 0 on 0 node(s)".
-func TestWaitForDaemonSetPods_ImagePullIsNotObserved(t *testing.T) {
-	labels := map[string]string{"app": "n2n"}
-	mk := func(name, node string) *corev1.Pod {
-		p := probePod(node, "Pending", "", "ImagePullBackOff")
-		p.ObjectMeta = metav1.ObjectMeta{Name: name, Namespace: "probe", Labels: labels}
-		return &p
-	}
-	client := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"))
-	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
-
-	_, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 2, time.Second)
-	var unobserved *probeNotObservedError
-	require.ErrorAs(t, err, &unobserved)
-	assert.Contains(t, unobserved.recommendation, nodeToNodeImageEnv)
+// An unbound DaemonSet pod has no spec.nodeName, but the controller pins it to
+// its node through a metadata.name affinity field, so a capacity-blocked pod
+// still names its node.
+func TestClassifyProbeNodes_UnscheduledPodNamesItsNode(t *testing.T) {
+	running := probePod("node-1", "Running", "10.0.0.1", "")
+	pending := probePod("", "Pending", "", "")
+	pending.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}
+	pending.Spec.Affinity = daemonSetNodeAffinity("node-2")
+	got := classifyProbeNodes([]corev1.Pod{running, pending}, []string{"node-1", "node-2"}, nil)
+	require.Len(t, got.gaps, 1)
+	assert.Equal(t, "node-2: Unschedulable", got.gaps[0])
 }
 
 func TestNodeToNodeProbeImage_DedicatedOverrideWins(t *testing.T) {
@@ -1774,19 +1672,6 @@ func TestControlPlaneNamespaceSet_DefaultsWhenUnset(t *testing.T) {
 	got := controlPlaneNamespaceSet()
 	assert.Contains(t, got, "vault-system")
 	assert.Contains(t, got, envoyGatewayNamespace)
-}
-
-// A reconciled desired=0 means no node tolerates the probe. That is an answer,
-// not a failure to observe one: requiring > 0 turned a fully tainted cluster
-// into a blocking critical UNKNOWN after a 30s wait.
-func TestWaitForDaemonSetDesiredCount_ReconciledZeroIsAnAnswer(t *testing.T) {
-	client := fake.NewSimpleClientset(&appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "n2n", Namespace: "probe", Generation: 1},
-		Status:     appsv1.DaemonSetStatus{ObservedGeneration: 1, DesiredNumberScheduled: 0},
-	})
-	got, err := waitForDaemonSetDesiredCount(context.Background(), client, "probe", "n2n", time.Second)
-	require.NoError(t, err, "a reconciled zero target must not be reported as never published")
-	assert.Equal(t, 0, got)
 }
 
 // An Envoy controller with no Ready pods must add a warning, or printSummary
@@ -2347,53 +2232,74 @@ func TestCheckTier2StatefulSets_ListFailureKeepsEarlierFindings(t *testing.T) {
 	assert.False(t, *state.Tier2StatefulSetsOK, "the observed NATS outage must survive a later list failure")
 }
 
-// A transient error while waiting for the DaemonSet's scheduling target is
-// retried, not reported as a failure to observe.
-func TestWaitForDaemonSetDesiredCount_RetriesTransientErrors(t *testing.T) {
-	client := fake.NewSimpleClientset(&appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "ds", Namespace: "probe", Generation: 1},
-		Status:     appsv1.DaemonSetStatus{ObservedGeneration: 1, DesiredNumberScheduled: 3},
-	})
-	calls := 0
-	client.PrependReactor("get", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
-		calls++
-		if calls == 1 {
-			return true, nil, apierrors.NewTooManyRequestsError("slow down")
-		}
-		return false, nil, nil
-	})
-	got, err := waitForDaemonSetDesiredCount(context.Background(), client, "probe", "ds", 10*time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, 3, got)
-	assert.Greater(t, calls, 1)
+// A node whose probe pod cannot be placed for capacity leaves a coverage gap,
+// not an UNKNOWN for the whole check: the other nodes are still probed, and
+// the warning names the node from the pod's affinity.
+func TestCheckNodeToNode_CapacityBlockedNodeIsACoverageGap(t *testing.T) {
+	pending := probePod("", "Pending", "", "")
+	pending.Name = "s-3"
+	pending.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}
+	pending.Spec.Affinity = daemonSetNodeAffinity("node-3")
+	f := newN2NFixture(t,
+		[]*corev1.Node{makeNode("node-1", true, 0), makeNode("node-2", true, 0), makeNode("node-3", true, 0)},
+		[]corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pending},
+		nil, checkerExit(nodeToNodeUnreachableExit))
+
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
+
+	require.NotNil(t, state.NodeToNodeOK, "the nodes that did start were probed")
+	assert.False(t, *state.NodeToNodeOK, "and a broken path between them still fails")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: Unschedulable")
 }
 
-// A probe that fits on fewer than two nodes of a multi-node cluster was not
-// exercised: UNKNOWN with a warning naming the taint, not N/A.
-func TestCheckNodeToNode_ProbeOnOneOfManyNodesIsUnknown(t *testing.T) {
-	n1, n2, n3 := makeNode("node-1", true, 0), makeNode("node-2", true, 0), makeNode("node-3", true, 0)
-	for _, n := range []*corev1.Node{n2, n3} {
-		n.Spec.Taints = []corev1.Taint{{Key: "nvidia.com/gpu", Effect: corev1.TaintEffectNoSchedule}}
+// A first image pull longer than the wait is not a CNI fault: the kubelet
+// publishes no pod IP until the pull returns, and the Pulling event says so.
+func TestCheckNodeToNode_SlowFirstPullIsNotANetworkFault(t *testing.T) {
+	pulling := probePod("node-3", "Pending", "", "ContainerCreating")
+	pulling.Name = "s-3"
+	nodes := func() []*corev1.Node {
+		return []*corev1.Node{makeNode("node-1", true, 0), makeNode("node-2", true, 0), makeNode("node-3", true, 0)}
 	}
-	client := fake.NewSimpleClientset(n1, n2, n3)
-	var dsName, dsNS string
-	client.PrependReactor("create", "daemonsets", func(a ktesting.Action) (bool, runtime.Object, error) {
-		ds := a.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
-		dsName, dsNS = ds.Name, ds.Namespace
-		return true, ds, nil
-	})
-	client.PrependReactor("get", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{Name: dsName, Namespace: dsNS, Generation: 1},
-			Status:     appsv1.DaemonSetStatus{ObservedGeneration: 1, DesiredNumberScheduled: 1},
-		}, nil
-	})
-	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
+	servers := []corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pulling}
 
-	assert.Nil(t, state.NodeToNodeOK)
-	assert.Empty(t, state.NodeToNodeNotApplicable, "three schedulable nodes is not a shape where the check is moot")
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "nvidia.com/gpu")
+	f := newN2NFixture(t, nodes(), servers,
+		[]corev1.Event{podEvent("s-3", "Scheduled", 0), podEvent("s-3", "Pulling", 1)}, checkerExit(0))
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
+	require.NotNil(t, state.NodeToNodeOK)
+	assert.True(t, *state.NodeToNodeOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: image still pulling")
+
+	// A sandbox failure after the pull started is the network after all.
+	f = newN2NFixture(t, nodes(), servers,
+		[]corev1.Event{podEvent("s-3", "Pulling", 0), podEvent("s-3", "FailedCreatePodSandBox", 1)}, checkerExit(0))
+	state = &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
+	require.NotNil(t, state.NodeToNodeOK)
+	assert.False(t, *state.NodeToNodeOK)
+}
+
+// The checker's exit code comes from the terminal pod the wait already read.
+// Fetching it again let a 429 on the second Get turn a real connection failure
+// into UNKNOWN and drop the firewall advice.
+func TestCheckNodeToNode_ConnectionFailureSurvivesAThrottledRead(t *testing.T) {
+	calls := 0
+	f := newN2NFixture(t, []*corev1.Node{makeNode("node-1", true, 0), makeNode("node-2", true, 0)},
+		[]corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2")},
+		nil, func() (*corev1.Pod, error) {
+			calls++
+			if calls == 1 {
+				return checkerPod(nodeToNodeUnreachableExit), nil
+			}
+			return nil, apierrors.NewTooManyRequestsError("slow down")
+		})
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
+
+	require.NotNil(t, state.NodeToNodeOK)
+	assert.False(t, *state.NodeToNodeOK)
+	assert.NotEmpty(t, state.Recommendations)
 }
 
 // The checker is pinned with NodeName, so a full node rejects it at kubelet
@@ -2420,8 +2326,7 @@ func TestCheckerFailureCause(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			client := fake.NewSimpleClientset(pod(tc.status))
-			why := checkerFailureCause(context.Background(), client, "ns", "c")
+			why := checkerFailureCause(pod(tc.status))
 			assert.Equal(t, tc.network, why == "", why)
 		})
 	}
@@ -3155,4 +3060,95 @@ func TestCheckTier1Deployments_ReplicaFailureIsNotARollout(t *testing.T) {
 	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(dep(rolloutProgressing())), nil, state)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK, "a moving rollout at its floor is tolerated")
+}
+
+// n2nFixture is a fake cluster for checkNodeToNode: the probe pods it serves
+// are placed in the run's namespace with the DaemonSet's labels, and checker
+// scripts what each Get of the checker pod returns.
+type n2nFixture struct {
+	client     *fake.Clientset
+	checkerCmd string
+}
+
+func newN2NFixture(
+	t *testing.T, nodes []*corev1.Node, pods []corev1.Pod, events []corev1.Event, checker func() (*corev1.Pod, error),
+) *n2nFixture {
+	t.Helper()
+	prev := nodeToNodeDSTimeout
+	nodeToNodeDSTimeout = 2 * time.Second
+	t.Cleanup(func() { nodeToNodeDSTimeout = prev })
+	objs := make([]runtime.Object, 0, len(nodes))
+	for _, n := range nodes {
+		objs = append(objs, n)
+	}
+	f := &n2nFixture{client: fake.NewSimpleClientset(objs...)}
+	var labels map[string]string
+	var ns string
+	f.client.PrependReactor("create", "daemonsets", func(a ktesting.Action) (bool, runtime.Object, error) {
+		ds := a.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
+		labels, ns = ds.Labels, ds.Namespace
+		return true, ds, nil
+	})
+	f.client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Pod, len(pods))
+		for i := range pods {
+			items[i] = *pods[i].DeepCopy()
+			items[i].Namespace, items[i].Labels = ns, labels
+		}
+		return true, &corev1.PodList{Items: items}, nil
+	})
+	f.client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.EventList{Items: events}, nil
+	})
+	f.client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		p := a.(ktesting.CreateAction).GetObject().(*corev1.Pod)
+		f.checkerCmd = strings.Join(p.Spec.Containers[0].Command, " ")
+		return true, p, nil
+	})
+	f.client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		p, err := checker()
+		return true, p, err
+	})
+	return f
+}
+
+func runningProbePod(name, node, ip string) corev1.Pod {
+	p := probePod(node, "Running", ip, "")
+	p.Name = name
+	return p
+}
+
+func checkerPod(exit int32) *corev1.Pod {
+	phase := corev1.PodSucceeded
+	if exit != 0 {
+		phase = corev1.PodFailed
+	}
+	return &corev1.Pod{Status: corev1.PodStatus{Phase: phase, ContainerStatuses: []corev1.ContainerStatus{{
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: exit}},
+	}}}}
+}
+
+func checkerExit(exit int32) func() (*corev1.Pod, error) {
+	return func() (*corev1.Pod, error) { return checkerPod(exit), nil }
+}
+
+// podEvent is a pod event seq seconds into the run, so events sort in order.
+func podEvent(pod, reason string, seq int) corev1.Event {
+	return corev1.Event{
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: pod},
+		Reason:         reason,
+		LastTimestamp:  metav1.NewTime(time.Unix(1_700_000_000+int64(seq), 0)),
+	}
+}
+
+// daemonSetNodeAffinity is the node pin the DaemonSet controller puts on each
+// pod it creates.
+func daemonSetNodeAffinity(node string) *corev1.Affinity {
+	return &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchFields: []corev1.NodeSelectorRequirement{{
+				Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{node},
+			}}}},
+		},
+	}}
 }

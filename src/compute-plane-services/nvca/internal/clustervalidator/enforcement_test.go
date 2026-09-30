@@ -19,6 +19,7 @@ package clustervalidator
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -232,7 +234,7 @@ func TestWaitForPodDone_Succeeded(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodSucceeded},
 	}
 	client := fake.NewSimpleClientset(pod)
-	ok, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
+	ok, _, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 }
@@ -243,7 +245,7 @@ func TestWaitForPodDone_Failed(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	}
 	client := fake.NewSimpleClientset(pod)
-	ok, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
+	ok, _, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
 	assert.NoError(t, err)
 	assert.False(t, ok)
 }
@@ -254,7 +256,7 @@ func TestWaitForPodDone_Timeout(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	client := fake.NewSimpleClientset(pod)
-	_, err := waitForPodDone(context.Background(), client, "ns", "p", 100*time.Millisecond)
+	_, _, err := waitForPodDone(context.Background(), client, "ns", "p", 100*time.Millisecond)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "did not complete")
 }
@@ -274,7 +276,7 @@ func TestWaitForPodDone_RetriesTransientErrors(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	ok, err := waitForPodDone(context.Background(), client, "ns", "p", 10*time.Second)
+	ok, _, err := waitForPodDone(context.Background(), client, "ns", "p", 10*time.Second)
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Greater(t, calls, 1)
@@ -284,7 +286,7 @@ func TestWaitForPodDone_RetriesTransientErrors(t *testing.T) {
 // the deadline.
 func TestWaitForPodDone_NotFoundIsTerminal(t *testing.T) {
 	start := time.Now()
-	_, err := waitForPodDone(context.Background(), fake.NewSimpleClientset(), "ns", "p", 30*time.Second)
+	_, _, err := waitForPodDone(context.Background(), fake.NewSimpleClientset(), "ns", "p", 30*time.Second)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second)
 }
@@ -337,7 +339,7 @@ func TestWaitForPodReady_HungGetEndsAtTheDeadline(t *testing.T) {
 func TestWaitForPodDone_HungGetEndsAtTheDeadline(t *testing.T) {
 	client := hangingClient(t)
 	finishesWithin(t, 6*time.Second, func() {
-		_, err := waitForPodDone(context.Background(), client, "ns", "p", time.Second)
+		_, _, err := waitForPodDone(context.Background(), client, "ns", "p", time.Second)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "did not complete", "a timed-out Get is transient, so the deadline ends the wait")
 	})
@@ -352,7 +354,7 @@ func TestWaitForPod_ExpiredBudgetMakesNoCall(t *testing.T) {
 		return false, nil, nil
 	})
 	require.Error(t, waitForPodReady(context.Background(), client, "ns", "srv", 0))
-	_, err := waitForPodDone(context.Background(), client, "ns", "p", 0)
+	_, _, err := waitForPodDone(context.Background(), client, "ns", "p", 0)
 	require.Error(t, err)
 	assert.Zero(t, calls)
 }
@@ -623,4 +625,32 @@ func TestAttemptContext_BoundsEachCall(t *testing.T) {
 	assert.LessOrEqual(t, remaining(time.Now().Add(time.Hour)), pollAttemptTimeout)
 	assert.Less(t, remaining(time.Now().Add(3*time.Second)), 4*time.Second)
 	assert.Greater(t, remaining(time.Now().Add(-time.Minute)), 500*time.Millisecond)
+}
+
+// A slow or throttled Get is not the pod's answer, so it is retried inside the
+// deadline. Failing on it aborted the whole enforcement check.
+func TestWaitForPodReady_RetriesTransientErrors(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "srv", Namespace: "ns"},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	})
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	require.NoError(t, waitForPodReady(context.Background(), client, "ns", "srv", 10*time.Second))
+	assert.Greater(t, calls, 1)
+
+	denied := fake.NewSimpleClientset()
+	denied.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "srv", fmt.Errorf("denied"))
+	})
+	start := time.Now()
+	require.Error(t, waitForPodReady(context.Background(), denied, "ns", "srv", 30*time.Second))
+	assert.Less(t, time.Since(start), 5*time.Second, "a denial cannot change inside the deadline")
 }

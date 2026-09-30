@@ -527,25 +527,40 @@ func probeConnectivityWithDelay(
 		_ = client.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
 	}()
 
-	return waitForPodDone(ctx, client, ns, name, timeout)
+	succeeded, _, err := waitForPodDone(ctx, client, ns, name, timeout)
+	return succeeded, err
 }
 
 // waitForPodReady polls until the named pod has the Ready condition.
 func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for {
 		if !time.Now().Before(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("pod %s/%s did not become ready within %v (last error: %w)", ns, name, timeout, lastErr)
+			}
 			return fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
 		}
 
 		getCtx, cancel := attemptContext(ctx, deadline)
 		pod, err := client.CoreV1().Pods(ns).Get(getCtx, name, metav1.GetOptions{})
 		cancel()
-		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
-			}
-		} else {
+		switch {
+		case err == nil:
+			lastErr = nil
+		case apierrors.IsNotFound(err):
+			// Not created yet.
+		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
+			return fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
+		default:
+			// A slow or throttled Get is not the pod's answer. The per-attempt
+			// cap turned an APF-queued Get into a hard failure of the whole
+			// enforcement check, so retry it inside the deadline, as
+			// waitForPodDone does.
+			lastErr = err
+		}
+		if err == nil {
 			if isPodReady(pod) {
 				return nil
 			}
@@ -583,17 +598,21 @@ func attemptContext(ctx context.Context, deadline time.Time) (context.Context, c
 }
 
 // waitForPodDone polls until the named pod reaches Succeeded or Failed.
-// Returns true for Succeeded, false for Failed.
-func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) (bool, error) {
+// Returns true for Succeeded, false for Failed, and the terminal pod, so a
+// caller that needs its exit code does not fetch it again and risk losing the
+// result to a transient error.
+func waitForPodDone(
+	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
+) (bool, *corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
 		if !time.Now().Before(deadline) {
 			if lastErr != nil {
-				return false, fmt.Errorf("pod %s/%s did not complete within %v (last error: %w)",
+				return false, nil, fmt.Errorf("pod %s/%s did not complete within %v (last error: %w)",
 					ns, name, timeout, lastErr)
 			}
-			return false, fmt.Errorf("pod %s/%s did not complete within %v", ns, name, timeout)
+			return false, nil, fmt.Errorf("pod %s/%s did not complete within %v", ns, name, timeout)
 		}
 
 		getCtx, cancel := attemptContext(ctx, deadline)
@@ -604,13 +623,13 @@ func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name s
 			lastErr = nil
 			switch pod.Status.Phase {
 			case corev1.PodSucceeded:
-				return true, nil
+				return true, pod, nil
 			case corev1.PodFailed:
-				return false, nil
+				return false, pod, nil
 			}
 		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsNotFound(err):
 			// Answers that cannot change inside the deadline.
-			return false, fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
+			return false, nil, fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
 		default:
 			// A 429 or apiserver blip is not the pod's result, so retry it
 			// rather than spend one Get on the whole verdict.
@@ -619,7 +638,7 @@ func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name s
 
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return false, nil, ctx.Err()
 		case <-time.After(2 * time.Second):
 		}
 	}

@@ -1472,8 +1472,6 @@ const (
 	nodeToNodeDSName         = "nvcf-n2n-server"
 	nodeToNodeCheckerName    = "nvcf-n2n-checker"
 	nodeToNodeActiveDeadline = int64(180)
-	nodeToNodeDSTimeout      = 2 * time.Minute
-	nodeToNodeStatusTimeout  = 30 * time.Second
 	nodeToNodeCheckerTimeout = 90 * time.Second
 	// nodeToNodeImageEnv is the dedicated probe image override. An operator
 	// debugging the node-to-node row has no reason to look under an
@@ -1668,31 +1666,31 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		return
 	}
 
-	var schedulable []string
-	for i := range nodes.Items {
-		if !nodes.Items[i].Spec.Unschedulable {
-			schedulable = append(schedulable, nodes.Items[i].Name)
-		}
+	// The probe tolerates every taint, so it lands on every node, and a pod is
+	// expected only where it can start: a Ready node that is not cordoned. A
+	// NotReady node cannot run it, and a taint the probe did not tolerate used
+	// to leave a GPU-tainted or partly NotReady cluster permanently UNKNOWN.
+	probeNodes, skippedNodes := nodeToNodeTargets(nodes.Items)
+	if len(skippedNodes) > 0 {
+		printInfo(log, fmt.Sprintf("  Not probed: %s", strings.Join(skippedNodes, ", ")))
 	}
 
-	// Leave the pointer nil rather than reporting Verified: there is no second
-	// node to reach, so the overlay was not exercised. The summary renders this
-	// as an explicit UNKNOWN row.
-	// Zero and one are different answers. No schedulable node at all means the
-	// cluster cannot place work and we observed nothing, so the result stays
+	// Zero and one are different answers. No usable node at all means the
+	// cluster cannot place work and nothing was observed, so the result stays
 	// unknown. Exactly one means there is no cross-node path to exercise, so
-	// the requirement is vacuously met: reporting that as a critical UNKNOWN
-	// would leave every single-node or k3d control plane permanently
-	// NVCF-Not-Ready once an unobserved critical check fails the verdict.
-	if len(schedulable) == 0 {
-		printWarning(log, "No schedulable nodes; node-to-node overlay not observed")
+	// the requirement is moot rather than unobserved. Either way the warnings
+	// list says why the row has no value, as the metrics contract requires.
+	if len(probeNodes) == 0 {
+		printWarning(log, "No Ready, schedulable nodes; node-to-node overlay not observed")
 		state.Warnings = append(state.Warnings,
-			"Node-to-Node: status unknown (no schedulable nodes)")
+			"Node-to-Node: status unknown (no Ready, schedulable nodes)")
 		return
 	}
-	if len(schedulable) == 1 {
-		printInfo(log, "  1 schedulable node; node-to-node check not applicable")
+	if len(probeNodes) == 1 {
+		printInfo(log, "  1 Ready, schedulable node; node-to-node check not applicable")
 		state.NodeToNodeNotApplicable = "single schedulable node, no cross-node path"
+		state.Warnings = append(state.Warnings,
+			"Node-to-Node: not applicable (one Ready, schedulable node, so there is no cross-node path to probe)")
 		return
 	}
 
@@ -1717,24 +1715,29 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 
 	// Deleting the namespace removes the DaemonSet and checker pod with it, but
 	// delete them first so a namespace stuck terminating does not strand the
-	// probe pods on every node.
+	// probe pods on every node. Each delete gets its own budget: sharing one
+	// let a slow DaemonSet delete spend the namespace delete's time, leaking
+	// the namespace until a later run's sweep.
 	defer func() {
 		grace := int64(0)
 		opts := metav1.DeleteOptions{GracePeriodSeconds: &grace}
-		delCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = client.AppsV1().DaemonSets(ns).Delete(delCtx, dsName, opts)
-		_ = client.CoreV1().Pods(ns).Delete(delCtx, checkerName, opts)
-		if err := client.CoreV1().Namespaces().Delete(delCtx, ns, metav1.DeleteOptions{}); err != nil &&
-			!apierrors.IsNotFound(err) {
+		del := func(f func(context.Context) error) error {
+			delCtx, cancel := context.WithTimeout(context.Background(), nodeToNodeDeleteTimeout)
+			defer cancel()
+			return f(delCtx)
+		}
+		_ = del(func(c context.Context) error { return client.AppsV1().DaemonSets(ns).Delete(c, dsName, opts) })
+		_ = del(func(c context.Context) error { return client.CoreV1().Pods(ns).Delete(c, checkerName, opts) })
+		if err := del(func(c context.Context) error {
+			return client.CoreV1().Namespaces().Delete(c, ns, metav1.DeleteOptions{})
+		}); err != nil && !apierrors.IsNotFound(err) {
 			log.Warnf("Failed to clean up probe namespace %s: %v", ns, err)
 		}
 	}()
 
-	ds, err := client.AppsV1().DaemonSets(ns).Create(
+	if _, err := client.AppsV1().DaemonSets(ns).Create(
 		ctx, buildNodeToNodeDaemonSet(dsName, ns, dsLabels, image), metav1.CreateOptions{},
-	)
-	if err != nil {
+	); err != nil {
 		// Any create error means the probe was never admitted, which says
 		// nothing about the overlay. Classifying by status code split one
 		// cause across two verdicts: RBAC, a ResourceQuota and Gatekeeper
@@ -1744,57 +1747,54 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		return
 	}
 
-	// DesiredNumberScheduled is the only number that accounts for taints the
-	// DaemonSet has no toleration for. The Create response always carries a
-	// zeroed status because the DaemonSet controller populates it
-	// asynchronously, so poll for it instead of reading it off ds directly.
-	// Falling back to len(schedulable) would count NoSchedule-tainted
-	// control-plane nodes and fail a healthy cluster on timeout.
-	wantPods, err := waitForDaemonSetDesiredCount(ctx, client, ns, ds.Name, nodeToNodeStatusTimeout)
+	log.Infof("  Waiting for probe pods on %d node(s)...", len(probeNodes))
+	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: dsLabels})
+	pods, err := waitForProbePods(ctx, client, ns, selector, probeNodes, nodeToNodeDSTimeout)
 	if err != nil {
-		printWarning(log, fmt.Sprintf("Could not determine DaemonSet scheduling target: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Node-to-Node: status unknown (DaemonSet status never reported a scheduling target)")
-		return
-	}
-	// Not applicable is about the cluster's shape, and that was already decided
-	// above from the schedulable node count. Reaching here means the cluster
-	// has two or more schedulable nodes but the probe landed on fewer, so a
-	// taint it does not tolerate kept it off them. That is unobserved, not
-	// inapplicable: reporting N/A dropped the critical row and its series on a
-	// multi-node cluster, with no warning to explain the absence.
-	if wantPods < 2 {
-		msg := fmt.Sprintf("probe DaemonSet scheduled on %d of %d schedulable node(s); "+
-			"the rest carry a taint it does not tolerate", wantPods, len(schedulable))
-		if keys := untoleratedTaintKeys(nodes.Items); len(keys) > 0 {
-			msg += " (" + strings.Join(keys, ", ") + ")"
+		var unobserved *probeNotObservedError
+		if errors.As(err, &unobserved) {
+			notObserved("probe pods were not observed: "+unobserved.reason, "")
+			return
 		}
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Node-to-Node: status unknown ("+msg+")")
+		notObserved(fmt.Sprintf("could not read probe pod status: %v", err), "")
 		return
 	}
 
-	log.Infof("  Waiting for server DaemonSet pods on %d nodes...", wantPods)
-	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: dsLabels})
-	serverPods, err := waitForDaemonSetPods(ctx, client, ns, selector, wantPods, nodeToNodeDSTimeout)
-	if err != nil {
-		var unobserved *probeNotObservedError
-		switch {
-		case errors.As(err, &unobserved):
-			notObserved("probe pods did not start: "+unobserved.reason, unobserved.recommendation)
-			return
-		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || ctx.Err() != nil:
-			notObserved(fmt.Sprintf("could not read probe pod status: %v", err), "")
-			return
-		}
-		printError(log, fmt.Sprintf("Server DaemonSet pods did not become ready: %v", err))
+	outcome := classifyProbeNodes(pods, probeNodes, probePullingPods(ctx, client, ns))
+	if len(outcome.networkFaults) > 0 {
+		// A pod the node scheduled but could not give an address to is the
+		// fault this check exists for, whatever the other nodes did.
+		printError(log, fmt.Sprintf("Probe pods got no pod IP on %d node(s): %s",
+			len(outcome.networkFaults), strings.Join(outcome.networkFaults, ", ")))
+		state.Recommendations = append(state.Recommendations,
+			"Check the CNI on the listed nodes: the pod was scheduled but never got a pod IP. "+
+				"Look for FailedCreatePodSandBox events and the CNI daemon's logs there.")
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
 	}
+	if len(outcome.running) < 2 {
+		rec := ""
+		if outcome.pullFailed {
+			rec = nodeToNodeImageRecommendation
+		}
+		notObserved("probe pods did not start on two nodes: "+strings.Join(outcome.gaps, ", "), rec)
+		return
+	}
+	if len(outcome.gaps) > 0 {
+		// Probe the nodes whose pods started; a node the probe itself could not
+		// use is a coverage gap, not a verdict on the overlay.
+		msg := fmt.Sprintf("not probed on %d node(s): %s", len(outcome.gaps), strings.Join(outcome.gaps, ", "))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Node-to-Node: "+msg)
+		if outcome.pullFailed {
+			state.Recommendations = append(state.Recommendations, nodeToNodeImageRecommendation)
+		}
+	}
 
 	// Select checkerNode from a Running server pod so it is guaranteed to be
 	// a node where the DaemonSet actually scheduled.
+	serverPods := outcome.running
 	checkerNode := serverPods[0].Spec.NodeName
 	var targetIPs []string
 	for i := range serverPods {
@@ -1802,15 +1802,6 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 			targetIPs = append(targetIPs, serverPods[i].Status.PodIP)
 			log.Infof("  Server pod on %s: %s", serverPods[i].Spec.NodeName, serverPods[i].Status.PodIP)
 		}
-	}
-
-	if len(targetIPs) == 0 {
-		// Leave the pointer nil. Reporting a critical check as Verified having
-		// sent zero packets is worse than reporting it as not run.
-		printWarning(log, "No cross-node server pod IPs available; probe did not run")
-		state.Warnings = append(state.Warnings,
-			"Node-to-Node: status unknown (no cross-node probe targets were available)")
-		return
 	}
 
 	if _, err := client.CoreV1().Pods(ns).Create(
@@ -1823,8 +1814,10 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 
 	// An error here means no result was read: the checker never finished, or
 	// its status could not be fetched. A connection failure is reported as a
-	// Failed phase, not an error.
-	succeeded, err := waitForPodDone(ctx, client, ns, checkerName, nodeToNodeCheckerTimeout)
+	// Failed phase, not an error. The terminal pod comes back with the
+	// result, so the exit code is read from it rather than fetched again: a
+	// 429 on a second Get lost a real connection failure to UNKNOWN.
+	succeeded, checker, err := waitForPodDone(ctx, client, ns, checkerName, nodeToNodeCheckerTimeout)
 	if err != nil {
 		notObserved(fmt.Sprintf("checker pod did not report a result: %v", err), "")
 		return
@@ -1841,7 +1834,7 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	// is skipped and a full node rejects it at kubelet admission (OutOfcpu,
 	// OutOfpods) with phase Failed. Only the script's own exit code says the
 	// connection itself failed.
-	if why := checkerFailureCause(ctx, client, ns, checkerName); why != "" {
+	if why := checkerFailureCause(checker); why != "" {
 		notObserved("checker pod failed without testing the overlay: "+why, "")
 		return
 	}
@@ -1856,103 +1849,74 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	state.NodeToNodeOK = &ok
 }
 
-// waitForDaemonSetDesiredCount polls until the DaemonSet controller has
-// reconciled the object and published a scheduling target. The Create response
-// always has a zeroed status, so reading DesiredNumberScheduled from it yields
-// 0 on every real cluster.
-func waitForDaemonSetDesiredCount(
-	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
-) (int, error) {
-	deadline := time.Now().Add(timeout)
-	var lastStatus string
-	for {
-		getCtx, cancel := attemptContext(ctx, deadline)
-		ds, err := client.AppsV1().DaemonSets(ns).Get(getCtx, name, metav1.GetOptions{})
-		cancel()
+// nodeToNodeDeleteTimeout bounds each probe cleanup delete.
+const nodeToNodeDeleteTimeout = 20 * time.Second
+
+// nodeToNodeDSTimeout is how long the probe pods get to start. A var so tests
+// that leave a node's pod down on purpose need not wait it out.
+var nodeToNodeDSTimeout = 2 * time.Minute
+
+// nodeToNodeTargets returns the nodes a probe pod is expected to start on, a
+// Ready node that is not cordoned, and a note for each node left out.
+func nodeToNodeTargets(nodes []corev1.Node) (targets, skipped []string) {
+	for i := range nodes {
+		n := &nodes[i]
 		switch {
-		case err != nil:
-			// Retry inside the deadline rather than aborting. client-go defaults
-			// to 5 QPS and this run issues ~22 namespaced LISTs, so a single 429
-			// early in the window would otherwise fail a critical check with
-			// most of its budget unspent. Only a permission error is terminal.
-			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-				return 0, err
-			}
-			lastStatus = err.Error()
-		case ds.Status.ObservedGeneration >= ds.Generation:
-			// Reconciled, so the target is published even when it is zero: that
-			// means no node tolerates the probe, which is an answer rather than
-			// a failure to observe one. Requiring > 0 turned a fully tainted
-			// cluster into a blocking critical UNKNOWN after a 30s wait.
-			return int(ds.Status.DesiredNumberScheduled), nil
+		case n.Spec.Unschedulable:
+			skipped = append(skipped, n.Name+" (cordoned)")
+		case !isNodeReady(n):
+			skipped = append(skipped, n.Name+" (NotReady)")
 		default:
-			lastStatus = fmt.Sprintf("desired=%d, observedGeneration=%d, generation=%d",
-				ds.Status.DesiredNumberScheduled, ds.Status.ObservedGeneration, ds.Generation)
-		}
-		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("timed out waiting for DaemonSet status (%s)", lastStatus)
-		}
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-time.After(2 * time.Second):
+			targets = append(targets, n.Name)
 		}
 	}
+	return targets, skipped
 }
 
-// waitForDaemonSetPods waits until every one of the DaemonSet's wantCount pods
-// is Running with an IP.
-//
-// All of them, not a quorum: wantCount comes from DesiredNumberScheduled, which
-// counts only nodes the pod actually tolerates, so each missing pod is a node
-// whose kubelet or CNI could not bring the probe up. Accepting a subset made
-// exactly that fault invisible.
-func waitForDaemonSetPods(
-	ctx context.Context, client kubernetes.Interface, ns, selector string,
-	wantCount int, timeout time.Duration,
+func isNodeReady(n *corev1.Node) bool {
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// waitForProbePods waits until every expected node has a Running probe pod
+// with an IP, and returns the pods from the last successful list either way:
+// the caller decides what a straggler means. A list that fails after earlier
+// ones succeeded does not discard what they showed, since the final attempt
+// usually starts just past the deadline. Only never listing at all, or a
+// permission error, leaves nothing to classify.
+func waitForProbePods(
+	ctx context.Context, client kubernetes.Interface, ns, selector string, expected []string, timeout time.Duration,
 ) ([]corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	var lastPods []corev1.Pod
+	listed := false
 	for {
 		listCtx, cancel := attemptContext(ctx, deadline)
 		pods, err := client.CoreV1().Pods(ns).List(listCtx, metav1.ListOptions{LabelSelector: selector})
 		cancel()
-		if err != nil {
-			// Same reasoning as waitForDaemonSetDesiredCount: retry transient
-			// errors inside the deadline instead of failing the check outright.
-			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-				return nil, err
+		switch {
+		case err == nil:
+			listed, lastPods = true, pods.Items
+			if len(classifyProbeNodes(lastPods, expected, nil).running) == len(expected) {
+				return lastPods, nil
 			}
+		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
+			return nil, err
+		default:
+			// Retry transient errors inside the deadline: client-go defaults to
+			// 5 QPS and this run issues many LISTs.
 			lastErr = err
 		}
-		var running []corev1.Pod
-		if err == nil {
-			lastErr = nil
-			lastPods = pods.Items
-			for i := range pods.Items {
-				if pods.Items[i].Status.Phase == corev1.PodRunning && pods.Items[i].Status.PodIP != "" {
-					running = append(running, pods.Items[i])
-				}
-			}
-			if len(running) >= wantCount {
-				return running, nil
-			}
-		}
 		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return nil, &probeNotObservedError{reason: fmt.Sprintf("listing DaemonSet pods: %v", lastErr)}
+			if !listed {
+				return nil, &probeNotObservedError{reason: fmt.Sprintf("listing probe pods: %v", lastErr)}
 			}
-			if unobserved := classifyUnstartedProbePods(lastPods, wantCount); unobserved != nil {
-				return nil, unobserved
-			}
-			// Every scheduled pod must come up. Returning a partial set here
-			// reported the overlay as Verified while a Ready node's pod sat in
-			// ContainerCreating with no IP (VPC-CNI IP exhaustion, a missing
-			// flannel subnet.env): the checker never probed that node, so the
-			// one fault this check exists to catch was the one it skipped.
-			return nil, fmt.Errorf("timed out waiting for %d Running pods (got %d on %d node(s))",
-				wantCount, len(running), distinctNodeCount(running))
+			return lastPods, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -1962,12 +1926,10 @@ func waitForDaemonSetPods(
 	}
 }
 
-// probeNotObservedError reports a probe that never produced evidence about the
-// overlay: its pods were not admitted, could not pull their image, or could not
-// start their container.
+// probeNotObservedError reports a probe that produced no evidence about the
+// overlay.
 type probeNotObservedError struct {
-	reason         string
-	recommendation string
+	reason string
 }
 
 func (e *probeNotObservedError) Error() string { return e.reason }
@@ -1996,66 +1958,144 @@ const nodeToNodeImageRecommendation = "Node-to-node probe image could not be pul
 	"clusterValidator.nodeToNodeProbeImage (env " + nodeToNodeImageEnv + ") to a busybox-compatible " +
 	"image the nodes can pull, for example a copy in your registry mirror."
 
-// classifyUnstartedProbePods decides whether a probe DaemonSet that did not
-// fully come up says anything about the overlay. It returns nil when at least
-// one pod was scheduled but never got an IP, which only the node or pod network
-// explains. It returns a probeNotObservedError when every straggler is
-// explained otherwise: not created, not scheduled, image or container errors,
-// or networked but still starting.
-func classifyUnstartedProbePods(pods []corev1.Pod, wantCount int) *probeNotObservedError {
-	if len(pods) < wantCount {
-		// The DaemonSet controller could not create the pods. Pod Security
-		// Admission, a pod quota or an admission webhook rejecting them all
-		// look like this; the FailedCreate event on the DaemonSet has the cause.
-		return &probeNotObservedError{reason: fmt.Sprintf(
-			"the DaemonSet created %d of %d probe pods; see the FailedCreate events on the DaemonSet",
-			len(pods), wantCount)}
-	}
-	var blocked []string
-	pullFailed := false
+// probeOutcome sorts the expected nodes by what their probe pod showed.
+type probeOutcome struct {
+	// running holds one Running pod with an IP per node that has one.
+	running []corev1.Pod
+	// networkFaults are nodes whose pod was scheduled and never got an IP for
+	// no other visible reason: only the node or the pod network explains it.
+	networkFaults []string
+	// gaps are nodes the probe could not use for a reason of its own:
+	// no pod, not scheduled, still pulling, image or container errors, or a
+	// kubelet rejection. They say nothing about the overlay.
+	gaps       []string
+	pullFailed bool
+}
+
+// classifyProbeNodes decides, per expected node, what its probe pod says.
+// pulling names pods with an image pull in progress: the kubelet publishes no
+// pod IP until the sync blocked on that pull returns, so without it a slow
+// first pull looks exactly like a node that could not network the pod.
+func classifyProbeNodes(pods []corev1.Pod, expected []string, pulling map[string]bool) probeOutcome {
+	byNode := map[string][]*corev1.Pod{}
 	for i := range pods {
 		p := &pods[i]
-		if p.Status.Phase == corev1.PodRunning && p.Status.PodIP != "" {
-			continue
+		if node := probePodNode(p); node != "" {
+			byNode[node] = append(byNode[node], p)
 		}
-		reason := probePodBlocker(p)
-		if reason == "" {
-			switch {
-			case p.Spec.NodeName == "":
-				reason = "not scheduled"
-			case p.Status.PodIP != "":
-				// The sandbox and its network came up; the container is
-				// still starting (a slow image pull reports ContainerCreating
-				// here). That is not a network fault.
-				reason = "networked but not yet Running"
-			default:
-				// Scheduled with no IP: the node could not network the pod.
-				return nil
+	}
+	var out probeOutcome
+	for _, node := range expected {
+		candidates := byNode[node]
+		var pick *corev1.Pod
+		for _, p := range candidates {
+			if p.Status.Phase == corev1.PodRunning && p.Status.PodIP != "" {
+				pick = p
+				break
+			}
+			if pick == nil || p.CreationTimestamp.After(pick.CreationTimestamp.Time) {
+				pick = p
 			}
 		}
-		if probeImagePullReasons[reason] {
-			pullFailed = true
+		if pick == nil {
+			// The DaemonSet controller could not create it: Pod Security
+			// Admission, a pod quota or a webhook. Its FailedCreate event says.
+			out.gaps = append(out.gaps, node+": no probe pod was created")
+			continue
 		}
-		blocked = append(blocked, p.Spec.NodeName+": "+reason)
+		if pick.Status.Phase == corev1.PodRunning && pick.Status.PodIP != "" {
+			out.running = append(out.running, *pick)
+			continue
+		}
+		reason := probePodBlocker(pick)
+		switch {
+		case reason != "":
+		case pulling[pick.Name]:
+			reason = "image still pulling"
+		case pick.Spec.NodeName == "":
+			reason = "not scheduled"
+		case pick.Status.PodIP != "":
+			reason = "networked but not yet Running"
+		default:
+			out.networkFaults = append(out.networkFaults, node)
+			continue
+		}
+		if probeImagePullReasons[reason] {
+			out.pullFailed = true
+		}
+		out.gaps = append(out.gaps, node+": "+reason)
 	}
-	if len(blocked) == 0 {
+	return out
+}
+
+// probePodNode is the node a DaemonSet pod is for. An unbound pod has no
+// spec.nodeName yet, but the DaemonSet controller pins it to its node with a
+// metadata.name node-affinity field, so an unschedulable pod still names it.
+func probePodNode(p *corev1.Pod) string {
+	if p.Spec.NodeName != "" {
+		return p.Spec.NodeName
+	}
+	a := p.Spec.Affinity
+	if a == nil || a.NodeAffinity == nil || a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return ""
+	}
+	for _, term := range a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		for _, f := range term.MatchFields {
+			if f.Key == "metadata.name" && f.Operator == corev1.NodeSelectorOpIn && len(f.Values) == 1 {
+				return f.Values[0]
+			}
+		}
+	}
+	return ""
+}
+
+// probePullingPods returns the probe pods with an image pull in progress, from
+// their events: a Pulling event and no Pulled or sandbox failure after it. It
+// returns nil when the events cannot be read, which leaves a pod with no IP
+// classified as a network fault, as before.
+func probePullingPods(ctx context.Context, client kubernetes.Interface, ns string) map[string]bool {
+	listCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
+	defer cancel()
+	events, err := client.CoreV1().Events(ns).List(listCtx, metav1.ListOptions{})
+	if err != nil {
 		return nil
 	}
-	e := &probeNotObservedError{reason: strings.Join(blocked, ", ")}
-	if pullFailed {
-		e.recommendation = nodeToNodeImageRecommendation
+	sort.SliceStable(events.Items, func(i, j int) bool {
+		return eventTime(&events.Items[i]).Before(eventTime(&events.Items[j]))
+	})
+	pulling := map[string]bool{}
+	for i := range events.Items {
+		e := &events.Items[i]
+		if e.InvolvedObject.Kind != "Pod" {
+			continue
+		}
+		switch e.Reason {
+		case "Pulling":
+			pulling[e.InvolvedObject.Name] = true
+		case "Pulled", "FailedCreatePodSandBox":
+			delete(pulling, e.InvolvedObject.Name)
+		}
 	}
-	return e
+	return pulling
+}
+
+// eventTime is when an event last happened, whichever field the source set.
+func eventTime(e *corev1.Event) time.Time {
+	switch {
+	case !e.LastTimestamp.IsZero():
+		return e.LastTimestamp.Time
+	case !e.EventTime.IsZero():
+		return e.EventTime.Time
+	default:
+		return e.CreationTimestamp.Time
+	}
 }
 
 // checkerFailureCause returns why a Failed checker pod ended when the cause
 // was not a failed connection, or "" when the script reported one.
-func checkerFailureCause(ctx context.Context, client kubernetes.Interface, ns, name string) string {
-	getCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
-	defer cancel()
-	pod, err := client.CoreV1().Pods(ns).Get(getCtx, name, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Sprintf("could not read the checker's exit status: %v", err)
+func checkerFailureCause(pod *corev1.Pod) string {
+	if pod == nil {
+		return "the checker's status was not returned"
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
 		t := cs.State.Terminated
@@ -2078,8 +2118,16 @@ func checkerFailureCause(ctx context.Context, client kubernetes.Interface, ns, n
 }
 
 // probePodBlocker returns why a probe pod is stuck when the cause is the probe
-// itself rather than the network, or "" when it is not.
+// itself rather than the network, or "" when it is not. The kubelet rejects a
+// pod at admission (Evicted under disk or PID pressure, OutOfcpu, OutOfpods)
+// by failing it with a reason and no IP, which is no network fault.
 func probePodBlocker(p *corev1.Pod) string {
+	if p.Status.Phase == corev1.PodFailed {
+		if p.Status.Reason != "" {
+			return "rejected by the kubelet (" + p.Status.Reason + ")"
+		}
+		return "failed"
+	}
 	for _, c := range p.Status.Conditions {
 		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
 			return "Unschedulable"
@@ -2094,53 +2142,11 @@ func probePodBlocker(p *corev1.Pod) string {
 	return ""
 }
 
-// untoleratedTaintKeys lists the scheduling taints on schedulable nodes that
-// the probe DaemonSet does not tolerate, so the warning can name them. The
-// control-plane taints are tolerated explicitly and node.kubernetes.io/* are
-// the DaemonSet controller's own, so neither is reported.
-func untoleratedTaintKeys(nodes []corev1.Node) []string {
-	uniq := map[string]bool{}
-	for i := range nodes {
-		if nodes[i].Spec.Unschedulable {
-			continue
-		}
-		for _, t := range nodes[i].Spec.Taints {
-			if t.Effect == corev1.TaintEffectPreferNoSchedule ||
-				t.Key == "node-role.kubernetes.io/control-plane" || t.Key == "node-role.kubernetes.io/master" ||
-				strings.HasPrefix(t.Key, "node.kubernetes.io/") {
-				continue
-			}
-			uniq[t.Key] = true
-		}
-	}
-	keys := make([]string, 0, len(uniq))
-	for k := range uniq {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// distinctNodeCount counts how many different nodes a pod set covers.
-func distinctNodeCount(pods []corev1.Pod) int {
-	nodes := make(map[string]struct{}, len(pods))
-	for i := range pods {
-		if n := pods[i].Spec.NodeName; n != "" {
-			nodes[n] = struct{}{}
-		}
-	}
-	return len(nodes)
-}
-
-// nodeToNodeTolerations mirrors the validator CronJob's own tolerations. The
-// DaemonSet controller auto-tolerates the not-ready and unschedulable taints
-// but not the control-plane one, so without these a dedicated control plane
-// reports DesiredNumberScheduled=0 and the overlay is never probed at all.
+// nodeToNodeTolerations tolerates every taint, so the probe lands on every
+// node, including a dedicated control plane and GPU nodes. Which of those
+// nodes a pod is expected on is decided from node readiness instead.
 func nodeToNodeTolerations() []corev1.Toleration {
-	return []corev1.Toleration{
-		{Key: "node-role.kubernetes.io/control-plane", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
-		{Key: "node-role.kubernetes.io/master", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
-	}
+	return []corev1.Toleration{{Operator: corev1.TolerationOpExists}}
 }
 
 func nodeToNodeSecurityContext() *corev1.SecurityContext {

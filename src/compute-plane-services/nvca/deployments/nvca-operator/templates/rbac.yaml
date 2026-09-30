@@ -44,6 +44,12 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list", "create", "delete", "watch"]
   - apiGroups: [""]
+    resources: ["events"]
+    # list: the node-to-node probe reads its pods' events to tell a slow
+    # first image pull, which publishes no pod IP until it returns, from a
+    # node that could not network the pod.
+    verbs: ["list"]
+  - apiGroups: [""]
     resources: ["configmaps"]
     # get: read the network-checks config ConfigMap (its name is overridable
     # via VALIDATOR_CONFIG_NAME, so this cannot be scoped by resourceName).
