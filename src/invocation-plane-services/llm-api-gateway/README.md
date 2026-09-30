@@ -160,6 +160,11 @@ Useful overrides:
 - `NVCF_GRPC_TIMEOUT` to cap each gRPC auth or policy call
 - `RATE_LIMIT_ENABLED=false` to disable rate limiting locally
 - `RATE_LIMIT_FAIL_OPEN=false` to make Olric or limiter failures fatal
+- `BARE_MODEL_NAMES_ENABLED=true` to treat the whole request `model` as the
+  model name with an empty routing key, for use without the NVCF control
+  plane. Such requests skip NVCF auth, and the caller's `Authorization` and
+  `X-Routing-Key` headers are not forwarded. Do not enable it where untrusted
+  callers can reach the gateway.
 - `OLRIC_ENABLED=false` to skip starting the embedded Olric node
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering

@@ -52,8 +52,10 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	requestDuration := telemetry.HTTPServerRequestDuration()
 	activeRequests := telemetry.HTTPActiveRequests()
 	var maxRequestBodyBytes int64
+	bareModelNamesEnabled := false
 	if cfg != nil {
 		maxRequestBodyBytes = cfg.Server.MaxRequestBodyBytes
+		bareModelNamesEnabled = cfg.BareModelNamesEnabled
 	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -79,12 +81,17 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			// request still gets the span, metrics, and completion log.
 			bodyErr := bufferRequestBody(gc.Request(), maxRequestBodyBytes)
 			routingKey := ""
-			if bodyErr == nil {
+			if bodyErr == nil && !bareModelNamesEnabled {
 				routingKey = requestRoutingKey(gc.Request())
 			}
 			targetRegion := targetRegionHeader(gc.Request().Header)
-			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
-			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
+			// With bare model names nothing validates the caller's bearer token,
+			// so it is not kept and never reaches the router.
+			bearerToken := ""
+			if !bareModelNamesEnabled {
+				bearerToken = bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
+			}
+			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion, bareModelNamesEnabled)
 
 			span.SetAttributes(
 				attribute.String("http.request.method", gc.Request().Method),
@@ -159,8 +166,9 @@ func storeRequestContext(
 	bearerToken string,
 	routingKey string,
 	targetRegion string,
+	bareModelNamesEnabled bool,
 ) {
-	if routingKey == "" {
+	if routingKey == "" && !bareModelNamesEnabled {
 		return
 	}
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{

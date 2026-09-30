@@ -62,6 +62,33 @@ func TestLoadFromEnvReadsInferenceWriteTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvReadsBareModelNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"unset defaults off", "", false},
+		{"enabled", "true", true},
+		{"disabled", "false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.value != "" {
+				t.Setenv("BARE_MODEL_NAMES_ENABLED", tc.value)
+			}
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+
+			if cfg.BareModelNamesEnabled != tc.want {
+				t.Fatalf("bare model names = %t, want %t", cfg.BareModelNamesEnabled, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvReadsMetricsPort(t *testing.T) {
 	t.Setenv("METRICS_PORT", "0")
 

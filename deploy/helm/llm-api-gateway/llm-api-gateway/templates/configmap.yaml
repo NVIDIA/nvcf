@@ -34,6 +34,7 @@ data:
   SECRETS_PATH: "/vault/secrets/secrets.json"
   RATE_LIMIT_ENABLED: {{ $cfg.rateLimitEnabled | toString | quote }}
   RATE_LIMIT_FAIL_OPEN: {{ $cfg.rateLimitFailOpen | toString | quote }}
+  BARE_MODEL_NAMES_ENABLED: {{ $cfg.bareModelNamesEnabled | toString | quote }}
   {{- with .Values.llmApiGateway.olric }}
   {{- if .enabled }}
   OLRIC_ENABLED: "true"

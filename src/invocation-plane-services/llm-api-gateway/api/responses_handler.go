@@ -119,7 +119,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		)
 	}
 
-	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model)
+	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model, h.handlers.bareModelNamesEnabled())
 	if err != nil {
 		return nil, nil, err
 	}

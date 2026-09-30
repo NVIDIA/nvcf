@@ -131,7 +131,7 @@ func (h *Handlers) normalizeChatRequest(
 		return nil, echo.NewHTTPError(http.StatusBadRequest, "messages is required")
 	}
 
-	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model)
+	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model, h.bareModelNamesEnabled())
 	if err != nil {
 		return nil, err
 	}

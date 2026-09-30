@@ -47,6 +47,10 @@ type Config struct {
 	// are only counted and logged so enforcement can roll out per
 	// environment.
 	ModelURIAllowlistEnabled bool
+	// BareModelNamesEnabled treats the whole request model as the model name with
+	// an empty routing key, for deployments without the NVCF control plane.
+	// Requests then skip NVCF auth, so keep it off for untrusted callers.
+	BareModelNamesEnabled bool
 }
 
 type ServerConfig struct {
@@ -258,6 +262,10 @@ func LoadFromEnv() (*Config, error) {
 
 	if v, ok := errs.boolean("MODEL_URI_ALLOWLIST_ENABLED"); ok {
 		cfg.ModelURIAllowlistEnabled = v
+	}
+
+	if v, ok := errs.boolean("BARE_MODEL_NAMES_ENABLED"); ok {
+		cfg.BareModelNamesEnabled = v
 	}
 
 	// SecretsPath is populated by applyStargateNVCFEnv above.

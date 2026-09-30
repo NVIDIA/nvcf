@@ -75,6 +75,10 @@ llmApiGateway:
     nvcfGrpcTimeout: 2s
     rateLimitEnabled: true
     rateLimitFailOpen: true
+    # Treat the whole request model as the model name, with no routing-key
+    # prefix and no NVCF auth. For deployments without the NVCF control plane.
+    # Do not enable where untrusted callers can reach the gateway.
+    bareModelNamesEnabled: false
     localFunctionId: ""
     defaultModel: ""
     defaultRpm: 120
