@@ -104,6 +104,7 @@ struct TestTlsControlPlaneService {
     watch_authorities: mpsc::UnboundedSender<String>,
     registration_authorities: mpsc::UnboundedSender<String>,
     registrations: mpsc::UnboundedSender<InferenceServerRegistration>,
+    registration_terminal: Option<Result<InferenceServerAck, Status>>,
 }
 
 #[tonic::async_trait]
@@ -153,9 +154,17 @@ impl StargateControlPlane for TestTlsControlPlaneService {
                 let _ = registrations.send(registration);
             }
         });
-        Ok(Response::new(Box::pin(
-            tokio_stream::once(Ok(InferenceServerAck::default())).chain(tokio_stream::pending()),
-        )))
+        let stream = tokio_stream::once(
+            self.registration_terminal
+                .clone()
+                .unwrap_or_else(|| Ok(InferenceServerAck::default())),
+        );
+        let stream: TestRegistrationStream = if self.registration_terminal.is_some() {
+            Box::pin(stream)
+        } else {
+            Box::pin(stream.chain(tokio_stream::pending()))
+        };
+        Ok(Response::new(stream))
     }
 }
 
@@ -169,6 +178,14 @@ struct TestTlsControlPlane {
 
 impl TestTlsControlPlane {
     async fn spawn(ca: &TestCertificateAuthority, dns_name: &str) -> Self {
+        Self::spawn_with_terminal(ca, dns_name, None).await
+    }
+
+    async fn spawn_with_terminal(
+        ca: &TestCertificateAuthority,
+        dns_name: &str,
+        registration_terminal: Option<Result<InferenceServerAck, Status>>,
+    ) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -185,6 +202,7 @@ impl TestTlsControlPlane {
             watch_authorities,
             registration_authorities,
             registrations,
+            registration_terminal,
         };
         let identity = ca.issue_server_identity(dns_name);
         let incoming = async_stream::stream! {
@@ -1059,6 +1077,11 @@ async fn watch_tls_failure_event(
         "a certificate validation failure must not reach WatchStargates"
     );
 
+    assert_eq!(
+        subscriber.event_count("Stargate gRPC operation failed"),
+        0,
+        "classified certificate failures must not emit generic retry warnings"
+    );
     stop.cancel();
     tokio::time::timeout(TEST_WAIT, watch_task)
         .await
@@ -1127,6 +1150,11 @@ async fn registration_stream_logs_unknown_issuer_and_remains_fail_closed() {
         subscriber.event_count("Stargate gRPC connection failed"),
         1,
         "continuous registration certificate failures should be logged once until recovery"
+    );
+    assert_eq!(
+        subscriber.event_count("Stargate gRPC operation failed"),
+        0,
+        "classified certificate failures must not emit generic retry warnings"
     );
     stop.cancel();
     tokio::time::timeout(TEST_WAIT, registration_task)
@@ -1479,10 +1507,9 @@ async fn stop_watched_endpoint_signals_and_awaits_task() {
 
 #[tokio::test]
 async fn repeated_registration_failures_each_emit_a_warning_with_their_cause() {
-    // Reserve a port without listening so each connection is refused.
-    let socket = tokio::net::TcpSocket::new_v4().unwrap();
-    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let dial_url = format!("http://{}", socket.local_addr().unwrap());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dial_url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
     let target = grpc_endpoint_with_dial(
         &[
             "https://",
@@ -1543,19 +1570,16 @@ async fn repeated_registration_failures_each_emit_a_warning_with_their_cause() {
 }
 
 #[test]
-fn registration_status_errors_omit_metadata_and_binary_details() {
+fn registration_status_errors_omit_remote_messages_metadata_and_binary_details() {
     let mut status = tonic::Status::with_details(
         tonic::Code::Unauthenticated,
-        "authentication failed",
+        "authentication failed: private-token",
         bytes::Bytes::from_static(b"private-details"),
     );
     status
         .metadata_mut()
         .insert("authorization", "private-token".parse().unwrap());
-    assert_eq!(
-        grpc_error_chain(&status),
-        "gRPC Unauthenticated: authentication failed"
-    );
+    assert_eq!(grpc_error_chain(&status), "gRPC Unauthenticated");
 }
 
 #[tokio::test]
@@ -1611,4 +1635,68 @@ async fn registration_http_errors_keep_transport_causes_without_sensitive_urls()
     assert!(detail.contains(&std::error::Error::source(&error).unwrap().to_string()));
     assert!(!detail.contains("private-password"));
     assert!(!detail.contains("private-query"));
+}
+
+#[tokio::test]
+async fn registration_stream_termination_delays_reconnect_and_cancels_promptly() {
+    for terminal in [
+        Ok(InferenceServerAck::default()),
+        Err(Status::unavailable("private-remote-message")),
+    ] {
+        let message = if terminal.is_ok() {
+            "Stargate registration response stream ended"
+        } else {
+            "Stargate gRPC operation failed"
+        };
+        let ca = TestCertificateAuthority::new("server-ca");
+        let mut server =
+            TestTlsControlPlane::spawn_with_terminal(&ca, "localhost", Some(terminal)).await;
+        let mut config = test_registration_config();
+        config.grpc_tls_ca_cert_pem = Some(ca.pem());
+        let metrics = PylonMetrics::new().unwrap();
+        config.forwarding.metrics = Some(metrics.clone());
+        let config = Arc::new(RegistrationSessionConfig::try_from(config).unwrap());
+        let target = StargateGrpcEndpoint::new(server.dial_url.clone(), "").unwrap();
+        let stop = CancellationToken::new();
+        let subscriber = RecordingTracingSubscriber::default();
+        let dispatch = tracing::Dispatch::new(subscriber.clone());
+        let _default_guard = tracing::dispatcher::set_default(&dispatch);
+        let task = tokio::spawn(run_router_registration_stream(target, config, stop.clone()));
+
+        wait_for_tracing_event_count(&subscriber, message, 1).await;
+        server.registration_authorities.recv().await.unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                server.registration_authorities.recv(),
+            )
+            .await
+            .is_err(),
+            "stream termination must delay reconnect"
+        );
+        assert_metrics(
+            &metrics,
+            &[&format!(
+                "pylon_registration_stream_connected{{router=\"{}\"}} 0",
+                server.dial_url,
+            )],
+        );
+        tokio::time::timeout(TEST_WAIT, server.registration_authorities.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        wait_for_tracing_event_count(&subscriber, message, 2).await;
+        stop.cancel();
+        tokio::time::timeout(Duration::from_millis(200), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(subscriber.events().iter().all(|event| {
+            event
+                .fields
+                .values()
+                .all(|value| !value.contains("private-remote-message"))
+        }));
+        server.shutdown().await;
+    }
 }

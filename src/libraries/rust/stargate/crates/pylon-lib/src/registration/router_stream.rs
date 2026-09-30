@@ -29,8 +29,8 @@ use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, Infere
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
 use super::grpc_endpoint::{
-    StargateGrpcEndpoint, connect_stargate_grpc_channel, grpc_error_chain,
-    log_stargate_grpc_certificate_failure,
+    StargateGrpcEndpoint, classify_stargate_grpc_certificate_failure,
+    connect_stargate_grpc_channel, grpc_error_chain, log_stargate_grpc_certificate_failure,
 };
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
@@ -67,14 +67,16 @@ pub(super) async fn run_router_registration_stream(
                     error.as_ref(),
                     last_certificate_failure,
                 );
-                tracing::warn!(
-                    transport = "grpc",
-                    operation = "register_inference_server",
-                    endpoint = %router_endpoint,
-                    cluster_id = %config.cluster_id,
-                    error = %grpc_error_chain(error.as_ref()),
-                    "Stargate gRPC operation failed"
-                );
+                if classify_stargate_grpc_certificate_failure(error.as_ref()).is_none() {
+                    tracing::warn!(
+                        transport = "grpc",
+                        operation = "register_inference_server",
+                        endpoint = %router_endpoint,
+                        cluster_id = %config.cluster_id,
+                        error = %grpc_error_chain(error.as_ref()),
+                        "Stargate gRPC operation failed"
+                    );
+                }
                 if stop
                     .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
                     .await
@@ -212,6 +214,7 @@ pub(super) async fn run_router_registration_stream(
             last_send = Instant::now();
         };
 
+        drop(advertised_status);
         if let Some(task) = reverse_task {
             task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
         }

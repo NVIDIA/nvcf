@@ -28,7 +28,8 @@ use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 use tracing::warn;
 
 use super::grpc_endpoint::{
-    StargateGrpcEndpoint, grpc_error_chain, log_stargate_grpc_certificate_failure,
+    StargateGrpcEndpoint, classify_stargate_grpc_certificate_failure, grpc_error_chain,
+    log_stargate_grpc_certificate_failure,
 };
 use super::topology::{RegistrationRouterTopology, publish_registration_router_topology};
 
@@ -185,13 +186,15 @@ async fn watch_stargate_endpoint(
                                 last_certificate_failure = log_stargate_grpc_certificate_failure(
                                     &target, "watch_stargates", &error, last_certificate_failure,
                                 );
-                                warn!(
-                                    transport = "grpc",
-                                    operation = "watch_stargates",
-                                    endpoint = %target,
-                                    error = %grpc_error_chain(&error),
-                                    "Stargate gRPC operation failed"
-                                );
+                                if classify_stargate_grpc_certificate_failure(&error).is_none() {
+                                    warn!(
+                                        transport = "grpc",
+                                        operation = "watch_stargates",
+                                        endpoint = %target,
+                                        error = %grpc_error_chain(&error),
+                                        "Stargate gRPC operation failed"
+                                    );
+                                }
                                 None
                             }
                         }
@@ -206,13 +209,15 @@ async fn watch_stargate_endpoint(
                     error.as_ref(),
                     last_certificate_failure,
                 );
-                warn!(
-                    transport = "grpc",
-                    operation = "watch_stargates",
-                    endpoint = %target,
-                    error = %grpc_error_chain(error.as_ref()),
-                    "Stargate gRPC operation failed"
-                );
+                if classify_stargate_grpc_certificate_failure(error.as_ref()).is_none() {
+                    warn!(
+                        transport = "grpc",
+                        operation = "watch_stargates",
+                        endpoint = %target,
+                        error = %grpc_error_chain(error.as_ref()),
+                        "Stargate gRPC operation failed"
+                    );
+                }
                 None
             }
         };

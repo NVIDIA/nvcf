@@ -248,7 +248,7 @@ fn rustls_certificate_error<'a>(
     }
 }
 
-fn classify_stargate_grpc_certificate_failure(
+pub(super) fn classify_stargate_grpc_certificate_failure(
     error: &(dyn Error + 'static),
 ) -> Option<StargateGrpcCertificateFailure> {
     match rustls_certificate_error(error)? {
@@ -318,8 +318,8 @@ pub(super) fn grpc_error_chain(error: &(dyn Error + 'static)) -> String {
                 error.column()
             )
         } else if let Some(status) = error.downcast_ref::<tonic::Status>() {
-            // Metadata and binary details are not needed to diagnose the RPC.
-            format!("gRPC {:?}: {}", status.code(), status.message())
+            // Remote messages, metadata, and details can echo credentials.
+            format!("gRPC {:?}", status.code())
         } else if let Some(error) = error.downcast_ref::<reqwest::Error>() {
             // Token-issuer URLs can contain credentials or sensitive queries.
             // Keep the failure category and its sources without displaying the URL.
