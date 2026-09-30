@@ -57,11 +57,18 @@ type CacheSeedServer struct {
 	Retention time.Duration
 	Log       logrus.FieldLogger
 
+	// FillBackoff is how long a key waits after a failed fill before the
+	// next request may start another; zero means one minute. Without it
+	// every seed poll would spawn a new holder against a failing fill.
+	FillBackoff time.Duration
+
 	// fill is the seam tests replace; nil means fillMirror.
 	fill func(ctx context.Context, uri string) error
+	now  func() time.Time
 
 	mu       sync.Mutex
 	inflight map[string]bool
+	lastFail map[string]time.Time
 }
 
 func (s *CacheSeedServer) log() logrus.FieldLogger {
@@ -107,11 +114,20 @@ func (s *CacheSeedServer) Handler(w http.ResponseWriter, r *http.Request) {
 // startFill runs one fill per key at a time, in the background.
 func (s *CacheSeedServer) startFill(uri string) {
 	key := modelvolume.Key(uri)
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	backoff := s.FillBackoff
+	if backoff <= 0 {
+		backoff = time.Minute
+	}
 	s.mu.Lock()
 	if s.inflight == nil {
 		s.inflight = map[string]bool{}
+		s.lastFail = map[string]time.Time{}
 	}
-	if s.inflight[key] {
+	if s.inflight[key] || now().Sub(s.lastFail[key]) < backoff {
 		s.mu.Unlock()
 		return
 	}
@@ -129,8 +145,11 @@ func (s *CacheSeedServer) startFill(uri string) {
 		if fill == nil {
 			fill = s.fillMirror
 		}
-		start := time.Now()
+		start := now()
 		if err := fill(ctx, uri); err != nil {
+			s.mu.Lock()
+			s.lastFail[key] = now()
+			s.mu.Unlock()
 			s.log().WithError(err).WithField("cache", uri).Warn("cache seed: mirror fill failed; pods compile locally until it succeeds")
 			return
 		}
@@ -188,6 +207,25 @@ func (s *CacheSeedServer) fillMirror(ctx context.Context, uri string) error {
 	if err != nil {
 		return err
 	}
+	return s.copyMirror(ctx, uri, src)
+}
+
+// copyMirror copies the attached cache volume at agentSrc (an agent-view
+// path under HostFSRoot, as the mount-holder reports it) into the mirror
+// for uri, then marks it complete. The copier takes host paths and
+// prefixes HostFSRoot itself, so the prefix is stripped here; passing the
+// agent path through produced /host/host/... (ct1, 2026-09-30).
+func (s *CacheSeedServer) copyMirror(ctx context.Context, uri, agentSrc string) error {
+	if s.Copier == nil {
+		return fmt.Errorf("cache seed server has no copier")
+	}
+	hostSrc := agentSrc
+	if root := strings.TrimSuffix(s.HostFSRoot, "/"); root != "" {
+		if !strings.HasPrefix(agentSrc, root+"/") {
+			return fmt.Errorf("mount path %q is not under the host root %q", agentSrc, s.HostFSRoot)
+		}
+		hostSrc = strings.TrimPrefix(agentSrc, root)
+	}
 	key := modelvolume.Key(uri)
 	final := s.mirrorDir(key)
 	tmp := final + ".tmp"
@@ -195,7 +233,7 @@ func (s *CacheSeedServer) fillMirror(ctx context.Context, uri string) error {
 	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
 		return err
 	}
-	if _, _, err := s.Copier.Copy(ctx, tmp, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: src}}); err != nil {
+	if _, _, err := s.Copier.Copy(ctx, tmp, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: hostSrc}}); err != nil {
 		return fmt.Errorf("copy cache into node mirror: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
