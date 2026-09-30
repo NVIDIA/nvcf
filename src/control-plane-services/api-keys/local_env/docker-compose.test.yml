@@ -35,7 +35,6 @@ services:
       # symlinks, and a directory bind would preserve those symlinks inside
       # Cassandra instead of mounting their contents.
       - ./cassandra/schema/0001_initial_schema.cql:/docker-entrypoint-initdb.d/0001_initial_schema.cql
-      - ./cassandra/schema/0002_multi_tenant_schema.cql:/docker-entrypoint-initdb.d/0002_multi_tenant_schema.cql
       - ./cassandra/entrypoint.sh:/entrypoint.sh
     command:
       - /bin/bash

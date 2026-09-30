@@ -34,12 +34,14 @@ Local and Testcontainers CQL lives in `local_env/cassandra/schema/`. The
 deployed keyspace is `api_keys_api`, applied from
 `migrations/cassandra/keyspaces/api_keys_api/`. Keep those copies aligned.
 
-`0001_initial_schema.cql` and `03_init_tables.up.sql` stay the original
-single-tenant tables. Do not add multi-tenant objects to `03`.
-`0002_multi_tenant_schema.cql` is the local init delta.
-`04_add_multi_tenant_schema.up.sql` is the deployed delta for new and existing
-clusters. Keep `keys_by_owner_and_service` until the dual-write migration stops
-using it.
+`0001_initial_schema.cql` follows the clean-slate model. It holds the full
+local schema, including the multi-tenant tables. Update it in place instead of
+adding local delta files.
+
+`03_init_tables.up.sql` stays the original single-tenant tables. Do not add
+multi-tenant objects to `03`. `04_add_multi_tenant_schema.up.sql` is the
+deployed delta for new and existing clusters. Keep `keys_by_owner_and_service`
+until the dual-write migration stops using it.
 
 Integration tests bind each `.cql` file in `local_env/docker-compose.test.yml`
 because Bazel runfiles are symlinks. Local Compose mounts the whole schema
