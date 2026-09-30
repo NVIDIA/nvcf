@@ -21,67 +21,74 @@ metadata:
   name: agent-config-merge
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.22.2
+    helm.sh/chart: helm-nvca-operator-1.28.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.5.2"
+    app.kubernetes.io/version: "3.8.0"
     app.kubernetes.io/managed-by: Helm
 data:
-  config.yaml:  |2
-  
+  config.yaml: |
+
+    agent:
+      UtilsResources:
+        cpu: "4"
+        memory: 4Gi
+      byooLogChunking:
+        dryRun: false
+        maxPayloadBytes: 0
     cluster:
       validationPolicy:
         allowedExtraKubernetesTypes:
-          - group: foo.com
-            kind: FooType
-            resource: footypes
-            version: v1
-          - group: scheduling.run.ai
-            kind: PodGroup
-            resource: podgroups
-            version: v2alpha2
-          - group: grove.io
-            kind: PodCliqueSet
-            resource: podcliquesets
-            version: v1alpha1
-          - group: grove.io
-            kind: PodClique
-            resource: podcliques
-            version: v1alpha1
-          - group: grove.io
-            kind: PodCliqueScalingGroup
-            resource: podcliquescalinggroups
-            version: v1alpha1
-          - group: scheduler.grove.io
-            kind: PodGang
-            resource: podgangs
-            version: v1alpha1
-          - group: nvidia.com
-            kind: DynamoCheckpoint
-            resource: dynamocheckpoints
-            version: v1alpha1
-          - group: nvidia.com
-            kind: DynamoComponentDeployment
-            resource: dynamocomponentdeployments
-            version: v1alpha1
-          - group: nvidia.com
-            kind: DynamoGraphDeployment
-            resource: dynamographdeployments
-            version: v1alpha1
-          - group: nvidia.com
-            kind: DynamoGraphDeploymentRequest
-            resource: dynamographdeploymentrequests
-            version: v1alpha1
-          - group: nvidia.com
-            kind: DynamoGraphDeploymentScalingAdapter
-            resource: dynamographdeploymentscalingadapters
-            version: v1alpha1
-          - group: nvidia.com
-            kind: DynamoModel
-            resource: dynamomodels
-            version: v1alpha1
-          - group: nvidia.com
-            kind: DynamoWorkerMetadata
-            resource: dynamoworkermetadatas
-            version: v1alpha1
+        - group: foo.com
+          kind: FooType
+          resource: footypes
+          version: v1
+        - group: scheduling.run.ai
+          kind: PodGroup
+          resource: podgroups
+          version: v2alpha2
+        - group: grove.io
+          kind: PodCliqueSet
+          resource: podcliquesets
+          version: v1alpha1
+        - group: grove.io
+          kind: PodClique
+          resource: podcliques
+          version: v1alpha1
+        - group: grove.io
+          kind: PodCliqueScalingGroup
+          resource: podcliquescalinggroups
+          version: v1alpha1
+        - group: scheduler.grove.io
+          kind: PodGang
+          resource: podgangs
+          version: v1alpha1
+        - group: nvidia.com
+          kind: DynamoCheckpoint
+          resource: dynamocheckpoints
+          version: v1alpha1
+        - group: nvidia.com
+          kind: DynamoComponentDeployment
+          resource: dynamocomponentdeployments
+          version: v1alpha1
+        - group: nvidia.com
+          kind: DynamoGraphDeployment
+          resource: dynamographdeployments
+          version: v1alpha1
+        - group: nvidia.com
+          kind: DynamoGraphDeploymentRequest
+          resource: dynamographdeploymentrequests
+          version: v1alpha1
+        - group: nvidia.com
+          kind: DynamoGraphDeploymentScalingAdapter
+          resource: dynamographdeploymentscalingadapters
+          version: v1alpha1
+        - group: nvidia.com
+          kind: DynamoModel
+          resource: dynamomodels
+          version: v1alpha1
+        - group: nvidia.com
+          kind: DynamoWorkerMetadata
+          resource: dynamoworkermetadatas
+          version: v1alpha1
         name: Unrestricted

@@ -20,9 +20,9 @@ autoscaler_manifest="$work_dir/function-autoscaler.yaml"
 autoscaler_release="$work_dir/function-autoscaler-release.json"
 # These literals are the compatibility contract under test. Review and advance
 # them together only after the autoscaler no longer uses the removed tables.
-cassandra_chart_version=0.20.3
-autoscaler_chart_version=0.3.2
-migrations_image_version=0.17.3
+cassandra_chart_version=0.21.3
+autoscaler_chart_version=0.5.0
+migrations_image_version=0.17.6
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {

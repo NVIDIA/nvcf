@@ -2,6 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 schemaVersion: 1
+# Inventory states are owned by this distributable. Other stack trees publish
+# their own release inventories and must not be referenced here.
+states:
+  - plane: control-plane
+    path: deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl
+    fullOverrides:
+      - addons.llm.enabled=true
+  - plane: control-plane
+    path: deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
+    fullOverrides:
+      - addons.llm.enabled=true
+      - addons.vanityGateway.enabled=true
+      - addons.nvcfUi.enabled=true
+  - plane: control-plane
+    path: deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl
+    fullOverrides:
+      - observability.profile=control
 # These charts are released independently and might not yet be mirrored into
 # the composite stack's release chart repository. Render each pinned chart from
 # its immutable public GitHub release tag, then report the public self-managed
@@ -17,9 +34,6 @@ sourceCharts:
     # intended public repository under natsAuthCalloutService.
     renderValues:
       image.repository: nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service
-  helm-nvca-operator:
-    tagPrefix: deploy/helm/nvca-operator/v
-    path: deploy/helm/nvca-operator/nvca-operator
   helm-nvcf-rate-limiter:
     tagPrefix: deploy/helm/ratelimiter/v
     path: deploy/helm/ratelimiter/nvcf-ratelimiter

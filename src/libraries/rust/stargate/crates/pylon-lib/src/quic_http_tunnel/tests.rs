@@ -442,6 +442,8 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         ..PylonRetryConfig::default()
     };
     for name in [
+        "Connection",
+        "Proxy-Connection",
         "Host",
         "X-Method",
         "X-Path",
@@ -549,7 +551,7 @@ fn pylon_response_header_filter_strips_internal_headers_case_insensitively()
 -> std::result::Result<(), reqwest::header::InvalidHeaderName> {
     let retry = PylonRetryConfig::default();
 
-    for name in [b"Content-Length".as_slice(), b"X-Stargate-Retryable"] {
+    for name in [b"Connection".as_slice(), b"X-Stargate-Retryable"] {
         assert!(!should_forward_response_header(
             &HeaderName::from_bytes(name)?,
             &retry,
@@ -750,6 +752,7 @@ async fn start_queue_mismatch_test_tunnel(
     config.tunnel_protocol = tunnel_protocol;
     config.inference_server_id = Some("inst-a".to_string());
     config.forwarding.metrics = Some(metrics.clone());
+    config.forwarding.queue_mismatch_retry = crate::PylonQueueMismatchRetryConfig::strict();
     config.forwarding.queue_mismatch_retry.enabled = enabled;
     config.forwarding.queue_mismatch_retry.retry_after_ms = Some(125);
     assert!(

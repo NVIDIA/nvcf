@@ -19,10 +19,8 @@ package steps
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,16 +28,15 @@ import (
 	"github.com/cucumber/godog"
 
 	"nvcf-bdd/dsl"
-	"nvcf-bdd/harness"
 )
 
 var modelInvocationRetryInterval = time.Second
 
+var vanityInvocationRetryInterval = time.Second
+
 var selectedFunctionPollInterval = 5 * time.Second
 
-type cliAuthState struct {
-	APIKey string `json:"apiKey"`
-}
+const vanityRouteNotFoundError = "Error: failed to invoke function: API error 404: 404 page not found"
 
 func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I use NVCF CLI config "([^"]*)"$`, sc.iUseNVCFCLIConfig)
@@ -186,81 +183,66 @@ func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
 	timeout string,
 	doc *godog.DocString,
 ) error {
-	apiKey, err := currentFunctionAPIKey(sc.NVCFCLIConfig)
-	if err != nil {
-		return err
+	args := []string{
+		"function",
+		"invoke",
+		"--vanity-host",
+		host,
+		"--path",
+		inferenceURL,
+		"--timeout",
+		timeout,
+		"--request-body",
+		doc.Content,
 	}
-	if strings.ContainsAny(apiKey, "\r\n\x00") {
-		return fmt.Errorf("saved function API key contains an invalid control character")
+	retryFor, retryTimeoutErr := time.ParseDuration(timeout + "s")
+	deadline := time.Now().Add(retryFor)
+	retryCtx := ctx
+	if retryTimeoutErr == nil && retryFor > 0 {
+		var cancel context.CancelFunc
+		retryCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
 	}
 
-	// nvcf-cli prefixes INVOKE_HOST with the selected function ID for normal
-	// function invocations. Vanity Gateway routes use the exact configured host,
-	// so send this smoke request directly through the local Envoy listener. The
-	// shell reads the key from stdin to keep it out of argv and command logs.
-	// TODO(https://github.com/NVIDIA/nvcf/issues/1399): replace this curl path
-	// with first-class nvcf-cli Vanity Gateway invocation support.
-	// Envoy can briefly return an HTTP error while a just-rolled gateway backend
-	// propagates; retries remain bounded by the scenario timeout.
-	script := `IFS= read -r api_key || [ -n "$api_key" ]; exec curl --silent --show-error --fail-with-body --header "Authorization: Bearer ${api_key}" "$@"`
-	command := dsl.BuildCommand(
-		"/bin/sh", "-c", script, "vanity-gateway-request",
-		"--request", "POST",
-		"--header", "Host: "+dsl.Interpolate(host),
-		"--header", "Content-Type: application/json",
-		"--data", dsl.Interpolate(doc.Content),
-		"--retry", "24",
-		"--retry-all-errors",
-		"--retry-delay", "5",
-		"--retry-max-time", dsl.Interpolate(timeout),
-		"--max-time", dsl.Interpolate(timeout),
-		"http://127.0.0.1:8080"+dsl.Interpolate(inferenceURL),
-	)
-	if err := sc.runResolvedAndRecordWith(
-		ctx,
-		command,
-		func(runCtx context.Context, resolved string) (harness.Result, error) {
-			return sc.Suite.Runner.RunWithSensitiveStdin(runCtx, resolved, apiKey)
-		},
-	); err != nil {
-		return err
+	for {
+		err := sc.runNVCFCLI(retryCtx, args...)
+		if err == nil {
+			return nil
+		}
+		if retryTimeoutErr != nil || retryFor <= 0 ||
+			!isTransientVanityRouteNotFound(sc.LastResult.Stderr) {
+			return err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		timer := time.NewTimer(min(vanityInvocationRetryInterval, remaining))
+		select {
+		case <-retryCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		case <-timer.C:
+		}
+		if time.Until(deadline) <= 0 {
+			return err
+		}
+		if retryCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
 	}
-	return sc.commandExitCodeShouldBe(0)
 }
 
-func currentFunctionAPIKey(configName string) (string, error) {
-	statePath, err := nvcfCLIStatePath(configName)
-	if err != nil {
-		return "", err
-	}
-	body, err := os.ReadFile(statePath)
-	if err != nil {
-		return "", fmt.Errorf("read NVCF CLI state: %w", err)
-	}
-	var state cliAuthState
-	if err := json.Unmarshal(body, &state); err != nil {
-		return "", fmt.Errorf("parse NVCF CLI state: %w", err)
-	}
-	state.APIKey = strings.TrimSpace(state.APIKey)
-	if state.APIKey == "" {
-		return "", fmt.Errorf("NVCF CLI state does not contain a function API key")
-	}
-	return state.APIKey, nil
-}
-
-func nvcfCLIStatePath(configName string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
-	}
-	contextName := filepath.Base(strings.TrimSpace(configName))
-	if extension := filepath.Ext(contextName); extension != "" {
-		contextName = strings.TrimSuffix(contextName, extension)
-	}
-	if contextName == "" || contextName == "default" || contextName == ".nvcf-cli" {
-		return filepath.Join(home, ".nvcf-cli.state"), nil
-	}
-	return filepath.Join(home, ".nvcf-cli."+contextName+".state"), nil
+func isTransientVanityRouteNotFound(stderr string) bool {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	return len(lines) > 0 && lines[len(lines)-1] == vanityRouteNotFoundError
 }
 
 func (sc *ScenarioContext) iSuccessfullyUndeploySelectedFunction(ctx context.Context) error {

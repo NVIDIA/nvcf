@@ -372,7 +372,7 @@ func setResponseFormat(
 			Name:        req.Text.Format.Name,
 			Description: ptr.Deref(req.Text.Format.Description),
 			Schema:      req.Text.Format.Schema,
-			Strict:      ptr.Deref(req.Text.Format.Strict),
+			Strict:      req.Text.Format.Strict,
 		}
 	}
 

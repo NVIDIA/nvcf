@@ -58,6 +58,7 @@ class NatsStreamManagerIntegrationTest extends IntegrationTest {
         when(natsConfigurationProperties.getReconnectJitter()).thenReturn(Duration.ZERO);
         when(natsConfigurationProperties.getNkeySeed()).thenReturn(Optional.empty());
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
+        when(natsConfigurationProperties.getReplicas()).thenReturn(1);
         when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.getMaxPoolSize()).thenReturn(1);
 

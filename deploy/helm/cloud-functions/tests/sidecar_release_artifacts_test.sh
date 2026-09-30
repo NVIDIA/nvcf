@@ -36,9 +36,6 @@ helm template nvcf-api "${chart_dir}" \
   --values "${chart_dir}/values.yaml" \
   --set-string api.image.registry=example.com \
   --set-string api.image.repository=foo/bar/strap \
-  --set-string api.accountBootstrap.image.registry=example.com \
-  --set-string api.accountBootstrap.image.repository=foo/bar/alpine-k8s \
-  --set-string api.accountBootstrap.image.tag=0.0.0 \
   --set-string "api.env.NVCF_SIDECARS_HOSTNAME=${hostname}" \
   --set-string "api.env.NVCF_SIDECARS_REPOSITORY=${repository}" \
   --show-only templates/configmap-remote-config.yaml \
@@ -88,9 +85,6 @@ helm template nvcf-api "${chart_dir}" \
   --values "${chart_dir}/values.yaml" \
   --set-string api.image.registry=example.com \
   --set-string api.image.repository=foo/bar/strap \
-  --set-string api.accountBootstrap.image.registry=example.com \
-  --set-string api.accountBootstrap.image.repository=foo/bar/alpine-k8s \
-  --set-string api.accountBootstrap.image.tag=0.0.0 \
   --show-only templates/configmap-remote-config.yaml \
   > "${manifest_without_sidecar_env}"
 

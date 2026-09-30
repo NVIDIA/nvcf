@@ -15,20 +15,15 @@
 
 use crate::ProtocolError;
 use http::{HeaderMap, HeaderName, HeaderValue};
+use std::collections::HashSet;
 
-/// Excludes fixed hop-by-hop fields and every field nominated by `Connection`.
-pub fn end_to_end_headers(
-    headers: &HeaderMap,
-) -> impl Iterator<Item = (&HeaderName, &HeaderValue)> {
-    let connection_options: Vec<HeaderName> = headers
+pub fn connection_header_names(headers: &HeaderMap) -> HashSet<HeaderName> {
+    headers
         .get_all(http::header::CONNECTION)
         .iter()
         .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
         .filter_map(|name| HeaderName::from_bytes(name.trim_ascii()).ok())
-        .collect();
-    headers
-        .iter()
-        .filter(move |(name, _)| !is_hop_by_hop_header(name) && !connection_options.contains(name))
+        .collect()
 }
 
 pub fn is_hop_by_hop_header(name: &HeaderName) -> bool {
@@ -141,26 +136,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn end_to_end_headers_honor_all_connection_options_and_preserve_repeated_fields() {
+    fn connection_header_names_include_all_lines_and_normalize_case() {
         let mut headers = HeaderMap::new();
-        headers.append(
-            "connection",
-            HeaderValue::from_static("X-First, keep-alive"),
+        for value in ["", " X-Hop-One, keep-alive", "x-HOP-two\t, , bad name"] {
+            headers.append(http::header::CONNECTION, HeaderValue::from_static(value));
+        }
+        assert_eq!(
+            connection_header_names(&headers),
+            ["x-hop-one", "keep-alive", "x-hop-two"]
+                .into_iter()
+                .map(HeaderName::from_static)
+                .collect()
         );
-        headers.append(
-            "connection",
-            HeaderValue::from_static(" x-second , X-FIRST "),
-        );
-        headers.insert("x-first", HeaderValue::from_static("private"));
-        headers.insert("x-second", HeaderValue::from_static("private"));
-        headers.insert("keep-alive", HeaderValue::from_static("timeout=5"));
-        headers.append("set-cookie", HeaderValue::from_static("a=1"));
-        headers.append("set-cookie", HeaderValue::from_static("b=2"));
-        let forwarded: HeaderMap = end_to_end_headers(&headers)
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-        assert_eq!(forwarded.len(), 2);
-        assert_eq!(forwarded.get_all("set-cookie").iter().count(), 2);
     }
 
     #[test]

@@ -176,7 +176,11 @@ The algorithm groups close TTFT values into buckets. It samples `n`
 candidates from unlocked buckets and chooses the candidate with the lowest
 configured comparator score. The default comparator is `ttft`. A
 later bucket becomes available after the request has waited for a fraction of
-the TTFT gap.
+the TTFT gap. When unlocked buckets have no capacity and a later bucket does,
+Stargate waits for that bucket to unlock. `x-max-wait-ms` is not required. The
+wait is capped at 60 seconds from request arrival, or at `x-max-wait-ms` when
+the header sets a shorter limit. After the cap, Stargate stops waiting and
+returns HTTP `503` if no candidate is selectable.
 
 When `cache_affinity_backend_selection_count` is enabled and the request has
 `x-cache-affinity-key`, a consistent hash ring first limits selection to a
@@ -460,7 +464,7 @@ for status, replay, and retry-budget rules.
 Stargate records algorithm and fallback choices, proxy attempts and retries,
 admission rejections, upstream latency, and active backend counts. The prefix
 is configurable with `--metrics-prefix`. See the
-[NVCF request-router metrics reference](../../../../../docs/user/metrics/llm-request-router/metrics.md)
+[NVCF request-router metrics reference](../../../../../docs/observability/metrics/llm-request-router/metrics.md)
 for metric names, labels, and descriptions.
 
 The proxy request span records the effective comparator in `routing.comparator`.

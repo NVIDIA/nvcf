@@ -120,7 +120,7 @@ assert_yaml_value "$explicit_values" '.api.remoteConfig.configData.custom.retain
 assert_yaml_value "$explicit_values" '.api.remoteConfig.configData.nvcf.sidecars.retained-setting' \
   keep-inside-sidecars "nested sidecar remote config"
 assert_yaml_value "$explicit_values" "$remote_worker_address_expression" \
-  llm-request-router.nvcf.svc.cluster.local:50071 "stack-owned worker address"
+  llm-request-router-backend-router.nvcf.svc.cluster.local:50071 "stack-owned worker address"
 assert_yaml_value "$explicit_values" '.api.env.CUSTOM_API_ENV' \
   configured "generic API env"
 assert_yaml_value "$explicit_values" '.api.env.LITERAL_TEMPLATE_VALUE' \
@@ -139,7 +139,7 @@ assert_yaml_value "$explicit_manifest" \
   'select(.kind == "ConfigMap" and .data."nvcf-api.yaml" != null) | .data."nvcf-api.yaml" | from_yaml | .nvcf.sidecars.retained-setting' \
   keep-inside-sidecars "rendered nested sidecar remote config"
 
-# With no explicit value, the enabled LLM addon derives Pylon 0.16.2 from the
+# With no explicit value, the enabled LLM addon derives Pylon 0.18.0 from the
 # effective worker-sidecar registry rather than the control-plane image path.
 write_environment <<'EOF'
 global:
@@ -157,7 +157,7 @@ EOF
 default_values="$work_dir/default-values.yaml"
 render_api_values "$default_values" >/dev/null
 assert_yaml_value "$default_values" "$remote_pylon_expression" \
-  registry.example.test/team/sidecars/pylon:0.16.2 "computed Pylon default"
+  registry.example.test/team/sidecars/pylon:0.18.0 "computed Pylon default"
 
 # Local BDD fixtures rely on the same computed default after their registry
 # paths are configured. They must not carry unresolved fixture placeholders
@@ -174,8 +174,8 @@ for fixture_name in self-managed-local-bdd.yaml self-managed-local-bdd-multi.yam
   fixture_pylon_image="$(yq -r "$remote_pylon_expression" "$fixture_values")"
   [[ "$fixture_pylon_image" != *REPLACE_WITH_* ]] ||
     fail "$fixture_name Pylon property retained an unresolved fixture placeholder"
-  [[ "$fixture_pylon_image" == nvcr.io/sample-org/sample-team/pylon:0.16.2 ]] ||
-    fail "$fixture_name Pylon property: expected computed 0.16.2 image, got $fixture_pylon_image"
+  [[ "$fixture_pylon_image" == nvcr.io/sample-org/sample-team/pylon:0.18.0 ]] ||
+    fail "$fixture_name Pylon property: expected computed 0.18.0 image, got $fixture_pylon_image"
 done
 
 # The deprecated env key remains accepted for one compatibility window, but

@@ -19,7 +19,7 @@ description: OpenBao self-managed deployment
 type: application
 
 version: 0.0.0 # managed by semantic-release
-appVersion: 2.6.2-nv-1.3.3 # todo update via renovate when bao image is updated
+appVersion: 2.6.2-nv-1.3.4
 
 dependencies:
   - name: openbao

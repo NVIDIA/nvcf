@@ -32,6 +32,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/restore-guard.sh"
 source "$SCRIPT_DIR/versions.sh"
 
 # ─── Global temp-file cleanup ────────────────────────────────────────────────
@@ -679,7 +680,16 @@ if [ "$SKIP_RESTORE" -eq 0 ] && [ -n "$CHECKPOINT_ID" ]; then
             -e "s|nodeName: __NODE_NAME__|nodeName: $NODE|" \
             "$RESTORE_MANIFEST_TEMPLATE" > "$R_MANIFEST"
     fi
+    # A cold start measured here is published into PDF-BENCH-RESULTS.md as a
+    # restore row, so verify before spending the run rather than after.
+    assert_no_placeholders "$R_MANIFEST" || exit 1
     kubectl apply -f "$R_MANIFEST" >/dev/null
+    if [ "$CAPTURE_PATH" = "rootfs" ]; then
+        POD_CACHE_DIR=$(agent_pod_cache_dir)
+        assert_restore_admitted "$RESTORE_POD_NAME" "$NAMESPACE" \
+            "$RESTORE_CONTAINER_NAME" "$POD_CACHE_DIR" || exit 1
+        log_info "  verified: $POD_CACHE_DIR mounted, cache env points into it"
+    fi
     wait_ready "$RESTORE_POD_NAME" "$POD_READY_TIMEOUT" || { log_error "restore pod didn't ready"; exit 1; }
     verify_infer "$RESTORE_POD_NAME" "$RESTORE_CONTAINER_NAME" || log_warn "  post-restore inference probe failed (continuing)"
     IFS=':' read -r RESTORE_CDL RESTORE_MDL RESTORE_INIT RESTORE_TOTAL <<<"$(measure_phase "$RESTORE_POD_NAME" "$RESTORE_CONTAINER_NAME" restore)"

@@ -63,7 +63,7 @@ test "$(yq -r '.openbao.migrations.image.tag // ""' "$openbao_values")" = "" ||
   fail "stack values should let the OpenBao chart supply the migrations image tag"
 expected_migrations_image="$(yq -r '
   .openbao.migrations.image |
-  "\(.registry)/\(.repository):0.19.1"
+  "\(.registry)/\(.repository):0.19.5"
 ' "$openbao_values")"
 
 HELMFILE_ENV="$environment_name" \

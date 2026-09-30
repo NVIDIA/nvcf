@@ -106,6 +106,9 @@ func NewCommand() *cobra.Command {
 			if err := (&featureflag.CLIFlag{}).Set(strings.Join(cfg.Agent.FeatureFlags, ",")); err != nil {
 				return fmt.Errorf("set featureflag CLI flag for config: %v", err)
 			}
+			if err := featureflag.ConfigureHelmInternalPersistentStorage(ctx, cfg.Agent.InternalPersistentStorage); err != nil {
+				return fmt.Errorf("configure internal persistent storage: %w", err)
+			}
 			// Cluster attributes shim
 			if err := (&featureflag.AttrCLIFlag{}).Set(strings.Join(cfg.Cluster.Attributes, ",")); err != nil {
 				return fmt.Errorf("set attribute CLI flag for config: %v", err)

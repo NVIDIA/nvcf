@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- $version := required "stackVersion is required: a receipt that names the wrong version is worse than no receipt" .Values.stackVersion }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # post-* rather than pre-*: the receipt states what the cluster is running,
+    # so it must not be written until the release it describes has been applied.
+    #
+    # Both install and upgrade, because the first cluster to receive this chart
+    # has no prior release of it, and Helm runs post-install there rather than
+    # post-upgrade. Omitting post-install would leave exactly the clusters this
+    # exists for without a receipt.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      name: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Release.Name }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      containers:
+        - name: receipt
+          image: "{{ with .Values.image.registry }}{{ . }}/{{ end }}{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: RECEIPT_CONFIGMAP
+              value: {{ .Values.configMapName | quote }}
+            - name: INSTALLED_STACK_VERSION
+              value: {{ $version | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # Rendered through apply rather than create so that the first
+              # install and every later upgrade take the same path. A receipt
+              # that only appears on a fresh install would be absent from
+              # exactly the clusters that are upgrading.
+              kubectl create configmap "${RECEIPT_CONFIGMAP}" \
+                --from-literal=installed_stack_version="${INSTALLED_STACK_VERSION}" \
+                --from-literal=recorded_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --dry-run=client -o yaml \
+                | kubectl apply -f -
+              echo "recorded installed_stack_version=${INSTALLED_STACK_VERSION} in ${RECEIPT_CONFIGMAP}"

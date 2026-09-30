@@ -282,6 +282,10 @@ mod tests {
             serde_json::from_str::<BackendConnectivity>(r#""rev\u0065rse""#).unwrap(),
             BackendConnectivity::Reverse
         );
+        for invalid in [serde_json::json!("unsupported"), serde_json::json!(3)] {
+            assert!(serde_json::from_value::<TunnelTransportProtocol>(invalid.clone()).is_err());
+            assert!(serde_json::from_value::<BackendConnectivity>(invalid).is_err());
+        }
     }
 
     #[test]

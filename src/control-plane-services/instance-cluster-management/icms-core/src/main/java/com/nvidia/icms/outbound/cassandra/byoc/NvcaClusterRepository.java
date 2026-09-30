@@ -141,9 +141,7 @@ public class NvcaClusterRepository {
     public List<ClustersByAuthorizedAccountsEntity> getAllClustersInAuthorizedAccount(
             String ncaId) {
         if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
-            // nca_id = :x UNION authorized_nca_ids CONTAINS :x
-            // UNION authorized_nca_ids CONTAINS '*'
-            return clusterRepository.getAllClustersVisibleToAccount(ncaId).stream()
+            return clusterRepository.getAllClustersForAuthorizationKey(ncaId).stream()
                     .map(entity -> toClustersByAuthorizedAccountsEntity(entity, entity.getNcaId()))
                     .collect(Collectors.toList());
         }

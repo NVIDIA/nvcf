@@ -21,10 +21,10 @@ metadata:
   name: nvca-operator-pre-delete-cleanup
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.22.2
+    helm.sh/chart: helm-nvca-operator-1.28.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.5.2"
+    app.kubernetes.io/version: "3.8.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: cleanup
   annotations:
@@ -39,10 +39,10 @@ kind: ClusterRole
 metadata:
   name: nvca-operator-pre-delete-cleanup
   labels:
-    helm.sh/chart: helm-nvca-operator-1.22.2
+    helm.sh/chart: helm-nvca-operator-1.28.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.5.2"
+    app.kubernetes.io/version: "3.8.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: cleanup
   annotations:
@@ -91,7 +91,7 @@ rules:
   resources: ["icmsrequests/status"]
   verbs: ["get", "update", "patch"]
 - apiGroups: ["nvca.nvcf.nvidia.io"]
-  resources: ["storagerequests", "storagerequests/status"]
+  resources: ["modelcachebindings", "modelcachebindings/status", "storagerequests", "storagerequests/status"]
   verbs: ["get", "list", "watch", "patch", "create", "update", "delete"]
 - apiGroups: ["batch"]
   resources: ["jobs", "cronjobs"]
@@ -140,10 +140,10 @@ kind: ClusterRoleBinding
 metadata:
   name: nvca-operator-pre-delete-cleanup
   labels:
-    helm.sh/chart: helm-nvca-operator-1.22.2
+    helm.sh/chart: helm-nvca-operator-1.28.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.5.2"
+    app.kubernetes.io/version: "3.8.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: cleanup
   annotations:

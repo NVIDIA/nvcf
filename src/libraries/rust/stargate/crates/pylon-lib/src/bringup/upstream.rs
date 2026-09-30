@@ -22,7 +22,7 @@ use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
 };
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
-use crate::sse_message_stream::{RelayOutcome, upstream_sse_message_stream};
+use crate::sse_message_stream::{RelayOutcome, UpstreamSseReadError, upstream_sse_message_stream};
 use crate::upstream_health::UpstreamHealthPaths;
 use crate::upstream_url::upstream_endpoint;
 use futures::StreamExt;
@@ -58,7 +58,19 @@ async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response
         return Ok(response);
     }
 
-    let (body, truncated) = read_error_body(response).await?;
+    // Keep the status when the error body stalls or breaks: a rejection must
+    // not turn into a transport timeout.
+    let (body, truncated) = match read_error_body(response).await {
+        Ok(body) => body,
+        Err(error) => {
+            return Err(BringupError::Api {
+                status,
+                message: format!(
+                    "upstream returned HTTP status {status}; reading the error body failed: {error}"
+                ),
+            });
+        }
+    };
     let message = (!truncated).then(|| extract_error_message(&body)).flatten();
     if is_prompt_too_long(status, &message) {
         Err(BringupError::PromptTooLong)
@@ -157,7 +169,7 @@ pub(super) async fn send_canary_request(
     let mut observed_tokens = 0_u64;
     let mut completed = false;
     while let Some(message) = messages.next().await {
-        let message = message.map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
+        let message = message.map_err(canary_stream_error)?;
         if let Some(generated_output) = message.facts.generated_output {
             observed_tokens = output_tokens
                 .observe_generated_characters(generated_output.characters)
@@ -296,6 +308,21 @@ fn extract_error_message(body: &[u8]) -> Option<String> {
         .map(|error| error.error.message)
 }
 
+fn canary_stream_error(error: UpstreamSseReadError) -> BringupError {
+    let timed_out = match &error {
+        UpstreamSseReadError::Timeout(_) => true,
+        UpstreamSseReadError::Upstream(source) => source
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout),
+        _ => false,
+    };
+    if timed_out {
+        BringupError::Timeout(error.to_string())
+    } else {
+        BringupError::InvalidResponse(error.to_string())
+    }
+}
+
 pub(super) fn is_prompt_too_long(status: StatusCode, message: &Option<String>) -> bool {
     status.is_client_error()
         && message.as_ref().is_some_and(|message| {
@@ -322,12 +349,28 @@ pub enum BringupError {
     RunawayGeneration { tokens: u32 },
     #[error("invalid completion response: {0}")]
     InvalidResponse(String),
+    #[error("completion response timed out: {0}")]
+    Timeout(String),
     #[error("calibration saturated before measuring positive input throughput")]
     InsufficientCalibrationData,
     #[error("stats collector stopped during model initialization")]
     StatsCollectorStopped,
     #[error("model generation retired during initialization")]
     RetiredGeneration,
+}
+
+impl BringupError {
+    /// Returns whether the request timed out after the connection was
+    /// established, while waiting for response headers or the body.
+    pub(crate) fn is_timeout(&self) -> bool {
+        match self {
+            Self::Timeout(_) => true,
+            // A connection that cannot be established is a failure, not
+            // queueing behind other requests.
+            Self::Http(error) => error.is_timeout() && !error.is_connect(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

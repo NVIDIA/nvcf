@@ -29,7 +29,7 @@ use crate::{
     timeseries_db::timeseries_db_client::TimeseriesDbClient,
 };
 use anyhow::{Context, Result};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use moka::sync::Cache;
 
 use std::sync::Arc;
@@ -78,6 +78,7 @@ struct GatewayTarget {
 struct GatheredScalingInputs {
     inputs: ScalingInputs,
     gateway_target: Option<GatewayTarget>,
+    latest_utilization_timestamp_seconds: Option<i64>,
 }
 
 pub mod bucket;
@@ -88,6 +89,17 @@ use discovery::get_recently_invoked_functions;
 const TIMESERIES_DB_QUERY_STEP: StdDuration = StdDuration::from_secs(60); // 1 minute step for TimeseriesDb queries
 pub const CALCULATE_UTILIZATION_LOCK_PREFIX: &str = "util_lock";
 const ACTIVE_FUNCTION_SET_NAME: &str = "RecentlyInvokedFunctions";
+
+/// Return the previous complete TimeseriesDb step.
+///
+/// The current step may contain only a subset of the latest scrape cycle.
+fn settled_timeseries_end_time(now: DateTime<Utc>) -> DateTime<Utc> {
+    let step_seconds = TIMESERIES_DB_QUERY_STEP.as_secs() as i64;
+    let current_boundary = now.timestamp().div_euclid(step_seconds) * step_seconds;
+    let settled_timestamp = current_boundary.saturating_sub(step_seconds);
+
+    DateTime::from_timestamp(settled_timestamp, 0).unwrap_or(now)
+}
 
 fn scaling_lock_name(bucket_index: usize) -> String {
     format!(
@@ -130,10 +142,10 @@ async fn get_function_utilization_history(
     env: &str,
     metric_source: MetricSource,
     ignore_env: bool,
+    end_time: DateTime<Utc>,
     lookback: StdDuration,
     utilization_window_seconds: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let end_time = Utc::now();
     let start_time = end_time - Duration::from_std(lookback)?;
     let step = TIMESERIES_DB_QUERY_STEP;
 
@@ -246,6 +258,19 @@ async fn get_function_utilization_history(
     Ok(utilization_data)
 }
 
+fn utilization_data_age_milliseconds(
+    utilization_timestamp_seconds: Option<i64>,
+    now_timestamp_milliseconds: i64,
+) -> Option<i64> {
+    let utilization_timestamp_milliseconds = utilization_timestamp_seconds?.saturating_mul(1_000);
+
+    Some(
+        now_timestamp_milliseconds
+            .saturating_sub(utilization_timestamp_milliseconds)
+            .max(0),
+    )
+}
+
 /// Get current instance count for BYOC functions from TimeseriesDb
 /// This queries the same metric used in utilization calculation for consistency
 async fn get_byoc_instance_count(
@@ -254,6 +279,7 @@ async fn get_byoc_instance_count(
     function_version_id: &Uuid,
     env: &str,
     ignore_env: bool,
+    end_time: DateTime<Utc>,
 ) -> Result<Option<usize>> {
     let env_suffix = if ignore_env {
         String::new()
@@ -269,14 +295,7 @@ async fn get_byoc_instance_count(
         env = env_suffix
     );
 
-    // Align end to the previous fully-settled step boundary (one step back from now).
-    // Reading the bleeding edge can pick up a partial scrape cycle and report a wrong count.
-    const STEP_SECS: i64 = 60;
-    let now_secs = Utc::now().timestamp();
-    let end_secs = (now_secs / STEP_SECS) * STEP_SECS - STEP_SECS;
-    let end_time = chrono::DateTime::from_timestamp(end_secs, 0).unwrap_or_else(Utc::now);
-    let start_time = end_time - chrono::Duration::seconds(STEP_SECS);
-    let step = std::time::Duration::from_secs(STEP_SECS as u64);
+    let start_time = end_time - Duration::from_std(TIMESERIES_DB_QUERY_STEP)?;
 
     tracing::info!(
         "BYOC instance count query for {}:{}: {}",
@@ -286,7 +305,7 @@ async fn get_byoc_instance_count(
     );
 
     let response = timeseries_db_client
-        .query_range(&query, start_time, end_time, step)
+        .query_range(&query, start_time, end_time, TIMESERIES_DB_QUERY_STEP)
         .await?;
 
     tracing::info!(
@@ -622,6 +641,12 @@ async fn gather_scaling_inputs(
         }
     }
 
+    // Control-plane instance count and utilization must describe the same settled snapshot.
+    // Otherwise a running-instance transition can combine an old count with new utilization
+    // and produce contradictory targets.
+    let control_plane_query_end_time = (metric_source == MetricSource::ControlPlane)
+        .then(|| settled_timeseries_end_time(Utc::now()));
+
     match metric_source {
         MetricSource::WorkerThreads => {}
         MetricSource::LlmGateway => {
@@ -643,6 +668,7 @@ async fn gather_scaling_inputs(
                 function_version_id,
                 env,
                 ignore_env,
+                control_plane_query_end_time.expect("control-plane query end time must be present"),
             )
             .await
             .unwrap_or_else(|error| {
@@ -680,10 +706,15 @@ async fn gather_scaling_inputs(
         env,
         metric_source,
         ignore_env,
+        control_plane_query_end_time.unwrap_or_else(Utc::now),
         scaling_settings.lookback,
         scaling_settings.utilization_window_seconds,
     )
     .await?;
+    let latest_utilization_timestamp_seconds = raw_utilization
+        .iter()
+        .map(|(timestamp, _)| *timestamp)
+        .max();
     let utilization_samples = sanitize_utilization(raw_utilization);
 
     let recently_invoked = if metric_source == MetricSource::LlmGateway {
@@ -715,6 +746,7 @@ async fn gather_scaling_inputs(
             recently_invoked,
         },
         gateway_target,
+        latest_utilization_timestamp_seconds,
     }))
 }
 
@@ -933,6 +965,13 @@ async fn make_scaling_requests(
                         return Ok(());
                     };
 
+                    if let Some(data_age_milliseconds) = utilization_data_age_milliseconds(
+                        gathered.latest_utilization_timestamp_seconds,
+                        Utc::now().timestamp_millis(),
+                    ) {
+                        metrics::record_utilization_data_age(data_age_milliseconds);
+                    }
+
                     let desired_instance_count = if let Some(target) = &gathered.gateway_target {
                         gateway_target_desired_instances(
                             decision.desired_instances,
@@ -1130,6 +1169,30 @@ mod tests {
         assert_eq!(scaling_lock_name(7), "util_lock_7_RecentlyInvokedFunctions");
     }
 
+    #[test]
+    fn settled_timeseries_end_time_uses_previous_complete_step() {
+        let now = DateTime::from_timestamp(1_700_000_123, 456_000_000)
+            .expect("valid timestamp");
+
+        assert_eq!(
+            settled_timeseries_end_time(now),
+            DateTime::from_timestamp(1_700_000_040, 0).expect("valid timestamp"),
+        );
+    }
+
+    #[test]
+    fn utilization_data_age_never_goes_negative() {
+        assert_eq!(
+            utilization_data_age_milliseconds(Some(1_700_000_005), 1_700_000_007_500),
+            Some(2_500)
+        );
+        assert_eq!(
+            utilization_data_age_milliseconds(Some(1_700_000_005), 1_700_000_004_000),
+            Some(0)
+        );
+        assert_eq!(utilization_data_age_milliseconds(None, 0), None);
+    }
+
     // ---- Helpers for the metric-acquisition tests ----
 
     /// Tiny retry budget so error paths resolve in milliseconds, not seconds.
@@ -1286,6 +1349,7 @@ mod tests {
             "stg",
             MetricSource::ControlPlane,
             true,
+            Utc::now(),
             StdDuration::from_secs(5 * 60),
             60,
         )
@@ -1328,6 +1392,7 @@ mod tests {
                 configured_env,
                 MetricSource::ControlPlane,
                 false,
+                Utc::now(),
                 StdDuration::from_secs(5 * 60),
                 60,
             )
@@ -1482,6 +1547,7 @@ mod tests {
                 "prod",
                 MetricSource::LlmGateway,
                 false,
+                Utc::now(),
                 StdDuration::from_secs(5 * 60),
                 70,
             )
@@ -1599,13 +1665,13 @@ mod tests {
         let client = ts_client(server.url());
 
         assert_eq!(
-            get_byoc_instance_count(&client, &fid, &fvid, "prd", false)
+            get_byoc_instance_count(&client, &fid, &fvid, "prd", false, Utc::now())
                 .await
                 .expect("prod cp instance count"),
             Some(3)
         );
         assert_eq!(
-            get_byoc_instance_count(&client, &fid, &fvid, "stg", false)
+            get_byoc_instance_count(&client, &fid, &fvid, "stg", false, Utc::now())
                 .await
                 .expect("stage cp instance count"),
             Some(3)
@@ -1636,6 +1702,7 @@ mod tests {
                 &fvid,
                 "stg",
                 true,
+                Utc::now(),
             )
             .await
             .expect("missing cp instance count"),
@@ -1664,6 +1731,7 @@ mod tests {
                 &fvid,
                 "stg",
                 true,
+                Utc::now(),
             )
             .await
             .expect("zero cp instance count"),
@@ -1757,6 +1825,10 @@ mod tests {
         .await
         .expect("gather inputs")
         .expect("current instance data");
+        assert_eq!(
+            gathered.latest_utilization_timestamp_seconds,
+            Some(1_700_000_000)
+        );
         let inputs = gathered.inputs;
 
         assert_eq!(inputs.current_instances, 5);

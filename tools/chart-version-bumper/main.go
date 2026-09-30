@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command chart-version-bumper moves a chart's version fields to a newly
-// released service version.
+// released service artifact version.
 //
 //	chart-version-bumper --tag src/control-plane-services/notary/v1.9.0 [--write]
 //
@@ -86,17 +86,21 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 		return 1, err
 	}
 
-	serviceID, version, err := meta.ServiceForTag(tag)
+	release, err := meta.ReleaseForTag(root, tag)
 	if err != nil {
 		return 1, err
 	}
-	charts := meta.ChartsDeploying(serviceID)
-	fmt.Fprintf(out, "%s -> service %s, version %s\n", tag, serviceID, version)
+	charts := meta.ChartsDeploying(release.ServiceID)
+	fmt.Fprintf(out, "%s -> service %s, version %s", tag, release.ServiceID, release.Version)
+	if release.ArtifactVersion != release.Version {
+		fmt.Fprintf(out, ", artifact %s", release.ArtifactVersion)
+	}
+	fmt.Fprintln(out)
 
 	if len(charts) == 0 {
 		// Not an error. Plenty of services ship no chart, and chart-service-edge
 		// is what reports charts that have not declared an edge yet.
-		fmt.Fprintf(out, "no chart declares that it deploys %s; nothing to do\n", serviceID)
+		fmt.Fprintf(out, "no chart declares that it deploys %s; nothing to do\n", release.ServiceID)
 		return 0, nil
 	}
 
@@ -105,10 +109,10 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 	for _, chart := range charts {
 		var p Plan
 		var err error
-		if len(chart.ValuesPaths) > 0 {
-			p, err = PlanForValuesPaths(root, chart.Entry, version, chart.ValuesPaths)
+		if len(chart.ValuesPaths) > 0 || len(chart.ValuesFiles) > 0 {
+			p, err = PlanForValuesPaths(root, chart.Entry, release.ArtifactVersion, chart.ValuesPaths, chart.ValuesFiles, chart.AppVersion)
 		} else {
-			p, err = PlanFor(root, chart.Entry, version)
+			p, err = PlanFor(root, chart.Entry, release.ArtifactVersion)
 		}
 		if err != nil {
 			return 1, err
@@ -120,17 +124,23 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 		case ActionSkip:
 			fmt.Fprintf(out, "  %s: skipped, %s\n", chart.ID, p.Detail)
 		default:
-			if p.Current == version {
-				fmt.Fprintf(out, "  %s: already %s\n", chart.ID, version)
+			if p.Current == release.ArtifactVersion {
+				fmt.Fprintf(out, "  %s: already %s\n", chart.ID, release.ArtifactVersion)
 				continue
 			}
-			fmt.Fprintf(out, "  %s: %s -> %s (%s)\n", chart.ID, p.Current, version, p.Detail)
-			level = HigherLevel(level, BumpLevel(p.Current, version))
+			currentRelease, err := release.currentReleaseVersion(p.Current)
+			if err != nil {
+				fmt.Fprintf(errOut, "  %s: REFUSED, %s\n", chart.ID, err)
+				refused++
+				continue
+			}
+			fmt.Fprintf(out, "  %s: %s -> %s (%s)\n", chart.ID, p.Current, release.ArtifactVersion, p.Detail)
+			level = HigherLevel(level, BumpLevel(currentRelease, release.Version))
 			if write {
-				if len(chart.ValuesPaths) > 0 {
-					err = ApplyValuesPaths(root, chart.Entry, version, chart.ValuesPaths)
+				if len(chart.ValuesPaths) > 0 || len(chart.ValuesFiles) > 0 {
+					err = ApplyValuesPaths(root, chart.Entry, release.ArtifactVersion, chart.ValuesPaths, chart.ValuesFiles, chart.AppVersion)
 				} else {
-					err = Apply(root, chart.Entry, version, p)
+					err = Apply(root, chart.Entry, release.ArtifactVersion, p)
 				}
 				if err != nil {
 					return 1, err

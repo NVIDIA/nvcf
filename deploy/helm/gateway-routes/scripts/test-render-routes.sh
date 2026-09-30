@@ -20,9 +20,10 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 default_render="$(mktemp)"
 enabled_render="$(mktemp)"
 annotated_render="$(mktemp)"
+overridden_listener_render="$(mktemp)"
 disabled_render="$(mktemp)"
 hostname_conflict_error="$(mktemp)"
-trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render" "$hostname_conflict_error"' EXIT
+trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$overridden_listener_render" "$disabled_render" "$hostname_conflict_error"' EXIT
 
 if ! command -v yq >/dev/null 2>&1; then
   echo "yq is required for render tests" >&2
@@ -77,6 +78,29 @@ case "$reserved_hostnames" in
   *'"api.localhost": "gateway/nvcf-api"'*'"events.localhost": "gateway/event-ledger"'*) ;;
   *)
     echo "admission policy does not reserve every enabled HTTPRoute hostname: $reserved_hostnames" >&2
+    exit 1
+    ;;
+esac
+
+# The policy only denies a match that ties a chart route under Gateway API rule
+# precedence, and that reduces to "a bare root match" only while every chart
+# route stays exactly one PathPrefix / with no method, header or query match.
+assert_yq_eq "$default_render" '[select(.kind == "HTTPRoute") | .spec.rules[] | select((.matches | length) != 1 or .matches[0].path.type != "PathPrefix" or .matches[0].path.value != "/" or (.matches[0] | has("headers")) or (.matches[0] | has("queryParams")) or (.matches[0] | has("method")))] | length' 0
+
+ties_root_match="$(yq ea -r 'select(.kind == "ValidatingAdmissionPolicy") | .spec.variables[] | select(.name == "tiesRootMatch") | .expression' "$default_render")"
+case "$ties_root_match" in
+  *'RegularExpression'*'match.path.value.matches("^/+$")'*) ;;
+  *)
+    echo "admission policy does not gate on a tying root match: $ties_root_match" >&2
+    exit 1
+    ;;
+esac
+
+conflicting_hostnames="$(yq ea -r 'select(.kind == "ValidatingAdmissionPolicy") | .spec.variables[] | select(.name == "conflictingHostnames") | .expression' "$default_render")"
+case "$conflicting_hostnames" in
+  *'!variables.tiesRootMatch'*) ;;
+  *)
+    echo "conflictingHostnames is not gated on tiesRootMatch: $conflicting_hostnames" >&2
     exit 1
     ;;
 esac
@@ -219,7 +243,6 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   --set llmRequestRouter.grpcTls.allowInsecureHttp=true \
   --set nvcfGatewayRoutes.gateways.nats.name=nats-gateway \
   --set nvcfGatewayRoutes.gateways.nats.namespace=gateway \
-  --set nvcfGatewayRoutes.gateways.nats.listenerName=nats \
   > "$enabled_render"
 
 assert_resource_count "$enabled_render" HTTPRoute llm-invocation gateway 1
@@ -307,5 +330,23 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   > "$annotated_render"
 
 assert_resource_field "$annotated_render" TCPRoute nats gateway '.metadata.annotations."example.com/nats-route"' true
+
+# The chart owns listener defaults, while every listener remains overridable.
+helm template nvcf-gateway-routes "$repo_root/chart" \
+  --set nvcfGatewayRoutes.routes.grpcWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.grpcWorker.listenerName=custom-worker \
+  --set nvcfGatewayRoutes.routes.nats.enabled=true \
+  --set nvcfGatewayRoutes.gateways.nats.listenerName=custom-nats \
+  --set nvcfGatewayRoutes.routes.llmWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmWorker.backend.namespace=nvcf \
+  --set nvcfGatewayRoutes.gateways.llmGrpc.listenerName=custom-llm-grpc \
+  --set nvcfGatewayRoutes.gateways.llmQuic.listenerName=custom-llm-quic \
+  --set llmRequestRouter.grpcTls.allowInsecureHttp=true \
+  > "$overridden_listener_render"
+
+assert_resource_field "$overridden_listener_render" TCPRoute grpc-worker gateway '.spec.parentRefs[0].sectionName' custom-worker
+assert_resource_field "$overridden_listener_render" TCPRoute nats gateway '.spec.parentRefs[0].sectionName' custom-nats
+assert_resource_field "$overridden_listener_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].sectionName' custom-llm-grpc
+assert_resource_field "$overridden_listener_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].sectionName' custom-llm-quic
 
 echo "Gateway route render checks passed."

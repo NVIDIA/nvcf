@@ -19,6 +19,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -41,7 +42,11 @@ type AdmissionPlan interface {
 }
 
 type NormalizedRequest struct {
-	ChatRequest     *models.ChatCompletionRequest
+	ChatRequest *models.ChatCompletionRequest
+	// RawBody is the client's JSON body. When set, it is forwarded upstream with
+	// only gateway-owned fields rewritten, so fields ChatRequest does not model
+	// (for example chat_template_kwargs) still reach the backend.
+	RawBody         []byte
 	InputTokens     int
 	MaxOutputTokens int
 	AdmissionPlan   AdmissionPlan
@@ -49,7 +54,9 @@ type NormalizedRequest struct {
 
 type StreamEvent struct {
 	Chunk *models.ChatCompletionChunk
-	Err   error
+	// Raw is the upstream chunk JSON that Chunk was decoded from.
+	Raw json.RawMessage
+	Err error
 }
 
 type ProxyRequest struct {
