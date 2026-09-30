@@ -107,7 +107,11 @@ func (m *miniAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 			for _, o := range m.objects[collection] {
 				items = append(items, o)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "List", "items": items})
+			// A typed client decodes only its own list kind.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"apiVersion": listAPIVersion(collection), "kind": listKinds[collection[strings.LastIndex(collection, "/")+1:]],
+				"items": items,
+			})
 			return
 		}
 		obj, ok := m.objects[collection][name]
@@ -137,6 +141,23 @@ func (m *miniAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 		// PATCH and PUT: accept and echo nothing interesting.
 		_ = json.NewEncoder(w).Encode(map[string]any{})
 	}
+}
+
+// listKinds maps a collection's resource to the kind a typed client decodes.
+var listKinds = map[string]string{
+	"jobs": "JobList", "pods": "PodList", "secrets": "SecretList", "configmaps": "ConfigMapList",
+	"serviceaccounts": "ServiceAccountList", "clusterroles": "ClusterRoleList",
+	"clusterrolebindings": "ClusterRoleBindingList", "namespaces": "NamespaceList",
+}
+
+// listAPIVersion is the group version in a collection path: "v1" under /api,
+// "<group>/<version>" under /apis.
+func listAPIVersion(collection string) string {
+	parts := strings.Split(strings.Trim(collection, "/"), "/")
+	if len(parts) >= 3 && parts[0] == "apis" {
+		return parts[1] + "/" + parts[2]
+	}
+	return "v1"
 }
 
 // isNamedPath reports whether path names one object rather than a collection:
@@ -208,4 +229,34 @@ func TestRunClusterValidator_HungDeletesAreBounded(t *testing.T) {
 	res := runInterrupted(t, client, m)
 	require.Error(t, res.Err)
 	assert.Less(t, time.Since(start), 25*time.Second)
+}
+
+// A control-plane run that times out once its pod has ended makes all three
+// deferred sweeps in turn, each on its own bounded context. With every DELETE
+// hanging, the run still returns within ClusterValidatorRunCeiling, which the
+// check's budget is sized from.
+func TestClusterValidatorRunCeiling_CoversHungSweeps(t *testing.T) {
+	prevTimeout, prevGrace, prevLogs, prevCleanup, prevMargin := clusterValidatorTimeout,
+		validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorCleanupTimeout, validatorRunMargin
+	clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorCleanupTimeout,
+		validatorRunMargin = 3*time.Second, time.Second, 500*time.Millisecond, time.Second, 200*time.Millisecond
+	t.Cleanup(func() {
+		clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorCleanupTimeout,
+			validatorRunMargin = prevTimeout, prevGrace, prevLogs, prevCleanup, prevMargin
+	})
+	// An NGC image with NGC_API_KEY mints a pull Secret, and a registry makes
+	// the ConfigMap, so each of the three sweeps has an object to delete.
+	t.Setenv("NGC_API_KEY", "key")
+	m, client := newMiniAPIServer(t)
+	m.hangDeletes.Store(true)
+
+	start := time.Now()
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorControlPlaneRole, []RegistryEntry{{Registry: "nvcr.io"}}, nil)
+	elapsed := time.Since(start)
+	require.Error(t, res.Err)
+	require.Contains(t, res.Err.Error(), "waiting for job", "the run reached the Job wait and timed out there")
+	assert.GreaterOrEqual(t, elapsed, validatorDeferredSweeps*validatorCleanupTimeout,
+		"every sweep ran and hung until its bound")
+	assert.LessOrEqual(t, elapsed, ClusterValidatorRunCeiling())
 }

@@ -78,11 +78,18 @@ var (
 	validatorCleanupTimeout = 30 * time.Second
 )
 
+// validatorDeferredSweeps is how many deferred sweeps one run can make, each
+// bounded by validatorCleanupTimeout: the pull secret, the RBAC, and for the
+// control-plane role the network-checks ConfigMap.
+const validatorDeferredSweeps = 3
+
 // ClusterValidatorRunCeiling is the longest one validator run can take: its
 // own timeout, then on a timeout the wait for the Job's deadline to end the
-// pod and the log fetch, plus a margin for the pod's termination grace period.
+// pod and the log fetch, then the deferred sweeps, which run in turn on fresh
+// contexts, plus a margin for the pod's termination grace period.
 func ClusterValidatorRunCeiling() time.Duration {
-	return clusterValidatorTimeout + validatorDeadlineGrace + clusterValidatorLogFetchTimeout + validatorRunMargin
+	return clusterValidatorTimeout + validatorDeadlineGrace + clusterValidatorLogFetchTimeout +
+		validatorDeferredSweeps*validatorCleanupTimeout + validatorRunMargin
 }
 
 // cleanupContext is a fresh, bounded context for one deferred sweep. It does
