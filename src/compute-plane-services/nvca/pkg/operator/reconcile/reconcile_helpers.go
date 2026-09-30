@@ -411,9 +411,9 @@ func (bc *BackendK8sCache) createOrUpdateServiceAccount(ctx context.Context, sa 
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-		saLatest, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, sa, metav1.UpdateOptions{})
+		saLatest, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to get latest version of serviceAccount: %v", err)
+			return fmt.Errorf("failed to get latest version of serviceAccount: %w", err)
 		}
 
 		// Update the AutomountServiceAccountToken field directly on the latest ServiceAccount object

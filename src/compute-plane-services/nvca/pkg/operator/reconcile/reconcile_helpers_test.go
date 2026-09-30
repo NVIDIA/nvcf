@@ -490,9 +490,16 @@ func TestBackendK8sCache_CreateOrUpdateServiceAccount(t *testing.T) {
 		assert.False(t, *got.AutomountServiceAccountToken)
 	})
 
-	t.Run("update existing serviceaccount", func(t *testing.T) {
+	t.Run("update existing serviceaccount preserves live fields", func(t *testing.T) {
 		clientset := fake.NewSimpleClientset(&corev1.ServiceAccount{
-			ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "team-x"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "default",
+				Namespace:   "team-x",
+				Labels:      map[string]string{"team": "platform"},
+				Annotations: map[string]string{"owner": "platform-team"},
+			},
+			Secrets:          []corev1.ObjectReference{{Name: "default-token"}},
+			ImagePullSecrets: []corev1.LocalObjectReference{{Name: "registry-creds"}},
 		})
 		bc := &BackendK8sCache{clients: &kubeclients.KubeClients{K8s: clientset}}
 
@@ -506,6 +513,10 @@ func TestBackendK8sCache_CreateOrUpdateServiceAccount(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, got.AutomountServiceAccountToken)
 		assert.False(t, *got.AutomountServiceAccountToken)
+		assert.Equal(t, "platform", got.Labels["team"])
+		assert.Equal(t, "platform-team", got.Annotations["owner"])
+		assert.Equal(t, []corev1.ObjectReference{{Name: "default-token"}}, got.Secrets)
+		assert.Equal(t, []corev1.LocalObjectReference{{Name: "registry-creds"}}, got.ImagePullSecrets)
 	})
 }
 
