@@ -43,6 +43,11 @@ multi-tenant objects to `03`. `04_add_multi_tenant_schema.up.sql` is the
 deployed delta for new and existing clusters. Keep `keys_by_owner_and_service`
 until the dual-write migration stops using it.
 
+Multi-tenant persistence lives in `AccountKeysDao`, `AccountOwnerStatusDao`,
+and `KeyOperationsDao`. `EncryptedModelConverter` maps every model column to a
+same-named value-object field, so a new column on an encrypted model also needs
+that field on its `@ValueObject`.
+
 Integration tests bind each `.cql` file in `local_env/docker-compose.test.yml`
 because Bazel runfiles are symlinks. Local Compose mounts the whole schema
 directory.

@@ -17,7 +17,7 @@
 
 package com.nvidia.apikeys.vo;
 
-import com.nvidia.apikeys.persistance.models.KeyModel;
+import com.nvidia.apikeys.persistance.models.KeyByAccountOwnerAndServiceModel;
 import com.nvidia.boot.jwt.services.mapping.annotation.ValueObject;
 import java.time.Instant;
 import java.util.Set;
@@ -30,21 +30,41 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@ValueObject(model = KeyModel.class)
-public class KeyVo {
+@ValueObject(model = KeyByAccountOwnerAndServiceModel.class)
+public class KeyByAccountOwnerAndServiceVo {
 
-    private KeyStatus keyStatus;
     private String ncaId;
     private KeyOwnerType ownerType;
     private String ownerId;
+
     private String issuerServiceId;
-    private Set<String> audienceServiceIds;
     private String keyId;
-    private String keyHash;
     private Instant createdAt;
     private Instant expiresAt;
     private Instant deletesAt;
+    private KeyStatus keyStatus;
+
+    private String keyHash;
     private String apiKeySuffix;
-    private String authorizations;
     private String description;
+    private Set<String> audienceServiceIds;
+
+    public static KeyByAccountOwnerAndServiceVo from(KeyVo key) {
+        // authorizations stay only on the keys table
+        return KeyByAccountOwnerAndServiceVo.builder()
+                .ncaId(key.getNcaId())
+                .ownerType(key.getOwnerType())
+                .ownerId(key.getOwnerId())
+                .issuerServiceId(key.getIssuerServiceId())
+                .keyId(key.getKeyId())
+                .createdAt(key.getCreatedAt())
+                .expiresAt(key.getExpiresAt())
+                .deletesAt(key.getDeletesAt())
+                .keyStatus(key.getKeyStatus())
+                .keyHash(key.getKeyHash())
+                .apiKeySuffix(key.getApiKeySuffix())
+                .description(key.getDescription())
+                .audienceServiceIds(key.getAudienceServiceIds())
+                .build();
+    }
 }
