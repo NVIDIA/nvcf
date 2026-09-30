@@ -1216,6 +1216,24 @@ async fn list_registered_models_counts_registered_and_routable_servers_per_clust
 }
 
 #[tokio::test]
+async fn list_registered_models_counts_only_open_registrations_as_healthy() {
+    let scenario = RegistrationScenario::new(None);
+    let ending = scenario.start_in("ending", "cluster-shared", 1111);
+    let open = scenario.start_in("open", "cluster-shared", 2222);
+    scenario.activate(&ending, "model-x").await;
+    scenario.activate(&open, "model-x").await;
+
+    // end_registration drops the registry record before routing cleanup
+    // finishes; hold the listing in that window.
+    scenario.state.registrations.end_registration(ending);
+
+    assert_eq!(
+        scenario.state.list_registered_models(None, &[]).await,
+        vec![model_listing("model-x", &[("cluster-shared", 1, 1)])]
+    );
+}
+
+#[tokio::test]
 async fn list_registered_models_drops_ended_registrations() {
     let scenario = RegistrationScenario::new(None);
     let running = scenario.start("ended", 1111);

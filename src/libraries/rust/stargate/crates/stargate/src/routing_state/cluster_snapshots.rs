@@ -163,7 +163,7 @@ impl ClusterRoutingGeneration {
         true
     }
 
-    fn contains_registration(&self, registration: &Arc<RegistrationGeneration>) -> bool {
+    pub(super) fn contains_registration(&self, registration: &Arc<RegistrationGeneration>) -> bool {
         backend_index(&self.backends, registration.inference_server_id())
             .is_ok_and(|index| Arc::ptr_eq(&self.backends[index].registration, registration))
     }

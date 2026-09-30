@@ -231,15 +231,16 @@ impl RegistrationRegistry {
             .contains_key(target)
     }
 
-    /// Counts open registrations per model and cluster for one routing key.
-    /// An empty `model_ids` filter keeps every advertised model.
-    pub(super) fn registered_servers_by_model(
+    /// Groups open registrations by advertised model and cluster for one
+    /// routing key. An empty `model_ids` filter keeps every advertised model.
+    pub(super) fn registrations_by_model_and_cluster(
         &self,
         routing_key: Option<&str>,
         model_ids: &[String],
-    ) -> BTreeMap<String, BTreeMap<String, u32>> {
+    ) -> BTreeMap<String, BTreeMap<String, Vec<Arc<RegistrationGeneration>>>> {
         let membership = self.membership.read();
-        let mut counts: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
+        let mut grouped: BTreeMap<String, BTreeMap<String, Vec<Arc<RegistrationGeneration>>>> =
+            BTreeMap::new();
         for record in membership.registrations_by_id.values() {
             let identity = &record.state.identity;
             if identity.routing_key.as_deref() != routing_key {
@@ -249,15 +250,15 @@ impl RegistrationRegistry {
                 if !model_ids.is_empty() && !model_ids.contains(model_id) {
                     continue;
                 }
-                let count = counts
+                grouped
                     .entry(model_id.clone())
                     .or_default()
                     .entry(identity.cluster_id.clone())
-                    .or_default();
-                *count = count.saturating_add(1);
+                    .or_default()
+                    .push(record.state.clone());
             }
         }
-        counts
+        grouped
     }
 
     pub(super) fn reverse_tunnel_registration(

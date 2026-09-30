@@ -209,8 +209,8 @@ impl StargateState {
 
     /// Lists every model advertised by an open registration for `routing_key`,
     /// routable or not, with per-cluster registered and routable server counts.
-    /// Clusters present only in routing state are skipped because their
-    /// registrations have already ended.
+    /// Only open registrations count as routable, so routed backends whose
+    /// registration already ended are never listed.
     pub async fn list_registered_models(
         &self,
         routing_key: Option<&str>,
@@ -218,19 +218,25 @@ impl StargateState {
     ) -> Vec<ModelListing> {
         let registered = self
             .registrations
-            .registered_servers_by_model(routing_key, model_ids);
+            .registrations_by_model_and_cluster(routing_key, model_ids);
         let mut listings = Vec::with_capacity(registered.len());
-        for (model_id, registered_by_cluster) in registered {
+        for (model_id, registrations_by_cluster) in registered {
             let target = RoutingTargetKey::new(routing_key.map(ToOwned::to_owned), &model_id);
-            let healthy_by_cluster = self.routing.backend_counts_by_cluster(&target).await;
-            let clusters = registered_by_cluster
+            let target_state = self.routing.target_state(&target).await;
+            let clusters = registrations_by_cluster
                 .into_iter()
-                .map(|(cluster_id, registered_servers)| ClusterListing {
-                    healthy_servers: healthy_by_cluster
-                        .get(&cluster_id)
-                        .map_or(0, |&count| u32::try_from(count).unwrap_or(u32::MAX)),
-                    cluster_id,
-                    registered_servers,
+                .map(|(cluster_id, registrations)| {
+                    let healthy_servers = target_state.as_ref().map_or(0, |target_state| {
+                        registrations
+                            .iter()
+                            .filter(|registration| target_state.routes_registration(registration))
+                            .count()
+                    });
+                    ClusterListing {
+                        cluster_id,
+                        registered_servers: saturating_u32(registrations.len()),
+                        healthy_servers: saturating_u32(healthy_servers),
+                    }
                 })
                 .collect();
             listings.push(ModelListing { model_id, clusters });
@@ -256,6 +262,10 @@ impl StargateState {
         self.registrations
             .reverse_tunnel_registration(inference_server_id)
     }
+}
+
+fn saturating_u32(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
