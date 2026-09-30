@@ -177,25 +177,77 @@ not.
    filesystem's locks (Lustre needs `-o flock`; the agent checks).
 
    Block storage: each pod compiles into its local `/opt/nvsnap/cache`
-   emptyDir. The cache identity is `cache://<config hash>/<ordinal>`:
-   the role-neutral configuration hash plus the pod's index in its group
-   (LeaderWorkerSet worker index, else the StatefulSet ordinal, else 0).
-   Per ordinal, never merged: the ranks of a tensor-parallel group write
-   rank-specific directories, and the paths they share (Inductor and
-   Triton autotune results) differ in content between ranks (measured
-   2026-09-29). A single-pod group is ordinal 0 and holds every rank.
-   The first pod of a key to become Ready is the source: the agent on its
-   node waits for the cache tree to stop changing (readiness is not
-   "compiled": a worker reports Ready before its torch.compile finishes),
-   then measures it, creates a claim of that size in the nvsnap namespace
-   (KindCache, names `nvsnap-cache-<key>`), copies the tree in through a
-   mount-holder, labels the retained PV complete and releases the claim.
-   Atomic claim creation picks one source among all pods sharing the key.
-   Every later pod with the key gets the read-only claim minted in its
-   namespace at admission and a seed init copies it into the cachedir
-   before the engine starts, best effort. Failures release the claim so
-   another pod can be the source; after the last attempt a failure record
-   stops admissions from waiting for the key for an hour.
+   emptyDir; the caches of a tensor-parallel group are gathered once, as
+   one volume per configuration, and every later pod of that
+   configuration mounts it. The identity of the set is `cache://<config
+   hash>`: the role-neutral configuration hash (image reference, model,
+   arguments, cache env, driver major, GPU class, salt). Inside it, one
+   directory per ordinal (LeaderWorkerSet worker index, else the
+   StatefulSet ordinal, else 0): the ranks of a group write rank-specific
+   directories, and the paths they share (Inductor and Triton autotune
+   results) differ in content between ranks (measured 2026-09-29), so
+   ranks are never merged, only placed side by side.
+
+   Why one volume and not one per rank (the first design, ct1
+   2026-09-30): per-rank volumes meant eight claims per namespace, eight
+   read-only attaches per deployment on top of the model's, and on
+   NVMesh a shared read-only attach can take 30 s under concurrent
+   clients. On the cold deployment every rank's cache already sits in an
+   emptyDir on local disk with no block storage involved, so the right
+   moment to touch NVMesh is once, after all ranks exist.
+
+   Cold deployment. The webhook finds no complete set for the key and
+   stamps the pod `nvsnap.io/cache-capture`, `nvsnap.io/cache-set=<key>`,
+   `nvsnap.io/cache-ordinal=<n>` and `nvsnap.io/cache-group-size=<N>`
+   (the group size from the owning LeaderWorkerSet or StatefulSet, 1 for
+   a lone pod). No claim, no volume, no Job. When a stamped pod is Ready
+   and its tree has stopped changing (readiness is not "compiled": a
+   worker reports Ready before its torch.compile finishes), the agent on
+   its node measures it and annotates the pod `nvsnap.io/cache-rank-
+   ready=true`, `nvsnap.io/cache-rank-bytes=<bytes>`. Nothing is copied;
+   the pod keeps serving and its emptyDir keeps the tree.
+
+   Election. An agent that marked a rank ready lists the group's pods by
+   key. When every ordinal up to the group size is ready it creates the
+   claim `nvsnap-cacheset-<key>` in the nvsnap namespace, sized from the
+   sum of the ranks plus ten percent, rounded up to a GiB, floor from
+   the profile's `minSize`. Create is atomic: one agent becomes the
+   collector, the rest see AlreadyExists and stop. A group that never
+   fully schedules never produces a partial set.
+
+   Collection. The collector attaches the claim through a mount-holder,
+   copies its own rank from the local emptyDir into `/<ordinal>/`, and
+   for every other ordinal streams the tree from the agent hosting that
+   pod (`GET /v1/cache-rank/<key>/<ordinal>`, a tar over the
+   authenticated agent-to-agent client checkpoints already replicate
+   over) into `/<ordinal>/`. Eight ranks of 0.85 GiB take under a minute
+   on the node network. It labels the retained PV complete, releases the
+   claim so the volume detaches, and clears any failure record. One
+   attach, one volume, for the whole group.
+
+   Warm deployment. The webhook finds the set complete, mints
+   `nvsnap-cacheset-<key>-ro` in the pod's namespace from the primary as
+   it does for the model, and the pod mounts two claims: the model
+   volume and the cache set. A seed init on the engine image copies
+   `/<ordinal>/` into the writable cachedir and exits 0. Two attaches per
+   pod, the model's and the set's. An overlay of the read-only mount
+   under the cachedir removes the copy as a follow-up and changes
+   nothing above.
+
+   Failures. A rank pod dies before collection: the group never reaches
+   all-ready, no claim is created, and the next deployment collects
+   again at the cost of one more compile round for that configuration.
+   The collector fails mid-copy: it deletes the claim, the primary is
+   reaped as abandoned, and another agent may win the next election;
+   after three failures a failure record stops admissions from waiting
+   on the key for an hour. A peer agent unreachable during collection:
+   bounded retries for that rank, then the same give-up; a set is never
+   marked complete with a rank missing. A seed copy that fails on a
+   warm pod: the init exits 0 and the engine compiles locally.
+
+   Retention. Every admission against a complete set touches
+   `nvsnap.io/last-used` on its PV; the reaper retires a set unused for
+   `agent.modelVolume.retention` together with its read-only views.
 
    The identity covers the image reference, model, arguments, cache
    env, driver major and GPU class, so a new engine image starts a new
@@ -224,8 +276,8 @@ first = nothing exists; concurrent = download in flight; later = complete.
 | M, DFS, first | 1; readers wait on marker; group forms when all engines start | ranks share cache; duplicates limited to races within one start | no |
 | any, DFS, concurrent or later | 0 | 0 | no |
 | D, NVMesh, first | 1; readers get bind-mounted ro volume on completion | writer compiles; readers compile locally once, then cache volume exists | no |
-| M, NVMesh, first | 1; readers bind-mounted on completion; group forms | each pod compiles once (concurrent ranks, no shared fs) | no |
-| any, NVMesh, later | 0 (ro claim at admission) | 0 (cache volume ro + shadow) | no |
+| M, NVMesh, first | 1; readers bind-mounted on completion; group forms | each rank compiles once; one collection into one cache-set volume after all ranks are Ready | no |
+| any, NVMesh, later | 0 (ro claim at admission) | 0 (cache set ro, per-rank subdirectory seeded) | no |
 | any, other namespace, later | 0 (`EnsureClaim`) | 0 | no |
 | engine-script download (kimi-k3), NVMesh, first | each pod of the first deployment downloads; one is captured after Ready | as M, NVMesh, first | no |
 | engine-script download, NVMesh, later | 0 (ro claim replaces the per-replica claim) | 0 | no |
@@ -249,7 +301,7 @@ between them. Everything after that first start is a full hit.
 | gang scheduler | readers always schedulable in RWX or hostPath mode; in `pvc` mode readers pend on binding until the download completes, so gang-scheduled charts use `hostPath` | profile `readerMode: hostPath` |
 | function namespace with Kyverno enforced (`disallow-host-path`, requests and limits, no SA token) | `pvc` mode uses no hostPath; the download Job carries every mount the chart's init had (registry key secret, script ConfigMap), default requests and limits, seccomp, dropped capabilities and no token | none needed |
 | identity deleted while a read-only PV is still Terminating (NVMesh) | the read-only PV name is deterministic per identity and namespace, so a re-download of the same identity cannot mint until the old PV finalizes; the attacher's detach timed out for minutes after the volume was gone | retention deletes read-only claims and PVs before the primary, and the controller retries minting; a stale VolumeAttachment on a deleted volume needs the finalizer cleared (seen on dev1 2026-09-26) |
-| shared read-only attach is slow (NVMesh: 30 s IO-enable timeouts under 8 to 16 concurrent clients, ct1 2026-09-30) | every worker attached two shared volumes, its model and its rank cache | `agent.modelVolume.cacheSeed: agent`: the cache volume stays the durable store, but the agent on each node mirrors it once (one attach per node per key) and serves it to pods over its API; the seed init (nvsnap-l2-wait seed mode, signed per namespace and key with the agent token, no token in workload namespaces) unpacks it into the cachedir and exits 0 on any outcome. A pod then attaches only its model volume. `volume` keeps the per-pod read-only cache claim |
+| shared read-only attach is slow (NVMesh: 30 s IO-enable timeouts under 8 to 16 concurrent clients, ct1 2026-09-30) | every worker attached two shared volumes, its model and its rank cache, and the group attached eight distinct cache volumes | one cache-set volume per configuration (mechanism 5): the group's ranks are collected once into it, a warm pod attaches the model and the set, two attaches, and the cluster holds one cache volume per configuration instead of eight. `agent.modelVolume.cacheSeed=agent` (node mirrors served by the agent) was the interim measure and is retired once the cache set is proven |
 | complete volume nobody uses any more | storage held forever | retention: every admission against a complete primary stamps `nvsnap.io/last-used`; the reaper retires a complete model or cache primary, and its read-only views, once nothing has used it for `agent.modelVolume.retention` (default 7 days) and no reader is bound in a live namespace; 0 keeps forever |
 | last reader of an identity leaves a node (NVMesh) | the agent's bind mount keeps the volume published; kubelet cannot unmount and the attacher's detach times out (seen on dev1 2026-09-26 during cleanup) | the agent must unbind and drop its mount-holder when no pod on the node uses the identity; part of retention (follow-up) |
 
