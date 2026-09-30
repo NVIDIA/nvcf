@@ -82,6 +82,25 @@ func (r *Reconciler) SweepOnce(ctx context.Context) {
 			continue // no usable capture yet — leave for a future tick
 		}
 
+		// An in-flight capture is not recovered over. A live claim whose
+		// owner pod is alive is left alone (unknown liveness counts as
+		// alive). Every sweep write is fenced on the resourceVersion it
+		// listed: any change since then (a claim that opened, or opened
+		// and closed, a lease the owner refreshed, a result that landed)
+		// makes the write fail and the next tick re-evaluate. The owner
+		// and unclaimed checks stay as a second line for objects whose
+		// version the fake or an old server does not track.
+		token := claimToken{ExpectUnclaimed: true, ObservedResourceVersion: cfs.GetResourceVersion()}
+		if st.CaptureOwner != "" {
+			leaseLive := st.CaptureLeaseExpiry != nil && time.Now().Before(st.CaptureLeaseExpiry.Time)
+			if leaseLive && r.claimOwnerAlive(ctx, st.CaptureOwner, st.CaptureOwnerUID) {
+				log.WithFields(logrus.Fields{"functionVersionID": fvID, "owner": st.CaptureOwner}).
+					Debug("sweep: capture in flight with a live owner; not recovering over it")
+				continue
+			}
+			token = claimToken{Owner: st.CaptureOwner, UID: st.CaptureOwnerUID, ObservedResourceVersion: cfs.GetResourceVersion()}
+		}
+
 		now := time.Now()
 		if err := writeStatus(ctx, r.DynClient, fvID, statusUpdate{
 			CheckpointHash:  hash,
@@ -91,7 +110,7 @@ func (r *Reconciler) SweepOnce(ctx context.Context) {
 			AttemptCount:    0,
 			LastError:       "",
 			LastAttemptAt:   now,
-		}); err != nil {
+		}, token); err != nil {
 			log.WithError(err).WithField("functionVersionID", fvID).
 				Warn("sweep: writeStatus Warm failed; will retry next tick")
 			continue

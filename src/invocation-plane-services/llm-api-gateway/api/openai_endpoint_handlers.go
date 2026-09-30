@@ -166,6 +166,9 @@ func (h *OpenAIProxyHandlers) Embeddings(ec echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := rejectAmbiguousMembers(rawBody, models.CreateEmbeddingRequest{}); err != nil {
+		return err
+	}
 
 	var request models.CreateEmbeddingRequest
 	if err := c.Bind(&request); err != nil {

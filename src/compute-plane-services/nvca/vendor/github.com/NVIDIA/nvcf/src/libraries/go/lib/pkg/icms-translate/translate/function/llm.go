@@ -41,6 +41,7 @@ const (
 	llmRouterClientImageDefault      = "nvcr.io/0651155215864979/ncp-dev/stargate-client:0.4.0"
 	llmRequestRouterAddressEnv       = "LLM_REQUEST_ROUTER_ADDRESS"
 	legacyStargateAddressEnv         = "STARGATE_ADDRESS"
+	maxRequestConcurrencyEnv         = "MAX_REQUEST_CONCURRENCY"
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
@@ -153,6 +154,15 @@ func newLLMRouterClientContainer(
 		fmt.Sprintf("--auth-token-file=%s", llmWorkerTokenPath),
 		"--backend-connectivity=reverse",
 		"--initial-input-tps=100",
+	}
+	maxRequestConcurrency := ""
+	if ls.MaxRequestConcurrency > 0 {
+		maxRequestConcurrency = strconv.Itoa(ls.MaxRequestConcurrency)
+	} else {
+		maxRequestConcurrency = allEnvSet[maxRequestConcurrencyEnv]
+	}
+	if maxRequestConcurrency != "" {
+		args = append(args, fmt.Sprintf("--max-engine-concurrency=%s", maxRequestConcurrency))
 	}
 	if healthPath := upstreamHealthPath(allEnvSet); healthPath != "" {
 		args = append(args, fmt.Sprintf("--upstream-health-path=%s", healthPath))
