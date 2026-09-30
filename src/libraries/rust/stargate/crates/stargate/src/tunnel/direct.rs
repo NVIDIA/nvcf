@@ -39,6 +39,10 @@ use super::request::OpenTunnelRequest;
 use super::webtransport::build_webtransport_client_connection;
 use super::{QuicTunnelConfig, StreamingResponse};
 
+/// Deadline for one health probe, kept separate from the proxy request
+/// timeout, which is sized for queued inference.
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct QuicHttpProxy {
     pub(super) config: QuicTunnelConfig,
     pub(super) endpoint_v4: Arc<Endpoint>,
@@ -143,6 +147,23 @@ impl QuicHttpProxy {
         &self,
         registration: &RegistrationGeneration,
     ) -> Result<Duration> {
+        // A hung probe would otherwise keep a stale ready result published
+        // for the whole request timeout.
+        self.health_check_rtt_within(registration, HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+
+    pub(super) async fn health_check_rtt_within(
+        &self,
+        registration: &RegistrationGeneration,
+        deadline: Duration,
+    ) -> Result<Duration> {
+        tokio::time::timeout(deadline, self.probe_health_rtt(registration))
+            .await
+            .map_err(|_| anyhow!("health check timed out after {deadline:?}"))?
+    }
+
+    async fn probe_health_rtt(&self, registration: &RegistrationGeneration) -> Result<Duration> {
         let inference_server_id = registration.inference_server_id();
         let start = std::time::Instant::now();
         let mut headers = HeaderMap::new();
