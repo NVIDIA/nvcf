@@ -479,6 +479,7 @@ func (h *ResponsesHandlers) finalizeNativeResponsesUsage(
 			ctx,
 			responsesEndpointPath,
 			requestFunctionID(c),
+			requestRoutedModel(c),
 			usage,
 			stream,
 		)

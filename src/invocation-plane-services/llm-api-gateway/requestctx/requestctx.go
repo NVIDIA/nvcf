@@ -39,4 +39,8 @@ type RequestContext struct {
 	// when no priority config applies. Lower value is higher priority, 0 is
 	// highest. Forwarded to Stargate as the X-Priority header when set.
 	Priority *uint32
+	// RoutedModel is the X-Model value once the router answered 2xx, and empty
+	// otherwise. The router accepts only models it serves, so metrics can use
+	// it as a bounded label that callers cannot extend with arbitrary names.
+	RoutedModel string
 }

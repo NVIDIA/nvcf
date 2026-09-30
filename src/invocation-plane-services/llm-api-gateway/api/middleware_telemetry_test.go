@@ -189,6 +189,7 @@ func TestRequestMetricsIncludeFunctionID(t *testing.T) {
 		context.Background(),
 		"/v1/chat/completions",
 		"fn-metrics",
+		"",
 		&models.ChatCompletionUsage{
 			PromptTokens:     2,
 			PromptTime:       0.02,
@@ -206,6 +207,7 @@ func TestRequestMetricsIncludeFunctionID(t *testing.T) {
 		context.Background(),
 		"/v1/chat/completions",
 		"fn-metrics",
+		"",
 		observability,
 		&models.ChatCompletionChunk{
 			Choices: []models.ChatCompletionChunkChoice{{
@@ -224,6 +226,7 @@ func TestRequestMetricsIncludeFunctionID(t *testing.T) {
 		context.Background(),
 		"/v1/chat/completions",
 		"fn-metrics",
+		"",
 		nil,
 		"",
 		events,
@@ -345,7 +348,7 @@ func pointHasAttributes(attrs []attribute.KeyValue, want map[string]string) bool
 		got[string(attr.Key)] = attr.Value.AsString()
 	}
 	for key, value := range want {
-		if got[key] != value {
+		if gotValue, ok := got[key]; !ok || gotValue != value {
 			return false
 		}
 	}

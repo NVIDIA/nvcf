@@ -125,7 +125,11 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			}
 			statusCode := httpStatusCode(gc, err)
 			status := strconv.Itoa(statusCode)
-			finalAttrs := append(metricAttrs, attribute.String("status", status))
+			finalAttrs := append(
+				metricAttrs,
+				attribute.String("status", status),
+				telemetry.ModelAttribute(requestRoutedModel(gc)),
+			)
 			telemetry.AddWithContext(context.WithoutCancel(ctx), requestsTotal, 1, finalAttrs...)
 			telemetry.RecordWithContext(context.WithoutCancel(ctx), requestDuration, time.Since(requestStart).Seconds(), finalAttrs...)
 

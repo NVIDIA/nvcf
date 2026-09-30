@@ -141,6 +141,7 @@ func (p *StargateProvider) Complete(
 		p.recordUpstreamRequest(ctx, reqCtx, start, 0, err)
 		return nil, err
 	}
+	recordRoutedModel(reqCtx, outbound, resp)
 
 	if err := checkHTTPError(resp); err != nil {
 		cancel()
@@ -181,6 +182,7 @@ func (p *StargateProvider) Stream(
 		p.recordUpstreamRequest(ctx, reqCtx, start, 0, err)
 		return nil, err
 	}
+	recordRoutedModel(reqCtx, outbound, resp)
 
 	if err := checkHTTPError(resp); err != nil {
 		cancel()
@@ -353,6 +355,14 @@ func (p *StargateProvider) newOutboundRequest(
 	return req, nil
 }
 
+// recordRoutedModel keeps the X-Model value only when the router answered 2xx.
+// Its unknown-model (404) and bad-header (400) answers must not create labels.
+func recordRoutedModel(reqCtx *requestctx.RequestContext, outbound *http.Request, resp *http.Response) {
+	if reqCtx != nil && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		reqCtx.RoutedModel = outbound.Header.Get(headerModel)
+	}
+}
+
 func setTargetRegionHeaders(headers http.Header, targetRegion string) {
 	headers.Set(headerTargetRegion, targetRegion)
 	headers.Set(headerLegacyTargetRegion, targetRegion)
@@ -443,6 +453,7 @@ func (p *StargateProvider) Proxy(
 		p.recordUpstreamRequest(ctx, reqCtx, start, 0, err)
 		return nil, err
 	}
+	recordRoutedModel(reqCtx, outbound, resp)
 
 	p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, nil)
 	return &ProxyResponse{

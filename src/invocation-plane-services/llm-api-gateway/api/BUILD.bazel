@@ -93,6 +93,7 @@ go_test(
         "middleware_telemetry_test.go",
         "middleware_test.go",
         "model_ids_test.go",
+        "model_metrics_test.go",
         "model_uris_test.go",
         "models_handler_test.go",
         "openai_routes_test.go",
