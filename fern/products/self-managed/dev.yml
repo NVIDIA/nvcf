@@ -21,6 +21,8 @@ navigation:
         path: ../../../docs/self-managed/pod-disruption-budgets.md
       - page: gRPC Invocation Enablement
         path: ../../../docs/self-managed/grpc-invocation-enablement.md
+      - page: High Availability
+        path: ../../../docs/self-managed/high-availability.md
       - page: LLM Function Enablement
         path: ../../../docs/self-managed/llm-function-enablement.md
       - page: LLM Request Router Load Balancing

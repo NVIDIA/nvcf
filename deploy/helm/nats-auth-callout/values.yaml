@@ -173,6 +173,12 @@ affinity:
   #                 - nvcf-nats-auth-callout-service
   #         topologyKey: kubernetes.io/hostname
 
+# Zone spread; set by the HA value layer, empty by default.
+topologySpreadConstraints: []
+
+# Rollout strategy; set by the HA value layer, empty by default.
+strategy: {}
+
 nodeSelector:
   {}
   # Example node selector to target specific nodes:

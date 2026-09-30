@@ -190,7 +190,7 @@ throughput:
    for override examples.
 
 <Note>
-- [Quickstart](./quickstart.md): One-click fresh installation walkthrough
+- [Quickstart](/nvcf/overview/quickstart): One-click fresh installation walkthrough
 - [self-managed-grpc-load-test](./grpc-load-testing.md): Validate control-plane throughput
 - [self-managed-http-load-test](./http-load-testing.md): Validate HTTP invocation throughput
 

@@ -9,6 +9,10 @@
 # fixture. In the multi-cluster topology those names resolve to alias
 # Services in the compute cluster, and the alias Endpoints point at
 # the control-plane load balancer.
+# Single-node BDD fixture: keep HA off so the pinned single-replica values below apply.
+highAvailability:
+  mode: none
+
 global:
   storageClass: local-path
   storageSize: 2Gi
