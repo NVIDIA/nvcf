@@ -441,9 +441,11 @@ An invalid header returns HTTP `400` before backend selection, with
 `{"error":"<message>","code":"<class>"}`. The message names the rejected
 parameter or value.
 
-Each routing key and model reuses one configuration and load balancer while its
-expression bytes are unchanged. Entries expire after 15 idle minutes, and each
-router process keeps at most 16384.
+Each routing key and model keeps the configurations and load balancers for its
+two most recent expressions, compared by bytes, so values that alternate while
+an update propagates reuse them. A third expression replaces the older one.
+Entries expire after 15 idle minutes, and each router process keeps at most
+16384.
 
 ## Load-balancer request headers
 

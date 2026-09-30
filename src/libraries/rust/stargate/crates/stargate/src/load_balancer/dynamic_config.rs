@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use moka::notification::RemovalCause;
 use moka::ops::compute::{CompResult, Op};
 use moka::sync::Cache;
 
@@ -12,9 +13,33 @@ use crate::routing_state::{RoutingTargetKey, StargateState};
 use super::expression::RejectionError;
 use super::target_state::LoadBalancerDefinition;
 
-struct DynamicConfigEntry {
+#[derive(Clone)]
+struct Configuration {
     expression: String,
     definition: LoadBalancerDefinition,
+}
+
+// Gateway replicas cache model metadata separately, so after an owner update they send the
+// old and new expressions alternately until their caches converge. Keeping the previous
+// expression makes that window a run of hits instead of a rebuild per switch.
+struct DynamicConfigEntry {
+    current: Configuration,
+    previous: Option<Configuration>,
+}
+
+impl DynamicConfigEntry {
+    fn definition_for(&self, header: &str) -> Option<&LoadBalancerDefinition> {
+        std::iter::once(&self.current)
+            .chain(&self.previous)
+            .find(|configuration| configuration.expression == header)
+            .map(|configuration| &configuration.definition)
+    }
+
+    // A replacement carries `current` into the new entry as its `previous`.
+    fn dropped(&self, cause: RemovalCause) -> impl Iterator<Item = &Configuration> {
+        let current = (cause != RemovalCause::Replaced).then_some(&self.current);
+        current.into_iter().chain(&self.previous)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,9 +74,11 @@ impl DynamicConfigCache {
                 .max_capacity(max_entries)
                 .time_to_idle(idle)
                 .eviction_listener(
-                    move |target: Arc<RoutingTargetKey>, entry: Arc<DynamicConfigEntry>, _| {
-                        entry.definition.retire();
-                        state.forget_load_balancer_instance(&target, &entry.definition);
+                    move |target: Arc<RoutingTargetKey>, entry: Arc<DynamicConfigEntry>, cause| {
+                        for configuration in entry.dropped(cause) {
+                            configuration.definition.retire();
+                            state.forget_load_balancer_instance(&target, &configuration.definition);
+                        }
                     },
                 )
                 .build(),
@@ -66,23 +93,24 @@ impl DynamicConfigCache {
     ) -> Result<(LoadBalancerDefinition, Outcome), RejectionError> {
         // Hits skip the per-key compute lock so they never wait behind a rebuild.
         if let Some(entry) = self.entries.get(target)
-            && entry.expression == header
+            && let Some(definition) = entry.definition_for(header)
         {
-            return Ok((entry.definition.clone(), Outcome::Hit));
+            return Ok((definition.clone(), Outcome::Hit));
         }
         let result = self
             .entries
             .entry_by_ref(target)
-            .and_try_compute_with(|current| {
-                if current
-                    .as_ref()
-                    .is_some_and(|entry| entry.value().expression == header)
-                {
+            .and_try_compute_with(|existing| {
+                let existing = existing.as_ref().map(|entry| entry.value());
+                if existing.is_some_and(|entry| entry.definition_for(header).is_some()) {
                     return Ok(Op::Nop);
                 }
                 Ok(Op::Put(Arc::new(DynamicConfigEntry {
-                    expression: header.to_owned(),
-                    definition: build()?,
+                    current: Configuration {
+                        expression: header.to_owned(),
+                        definition: build()?,
+                    },
+                    previous: existing.map(|entry| entry.current.clone()),
                 })))
             })?;
         let (entry, outcome) = match result {
@@ -94,7 +122,12 @@ impl DynamicConfigCache {
                 unreachable!("dynamic config compute returned no entry")
             }
         };
-        Ok((entry.into_value().definition.clone(), outcome))
+        let definition = entry
+            .into_value()
+            .definition_for(header)
+            .cloned()
+            .expect("a hit matched this expression and a build stored it as current");
+        Ok((definition, outcome))
     }
 
     #[cfg(test)]
@@ -207,7 +240,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_changed_bytes_forgets_only_superseded_instance() {
+    async fn test_resolve_keeps_previous_expression_and_forgets_older_ones() {
         let state = Arc::new(StargateState::new());
         let target = RoutingTargetKey::new(None, "model");
         let snapshot = register_target(&state, &target).await;
@@ -219,27 +252,54 @@ mod tests {
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
         let first_instance = snapshot.load_balancers().load_balancer(&first);
-        assert_eq!(snapshot.load_balancers().instance_count(), 2);
 
-        // Equivalent values with different bytes must still replace the entry.
+        // Equivalent values with different bytes still build a new configuration.
         let changed = "ROUND_ROBIN; require_input_tokens=false";
         let (second, outcome) = cache
             .resolve(&target, changed, || compile(changed))
             .unwrap();
         assert_eq!(outcome, Outcome::Rebuild);
         assert_ne!(first, second);
-        assert_eq!(snapshot.load_balancers().instance_count(), 1);
         let second_instance = snapshot.load_balancers().load_balancer(&second);
-        assert!(!Arc::ptr_eq(&first_instance, &second_instance));
+        assert_eq!(snapshot.load_balancers().instance_count(), 3);
+
+        // Gateway replicas alternating between the two values only hit.
+        for _ in 0..4 {
+            for (header, definition, instance) in [
+                (EXPRESSION, &first, &first_instance),
+                (changed, &second, &second_instance),
+            ] {
+                let (resolved, outcome) = cache
+                    .resolve(&target, header, || panic!("alternation rebuilt {header}"))
+                    .unwrap();
+                assert_eq!((&resolved, outcome), (definition, Outcome::Hit));
+                assert!(Arc::ptr_eq(
+                    instance,
+                    &snapshot.load_balancers().load_balancer(&resolved)
+                ));
+            }
+        }
+
+        // A third value keeps the current one as previous and forgets the older one.
+        let third = "round-robin;require_input_tokens=true";
+        let (third_definition, outcome) = cache.resolve(&target, third, || compile(third)).unwrap();
+        assert_eq!(outcome, Outcome::Rebuild);
+        assert!(!snapshot.load_balancers().contains(&first));
+        assert!(snapshot.load_balancers().contains(&second));
+        assert_eq!(
+            cache.resolve(&target, changed, || panic!("previous rebuilt")),
+            Ok((second.clone(), Outcome::Hit))
+        );
+        assert_ne!(third_definition, second);
         assert!(Arc::ptr_eq(
             &static_instance,
             &snapshot.load_balancers().load_balancer(&static_definition)
         ));
 
-        // A request paused after resolution must not reinsert an evicted definition.
+        // A request paused after resolution must not reinsert a forgotten definition.
         let _in_flight = snapshot.load_balancers().load_balancer(&first);
-        assert_eq!(snapshot.load_balancers().instance_count(), 2);
         assert!(!snapshot.load_balancers().contains(&first));
+        assert_eq!(snapshot.load_balancers().instance_count(), 2);
     }
 
     #[tokio::test]
@@ -328,16 +388,19 @@ mod tests {
         let snapshot = register_target(&state, &target).await;
         let cache =
             DynamicConfigCache::new(state, Duration::from_secs(60), DYNAMIC_CONFIG_MAX_ENTRIES);
-        let (mut current, _) = cache
+        let (mut older, _) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
-        for value in 1..=32 {
+        let header = "round-robin;max_input_work_seconds=1";
+        let (mut newer, _) = cache.resolve(&target, header, || compile(header)).unwrap();
+        for value in 2..=33 {
             let barrier = Barrier::new(2);
             let header = format!("round-robin;max_input_work_seconds={value}");
+            // The next rebuild drops `older`; race a selection on it against that rebuild.
             let next = std::thread::scope(|scope| {
                 let selection = scope.spawn(|| {
                     barrier.wait();
-                    snapshot.load_balancers().load_balancer(&current)
+                    snapshot.load_balancers().load_balancer(&older)
                 });
                 barrier.wait();
                 let (next, outcome) = cache
@@ -347,9 +410,10 @@ mod tests {
                 let _in_flight = selection.join().unwrap();
                 next
             });
-            assert!(!snapshot.load_balancers().contains(&current));
+            assert!(!snapshot.load_balancers().contains(&older));
             assert_eq!(snapshot.load_balancers().instance_count(), 0);
-            current = next;
+            older = newer;
+            newer = next;
         }
     }
 
@@ -364,9 +428,16 @@ mod tests {
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
         let _instance = snapshot.load_balancers().load_balancer(&first);
+        let changed = "round-robin;require_input_tokens=true";
+        let (previous_holder, _) = cache
+            .resolve(&target, changed, || compile(changed))
+            .unwrap();
+        let _instance = snapshot.load_balancers().load_balancer(&previous_holder);
+        assert_eq!(snapshot.load_balancers().instance_count(), 2);
         cache.run_pending_tasks();
         tokio::time::sleep(Duration::from_millis(100)).await;
         cache.run_pending_tasks();
+        // Expiry forgets both the current and the previous configuration.
         assert!(cache.entries.get(&target).is_none());
         assert_eq!(snapshot.load_balancers().instance_count(), 0);
         let (second, outcome) = cache
@@ -456,7 +527,7 @@ mod tests {
                 cache
                     .entries
                     .get(&target)
-                    .map(|entry| entry.definition.clone()),
+                    .map(|entry| entry.current.definition.clone()),
                 before
             );
         }
