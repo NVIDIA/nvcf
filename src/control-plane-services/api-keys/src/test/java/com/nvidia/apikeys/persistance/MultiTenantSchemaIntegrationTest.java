@@ -19,6 +19,7 @@ package com.nvidia.apikeys.persistance;
 
 import static com.nvidia.apikeys.config.IntegrationTestConfiguration.KEY_SPACE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
@@ -107,6 +108,68 @@ class MultiTenantSchemaIntegrationTest {
                 .containsExactly("owner_type", "owner_id");
         assertThat(clusteringColumns("keys_by_owner_and_service"))
                 .containsExactly("issuer_service_id", "key_id");
+    }
+
+    @Test
+    void accountStatusesRemainDiscoverableByOwnerAfterLastKeyDeletion() {
+        Session session = IntegrationTestConfiguration.CQL_SESSION;
+        session.execute("INSERT INTO " + KEY_SPACE + "." + MANAGEMENT_TABLE
+                + " (nca_id, owner_type, owner_id, issuer_service_id, key_id, key_status)"
+                + " VALUES ('account-a', 'USER', 'alice', 'service-a', 'key-a', 'ACTIVE')");
+        session.execute("INSERT INTO " + KEY_SPACE + ".owner_status_by_account"
+                + " (nca_id, owner_type, owner_id, owner_status)"
+                + " VALUES ('account-a', 'USER', 'alice', 'ACTIVE')");
+        session.execute("INSERT INTO " + KEY_SPACE + ".owner_status_by_account"
+                + " (nca_id, owner_type, owner_id, owner_status)"
+                + " VALUES ('account-b', 'USER', 'alice', 'SUSPENDED')");
+        session.execute("INSERT INTO " + KEY_SPACE + ".owner_status_by_account"
+                + " (nca_id, owner_type, owner_id, owner_status)"
+                + " VALUES ('account-a', 'USER', 'bob', 'SUSPENDED')");
+
+        session.execute("DELETE FROM " + KEY_SPACE + "." + MANAGEMENT_TABLE
+                + " WHERE nca_id = 'account-a' AND owner_type = 'USER' AND owner_id = 'alice'"
+                + " AND issuer_service_id = 'service-a' AND key_id = 'key-a'");
+
+        assertThat(session.execute("SELECT * FROM " + KEY_SPACE + "." + MANAGEMENT_TABLE
+                + " WHERE owner_id = 'alice'").all()).isEmpty();
+        assertThat(session.execute("SELECT nca_id, owner_type, owner_status FROM " + KEY_SPACE
+                + ".owner_status_by_account WHERE owner_id = 'alice'").all())
+                .extracting(row -> row.getString("nca_id"), row -> row.getString("owner_type"),
+                        row -> row.getString("owner_status"))
+                .containsExactlyInAnyOrder(
+                        tuple("account-a", "USER", "ACTIVE"),
+                        tuple("account-b", "USER", "SUSPENDED"));
+    }
+
+    @Test
+    void serviceStatusesAreDiscoverableByOwnerBeforeAnyKeysExist() {
+        Session session = IntegrationTestConfiguration.CQL_SESSION;
+        session.execute("INSERT INTO " + KEY_SPACE + ".owner_status_by_account_and_service"
+                + " (nca_id, owner_type, owner_id, issuer_service_id, owner_status)"
+                + " VALUES ('account-a', 'USER', 'alice', 'service-a', 'ACTIVE')");
+        session.execute("INSERT INTO " + KEY_SPACE + ".owner_status_by_account_and_service"
+                + " (nca_id, owner_type, owner_id, issuer_service_id, owner_status)"
+                + " VALUES ('account-a', 'USER', 'alice', 'service-b', 'SUSPENDED')");
+        session.execute("INSERT INTO " + KEY_SPACE + ".owner_status_by_account_and_service"
+                + " (nca_id, owner_type, owner_id, issuer_service_id, owner_status)"
+                + " VALUES ('account-b', 'USER', 'alice', 'service-a', 'ACTIVE')");
+        session.execute("INSERT INTO " + KEY_SPACE + ".owner_status_by_account_and_service"
+                + " (nca_id, owner_type, owner_id, issuer_service_id, owner_status)"
+                + " VALUES ('account-a', 'USER', 'bob', 'service-a', 'SUSPENDED')");
+
+        assertThat(session.execute("SELECT * FROM " + KEY_SPACE + ".keys").all()).isEmpty();
+        assertThat(session.execute("SELECT * FROM " + KEY_SPACE + "." + MANAGEMENT_TABLE)
+                .all()).isEmpty();
+        assertThat(session.execute("SELECT * FROM " + KEY_SPACE + ".owner_status_by_account")
+                .all()).isEmpty();
+        assertThat(session.execute("SELECT nca_id, issuer_service_id, owner_status FROM " + KEY_SPACE
+                + ".owner_status_by_account_and_service WHERE owner_id = 'alice'").all())
+                .extracting(row -> row.getString("nca_id"), row -> row.getString("issuer_service_id"),
+                        row -> row.getString("owner_status"))
+                .containsExactlyInAnyOrder(
+                        tuple("account-a", "service-a", "ACTIVE"),
+                        tuple("account-a", "service-b", "SUSPENDED"),
+                        tuple("account-b", "service-a", "ACTIVE"));
     }
 
     private static List<String> partitionKeyColumns(String table) {
