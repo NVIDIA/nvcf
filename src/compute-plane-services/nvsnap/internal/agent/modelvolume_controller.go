@@ -216,8 +216,20 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	if staging := pod.Annotations[modelvolume.StagingAnnotation]; staging != "" {
 		// A Block-mode staging pod: its download init finished and the
 		// hold container keeps the emptyDir alive for this node's agent.
-		if pod.Spec.NodeName == c.NodeName && modelvolume.StagingReady(pod) {
-			c.promoteStaging(ctx, pod, uri, staging, c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName}))
+		if pod.Spec.NodeName != c.NodeName {
+			return
+		}
+		log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName})
+		if reason, failed := modelvolume.StagingFailed(pod, c.StagingAttempts); failed {
+			// The download itself cannot start or finish here (for
+			// example an amd64-only engine image on an arm64 node). Do
+			// not sit out the Job's deadline: give up now so the readers
+			// are released and the pod's owner sees the real error.
+			c.giveUpOnce(ctx, uri, pod.Namespace, reason, log.WithField("reason", reason))
+			return
+		}
+		if modelvolume.StagingReady(pod) {
+			c.promoteStaging(ctx, pod, uri, staging, log)
 		}
 		return
 	}
@@ -317,6 +329,23 @@ func (c *ModelVolumeController) promoteStaging(ctx context.Context, pod *corev1.
 		if err := c.Provisioner.DeleteJob(ctx, uri, pod.Namespace); err != nil {
 			log.WithError(err).Warn("model volume: delete staging job after copy failed")
 		}
+	}()
+}
+
+// giveUpOnce runs giveUp for a failing staging pod once per identity;
+// the pod keeps producing events while its Job is being deleted.
+func (c *ModelVolumeController) giveUpOnce(ctx context.Context, uri, jobNS, reason string, log logrus.FieldLogger) {
+	c.mu.Lock()
+	if c.inflight[uri] {
+		c.mu.Unlock()
+		return
+	}
+	c.inflight[uri] = true
+	c.mu.Unlock()
+	go func() {
+		defer func() { c.mu.Lock(); delete(c.inflight, uri); c.mu.Unlock() }()
+		log.Error("model volume: download cannot start on this node; giving up early")
+		c.giveUp(ctx, uri, jobNS, reason, log)
 	}()
 }
 

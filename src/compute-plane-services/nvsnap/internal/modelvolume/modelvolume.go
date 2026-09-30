@@ -682,6 +682,41 @@ func StagingReady(pod *corev1.Pod) bool {
 	return false
 }
 
+// StagingFailed reports whether a Block-mode staging pod's download init
+// cannot be made to work: it has been restarted attempts times or more
+// under the Job's OnFailure policy. An image that does not run on the
+// node (exec format error), a missing download CLI, or a rejected token
+// all look like this, and none of them heals with more restarts. The
+// reason carries the kubelet's last termination message so the failure
+// record says what went wrong.
+func StagingFailed(pod *corev1.Pod, attempts int) (string, bool) {
+	if pod == nil || attempts <= 0 || pod.DeletionTimestamp != nil {
+		return "", false
+	}
+	for i := range pod.Status.InitContainerStatuses {
+		s := &pod.Status.InitContainerStatuses[i]
+		if s.Name != DownloadContainer {
+			continue
+		}
+		if s.State.Terminated != nil && s.State.Terminated.ExitCode == 0 {
+			return "", false
+		}
+		if int(s.RestartCount) < attempts {
+			return "", false
+		}
+		last := s.LastTerminationState.Terminated
+		if last == nil {
+			last = s.State.Terminated
+		}
+		reason := fmt.Sprintf("download init restarted %d times", s.RestartCount)
+		if last != nil {
+			reason += fmt.Sprintf(": exit %d %s %s", last.ExitCode, last.Reason, strings.TrimSpace(last.Message))
+		}
+		return strings.TrimSpace(reason), true
+	}
+	return "", false
+}
+
 // Harden gives a container the fields function-namespace baselines
 // require (Kyverno on NVCF clusters: requests and limits on every
 // container, no privilege escalation, dropped capabilities with NET_RAW

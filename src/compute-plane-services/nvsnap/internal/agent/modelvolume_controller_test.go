@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -466,6 +467,57 @@ func TestModelVolumeController_StagingGivesUpAfterAttempts(t *testing.T) {
 		_, err := kc.CoreV1().Pods("sr-fn").Get(ctx, "mini-service-0", metav1.GetOptions{})
 		return err != nil
 	})
+}
+
+// A download init that keeps restarting (an engine image that does not
+// run on the node, a missing CLI, a bad token) is abandoned as soon as it
+// has been retried StagingAttempts times rather than after the Job's
+// deadline: same cleanup as a failing copy, and the pending reader is
+// released so its owner surfaces the real error.
+func TestModelVolumeController_StagingGivesUpWhenDownloadCannotStart(t *testing.T) {
+	ctx := context.Background()
+	kc, p, pod := stagingFixture(t, "node-a")
+	pending := readerPod("sr-fn", "")
+	pending.Name = "mini-service-0"
+	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, pending, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c, _, _ := mvController(t, kc, p, "node-a")
+	c.StagingAttempts = 3
+	copied := false
+	c.copyStaging = func(context.Context, string, string, string) error { copied = true; return nil }
+	crash := pod.DeepCopy()
+	crash.Status.Phase = corev1.PodPending
+	crash.Status.InitContainerStatuses[0].RestartCount = 2
+	crash.Status.InitContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+	crash.Status.InitContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 128, Reason: "StartError", Message: "exec /bin/sh: exec format error"}}
+	c.Handle(ctx, crash)
+	time.Sleep(50 * time.Millisecond)
+	if _, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(mvURI), metav1.GetOptions{}); err != nil {
+		t.Fatal("two restarts are still a retry; the job must stay")
+	}
+	crash.Status.InitContainerStatuses[0].RestartCount = 3
+	c.Handle(ctx, crash)
+	c.Handle(ctx, crash)
+	waitUntil(t, "job dropped", func() bool {
+		_, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(mvURI), metav1.GetOptions{})
+		return err != nil
+	})
+	waitUntil(t, "failure recorded", func() bool { st, _ := p.Lookup(ctx, mvURI); return st.Failed && !st.Complete })
+	waitUntil(t, "pending reader released", func() bool {
+		_, err := kc.CoreV1().Pods("sr-fn").Get(ctx, "mini-service-0", metav1.GetOptions{})
+		return err != nil
+	})
+	if copied {
+		t.Error("nothing is copied from a download that never finished")
+	}
+	rec, err := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, modelvolume.FailureRecordName(mvURI), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Annotations[modelvolume.FailedAnnotation]; !strings.Contains(got, "exec format error") || !strings.Contains(got, "restarted 3 times") {
+		t.Errorf("failure record must carry the kubelet message, got %q", got)
+	}
 }
 
 // RWX Jobs carry no staging annotation and complete as before.
