@@ -32,11 +32,15 @@ import (
 
 const (
 	UtilsHealthPort int32 = 8080
+	// UtilsMetricsPort is the TCP port exposed by worker-utils for Prometheus metrics.
+	UtilsMetricsPort int32 = 8010
 
 	UtilsContainerName = "utils"
-	UtilsPodName       = "utils"
-	InitContainerName  = "init"
-	ESSContainerName   = "ess"
+	// WorkerMetricsPortName is the shared named port used by worker PodMonitor targets.
+	WorkerMetricsPortName = "worker-metrics"
+	UtilsPodName          = "utils"
+	InitContainerName     = "init"
+	ESSContainerName      = "ess"
 
 	TermLogPath = "/dev/termination-log"
 	DevShmPath  = "/dev/shm"
@@ -328,6 +332,16 @@ func AddNVIDIAGPUNoScheduleToleration(podSpec *corev1.PodSpec) (added bool) {
 		Operator: corev1.TolerationOpExists,
 		Effect:   corev1.TaintEffectNoSchedule,
 	})
+}
+
+// MutateUtilsContainer declares the worker metrics port and configures the health probes.
+func MutateUtilsContainer(containerSpec *corev1.Container) {
+	containerSpec.Ports = append(containerSpec.Ports, corev1.ContainerPort{
+		Name:          WorkerMetricsPortName,
+		ContainerPort: UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	})
+	MutateUtilsProbes(containerSpec)
 }
 
 func MutateUtilsProbes(containerSpec *corev1.Container) {

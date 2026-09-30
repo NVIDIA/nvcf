@@ -124,7 +124,7 @@ utils:
 ## @param storage.sharedStorage.taskData.mountOptions Mount options for the provisioned task data PV.
 ## @param storage.sharedStorage.taskData.storageCapacity Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.
 ## @param storage.internalPersistentStorage.storageClassName Storage class for the Internal Persistent Storage (IPS) PVC.
-## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).
+## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC. Set requests.storage; it defaults to 500Gi when omitted.
 storage:
   sharedStorage:
     server:
@@ -390,7 +390,7 @@ helmManaged:
   ## @param helmManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:
     imageRepository: ""
-    imageTag: 0.10.2
+    imageTag: 0.11.1
   ## @param helmManaged.otelCollector.enabled Enable OTel collector sidecar for helm-managed clusters
   ## @param helmManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param helmManaged.otelCollector.imageTag (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.
@@ -403,18 +403,20 @@ helmManaged:
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: "3.0.4"
+  nvcaVersion: "3.12.7"
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.
   gpuManualInstanceConfigB64: ""
   ## @param selfManaged.clusterAttributes (Optional) List of attributes for the cluster. Defaults to an empty array.
   clusterAttributes: []
+  ## @param selfManaged.region Region reported for a self-managed cluster.
+  region: us-west-1
   ## @param selfManaged.imageCredHelper.imageRepository (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param selfManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:
     imageRepository: ""
-    imageTag: 0.10.2
+    imageTag: 0.11.1
   ## @param selfManaged.otelCollector.enabled Enable OTel collector sidecar for self-managed clusters
   ## @param selfManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param selfManaged.otelCollector.imageTag (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.

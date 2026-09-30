@@ -167,6 +167,10 @@ public class SpotInstanceRequestSchema {
     @Schema(name = "LaunchSpecification.GpuSpecificationId", description = "Function or Task Gpu Specification id")
     UUID gpuSpecificationId;
 
+    @Schema(name = "LaunchSpecification.MaxRequestConcurrency",
+            description = "Maximum concurrent requests configured for each function instance")
+    Integer maxRequestConcurrency;
+
     public String getLoggingId() {
         if (taskId != null) {
             return String.format("TaskId %s | DeploymentId %s | NcaId %s", this.getTaskId(),  this.getDeploymentId(), this.getNcaId());

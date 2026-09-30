@@ -62,11 +62,13 @@ jobs:
           # fails any workflow that pins one.
           go-version-file: tools/go-toolchain/go.mod
 
-      - name: Test the bumper
-        # The bumper rewrites version fields in shipped charts, so its tests run
-        # here rather than somewhere that might not be reached. A test that
-        # gates nothing is not a test.
-        run: go test -C tools/chart-version-bumper ./...
+      - name: Test the chart release tools
+        # The bumper rewrites version fields in shipped charts, and the edge
+        # audit decodes the same ownership declarations. Exercise both schemas
+        # before either tool acts on a release.
+        run: |
+          go test -C tools/chart-version-bumper ./...
+          go test -C tools/chart-service-edge ./...
 
       - name: Test the commit type helper
         # It decides the semver step of the chart release this bump causes.
@@ -242,7 +244,7 @@ jobs:
           body="$(printf '%s\n' \
             "Opened by \`.github/workflows/chart-version-bump.yml\` when \`${TAG}\` was published." \
             "" \
-            "The released tag carries the version, so this is a direct update rather than a lookup of the newest published image." \
+            "The released tag identifies the version and source tree, so this is a direct update rather than a lookup of the newest published image." \
             "" \
             "Merging this does not move the self-managed stack. A chart version reaches the stack only once the chart itself is released, and publishing that chart release is what triggers \`stack-pin-bump.yml\`." \
             "" \

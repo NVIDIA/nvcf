@@ -231,6 +231,10 @@ spec:
       successThreshold: 1
       timeoutSeconds: 1
     name: utils
+    ports:
+    - containerPort: 8010
+      name: worker-metrics
+      protocol: TCP
     readinessProbe:
       failureThreshold: 2
       httpGet:

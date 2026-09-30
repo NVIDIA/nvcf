@@ -835,6 +835,65 @@ async fn assert_direct_tunnel_preserves_request_head(tunnel_protocol: TunnelTran
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http3_tunnel_strips_connection_nominated_headers_before_sending() {
+    let server = test_server_endpoint(TunnelTransportProtocol::Http3, |_| {});
+    let addr = server.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        let connection = server.accept().await.unwrap().await.unwrap();
+        let mut h3_connection: H3ServerConnection = h3::server::builder()
+            .build(h3_quinn::Connection::new(connection))
+            .await
+            .unwrap();
+        let resolver = h3_connection.accept().await.unwrap().unwrap();
+        let (request, _stream) = resolver.resolve_request().await.unwrap();
+        let headers = request.headers();
+        assert!(!headers.contains_key("connection"));
+        assert!(!headers.contains_key("x-hop-one"));
+        assert!(!headers.contains_key("x-hop-two"));
+        assert!(!headers.contains_key("host"));
+        assert_eq!(
+            headers.get_all("x-kept").iter().collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+    });
+    let proxy = test_quic_proxy(TunnelTransportProtocol::Http3);
+    let registration = connect_direct_registration(&proxy, &format!("quic://{addr}")).await;
+    let connection = registration
+        .tunnel_connections()
+        .connection_set()
+        .unwrap()
+        .choose_healthy()
+        .unwrap();
+    let TunnelConnection::Http3(handle) = connection else {
+        panic!("expected HTTP/3 connection");
+    };
+    let mut headers = HeaderMap::new();
+    headers.append("connection", HeaderValue::from_static("X-Hop-One"));
+    headers.append(
+        "connection",
+        HeaderValue::from_static(" x-HOP-two , X-Hop-One"),
+    );
+    headers.insert("x-hop-one", HeaderValue::from_static("private"));
+    headers.insert("x-hop-two", HeaderValue::from_static("private"));
+    headers.insert("host", HeaderValue::from_static("previous.test"));
+    headers.append("x-kept", HeaderValue::from_static("one"));
+    headers.append("x-kept", HeaderValue::from_static("two"));
+    let _request = handle
+        .open_streaming_request(super::request::OpenTunnelRequest::new(
+            Method::GET,
+            "/health",
+            headers,
+            Duration::from_secs(3),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), peer)
+        .await
+        .expect("HTTP/3 peer should receive request headers")
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_connect_installs_configured_connection_set() {
     let fixture = DirectTunnelFixture::start_with_connections(
         health_backend("ok"),

@@ -577,9 +577,9 @@ func writeComputePlaneNVCAValues(req computePlaneNVCAValuesRequest) error {
 		ClusterID:      req.Registration.ClusterID,
 		ClusterGroupID: req.Registration.ClusterGroupID,
 		NCAID:          req.NCAID,
-		Region:         req.Region,
 		SelfManaged: nvca.SelfManagedValues{
 			IdentitySource:                 req.IdentitySource,
+			Region:                         req.Region,
 			ICMSServiceURL:                 req.Endpoints.ICMSURL,
 			ICMSServiceHostHeaderOverride:  req.Hosts.SIS,
 			ReValServiceURL:                req.Endpoints.ReValURL,

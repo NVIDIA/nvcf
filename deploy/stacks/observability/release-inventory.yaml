@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+schemaVersion: 1
+states:
+  - plane: observability
+    path: deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl
+    baseOverrides:
+      - observability.profile=all
+publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf

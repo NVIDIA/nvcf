@@ -75,11 +75,10 @@ Propagates Helm chart changes through the native monorepo paths:
 Umbrella CI is declared in `tools/ci/subproject-validations.yaml` with
 subproject id `nvca-operator`. Do not add a chart-local `.gitlab-ci.yml`.
 
-Validate the same chart path CI uses:
+Run the repository-wide Helm validation used by CI:
 
 ```bash
-tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
-  -f tools/ci/helm-validate-values/nvca-operator.yaml
+tools/ci/check-helm-charts
 ```
 
 ## Local Image Testing

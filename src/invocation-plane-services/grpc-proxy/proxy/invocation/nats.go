@@ -44,12 +44,14 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, ssaFqdn, secretsPath str
 		var err error
 		natsAuthOption, err = newNkeyAuthOption(nKeySeed)
 		if err != nil {
+			recordNatsStartupFailure("nats nkey auth setup failed", err)
 			return nil, err
 		}
 	} else {
 		var err error
 		natsAuthOption, err = newAuthCalloutAuthOption(ssaFqdn, secretsPath)
 		if err != nil {
+			recordNatsStartupFailure("nats auth callout setup failed", err)
 			return nil, err
 		}
 	}
@@ -78,6 +80,7 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, ssaFqdn, secretsPath str
 			zap.L().Info("connected to nats", zap.String("server", conn.ConnectedServerName()), zap.String("cluster", conn.ConnectedClusterName()))
 		}))
 	if err != nil {
+		recordNatsStartupFailure("nats initial connection failed", err)
 		return nil, err
 	}
 	metrics.SetNatsStatsConnection(nc)
@@ -101,6 +104,15 @@ func recordNatsAsyncError(err error) {
 func recordNatsFailure(message string, err error) {
 	reason := natsErrorReason(err)
 	zap.L().Warn(message, zap.String("reason", reason), zap.Error(err))
+	metrics.NatsFailureCounter.WithLabelValues(reason).Inc()
+}
+
+// recordNatsStartupFailure records a failure that prevents the proxy from
+// starting. The process exits before the metrics endpoint is served, so the log
+// line, not the counter, is what leaves the pod.
+func recordNatsStartupFailure(message string, err error) {
+	reason := natsErrorReason(err)
+	zap.L().Error(message, zap.String("reason", reason), zap.Error(err))
 	metrics.NatsFailureCounter.WithLabelValues(reason).Inc()
 }
 

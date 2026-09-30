@@ -719,6 +719,12 @@ Registry credentials allow NVCF to pull container images from private registries
   --registry "docker.io" \
   --username "myusername" \
   --password "mypassword"
+
+# Add registry credentials securely using a secret file (or '-' for standard input)
+./nvcf-cli registry-credential add \
+  --hostname "docker.io" \
+  --secret-file "/path/to/secret.b64" \
+  --artifact-type CONTAINER
 ```
 
 #### Method C: Using curl directly
@@ -1021,7 +1027,7 @@ curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
   -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
 ```
 
-For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/user/llm-gateway.md).
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/overview/llm-gateway.md).
 
 #### Sample Invocation JSON (`examples/invoke-function.json`)
 

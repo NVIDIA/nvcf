@@ -92,5 +92,10 @@ computePlane:
           operator: Exists
     interval: 30s
     path: /metrics
-    port: metrics
+    port: worker-metrics
+    # Preserve function identity for autoscaler queries on worker metrics.
+    podTargetLabels:
+      - function-id
+      - function-version-id
+      - nca-id
     labels: {}

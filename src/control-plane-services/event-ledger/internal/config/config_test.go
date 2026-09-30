@@ -236,6 +236,34 @@ func TestCloudEventsEnabledConfiguration_EventLedgerEnvPrefix(t *testing.T) {
 	assert.False(t, cfg.Publisher.Cloudevents.Enabled)
 }
 
+func TestAuthIntrospectionConfiguration_EventLedgerEnvPrefix(t *testing.T) {
+	t.Setenv("EVENT_LEDGER_AUTH_INTROSPECTION_ENABLED", "true")
+	t.Setenv("EVENT_LEDGER_AUTH_INTROSPECTION_URL", "http://api.sis.svc.cluster.local:8080/v1/nvca/tokens/introspect")
+
+	v := viper.New()
+	v.AutomaticEnv()
+	v.SetEnvPrefix("EVENT_LEDGER")
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
+
+	rootCmd := &cobra.Command{
+		Use: "test",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return nil
+		},
+	}
+
+	logger := &otelzap.SugaredLogger{}
+	cliArgs := NewCliArgs(rootCmd, v, logger)
+	cliArgs.SetupAuth()
+
+	require.NoError(t, rootCmd.Execute())
+
+	var cfg Config
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.True(t, cfg.Auth.Introspection.Enabled)
+	assert.Equal(t, "http://api.sis.svc.cluster.local:8080/v1/nvca/tokens/introspect", cfg.Auth.Introspection.URL)
+}
+
 func TestAuthPolicyCredentialsRefreshIntervalDefault(t *testing.T) {
 	v := viper.New()
 

@@ -74,6 +74,7 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -544,6 +545,77 @@ class AuthorizedPartiesControllerTest {
         assertThat(authParties2)
                 .hasSize(3)
                 .containsExactlyInAnyOrderElementsOf(authorizedParties);
+    }
+
+    @Test
+    void getAuthorizedPartiesForAllFunctions() {
+        var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                    List.of(SCOPE_AUTHORIZE_CLIENTS),
+                                                    100);
+        testAuthPartiesService.createTestFunction(TEST_FUNCTION_ID, TEST_VERSION_ID_1,
+                                                  TEST_NCA_ID, TEST_FUNCTION_NAME);
+        testAuthPartiesService.createTestFunction(TEST_FUNCTION_ID, TEST_VERSION_ID_2,
+                                                  TEST_NCA_ID, TEST_FUNCTION_NAME_2);
+        testAuthPartiesService.createTestFunction(TEST_FUNCTION_ID_3, TEST_VERSION_ID_3,
+                                                  TEST_NCA_ID, TEST_FUNCTION_NAME_3);
+
+        var unsharedVersionId = UUID.randomUUID();
+        testAuthPartiesService.createTestFunction(TEST_FUNCTION_ID_2, unsharedVersionId,
+                                                  TEST_NCA_ID, "unshared-function");
+
+        var otherAccountFunctionId = UUID.randomUUID();
+        var otherAccountVersionId = UUID.randomUUID();
+        testAuthPartiesService.createTestFunction(otherAccountFunctionId, otherAccountVersionId,
+                                                  TEST_NCA_ID_2, "other-account-function");
+
+        var functionAuthorizedParties = Set.of(
+                AuthorizedPartyDto.builder().ncaId(TEST_AUTHORIZED_NCA_ID_1).build(),
+                AuthorizedPartyDto.builder().ncaId(TEST_AUTHORIZED_NCA_ID_2).build());
+        testAuthPartiesService.associateAuthParties(TEST_NCA_ID, TEST_FUNCTION_ID,
+                                                    Optional.empty(),
+                                                    functionAuthorizedParties);
+        testAuthPartiesService.associateAuthParties(TEST_NCA_ID, TEST_FUNCTION_ID_3,
+                                                    Optional.empty(),
+                                                    functionAuthorizedParties);
+
+        var versionAuthorizedParties = Set.of(
+                AuthorizedPartyDto.builder().ncaId(TEST_AUTHORIZED_NCA_ID_3).build());
+        testAuthPartiesService.associateAuthParties(TEST_NCA_ID, TEST_FUNCTION_ID_3,
+                                                    Optional.of(TEST_VERSION_ID_3),
+                                                    versionAuthorizedParties);
+        testAuthPartiesService.associateAuthParties(TEST_NCA_ID_2, otherAccountFunctionId,
+                                                    Optional.empty(),
+                                                    functionAuthorizedParties);
+
+        var requestEntity = RequestEntity
+                .get(URI.create("/v2/nvcf/authorizations/functions"))
+                .header("Authorization", "Bearer " + token)
+                .build();
+        var responseEntity =
+                testRestTemplate.exchange(requestEntity, ListAuthorizedPartiesResponse.class);
+
+        assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var responseBody = responseEntity.getBody();
+        assertThat(responseBody).isNotNull();
+        var functionsByVersion = responseBody.functions().stream()
+                .collect(Collectors.toMap(dto -> dto.versionId(), dto -> dto));
+        assertThat(functionsByVersion)
+                .containsOnlyKeys(TEST_VERSION_ID_1, TEST_VERSION_ID_2, TEST_VERSION_ID_3);
+
+        assertThat(functionsByVersion.get(TEST_VERSION_ID_1).id()).isEqualTo(TEST_FUNCTION_ID);
+        assertThat(functionsByVersion.get(TEST_VERSION_ID_1).authorizedParties())
+                .containsExactlyInAnyOrderElementsOf(functionAuthorizedParties);
+        assertThat(functionsByVersion.get(TEST_VERSION_ID_2).id()).isEqualTo(TEST_FUNCTION_ID);
+        assertThat(functionsByVersion.get(TEST_VERSION_ID_2).authorizedParties())
+                .containsExactlyInAnyOrderElementsOf(functionAuthorizedParties);
+        assertThat(functionsByVersion.get(TEST_VERSION_ID_3).id()).isEqualTo(TEST_FUNCTION_ID_3);
+        var mergedAuthorizedParties = Stream
+                .concat(functionAuthorizedParties.stream(), versionAuthorizedParties.stream())
+                .collect(Collectors.toSet());
+        assertThat(functionsByVersion.get(TEST_VERSION_ID_3).authorizedParties())
+                .containsExactlyInAnyOrderElementsOf(mergedAuthorizedParties);
+        assertThat(responseBody.functions())
+                .allMatch(function -> function.ncaId().equals(TEST_NCA_ID));
     }
 
     Stream<Arguments> argsForNoAuthorizedParties() {

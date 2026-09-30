@@ -42,6 +42,8 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 		return renderImageMirroringObservabilityStackSnippet(catalog)
 	case "image-mirroring-cli-snippet":
 		return renderImageMirroringCLISnippet(catalog)
+	case "compatibility-matrix":
+		return renderCompatibilityMatrix(catalog)
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}
@@ -206,6 +208,7 @@ func (catalog *Catalog) stackArtifact() Artifact {
 		Type:     ArtifactTypeResource,
 		Registry: catalog.Stack.Registry,
 		Version:  catalog.Stack.Version,
+		Stacks:   []string{selfManagedStackKey},
 	}
 }
 

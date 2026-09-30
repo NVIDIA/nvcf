@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result};
 use futures::future;
 use quinn::Connection;
-use stargate_protocol::common::end_to_end_headers;
+use stargate_protocol::common::{connection_header_names, is_hop_by_hop_header};
 use tracing::warn;
 
 use super::body::{OpenStreamingRequest, OpenStreamingRequestInner};
@@ -83,8 +83,9 @@ impl Http3ConnectionHandle {
             .uri(uri)
             .body(())
             .context("build h3 request")?;
-        for (name, value) in end_to_end_headers(&request.headers) {
-            if name != "host" {
+        let connection_headers = connection_header_names(&request.headers);
+        for (name, value) in &request.headers {
+            if !is_hop_by_hop_header(name) && name != "host" && !connection_headers.contains(name) {
                 h3_request.headers_mut().append(name, value.clone());
             }
         }

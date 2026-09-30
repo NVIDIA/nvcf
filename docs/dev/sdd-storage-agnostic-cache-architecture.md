@@ -50,8 +50,12 @@ Four pieces:
 
 ## Capability catalog
 
-Installed by the NVCA chart as ConfigMap `nvcf-storage-capabilities`, validated
-by a packaged JSON Schema and by the Go loader with the same rules.
+Installed by the NVCA chart as ConfigMap `nvcf-storage-capabilities` in the
+operator's namespace; the operator mirrors it into the agent's namespace, where
+the agent and the storage controller read it, and re-mirrors on every edit. A
+copy of the shipped catalog is compiled into NVCA and used only while the
+ConfigMap is absent. Validated by a packaged JSON Schema and by the Go loader
+with the same rules.
 
 ```yaml
 drivers:
@@ -62,7 +66,11 @@ drivers:
     encryptionSupported: true
   - name: csi.weka.io
     provider: weka
-    accessModes: []
+    accessModes: [ReadWriteMany]
+    readerMountOptions: []
+  - name: csi.trident.netapp.io
+    provider: netappTrident
+    accessModes: [ReadWriteMany]
     readerMountOptions: []
 ```
 
@@ -138,11 +146,13 @@ retried instead of leaving the namespace Terminating.
 Every reader is a static PV pre-bound to a claim by name. The PV is a copy of
 the writer's PV with: `storageClassName` cleared (a pre-bound pair whose classes
 differ never binds), `csi.readOnly: true` (access modes are not enforced at
-mount time), and `mountOptions` resolved per provisioner from the
-`nvca-cache-mount-options` ConfigMap. The catalog's `readerMountOptions` is the
-intended source for those options and is validated, but no reader code reads it
-yet. Only the volume handle differs by driver: NVMesh rewrites the namespace
-segment; every other driver reuses the writer's handle unchanged.
+mount time), and `mountOptions` taken from the request's persisted selection,
+which carries the catalog's `readerMountOptions`. Operator-configured options
+are appended unless they negate a required one (`rw` against `ro`). A request
+with no durable selection falls back to the per-provisioner
+`nvca-cache-mount-options` ConfigMap, so in-flight legacy requests keep their
+behavior. Only the volume handle differs by driver: NVMesh rewrites the
+namespace segment; every other driver reuses the writer's handle unchanged.
 
 A reader claim that names only a StorageClass gets a new empty volume from a
 dynamic provisioner. It binds, the pod starts, and the model is missing. That
@@ -213,6 +223,7 @@ a `Retain` class must be created for the cache.
 |---|---|
 | Catalog, class, or gate changes after the binding exists | Binding stays authoritative |
 | Class or catalog drifts before the binding exists | Fail before any side effect |
+| Catalog ConfigMap is absent (agent ahead of its chart) | Resolve against the catalog compiled into NVCA, warn, count; the ConfigMap is authoritative once present |
 | Binding is `Retiring`, missing, or lacks this request's reference | Fail; never rebind |
 | Object has foreign or missing ownership | Never adopt or delete it |
 | Reader PV and claim disagree on class | Never binds; prevented by construction |

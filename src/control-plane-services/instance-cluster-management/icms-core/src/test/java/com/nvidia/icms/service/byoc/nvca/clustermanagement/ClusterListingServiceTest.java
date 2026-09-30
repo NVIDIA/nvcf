@@ -40,6 +40,7 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.service.CloudHealthService;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.util.TestUtil;
 
@@ -111,6 +112,9 @@ class ClusterListingServiceTest {
 
     @Mock
     private ComputePlatformService computePlatformService;
+
+    @Mock
+    private GpuGatingService gpuGatingService;
 
     @InjectMocks
     private ClusterListingService clusterListingService;
@@ -743,6 +747,46 @@ class ClusterListingServiceTest {
         // Assert - Non BYOC clusters should be skipped when includeNonByocInAuthorizedClusters is null
         Assertions.assertNotNull(response);
         Assertions.assertEquals(0, response.size());
+    }
+
+    @Test
+    void getClustersByNcaId_withAuthorizedClusters_appliesGpuGating() {
+        // Prepare
+        ClustersByAuthorizedAccountsEntity authorizedCluster =
+                getDummyClustersByAuthorizedAccountResp(DUMMY_BYOC_CLUSTER_GROUP_NAME,
+                        PLATFORM_CLUSTER_GROUP_ID, DUMMY_CLUSTER_ID,
+                        DUMMY_BYOC_NCA_ID, DUMMY_BYOC_INSTANCE_TYPE,
+                        DUMMY_BYOC_INSTANCE_TYPE_VALUE, DUMMY_GPU_NAME, 8,
+                        DUMMY_BYOC_AUTHORIZED_NCA_ID);
+
+        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_BYOC_NCA_ID))
+                .thenReturn(new ArrayList<>(List.of(authorizedCluster)));
+        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(WILDCARD))
+                .thenReturn(new ArrayList<>());
+
+        // Act
+        clusterListingService.getClustersByNcaId(DUMMY_BYOC_NCA_ID, true, true);
+
+        // Assert
+        verify(gpuGatingService).removeGatedAuthorizedClusters(ArgumentMatchers.anyList(),
+                                                               ArgumentMatchers.eq(DUMMY_BYOC_NCA_ID));
+    }
+
+    /**
+     * Gating only governs borrowed capacity, so the listing of clusters the NCA owns must not go
+     * through it.
+     */
+    @Test
+    void getClustersByNcaId_withOwnClustersOnly_doesNotApplyGpuGating() {
+        // Prepare
+        when(clusterRepository.getAllClustersInAnAccount(DUMMY_BYOC_NCA_ID))
+                .thenReturn(new ArrayList<>());
+
+        // Act
+        clusterListingService.getClustersByNcaId(DUMMY_BYOC_NCA_ID, false, false);
+
+        // Assert
+        verifyNoInteractions(gpuGatingService);
     }
 
     @Test

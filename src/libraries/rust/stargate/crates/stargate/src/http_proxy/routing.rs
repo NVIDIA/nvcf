@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use rand::Rng;
 use tracing::{Span, warn};
 
@@ -30,17 +30,31 @@ use crate::routing_state::{RoutedClusterSnapshot, RoutingTargetKey};
 
 use super::HEADER_STARGATE_ERROR_CODE;
 
+const ERROR_OVERLOADED: &str = "overloaded_error";
 const ERROR_NO_ELIGIBLE_CANDIDATES: &str = "no_eligible_candidates";
 const ERROR_NO_ELIGIBLE_CANDIDATES_BODY: &str =
     r#"{"error":"no eligible candidates","code":"no_eligible_candidates"}"#;
-const ERROR_INPUT_WORK_LIMIT_EXCEEDED: &str = "input_work_limit_exceeded";
-const ERROR_INPUT_WORK_LIMIT_EXCEEDED_BODY: &str =
-    r#"{"error":"input work admission limit exceeded","code":"input_work_limit_exceeded"}"#;
 const ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED: &str = "input_work_limit_exceeded";
 const ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE: &str = "input_work_capacity_unavailable";
 const ROUTING_RETRY_SLEEP_MIN_MS: u64 = 1;
 const ROUTING_RETRY_SLEEP_MAX_MS: u64 = 10;
 const ROUTING_RETRY_MAX_WAIT_MS: u64 = 60_000;
+
+pub(super) fn overloaded_response() -> Response<Body> {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(HEADER_STARGATE_ERROR_CODE, ERROR_OVERLOADED)],
+        axum::Json(serde_json::json!({
+            "error": {
+                "code": ERROR_OVERLOADED,
+                "message": "Inference capacity is temporarily unavailable.",
+                "param": "",
+                "type": ERROR_OVERLOADED,
+            }
+        })),
+    )
+        .into_response()
+}
 
 pub(super) fn eligible_cluster_candidate_count(
     candidates: &[RoutedClusterSnapshot],
@@ -86,11 +100,7 @@ pub(super) fn input_work_admission_rejection_response(
         "rejecting request before routing due to input-work admission"
     );
 
-    json_error_response(
-        StatusCode::SERVICE_UNAVAILABLE,
-        ERROR_INPUT_WORK_LIMIT_EXCEEDED,
-        ERROR_INPUT_WORK_LIMIT_EXCEEDED_BODY,
-    )
+    overloaded_response()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +146,7 @@ pub(super) struct NoRoutingFinalizationContext<'a> {
     pub(super) failed_backend_count: usize,
     pub(super) failed_cluster_count: usize,
     pub(super) routing_retry_attempts: u64,
+    pub(super) capacity_rejected: bool,
 }
 
 pub(super) fn finalize_no_routing_choice(
@@ -173,7 +184,11 @@ pub(super) fn finalize_no_routing_choice(
                 .metrics
                 .requests_total(rk_ref, model_id, "", "503")
                 .inc();
-            Err(StatusCode::SERVICE_UNAVAILABLE)
+            if context.capacity_rejected {
+                Ok(overloaded_response())
+            } else {
+                Err(StatusCode::SERVICE_UNAVAILABLE)
+            }
         }
     }
 }
@@ -191,6 +206,15 @@ pub(super) fn routing_retry_deadline(
             wait_ms.min(ROUTING_RETRY_MAX_WAIT_MS),
         ))
     })
+}
+
+/// Deadline for timed load-balancer waits. Unlike generic routing retries,
+/// bucket waits do not require `x-max-wait-ms`, but they stay bounded.
+pub(super) fn routing_wait_deadline(request_start: Instant, max_wait_ms: Option<u64>) -> Instant {
+    let wait_ms = max_wait_ms.map_or(ROUTING_RETRY_MAX_WAIT_MS, |wait_ms| {
+        wait_ms.min(ROUTING_RETRY_MAX_WAIT_MS)
+    });
+    request_start + Duration::from_millis(wait_ms)
 }
 
 pub(super) fn routing_wait_delay(
@@ -444,6 +468,43 @@ mod tests {
             eligible_cluster_candidate_count(&candidates, Some(&excluded)),
             1
         );
+    }
+
+    #[test]
+    fn routing_wait_deadline_is_bounded_without_max_wait_header() {
+        let request_start = Instant::now();
+        let cap = request_start + Duration::from_millis(ROUTING_RETRY_MAX_WAIT_MS);
+        assert_eq!(routing_wait_deadline(request_start, None), cap);
+        assert_eq!(routing_wait_deadline(request_start, Some(u64::MAX)), cap);
+        assert_eq!(
+            routing_wait_deadline(request_start, Some(250)),
+            request_start + Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn routing_wait_stops_at_default_deadline_without_max_wait_header() {
+        let request_start = Instant::now();
+        let deadline = routing_wait_deadline(request_start, None);
+        let one_hour = Duration::from_secs(3600);
+        assert_eq!(
+            routing_wait_delay(one_hour, Some(deadline), request_start),
+            Some(Duration::from_millis(25))
+        );
+        assert_eq!(
+            routing_wait_delay(
+                one_hour,
+                Some(deadline),
+                deadline - Duration::from_millis(5)
+            ),
+            Some(Duration::from_millis(5))
+        );
+        assert_eq!(routing_wait_delay(one_hour, Some(deadline), deadline), None);
+        // Generic capacity retries still require an explicit header budget.
+        assert!(!should_retry_routing(routing_retry_deadline(
+            request_start,
+            None
+        )));
     }
 
     #[test]

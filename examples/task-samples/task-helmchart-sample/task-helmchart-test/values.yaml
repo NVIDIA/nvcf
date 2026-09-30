@@ -24,3 +24,11 @@ image:
   repository: "nvcr.io/guineapig-1/task_simple_sample" # replace with your own container
   tag: "latest"
   pullPolicy: "Always"
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi

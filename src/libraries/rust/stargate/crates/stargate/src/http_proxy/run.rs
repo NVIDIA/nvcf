@@ -39,7 +39,8 @@ use super::routing::{
     NoRoutingChoiceAction, NoRoutingChoiceInputs, NoRoutingFinalizationContext,
     classify_no_routing_choice, eligible_cluster_candidate_count, finalize_no_routing_choice,
     input_work_admission_rejection_reason, input_work_admission_rejection_response,
-    routing_retry_deadline, routing_wait_delay, should_retry_routing, sleep_before_routing_retry,
+    routing_retry_deadline, routing_wait_deadline, routing_wait_delay, should_retry_routing,
+    sleep_before_routing_retry,
 };
 use super::trace::{RoutingTraceFields, record_routing_to_span};
 
@@ -60,25 +61,31 @@ pub(super) struct ProxyRequestRun<'a> {
     pub(super) request: PreparedProxyRequest,
     routing_started_at: Option<Instant>,
     routing_retry_deadline: Option<Instant>,
+    routing_wait_deadline: Instant,
     routing_retry_attempts: u64,
     pub(super) failed_backend_ids: HashSet<String>,
     failed_cluster_ids: HashSet<String>,
     pub(super) attempt_counters: ProxyAttemptCounters,
+    pub(super) last_attempt_capacity_rejected: bool,
 }
 
 impl<'a> ProxyRequestRun<'a> {
     pub(super) fn new(app: &'a ProxyAppState, request: PreparedProxyRequest) -> Self {
         let routing_retry_deadline =
             routing_retry_deadline(request.request_start, request.request_inputs.max_wait_ms);
+        let routing_wait_deadline =
+            routing_wait_deadline(request.request_start, request.request_inputs.max_wait_ms);
         Self {
             app,
             request,
             routing_started_at: Some(Instant::now()),
             routing_retry_deadline,
+            routing_wait_deadline,
             routing_retry_attempts: 0,
             failed_backend_ids: HashSet::new(),
             failed_cluster_ids: HashSet::new(),
             attempt_counters: ProxyAttemptCounters::default(),
+            last_attempt_capacity_rejected: false,
         }
     }
 
@@ -154,7 +161,7 @@ impl<'a> ProxyRequestRun<'a> {
 
         if let LoadBalancerDecision::Wait(remaining) = decision
             && let Some(delay) =
-                routing_wait_delay(remaining, self.routing_retry_deadline, Instant::now())
+                routing_wait_delay(remaining, Some(self.routing_wait_deadline), Instant::now())
         {
             self.routing_retry_attempts += 1;
             Span::current().record("routing.retry_attempts", self.routing_retry_attempts);
@@ -268,6 +275,7 @@ impl<'a> ProxyRequestRun<'a> {
                     failed_backend_count: self.failed_backend_ids.len(),
                     failed_cluster_count: self.failed_cluster_ids.len(),
                     routing_retry_attempts: self.routing_retry_attempts,
+                    capacity_rejected: self.last_attempt_capacity_rejected,
                 }))
             }
         }

@@ -40,10 +40,17 @@ func run(args []string) error {
 	check := flags.Bool("check", false, "fail if generated docs differ from checked-in marker blocks")
 	updateCatalog := flags.Bool("update-catalog", false, "fetch the resolved GitHub stack inventory and update the catalog")
 	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
+	computeStackVersion := flags.String("compute-stack-version", "", "compute-plane stack version to fetch")
+	observabilityStackVersion := flags.String("observability-stack-version", "", "observability stack version to fetch")
+	freezeStack := flags.String("freeze-stack", "", "release_set stack whose documentation version is being frozen (control-plane, compute-plane, or observability)")
+	freezeVersion := flags.String("freeze-version", "", "documentation version to freeze for --freeze-stack ("+documentationVersionFormat+")")
 	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
 	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
-	stackSourceTag := flags.String("stack-source-tag", "", "immutable self-managed stack source tag for inventory generation")
-	stackSourceCommit := flags.String("stack-source-commit", "", "immutable self-managed stack source commit for inventory generation")
+	allowUnavailableSourceCharts := flags.Bool("allow-unavailable-source-charts", false, "use published charts when configured source paths are unavailable in a historical tag")
+	stackSourceTag := flags.String("stack-source-tag", "", "immutable owning stack source tag for inventory generation")
+	stackSourceCommit := flags.String("stack-source-commit", "", "immutable owning stack source commit for inventory generation")
+	compareFrom := flags.String("compare-release-set-from", "", "directory containing previous release-set inventory JSON files")
+	compareTo := flags.String("compare-release-set-to", "", "directory containing current release-set inventory JSON files")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -58,6 +65,26 @@ func run(args []string) error {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
+	}
+	if *compareFrom != "" || *compareTo != "" {
+		if *compareFrom == "" || *compareTo == "" {
+			return fmt.Errorf("--compare-release-set-from and --compare-release-set-to must be used together")
+		}
+		if *updateCatalog || *check || *inventoryOutput != "" || *freezeStack != "" || *freezeVersion != "" ||
+			*stackVersion != "" || *computeStackVersion != "" || *observabilityStackVersion != "" ||
+			*inventoryConfig != "" || *allowUnavailableSourceCharts || *stackSourceTag != "" || *stackSourceCommit != "" {
+			return fmt.Errorf("release-set comparison cannot be combined with catalog update, check, or inventory generation flags")
+		}
+		fromPath := resolveRepoPath(repoRoot, *compareFrom)
+		toPath := resolveRepoPath(repoRoot, *compareTo)
+		report, err := compareInventorySetDirectories(fromPath, toPath)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Print(report); err != nil {
+			return fmt.Errorf("write release-set comparison: %w", err)
+		}
+		return nil
 	}
 	if *inventoryOutput != "" {
 		if *updateCatalog || *check {
@@ -78,16 +105,35 @@ func run(args []string) error {
 			Version: *stackVersion,
 			Tag:     *stackSourceTag,
 			Commit:  *stackSourceCommit,
+		}, resolvedInventoryGenerationOptions{
+			AllowUnavailableSourceCharts: *allowUnavailableSourceCharts,
 		})
 	}
-	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" {
-		return fmt.Errorf("--stack-source-tag, --stack-source-commit, and --inventory-config require --generate-stack-inventory")
+	if !*updateCatalog && (*computeStackVersion != "" || *observabilityStackVersion != "") {
+		return fmt.Errorf("--compute-stack-version and --observability-stack-version require --update-catalog")
+	}
+	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" || *allowUnavailableSourceCharts {
+		return fmt.Errorf("--stack-source-tag, --stack-source-commit, --inventory-config, and --allow-unavailable-source-charts require --generate-stack-inventory")
 	}
 	if *catalogPath == "" {
 		*catalogPath = filepath.Join(repoRoot, "docs", "version-catalog", *target+".yaml")
 	}
 	if !filepath.IsAbs(*catalogPath) {
 		*catalogPath = filepath.Join(repoRoot, *catalogPath)
+	}
+	if *freezeStack != "" || *freezeVersion != "" {
+		if *freezeStack == "" || *freezeVersion == "" {
+			return fmt.Errorf("--freeze-stack and --freeze-version must be used together")
+		}
+		if *updateCatalog || *check || *stackVersion != "" || *computeStackVersion != "" || *observabilityStackVersion != "" {
+			return fmt.Errorf("--freeze-stack cannot be combined with catalog update, check, or stack version flags")
+		}
+		snapshotPath, err := freezeStackDocumentation(repoRoot, *catalogPath, *freezeStack, *freezeVersion)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s for %s version %s\n", relOrAbs(repoRoot, snapshotPath), *freezeStack, *freezeVersion)
+		return nil
 	}
 
 	var catalog *Catalog
@@ -96,7 +142,11 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		updated, err := updateCatalogFromGitHub(repoRoot, *stackVersion, base)
+		updated, err := updateCatalogFromGitHubInventories(repoRoot, map[string]string{
+			selfManagedStackKey:   *stackVersion,
+			computePlaneStackKey:  *computeStackVersion,
+			observabilityStackKey: *observabilityStackVersion,
+		}, base)
 		if err != nil {
 			return err
 		}
@@ -135,6 +185,13 @@ func run(args []string) error {
 		return err
 	}
 	return nil
+}
+
+func resolveRepoPath(repoRoot, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(repoRoot, path)
 }
 
 func writeCatalogAfterStackSourceValidation(repoRoot, catalogPath string, catalog *Catalog) error {

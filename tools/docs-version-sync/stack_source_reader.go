@@ -58,10 +58,18 @@ func loadStackSourceSnapshot(repoRoot string, release stackSourceRelease, source
 
 // validateStackSourceRelease verifies the canonical identity of a selected stack release.
 func validateStackSourceRelease(release stackSourceRelease) error {
+	spec, err := stackInventorySpecByTag(release.Tag)
+	if err != nil {
+		return err
+	}
+	return validateStackSourceReleaseForSpec(release, spec)
+}
+
+func validateStackSourceReleaseForSpec(release stackSourceRelease, spec stackInventorySpec) error {
 	if !validStackVersion(release.Version) {
 		return fmt.Errorf("stack source version %q is not a semantic version", release.Version)
 	}
-	wantTag := stackTagPrefix + release.Version
+	wantTag := spec.TagPrefix + release.Version
 	if release.Tag != wantTag {
 		return fmt.Errorf("stack source tag must be %s for source version %s", wantTag, release.Version)
 	}

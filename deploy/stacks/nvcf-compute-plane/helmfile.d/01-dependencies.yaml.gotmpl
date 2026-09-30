@@ -395,7 +395,9 @@ releases:
       - grove-system/grove-operator
     values:
       - ../global.yaml.gotmpl
-      - dynamo-operator:
+      - {{- $dynamo := dig "dynamoOperator" dict .Values.addons }}
+        {{- $natsImage := dig "nats" "image" dict $dynamo }}
+        dynamo-operator:
           controllerManager:
             manager:
               image:
@@ -430,6 +432,18 @@ releases:
           namespaceRestriction:
             enabled: false
         nats:
+          container:
+            image:
+              registry: {{ dig "registry" "docker.io" $natsImage | quote }}
+              repository: {{ dig "repository" "library/nats" $natsImage | quote }}
+              tag: {{ dig "tag" "2.10.21-alpine" $natsImage | quote }}
+          # Keep the bundled Dynamo NATS reloader aligned with the NVCF NATS
+          # chart default. The release inventory merger rejects different
+          # versions of the same image.
+          reloader:
+            image:
+              registry: docker.io
+              tag: "0.24.0"
           jetstream:
             enabled: true
             fileStore:

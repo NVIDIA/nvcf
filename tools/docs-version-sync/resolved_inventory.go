@@ -21,6 +21,7 @@ const resolvedStackInventorySchemaVersion = 1
 
 var (
 	resolvedStackPlanes = []string{"compute-plane", "control-plane", "observability"}
+	imageArgumentRe     = regexp.MustCompile(`^--[A-Za-z0-9][A-Za-z0-9_.-]*-image=(.*)$`)
 	imageDigestRe       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+.-]*:[A-Za-z0-9=_+.-]+$`)
 )
 
@@ -29,6 +30,7 @@ type resolvedStackInventory struct {
 	Source        stackSourceRelease          `json:"source"`
 	Releases      []resolvedInventoryRelease  `json:"releases"`
 	Artifacts     []resolvedInventoryArtifact `json:"artifacts"`
+	Warnings      []string                    `json:"warnings,omitempty"`
 }
 
 type resolvedInventoryRelease struct {
@@ -51,8 +53,9 @@ type resolvedInventoryArtifact struct {
 }
 
 type resolvedArtifactSource struct {
-	Plane   string `json:"plane"`
-	Release string `json:"release"`
+	Plane       string              `json:"plane"`
+	Release     string              `json:"release"`
+	Requirement ManifestRequirement `json:"requirement,omitempty"`
 }
 
 type resolvedInventoryPlaneInput struct {
@@ -77,6 +80,7 @@ type parsedImageReference struct {
 	Version    string
 	Digest     string
 	Reference  string
+	Indirect   bool
 }
 
 // generateResolvedStackInventory builds an inventory from Helmfile list output and manifests
@@ -106,8 +110,14 @@ func generateResolvedStackInventory(source stackSourceRelease, planes []resolved
 		}
 
 		for _, release := range releases {
-			sourceRef := resolvedArtifactSource{Plane: plane.Name, Release: release.Name}
-			chartArtifact, err := resolvedChartArtifact(release, sourceRef)
+			releaseRequirement := ManifestOptional
+			if release.Enabled && release.Installed {
+				releaseRequirement = ManifestRequired
+			}
+			chartSource := resolvedArtifactSource{
+				Plane: plane.Name, Release: release.Name, Requirement: releaseRequirement,
+			}
+			chartArtifact, err := resolvedChartArtifact(release, chartSource)
 			if err != nil {
 				return resolvedStackInventory{}, fmt.Errorf("resolve chart for %s release %s: %w", plane.Name, release.Name, err)
 			}
@@ -118,6 +128,10 @@ func generateResolvedStackInventory(source stackSourceRelease, planes []resolved
 				return resolvedStackInventory{}, fmt.Errorf("resolve images for %s release %s: %w", plane.Name, release.Name, err)
 			}
 			for _, image := range images {
+				imageRequirement := ManifestOptional
+				if releaseRequirement == ManifestRequired && !image.Indirect {
+					imageRequirement = ManifestRequired
+				}
 				mergeResolvedArtifact(artifacts, resolvedInventoryArtifact{
 					Type:       "container-image",
 					Name:       image.Name,
@@ -125,7 +139,9 @@ func generateResolvedStackInventory(source stackSourceRelease, planes []resolved
 					Version:    image.Version,
 					Digest:     image.Digest,
 					Reference:  image.Reference,
-					Sources:    []resolvedArtifactSource{sourceRef},
+					Sources: []resolvedArtifactSource{{
+						Plane: plane.Name, Release: release.Name, Requirement: imageRequirement,
+					}},
 				})
 			}
 
@@ -133,7 +149,7 @@ func generateResolvedStackInventory(source stackSourceRelease, planes []resolved
 				Plane:     plane.Name,
 				Name:      release.Name,
 				Namespace: release.Namespace,
-				Required:  release.Enabled && release.Installed,
+				Required:  releaseRequirement == ManifestRequired,
 				Chart:     release.Chart,
 				Version:   release.Version,
 			})
@@ -160,14 +176,17 @@ func generateResolvedStackInventory(source stackSourceRelease, planes []resolved
 }
 
 func normalizeResolvedInventoryPlanes(planes []resolvedInventoryPlaneInput) ([]resolvedInventoryPlaneInput, error) {
-	if len(planes) != len(resolvedStackPlanes) {
-		return nil, fmt.Errorf("resolved inventory requires planes %s", strings.Join(resolvedStackPlanes, ", "))
+	if len(planes) == 0 {
+		return nil, fmt.Errorf("resolved inventory requires at least one plane")
 	}
 	planes = append([]resolvedInventoryPlaneInput(nil), planes...)
 	sort.Slice(planes, func(i, j int) bool { return planes[i].Name < planes[j].Name })
-	for i, want := range resolvedStackPlanes {
-		if planes[i].Name != want {
-			return nil, fmt.Errorf("resolved inventory plane %d is %q, want %q", i, planes[i].Name, want)
+	for i, plane := range planes {
+		if !isResolvedStackPlane(plane.Name) {
+			return nil, fmt.Errorf("resolved inventory plane %d is unknown: %q", i, plane.Name)
+		}
+		if i > 0 && planes[i-1].Name == plane.Name {
+			return nil, fmt.Errorf("resolved inventory plane %q is duplicated", plane.Name)
 		}
 	}
 	return planes, nil
@@ -312,6 +331,11 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 				}
 				images[image.Reference] = image
 			}
+			if key.Value == "args" || key.Value == "command" {
+				if err := collectResolvedImageArguments(value, images); err != nil {
+					return err
+				}
+			}
 			if err := collectResolvedImages(value, images); err != nil {
 				return err
 			}
@@ -324,6 +348,37 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 		}
 	}
 	return nil
+}
+
+func collectResolvedImageArguments(node *yaml.Node, images map[string]parsedImageReference) error {
+	if node.Kind == yaml.ScalarNode {
+		if reference, ok := resolvedImageArgument(node.Value); ok {
+			image, err := parseResolvedImageReference(reference)
+			if err != nil {
+				return fmt.Errorf("image argument %q: %w", node.Value, err)
+			}
+			image.Indirect = true
+			if existing, exists := images[image.Reference]; exists && !existing.Indirect {
+				return nil
+			}
+			images[image.Reference] = image
+		}
+		return nil
+	}
+	for _, child := range node.Content {
+		if err := collectResolvedImageArguments(child, images); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resolvedImageArgument(value string) (string, bool) {
+	matches := imageArgumentRe.FindStringSubmatch(value)
+	if matches == nil {
+		return "", false
+	}
+	return matches[1], true
 }
 
 func isResolvedImageField(key string) bool {
@@ -379,12 +434,20 @@ func mergeResolvedArtifact(artifacts map[string]*resolvedInventoryArtifact, cand
 		artifacts[key] = &copy
 		return
 	}
-	for _, source := range existing.Sources {
-		if source == candidate.Sources[0] {
-			return
+	mergeResolvedArtifactSource(existing, candidate.Sources[0])
+}
+
+func mergeResolvedArtifactSource(artifact *resolvedInventoryArtifact, candidate resolvedArtifactSource) {
+	for index, source := range artifact.Sources {
+		if source.Plane != candidate.Plane || source.Release != candidate.Release {
+			continue
 		}
+		if candidate.Requirement == ManifestRequired {
+			artifact.Sources[index].Requirement = ManifestRequired
+		}
+		return
 	}
-	existing.Sources = append(existing.Sources, candidate.Sources[0])
+	artifact.Sources = append(artifact.Sources, candidate)
 }
 
 func validateResolvedStackInventory(inventory resolvedStackInventory) error {
@@ -400,9 +463,16 @@ func validateResolvedStackInventory(inventory resolvedStackInventory) error {
 	if len(inventory.Artifacts) == 0 {
 		return fmt.Errorf("resolved inventory has no artifacts")
 	}
+	for index, warning := range inventory.Warnings {
+		if warning == "" || warning != strings.TrimSpace(warning) {
+			return fmt.Errorf("resolved inventory warning must be non-empty and trimmed")
+		}
+		if index > 0 && inventory.Warnings[index-1] >= warning {
+			return fmt.Errorf("resolved inventory warnings are not uniquely sorted")
+		}
+	}
 
 	releases := make(map[string]resolvedInventoryRelease, len(inventory.Releases))
-	planeReleaseCounts := make(map[string]int, len(resolvedStackPlanes))
 	for i, release := range inventory.Releases {
 		if i > 0 && compareResolvedInventoryReleases(inventory.Releases[i-1], release) >= 0 {
 			return fmt.Errorf("resolved inventory releases are not uniquely sorted")
@@ -412,12 +482,6 @@ func validateResolvedStackInventory(inventory resolvedStackInventory) error {
 		}
 		key := resolvedReleaseKey(release.Plane, release.Name)
 		releases[key] = release
-		planeReleaseCounts[release.Plane]++
-	}
-	for _, plane := range resolvedStackPlanes {
-		if planeReleaseCounts[plane] == 0 {
-			return fmt.Errorf("resolved inventory has no %s releases", plane)
-		}
 	}
 
 	chartSources := make(map[string]struct{}, len(inventory.Releases))
@@ -441,6 +505,13 @@ func validateResolvedStackInventory(inventory resolvedStackInventory) error {
 			release, ok := releases[resolvedReleaseKey(source.Plane, source.Release)]
 			if !ok {
 				return fmt.Errorf("artifact %s references unknown release %s/%s", artifact.Reference, source.Plane, source.Release)
+			}
+			if source.Requirement != "" && source.Requirement != ManifestRequired && source.Requirement != ManifestOptional {
+				return fmt.Errorf("artifact %s source %s/%s has unknown requirement %q", artifact.Reference, source.Plane, source.Release, source.Requirement)
+			}
+			if artifact.Type == "helm-chart" && source.Requirement != "" &&
+				(source.Requirement == ManifestRequired) != release.Required {
+				return fmt.Errorf("chart artifact %s source requirement does not match release %s/%s", artifact.Reference, source.Plane, source.Release)
 			}
 			if artifact.Type == "helm-chart" && artifact.Reference == release.Chart+"@"+release.Version {
 				chartSources[resolvedReleaseKey(source.Plane, source.Release)] = struct{}{}
