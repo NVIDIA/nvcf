@@ -12,6 +12,9 @@ use super::{
     LoadBalancerRoutingAlgorithmError, MAX_POWER_OF_N_SAMPLE_COUNT,
 };
 
+// The affinity ring allocates candidates times this value; static config stays operator-trusted.
+const MAX_EXPRESSION_VIRTUAL_NODES: usize = 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub(crate) struct RejectionError {
@@ -235,8 +238,13 @@ impl RoutingExpression {
                         }
                         "comparator" => settings.comparator = Some(parameter.comparator()?),
                         "cache_affinity_virtual_nodes" => {
-                            settings.cache_affinity_virtual_nodes =
-                                Some(parameter.positive_unsigned()?)
+                            let value = parameter.positive_unsigned()?;
+                            if value > MAX_EXPRESSION_VIRTUAL_NODES {
+                                return Err(parameter.invalid(format!(
+                                    "must be at most {MAX_EXPRESSION_VIRTUAL_NODES}"
+                                )));
+                            }
+                            settings.cache_affinity_virtual_nodes = Some(value);
                         }
                         "cache_affinity_backend_selection_count" => {
                             settings.cache_affinity_backend_selection_count =
@@ -648,6 +656,14 @@ mod tests {
                 "wait-and-widen;cache_affinity_input_tokens_scale=1.1",
                 "invalid_value",
             ),
+            (
+                "wait-and-widen;cache_affinity_virtual_nodes=1025",
+                "invalid_value",
+            ),
+            (
+                "wait-and-widen;cache_affinity_virtual_nodes=999999999999999",
+                "invalid_value",
+            ),
             ("wait-and-widen;max_queued=-1", "invalid_value"),
             ("pulsar;require_input_tokens=True", "invalid_value"),
             ("pulsar;require_input_tokens=1", "invalid_value"),
@@ -680,6 +696,18 @@ mod tests {
             assert_eq!(error.requested, raw);
             assert!(!error.message.is_empty());
         }
+        let at_limit = RoutingExpression::parse("wait-and-widen;cache_affinity_virtual_nodes=1024")
+            .unwrap()
+            .compile(&router, "model")
+            .unwrap();
+        assert_eq!(
+            at_limit
+                .config()
+                .wait_and_widen_settings()
+                .unwrap()
+                .cache_affinity_virtual_nodes,
+            Some(1024)
+        );
         let router = LoadBalancerRouter::from_config(&LoadBalancerConfig::default()).unwrap();
         let raw = "pulsar;seed=x";
         assert_eq!(

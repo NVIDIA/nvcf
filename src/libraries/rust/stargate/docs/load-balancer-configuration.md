@@ -434,6 +434,7 @@ selected algorithm. Omitted fields keep their configured values. The value is
 an RFC 8941 Item with Parameters, at most 1024 bytes and 32 parameters, with
 every parameter written as `key=value` and no commas. Quote a number that needs
 more than three fractional digits, such as `next_bucket_unlock_factor="0.0625"`.
+An expression may set `cache_affinity_virtual_nodes` to at most 1024.
 
 An invalid header returns HTTP `400` before backend selection, with
 `x-stargate-error-code: <class>` and body
