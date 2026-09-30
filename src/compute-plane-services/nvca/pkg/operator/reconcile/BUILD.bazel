@@ -51,6 +51,7 @@ go_library(
     deps = [
         "//src/compute-plane-services/nvca/internal/clustervalidator",
         "//src/compute-plane-services/nvca/internal/transporttls",
+        "//src/compute-plane-services/nvca/internal/util/k8sutil",
         "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
         "//src/compute-plane-services/nvca/pkg/client/clientset/versioned/scheme",
         "//src/compute-plane-services/nvca/pkg/client/informers/externalversions",

@@ -395,7 +395,7 @@ func (bc *BackendK8sCache) createOrUpdateServiceAccount(ctx context.Context, sa 
 	// get and create if not exists, updated if it does
 	_, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to get %v serviceAccount, err: %v", sa.Name, err)
+		return fmt.Errorf("failed to get %v serviceAccount, err: %w", sa.Name, err)
 	}
 	if k8serrors.IsNotFound(err) {
 		_, err = bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Create(ctx, sa, metav1.CreateOptions{})
@@ -403,7 +403,7 @@ func (bc *BackendK8sCache) createOrUpdateServiceAccount(ctx context.Context, sa 
 			return nil
 		}
 		if !k8serrors.IsAlreadyExists(err) {
-			return fmt.Errorf("failed to create %v serviceAccount, err: %v", sa.Name, err)
+			return fmt.Errorf("failed to create %v serviceAccount, err: %w", sa.Name, err)
 		}
 		// In a new namespace the ServiceAccount controller can create "default"
 		// first; fall through so the desired settings are still applied.
@@ -423,7 +423,7 @@ func (bc *BackendK8sCache) createOrUpdateServiceAccount(ctx context.Context, sa 
 		return updateErr
 	})
 	if retryErr != nil {
-		return fmt.Errorf("failed to update %v serviceAccount, err: %v", sa.Name, retryErr)
+		return fmt.Errorf("failed to update %v serviceAccount, err: %w", sa.Name, retryErr)
 	}
 	return nil
 }

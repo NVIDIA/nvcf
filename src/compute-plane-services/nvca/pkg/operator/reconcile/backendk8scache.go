@@ -1080,13 +1080,20 @@ func (bc *BackendK8sCache) SyncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 		},
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 		oteltrace.WithAttributes(nvcaopotel.GetOTelAttributesFromNVCFBackend(nb)...))
-	if err == nil || !isInvalidAgentConfigError(err) {
+	return bc.reportUnappliedAgentConfig(ctx, nb, err)
+}
+
+// reportUnappliedAgentConfig marks the NVCFBackend unhealthy when a sync left the requested agent configuration
+// unapplied, either because it is invalid or because a dependency could not be prepared. The previous agent keeps
+// running in both cases, so its health alone would otherwise suggest the new configuration is in effect.
+func (bc *BackendK8sCache) reportUnappliedAgentConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend, err error) error {
+	if err == nil || !(isInvalidAgentConfigError(err) || isAgentConfigNotAppliedError(err)) {
 		return err
 	}
 
 	if statusErr := bc.markNVCFBackendUnhealthy(ctx, nb, err); statusErr != nil {
 		core.GetLogger(ctx).WithError(statusErr).Errorf(
-			"failed to mark NVCFBackend %v/%v unhealthy after invalid agent configuration",
+			"failed to mark NVCFBackend %v/%v unhealthy after the agent configuration was not applied",
 			nb.Namespace, nb.Name,
 		)
 	}
@@ -1122,7 +1129,7 @@ func (bc *BackendK8sCache) markNVCFBackendUnhealthy(ctx context.Context, nb *nvi
 	if updated && bc.eventRecorder != nil {
 		bc.eventRecorder.Eventf(nb, corev1.EventTypeWarning,
 			string(nvcaoptypes.EventCategoryHealth),
-			"%v health changed to '%v' because the agent configuration is invalid: %v",
+			"%v health changed to '%v' because the requested agent configuration was not applied: %v",
 			AgentName, nvidiaiov1.AgentStatusUnhealthy, cause)
 	}
 	return nil

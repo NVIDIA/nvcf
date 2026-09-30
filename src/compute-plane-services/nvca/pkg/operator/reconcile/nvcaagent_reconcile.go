@@ -55,6 +55,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
@@ -326,7 +327,7 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, requestsN
 	}
 
 	if err := bc.createOrUpdateServiceAccount(ctx, defaultSA); err != nil {
-		return fmt.Errorf("failed to update ServiceAccount %s/%s, error: %v", defaultSA.Namespace, defaultSA.Name, err)
+		return fmt.Errorf("failed to update ServiceAccount %s/%s, error: %w", defaultSA.Namespace, defaultSA.Name, err)
 	}
 
 	return nil
@@ -562,10 +563,8 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 		return fmt.Errorf("failed to resolve requests namespace for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
 	}
-	err = bc.setupRequestsNamespace(ctx, requestsNamespace)
-	if err != nil {
-		return fmt.Errorf("failed to setup requests namespace for NVCFBackend %v/%v, err: %w",
-			nb.Namespace, nb.Name, err)
+	if err := bc.setupRequestsNamespace(ctx, requestsNamespace); err != nil {
+		return requestsNamespaceSetupError(requestsNamespace, err)
 	}
 
 	err = bc.setupImagePullSecrets(ctx, nb)
@@ -1420,6 +1419,16 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	}, nil
 }
 
+// requestsNamespaceSetupError wraps a failure to prepare the requests namespace. The agent is not rolled out, so a
+// non-transient failure is reported as configuration that was not applied; transient failures are retried quietly.
+func requestsNamespaceSetupError(requestsNamespace string, err error) error {
+	wrapped := fmt.Errorf("worker.requestsNamespace %q could not be prepared: %w", requestsNamespace, err)
+	if k8sutil.IsTransientK8sError(err) {
+		return wrapped
+	}
+	return &agentConfigNotAppliedError{err: wrapped}
+}
+
 // validateMergedAgentConfig rejects agent-config-merge values that would make a
 // new agent fail at startup, so the operator keeps the running agent instead
 // of rolling out a configuration it knows is broken.
@@ -1591,6 +1600,25 @@ func (e *invalidAgentConfigError) Unwrap() error {
 
 func isInvalidAgentConfigError(err error) bool {
 	var target *invalidAgentConfigError
+	return errors.As(err, &target)
+}
+
+// agentConfigNotAppliedError marks a valid configuration the operator could not apply. The previous agent keeps
+// running, so the NVCFBackend must not keep reporting healthy as if the new configuration were in effect.
+type agentConfigNotAppliedError struct {
+	err error
+}
+
+func (e *agentConfigNotAppliedError) Error() string {
+	return e.err.Error()
+}
+
+func (e *agentConfigNotAppliedError) Unwrap() error {
+	return e.err
+}
+
+func isAgentConfigNotAppliedError(err error) bool {
+	var target *agentConfigNotAppliedError
 	return errors.As(err, &target)
 }
 

@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1874,6 +1875,96 @@ func Test_shouldUpdateNVCFStatus(t *testing.T) {
 	for _, test := range tests {
 		t.Run("", func(t *testing.T) {
 			assert.Equal(t, test.expectedResult, shouldUpdateNVCFStatus(test.inputNBStatus, test.inputNVCAStatus))
+		})
+	}
+}
+
+func TestReportUnappliedAgentConfig(t *testing.T) {
+	forbidden := k8serrors.NewForbidden(corev1.Resource("serviceaccounts"), "default",
+		errors.New("namespace team-x is being terminated"))
+	tests := []struct {
+		name          string
+		err           error
+		wantUnhealthy bool
+	}{
+		{name: "no error", err: nil},
+		{name: "unrelated sync error", err: errors.New("fetch NGC service key")},
+		{
+			name:          "invalid configuration",
+			err:           fmt.Errorf("sync: %w", &invalidAgentConfigError{err: errors.New(`worker.requestsNamespace "Team_X" is invalid`)}),
+			wantUnhealthy: true,
+		},
+		{
+			name:          "requests namespace could not be prepared",
+			err:           fmt.Errorf("sync: %w", requestsNamespaceSetupError("team-x", forbidden)),
+			wantUnhealthy: true,
+		},
+		{
+			name: "transient requests namespace failure",
+			err: fmt.Errorf("sync: %w", requestsNamespaceSetupError("team-x",
+				k8serrors.NewServiceUnavailable("apiserver unavailable"))),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			nb := &nvidiaiov1.NVCFBackend{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-backend", Namespace: NVCAOperatorNamespace},
+				Status:     nvidiaiov1.NVCFBackendStatus{AgentStatus: nvidiaiov1.AgentStatusHealthy},
+			}
+			recorder := record.NewFakeRecorder(1)
+			bc := &BackendK8sCache{
+				clients:           &kubeclients.KubeClients{NVCAOP: fakenvcaopclient.NewSimpleClientset(nb)},
+				operatorNamespace: NVCAOperatorNamespace,
+				eventRecorder:     recorder,
+			}
+
+			err := bc.reportUnappliedAgentConfig(ctx, nb, tt.err)
+			assert.Equal(t, tt.err, err, "the sync error must be returned unchanged")
+
+			got, getErr := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+			require.NoError(t, getErr)
+			if !tt.wantUnhealthy {
+				assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+				assert.Empty(t, recorder.Events)
+				return
+			}
+			assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+			event := <-recorder.Events
+			assert.Contains(t, event, "requested agent configuration was not applied")
+			assert.Contains(t, event, "worker.requestsNamespace")
+		})
+	}
+}
+
+func TestRequestsNamespaceSetupError(t *testing.T) {
+	tests := []struct {
+		name           string
+		err            error
+		wantNotApplied bool
+	}{
+		{
+			name:           "forbidden",
+			err:            k8serrors.NewForbidden(corev1.Resource("namespaces"), "team-x", errors.New("denied")),
+			wantNotApplied: true,
+		},
+		{
+			name: "forbidden wrapped by the ServiceAccount helper",
+			err: fmt.Errorf("failed to update ServiceAccount team-x/default, error: %w",
+				k8serrors.NewForbidden(corev1.Resource("serviceaccounts"), "default", errors.New("being terminated"))),
+			wantNotApplied: true,
+		},
+		{name: "service unavailable", err: k8serrors.NewServiceUnavailable("apiserver unavailable")},
+		{name: "conflict", err: k8serrors.NewConflict(corev1.Resource("namespaces"), "team-x", errors.New("changed"))},
+		{name: "timeout", err: k8serrors.NewTimeoutError("slow", 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := requestsNamespaceSetupError("team-x", tt.err)
+			assert.ErrorIs(t, err, tt.err)
+			assert.ErrorContains(t, err, `worker.requestsNamespace "team-x" could not be prepared`)
+			assert.Equal(t, tt.wantNotApplied, isAgentConfigNotAppliedError(err))
+			assert.False(t, isInvalidAgentConfigError(err))
 		})
 	}
 }

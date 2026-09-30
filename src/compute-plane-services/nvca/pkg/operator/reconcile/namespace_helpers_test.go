@@ -742,6 +742,19 @@ func TestSetupNamespacesPreserveExternalMetadata(t *testing.T) {
 		assert.True(t, k8serrors.IsForbidden(err))
 	})
 
+	t.Run("forbidden ServiceAccount setup is reported as configuration not applied", func(t *testing.T) {
+		bc, clientset := newNamespaceCache(t)
+		clientset.PrependReactor("create", "serviceaccounts", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, k8serrors.NewForbidden(corev1.Resource("serviceaccounts"), "default",
+				fmt.Errorf("namespace team-x is being terminated"))
+		})
+
+		err := bc.setupRequestsNamespace(ctx, "team-x")
+		require.Error(t, err)
+		assert.True(t, k8serrors.IsForbidden(err), "the API error type must survive wrapping")
+		assert.True(t, isAgentConfigNotAppliedError(requestsNamespaceSetupError("team-x", err)))
+	})
+
 	t.Run("requests namespace drops the gxcache label when disabled", func(t *testing.T) {
 		existing := externalMetadata(getRequestsNamespace(nb))
 		existing.Labels[clustermgmt.ShaderCacheLabelKey] = "true"
