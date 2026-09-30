@@ -234,6 +234,9 @@ type ModelVolumeConfig struct {
 	// ReapInterval is how often the reaper removes read-only model PVs
 	// without a claim and abandoned primaries. Zero means ten minutes.
 	ReapInterval time.Duration
+	// Retention is how long a complete model or cache volume is kept
+	// after its last use before the reaper frees it. Zero keeps forever.
+	Retention time.Duration
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
@@ -684,7 +687,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 		// Read-only PVs whose namespace is gone and primaries whose copy
 		// never completed; idempotent, so every agent may run it.
-		reaper := &modelvolume.Reaper{Kube: a.kubeClient, Log: a.log.WithField("subsys", "modelvolume.reaper")}
+		reaper := &modelvolume.Reaper{Kube: a.kubeClient, Log: a.log.WithField("subsys", "modelvolume.reaper"), Retention: a.config.ModelVolume.Retention}
 		go reaper.Run(ctx, a.config.ModelVolume.ReapInterval)
 	}
 

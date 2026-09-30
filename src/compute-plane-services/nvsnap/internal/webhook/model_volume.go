@@ -148,6 +148,11 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 				return nil, fmt.Errorf("mint read-only claim: %w", err)
 			}
 		}
+		if st.Complete {
+			if err := m.ModelVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
+				log.WithError(err).Warn("model volume: record last use failed")
+			}
+		}
 		if !st.Complete {
 			patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
 		}

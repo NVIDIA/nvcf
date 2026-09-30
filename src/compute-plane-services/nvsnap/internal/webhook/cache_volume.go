@@ -109,6 +109,9 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 			log.WithError(err).Warn("cache volume: mint read-only claim failed; pod compiles locally")
 			return nil
 		}
+		if err := m.CacheVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
+			log.WithError(err).Warn("cache volume: record last use failed")
+		}
 		patches := mp.annotation(CacheURIAnnotation, uri)
 		if pod.Spec.InitContainers == nil && !initCreated {
 			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})

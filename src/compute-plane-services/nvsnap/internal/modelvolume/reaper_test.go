@@ -157,3 +157,62 @@ func TestReaper_OrphanReadOnlyClaims(t *testing.T) {
 		t.Error("reader pods are never touched by the claim reaper")
 	}
 }
+
+// Retention: a complete primary is retired with its storage once nothing
+// has admitted against it for Retention and no reader is bound in a live
+// namespace. Its read-only views go with it. Recently used, still read,
+// or Retention zero: kept. Caches follow the same rule as models.
+func TestReaper_RetiresCompletePrimariesPastRetention(t *testing.T) {
+	ctx := context.Background()
+	key := Key(uri)
+	complete := map[string]string{IdentityLabel: key, CompleteLabel: "true"}
+	ro := map[string]string{IdentityLabel: key, "nvsnap.io/role": "reader-shared"}
+	cacheKey := "abc123def4567890"
+	cacheComplete := map[string]string{CacheLabel: cacheKey, CompleteLabel: "true"}
+	live := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sr-live"}}
+	stamp := func(pv *corev1.PersistentVolume, ago time.Duration) *corev1.PersistentVolume {
+		pv.Annotations = map[string]string{LastUsedAnnotation: time.Now().Add(-ago).UTC().Format(time.RFC3339)}
+		return pv
+	}
+	oldUnused := stamp(pvFixture("primary-old-unused", complete, "nvsnap-system", ClaimName(uri), corev1.VolumeReleased, false, 30*24*time.Hour), 8*24*time.Hour)
+	oldRO := pvFixture("primary-old-unused-ro-released", ro, "sr-gone", ClaimName(uri)+"-ro", corev1.VolumeReleased, true, 20*24*time.Hour)
+	recent := stamp(pvFixture("primary-recent", map[string]string{IdentityLabel: Key("hf://o/other"), CompleteLabel: "true"}, "nvsnap-system", ClaimName("hf://o/other"), corev1.VolumeReleased, false, 30*24*time.Hour), 2*24*time.Hour)
+	stillRead := stamp(pvFixture("primary-still-read", map[string]string{IdentityLabel: Key("hf://o/read"), CompleteLabel: "true"}, "nvsnap-system", ClaimName("hf://o/read"), corev1.VolumeReleased, false, 30*24*time.Hour), 9*24*time.Hour)
+	stillReadRO := pvFixture("primary-still-read-ro", map[string]string{IdentityLabel: Key("hf://o/read"), "nvsnap.io/role": "reader-shared"}, "sr-live", ClaimName("hf://o/read")+"-ro", corev1.VolumeBound, true, time.Hour)
+	noStamp := pvFixture("primary-no-stamp-old", map[string]string{IdentityLabel: Key("hf://o/legacy"), CompleteLabel: "true"}, "nvsnap-system", ClaimName("hf://o/legacy"), corev1.VolumeReleased, false, 10*24*time.Hour)
+	cacheOld := stamp(pvFixture("cache-old-unused", cacheComplete, "nvsnap-system", "nvsnap-cache-"+cacheKey, corev1.VolumeReleased, false, 30*24*time.Hour), 8*24*time.Hour)
+	kc := fake.NewSimpleClientset(live, oldUnused, oldRO, recent, stillRead, stillReadRO, noStamp, cacheOld)
+
+	r := &Reaper{Kube: kc, Retention: 7 * 24 * time.Hour}
+	res, err := r.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RetiredPrimaries != 3 {
+		t.Errorf("retired %d primaries, want 3 (old unused model, legacy without stamp, old unused cache): %+v", res.RetiredPrimaries, res)
+	}
+	left := map[string]bool{}
+	pvs, _ := kc.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	for _, pv := range pvs.Items {
+		left[pv.Name] = true
+	}
+	for _, gone := range []string{"primary-old-unused", "primary-old-unused-ro-released", "primary-no-stamp-old", "cache-old-unused"} {
+		if left[gone] {
+			t.Errorf("%s must be retired", gone)
+		}
+	}
+	for _, want := range []string{"primary-recent", "primary-still-read", "primary-still-read-ro"} {
+		if !left[want] {
+			t.Errorf("%s must survive: recently used or still read", want)
+		}
+	}
+
+	// Retention zero keeps everything, whatever its age.
+	kc2 := fake.NewSimpleClientset(stamp(pvFixture("primary-forever", complete, "nvsnap-system", ClaimName(uri), corev1.VolumeReleased, false, 400*24*time.Hour), 300*24*time.Hour))
+	if res, err := (&Reaper{Kube: kc2}).Sweep(ctx); err != nil || res.RetiredPrimaries != 0 {
+		t.Errorf("Retention 0 must never retire: %+v %v", res, err)
+	}
+	if _, err := kc2.CoreV1().PersistentVolumes().Get(ctx, "primary-forever", metav1.GetOptions{}); err != nil {
+		t.Error("primary-forever must survive with Retention 0")
+	}
+}

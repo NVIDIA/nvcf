@@ -25,20 +25,28 @@ import (
 //   - Read-only PVs (one per reader namespace) whose claim is gone: the
 //     PV is Released, or its namespace no longer exists. The next reader
 //     in that namespace mints a fresh one from the primary.
+//
 //   - Primary PVs Released without the complete label: a copy died
 //     between claim creation and completion. Older than AbandonAfter
 //     they are switched to reclaim Delete and removed, freeing the
 //     capacity. Completion labels the PV before releasing its claim,
 //     so a complete primary is never in this state.
 //
-// Complete primaries are kept: retention policy is a separate decision.
+//   - Complete primaries (model or cache) are retired with their storage
+//     once nothing has used them for Retention: no read-only PV of theirs
+//     is bound in a live namespace and the last-used annotation (set at
+//     completion and on every admission against the volume) is older
+//     than Retention. Zero Retention keeps them forever.
 type Reaper struct {
 	Kube kubernetes.Interface
 	Log  logrus.FieldLogger
 	// AbandonAfter is the minimum age of an incomplete Released primary
 	// before it is deleted. Zero means 15 minutes.
 	AbandonAfter time.Duration
-	now          func() time.Time
+	// Retention is how long a complete primary is kept after its last
+	// use. Zero means never retire.
+	Retention time.Duration
+	now       func() time.Time
 }
 
 // Result counts what one sweep removed.
@@ -46,6 +54,7 @@ type Result struct {
 	ReadOnlyPVs        int
 	AbandonedPrimaries int
 	OrphanClaims       int
+	RetiredPrimaries   int
 }
 
 // OrphanClaimAfter is how long a read-only claim may go without any pod
@@ -104,10 +113,41 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 		namespaces[ns] = exists
 		return exists
 	}
+	// Identities with a read-only PV bound in a namespace that still
+	// exists have a live reader; retention never touches those.
+	live := map[string]bool{}
+	for i := range pvs.Items {
+		pv := &pvs.Items[i]
+		if isReadOnlyModelPV(pv) && pv.Status.Phase == corev1.VolumeBound && pv.Spec.ClaimRef != nil && nsExists(pv.Spec.ClaimRef.Namespace) {
+			live[identityKey(pv)] = true
+		}
+	}
 	for i := range pvs.Items {
 		pv := &pvs.Items[i]
 		fields := logrus.Fields{"pv": pv.Name, "model": pv.Labels[IdentityLabel], "cache": pv.Labels[CacheLabel], "phase": pv.Status.Phase}
 		switch {
+		case isPrimaryModelPV(pv) && pv.Labels[CompleteLabel] == "true" && pv.Status.Phase == corev1.VolumeReleased && r.Retention > 0:
+			last := lastUsed(pv)
+			if r.now().Sub(last) < r.Retention || live[identityKey(pv)] || attached[pv.Name] {
+				continue
+			}
+			// Read-only views of this primary first: they are Retain PV
+			// objects over the same storage and would be left dangling.
+			for j := range pvs.Items {
+				ro := &pvs.Items[j]
+				if !isReadOnlyModelPV(ro) || identityKey(ro) != identityKey(pv) || attached[ro.Name] {
+					continue
+				}
+				if derr := r.deletePV(ctx, ro.Name); derr != nil {
+					log.WithFields(fields).WithField("read_only_pv", ro.Name).WithError(derr).Warn("model volume reaper: delete read-only PV of retired primary failed")
+				}
+			}
+			if derr := r.deleteWithStorage(ctx, pv); derr != nil {
+				log.WithFields(fields).WithError(derr).Warn("model volume reaper: retire primary failed")
+				continue
+			}
+			res.RetiredPrimaries++
+			log.WithFields(fields).WithFields(logrus.Fields{"last_used": last.Format(time.RFC3339), "retention": r.Retention.String()}).Info("model volume reaper: retired primary unused past retention; storage freed")
 		case isReadOnlyModelPV(pv):
 			orphan := pv.Status.Phase == corev1.VolumeReleased
 			if pv.Status.Phase == corev1.VolumeBound && pv.Spec.ClaimRef != nil && !nsExists(pv.Spec.ClaimRef.Namespace) {
@@ -262,8 +302,8 @@ func (r *Reaper) Run(ctx context.Context, interval time.Duration) {
 	for {
 		if res, err := r.Sweep(ctx); err != nil {
 			r.log().WithError(err).Warn("model volume reaper: sweep failed")
-		} else if res.ReadOnlyPVs+res.AbandonedPrimaries+res.OrphanClaims > 0 {
-			r.log().WithFields(logrus.Fields{"read_only_pvs": res.ReadOnlyPVs, "abandoned_primaries": res.AbandonedPrimaries, "orphan_claims": res.OrphanClaims}).Info("model volume reaper: sweep done")
+		} else if res.ReadOnlyPVs+res.AbandonedPrimaries+res.OrphanClaims+res.RetiredPrimaries > 0 {
+			r.log().WithFields(logrus.Fields{"read_only_pvs": res.ReadOnlyPVs, "abandoned_primaries": res.AbandonedPrimaries, "orphan_claims": res.OrphanClaims, "retired_primaries": res.RetiredPrimaries}).Info("model volume reaper: sweep done")
 		}
 		select {
 		case <-ctx.Done():
@@ -271,6 +311,26 @@ func (r *Reaper) Run(ctx context.Context, interval time.Duration) {
 		case <-t.C:
 		}
 	}
+}
+
+// identityKey is the volume's key in its label namespace, so a model and
+// a cache with the same short hash never collide.
+func identityKey(pv *corev1.PersistentVolume) string {
+	if k := pv.Labels[CacheLabel]; k != "" {
+		return "cache:" + k
+	}
+	return "model:" + pv.Labels[IdentityLabel]
+}
+
+// lastUsed is the last-used annotation, or the creation time for a
+// primary that predates it.
+func lastUsed(pv *corev1.PersistentVolume) time.Time {
+	if v := pv.Annotations[LastUsedAnnotation]; v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+	}
+	return pv.CreationTimestamp.Time
 }
 
 func isReadOnlyModelPV(pv *corev1.PersistentVolume) bool {

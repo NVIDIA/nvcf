@@ -49,6 +49,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -96,6 +97,9 @@ const (
 	CaptureLabel = "nvsnap.io/model-capture"
 	// CaptureVolumeAnnotation names the pod volume the engine downloads into.
 	CaptureVolumeAnnotation = "nvsnap.io/model-capture-volume"
+	// LastUsedAnnotation on a primary PV is the RFC 3339 time a pod last
+	// admitted against it (or it completed). Retention counts from here.
+	LastUsedAnnotation = "nvsnap.io/last-used"
 	// SourceNamespaceLabel on the primary PV records the namespace the
 	// download Job ran in.
 	SourceNamespaceLabel = "nvsnap.io/model-source-namespace"
@@ -440,6 +444,7 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 				pv.Annotations = map[string]string{}
 			}
 			pv.Annotations[IdentityAnnotation] = uri
+			pv.Annotations[LastUsedAnnotation] = time.Now().UTC().Format(time.RFC3339)
 			pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 			if _, err := p.Kube.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
 				return fmt.Errorf("label volume %s complete: %w", pv.Name, err)
@@ -688,6 +693,21 @@ func StagingReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// TouchLastUsed records that a pod was just admitted against the primary
+// PV, so retention counts from now. Best effort: a failure here must not
+// fail an admission, and a missing PV is not an error.
+func (p *Provisioner) TouchLastUsed(ctx context.Context, pvName string) error {
+	if pvName == "" {
+		return nil
+	}
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, LastUsedAnnotation, time.Now().UTC().Format(time.RFC3339))
+	_, err := p.Kube.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // StagingFailed reports whether a Block-mode staging pod's download init

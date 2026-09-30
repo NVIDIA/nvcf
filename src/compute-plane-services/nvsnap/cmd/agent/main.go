@@ -180,6 +180,8 @@ func main() {
 		"Host directory (mounted Bidirectional into the agent at the same path) where completed model volumes are bound for readers on block storage (default /var/lib/containerd/nvsnap-models)")
 	flag.DurationVar(&config.ModelVolume.ReapInterval, "model-volume-reap-interval", 0,
 		"How often the model volume reaper removes read-only PVs without a claim and abandoned primaries (0 = 10m)")
+	flag.DurationVar(&config.ModelVolume.Retention, "model-volume-retention", 0,
+		"How long a complete model or cache volume is kept after its last use before the reaper frees its storage (0 = keep forever)")
 	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
 		"How long a reader waits for the writer's download before downloading itself (default 1h)")
 

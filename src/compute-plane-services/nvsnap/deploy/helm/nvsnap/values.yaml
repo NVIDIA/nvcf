@@ -138,6 +138,10 @@ agent:
     # How often each agent sweeps read-only model PVs whose claim or
     # namespace is gone and primaries whose copy never completed.
     reapInterval: 10m
+    # How long a complete model or compile-cache volume is kept after the
+    # last pod admitted against it. Past this, with no reader bound, the
+    # reaper frees its storage. Set to 0 to keep volumes forever.
+    retention: 168h
 
   election:
     enabled: false

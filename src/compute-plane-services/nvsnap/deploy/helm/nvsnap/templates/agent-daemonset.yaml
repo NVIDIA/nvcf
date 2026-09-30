@@ -117,6 +117,7 @@ spec:
             - --model-volume
             - --model-volume-wait-deadline={{ .Values.agent.modelVolume.waitDeadline | default "1h" }}
             - --model-volume-reap-interval={{ .Values.agent.modelVolume.reapInterval | default "10m" }}
+            - --model-volume-retention={{ .Values.agent.modelVolume.retention | default "168h" }}
             - --model-volume-host-root={{ .Values.agent.hostPaths.nvsnapModels | default "/var/lib/containerd/nvsnap-models" }}
             {{- end }}
             {{- if and .Values.agent.election .Values.agent.election.enabled }}
