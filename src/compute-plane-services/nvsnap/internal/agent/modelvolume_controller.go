@@ -233,6 +233,15 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		}
 		return
 	}
+	if pod.Labels[modelvolume.CaptureLabel] == "true" {
+		// The engine downloaded the model itself into a pod volume; once
+		// the pod is Ready the tree is final and this node's agent copies
+		// it into the primary. Not a reader: it never waits on a claim.
+		if pod.Spec.NodeName == c.NodeName && rootfsonly.IsPodReady(pod) && pod.DeletionTimestamp == nil {
+			c.captureModel(ctx, pod, uri)
+		}
+		return
+	}
 	if pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
 		if pod.Spec.NodeName == c.NodeName && rootfsonly.IsPodReady(pod) && pod.DeletionTimestamp == nil {
 			c.captureCache(ctx, pod)
@@ -383,6 +392,129 @@ func (c *ModelVolumeController) giveUp(ctx context.Context, uri, jobNS, reason s
 	c.mu.Lock()
 	delete(c.attempts, uri)
 	c.mu.Unlock()
+}
+
+// captureModel turns a Ready pod's engine-downloaded landing volume into
+// the completed primary. The pod keeps serving from its own copy; the
+// volume outlives the copy because the pod does. Atomic claim creation
+// decides which pod, of all those downloading the same model across the
+// cluster, is the source; the rest keep their downloads and nothing more
+// happens to them.
+func (c *ModelVolumeController) captureModel(ctx context.Context, pod *corev1.Pod, uri string) {
+	vol := pod.Annotations[modelvolume.CaptureVolumeAnnotation]
+	if vol == "" {
+		return
+	}
+	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName, "volume": vol})
+	key := "capture:" + uri
+	c.mu.Lock()
+	if c.inflight[key] || c.attempts[key] >= c.StagingAttempts {
+		c.mu.Unlock()
+		return
+	}
+	c.inflight[key] = true
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.inflight, key)
+			c.mu.Unlock()
+		}()
+		st, err := c.Provisioner.Lookup(ctx, uri)
+		if err != nil {
+			log.WithError(err).Warn("model volume: lookup failed")
+			return
+		}
+		if st.Complete || st.Failed {
+			return
+		}
+		src, err := c.podVolumeHostPath(ctx, pod, vol)
+		if err != nil {
+			log.WithError(err).Warn("model volume: cannot locate the engine's landing volume on this node")
+			return
+		}
+		bytes, err := c.stageSize(filepath.Join(c.HostFSRoot, src))
+		if err != nil || bytes <= 0 {
+			log.WithError(err).WithField("bytes", bytes).Warn("model volume: engine landing volume is empty; nothing to capture")
+			return
+		}
+		sysNS := c.Provisioner.Cfg.SystemNamespace()
+		size := c.Provisioner.Cfg.VolumeSize(bytes)
+		claim, created, err := c.Provisioner.ClaimSizedClaim(ctx, uri, sysNS, size)
+		if err != nil {
+			log.WithError(err).Warn("model volume: claim failed")
+			return
+		}
+		if !created {
+			return // another pod is the source for this model
+		}
+		log = log.WithFields(logrus.Fields{"bytes": bytes, "claim_size": size.String(), "claim": sysNS + "/" + claim})
+		log.Info("model volume: primary claim sized from the engine's download; copying")
+		start := time.Now()
+		if err := c.copyCaptured(ctx, uri, sysNS, claim, src); err != nil {
+			c.mu.Lock()
+			c.attempts[key]++
+			n := c.attempts[key]
+			c.mu.Unlock()
+			log.WithError(err).WithField("attempt", n).Warn("model volume: capture failed")
+			// Release the claim so another pod can become the source; on
+			// the last attempt record the failure so admissions stop
+			// stamping pods for this model for a while.
+			if derr := c.Kube.CoreV1().PersistentVolumeClaims(sysNS).Delete(ctx, claim, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				log.WithError(derr).Warn("model volume: delete claim after failure failed")
+			}
+			if n >= c.StagingAttempts {
+				if rerr := c.Provisioner.RecordFailure(ctx, uri, err.Error()); rerr != nil {
+					log.WithError(rerr).Warn("model volume: record failure failed")
+				}
+			}
+			return
+		}
+		log.WithField("elapsed", time.Since(start).Round(time.Second).String()).Info("model volume: captured from the engine's download; later pods read it")
+	}()
+}
+
+// copyCaptured waits for the claim, copies the tree in, marks it complete.
+func (c *ModelVolumeController) copyCaptured(ctx context.Context, uri, sysNS, claim, src string) error {
+	if _, err := c.Provisioner.WaitBound(ctx, sysNS, claim, stagingBindTimeout); err != nil {
+		return err
+	}
+	if err := c.copyStaging(ctx, sysNS, claim, src); err != nil {
+		return err
+	}
+	if err := c.Provisioner.MarkComplete(ctx, uri, sysNS); err != nil {
+		return err
+	}
+	return c.Provisioner.ClearFailure(ctx, uri)
+}
+
+// podVolumeHostPath is the kubelet path of a pod volume on this node: an
+// emptyDir under kubernetes.io~empty-dir by volume name, a CSI-backed
+// claim under kubernetes.io~csi by its PV name.
+func (c *ModelVolumeController) podVolumeHostPath(ctx context.Context, pod *corev1.Pod, vol string) (string, error) {
+	base := filepath.Join(c.KubeletPodsDir, string(pod.UID), "volumes")
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Name != vol {
+			continue
+		}
+		switch {
+		case v.EmptyDir != nil:
+			return filepath.Join(base, "kubernetes.io~empty-dir", vol), nil
+		case v.PersistentVolumeClaim != nil:
+			pvc, err := c.Kube.CoreV1().PersistentVolumeClaims(pod.Namespace).Get(ctx, v.PersistentVolumeClaim.ClaimName, metav1.GetOptions{})
+			if err != nil {
+				return "", fmt.Errorf("get claim %s/%s: %w", pod.Namespace, v.PersistentVolumeClaim.ClaimName, err)
+			}
+			if pvc.Spec.VolumeName == "" {
+				return "", fmt.Errorf("claim %s/%s is not bound", pod.Namespace, pvc.Name)
+			}
+			return filepath.Join(base, "kubernetes.io~csi", pvc.Spec.VolumeName, "mount"), nil
+		default:
+			return "", fmt.Errorf("volume %s is neither an emptyDir nor a claim", vol)
+		}
+	}
+	return "", fmt.Errorf("volume %s not in pod", vol)
 }
 
 // Labels and annotations the webhook stamps on a pod whose cachedir is to

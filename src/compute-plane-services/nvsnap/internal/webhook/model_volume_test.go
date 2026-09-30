@@ -652,3 +652,95 @@ func TestPodOrdinal(t *testing.T) {
 		}
 	}
 }
+
+// kimi-k3 shape: the main container's script downloads an NGC artifact
+// into the pod's own volumeClaimTemplate claim. nvsnap has no recipe for
+// that download, so the first pod is stamped for capture after Ready and
+// keeps its writable claim; nothing waits and no Job is created.
+func kimiEnginePod() *corev1.Pod {
+	gpu := corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("4")}}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3-0", Namespace: "sr-fn",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "mini-service-kimi-k3"}}},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "kimi-k3", Image: "nvcr.io/org/llm_nim/kimi-k3:vllm", Command: []string{"/bin/bash", "/opt/kimi-k3/start.sh"},
+				Env: []corev1.EnvVar{{Name: "MODEL_PATH", Value: "/config/models/kimi-k3"}, {Name: "NGC_MODEL_NAME", Value: "org/llm_nim/kimi-k3:hf"},
+					{Name: "NGC_MODEL_MOUNT", Value: "/config/models"}, {Name: "NGC_STABLE_MODEL_PATH", Value: "/config/models/kimi-k3"}},
+				VolumeMounts: []corev1.VolumeMount{{Name: "ngc-models", MountPath: "/config/models"}},
+				Resources:    gpu,
+			}},
+			Volumes: []corev1.Volume{{Name: "ngc-models", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "ngc-models-mini-service-kimi-k3-0"}}}},
+		},
+	}
+}
+
+func TestModelVolume_EngineNGCDownload_FirstPodCapturedAfterReady(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleLeader, kc)
+	pod := kimiEnginePod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/llm_nim/kimi-k3:hf"
+	if v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.CaptureLabel] != "true" || v.annotations[modelvolume.CaptureVolumeAnnotation] != "ngc-models" {
+		t.Errorf("first pod is stamped for capture of its landing volume: labels=%v annotations=%v", v.labels, v.annotations)
+	}
+	if v.labels[modelvolume.RoleLabel] != "" || v.labels[modelvolume.PendingLabel] != "" {
+		t.Errorf("a capture source is not a reader and never waits: %v", v.labels)
+	}
+	if _, replaced := v.volumes["ngc-models"]; replaced || len(v.roMounts) != 0 || len(v.newInits) != 0 {
+		t.Errorf("the pod keeps its own writable claim and gets no init: volumes=%v ro=%v inits=%v", v.volumes, v.roMounts, v.newInits)
+	}
+	if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Error("no download Job: nvsnap has no recipe for the chart's own NGC download")
+	}
+}
+
+// Once captured, the next pod's per-replica claim is replaced by the
+// read-only copy at the same path, mounted read-only, with no wait init
+// and no offline switch: the chart's script finds its own markers there.
+func TestModelVolume_EngineNGCDownload_LaterPodReadsCapturedVolume(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	uri := "ngc://org/llm_nim/kimi-k3:hf"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-kimi-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Ti")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-kimi:vol:nvsnap-system"}},
+		},
+	}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), pv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pod := kimiEnginePod()
+	pod.Name = "mini-service-kimi-k3-1"
+	pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName = "ngc-models-mini-service-kimi-k3-1"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.labels[modelvolume.CaptureLabel] != "" || v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "" {
+		t.Errorf("complete: a plain reader, not pending: %v", v.labels)
+	}
+	vol, replaced := v.volumes["ngc-models"]
+	if !replaced || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != modelvolume.ReadOnlyClaimName(uri) || len(v.roMounts) != 1 {
+		t.Errorf("landing claim becomes the read-only copy mounted read-only, got %+v ro=%v", vol, v.roMounts)
+	}
+	for _, init := range v.newInits {
+		if init.Name == "nvsnap-model-download" {
+			t.Errorf("no wait init for a captured tree: the chart's script finds its markers on the volume: %v", init.Args)
+		}
+	}
+	if v.env["HF_HUB_OFFLINE"] != "" {
+		t.Errorf("no offline switch for a captured tree: env=%v", v.env)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ReadOnlyClaimName(uri), metav1.GetOptions{}); err != nil {
+		t.Errorf("read-only claim minted at admission of a complete volume: %v", err)
+	}
+}

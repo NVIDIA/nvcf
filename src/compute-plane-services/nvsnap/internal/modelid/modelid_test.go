@@ -242,3 +242,61 @@ func TestResolveWithGroup_LWSWorkerInheritsLeader(t *testing.T) {
 		t.Errorf("missing group: ok=%v err=%v, want not ok with error", ok, err)
 	}
 }
+
+// The kimi-k3 shape seen on a GB300 cluster (2026-09-30): no init
+// container; the main container's start.sh downloads the NGC artifact
+// named in its env into a per-replica claim from the StatefulSet's
+// volumeClaimTemplate, then starts vllm from MODEL_PATH.
+func kimiEngineDownloadPod(claim string, owner string) *corev1.Pod {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3-0", Namespace: "sr-fn"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "kimi-k3", Image: "nvcr.io/org/llm_nim/kimi-k3:vllm", Command: []string{"/bin/bash", "/opt/kimi-k3/start.sh"},
+				Env: []corev1.EnvVar{
+					{Name: "MODEL_PATH", Value: "/config/models/kimi-k3"},
+					{Name: "NGC_MODEL_NAME", Value: "org/llm_nim/kimi-k3:hf"},
+					{Name: "NGC_MODEL_MOUNT", Value: "/config/models"},
+					{Name: "NGC_STABLE_MODEL_PATH", Value: "/config/models/kimi-k3"},
+				},
+				VolumeMounts: []corev1.VolumeMount{{Name: "scripts", MountPath: "/opt/kimi-k3"}, {Name: "ngc-models", MountPath: "/config/models"}},
+			}},
+			Volumes: []corev1.Volume{{Name: "scripts", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{}}},
+				{Name: "ngc-models", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}}},
+		},
+	}
+	if owner != "" {
+		pod.OwnerReferences = []metav1.OwnerReference{{Kind: owner, Name: "mini-service-kimi-k3"}}
+	}
+	return pod
+}
+
+func TestResolve_EngineNGCEnvIntoPerPodClaim(t *testing.T) {
+	r, ok := Resolve(kimiEngineDownloadPod("ngc-models-mini-service-kimi-k3-0", "StatefulSet"), 0)
+	if !ok {
+		t.Fatal("a main container naming an NGC artifact in its env is a downloader")
+	}
+	if r.Identity.URI() != "ngc://org/llm_nim/kimi-k3:hf" || r.Source != "env NGC_MODEL_NAME" {
+		t.Errorf("identity = %q from %q; the artifact name beats the local MODEL_PATH", r.Identity.URI(), r.Source)
+	}
+	l := r.Landing
+	if l.Downloader != DownloaderEngine || l.Path != "/config/models" || l.VolumeName != "ngc-models" || l.Kind != VolumePodClaim || !l.Substitutable() {
+		t.Errorf("landing = %+v; a volumeClaimTemplate replica claim is per-pod scratch and substitutable", l)
+	}
+}
+
+func TestResolve_EngineNGCEnvIntoSharedClaimIsLeftAlone(t *testing.T) {
+	for name, pod := range map[string]*corev1.Pod{
+		"shared claim name":     kimiEngineDownloadPod("team-model-store", "StatefulSet"),
+		"not a StatefulSet":     kimiEngineDownloadPod("ngc-models-mini-service-kimi-k3-0", "ReplicaSet"),
+		"claim equals pod name": kimiEngineDownloadPod("-mini-service-kimi-k3-0", "StatefulSet"),
+	} {
+		r, ok := Resolve(pod, 0)
+		if !ok {
+			t.Fatalf("%s: identity still resolves", name)
+		}
+		if r.Landing.Kind != VolumePVC || r.Landing.Substitutable() {
+			t.Errorf("%s: a claim that is not this pod's own replica claim stays the customer's: %+v", name, r.Landing)
+		}
+	}
+}

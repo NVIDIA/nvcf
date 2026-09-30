@@ -649,3 +649,68 @@ func TestModelVolumeController_CacheWaitsForTreeToSettle(t *testing.T) {
 		t.Errorf("copies %d", copies)
 	}
 }
+
+// An engine that downloads into its own per-replica claim (kimi-k3) is
+// captured once Ready: the agent on its node locates the claim's kubelet
+// mount, sizes the primary from the tree, copies it in and marks it
+// complete. The pod itself is untouched: no Job, no reader wait.
+func TestModelVolumeController_CapturesEngineLandingFromReadyPod(t *testing.T) {
+	ctx := context.Background()
+	kc, p, _ := stagingFixture(t, "node-a")
+	uri := "ngc://org/llm_nim/kimi-k3:hf"
+	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "ngc-models-mini-service-kimi-k3-0", Namespace: "sr-fn"},
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pvc-kimi-replica-0"}}
+	if err := kc.Tracker().Add(pvc); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3-0", Namespace: "sr-fn", UID: "pod-uid-kimi",
+			Labels:      map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CaptureLabel: "true"},
+			Annotations: map[string]string{modelvolume.IdentityAnnotation: uri, modelvolume.CaptureVolumeAnnotation: "ngc-models"}},
+		Spec: corev1.PodSpec{NodeName: "node-a", Volumes: []corev1.Volume{{Name: "ngc-models",
+			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc.Name}}}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	}
+	c, _, _ := mvController(t, kc, p, "node-a")
+	var measured, copied string
+	c.stageSize = func(path string) (int64, error) { measured = path; return 2000 << 30, nil }
+	c.copyStaging = func(_ context.Context, ns, claim, src string) error {
+		copied = ns + "/" + claim + "<-" + src
+		return nil
+	}
+
+	notReady := pod.DeepCopy()
+	notReady.Status.Conditions = nil
+	c.Handle(ctx, notReady)
+	time.Sleep(50 * time.Millisecond)
+	if measured != "" {
+		t.Fatal("nothing is captured before the pod is Ready: the download may still be running")
+	}
+	c.Handle(ctx, pod)
+	waitUntil(t, "captured", func() bool { st, _ := p.Lookup(ctx, uri); return st.Complete })
+	wantSrc := "/var/lib/kubelet/pods/pod-uid-kimi/volumes/kubernetes.io~csi/pvc-kimi-replica-0/mount"
+	if measured != "/host"+wantSrc {
+		t.Errorf("measured %q, want the replica claim's kubelet mount through the host root", measured)
+	}
+	if copied != "nvsnap-system/"+modelvolume.ClaimName(uri)+"<-"+wantSrc {
+		t.Errorf("copied %q", copied)
+	}
+	pv, err := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-staged", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := pv.Spec.Capacity[corev1.ResourceStorage]; size.String() != "2200Gi" {
+		t.Errorf("primary sized from the 2000 GiB tree plus headroom, got %s", size.String())
+	}
+	if pv.Labels[modelvolume.CompleteLabel] != "true" || pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Errorf("primary must be complete and retained: %v", pv.Labels)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, modelvolume.ClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("primary claim released after the copy so the volume detaches")
+	}
+	if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(ctx, metav1.ListOptions{}); len(jobs.Items) != 1 { // only the fixture's unrelated staging job
+		t.Errorf("capture creates no Job: %d", len(jobs.Items))
+	}
+	c.Handle(ctx, pod) // complete: a second Ready event is a no-op
+	time.Sleep(50 * time.Millisecond)
+}

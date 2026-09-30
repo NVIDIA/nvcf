@@ -51,9 +51,16 @@ not.
    (LWS `--headless` workers) inherit from the group's template via owner
    references (`leaderworkerset.sigs.k8s.io/group-key`, StatefulSet,
    `grove.io/podgang`). Landing path is where the download writes:
-   `HF_HOME`, `NIM_CACHE_PATH`, the init's dest, `/mnt/models`. If the
-   volume there is already a PVC, hostPath or OCI image, skip the pod.
-   Role flags and wiring env stay out of the hash (`stripRoleFlags`).
+   `HF_HOME`, `NIM_CACHE_PATH`, the init's dest, `/mnt/models`. A main
+   container that names `NGC_MODEL_NAME` in its env (an NVCF chart whose
+   own script downloads, kimi-k3 on GB300 2026-09-30) is an engine
+   downloader landing at `NGC_MODEL_MOUNT`; the artifact name beats the
+   local `MODEL_PATH` the engine is started from. If the volume there is
+   a shared PVC, hostPath or OCI image, skip the pod. A per-replica claim
+   from a StatefulSet volumeClaimTemplate (`<template>-<pod>`, owner
+   StatefulSet) is the opposite of shared, one full download per pod, and
+   is substituted like an emptyDir. Role flags and wiring env stay out of
+   the hash (`stripRoleFlags`).
 
 2. One download step per identity per cluster, as a Job (webhook). The
    webhook creates Job `nvsnap-model-dl-<key>` in the pod's namespace on
@@ -65,6 +72,22 @@ not.
    with the engine image and credentials. Every workload pod is a reader:
    its download init becomes a wait for the marker, and an engine that
    downloaded itself is started offline.
+
+   When the engine downloads an artifact nvsnap has no recipe for (the
+   chart's own NGC script in the main container) into a pod volume, there
+   is no Job: pre-filling the volume would miss the script's markers and
+   symlinks, and the script would try to write into a read-only mount. The
+   first pod keeps its writable landing and is labelled
+   `nvsnap.io/model-capture`; once it is Ready the agent on its node
+   copies the finished volume, markers and all, into the primary
+   (mechanism 3, the same path as the staging copy, with atomic claim
+   creation choosing one source among concurrent pods). Later pods get the
+   read-only copy at the same path and the script's own "already present"
+   check passes. Pods of the same first deployment each download once;
+   every deployment after that downloads nothing. Block mode with PVC
+   readers only. A StatefulSet still creates the template claim for a
+   reader even though the pod no longer mounts it; dropping that is the
+   chart's to do.
 
    Why a Job and not the first pod: on NVMesh a volume attached read-write
    by a running pod cannot be attached read-only anywhere else (dev1,
@@ -204,6 +227,8 @@ first = nothing exists; concurrent = download in flight; later = complete.
 | M, NVMesh, first | 1; readers bind-mounted on completion; group forms | each pod compiles once (concurrent ranks, no shared fs) | no |
 | any, NVMesh, later | 0 (ro claim at admission) | 0 (cache volume ro + shadow) | no |
 | any, other namespace, later | 0 (`EnsureClaim`) | 0 | no |
+| engine-script download (kimi-k3), NVMesh, first | each pod of the first deployment downloads; one is captured after Ready | as M, NVMesh, first | no |
+| engine-script download, NVMesh, later | 0 (ro claim replaces the per-replica claim) | 0 | no |
 | neither storage | nvsnap does nothing for Helm | | no |
 
 The one row that does not reach "once per cluster" is M on NVMesh on the

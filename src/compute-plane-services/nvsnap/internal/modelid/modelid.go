@@ -87,6 +87,7 @@ const (
 	VolumeEmptyDir VolumeKind = "emptyDir" // substitutable
 	VolumeRootfs   VolumeKind = "rootfs"   // no volume: container filesystem, substitutable
 	VolumePVC      VolumeKind = "pvc"      // customer's own shared storage: skip
+	VolumePodClaim VolumeKind = "podClaim" // StatefulSet volumeClaimTemplate: per-replica scratch, substitutable
 	VolumeHostPath VolumeKind = "hostPath" // customer's node cache: skip
 	VolumeOther    VolumeKind = "other"    // image volume, CSI ephemeral, etc.: skip
 )
@@ -106,10 +107,12 @@ type Landing struct {
 }
 
 // Substitutable reports whether the webhook may replace the landing volume
-// with the shared model volume. A PVC, hostPath or image volume means the
-// customer already solved sharing; leave it alone.
+// with the shared model volume. A shared PVC, hostPath or image volume
+// means the customer already solved sharing; leave it alone. A per-replica
+// claim from a StatefulSet volumeClaimTemplate is the opposite of shared
+// (one full download per pod), so it is ours to replace.
 func (l Landing) Substitutable() bool {
-	return l.Kind == VolumeEmptyDir || l.Kind == VolumeRootfs
+	return l.Kind == VolumeEmptyDir || l.Kind == VolumeRootfs || l.Kind == VolumePodClaim
 }
 
 // Result is what Resolve returns for a pod.
@@ -152,7 +155,16 @@ func Resolve(pod *corev1.Pod, mainContainer int) (Result, bool) {
 			return r, true
 		}
 	}
-	// 2. The engine downloads itself.
+	// 2. The engine's own script downloads an NGC artifact named in its
+	//    env (NVCF Helm functions that fetch in the main container rather
+	//    than an init). The explicit artifact name beats the local
+	//    MODEL_PATH the engine is then started from.
+	if env := envMap(&main); env["NGC_MODEL_NAME"] != "" {
+		dest := firstNonEmpty(env["NGC_MODEL_MOUNT"], parentDir(env["NGC_STABLE_MODEL_PATH"]), parentDir(env["MODEL_PATH"]), mountRoot(&main))
+		land := landingFor(pod, &main, dest, DownloaderEngine, "")
+		return Result{Identity: Identity{Scheme: "ngc", Ref: env["NGC_MODEL_NAME"]}, Landing: land, Source: "env NGC_MODEL_NAME"}, true
+	}
+	// 3. The engine downloads itself.
 	if id, src, ok := fromEngine(&main); ok {
 		land := landingFor(pod, &main, engineCachePath(&main), DownloaderEngine, "")
 		return Result{Identity: id, Landing: land, Source: src}, true
@@ -297,6 +309,9 @@ func landingFor(pod *corev1.Pod, main *corev1.Container, dest string, dl Downloa
 			l.Kind = VolumeEmptyDir
 		case v.PersistentVolumeClaim != nil:
 			l.Kind = VolumePVC
+			if perPodClaim(pod, v.PersistentVolumeClaim.ClaimName) {
+				l.Kind = VolumePodClaim
+			}
 		case v.HostPath != nil:
 			l.Kind = VolumeHostPath
 		default:
@@ -304,6 +319,30 @@ func landingFor(pod *corev1.Pod, main *corev1.Container, dest string, dl Downloa
 		}
 	}
 	return l
+}
+
+// perPodClaim reports whether claim is this pod's own replica claim from
+// a StatefulSet volumeClaimTemplate: the controller names those
+// <template>-<pod> and the pod is owned by the StatefulSet.
+func perPodClaim(pod *corev1.Pod, claim string) bool {
+	if pod.Name == "" || !strings.HasSuffix(claim, "-"+pod.Name) || len(claim) == len(pod.Name)+1 {
+		return false
+	}
+	for _, o := range pod.OwnerReferences {
+		if o.Kind == "StatefulSet" {
+			return true
+		}
+	}
+	return false
+}
+
+// parentDir is path.Dir for a set value and empty for an unset one, so it
+// composes with firstNonEmpty.
+func parentDir(p string) string {
+	if p == "" {
+		return ""
+	}
+	return path.Dir(p)
 }
 
 // mountRoot is the first non-system mount of a container, the usual

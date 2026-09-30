@@ -88,6 +88,14 @@ const (
 	// volume the download landed in; the agent on the Job's node copies it
 	// into the sized claim.
 	StagingAnnotation = "nvsnap.io/model-staging-volume"
+	// CaptureLabel is "true" on a pod whose engine downloads an artifact
+	// nvsnap has no download recipe for (a chart script pulling an NGC
+	// model) into a pod volume. The pod keeps its own download; the agent
+	// on its node copies the finished volume, markers and all, into the
+	// primary once the pod is Ready, and later pods read that copy.
+	CaptureLabel = "nvsnap.io/model-capture"
+	// CaptureVolumeAnnotation names the pod volume the engine downloads into.
+	CaptureVolumeAnnotation = "nvsnap.io/model-capture-volume"
 	// SourceNamespaceLabel on the primary PV records the namespace the
 	// download Job ran in.
 	SourceNamespaceLabel = "nvsnap.io/model-source-namespace"

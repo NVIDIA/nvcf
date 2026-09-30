@@ -79,7 +79,29 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		log.Info("model volume: recent failure recorded for this model; leaving pod on its own download")
 		return nil, nil
 	}
+	step, derivable := m.downloadStep(pod, main, land, res.Identity)
+	// The engine's own script fetches an artifact nvsnap has no download
+	// recipe for (an NGC model pulled in the main container) into a pod
+	// volume. Pre-filling that volume would miss the script's markers and
+	// layout, so the first pod keeps downloading as the chart intends and
+	// the agent on its node captures the finished tree once the pod is
+	// Ready. Later pods reference the read-only copy; the script's own
+	// "already present" check passes because the tree is exactly what it
+	// wrote. Block mode with PVC readers only: the volume must be in place
+	// before the engine starts, which a hostPath bind cannot promise.
+	captureSource := !derivable && land.Downloader == modelid.DownloaderEngine && land.VolumeName != "" &&
+		m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderPVC
 	if !st.Complete {
+		if captureSource {
+			patches = append(patches, mp.label(modelvolume.CaptureLabel, "true")...)
+			patches = append(patches, mp.annotation(modelvolume.CaptureVolumeAnnotation, land.VolumeName)...)
+			log.WithField("volume", land.VolumeName).Info("model volume: engine downloads a non-derivable artifact; pod keeps its own download and is captured after Ready")
+			return patches, nil
+		}
+		if !derivable {
+			log.Info("model volume: no download step can be derived (engine downloads a non-HF model); leaving pod alone")
+			return nil, nil
+		}
 		// The download step is a Job, created once per identity; create is
 		// atomic so concurrent admissions converge without an election. It
 		// runs in the pod's namespace because that is where the chart's
@@ -87,11 +109,6 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		// Block: it writes into a pod-local emptyDir and the agent on that
 		// node copies the result into a claim sized from the bytes that
 		// landed; nothing is guessed at admission.
-		step, ok := m.downloadStep(pod, main, land, res.Identity)
-		if !ok {
-			log.Info("model volume: no download step can be derived (engine downloads a non-HF model); leaving pod alone")
-			return nil, nil
-		}
 		claim := ""
 		if m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX {
 			claim, err = m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
@@ -137,7 +154,11 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		patches = append(patches, m.substituteLandingVolume(pod, main, land, modelvolume.ReadOnlyClaimName(uri))...)
 		log.WithField("complete", st.Complete).Info("model volume: reader on block storage references the read-only claim")
 	}
-	patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
+	if !captureSource {
+		// A captured tree needs no wait init and no offline switch: the
+		// chart's own script finds its markers on the read-only volume.
+		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
+	}
 	patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
 	return patches, nil
 }
