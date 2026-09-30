@@ -7,8 +7,8 @@ the shared `stargate-forwarding` crate.
 
 - `stargate-k8s-router` supports `raw-quic` and `webtransport` tunnel traffic.
   Plain `http3` tunnel traffic uses an L4 path and does not pass through this router.
-- Raw QUIC request streams are bidirectional. Prioritizing bidirectional
-  acceptance over unidirectional acceptance in the raw QUIC relay is intentional.
+- Raw QUIC request streams are bidirectional. During drain, prioritizing
+  bidirectional acceptance over unidirectional acceptance is intentional.
 - WebTransport uses a separate session bridge. Do not infer a plain HTTP/3
   stream fairness requirement for the raw QUIC relay from that implementation.
 

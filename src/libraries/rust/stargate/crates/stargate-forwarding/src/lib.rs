@@ -300,13 +300,11 @@ async fn relay_direction(acceptor: quinn::Connection, initiator: quinn::Connecti
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
-            biased;
             result = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(Err(error)) = result {
                     warn!(%error, "stream relay task failed");
                 }
             }
-            // The raw-QUIC router's request streams are bidirectional; prefer them over uni streams.
             bi = acceptor.accept_bi() => {
                 spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream,
                     "accept_bi failed in relay", "bi-stream relay error");

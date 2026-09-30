@@ -368,9 +368,11 @@ fn finish_attempt(
         Span::current().record("proxy.retry_reason", retry_reason);
     }
     let upstream = match disposition {
-        FinalRetryDisposition::PassThrough
-        | FinalRetryDisposition::AmbiguousDelivery
-        | FinalRetryDisposition::ReplayIncomplete(_) => upstream,
+        FinalRetryDisposition::PassThrough | FinalRetryDisposition::ReplayIncomplete(_) => upstream,
+        FinalRetryDisposition::AmbiguousDelivery => {
+            metrics.proxy_ambiguous_delivery_total().inc();
+            upstream
+        }
         FinalRetryDisposition::Exhausted(retry_reason) => {
             metrics
                 .proxy_retry_exhausted_total(run.routing_key(), run.model_id(), &retry_reason)

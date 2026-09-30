@@ -69,6 +69,10 @@ note over Proxy,QuicProxy
   Transport failures may be retried before body submission.
   After submission, a transport failure returns an error:
   the backend may already have applied the POST.
+  Local buffered writes do not prove backend receipt.
+  A dead peer can therefore cause a 502 even when it
+  never received the POST, including during rollouts.
+  This conservative choice prevents duplicate submissions.
   Explicit retryable pylon rejections can still be replayed
   within the configured retry limits.
 end note

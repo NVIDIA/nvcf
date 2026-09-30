@@ -3408,6 +3408,13 @@ async fn submitted_post_is_not_replayed_after_header_timeout() {
     let status = response.status();
     let body = response.text().await.unwrap();
     let accepted = hits.load(Ordering::SeqCst);
+    let ambiguous = fixture
+        .handle
+        .metrics()
+        .registry()
+        .gather()
+        .into_iter()
+        .find(|family| family.name() == "stargate_proxy_ambiguous_delivery_total");
     fixture.shutdown().await;
     backend_task.abort();
     let _ = backend_task.await;
@@ -3416,4 +3423,8 @@ async fn submitted_post_is_not_replayed_after_header_timeout() {
         accepted, 1,
         "one POST was accepted {accepted} times; final status={status}, body={body}"
     );
+    let ambiguous = ambiguous.expect("ambiguous delivery counter missing");
+    assert_eq!(ambiguous.get_metric().len(), 1);
+    assert!(ambiguous.get_metric()[0].get_label().is_empty());
+    assert_eq!(ambiguous.get_metric()[0].get_counter().value(), 1.0);
 }
