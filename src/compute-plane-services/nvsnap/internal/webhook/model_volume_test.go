@@ -834,14 +834,13 @@ func TestCacheVolume_CompleteSeedsFromNodeAgent(t *testing.T) {
 	if seed == nil {
 		t.Fatalf("seed init missing: %v", v.newInits)
 	}
-	args := strings.Join(seed.Args, " ")
 	wantURL := m.AgentBaseURL + "/v1/cache-seed/" + modelvolume.Key(curi) + "?uri=" + url.QueryEscape(curi) + "&ns=sr-fn"
-	if seed.Image != m.CacheSeedImage || seed.Command[0] != "/nvsnap-l2-wait" || !strings.Contains(args, "--seed-url "+wantURL) || !strings.Contains(args, "--seed-dest /opt/nvsnap/cache") {
-		t.Errorf("seed init fetches from the node agent: image=%s cmd=%v args=%q", seed.Image, seed.Command, args)
-	}
 	env := map[string]string{}
 	for _, e := range seed.Env {
 		env[e.Name] = e.Value
+	}
+	if seed.Image != pod.Spec.Containers[0].Image || env["NVSNAP_SEED_URL"] != wantURL || !strings.Contains(seed.Args[0], "python3 -c") || !strings.Contains(seed.Args[0], "/opt/nvsnap/cache") || !strings.HasSuffix(seed.Args[0], "exit 0") {
+		t.Errorf("seed init runs on the engine image (tenant pull secrets), fetches from the node agent, exits 0: image=%s url=%q", seed.Image, env["NVSNAP_SEED_URL"])
 	}
 	if env["NVSNAP_SEED_TOKEN"] != modelvolume.SeedToken("agent-token", "sr-fn", curi) {
 		t.Error("seed token is signed for this namespace and cache key")

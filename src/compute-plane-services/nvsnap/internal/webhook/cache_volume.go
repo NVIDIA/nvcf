@@ -168,26 +168,65 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 }
 
 // agentSeedInit is the init container that fetches the cache seed from
-// the node agent and unpacks it into the cachedir. Best effort by
-// construction: nvsnap-l2-wait's seed mode exits 0 on any failure.
+// the node agent and unpacks it into the cachedir. It runs on the engine
+// image, like the volume seed: a tenant pod only holds the function's own
+// pull secrets, so an nvsnap image injected here would fail to pull
+// (ct1, 2026-09-30). Python is what every engine image has; curl and tar
+// are the fallback. Best effort by construction: every path exits 0, a
+// missed seed only costs the compile the engine would have done anyway.
 func (m *Mutator) agentSeedInit(pod *corev1.Pod, main *corev1.Container, uri string) corev1.Container {
 	agentURL := fmt.Sprintf("http://$(NVSNAP_HOST_IP):%d", MountPrepDefaultAgentPort)
 	if m.AgentBaseURL != "" {
 		agentURL = strings.TrimRight(m.AgentBaseURL, "/")
 	}
 	seedURL := fmt.Sprintf("%s/v1/cache-seed/%s?uri=%s&ns=%s", agentURL, modelvolume.Key(uri), url.QueryEscape(uri), url.QueryEscape(pod.Namespace))
+	dest := path.Join(m.CacheDir, cacheSubdir)
 	c := corev1.Container{
-		Name:            cacheSeedInitName,
-		Image:           m.CacheSeedImage,
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"/nvsnap-l2-wait"},
-		Args:            []string{"--seed-url", seedURL, "--seed-dest", path.Join(m.CacheDir, cacheSubdir), "--seed-timeout", "3m"},
+		Name:    cacheSeedInitName,
+		Image:   main.Image,
+		Command: []string{"/bin/sh", "-c"},
+		Args:    []string{agentSeedScript(dest)},
 		Env: []corev1.EnvVar{
 			{Name: "NVSNAP_HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}},
+			{Name: "NVSNAP_SEED_URL", Value: seedURL},
 			{Name: "NVSNAP_SEED_TOKEN", Value: modelvolume.SeedToken(m.CacheSeedSecret, pod.Namespace, uri)},
+			{Name: "NVSNAP_SEED_TIMEOUT", Value: "180"},
 		},
 		VolumeMounts: []corev1.VolumeMount{{Name: cacheDirVolumeName, MountPath: m.CacheDir}},
 	}
 	modelvolume.Harden(&c, modelvolume.HoldResources, main.SecurityContext)
 	return c
+}
+
+// agentSeedScript polls the agent until the node mirror is ready (503),
+// then unpacks the tar into dest world-writable. Python first, curl and
+// tar as the fallback; any failure prints why and exits 0.
+func agentSeedScript(dest string) string {
+	py := `import os,sys,tarfile,time,urllib.request,urllib.error
+url=os.environ["NVSNAP_SEED_URL"].replace("$(NVSNAP_HOST_IP)",os.environ.get("NVSNAP_HOST_IP",""))
+dest=sys.argv[1]; deadline=time.time()+float(os.environ.get("NVSNAP_SEED_TIMEOUT","180")); t0=time.time()
+while True:
+    try:
+        r=urllib.request.urlopen(urllib.request.Request(url,headers={"X-Nvsnap-Seed-Token":os.environ.get("NVSNAP_SEED_TOKEN","")}),timeout=600)
+        n=0
+        with tarfile.open(fileobj=r,mode="r|") as tf:
+            for m in tf:
+                p=os.path.normpath(m.name)
+                if p.startswith("..") or os.path.isabs(p) or (m.issym() and (os.path.isabs(m.linkname) or os.path.normpath(os.path.join(os.path.dirname(p),m.linkname)).startswith(".."))): continue
+                if m.isdir() or m.isreg() or m.issym(): tf.extract(m,dest); n+=1
+        for root,ds,fs in os.walk(dest):
+            for d in ds: os.chmod(os.path.join(root,d),0o777)
+            for f in fs:
+                fp=os.path.join(root,f)
+                if not os.path.islink(fp): os.chmod(fp,0o777 if os.stat(fp).st_mode&0o111 else 0o666)
+        print("nvsnap: cache seeded %d entries from the node agent in %.0fs"%(n,time.time()-t0)); break
+    except urllib.error.HTTPError as e:
+        if e.code!=503: print("nvsnap: seed refused (%d); engine compiles locally"%e.code); break
+    except Exception as e:
+        err=str(e)
+        if time.time()>deadline: print("nvsnap: seed error (%s); engine compiles locally"%err); break
+    if time.time()>deadline: print("nvsnap: seed not ready within deadline; engine compiles locally"); break
+    time.sleep(5)
+`
+	return fmt.Sprintf(`mkdir -p %[1]s; if command -v python3 >/dev/null 2>&1; then python3 -c %[2]s %[1]s; else echo "nvsnap: no python3 in the engine image; engine compiles locally"; fi; exit 0`, dest, shellQuote(py))
 }
