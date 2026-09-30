@@ -31,8 +31,8 @@ set. Every Pylon must also select exactly one local stats initialization source:
 lifecycle and calibration contract.
 
 Pulsar and Pulsar wait-and-widen use generation maximum input TPS for capacity
-weighting by default. Upgrade Pylons before Stargates so all active backends
-publish `max_input_tps`, or explicitly select
+weighting by default. Upgrade Pylons and registration relays before Stargates
+so all active backends publish `max_input_tps`, or explicitly select
 `rendezvous_weight: last-mean-input-tps` during a mixed-version rollout. See
 [load-balancer configuration](docs/load-balancer-configuration.md#pulsar).
 

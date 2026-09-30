@@ -265,8 +265,10 @@ For a shared-engine cluster, the maximum is the greatest active backend peak,
 available only when every active backend reports a valid maximum. Historical
 peaks from observers of the same engine are not summed.
 
-Upgrade all Pylons in a cluster before enabling maximum-based Stargates. Older
-Pylons omit the new maximum field and make that cluster ineligible in the new
+Upgrade all Pylons and any registration relays, including
+`stargate-k8s-router`, before enabling maximum-based Stargates. Older relays
+decode and re-encode registrations without preserving the new field. Older
+Pylons omit it and make that cluster ineligible in the new
 default mode. Use explicit `last-mean-input-tps` during a mixed-version rollout
 if Pylons cannot be upgraded first.
 
