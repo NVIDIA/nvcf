@@ -176,6 +176,7 @@ metrics! {
         gauge stats_source("model_stats_source", "Binary gauge for observed stats source labels by model", ["model", "source"]);
         gauge advertised_status("model_advertised_status", "Current model status advertised to each stargate router; the active status label is 1 and other status labels are 0", ["router", "model", "status"]);
         histogram calibration_duration_ms("model_calibration_duration_ms", "Per-generation calibration traffic-ramp duration in milliseconds by model and outcome", ["model", "outcome"], CALIBRATION_BUCKETS);
+        counter canary_results_total("model_canary_results_total", "Health canary decisions by model, bringup phase, and result", ["model", "phase", "result"]);
     }
     retry {
         counter retryable_responses_total("retryable_responses_total", "Total number of retryable responses emitted or relayed by pylon", ["inference_server_id", "reason", "status"]);
@@ -416,6 +417,15 @@ impl PylonMetrics {
                 .state_input_tokens
                 .remove_label_values(&[model_id, state]);
         }
+        for phase in CanaryPhase::ALL {
+            for result in CanaryResult::ALL {
+                let _ = self.canary_results_total.remove_label_values(&[
+                    model_id,
+                    phase.as_str(),
+                    result.as_str(),
+                ]);
+            }
+        }
         if let Some(stats) = stats {
             for capability in &stats.stats_capabilities {
                 let _ = self
@@ -437,6 +447,27 @@ impl PylonMetrics {
         self.calibration_duration_ms
             .with_label_values(&[model_id, outcome.as_str()])
             .observe(duration.as_secs_f64() * 1_000.0);
+    }
+
+    pub(crate) fn init_model_canary_results(&self, model_id: &str) {
+        for phase in CanaryPhase::ALL {
+            for result in phase.results() {
+                self.canary_results_total
+                    .with_label_values(&[model_id, phase.as_str(), result.as_str()])
+                    .inc_by(0);
+            }
+        }
+    }
+
+    pub(crate) fn observe_model_canary_result(
+        &self,
+        model_id: &str,
+        phase: CanaryPhase,
+        result: CanaryResult,
+    ) {
+        self.canary_results_total
+            .with_label_values(&[model_id, phase.as_str(), result.as_str()])
+            .inc();
     }
 
     metric_observer!(bool_gauge observe_registration_stream_connected(
@@ -590,6 +621,61 @@ impl CalibrationOutcome {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanaryPhase {
+    Active,
+    Recovery,
+}
+
+impl CanaryPhase {
+    const ALL: [Self; 2] = [Self::Active, Self::Recovery];
+
+    /// Results each phase can record; recovery canaries never skip and must pass.
+    fn results(self) -> &'static [CanaryResult] {
+        match self {
+            Self::Active => &CanaryResult::ALL,
+            Self::Recovery => &[CanaryResult::Passed, CanaryResult::Failed],
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Recovery => "recovery",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanaryResult {
+    /// The canary completed within its limits.
+    Passed,
+    /// Recent request progress on the model made the canary unnecessary.
+    SkippedRecentProgress,
+    /// The canary timed out while the upstream made progress on other requests.
+    TimedOutUpstreamBusy,
+    /// The canary failed and counted against the model.
+    Failed,
+}
+
+impl CanaryResult {
+    const ALL: [Self; 4] = [
+        Self::Passed,
+        Self::SkippedRecentProgress,
+        Self::TimedOutUpstreamBusy,
+        Self::Failed,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::SkippedRecentProgress => "skipped_recent_progress",
+            Self::TimedOutUpstreamBusy => "timed_out_upstream_busy",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 const QUEUE_ADMISSION_BUCKETS: &[f64] = &[
     0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0,
     30_000.0, 60_000.0,
@@ -660,7 +746,7 @@ mod tests {
 
     use stargate_proto::pb::InferenceServerStatus;
 
-    use super::CalibrationOutcome;
+    use super::{CalibrationOutcome, CanaryPhase, CanaryResult};
 
     use crate::{
         CurrentModelStats, PylonMetrics, PylonRuntimeState, RequestObservation,
@@ -1073,6 +1159,44 @@ mod tests {
                 r#"pylon_model_calibration_duration_ms_count{model="model-a",outcome="cancelled"} 1"#,
                 r#"pylon_model_calibration_duration_ms_sum{model="model-a",outcome="cancelled"} 3"#,
             ],
+        );
+    }
+
+    #[test]
+    fn canary_results_are_preinitialized_recorded_and_removed() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+
+        metrics.init_model_canary_results("model-a");
+        metrics.observe_model_canary_result(
+            "model-a",
+            CanaryPhase::Active,
+            CanaryResult::TimedOutUpstreamBusy,
+        );
+
+        let body = assert_metrics(
+            &metrics,
+            &[
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="passed"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="skipped_recent_progress"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="timed_out_upstream_busy"} 1"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="active",result="failed"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="recovery",result="passed"} 0"#,
+                r#"pylon_model_canary_results_total{model="model-a",phase="recovery",result="failed"} 0"#,
+            ],
+        );
+        assert!(
+            !body.contains(r#"phase="recovery",result="skipped_recent_progress""#)
+                && !body.contains(r#"phase="recovery",result="timed_out_upstream_busy""#),
+            "unreachable recovery results should not be pre-initialized"
+        );
+
+        metrics.remove_model_gauges("model-a", None);
+        assert!(
+            !metrics
+                .gather_text()
+                .expect("metrics should render")
+                .contains("pylon_model_canary_results_total"),
+            "retired models should drop their canary result series"
         );
     }
 

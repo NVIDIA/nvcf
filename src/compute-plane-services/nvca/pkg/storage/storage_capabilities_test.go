@@ -384,10 +384,10 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NotNil(t, nvmesh.ReaderMountOptions)
 	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 
-	// Weka and OCI FSS are shared filesystems enabled on the ReadWriteMany
-	// shape: one shared claim, readers mount it read-only, no derived reader
-	// PV and therefore no reader mount options.
-	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com"} {
+	// Weka, OCI FSS and NetApp Trident (ONTAP NAS) are shared filesystems
+	// enabled on the ReadWriteMany shape: one shared claim, readers mount it
+	// read-only, no derived reader PV and therefore no reader mount options.
+	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "csi.trident.netapp.io"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
 		require.NotNil(t, driver.AccessModes, provisioner)

@@ -17,6 +17,9 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	corev1 "k8s.io/api/core/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -150,6 +153,125 @@ func TestTryClaimCapture(t *testing.T) {
 // the Capturing claim — without this a completed/failed capture would
 // leave captureOwner/leaseExpiry set and either pin the function or let
 // readStatus mis-report a stale owner.
+// A live lease held by a pod that no longer exists is stealable at once:
+// the owner died mid-capture (dev1 2026-09-28: the node agent restarted
+// under it and the pod was replaced) and nothing would release the claim
+// before the lease expired.
+func TestTryClaimCapture_DeadOwnerIsStealable(t *testing.T) {
+	ctx := context.Background()
+	fvID := "fv-dead"
+	now := time.Now()
+	lease := now.Add(50 * time.Minute)
+	dyn := newFakeDynamic(coldCFS(fvID))
+	if claimed, err := tryClaimCapture(ctx, dyn, fvID, "ns1/podA", lease, now); err != nil || !claimed {
+		t.Fatalf("podA claim: claimed=%v err=%v", claimed, err)
+	}
+	dead := func(context.Context, string, string) bool { return false }
+	alive := func(context.Context, string, string) bool { return true }
+	if claimed, _ := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podB", "uid-b", lease, now, alive); claimed {
+		t.Fatal("podB must not steal a live claim from a live owner")
+	}
+	if claimed, _ := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podB", "uid-b", lease, now, nil); claimed {
+		t.Fatal("unknown liveness (nil) must keep the claim")
+	}
+	claimed, err := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podB", "uid-b", lease, now, dead)
+	if err != nil || !claimed {
+		t.Fatalf("podB must steal the claim from a dead owner: claimed=%v err=%v", claimed, err)
+	}
+	cur, err := dyn.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := readStatus(cur); st.CaptureOwner != "ns1/podB" || st.CaptureOwnerUID != "uid-b" {
+		t.Errorf("owner after steal = %q/%q, want ns1/podB uid-b", st.CaptureOwner, st.CaptureOwnerUID)
+	}
+}
+
+// A pod that reuses the claimant's namespace/name with a new UID is a
+// replacement, not the owner: its own claim is a foreign steal, subject to
+// the liveness check like any other, and the liveness check itself treats
+// the UID mismatch as "owner gone".
+func TestTryClaimCapture_SameNameDifferentUIDIsNotTheOwner(t *testing.T) {
+	ctx := context.Background()
+	fvID := "fv-same-name"
+	now := time.Now()
+	lease := now.Add(50 * time.Minute)
+	dyn := newFakeDynamic(coldCFS(fvID))
+	if claimed, err := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podA", "uid-old", lease, now, nil); err != nil || !claimed {
+		t.Fatalf("first claim: %v %v", claimed, err)
+	}
+	alive := func(context.Context, string, string) bool { return true }
+	if claimed, _ := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podA", "uid-new", lease, now, alive); claimed {
+		t.Fatal("same name with a different UID must not be treated as the re-entrant owner")
+	}
+	if claimed, _ := tryClaimCaptureLive(ctx, dyn, fvID, "ns1/podA", "uid-old", lease, now, alive); !claimed {
+		t.Fatal("the real owner re-enters its own claim")
+	}
+	// claimOwnerAlive compares the UID of the pod it finds.
+	r := &Reconciler{KubeClient: k8sfake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "podA", Namespace: "ns1", UID: "uid-new"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	})}
+	if r.claimOwnerAlive(ctx, "ns1/podA", "uid-old") {
+		t.Error("a replacement pod under the old name must read as owner gone")
+	}
+	if !r.claimOwnerAlive(ctx, "ns1/podA", "uid-new") {
+		t.Error("the pod with the recorded UID is alive")
+	}
+	if !r.claimOwnerAlive(ctx, "ns1/podA", "") {
+		t.Error("without a recorded UID the name alone decides, as before")
+	}
+}
+
+// Terminal writes are fenced by the claim: a reconcile whose claim was taken
+// over must not release or overwrite the new owner's claim.
+func TestWriteStatusRejectsSupersededClaim(t *testing.T) {
+	const fvID = "fv-fenced"
+	ctx := context.Background()
+	dyn := newFakeDynamic(capturingCFS(fvID, "ns1/podB", time.Now().Add(30*time.Minute)))
+	warm := statusUpdate{CheckpointHash: "cafe", CapturedHere: true, LocalCacheState: nvsnapv1alpha1.LocalCacheStateWarm}
+	err := writeStatus(ctx, dyn, fvID, warm, claimToken{Owner: "ns1/podA", UID: "uid-a"})
+	if !errors.Is(err, ErrClaimSuperseded) {
+		t.Fatalf("podA's write must be rejected once podB owns the claim: %v", err)
+	}
+	cur, _ := dyn.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
+	if st := readStatus(cur); st.CaptureOwner != "ns1/podB" || st.LocalCacheState != nvsnapv1alpha1.LocalCacheStateCapturing {
+		t.Errorf("status must be untouched by the superseded writer: %+v", st)
+	}
+	if err := writeStatus(ctx, dyn, fvID, warm, claimToken{Owner: "ns1/podB"}); err != nil {
+		t.Fatalf("the owner's write goes through: %v", err)
+	}
+	if err := writeStatus(ctx, dyn, fvID, warm, claimToken{}); err != nil {
+		t.Fatalf("an unfenced write is never rejected: %v", err)
+	}
+	// After a terminal write the claim is gone: a late write from the
+	// former owner is superseded, not applied.
+	if err := writeStatus(ctx, dyn, fvID, statusUpdate{LocalCacheState: nvsnapv1alpha1.LocalCacheStateFailed, LastError: "late"}, claimToken{Owner: "ns1/podB"}); !errors.Is(err, ErrClaimSuperseded) {
+		t.Fatalf("a writer whose claim was already closed must be rejected: %v", err)
+	}
+	// A path that observed no claim is rejected once a claim appeared.
+	dyn2 := newFakeDynamic(capturingCFS("fv-claimed", "ns1/podC", time.Now().Add(30*time.Minute)))
+	if err := writeStatus(ctx, dyn2, "fv-claimed", warm, claimToken{ExpectUnclaimed: true}); !errors.Is(err, ErrClaimSuperseded) {
+		t.Fatalf("ExpectUnclaimed must reject a write over a live claim: %v", err)
+	}
+	cur2, _ := dyn2.Resource(CFSResource).Get(ctx, "fv-claimed", metav1.GetOptions{})
+	if st := readStatus(cur2); st.CaptureOwner != "ns1/podC" {
+		t.Errorf("claim must survive: %+v", st)
+	}
+	// The version fence catches what state comparison cannot: a claim that
+	// opened and closed, or a lease refresh by the same owner, between the
+	// observation and the write.
+	obj := coldCFS("fv-versioned")
+	obj.SetResourceVersion("41")
+	dyn3 := newFakeDynamic(obj)
+	if err := writeStatus(ctx, dyn3, "fv-versioned", warm, claimToken{ExpectUnclaimed: true, ObservedResourceVersion: "40"}); !errors.Is(err, ErrClaimSuperseded) {
+		t.Fatalf("a write observed at an older version must be rejected: %v", err)
+	}
+	if err := writeStatus(ctx, dyn3, "fv-versioned", warm, claimToken{ExpectUnclaimed: true, ObservedResourceVersion: "41"}); err != nil {
+		t.Fatalf("a write at the observed version goes through: %v", err)
+	}
+}
+
 func TestWriteStatusReleasesClaim(t *testing.T) {
 	const fvID = "fv-release"
 	ctx := context.Background()
@@ -159,7 +281,7 @@ func TestWriteStatusReleasesClaim(t *testing.T) {
 		CheckpointHash:  "feedface",
 		CapturedHere:    true,
 		LocalCacheState: nvsnapv1alpha1.LocalCacheStateWarm,
-	}); err != nil {
+	}, claimToken{Owner: "ns1/podA"}); err != nil {
 		t.Fatalf("writeStatus: %v", err)
 	}
 	cur, _ := dyn.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
@@ -203,6 +325,10 @@ func TestReconcileSkipsWhenCaptureInFlight(t *testing.T) {
 	// podA already holds a live Capturing claim on this fvID.
 	dyn := newFakeDynamic(capturingCFS(fvID, "ns1/podA", time.Now().Add(30*time.Minute)))
 	r := newTestReconciler(t, pod, srv, dyn)
+	// podA, the claim owner, is alive: the in-flight guard must hold.
+	if _, err := r.KubeClient.CoreV1().Pods("ns1").Create(context.Background(), inferencePod("podA", "ns1", fvID), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := r.Reconcile(context.Background(), pod); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -214,5 +340,31 @@ func TestReconcileSkipsWhenCaptureInFlight(t *testing.T) {
 	cur, _ := dyn.Resource(CFSResource).Get(context.Background(), fvID, metav1.GetOptions{})
 	if st := readStatus(cur); st.CaptureOwner != "ns1/podA" {
 		t.Errorf("claim owner = %q, want unchanged ns1/podA", st.CaptureOwner)
+	}
+}
+
+// Same scenario, but the claim owner no longer exists: the claim is dead
+// and podB must capture instead of waiting out the lease.
+func TestReconcileStealsClaimFromDeadOwner(t *testing.T) {
+	fvID := "fv-dead-owner"
+	posted := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/api/v1/checkpoints/lookup"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"matches": []any{}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/api/v1/checkpoints"):
+			posted++
+			w.WriteHeader(http.StatusInternalServerError) // stop the flow here; the claim is what is under test
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	pod := inferencePod("podB", "ns1", fvID)
+	dyn := newFakeDynamic(capturingCFS(fvID, "ns1/podA", time.Now().Add(30*time.Minute)))
+	r := newTestReconciler(t, pod, srv, dyn)
+	_ = r.Reconcile(context.Background(), pod)
+	if posted != 1 {
+		t.Fatalf("podB must take over a claim whose owner pod is gone; POSTs=%d", posted)
 	}
 }

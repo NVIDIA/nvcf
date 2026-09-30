@@ -11,6 +11,10 @@
 # substitution, helmfile pulls images from a path that obviously
 # does not resolve, which is the intended failure mode.
 
+# Single-node BDD fixture: keep HA off so the pinned single-replica values below apply.
+highAvailability:
+  mode: none
+
 global:
   storageClass: local-path
   storageSize: 2Gi

@@ -416,7 +416,7 @@ HTTPS.
 
 | Install path | Gateway values to use |
 | --- | --- |
-| [Quickstart](./quickstart.md) | Do not use these remote Gateway values. The quickstart uses local k3d route hostnames. |
+| [Quickstart](/nvcf/overview/quickstart) | Do not use these remote Gateway values. The quickstart uses local k3d route hostnames. |
 | [Helmfile Installation](./helmfile-installation.md) | Use `GATEWAY_ADDR` as `global.domain`, and set `ingress.gatewayApi.gateways` to the Gateway names, namespaces, and listener names from Gateway quickstart. |
 
 ## Configure the CLI for Gateway access
