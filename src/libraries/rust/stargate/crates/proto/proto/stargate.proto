@@ -69,7 +69,26 @@ message ListModelsRequest {
 }
 
 message ListModelsResponse {
+  // Models that are routable now.
   repeated string model_ids = 1;
+  // Every model advertised by an open registration that matches the request's
+  // routing key and model filter, routable or not. Sorted by model_id.
+  repeated ModelListing models = 2;
+}
+
+message ModelListing {
+  string model_id = 1;
+  // Sorted by cluster_id.
+  repeated ClusterListing clusters = 2;
+}
+
+message ClusterListing {
+  // The registration's cluster_id, or its inference_server_id when empty.
+  string cluster_id = 1;
+  // Open registrations from this cluster that advertise the model.
+  uint32 registered_servers = 2;
+  // Registrations from this cluster that are currently routable for the model.
+  uint32 healthy_servers = 3;
 }
 
 message ModelStats {

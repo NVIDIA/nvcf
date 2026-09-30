@@ -76,7 +76,17 @@ The HTTP mirror accepts an optional repeatable `model_ids` filter:
 The HTTP response is JSON with the same shape as the gRPC response:
 
 ```json
-{"model_ids":["model-a","model-b"]}
+{
+  "model_ids": ["model-a"],
+  "models": [
+    {"model_id": "model-a", "clusters": [
+      {"cluster_id": "cluster-1", "registered_servers": 2, "healthy_servers": 1}
+    ]},
+    {"model_id": "model-b", "clusters": [
+      {"cluster_id": "cluster-2", "registered_servers": 1, "healthy_servers": 0}
+    ]}
+  ]
+}
 ```
 
 An empty `model_ids` value returns HTTP `400`. The HTTP path uses the same
@@ -92,6 +102,14 @@ Response:
 
 - `model_ids`: model ids with a current routable target generation in the
   selected pod's local state.
+- `models`: every model advertised by an open registration that matches the
+  request's routing key and model filters, routable or not, sorted by
+  `model_id`. Each entry lists `clusters` sorted by `cluster_id`, with
+  `registered_servers` (open registrations from that cluster that advertise
+  the model) and `healthy_servers` (those currently routable). `cluster_id`
+  falls back to the inference server id when the registration sends none.
+  `models` and `model_ids` are not read atomically, so they can briefly
+  disagree while a registration changes.
 
 `ListModels` is a hint, not a reservation. If a recent positive result is
 followed by proxy `404` with `x-stargate-error-code: no_eligible_candidates`,

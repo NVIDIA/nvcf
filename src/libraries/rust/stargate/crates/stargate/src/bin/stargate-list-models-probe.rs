@@ -136,6 +136,7 @@ mod tests {
 
             Ok(Response::new(ListModelsResponse {
                 model_ids: self.model_ids.clone(),
+                ..Default::default()
             }))
         }
     }
