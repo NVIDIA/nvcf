@@ -158,6 +158,9 @@ type NetpolPairResult struct {
 	Directions map[string]DirectionStatus
 }
 
+// annotationTrue is the string form of true in annotations and env values.
+const annotationTrue = "true"
+
 // PostInstallEnv tells the validator the control plane is already installed.
 const PostInstallEnv = "VALIDATOR_POST_INSTALL"
 
@@ -165,7 +168,7 @@ const PostInstallEnv = "VALIDATOR_POST_INSTALL"
 // lenient pre-install reading.
 func postInstallMode(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "true", "1", "yes":
+	case annotationTrue, "1", "yes":
 		return true
 	default:
 		return false

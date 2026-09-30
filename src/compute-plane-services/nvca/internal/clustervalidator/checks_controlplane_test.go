@@ -39,6 +39,7 @@ import (
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -58,7 +59,8 @@ func TestCheckStorageClass_DefaultPresent(t *testing.T) {
 	checkStorageClass(context.Background(), client, state)
 
 	require.NotNil(t, state.DefaultStorageClassOK)
-	assert.True(t, *state.DefaultStorageClassOK, "a StorageClass with the default annotation must set DefaultStorageClassOK=true")
+	assert.True(t, *state.DefaultStorageClassOK,
+		"a StorageClass with the default annotation must set DefaultStorageClassOK=true")
 	assert.Empty(t, state.Recommendations)
 }
 
@@ -86,7 +88,8 @@ func TestCheckStorageClass_NoDefault(t *testing.T) {
 	checkStorageClass(context.Background(), client, state)
 
 	require.NotNil(t, state.DefaultStorageClassOK)
-	assert.False(t, *state.DefaultStorageClassOK, "StorageClass without default annotation must set DefaultStorageClassOK=false")
+	assert.False(t, *state.DefaultStorageClassOK,
+		"StorageClass without default annotation must set DefaultStorageClassOK=false")
 	assert.NotEmpty(t, state.Recommendations, "missing default StorageClass must add a recommendation")
 }
 
@@ -1599,9 +1602,12 @@ func TestClassifyProbeNodes(t *testing.T) {
 		pullError bool
 	}{
 		{"pod never created", []corev1.Pod{running}, nil, false, "no probe pod was created", false},
-		{"image pull backoff", second(probePod("node-2", "Pending", "", "ImagePullBackOff")), nil, false, "ImagePullBackOff", true},
-		{"first pull error", second(probePod("node-2", "Pending", "", "ErrImagePull")), nil, false, "ErrImagePull", true},
-		{"container cannot start", second(probePod("node-2", "Running", "", "CrashLoopBackOff")), nil, false, "CrashLoopBackOff", false},
+		{"image pull backoff", second(probePod("node-2", "Pending", "", "ImagePullBackOff")),
+			nil, false, "ImagePullBackOff", true},
+		{"first pull error", second(probePod("node-2", "Pending", "", "ErrImagePull")),
+			nil, false, "ErrImagePull", true},
+		{"container cannot start", second(probePod("node-2", "Running", "", "CrashLoopBackOff")),
+			nil, false, "CrashLoopBackOff", false},
 		{"kubelet eviction", second(evicted), nil, false, "rejected by the kubelet (Evicted)", false},
 		{"first pull still running", second(probePod("node-2", "Pending", "", "ContainerCreating")),
 			map[string]bool{"b": true}, false, "image still pulling", false},
@@ -1900,7 +1906,8 @@ func TestCheckExternalLoadBalancer_DiscoveredGatewaysAreStrict(t *testing.T) {
 	t.Run("NVCF Gateway pending fails", func(t *testing.T) {
 		client := routeDiscoveryClient()
 		addServices(t, client,
-			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
+			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw",
+				corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
 			gatewayLBService("nvcf", "envoy-nats", "nvcf", "nats-gw", corev1.ServiceTypeLoadBalancer, ""),
 			foreign.DeepCopy(),
 		)
@@ -1917,7 +1924,8 @@ func TestCheckExternalLoadBalancer_DiscoveredGatewaysAreStrict(t *testing.T) {
 	t.Run("all NVCF Gateways addressed passes despite a foreign pending", func(t *testing.T) {
 		client := routeDiscoveryClient()
 		addServices(t, client,
-			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
+			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw",
+				corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
 			gatewayLBService("nvcf", "envoy-nats", "nvcf", "nats-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.2"),
 			foreign.DeepCopy(),
 		)
@@ -1932,7 +1940,8 @@ func TestCheckExternalLoadBalancer_DiscoveredGatewaysAreStrict(t *testing.T) {
 	t.Run("route points at a Gateway with no proxy Service", func(t *testing.T) {
 		client := routeDiscoveryClient()
 		addServices(t, client,
-			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
+			gatewayLBService(envoyNS, "envoy-shared", "nvcf", "shared-gw",
+				corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
 		)
 		state := &ValidationState{Log: testLog()}
 		checkExternalLoadBalancer(context.Background(), client, discoveredStack(), state)
@@ -2108,7 +2117,8 @@ func TestCheckTier1Deployments_RolloutBelowItsFloorFails(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			state := &ValidationState{Log: testLog()}
-			checkTier1Deployments(context.Background(), fake.NewSimpleClientset(rolling(tc.strategy, tc.ready)), nil, state)
+			client := fake.NewSimpleClientset(rolling(tc.strategy, tc.ready))
+			checkTier1Deployments(context.Background(), client, nil, state)
 			require.NotNil(t, state.Tier1DeploymentsOK)
 			assert.Equal(t, tc.wantOK, *state.Tier1DeploymentsOK)
 		})
@@ -2138,9 +2148,10 @@ func TestCheckTier1Deployments_OnlyNVCFEnvoyProxiesAreAssessed(t *testing.T) {
 	two := int32(2)
 	proxy := func(name, gw string, ready int32) *appsv1.Deployment {
 		return &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: envoyGatewayNamespace, Generation: 1, Labels: map[string]string{
-				owningGatewayNameLabel: gw, owningGatewayNamespaceLabel: "nvcf",
-			}},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: envoyGatewayNamespace, Generation: 1, Labels: map[string]string{
+					owningGatewayNameLabel: gw, owningGatewayNamespaceLabel: "nvcf",
+				}},
 			Spec:   appsv1.DeploymentSpec{Replicas: &two},
 			Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: ready},
 		}
@@ -2242,7 +2253,9 @@ func TestCheckNodeToNode_CapacityBlockedNodeIsACoverageGap(t *testing.T) {
 	pending.Spec.Affinity = daemonSetNodeAffinity("node-3")
 	f := newN2NFixture(t,
 		[]*corev1.Node{makeNode("node-1", true, 0), makeNode("node-2", true, 0), makeNode("node-3", true, 0)},
-		[]corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pending},
+		[]corev1.Pod{
+			runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pending,
+		},
 		nil, checkerExit(nodeToNodeUnreachableExit))
 
 	state := &ValidationState{Log: testLog()}
@@ -2261,7 +2274,9 @@ func TestCheckNodeToNode_SlowFirstPullIsNotANetworkFault(t *testing.T) {
 	nodes := func() []*corev1.Node {
 		return []*corev1.Node{makeNode("node-1", true, 0), makeNode("node-2", true, 0), makeNode("node-3", true, 0)}
 	}
-	servers := []corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pulling}
+	servers := []corev1.Pod{
+		runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pulling,
+	}
 
 	f := newN2NFixture(t, nodes(), servers,
 		[]corev1.Event{podEvent("s-3", "Scheduled", 0), podEvent("s-3", "Pulling", 1)}, checkerExit(0))
@@ -2335,7 +2350,8 @@ func TestCheckerFailureCause(t *testing.T) {
 func TestBuildNodeToNodeCheckerPod_ExitCodesSeparateNetworkFailures(t *testing.T) {
 	cmd := buildNodeToNodeCheckerPod("c", "ns", "node-1", []string{"10.0.0.2"}, "img").Spec.Containers[0].Command[2]
 	assert.Contains(t, cmd, fmt.Sprintf("|| exit %d", nodeToNodeNoNetcatExit))
-	assert.Contains(t, cmd, fmt.Sprintf("nc -z -w 5 10.0.0.2 %d || exit %d", nodeToNodeTestPort, nodeToNodeUnreachableExit))
+	assert.Contains(t, cmd,
+		fmt.Sprintf("nc -z -w 5 10.0.0.2 %d || exit %d", nodeToNodeTestPort, nodeToNodeUnreachableExit))
 }
 
 // Envoy is non-critical, so a missing namespace needs a warning or the run
@@ -2491,7 +2507,8 @@ func TestCheckTier1Deployments_MergedProxyIsAttributedByClass(t *testing.T) {
 			require.NoError(t, err)
 		}
 		state := &ValidationState{Log: testLog()}
-		checkTier1Deployments(context.Background(), client, gatewayClient(t, gatewayObject("nvcf", "shared-gw", "eg")), state)
+		gws := gatewayClient(t, gatewayObject("nvcf", "shared-gw", "eg"))
+		checkTier1Deployments(context.Background(), client, gws, state)
 		return state
 	}
 
@@ -2554,8 +2571,10 @@ func TestCheckExternalLoadBalancer_UnreadableClassesAreUnknown(t *testing.T) {
 	addServices(t, client, &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "envoy-merged", Namespace: envoyGatewayNamespace,
 			Labels: map[string]string{owningGatewayClassLabel: "eg"}},
-		Spec:   corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
-		Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.1"}}}},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+			Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.1"}},
+		}},
 	})
 	dyn := routeClient()
 	dyn.PrependReactor("list", "gateways", func(ktesting.Action) (bool, runtime.Object, error) {
@@ -2693,8 +2712,10 @@ func TestCheckExternalLoadBalancer_PendingBeatsUnattributed(t *testing.T) {
 		&corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{Name: "envoy-merged", Namespace: envoyGatewayNamespace,
 				Labels: map[string]string{owningGatewayClassLabel: "eg"}},
-			Spec:   corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
-			Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.1"}}}},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+			Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.1"}},
+			}},
 		},
 		&corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{Name: "envoy-api", Namespace: envoyGatewayNamespace,
@@ -2761,7 +2782,8 @@ func runTier2(objs []runtime.Object) *ValidationState {
 func TestCheckTier2StatefulSets_StalledRolloutFails(t *testing.T) {
 	crashLoop := func(p *corev1.Pod) {
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name: "nats", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+			Name:  "nats",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
 		}}
 	}
 	restarting := func(p *corev1.Pod) {
@@ -2783,7 +2805,8 @@ func TestCheckTier2StatefulSets_StalledRolloutFails(t *testing.T) {
 func TestCheckTier2StatefulSets_StartingRolloutPodIsTolerated(t *testing.T) {
 	creating := func(p *corev1.Pod) {
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name: "nats", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+			Name:  "nats",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
 		}}
 	}
 	state := runTier2(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", creating))
@@ -2902,7 +2925,8 @@ func TestCheckTier1Deployments_PostInstallWithoutNVCFRoutesAssessesProxies(t *te
 
 	state := runTier1(t, true, routeClient(), down)
 	assert.Nil(t, state.Tier1DeploymentsOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "no NVCF routes found although the control plane is installed")
+	assert.Contains(t, strings.Join(state.Warnings, "; "),
+		"no NVCF routes found although the control plane is installed")
 
 	state = runTier1(t, false, routeClient(), down.DeepCopy())
 	require.NotNil(t, state.Tier1DeploymentsOK, "before install no proxy is NVCF's yet")
@@ -2977,7 +3001,8 @@ func TestCheckExternalLoadBalancer_PostInstallWithoutNVCFRoutesIsUnknown(t *test
 	t.Setenv(nvcfGatewayNamesEnv, "")
 	client := routeDiscoveryClient()
 	addServices(t, client,
-		gatewayLBService(envoyGatewayNamespace, "envoy-team-b", "team-b", "b", corev1.ServiceTypeLoadBalancer, "203.0.113.2"),
+		gatewayLBService(envoyGatewayNamespace, "envoy-team-b", "team-b", "b",
+			corev1.ServiceTypeLoadBalancer, "203.0.113.2"),
 		gatewayLBService(envoyGatewayNamespace, "envoy-nvcf", "gw", "shared-gw", corev1.ServiceTypeLoadBalancer, ""),
 	)
 	state := &ValidationState{Log: testLog(), PostInstall: true}
@@ -3151,4 +3176,63 @@ func daemonSetNodeAffinity(node string) *corev1.Affinity {
 			}}}},
 		},
 	}}
+}
+
+// Test entry points that discover the Gateway API surface and resolve Gateway
+// ownership on their own. Run does both once and calls the In/For variants.
+
+func checkGatewayAPICRDs(_ context.Context, client kubernetes.Interface, state *ValidationState) {
+	surface, err := discoverGatewayAPIResources(client)
+	checkGatewayAPICRDsIn(state, surface, err)
+}
+
+func checkGatewayRoutes(_ context.Context, client kubernetes.Interface, state *ValidationState) {
+	surface, err := discoverGatewayAPIResources(client)
+	checkGatewayRoutesIn(state, surface, err)
+}
+
+func resolveGatewayOwnership(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
+) *gatewayOwnership {
+	surface, err := discoverGatewayAPIResources(client)
+	return resolveGatewayOwnershipIn(ctx, surface, err, routes)
+}
+
+func checkExternalLoadBalancer(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, state *ValidationState,
+) {
+	checkExternalLoadBalancerFor(ctx, client, resolveGatewayOwnership(ctx, client, routes), state)
+}
+
+func checkTier1Deployments(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, state *ValidationState,
+) {
+	checkTier1DeploymentsFor(ctx, client, resolveGatewayOwnership(ctx, client, routes), state)
+}
+
+func resolveNVCFGateways(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
+) (gatewaySet, string, error) {
+	own := resolveGatewayOwnership(ctx, client, routes)
+	return own.gateways, own.source, own.err
+}
+
+func discoverNVCFGateways(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
+) (gatewaySet, error) {
+	surface, err := discoverGatewayAPIResources(client)
+	if err != nil {
+		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
+	}
+	return discoverNVCFGatewaysIn(ctx, surface, routes)
+}
+
+func nvcfGatewayClasses(
+	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, g gatewaySet,
+) (map[string][]string, error) {
+	surface, err := discoverGatewayAPIResources(client)
+	if err != nil {
+		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
+	}
+	return nvcfGatewayClassesIn(ctx, surface, routes, g)
 }

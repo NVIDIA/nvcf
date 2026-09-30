@@ -538,7 +538,8 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 	for {
 		if !time.Now().Before(deadline) {
 			if lastErr != nil {
-				return fmt.Errorf("pod %s/%s did not become ready within %v (last error: %w)", ns, name, timeout, lastErr)
+				return fmt.Errorf("pod %s/%s did not become ready within %v (last error: %w)",
+					ns, name, timeout, lastErr)
 			}
 			return fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
 		}

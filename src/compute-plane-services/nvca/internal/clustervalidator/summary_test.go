@@ -295,5 +295,6 @@ func TestAllCheckKeysCoversEveryCheckKeyConst(t *testing.T) {
 	} {
 		assert.True(t, known[k], "%q is a CheckKey constant but missing from AllCheckKeys", k)
 	}
-	assert.Len(t, AllCheckKeys, 18, "if you added a new CheckKey, also add it to AllCheckKeys AND to clusterValidatorCheckKeys() in internal/metrics/metrics.go")
+	assert.Len(t, AllCheckKeys, 18, "if you added a new CheckKey, also add it to AllCheckKeys AND to "+
+		"clusterValidatorCheckKeys() in internal/metrics/metrics.go")
 }

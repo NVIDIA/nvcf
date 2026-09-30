@@ -844,8 +844,8 @@ func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *
 	// first here.
 	var defaults []string
 	for _, sc := range classes.Items {
-		if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" ||
-			sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true" {
+		if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == annotationTrue ||
+			sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == annotationTrue {
 			defaults = append(defaults, sc.Name)
 		}
 	}
@@ -862,7 +862,8 @@ func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *
 		// which mid-CSI-migration clusters (gp2 plus gp3) hit routinely.
 		if versionGTE(state.K8sVersion, multiDefaultTolerated) {
 			msg := fmt.Sprintf(
-				"Multiple default StorageClasses found (%s); Kubernetes >= %s binds PVCs with the newest, but the extras should be cleared",
+				"Multiple default StorageClasses found (%s); Kubernetes >= %s binds PVCs with the newest, "+
+					"but the extras should be cleared",
 				strings.Join(defaults, ", "), multiDefaultTolerated)
 			printWarning(log, msg)
 			state.Warnings = append(state.Warnings, "Default StorageClass: "+msg)
@@ -886,10 +887,12 @@ func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *
 	}
 
 	if defaultClass == "" {
-		printError(log, fmt.Sprintf("No default StorageClass found (%d classes present, none marked as default)", len(classes.Items)))
+		printError(log, fmt.Sprintf("No default StorageClass found (%d classes present, none marked as default)",
+			len(classes.Items)))
 		state.Recommendations = append(state.Recommendations,
 			"Mark a StorageClass as default with: "+
-				"kubectl patch storageclass <name> -p '{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}'")
+				"kubectl patch storageclass <name> -p "+
+				"'{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}'")
 		ok := false
 		state.DefaultStorageClassOK = &ok
 		return
@@ -1006,16 +1009,10 @@ func discoverGatewayAPIResources(client kubernetes.Interface) (gatewayAPISurface
 	return surface, nil
 }
 
-// checkGatewayAPICRDs verifies that the Gateway API CRD set is installed and
+// checkGatewayAPICRDsIn verifies that the Gateway API CRD set is installed and
 // registers all four required resource types. Without these CRDs neither the
 // Gateway controller nor nvcf-cli can create routing objects.
-func checkGatewayAPICRDs(_ context.Context, client kubernetes.Interface, state *ValidationState) {
-	surface, err := discoverGatewayAPIResources(client)
-	checkGatewayAPICRDsIn(state, surface, err)
-}
-
-// checkGatewayAPICRDsIn judges an already discovered Gateway API surface, so
-// Run pays for discovery once.
+// It judges an already discovered surface, so Run pays for discovery once.
 func checkGatewayAPICRDsIn(state *ValidationState, surface gatewayAPISurface, err error) {
 	log := state.Log
 	printHeader(log, "Gateway API CRDs")
@@ -1138,18 +1135,12 @@ func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *
 	state.EnvoyGatewayOK = &ok
 }
 
-// checkGatewayRoutes verifies that the route CR types NVCF creates are
-// registered with the apiserver. It does discovery only: it does not list
+// checkGatewayRoutesIn verifies that the route CR types NVCF creates are
+// registered with the apiserver. It judges an already discovered surface only: it does not list
 // route objects, so it cannot tell whether any route actually exists.
 //
 // Non-critical: route CR types are installed by nvcf up and are expected to
 // be absent on a fresh cluster before install.
-func checkGatewayRoutes(_ context.Context, client kubernetes.Interface, state *ValidationState) {
-	surface, err := discoverGatewayAPIResources(client)
-	checkGatewayRoutesIn(state, surface, err)
-}
-
-// checkGatewayRoutesIn judges an already discovered Gateway API surface.
 func checkGatewayRoutesIn(state *ValidationState, surface gatewayAPISurface, err error) {
 	log := state.Log
 	printHeader(log, "Gateway Route CR Types")
@@ -1192,27 +1183,18 @@ func checkGatewayRoutesIn(state *ValidationState, surface gatewayAPISurface, err
 	state.GatewayRoutesOK = &ok
 }
 
-// checkExternalLoadBalancer performs a passive check that the NVCF Gateways'
+// checkExternalLoadBalancerFor performs a passive check that the NVCF Gateways'
 // proxy Services have an external address from a load balancer controller
 // (cloud LB, MetalLB, etc.).
 //
 // Envoy Gateway puts every Gateway's proxy Service in its own namespace by
 // default, including other teams', so the check first decides which Gateways
-// are NVCF's (resolveNVCFGateways) and judges only their Services. When that
+// are NVCF's (gatewayOwnership, shared with Tier-1 so the rows agree) and judges only their Services. When that
 // cannot be decided it falls back to the whole namespace and says so.
 //
 // Non-critical: the passive form only detects an existing LB service; it does
 // not create a probe service, so absence means either no LB service exists yet
 // or no LB controller is installed.
-func checkExternalLoadBalancer(
-	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, state *ValidationState,
-) {
-	checkExternalLoadBalancerFor(ctx, client, resolveGatewayOwnership(ctx, client, routes), state)
-}
-
-// checkExternalLoadBalancerFor judges the proxy Services of the Gateways own
-// attributes to NVCF. Run passes the same ownership to Tier-1, so the two rows
-// cannot disagree about which Gateways are NVCF's.
 func checkExternalLoadBalancerFor(
 	ctx context.Context, client kubernetes.Interface, own *gatewayOwnership, state *ValidationState,
 ) {
@@ -1518,16 +1500,17 @@ func createNodeToNodeNamespace(ctx context.Context, client kubernetes.Interface,
 }
 
 // legacyNodeToNodeNamespace is where validator versions before the per-run
-// probe namespace created their DaemonSet. Kept so an orphan left by a
-// currently deployed validator is still reclaimable; remove once those
-// versions are out of service.
+// probe namespace created their DaemonSet. Their orphans there are still
+// reclaimed, since those versions can be deployed alongside this one.
 const legacyNodeToNodeNamespace = "default"
 
 // sweepLegacyOrphanN2NDaemonSets reclaims probe DaemonSets stranded in
 // "default" by an older validator that was killed before its cleanup ran.
 // The per-run namespace sweep cannot see those: they predate the namespace.
 // Without this they persist indefinitely, one probe pod per node.
-func sweepLegacyOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration) {
+func sweepLegacyOrphanN2NDaemonSets(
+	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
+) {
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -2175,9 +2158,10 @@ func buildNodeToNodeDaemonSet(name, namespace string, labels map[string]string, 
 					RestartPolicy: corev1.RestartPolicyAlways,
 					Tolerations:   nodeToNodeTolerations(),
 					Containers: []corev1.Container{{
-						Name:            "server",
-						Image:           image,
-						Command:         []string{"sh", "-c", fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
+						Name:  "server",
+						Image: image,
+						Command: []string{"sh", "-c",
+							fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
 						Resources:       enforcementResources(),
 						SecurityContext: nodeToNodeSecurityContext(),
 					}},
@@ -2194,7 +2178,8 @@ func buildNodeToNodeCheckerPod(name, namespace, nodeName string, targetIPs []str
 	// admission rejection, an image without nc, a deadline.
 	cmds := []string{fmt.Sprintf("command -v nc >/dev/null 2>&1 || exit %d", nodeToNodeNoNetcatExit)}
 	for _, ip := range targetIPs {
-		cmds = append(cmds, fmt.Sprintf("nc -z -w 5 %s %d || exit %d", ip, nodeToNodeTestPort, nodeToNodeUnreachableExit))
+		cmds = append(cmds,
+			fmt.Sprintf("nc -z -w 5 %s %d || exit %d", ip, nodeToNodeTestPort, nodeToNodeUnreachableExit))
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2224,8 +2209,6 @@ func buildNodeToNodeCheckerPod(name, namespace, nodeName string, targetIPs []str
 	}
 }
 
-// controlPlaneNamespaces is the set of namespaces scanned by Tier-1 and
-// Tier-2 HA checks on the control-plane cluster.
 // controlPlaneNamespaces lists the namespaces the self-managed stack deploys
 // into, per deploy/stacks/self-managed/helmfile.d. Namespaces that are absent
 // are skipped silently (a LIST against a missing namespace returns an empty
@@ -2243,8 +2226,9 @@ var controlPlaneNamespaces = []string{
 // OpenBao does not silently drop its StatefulSet from the Tier-2 check.
 const openBaoNamespaceEnv = "NVCF_OPENBAO_NAMESPACE"
 
-// controlPlaneNamespaceSet returns controlPlaneNamespaces plus any
-// runtime-configured OpenBao and Envoy Gateway namespaces, de-duplicated.
+// controlPlaneNamespaceSet returns the namespaces Tier-1 and Tier-2 scan:
+// controlPlaneNamespaces with a relocated OpenBao or Envoy Gateway namespace in
+// place of its default, de-duplicated.
 func controlPlaneNamespaceSet() []string {
 	// Each override RELOCATES a component, so it replaces that component's
 	// default namespace rather than adding to it. Appending left the defaults
@@ -2276,11 +2260,7 @@ func controlPlaneNamespaceSet() []string {
 	return out
 }
 
-// envoyGatewayNamespaceName is where the Envoy Gateway controller and its
-// provisioned proxy Services live.
-// gatewaySet holds NVCF Gateways as "name" or "namespace/name". Discovered
-// entries are always "namespace/name"; a configured bare name matches that
-// Gateway in any namespace.
+// gatewaySet holds NVCF Gateways as "namespace/name" entries.
 type gatewaySet map[string]bool
 
 // nvcfGatewayNames parses NVCF_GATEWAY_NAMES into namespace/name entries.
@@ -2333,22 +2313,8 @@ func (g gatewaySet) entriesForProxy(labels map[string]string, classes map[string
 	return nil
 }
 
-// nvcfGatewayClasses maps each GatewayClass used by an NVCF Gateway to the
+// nvcfGatewayClassesIn maps each GatewayClass used by an NVCF Gateway to the
 // entries that use it, so merged-gateways proxies can be attributed.
-func nvcfGatewayClasses(
-	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, g gatewaySet,
-) (map[string][]string, error) {
-	if len(g) == 0 {
-		return nil, nil
-	}
-	surface, err := discoverGatewayAPIResources(client)
-	if err != nil {
-		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
-	}
-	return nvcfGatewayClassesIn(ctx, surface, routes, g)
-}
-
-// nvcfGatewayClassesIn is nvcfGatewayClasses over an already discovered surface.
 func nvcfGatewayClassesIn(
 	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface, g gatewaySet,
 ) (map[string][]string, error) {
@@ -2462,15 +2428,6 @@ type gatewayOwnership struct {
 	classErr        error
 }
 
-// resolveGatewayOwnership discovers the Gateway API surface and resolves the
-// NVCF Gateways.
-func resolveGatewayOwnership(
-	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
-) *gatewayOwnership {
-	surface, err := discoverGatewayAPIResources(client)
-	return resolveGatewayOwnershipIn(ctx, surface, err, routes)
-}
-
 // resolveGatewayOwnershipIn resolves the NVCF Gateways over an already
 // discovered surface. A configured list replaces discovery: the launcher knows
 // the stack's Gateways, and a list set by hand is set because discovery does
@@ -2496,14 +2453,6 @@ func resolveGatewayOwnershipIn(
 	}
 	own.gateways, own.source = discovered, "from NVCF routes"
 	return own
-}
-
-// resolveNVCFGateways returns the NVCF Gateways and where they came from.
-func resolveNVCFGateways(
-	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
-) (gatewaySet, string, error) {
-	own := resolveGatewayOwnership(ctx, client, routes)
-	return own.gateways, own.source, own.err
 }
 
 // reportInvalid warns once per check about ignored gateway-name entries.
@@ -2548,21 +2497,10 @@ func (o *gatewayOwnership) proxyOwner(ctx context.Context, labels map[string]str
 	return classes[labels[owningGatewayClassLabel]], true
 }
 
-// discoverNVCFGateways collects the Gateways that routes rendered by the
+// discoverNVCFGatewaysIn collects the Gateways that routes rendered by the
 // nvcf-gateway-routes chart attach to.
-func discoverNVCFGateways(
-	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
-) (gatewaySet, error) {
-	surface, err := discoverGatewayAPIResources(client)
-	if err != nil {
-		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
-	}
-	return discoverNVCFGatewaysIn(ctx, surface, routes)
-}
-
-// discoverNVCFGatewaysIn is discoverNVCFGateways over an already discovered
-// surface. Route kinds the cluster does not serve are skipped; an error
-// listing a served kind is returned, not treated as absence.
+// Route kinds the cluster does not serve are skipped; an error listing a
+// served kind is returned, not treated as absence.
 func discoverNVCFGatewaysIn(
 	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface,
 ) (gatewaySet, error) {
@@ -2631,6 +2569,8 @@ func gatewayParentRefs(route *unstructured.Unstructured) []string {
 	return out
 }
 
+// envoyGatewayNamespaceName is where the Envoy Gateway controller and, by
+// default, its provisioned proxies live.
 func envoyGatewayNamespaceName() string {
 	if ns := strings.TrimSpace(os.Getenv(envoyGatewayNamespaceEnv)); ns != "" {
 		return ns
@@ -2672,7 +2612,12 @@ func rolloutReadyFloor(d *appsv1.Deployment, want int32) int32 {
 	if err == nil && unavailable == 0 && surge == 0 {
 		unavailable = 1
 	}
-	return want - int32(unavailable)
+	if unavailable >= int(want) {
+		// Everything may be unavailable at once, so there is no floor. This
+		// also bounds the conversion below.
+		return 0
+	}
+	return want - int32(unavailable) // #nosec G115 -- 0 <= unavailable < want, an int32
 }
 
 // rolloutProgressingReasons are the Progressing condition reasons the
@@ -2728,7 +2673,14 @@ func deploymentRolloutStalled(d *appsv1.Deployment) bool {
 	return false
 }
 
-// checkTier1Deployments verifies that every Deployment in the control-plane
+// sharedTier1Namespaces hold third-party controllers NVCF installs beside, or
+// may find already installed. A Deployment there that is scaled to zero may be
+// someone else's parked controller, so it warns rather than failing the row.
+func sharedTier1Namespaces() map[string]bool {
+	return map[string]bool{"cert-manager": true, envoyGatewayNamespaceName(): true}
+}
+
+// checkTier1DeploymentsFor verifies that every Deployment in the control-plane
 // namespaces has readyReplicas >= spec.replicas. Any under-replicated Deployment
 // means HA headroom is gone and a second failure causes a full outage.
 //
@@ -2737,337 +2689,330 @@ func deploymentRolloutStalled(d *appsv1.Deployment) bool {
 //
 // Critical: under-replication means a single additional failure causes a full
 // service outage.
-func checkTier1Deployments(
-	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, state *ValidationState,
-) {
-	checkTier1DeploymentsFor(ctx, client, resolveGatewayOwnership(ctx, client, routes), state)
-}
-
-// sharedTier1Namespaces hold third-party controllers NVCF installs beside, or
-// may find already installed. A Deployment there that is scaled to zero may be
-// someone else's parked controller, so it warns rather than failing the row.
-func sharedTier1Namespaces() map[string]bool {
-	return map[string]bool{"cert-manager": true, envoyGatewayNamespaceName(): true}
-}
-
-// checkTier1DeploymentsFor is checkTier1Deployments with the run's shared
-// Gateway ownership.
 func checkTier1DeploymentsFor(
 	ctx context.Context, client kubernetes.Interface, own *gatewayOwnership, state *ValidationState,
 ) {
-	log := state.Log
-	printHeader(log, "Tier-1 Deployment Readiness")
+	printHeader(state.Log, "Tier-1 Deployment Readiness")
+	own.reportInvalid(state.Log, state)
+	scan := newTier1Scan(own, state)
+	for _, ns := range scan.namespaces {
+		scan.scanNamespace(ctx, client, ns)
+	}
+	proxiesUnobserved := scan.reportProxyAttribution()
+	if scan.checkGatewayCoverage(ctx, client) {
+		proxiesUnobserved = true
+	}
+	scan.verdict(proxiesUnobserved)
+}
 
-	var underReplicated []string
-	var scaledToZero []string
-	var gatewayGaps []string
-	checkedCount := 0
-	deniedCount := 0
-	rollingCount := 0
-	// rollingUnderReplicated counts tolerated rollouts that are below their
-	// replica target but still at or above their rollout floor.
-	rollingUnderReplicated := 0
+// tier1Scan collects what Tier-1 saw across the scanned namespaces.
+type tier1Scan struct {
+	log   *logrus.Entry
+	state *ValidationState
+	own   *gatewayOwnership
 
 	// Envoy Gateway runs a proxy Deployment per Gateway, or one per class in
-	// merged-gateways mode, beside its controller, including for other teams'
-	// Gateways, so only NVCF's proxies are assessed. A foreign proxy at 1/2 otherwise fails this critical row.
-	envoyNS := envoyGatewayNamespaceName()
-	own.reportInvalid(log, state)
-	shared := sharedTier1Namespaces()
+	// merged-gateways mode, beside its controller, including for other
+	// teams' Gateways, so only NVCF's proxies are assessed. GatewayNamespace
+	// mode puts each proxy beside its Gateway, so those namespaces are
+	// searched too (proxyOnly), for proxies only.
+	envoyNS    string
+	namespaces []string
+	proxyOnly  map[string]bool
+	shared     map[string]bool
+	// noGatewaysPostInstall: installed with no NVCF Gateway named anywhere,
+	// every proxy is treated as possibly NVCF's.
+	noGatewaysPostInstall bool
+
+	underReplicated []string
+	scaledToZero    []string
+	gatewayGaps     []string
+	checkedCount    int
+	deniedCount     int
+	rollingCount    int
+	// rollingUnderReplicated counts tolerated rollouts that are below their
+	// replica target but still at or above their rollout floor.
+	rollingUnderReplicated int
+
 	// skippedProxies are other teams' proxies. unattributedDown are proxies
 	// whose owner could not be decided and that are not Ready: a Ready proxy
-	// says nothing bad about the tier whoever owns it, so only these leave the
-	// row undecided. Installed with no NVCF Gateway named anywhere, every
-	// proxy is treated as possibly NVCF's.
-	skippedProxies := 0
-	var unattributedDown []string
-	unattributed := 0
-	noGatewaysPostInstall := own.err == nil && len(own.gateways) == 0 && state.PostInstall
+	// says nothing bad about the tier whoever owns it, so only these leave
+	// the row undecided.
+	skippedProxies   int
+	unattributed     int
+	unattributedDown []string
 	// proxySeen records the NVCF Gateways that have a proxy, so an installed
 	// control plane with a Gateway that has none fails.
-	proxySeen := map[string]bool{}
+	proxySeen map[string]bool
+}
 
-	// GatewayNamespace mode puts each proxy beside its Gateway, so those
-	// namespaces are searched too, for proxies only.
-	namespaces := controlPlaneNamespaceSet()
-	proxyOnly := map[string]bool{}
-	for _, ns := range own.gateways.namespaces(envoyNS) {
-		if !slices.Contains(namespaces, ns) {
-			namespaces = append(namespaces, ns)
-			proxyOnly[ns] = true
+func newTier1Scan(own *gatewayOwnership, state *ValidationState) *tier1Scan {
+	scan := &tier1Scan{
+		log: state.Log, state: state, own: own,
+		envoyNS:               envoyGatewayNamespaceName(),
+		namespaces:            controlPlaneNamespaceSet(),
+		proxyOnly:             map[string]bool{},
+		shared:                sharedTier1Namespaces(),
+		noGatewaysPostInstall: own.err == nil && len(own.gateways) == 0 && state.PostInstall,
+		proxySeen:             map[string]bool{},
+	}
+	for _, ns := range own.gateways.namespaces(scan.envoyNS) {
+		if !slices.Contains(scan.namespaces, ns) {
+			scan.namespaces = append(scan.namespaces, ns)
+			scan.proxyOnly[ns] = true
 		}
 	}
+	return scan
+}
 
-	for _, ns := range namespaces {
-		deploys, err := client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			// A 403 means we could not observe the namespace, not that it is
-			// healthy. Track it separately so it cannot reach the trivial-pass
-			// exit below. A LIST against a missing namespace returns an empty
-			// 200, so IsNotFound is not a case here.
-			if apierrors.IsForbidden(err) {
-				deniedCount++
-				continue
-			}
-			// Same shape as the 403 branch: keep going. Returning here throws
-			// away the under-replicated Deployments already collected from
-			// earlier namespaces and publishes the tier as unknown, even
-			// though a fully-down service was observed.
-			printWarning(log, fmt.Sprintf("Could not list Deployments in %s: %v", ns, err))
-			state.Warnings = append(state.Warnings,
+func (s *tier1Scan) warn(msg string) {
+	printWarning(s.log, msg)
+	s.state.Warnings = append(s.state.Warnings, "Tier-1 Deployments: "+msg)
+}
+
+func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interface, ns string) {
+	deploys, err := client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		// A 403 means we could not observe the namespace, not that it is
+		// healthy. Track it separately so it cannot reach the trivial-pass
+		// exit below. A LIST against a missing namespace returns an empty
+		// 200, so IsNotFound is not a case here. Any other error keeps going
+		// the same way: returning here threw away the under-replicated
+		// Deployments already collected from earlier namespaces.
+		if !apierrors.IsForbidden(err) {
+			printWarning(s.log, fmt.Sprintf("Could not list Deployments in %s: %v", ns, err))
+			s.state.Warnings = append(s.state.Warnings,
 				fmt.Sprintf("Tier-1 Deployments: status unknown (listing failed in %s)", ns))
-			deniedCount++
-			continue
 		}
-		for i := range deploys.Items {
-			d := &deploys.Items[i]
-			want := int32(1)
-			if d.Spec.Replicas != nil {
-				want = *d.Spec.Replicas
-			}
-			proxy := isEnvoyProxy(d.Labels) && (ns == envoyNS || proxyOnly[ns])
-			if proxyOnly[ns] && !proxy {
-				continue
-			}
-			if proxy {
-				entries, known := own.proxyOwner(ctx, d.Labels)
-				for _, e := range entries {
-					proxySeen[e] = true
-				}
-				if !known || noGatewaysPostInstall {
-					unattributed++
-					if want == 0 || d.Status.ReadyReplicas < want {
-						unattributedDown = append(unattributedDown, fmt.Sprintf("%s/%s (ready: %d, want: %d)",
-							ns, d.Name, d.Status.ReadyReplicas, want))
-					} else {
-						// Assessed and Ready, whoever owns it.
-						checkedCount++
-					}
-					continue
-				}
-				if len(entries) == 0 {
-					skippedProxies++
-					continue
-				}
-			}
-			// A Deployment scaled to zero satisfies "ReadyReplicas >= want"
-			// with nothing running at all, so counting it as healthy lets a
-			// maintenance scale-down or a replicaCount:0 values error publish
-			// the critical row as All Ready. Report it instead of counting it.
-			if want == 0 {
-				// A failure, not a warning: this is the replicaCount:0 values
-				// error, and the same Deployment at 2/3 is already a critical
-				// failure. Warning here made "fully down" score better than
-				// "degraded". In a shared namespace it may be another
-				// install's parked controller, such as an external
-				// cert-manager, so there it only warns.
-				if shared[ns] && !proxy {
-					msg := fmt.Sprintf("%s/%s is scaled to zero replicas", ns, d.Name)
-					printWarning(log, msg)
-					state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-					continue
-				}
-				scaledToZero = append(scaledToZero, ns+"/"+d.Name)
-				continue
-			}
-			// A rollout transiently drops readyReplicas below spec.replicas on
-			// a healthy cluster, so skip those. But UpdatedReplicas < want is
-			// not self-limiting: a bad image wedges there permanently with
-			// ObservedGeneration == Generation. ProgressDeadlineExceeded is the
-			// signal that separates "in flight" from "stuck", so a stalled
-			// rollout falls through to the under-replicated check below.
-			// A paused Deployment is not rolling anywhere: the controller
-			// holds it at UpdatedReplicas < want indefinitely without ever
-			// reporting ProgressDeadlineExceeded, so tolerating it as a rollout
-			// passed a paused Deployment at 0/3 on every run. Assess it as is.
-			// The readiness floor bounds the rest: progressDeadlineSeconds at
-			// its sentinel and a wedged controller never report a stall either,
-			// but no healthy RollingUpdate drops below it.
-			rollingOut := deploymentRollingOut(d, want)
-			if rollingOut && !deploymentRolloutStalled(d) && d.Status.ReadyReplicas >= rolloutReadyFloor(d, want) {
-				msg := fmt.Sprintf("%s/%s: rollout in progress (updated: %d/%d); re-run check after rollout completes",
-					ns, d.Name, d.Status.UpdatedReplicas, want)
-				printWarning(log, msg)
-				state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-				rollingCount++
-				if d.Status.ReadyReplicas < want {
-					rollingUnderReplicated++
-				}
-				continue
-			}
-			checkedCount++
-			if d.Status.ReadyReplicas < want {
-				underReplicated = append(underReplicated,
-					fmt.Sprintf("%s/%s (ready: %d, want: %d)", ns, d.Name, d.Status.ReadyReplicas, want))
-			}
-		}
+		s.deniedCount++
+		return
 	}
+	for i := range deploys.Items {
+		s.assess(ctx, ns, &deploys.Items[i])
+	}
+}
 
-	// A proxy whose owner could not be decided was still assessed for
-	// readiness. Only one that is not Ready could be NVCF's own outage, so
-	// only those leave the row undecided; an observed failure still decides it
-	// first.
-	proxiesUnobserved := len(unattributedDown) > 0
-	switch why := own.err; {
-	case why == nil && noGatewaysPostInstall:
+func (s *tier1Scan) assess(ctx context.Context, ns string, d *appsv1.Deployment) {
+	want := int32(1)
+	if d.Spec.Replicas != nil {
+		want = *d.Spec.Replicas
+	}
+	proxy := isEnvoyProxy(d.Labels) && (ns == s.envoyNS || s.proxyOnly[ns])
+	if s.proxyOnly[ns] && !proxy {
+		return
+	}
+	if proxy && s.settleProxy(ctx, ns, d, want) {
+		return
+	}
+	// A Deployment scaled to zero satisfies "ReadyReplicas >= want" with
+	// nothing running at all, so counting it as healthy lets a maintenance
+	// scale-down or a replicaCount:0 values error publish the critical row as
+	// All Ready. It fails rather than warns: the same Deployment at 2/3
+	// already fails, and "fully down" must not score better than
+	// "degraded". In a shared namespace it may be another install's parked
+	// controller, such as an external cert-manager, so there it only warns.
+	if want == 0 {
+		if s.shared[ns] && !proxy {
+			s.warn(fmt.Sprintf("%s/%s is scaled to zero replicas", ns, d.Name))
+			return
+		}
+		s.scaledToZero = append(s.scaledToZero, ns+"/"+d.Name)
+		return
+	}
+	// A rollout transiently drops readyReplicas below spec.replicas on a
+	// healthy cluster, so tolerate one that is moving (deploymentRollingOut),
+	// has not stalled (ProgressDeadlineExceeded), and is at or above the
+	// readiness floor no healthy RollingUpdate drops below.
+	if deploymentRollingOut(d, want) && !deploymentRolloutStalled(d) &&
+		d.Status.ReadyReplicas >= rolloutReadyFloor(d, want) {
+		s.warn(fmt.Sprintf("%s/%s: rollout in progress (updated: %d/%d); re-run check after rollout completes",
+			ns, d.Name, d.Status.UpdatedReplicas, want))
+		s.rollingCount++
+		if d.Status.ReadyReplicas < want {
+			s.rollingUnderReplicated++
+		}
+		return
+	}
+	s.checkedCount++
+	if d.Status.ReadyReplicas < want {
+		s.underReplicated = append(s.underReplicated,
+			fmt.Sprintf("%s/%s (ready: %d, want: %d)", ns, d.Name, d.Status.ReadyReplicas, want))
+	}
+}
+
+// settleProxy handles an Envoy proxy that is not an NVCF proxy to assess like
+// any other Deployment, and reports whether it did.
+func (s *tier1Scan) settleProxy(ctx context.Context, ns string, d *appsv1.Deployment, want int32) bool {
+	entries, known := s.own.proxyOwner(ctx, d.Labels)
+	for _, e := range entries {
+		s.proxySeen[e] = true
+	}
+	if !known || s.noGatewaysPostInstall {
+		s.unattributed++
+		if want == 0 || d.Status.ReadyReplicas < want {
+			s.unattributedDown = append(s.unattributedDown, fmt.Sprintf("%s/%s (ready: %d, want: %d)",
+				ns, d.Name, d.Status.ReadyReplicas, want))
+		} else {
+			// Assessed and Ready, whoever owns it.
+			s.checkedCount++
+		}
+		return true
+	}
+	if len(entries) == 0 {
+		s.skippedProxies++
+		return true
+	}
+	return false
+}
+
+// reportProxyAttribution warns about proxies whose owner could not be decided
+// and reports whether any of them leaves the row undecided. A proxy whose owner
+// is unknown was still assessed for readiness: only one that is not Ready
+// could be NVCF's own outage, and an observed failure still decides it first.
+func (s *tier1Scan) reportProxyAttribution() bool {
+	proxiesUnobserved := len(s.unattributedDown) > 0
+	switch why := s.own.err; {
+	case why == nil && s.noGatewaysPostInstall:
 		why = errNoNVCFGatewaysPostInstall
 		fallthrough
 	case why != nil:
 		if proxiesUnobserved {
-			msg := fmt.Sprintf("could not tell which Envoy proxies are NVCF's (%v), and %d are not Ready: %s",
-				why, len(unattributedDown), strings.Join(unattributedDown, ", "))
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-		} else if unattributed > 0 {
-			printInfo(log, fmt.Sprintf("  Envoy proxy ownership unknown (%v), but all %d proxies are Ready", why, unattributed))
+			s.warn(fmt.Sprintf("could not tell which Envoy proxies are NVCF's (%v), and %d are not Ready: %s",
+				why, len(s.unattributedDown), strings.Join(s.unattributedDown, ", ")))
+		} else if s.unattributed > 0 {
+			printInfo(s.log, fmt.Sprintf("  Envoy proxy ownership unknown (%v), but all %d proxies are Ready",
+				why, s.unattributed))
 		}
 	case proxiesUnobserved:
-		msg := fmt.Sprintf("could not read the NVCF Gateways' classes to attribute merged-gateways proxies, "+
-			"and %d are not Ready: %s", len(unattributedDown), strings.Join(unattributedDown, ", "))
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-	case skippedProxies > 0 && len(own.gateways) == 0:
-		msg := fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: no NVCF routes found to identify "+
-			"the NVCF Gateways; set clusterValidator.gatewayNames (env %s) if they exist", skippedProxies, envoyNS,
-			nvcfGatewayNamesEnv)
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
+		s.warn(fmt.Sprintf("could not read the NVCF Gateways' classes to attribute merged-gateways proxies, "+
+			"and %d are not Ready: %s", len(s.unattributedDown), strings.Join(s.unattributedDown, ", ")))
+	case s.skippedProxies > 0 && len(s.own.gateways) == 0:
+		s.warn(fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: no NVCF routes found to identify "+
+			"the NVCF Gateways; set clusterValidator.gatewayNames (env %s) if they exist", s.skippedProxies, s.envoyNS,
+			nvcfGatewayNamesEnv))
 	}
+	return proxiesUnobserved
+}
 
-	// Installed, every NVCF Gateway needs a proxy. Route discovery skipping
-	// a proxy-less Gateway is exactly the outage the post-install signal is
-	// for. Undecidable while a proxy's owner is unknown: it may be the one.
-	if state.PostInstall && own.err == nil && unattributed == 0 {
-		proxyNamespaces := append([]string{envoyNS}, own.gateways.namespaces(envoyNS)...)
-		missing, err := missingGatewayProxies(ctx, client, own, proxySeen, proxyNamespaces)
-		switch {
-		case err != nil:
-			msg := fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", err)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-			proxiesUnobserved = true
-		case len(missing) > 0:
-			for _, e := range missing {
-				gatewayGaps = append(gatewayGaps, "NVCF Gateway "+e+" has no Envoy proxy")
-			}
-			checkedCount++
-		}
+// checkGatewayCoverage fails an installed control plane with an NVCF Gateway
+// that has no proxy: route discovery skipping a proxy-less Gateway is exactly
+// the outage the post-install signal is for. It is undecidable while a
+// proxy's owner is unknown, since that proxy may be the one, and it reports
+// whether the check itself could not be completed.
+func (s *tier1Scan) checkGatewayCoverage(ctx context.Context, client kubernetes.Interface) bool {
+	if !s.state.PostInstall || s.own.err != nil || s.unattributed > 0 {
+		return false
 	}
+	proxyNamespaces := append([]string{s.envoyNS}, s.own.gateways.namespaces(s.envoyNS)...)
+	missing, err := missingGatewayProxies(ctx, client, s.own, s.proxySeen, proxyNamespaces)
+	if err != nil {
+		s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", err))
+		return true
+	}
+	for _, e := range missing {
+		s.gatewayGaps = append(s.gatewayGaps, "NVCF Gateway "+e+" has no Envoy proxy")
+	}
+	if len(missing) > 0 {
+		s.checkedCount++
+	}
+	return false
+}
 
-	if checkedCount == 0 {
-		if len(scaledToZero) > 0 {
-			// An observed failure wins over unreadable namespaces and tolerated
-			// rollouts, as it does on the checkedCount > 0 path below.
-			printError(log, fmt.Sprintf("%d Deployment(s) are scaled to zero replicas: %s",
-				len(scaledToZero), strings.Join(scaledToZero, ", ")))
-			ok := false
-			state.Tier1DeploymentsOK = &ok
-			return
-		}
-		if proxiesUnobserved {
-			state.Warnings = append(state.Warnings,
-				"Tier-1 Deployments: status unknown (NVCF Envoy proxies could not be identified, so they were not assessed)")
-			return
-		}
-		if deniedCount > 0 {
-			// Leave nil: nothing was assessed and at least one namespace could
-			// not be read, so an empty result is not evidence of pre-install.
-			printWarning(log, fmt.Sprintf("Deployments not readable in %d control-plane namespace(s)", deniedCount))
-			state.Warnings = append(state.Warnings, fmt.Sprintf(
-				"Tier-1 Deployments: status unknown (Deployment list denied or failed in %d control-plane namespace(s))",
-				deniedCount))
-			return
-		}
-		if rollingCount > 0 {
-			// A tolerated rollout is a pass with a warning, not UNKNOWN, and
-			// must agree with the rollingUnderReplicated branch below. Stalled
-			// rollouts and those below their readiness floor never get here:
-			// they were assessed and reach the failure path instead.
-			msg := fmt.Sprintf("all %d Deployment(s) are mid-rollout; re-run after the rollout completes", rollingCount)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-			ok := true
-			state.Tier1DeploymentsOK = &ok
-			return
-		}
-		if !state.PostInstall {
-			printInfo(log, "  No Deployments found in control-plane namespaces (pre-install state)")
-			ok := true
-			state.Tier1DeploymentsOK = &ok
-			return
-		}
-		// The launcher says the control plane is installed, so finding
-		// nothing means the namespace list does not match the install (a
-		// relocated release, an override left unset) or the services are gone.
-		printError(log, "No Deployments found in any control-plane namespace")
-		state.Recommendations = append(state.Recommendations,
-			"Tier-1 found no Deployments. Check that the control plane is installed in this cluster, and set "+
-				"clusterValidator.openBaoNamespace / envoyGatewayNamespace if those components were relocated.")
-		ok := false
-		state.Tier1DeploymentsOK = &ok
+func (s *tier1Scan) setOK(ok bool) {
+	s.state.Tier1DeploymentsOK = &ok
+}
+
+const tier1ProxiesUnknown = "Tier-1 Deployments: status unknown (NVCF Envoy proxies could not be identified, " +
+	"so they were not assessed)"
+
+func (s *tier1Scan) deniedWarning() string {
+	return fmt.Sprintf("Tier-1 Deployments: status unknown (Deployment list denied or failed in %d "+
+		"control-plane namespace(s))", s.deniedCount)
+}
+
+// verdict decides the row. An observed failure wins over anything unobserved,
+// and a tolerated rollout is a pass with a warning, not UNKNOWN.
+func (s *tier1Scan) verdict(proxiesUnobserved bool) {
+	if s.checkedCount == 0 {
+		s.verdictNothingAssessed(proxiesUnobserved)
 		return
 	}
-
-	// A Deployment scaled to zero fails the row: a fully down component must
-	// not score better than the same component at 2/3, which already fails.
-	if len(scaledToZero) > 0 {
-		underReplicated = append(underReplicated,
-			fmt.Sprintf("scaled to zero replicas: %s", strings.Join(scaledToZero, ", ")))
+	failures := s.underReplicated
+	if len(s.scaledToZero) > 0 {
+		failures = append(failures, fmt.Sprintf("scaled to zero replicas: %s", strings.Join(s.scaledToZero, ", ")))
 	}
-	underReplicated = append(underReplicated, gatewayGaps...)
-
-	if len(underReplicated) > 0 {
-		printError(log, fmt.Sprintf("Under-replicated Deployments (%d):", len(underReplicated)))
-		for _, name := range underReplicated {
-			printInfo(log, "  "+name)
+	failures = append(failures, s.gatewayGaps...)
+	switch {
+	case len(failures) > 0:
+		printError(s.log, fmt.Sprintf("Under-replicated Deployments (%d):", len(failures)))
+		for _, name := range failures {
+			printInfo(s.log, "  "+name)
 		}
-		state.Recommendations = append(state.Recommendations,
+		s.state.Recommendations = append(s.state.Recommendations,
 			"Check for crashed, evicted, or unschedulable pods in the listed namespaces. "+
 				"If a service is intentionally single-replica, raise its replicaCount in the "+
 				"self-managed stack values to keep HA headroom.")
-		ok := false
-		state.Tier1DeploymentsOK = &ok
-		return
-	}
-
-	if proxiesUnobserved {
-		state.Warnings = append(state.Warnings,
-			"Tier-1 Deployments: status unknown (NVCF Envoy proxies could not be identified, so they were not assessed)")
-		return
-	}
-
-	if deniedCount > 0 {
+		s.setOK(false)
+	case proxiesUnobserved:
+		s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
+	case s.deniedCount > 0:
 		// Some namespaces were never observed, so "all ready" is not a claim we
 		// can make even though every Deployment we could see passed.
-		printWarning(log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
-			checkedCount, deniedCount))
-		state.Warnings = append(state.Warnings,
-			fmt.Sprintf("Tier-1 Deployments: status unknown (Deployment list denied or failed in %d control-plane namespace(s))",
-				deniedCount))
-		return
-	}
-
-	if rollingUnderReplicated > 0 {
+		printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
+			s.checkedCount, s.deniedCount))
+		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown. Rolling one pod at a time is what an upgrade
 		// looks like; reporting it as an unobserved critical check made every
 		// control-plane upgrade NVCF-Not-Ready with a non-zero exit.
-		msg := fmt.Sprintf("%d Deployment(s) ready, %d mid-rollout and below their replica target",
-			checkedCount, rollingUnderReplicated)
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
-		ok := true
-		state.Tier1DeploymentsOK = &ok
-		return
+		s.warn(fmt.Sprintf("%d Deployment(s) ready, %d mid-rollout and below their replica target",
+			s.checkedCount, s.rollingUnderReplicated))
+		s.setOK(true)
+	default:
+		if s.rollingCount > 0 {
+			printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, %d mid-rollout but still at their replica target",
+				s.checkedCount, s.rollingCount))
+		}
+		printSuccess(s.log, fmt.Sprintf("All %d assessed Deployment(s) in control-plane namespaces are fully ready",
+			s.checkedCount))
+		s.setOK(true)
 	}
+}
 
-	if rollingCount > 0 {
-		printWarning(log, fmt.Sprintf("%d Deployment(s) ready, %d mid-rollout but still at their replica target",
-			checkedCount, rollingCount))
+func (s *tier1Scan) verdictNothingAssessed(proxiesUnobserved bool) {
+	switch {
+	case len(s.scaledToZero) > 0:
+		// An observed failure wins over unreadable namespaces and tolerated
+		// rollouts, as it does when something was assessed.
+		printError(s.log, fmt.Sprintf("%d Deployment(s) are scaled to zero replicas: %s",
+			len(s.scaledToZero), strings.Join(s.scaledToZero, ", ")))
+		s.setOK(false)
+	case proxiesUnobserved:
+		s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
+	case s.deniedCount > 0:
+		// Leave nil: nothing was assessed and at least one namespace could not
+		// be read, so an empty result is not evidence of pre-install.
+		printWarning(s.log, fmt.Sprintf("Deployments not readable in %d control-plane namespace(s)", s.deniedCount))
+		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+	case s.rollingCount > 0:
+		// A tolerated rollout is a pass with a warning. Stalled rollouts and
+		// those below their readiness floor never get here: they were assessed
+		// and reach the failure path instead.
+		s.warn(fmt.Sprintf("all %d Deployment(s) are mid-rollout; re-run after the rollout completes", s.rollingCount))
+		s.setOK(true)
+	case !s.state.PostInstall:
+		printInfo(s.log, "  No Deployments found in control-plane namespaces (pre-install state)")
+		s.setOK(true)
+	default:
+		// The launcher says the control plane is installed, so finding nothing
+		// means the namespace list does not match the install (a relocated
+		// release, an override left unset) or the services are gone.
+		printError(s.log, "No Deployments found in any control-plane namespace")
+		s.state.Recommendations = append(s.state.Recommendations,
+			"Tier-1 found no Deployments. Check that the control plane is installed in this cluster, and set "+
+				"clusterValidator.openBaoNamespace / envoyGatewayNamespace if those components were relocated.")
+		s.setOK(false)
 	}
-
-	printSuccess(log, fmt.Sprintf("All %d assessed Deployment(s) in control-plane namespaces are fully ready", checkedCount))
-	ok := true
-	state.Tier1DeploymentsOK = &ok
 }
 
 // missingGatewayProxies returns the NVCF Gateways with no Envoy proxy among
@@ -3116,280 +3061,275 @@ func missingGatewayProxies(
 // it rolls one pod at a time, so that is the steady state for the duration of
 // any upgrade. More than one pod down fails.
 //
-// The check is generic; no hardcoded StatefulSet names.
+// Any odd-sized StatefulSet of three or more in the control-plane namespaces
+// is assessed. The stack's own quorum components (knownQuorumComponents) are
+// also judged below three replicas and at even sizes.
 //
 // Critical: broken quorum or co-located peers leave the stack one failure
 // away from a total control-plane outage.
 func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
-	log := state.Log
-	printHeader(log, "Tier-2 StatefulSet Quorum and Placement")
+	printHeader(state.Log, "Tier-2 StatefulSet Quorum and Placement")
+	scan := &tier2Scan{log: state.Log, state: state}
+	for _, ns := range controlPlaneNamespaceSet() {
+		scan.scanNamespace(ctx, client, ns)
+	}
+	scan.verdict()
+}
 
-	const minQuorumSize = int32(3)
-	var failures []string
-	var skippedParity []string
+// minQuorumSize is the smallest replica count that holds a quorum through the
+// loss of one member.
+const minQuorumSize = int32(3)
+
+// tier2Scan collects what Tier-2 saw across the control-plane namespaces.
+type tier2Scan struct {
+	log   *logrus.Entry
+	state *ValidationState
+
+	failures      []string
+	skippedParity []string
 	// nonHA holds known quorum components running below three replicas under
 	// highAvailability.mode none, which is what that mode deploys.
-	var nonHA []string
-	checkedCount := 0
-	deniedCount := 0
-	rollingCount := 0
-	// rollingUnderReplicated bounds the rollout skip, as in checkTier1Deployments.
-	rollingUnderReplicated := 0
+	nonHA        []string
+	checkedCount int
+	deniedCount  int
+	rollingCount int
+	// rollingUnderReplicated bounds the rollout skip, as in Tier-1.
+	rollingUnderReplicated int
 	// placementUnknown counts StatefulSets whose pods could not be listed, so
 	// an unreadable namespace cannot masquerade as a clean placement result.
-	placementUnknown := 0
+	placementUnknown int
+}
 
-	for _, ns := range controlPlaneNamespaceSet() {
-		stsList, err := client.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			// See checkTier1Deployments: a 403 must not reach the trivial-pass
-			// exit. The chart ClusterRole grants statefulsets, but a narrower
-			// role or a namespace-scoped policy can still deny it.
-			if apierrors.IsForbidden(err) {
-				deniedCount++
-				continue
-			}
-			// See checkTier1Deployments: continue rather than return, so
-			// quorum failures already observed are not discarded.
-			printWarning(log, fmt.Sprintf("Could not list StatefulSets in %s: %v", ns, err))
-			state.Warnings = append(state.Warnings,
+func (s *tier2Scan) warn(msg string) {
+	printWarning(s.log, msg)
+	s.state.Warnings = append(s.state.Warnings, "Tier-2 StatefulSets: "+msg)
+}
+
+func (s *tier2Scan) fail(format string, args ...any) {
+	s.failures = append(s.failures, fmt.Sprintf(format, args...))
+}
+
+func (s *tier2Scan) scanNamespace(ctx context.Context, client kubernetes.Interface, ns string) {
+	stsList, err := client.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		// As in Tier-1: a 403 must not reach the trivial-pass exit, and any
+		// other error keeps going so failures already observed are kept.
+		if !apierrors.IsForbidden(err) {
+			printWarning(s.log, fmt.Sprintf("Could not list StatefulSets in %s: %v", ns, err))
+			s.state.Warnings = append(s.state.Warnings,
 				fmt.Sprintf("Tier-2 StatefulSets: status unknown (listing failed in %s)", ns))
-			deniedCount++
+		}
+		s.deniedCount++
+		return
+	}
+	for i := range stsList.Items {
+		s.assess(ctx, client, ns, &stsList.Items[i])
+	}
+}
+
+func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet) {
+	if sts.Spec.Replicas == nil {
+		return
+	}
+	want := *sts.Spec.Replicas
+	known := isKnownQuorumComponent(ns, sts.Name)
+	if want < minQuorumSize {
+		s.assessSubQuorum(ns, sts.Name, want, known)
+		return
+	}
+	if want%2 == 0 && !known {
+		// Even replica counts are not a quorum shape this check can reason
+		// about for an unknown workload, so record it rather than assess it.
+		// The known components are assessed at any size: a 4-node Cassandra
+		// ring at 0/4 is down, whatever its parity.
+		s.skippedParity = append(s.skippedParity, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
+		return
+	}
+
+	oneDownRolling, decided := s.assessRollout(ns, sts, want)
+	if decided {
+		return
+	}
+	s.checkedCount++
+	if sts.Status.ReadyReplicas < want && !oneDownRolling {
+		s.fail("%s/%s: readyReplicas=%d (need %d)", ns, sts.Name, sts.Status.ReadyReplicas, want)
+		return
+	}
+
+	selector := metav1.FormatLabelSelector(sts.Spec.Selector)
+	pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		// Not a placement failure: we could not look. Recording it in failures
+		// would report a broken quorum for an RBAC gap on pods, while the
+		// identical gap on statefulsets is correctly reported as unknown.
+		s.warn(fmt.Sprintf("%s/%s: could not list pods for placement check: %v", ns, sts.Name, err))
+		s.placementUnknown++
+		return
+	}
+
+	// A rollout with one pod down is tolerated only while it can still
+	// finish. With no progress deadline on a StatefulSet, the down pod is the
+	// evidence: a crash-looping new pod, or an old-revision pod held back by a
+	// partition, stays down on every run.
+	if oneDownRolling {
+		if reason := stalledRolloutPod(sts, pods.Items); reason != "" {
+			s.fail("%s/%s: readyReplicas=%d (need %d), rolling update is not progressing: %s",
+				ns, sts.Name, sts.Status.ReadyReplicas, want, reason)
+			return
+		}
+		s.rollingUnderReplicated++
+	}
+	s.assessPlacement(ns, sts, pods.Items)
+}
+
+// assessSubQuorum judges a StatefulSet below three replicas. A known quorum
+// component there has lost quorum under an HA install and fails, but is the
+// documented shape under highAvailability.mode none. Only the launcher knows
+// which, so an unset mode records it as not assessed rather than guessing.
+// Anything else is recorded too, so an all-sub-quorum cluster cannot reach the
+// trivial-pass exit having examined nothing.
+func (s *tier2Scan) assessSubQuorum(ns, name string, want int32, known bool) {
+	switch mode := haMode(); {
+	case known && want == 0:
+		// Scaled to zero is the component down in any mode.
+		s.fail("%s/%s: scaled to zero replicas", ns, name)
+		s.checkedCount++
+	case known && (mode == "preferred" || mode == "enforced"):
+		s.fail("%s/%s: spec.replicas=%d, below the quorum minimum of %d for highAvailability.mode %s",
+			ns, name, want, minQuorumSize, mode)
+		s.checkedCount++
+	case known && mode == "none":
+		s.nonHA = append(s.nonHA, fmt.Sprintf("%s/%s (replicas=%d)", ns, name, want))
+	default:
+		s.skippedParity = append(s.skippedParity, fmt.Sprintf("%s/%s (replicas=%d)", ns, name, want))
+	}
+}
+
+// assessRollout handles a RollingUpdate in flight. StatefulSets roll one pod
+// at a time, so readyReplicas == want-1 is the steady state for the whole of
+// any image bump, PVC resize or node drain, and is tolerated while the rollout
+// can finish (oneDownRolling). More than one pod down fails, which decides the
+// StatefulSet. Under OnDelete the controller never advances CurrentRevision on
+// its own, so a revision mismatch says nothing and readiness is assessed
+// directly.
+func (s *tier2Scan) assessRollout(ns string, sts *appsv1.StatefulSet, want int32) (oneDownRolling, decided bool) {
+	if sts.Spec.UpdateStrategy.Type == appsv1.OnDeleteStatefulSetStrategyType ||
+		sts.Status.UpdateRevision == "" || sts.Status.CurrentRevision == sts.Status.UpdateRevision {
+		return false, false
+	}
+	s.warn(fmt.Sprintf("%s/%s: rolling update in progress (ready: %d/%d)",
+		ns, sts.Name, sts.Status.ReadyReplicas, want))
+	s.rollingCount++
+	switch {
+	case sts.Status.ReadyReplicas >= want:
+		return false, false
+	case sts.Status.ReadyReplicas == want-1:
+		return true, false
+	default:
+		s.fail("%s/%s: readyReplicas=%d (need %d, rolling update in progress)",
+			ns, sts.Name, sts.Status.ReadyReplicas, want)
+		s.checkedCount++
+		return false, true
+	}
+}
+
+// assessPlacement fails two Ready peers on one node: one node loss from losing
+// quorum. Only Ready pods owned by this StatefulSet count; phase stays Running
+// through CrashLoopBackOff, and a surplus pod left over from a rollout would
+// otherwise read as a co-location. A tolerated rollout is scanned too.
+func (s *tier2Scan) assessPlacement(ns string, sts *appsv1.StatefulSet, pods []corev1.Pod) {
+	nodeOwner := make(map[string]string)
+	for j := range pods {
+		p := &pods[j]
+		if !metav1.IsControlledBy(p, sts) || !isPodReady(p) {
 			continue
 		}
-
-		for i := range stsList.Items {
-			sts := &stsList.Items[i]
-			// Any odd replica count of 3 or more is a quorum member. Requiring
-			// exactly 3 silently drops a Cassandra scaled to 5 from the check
-			// rather than failing it.
-			if sts.Spec.Replicas == nil {
-				continue
-			}
-			want := *sts.Spec.Replicas
-			known := isKnownQuorumComponent(ns, sts.Name)
-			if want < minQuorumSize {
-				// Below three, a known quorum component has lost quorum under
-				// an HA install and fails, but is the documented shape under
-				// highAvailability.mode none. Only the launcher knows which,
-				// so an unset mode records it as not assessed rather than
-				// guessing. Anything else is recorded too, so an
-				// all-sub-quorum cluster cannot reach the trivial-pass exit
-				// having examined nothing.
-				switch mode := haMode(); {
-				case known && want == 0:
-					// Scaled to zero is the component down in any mode.
-					failures = append(failures, fmt.Sprintf("%s/%s: scaled to zero replicas", ns, sts.Name))
-					checkedCount++
-				case known && (mode == "preferred" || mode == "enforced"):
-					failures = append(failures,
-						fmt.Sprintf("%s/%s: spec.replicas=%d, below the quorum minimum of %d for highAvailability.mode %s",
-							ns, sts.Name, want, minQuorumSize, mode))
-					checkedCount++
-				case known && mode == "none":
-					nonHA = append(nonHA, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
-				default:
-					skippedParity = append(skippedParity,
-						fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
-				}
-				continue
-			}
-			if want%2 == 0 && !known {
-				// Even replica counts are not a quorum shape this check can
-				// reason about for an unknown workload, so record it rather than
-				// assess it. The known components are assessed at any size: a
-				// 4-node Cassandra ring at 0/4 is down, whatever its parity.
-				skippedParity = append(skippedParity, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
-				continue
-			}
-
-			// StatefulSets roll one pod at a time, so readyReplicas == want-1
-			// is the steady state for the whole duration of any image bump,
-			// PVC resize, or node drain, and is tolerated with a warning.
-			// There is no StatefulSet equivalent of ProgressDeadlineExceeded,
-			// and CurrentRevision only advances when a RollingUpdate completes,
-			// so a mismatch can be permanent (a non-zero partition, a wedged
-			// rollout). Readiness bounds the tolerance instead: at the full
-			// ready count nothing is hidden, and more than one pod down fails.
-			// Only a RollingUpdate can have a rollout in flight. Under OnDelete
-			// the controller never advances CurrentRevision on its own, so a
-			// mismatch says nothing and readiness is assessed directly.
-			rollingUpdate := sts.Spec.UpdateStrategy.Type != appsv1.OnDeleteStatefulSetStrategyType
-			oneDownRolling := false
-			if rollingUpdate && sts.Status.UpdateRevision != "" &&
-				sts.Status.CurrentRevision != sts.Status.UpdateRevision {
-				msg := fmt.Sprintf("%s/%s: rolling update in progress (ready: %d/%d)",
-					ns, sts.Name, sts.Status.ReadyReplicas, want)
-				printWarning(log, msg)
-				state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
-				rollingCount++
-
-				switch {
-				case sts.Status.ReadyReplicas >= want:
-					// Full ready count: assess normally and let the placement
-					// scan run.
-				case sts.Status.ReadyReplicas == want-1:
-					// One pod down is what rolling one at a time looks like,
-					// but only while the rollout can still finish. That is
-					// decided below from the down pod itself, once the pods
-					// are listed.
-					oneDownRolling = true
-				default:
-					// More than one peer down is beyond what a rolling update
-					// explains.
-					failures = append(failures,
-						fmt.Sprintf("%s/%s: readyReplicas=%d (need %d, rolling update in progress)",
-							ns, sts.Name, sts.Status.ReadyReplicas, want))
-					checkedCount++
-					continue
-				}
-			}
-			checkedCount++
-
-			if sts.Status.ReadyReplicas < want && !oneDownRolling {
-				failures = append(failures,
-					fmt.Sprintf("%s/%s: readyReplicas=%d (need %d)",
-						ns, sts.Name, sts.Status.ReadyReplicas, want))
-				continue
-			}
-
-			selector := metav1.FormatLabelSelector(sts.Spec.Selector)
-			pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
-			if err != nil {
-				// Not a placement failure: we could not look. Recording it in
-				// failures would report a broken quorum for an RBAC gap on
-				// pods, while the identical gap on statefulsets above is
-				// correctly reported as unknown.
-				msg := fmt.Sprintf("%s/%s: could not list pods for placement check: %v", ns, sts.Name, err)
-				printWarning(log, msg)
-				state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
-				placementUnknown++
-				continue
-			}
-
-			// A rollout with one pod down is tolerated only while it can still
-			// finish. With no progress deadline on a StatefulSet, the down pod
-			// is the evidence: a crash-looping new pod, or an old-revision pod
-			// held back by a partition, stays down on every run.
-			if oneDownRolling {
-				if reason := stalledRolloutPod(sts, pods.Items); reason != "" {
-					failures = append(failures, fmt.Sprintf("%s/%s: readyReplicas=%d (need %d), rolling update is not "+
-						"progressing: %s", ns, sts.Name, sts.Status.ReadyReplicas, want, reason))
-					continue
-				}
-				rollingUnderReplicated++
-			}
-
-			// Count only Ready pods owned by this StatefulSet. Phase stays
-			// Running through CrashLoopBackOff, and a surplus pod left over
-			// from a rollout would otherwise be reported as a co-location.
-			// A tolerated rollout still gets this scan: two Ready peers on
-			// one node are one node loss from losing quorum either way.
-			nodeOwner := make(map[string]string)
-			for j := range pods.Items {
-				p := &pods.Items[j]
-				if !metav1.IsControlledBy(p, sts) || !isPodReady(p) {
-					continue
-				}
-				if first, dup := nodeOwner[p.Spec.NodeName]; dup {
-					failures = append(failures,
-						fmt.Sprintf("%s/%s: pods %s and %s are co-located on node %s",
-							ns, sts.Name, first, p.Name, p.Spec.NodeName))
-				} else {
-					nodeOwner[p.Spec.NodeName] = p.Name
-				}
-			}
+		if first, dup := nodeOwner[p.Spec.NodeName]; dup {
+			s.fail("%s/%s: pods %s and %s are co-located on node %s", ns, sts.Name, first, p.Name, p.Spec.NodeName)
+		} else {
+			nodeOwner[p.Spec.NodeName] = p.Name
 		}
 	}
+}
 
-	if len(nonHA) > 0 {
-		printInfo(log, fmt.Sprintf("  Not a quorum under highAvailability.mode none: %s", strings.Join(nonHA, ", ")))
-	}
-	if len(skippedParity) > 0 {
-		msg := fmt.Sprintf("%d StatefulSet(s) not assessed (not a quorum shape this check covers): %s",
-			len(skippedParity), strings.Join(skippedParity, ", "))
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
-	}
+func (s *tier2Scan) setOK(ok bool) {
+	s.state.Tier2StatefulSetsOK = &ok
+}
 
-	if checkedCount == 0 {
-		if deniedCount > 0 {
-			printWarning(log, fmt.Sprintf("StatefulSets not readable in %d control-plane namespace(s)", deniedCount))
-			state.Warnings = append(state.Warnings, fmt.Sprintf(
-				"Tier-2 StatefulSets: status unknown (StatefulSet list denied or failed in %d control-plane namespace(s))",
-				deniedCount))
-			return
-		}
-		if len(skippedParity) > 0 {
-			// StatefulSets exist in the quorum namespaces but none was
-			// assessed. Claiming "Quorum and Placement OK" here would certify
-			// a ring this check never looked at.
-			state.Warnings = append(state.Warnings,
-				"Tier-2 StatefulSets: status unknown (no quorum-shaped StatefulSet was assessed)")
-			return
-		}
-		if placementUnknown > 0 {
-			printWarning(log, fmt.Sprintf("Placement not assessed for %d StatefulSet(s); pods were not readable", placementUnknown))
-			return
-		}
-		printInfo(log, "  No quorum StatefulSets (odd spec.replicas >= 3) found (pre-install or non-HA install)")
-		ok := true
-		state.Tier2StatefulSetsOK = &ok
+func (s *tier2Scan) deniedWarning() string {
+	return fmt.Sprintf("Tier-2 StatefulSets: status unknown (StatefulSet list denied or failed in %d "+
+		"control-plane namespace(s))", s.deniedCount)
+}
+
+func (s *tier2Scan) verdict() {
+	if len(s.nonHA) > 0 {
+		printInfo(s.log, fmt.Sprintf("  Not a quorum under highAvailability.mode none: %s",
+			strings.Join(s.nonHA, ", ")))
+	}
+	if len(s.skippedParity) > 0 {
+		s.warn(fmt.Sprintf("%d StatefulSet(s) not assessed (not a quorum shape this check covers): %s",
+			len(s.skippedParity), strings.Join(s.skippedParity, ", ")))
+	}
+	if s.checkedCount == 0 {
+		s.verdictNothingAssessed()
 		return
 	}
-
-	if len(failures) > 0 {
-		printError(log, fmt.Sprintf("Tier-2 quorum/placement findings (%d):", len(failures)))
-		for _, f := range failures {
-			printInfo(log, "  "+f)
+	switch {
+	case len(s.failures) > 0:
+		printError(s.log, fmt.Sprintf("Tier-2 quorum/placement findings (%d):", len(s.failures)))
+		for _, f := range s.failures {
+			printInfo(s.log, "  "+f)
 		}
-		state.Recommendations = append(state.Recommendations,
+		s.state.Recommendations = append(s.state.Recommendations,
 			"Ensure each Tier-2 StatefulSet (NATS, OpenBao, Cassandra) has all spec.replicas pods Ready "+
 				"and spread across distinct nodes.")
-		ok := false
-		state.Tier2StatefulSetsOK = &ok
-		return
-	}
-
-	if deniedCount > 0 {
-		printWarning(log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d namespace(s) were not readable",
-			checkedCount, deniedCount))
-		state.Warnings = append(state.Warnings,
-			fmt.Sprintf("Tier-2 StatefulSets: status unknown (StatefulSet list denied or failed in %d control-plane namespace(s))",
-				deniedCount))
-		return
-	}
-
-	if placementUnknown > 0 {
-		printWarning(log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but placement was not assessed for %d",
-			checkedCount, placementUnknown))
-		state.Warnings = append(state.Warnings,
+		s.setOK(false)
+	case s.deniedCount > 0:
+		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d namespace(s) were not readable",
+			s.checkedCount, s.deniedCount))
+		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+	case s.placementUnknown > 0:
+		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but placement was not assessed for %d",
+			s.checkedCount, s.placementUnknown))
+		s.state.Warnings = append(s.state.Warnings,
 			"Tier-2 StatefulSets: status unknown (pod placement could not be read for one or more StatefulSets)")
-		return
-	}
-
-	if rollingUnderReplicated > 0 {
+	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown: same rule as Tier-1. A NATS StatefulSet at
 		// 2/3 mid-RollingUpdate is what an upgrade looks like, and reporting
 		// it as an unobserved critical check made every control-plane upgrade
 		// NVCF-Not-Ready with a non-zero exit.
-		msg := fmt.Sprintf("%d quorum StatefulSet(s) healthy, %d mid-rollout and below target",
-			checkedCount, rollingUnderReplicated)
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Tier-2 StatefulSets: "+msg)
-		ok := true
-		state.Tier2StatefulSetsOK = &ok
-		return
+		s.warn(fmt.Sprintf("%d quorum StatefulSet(s) healthy, %d mid-rollout and below target",
+			s.checkedCount, s.rollingUnderReplicated))
+		s.setOK(true)
+	default:
+		if s.rollingCount > 0 {
+			printWarning(s.log, fmt.Sprintf(
+				"%d quorum StatefulSet(s) healthy, %d mid-rollout but at their replica target",
+				s.checkedCount, s.rollingCount))
+		}
+		printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", s.checkedCount))
+		s.setOK(true)
 	}
+}
 
-	if rollingCount > 0 {
-		printWarning(log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, %d mid-rollout but at their replica target",
-			checkedCount, rollingCount))
+func (s *tier2Scan) verdictNothingAssessed() {
+	switch {
+	case s.deniedCount > 0:
+		printWarning(s.log, fmt.Sprintf("StatefulSets not readable in %d control-plane namespace(s)", s.deniedCount))
+		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+	case len(s.skippedParity) > 0:
+		// StatefulSets exist in the quorum namespaces but none was assessed.
+		// Claiming "Quorum and Placement OK" here would certify a ring this
+		// check never looked at.
+		s.state.Warnings = append(s.state.Warnings,
+			"Tier-2 StatefulSets: status unknown (no quorum-shaped StatefulSet was assessed)")
+	case s.placementUnknown > 0:
+		printWarning(s.log, fmt.Sprintf("Placement not assessed for %d StatefulSet(s); pods were not readable",
+			s.placementUnknown))
+	default:
+		printInfo(s.log, "  No quorum StatefulSets (odd spec.replicas >= 3) found (pre-install or non-HA install)")
+		s.setOK(true)
 	}
-
-	printSuccess(log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", checkedCount))
-	ok := true
-	state.Tier2StatefulSetsOK = &ok
 }
 
 // checkConfigurableReachability probes user-defined endpoints loaded from the

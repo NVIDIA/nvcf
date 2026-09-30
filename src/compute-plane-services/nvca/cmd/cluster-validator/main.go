@@ -87,7 +87,8 @@ func main() {
 		log.Warnf("VALIDATOR_ROLE=%q is not recognized; defaulting to compute-plane", roleEnv)
 	}
 
-	if err := clustervalidator.Run(ctx, client, routes, configNS, configName, summaryNS, emitMetrics, role); err != nil {
+	err = clustervalidator.Run(ctx, client, routes, configNS, configName, summaryNS, emitMetrics, role)
+	if err != nil {
 		log.WithError(err).Fatal("Cluster validation failed")
 	}
 }

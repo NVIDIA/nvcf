@@ -341,7 +341,8 @@ func TestWaitForPodDone_HungGetEndsAtTheDeadline(t *testing.T) {
 	finishesWithin(t, 6*time.Second, func() {
 		_, _, err := waitForPodDone(context.Background(), client, "ns", "p", time.Second)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "did not complete", "a timed-out Get is transient, so the deadline ends the wait")
+		assert.Contains(t, err.Error(), "did not complete",
+			"a timed-out Get is transient, so the deadline ends the wait")
 	})
 }
 
