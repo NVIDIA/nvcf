@@ -322,6 +322,15 @@ assert_cluster_validator_role() {
     return 1
   fi
   printf 'ok %s schema rejects an unknown clusterValidator.haMode\n' "${chart_label}"
+
+  if helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true --set "clusterValidator.gatewayNames={gateway}" >/dev/null 2>&1; then
+    printf 'FAIL %s schema accepted a gateway name without a namespace\n' "${chart_label}" >&2
+    return 1
+  fi
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true --set "clusterValidator.gatewayNames={gw/shared-gw}" >/dev/null
+  printf 'ok %s schema requires namespace/name gateway names\n' "${chart_label}"
 }
 
 assert_cluster_validator_role "${repo_root}/deployments/nvca-operator" "service chart"

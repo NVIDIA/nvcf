@@ -1256,9 +1256,10 @@
                 "gatewayNames": {
                     "type": "array",
                     "items": {
-                        "type": "string"
+                        "type": "string",
+                        "pattern": "^[^/\\s]+/[^/\\s]+$"
                     },
-                    "description": "Override for the NVCF Gateways (name or namespace/name) the LoadBalancer check inspects; replaces discovery from the NVCF routes",
+                    "description": "Every NVCF Gateway as namespace/name; replaces discovery from the NVCF routes for the LoadBalancer and Tier-1 checks",
                     "default": []
                 },
                 "nodeToNodeProbeImage": {

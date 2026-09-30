@@ -240,12 +240,16 @@ func Run(
 		// inter-node overlay connectivity. GPU operator and SMB CSI are
 		// compute-plane concerns and are skipped.
 		checkStorageClass(ctx, client, state)
-		checkGatewayAPICRDs(ctx, client, state)
+		// Discover the Gateway API surface and decide which Gateways are
+		// NVCF's once, so the LoadBalancer row and Tier-1 judge the same set.
+		surface, surfaceErr := discoverGatewayAPIResources(client)
+		checkGatewayAPICRDsIn(state, surface, surfaceErr)
 		checkEnvoyGateway(ctx, client, state)
-		checkGatewayRoutes(ctx, client, state)
-		checkExternalLoadBalancer(ctx, client, routes, state)
+		checkGatewayRoutesIn(state, surface, surfaceErr)
+		ownership := resolveGatewayOwnershipIn(ctx, surface, surfaceErr, routes)
+		checkExternalLoadBalancerFor(ctx, client, ownership, state)
 		checkNodeToNode(ctx, client, state, nodeToNodeProbeImage(netCfg))
-		checkTier1Deployments(ctx, client, routes, state)
+		checkTier1DeploymentsFor(ctx, client, ownership, state)
 		checkTier2StatefulSets(ctx, client, state)
 	} else {
 		// Compute-plane cluster (default): GPU operator, SMB CSI driver.

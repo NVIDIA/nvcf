@@ -237,7 +237,7 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.role`                               | Check set: `control-plane`, or `compute-plane` or empty for the GPU checks        | `""`                                   |
 | `clusterValidator.openBaoNamespace`                   | Namespace holding OpenBao when it is not `vault-system`                           | `""`                                   |
 | `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
-| `clusterValidator.gatewayNames`                       | Override for the NVCF Gateways (`name` or `namespace/name`); replaces discovery   | `[]` (discovered from NVCF routes)     |
+| `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; replaces discovery for the LB and Tier-1 checks | `[]` (discovered from NVCF routes)     |
 | `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets` | `""` (`busybox:1.36`)                  |
 | `clusterValidator.haMode`                             | Stack `highAvailability.mode`; sub-quorum fails only under `preferred`/`enforced` | `""` (not assessed)                    |
 | `clusterValidator.schedule`                           | CronJob schedule (cron expression)                                                | `0 */3 * * *`                          |
