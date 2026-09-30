@@ -43,6 +43,7 @@ rectangle "stargate" #f0f7e8 {
   rectangle "Model Discovery gRPC\nListModels" as ModelDiscovery
   rectangle "Forwarding Dispatch\ngRPC: :authority check\nQUIC: SNI check" as Forwarding
   rectangle "HTTP Proxy\n/v1/chat/completions\n/v1/responses\n/v1/embeddings" as HttpProxy
+  rectangle "Request Routing\nwaits + exclusions + selection" as RequestRouting
   rectangle "QUIC Tunnel Client\n+ Reverse Listener" as Quic
   rectangle "Load Balancer Router" as Router
   database "Routing State\nkeyed by RoutingTargetKey\n(conn + RTT gated)" as State
@@ -72,9 +73,10 @@ Client --> ModelSvc : model discovery\n(load-balanced)
 Client --> ProxySvc : inference POST\n(load-balanced)
 ModelSvc --> ModelDiscovery
 ProxySvc --> HttpProxy
-HttpProxy --> Router : RoutingTargetKey\n(routing_key + model_id)\n+ request metadata
+HttpProxy --> RequestRouting : routing target + request metadata
+RequestRouting --> Router : algorithm decision
+RequestRouting --> State : snapshots + live backend selection
 HttpProxy --> Quic : proxy request
-Router --> State : candidate lookup
 
 ' QUIC data path
 Quic --> TunnelCli : framed HTTP request\n+ /health probe
@@ -105,6 +107,6 @@ Discovery --> ControlPlane : peer snapshots\n(polled)
 ' observability
 Telemetry --> Obs : Prometheus / OTLP
 HttpProxy --> Telemetry : spans + latency
-Router --> Telemetry : routing duration
+RequestRouting --> Telemetry : routing waits + selection + duration
 
 @enduml

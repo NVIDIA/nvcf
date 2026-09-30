@@ -13,32 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::time::{Duration, Instant};
-
 use axum::body::Body;
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use rand::Rng;
 use tracing::{Span, warn};
 
-use crate::load_balancer::{
-    LoadBalancerAlgorithmConfig, LoadBalancerRequest, input_work_seconds_for_request,
-};
 use crate::metrics::StargateMetrics;
-use crate::routing_state::{RoutedClusterSnapshot, RoutingTargetKey};
+use crate::routing_state::RoutingTargetKey;
 
 use super::HEADER_STARGATE_ERROR_CODE;
+use super::request_routing::RoutingRejection;
 
 const ERROR_OVERLOADED: &str = "overloaded_error";
 const ERROR_NO_ELIGIBLE_CANDIDATES: &str = "no_eligible_candidates";
 const ERROR_NO_ELIGIBLE_CANDIDATES_BODY: &str =
     r#"{"error":"no eligible candidates","code":"no_eligible_candidates"}"#;
-const ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED: &str = "input_work_limit_exceeded";
-const ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE: &str = "input_work_capacity_unavailable";
-const ROUTING_RETRY_SLEEP_MIN_MS: u64 = 1;
-const ROUTING_RETRY_SLEEP_MAX_MS: u64 = 10;
-const ROUTING_RETRY_MAX_WAIT_MS: u64 = 60_000;
 
 pub(super) fn overloaded_response() -> Response<Body> {
     (
@@ -54,31 +43,6 @@ pub(super) fn overloaded_response() -> Response<Body> {
         })),
     )
         .into_response()
-}
-
-pub(super) fn eligible_cluster_candidate_count(
-    candidates: &[RoutedClusterSnapshot],
-    excluded_cluster_ids: Option<&HashSet<String>>,
-) -> usize {
-    excluded_cluster_ids.map_or(candidates.len(), |excluded_cluster_ids| {
-        candidates
-            .iter()
-            .filter(|candidate| !excluded_cluster_ids.contains(&candidate.cluster_id))
-            .count()
-    })
-}
-
-pub(super) fn input_work_admission_rejection_reason(
-    config: &LoadBalancerAlgorithmConfig,
-    request: &LoadBalancerRequest<'_>,
-    candidates: &[RoutedClusterSnapshot],
-    limit_seconds: f64,
-) -> Option<&'static str> {
-    match input_work_seconds_for_request(config, request, candidates) {
-        Some(seconds) if seconds <= limit_seconds => None,
-        Some(_) => Some(ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED),
-        None => Some(ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE),
-    }
 }
 
 pub(super) fn input_work_admission_rejection_response(
@@ -103,55 +67,37 @@ pub(super) fn input_work_admission_rejection_response(
     overloaded_response()
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct NoRoutingChoiceInputs {
-    pub(super) num_candidates: usize,
-    pub(super) eligible_candidate_count: usize,
-    pub(super) target_registered: bool,
-    pub(super) failed_backend_count: usize,
-    pub(super) failed_cluster_count: usize,
-    pub(super) retry_allowed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NoRoutingChoiceAction {
-    RetryRouting,
-    Finalize(NoRoutingFinalization),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NoRoutingFinalization {
-    NoCandidatesNotFound,
-    ServiceUnavailable,
-}
-
-pub(super) fn classify_no_routing_choice(inputs: NoRoutingChoiceInputs) -> NoRoutingChoiceAction {
-    if inputs.num_candidates > 0 && inputs.eligible_candidate_count > 0 && inputs.retry_allowed {
-        NoRoutingChoiceAction::RetryRouting
-    } else if inputs.num_candidates == 0
-        && !inputs.target_registered
-        && inputs.failed_backend_count == 0
-        && inputs.failed_cluster_count == 0
-    {
-        NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoCandidatesNotFound)
-    } else {
-        NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
-    }
-}
-
-pub(super) struct NoRoutingFinalizationContext<'a> {
+pub(super) struct RoutingRejectionContext<'a> {
     pub(super) metrics: &'a StargateMetrics,
     pub(super) target: &'a RoutingTargetKey,
-    pub(super) finalization: NoRoutingFinalization,
+    pub(super) rejection: RoutingRejection,
     pub(super) failed_backend_count: usize,
     pub(super) failed_cluster_count: usize,
     pub(super) routing_retry_attempts: u64,
     pub(super) capacity_rejected: bool,
 }
 
-pub(super) fn finalize_no_routing_choice(
-    context: NoRoutingFinalizationContext<'_>,
+pub(super) fn routing_rejection_response(
+    context: RoutingRejectionContext<'_>,
 ) -> Result<Response<Body>, StatusCode> {
+    let (status, response) = match context.rejection {
+        RoutingRejection::Admission(reason) => {
+            return Ok(input_work_admission_rejection_response(
+                context.metrics,
+                context.target,
+                reason,
+            ));
+        }
+        RoutingRejection::NoCandidatesNotFound => ("404", Ok(no_eligible_candidates_response())),
+        RoutingRejection::ServiceUnavailable => (
+            "503",
+            if context.capacity_rejected {
+                Ok(overloaded_response())
+            } else {
+                Err(StatusCode::SERVICE_UNAVAILABLE)
+            },
+        ),
+    };
     let rk_ref = context.target.routing_key.as_deref();
     let model_id = context.target.model_id.as_str();
     if context.failed_backend_count > 0 || context.failed_cluster_count > 0 {
@@ -164,84 +110,18 @@ pub(super) fn finalize_no_routing_choice(
     warn!(
         routing_key = ?context.target.routing_key,
         model_id = %model_id,
-        finalization = ?context.finalization,
+        finalization = ?context.rejection,
         failed_backend_count = context.failed_backend_count,
         failed_cluster_count = context.failed_cluster_count,
         routing_retry_attempts = context.routing_retry_attempts,
         "no inference server candidates for routing target"
     );
 
-    match context.finalization {
-        NoRoutingFinalization::NoCandidatesNotFound => {
-            context
-                .metrics
-                .requests_total(rk_ref, model_id, "", "404")
-                .inc();
-            Ok(no_eligible_candidates_response())
-        }
-        NoRoutingFinalization::ServiceUnavailable => {
-            context
-                .metrics
-                .requests_total(rk_ref, model_id, "", "503")
-                .inc();
-            if context.capacity_rejected {
-                Ok(overloaded_response())
-            } else {
-                Err(StatusCode::SERVICE_UNAVAILABLE)
-            }
-        }
-    }
-}
-
-pub(super) fn should_retry_routing(deadline: Option<Instant>) -> bool {
-    deadline.is_some_and(|deadline| Instant::now() < deadline)
-}
-
-pub(super) fn routing_retry_deadline(
-    request_start: Instant,
-    max_wait_ms: Option<u64>,
-) -> Option<Instant> {
-    max_wait_ms.and_then(|wait_ms| {
-        request_start.checked_add(Duration::from_millis(
-            wait_ms.min(ROUTING_RETRY_MAX_WAIT_MS),
-        ))
-    })
-}
-
-/// Deadline for timed load-balancer waits. Unlike generic routing retries,
-/// bucket waits do not require `x-max-wait-ms`, but they stay bounded.
-pub(super) fn routing_wait_deadline(request_start: Instant, max_wait_ms: Option<u64>) -> Instant {
-    let wait_ms = max_wait_ms.map_or(ROUTING_RETRY_MAX_WAIT_MS, |wait_ms| {
-        wait_ms.min(ROUTING_RETRY_MAX_WAIT_MS)
-    });
-    request_start + Duration::from_millis(wait_ms)
-}
-
-pub(super) fn routing_wait_delay(
-    remaining: Duration,
-    deadline: Option<Instant>,
-    now: Instant,
-) -> Option<Duration> {
-    // Recheck capacity while waiting for the next routing phase or bucket.
-    // Timed waits do not need the 1-10 ms generic capacity retry loop.
-    let delay = remaining.min(Duration::from_millis(25));
-    let delay = deadline.map_or(delay, |deadline| {
-        delay.min(deadline.saturating_duration_since(now))
-    });
-    (!delay.is_zero()).then_some(delay)
-}
-
-pub(super) async fn sleep_before_routing_retry(deadline: Option<Instant>) {
-    // The retry deadline may pass between checks; clamp elapsed deadlines to no sleep.
-    let remaining = deadline.map_or(Duration::ZERO, |deadline| {
-        deadline.saturating_duration_since(Instant::now())
-    });
-    if remaining.is_zero() {
-        return;
-    }
-    let random_sleep_ms =
-        rand::rng().random_range(ROUTING_RETRY_SLEEP_MIN_MS..ROUTING_RETRY_SLEEP_MAX_MS);
-    tokio::time::sleep(remaining.min(Duration::from_millis(random_sleep_ms))).await;
+    context
+        .metrics
+        .requests_total(rk_ref, model_id, "", status)
+        .inc();
+    response
 }
 
 fn no_eligible_candidates_response() -> Response<Body> {
@@ -268,250 +148,4 @@ fn json_error_response(
         HeaderValue::from_static("application/json"),
     );
     response
-}
-
-#[cfg(test)]
-mod tests {
-    use stargate_proto::pb::{InferenceServerStatus, ModelStats};
-
-    use super::*;
-    use crate::load_balancer::LoadBalancerAlgorithm;
-
-    #[test]
-    fn affinity_wait_rechecks_capacity_and_respects_explicit_deadline() {
-        let now = Instant::now();
-        assert_eq!(
-            routing_wait_delay(Duration::from_millis(100), None, now),
-            Some(Duration::from_millis(25))
-        );
-        assert_eq!(
-            routing_wait_delay(Duration::from_millis(5), None, now),
-            Some(Duration::from_millis(5))
-        );
-        assert_eq!(
-            routing_wait_delay(
-                Duration::from_millis(100),
-                Some(now + Duration::from_millis(10)),
-                now
-            ),
-            Some(Duration::from_millis(10))
-        );
-        assert_eq!(
-            routing_wait_delay(Duration::from_millis(100), Some(now), now),
-            None
-        );
-        assert_eq!(routing_wait_delay(Duration::ZERO, None, now), None);
-    }
-
-    fn cluster_candidate(cluster_id: &str) -> RoutedClusterSnapshot {
-        RoutedClusterSnapshot {
-            cluster_id: cluster_id.to_string(),
-            stats: ModelStats::default(),
-            rtt: Duration::from_millis(1),
-            snapshot_updated_at: Instant::now(),
-            status: InferenceServerStatus::Active,
-            active_backend_count: 1,
-        }
-    }
-
-    fn input_work_admission_request<'a>(
-        target: &'a RoutingTargetKey,
-        input_tokens: u64,
-    ) -> LoadBalancerRequest<'a> {
-        LoadBalancerRequest {
-            routing_target: target,
-            cache_affinity_key: Some("cache-key-a"),
-            input_tokens: Some(input_tokens),
-            priority: 0,
-            received_at: Instant::now(),
-            request_slo: None,
-            excluded_cluster_ids: None,
-        }
-    }
-
-    fn routing_target() -> RoutingTargetKey {
-        RoutingTargetKey::new(None, "model-a")
-    }
-
-    fn no_routing_inputs(
-        num_candidates: usize,
-        eligible_candidate_count: usize,
-    ) -> NoRoutingChoiceInputs {
-        NoRoutingChoiceInputs {
-            num_candidates,
-            eligible_candidate_count,
-            target_registered: false,
-            failed_backend_count: 0,
-            failed_cluster_count: 0,
-            retry_allowed: true,
-        }
-    }
-
-    #[test]
-    fn input_work_admission_rejects_overloaded_pool() {
-        let mut candidate = cluster_candidate("cluster-a");
-        candidate.stats.queued_input_size = 300;
-        candidate.stats.last_mean_input_tps = 100.0;
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
-        let target = routing_target();
-        let request = input_work_admission_request(&target, 50);
-
-        assert_eq!(
-            input_work_admission_rejection_reason(&config, &request, &[candidate], 3.0),
-            Some(ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED)
-        );
-    }
-
-    #[test]
-    fn input_work_admission_ignores_decode_only_total_query_input_size() {
-        let mut candidate = cluster_candidate("cluster-a");
-        candidate.stats.total_query_input_size = 300;
-        candidate.stats.queued_input_size = 0;
-        candidate.stats.last_mean_input_tps = 100.0;
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
-        let target = routing_target();
-        let request = input_work_admission_request(&target, 50);
-
-        assert_eq!(
-            input_work_admission_rejection_reason(&config, &request, &[candidate], 3.0),
-            None
-        );
-    }
-
-    #[test]
-    fn input_work_admission_rejects_pool_without_valid_capacity() {
-        let mut candidate = cluster_candidate("cluster-a");
-        candidate.stats.last_mean_input_tps = 0.0;
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
-        let target = routing_target();
-        let request = input_work_admission_request(&target, 50);
-
-        assert_eq!(
-            input_work_admission_rejection_reason(&config, &request, &[candidate], 3.0),
-            Some(ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE)
-        );
-    }
-
-    #[test]
-    fn no_routing_choice_retries_only_with_eligible_candidates_and_budget() {
-        assert_eq!(
-            classify_no_routing_choice(no_routing_inputs(2, 1)),
-            NoRoutingChoiceAction::RetryRouting
-        );
-        assert_eq!(
-            classify_no_routing_choice(NoRoutingChoiceInputs {
-                failed_backend_count: 1,
-                failed_cluster_count: 1,
-                ..no_routing_inputs(2, 0)
-            }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
-        );
-        assert_eq!(
-            classify_no_routing_choice(NoRoutingChoiceInputs {
-                retry_allowed: false,
-                ..no_routing_inputs(2, 1)
-            }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
-        );
-    }
-
-    #[test]
-    fn no_routing_choice_finalizes_empty_route_as_not_found() {
-        assert_eq!(
-            classify_no_routing_choice(no_routing_inputs(0, 0)),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoCandidatesNotFound)
-        );
-    }
-
-    #[test]
-    fn no_routing_choice_finalizes_registered_empty_route_as_unavailable() {
-        assert_eq!(
-            classify_no_routing_choice(NoRoutingChoiceInputs {
-                target_registered: true,
-                ..no_routing_inputs(0, 0)
-            }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
-        );
-    }
-
-    #[test]
-    fn no_routing_choice_finalizes_failed_empty_route_as_unavailable() {
-        assert_eq!(
-            classify_no_routing_choice(NoRoutingChoiceInputs {
-                failed_backend_count: 1,
-                ..no_routing_inputs(0, 0)
-            }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
-        );
-    }
-
-    #[test]
-    fn eligible_cluster_candidate_count_uses_len_without_exclusions() {
-        let candidates = vec![
-            cluster_candidate("cluster-a"),
-            cluster_candidate("cluster-b"),
-            cluster_candidate("cluster-c"),
-        ];
-
-        assert_eq!(eligible_cluster_candidate_count(&candidates, None), 3);
-    }
-
-    #[test]
-    fn eligible_cluster_candidate_count_filters_excluded_clusters() {
-        let candidates = vec![
-            cluster_candidate("cluster-a"),
-            cluster_candidate("cluster-b"),
-        ];
-        let excluded = HashSet::from(["cluster-a".to_string()]);
-
-        assert_eq!(
-            eligible_cluster_candidate_count(&candidates, Some(&excluded)),
-            1
-        );
-    }
-
-    #[test]
-    fn routing_wait_deadline_is_bounded_without_max_wait_header() {
-        let request_start = Instant::now();
-        let cap = request_start + Duration::from_millis(ROUTING_RETRY_MAX_WAIT_MS);
-        assert_eq!(routing_wait_deadline(request_start, None), cap);
-        assert_eq!(routing_wait_deadline(request_start, Some(u64::MAX)), cap);
-        assert_eq!(
-            routing_wait_deadline(request_start, Some(250)),
-            request_start + Duration::from_millis(250)
-        );
-    }
-
-    #[test]
-    fn routing_wait_stops_at_default_deadline_without_max_wait_header() {
-        let request_start = Instant::now();
-        let deadline = routing_wait_deadline(request_start, None);
-        let one_hour = Duration::from_secs(3600);
-        assert_eq!(
-            routing_wait_delay(one_hour, Some(deadline), request_start),
-            Some(Duration::from_millis(25))
-        );
-        assert_eq!(
-            routing_wait_delay(
-                one_hour,
-                Some(deadline),
-                deadline - Duration::from_millis(5)
-            ),
-            Some(Duration::from_millis(5))
-        );
-        assert_eq!(routing_wait_delay(one_hour, Some(deadline), deadline), None);
-        // Generic capacity retries still require an explicit header budget.
-        assert!(!should_retry_routing(routing_retry_deadline(
-            request_start,
-            None
-        )));
-    }
-
-    #[test]
-    fn routing_retry_deadline_caps_max_wait_header() {
-        let request_start = Instant::now();
-        let deadline = routing_retry_deadline(request_start, Some(u64::MAX))
-            .expect("capped deadline should be computed");
-        assert!(deadline <= request_start + Duration::from_millis(ROUTING_RETRY_MAX_WAIT_MS));
-    }
 }

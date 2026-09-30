@@ -33,6 +33,7 @@ use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 mod attempt;
 mod diagnostics;
 mod request;
+mod request_routing;
 mod retry;
 mod routing;
 mod run;
@@ -46,7 +47,7 @@ use request::{
 };
 pub use retry::ProxyRetryConfig;
 use retry::{ReplayableRequestBody, retry_budget_deadline};
-use run::{PreparedProxyRequest, ProxyRequestRun};
+use run::{PreparedProxyRequest, ProxyRequest, ProxyRequestRun};
 use trace::{RequestTraceFields, proxy_openai_request_span, record_request_to_span};
 use upstream::prepare_forwarded_headers;
 
@@ -207,13 +208,15 @@ fn prepare_proxy_request(
     Ok(PreparedProxyRequest {
         request_inputs,
         lb_resolution,
-        endpoint_name: endpoint.name,
-        method: parts.method,
-        path_and_query,
-        forwarded_headers: prepare_forwarded_headers(&parts.headers),
-        retry_deadline,
-        request_start,
-        replay_body,
+        request: ProxyRequest {
+            endpoint_name: endpoint.name,
+            method: parts.method,
+            path_and_query,
+            forwarded_headers: prepare_forwarded_headers(&parts.headers),
+            retry_deadline,
+            request_start,
+            replay_body,
+        },
     })
 }
 
@@ -247,7 +250,9 @@ mod test_support {
     use crate::routing_state::StargateState;
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz};
+    use super::{
+        DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz,
+    };
 
     pub(super) fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -308,7 +313,10 @@ mod test_support {
         let ready_token = CancellationToken::new();
         app.readiness = ReadinessState::warming_up(ready_token.clone());
 
-        assert_eq!(readyz(State(app.clone())).await, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            readyz(State(app.clone())).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
 
         ready_token.cancel();
 

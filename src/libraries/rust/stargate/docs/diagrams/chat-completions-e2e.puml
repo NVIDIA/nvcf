@@ -11,7 +11,9 @@ participant "LLM Gateway" as Gateway
 
 box "Stargate Pod" #f0f7e8
   participant "HTTP Proxy\n:8000" as Proxy
+  participant "Request Routing" as Routing
   participant "Load Balancer\nRouter" as LB
+  participant "Routing State" as State
   participant "QUIC Tunnel\nClient" as QuicProxy
 end box
 
@@ -31,8 +33,9 @@ note over Proxy
   is required. Body is opaque -- never parsed.
 end note
 
-Proxy -> LB: cluster_candidates_for_target(\n  RoutingTargetKey{my-rk, my-model})
-LB --> Proxy: [cluster-A (rtt=5ms), cluster-B (rtt=12ms)]
+Proxy -> Routing: route request for my-rk / my-model
+Routing -> State: fresh routing snapshot
+State --> Routing: clusters and their registration owners
 
 note over LB
   Default: power-of-n
@@ -42,9 +45,21 @@ note over LB
   sample are candidates.
 end note
 
-Proxy -> LB: choose(LoadBalancerRequest, candidates)
-LB --> Proxy: cluster-A
-Proxy -> Proxy: select concrete backend\nserver-A in cluster-A
+Routing -> Routing: exclude failed clusters\ncheck input-work admission
+Routing -> LB: evaluate resolved algorithm
+LB --> Routing: cluster-A
+Routing -> State: select live backend in cluster-A
+State --> Routing: server-A
+Routing --> Proxy: selected cluster and backend
+
+note over Routing
+  Algorithm waits and generic routing retries
+  have separate limits. A wait refreshes the
+  snapshot before reevaluating capacity.
+  Limits stop further waiting, not selection.
+  Backend failover tries a sibling first;
+  cluster failure starts fresh routing.
+end note
 
 == QUIC Tunnel ==
 Proxy -> QuicProxy: proxy_request_streaming(\n  "server-A",\n  POST, "/v1/chat/completions",\n  forwarded headers, body)

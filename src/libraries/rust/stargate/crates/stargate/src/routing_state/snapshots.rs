@@ -87,28 +87,6 @@ impl RoutingTargetSnapshot {
             owner: self.cluster_owners.swap_remove(index),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(clusters: Vec<RoutedClusterSnapshot>) -> Self {
-        let clusters = clusters
-            .into_iter()
-            .map(|snapshot| {
-                let registration =
-                    super::registration::test_registration_generation(RegistrationIdentity {
-                        inference_server_id: format!("{}-test-owner", snapshot.cluster_id),
-                        cluster_id: snapshot.cluster_id.clone(),
-                        inference_server_url: "quic://127.0.0.1:5000".to_string(),
-                        routing_key: None,
-                        reverse_tunnel: false,
-                    });
-                let owner = Arc::new(RoutedClusterState::new(
-                    registration.cluster_generation.clone(),
-                ));
-                (snapshot, owner)
-            })
-            .collect();
-        Self::new(Arc::new(RoutingTargetState::default()), clusters)
-    }
 }
 
 #[derive(Debug)]
