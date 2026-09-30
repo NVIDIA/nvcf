@@ -469,9 +469,12 @@ nvcr.io/nvidia/nvcf-byoc/cluster-validator
 
 {{/*
 The cluster-validator Job spec, shared by the CronJob and the one-shot Job the
-control-plane role runs at install, so the two cannot drift.
+control-plane role runs at install, so the two cannot drift. Takes a dict:
+"root" is the chart context, and "reportOnly" marks the install-time Job.
 */}}
 {{- define "nvcaop.clusterValidatorJobSpec" -}}
+{{- $reportOnly := .reportOnly -}}
+{{- with .root -}}
 {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
 parallelism: 1
 completions: 1
@@ -554,6 +557,14 @@ template:
           - name: NVCF_HA_MODE
             value: {{ $cv.haMode | quote }}
           {{- end }}
+          {{- if $reportOnly }}
+          # The install-time Job is a release resource, and the stack waits
+          # for Jobs: a Not-Ready verdict publishes its summary and completes
+          # rather than failing the install or upgrade. The CronJob's runs
+          # still fail.
+          - name: VALIDATOR_REPORT_ONLY
+            value: "true"
+          {{- end }}
         resources:
           requests:
             cpu: {{ $cv.resources.requests.cpu | quote }}
@@ -581,4 +592,5 @@ template:
     nodeSelector:
       {{ .Values.nodeSelector.key }}: {{ .Values.nodeSelector.value }}
     {{- end }}
+{{- end }}
 {{- end }}

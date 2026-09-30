@@ -73,3 +73,13 @@ func TestPreflightMode(t *testing.T) {
 		}
 	}
 }
+
+// Only an explicit VALIDATOR_REPORT_ONLY lets a failed validation complete;
+// unset, the CronJob and a direct run still fail.
+func TestValidationFailureIsFatal(t *testing.T) {
+	for in, want := range map[string]bool{"": true, "false": true, "garbage": true, "true": false, " TRUE ": false, "1": false} {
+		if got := validationFailureIsFatal(in); got != want {
+			t.Errorf("validationFailureIsFatal(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

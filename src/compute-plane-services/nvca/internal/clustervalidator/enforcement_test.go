@@ -655,3 +655,21 @@ func TestWaitForPodReady_RetriesTransientErrors(t *testing.T) {
 	require.Error(t, waitForPodReady(context.Background(), denied, "ns", "srv", 30*time.Second))
 	assert.Less(t, time.Since(start), 5*time.Second, "a denial cannot change inside the deadline")
 }
+
+// A transient error followed by NotFound until the deadline times out on the
+// missing pod, not on the error the API has since recovered from.
+func TestWaitForPodReady_NotFoundClearsAnEarlierTransientError(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	err := waitForPodReady(context.Background(), client, "ns", "missing", 3*time.Second)
+	require.Error(t, err)
+	assert.Greater(t, calls, 1)
+	assert.NotContains(t, err.Error(), "slow down")
+}

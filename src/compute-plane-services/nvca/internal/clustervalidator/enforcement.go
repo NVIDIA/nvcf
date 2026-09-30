@@ -551,7 +551,9 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 		case err == nil:
 			lastErr = nil
 		case apierrors.IsNotFound(err):
-			// Not created yet.
+			// Not created yet. The API answered, so an earlier transient
+			// error no longer explains a timeout.
+			lastErr = nil
 		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
 			return fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
 		default:

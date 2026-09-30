@@ -89,8 +89,20 @@ func main() {
 
 	err = clustervalidator.Run(ctx, client, routes, configNS, configName, summaryNS, emitMetrics, role)
 	if err != nil {
+		if !validationFailureIsFatal(os.Getenv("VALIDATOR_REPORT_ONLY")) {
+			log.WithError(err).Error("Cluster validation failed; report-only run, so the verdict is in the summary and the Job completes")
+			return
+		}
 		log.WithError(err).Fatal("Cluster validation failed")
 	}
+}
+
+// validationFailureIsFatal reports whether a failed validation fails the
+// process. VALIDATOR_REPORT_ONLY marks the chart's install-time Job, a release
+// resource the stack waits on: it publishes the verdict in its summary and
+// completes, so a Not-Ready cluster does not fail the install or upgrade.
+func validationFailureIsFatal(reportOnlyEnv string) bool {
+	return !preflightMode(reportOnlyEnv)
 }
 
 // parseRole normalizes the VALIDATOR_ROLE env value. Returns the matching

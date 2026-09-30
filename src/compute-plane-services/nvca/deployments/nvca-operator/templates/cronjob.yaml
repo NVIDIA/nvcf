@@ -36,5 +36,5 @@ spec:
         {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: validation
     spec:
-      {{- include "nvcaop.clusterValidatorJobSpec" . | nindent 6 }}
+      {{- include "nvcaop.clusterValidatorJobSpec" (dict "root" .) | nindent 6 }}
 {{- end }}

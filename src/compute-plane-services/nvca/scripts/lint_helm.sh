@@ -301,11 +301,18 @@ assert_cluster_validator_role() {
     "${chart_label} init container leaves the post-install signal unset"
 
   # Under the control-plane role the init container publishes no summary, so a
-  # one-shot Job runs the CronJob's own spec at install instead.
+  # one-shot Job runs the CronJob's own spec at install instead. The stack
+  # waits for Jobs, so it runs report-only and a Not-Ready verdict cannot fail
+  # the release; the CronJob's runs still fail.
   local initial_job='select(.kind == "Job" and .metadata.labels."app.kubernetes.io/component" == "validation")'
+  local initial_env="${initial_job} | .spec.template.spec.containers[0].env[]"
   assert_eq "$(yq "${cron_env} | [.name, .value] | join(\"=\")" "${rendered}" | grep '=')" \
-    "$(yq "${initial_job} | .spec.template.spec.containers[0].env[] | [.name, .value] | join(\"=\")" "${rendered}" | grep '=')" \
+    "$(yq "${initial_env} | select(.name != \"VALIDATOR_REPORT_ONLY\") | [.name, .value] | join(\"=\")" "${rendered}" | grep '=')" \
     "${chart_label} install-time Job runs the CronJob's spec under the control-plane role"
+  assert_eq "true" "$(yq "${initial_env} | select(.name == \"VALIDATOR_REPORT_ONLY\") | .value" "${rendered}")" \
+    "${chart_label} install-time Job is report-only"
+  assert_eq "" "$(yq "${cron_env} | select(.name == \"VALIDATOR_REPORT_ONLY\") | .value" "${rendered}")" \
+    "${chart_label} CronJob runs still fail on a Not-Ready verdict"
 
   helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
     --set clusterValidator.enabled=true >"${rendered}"

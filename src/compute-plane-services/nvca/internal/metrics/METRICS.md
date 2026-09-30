@@ -1564,11 +1564,11 @@ The following metrics have dynamic cardinality based on cluster configuration:
   - Orphaned resource cleanup: number of resource types × status values (low, typically 2-4 series)
   - Cleaner runs: number of cleaner names × status values (low, typically 2-4 series)
 - **Cluster attribute metrics**: 1 series per cluster (Kata runtime isolation enabled/disabled)
-- **Cluster-validator metrics**: fixed-cardinality vectors (`nvca_cluster_validator_ready`, `_last_run_timestamp_seconds`, `_last_run_duration_seconds`) yield 1 series each and are updated in place on every run (no per-run churn). `_check_status` yields ~10 series (one per built-in check). `_endpoint_reachable` is bounded by the customer's `networkChecks` config (typically <20 entries); `_netpol_pair_passed` is bounded by 4 × the number of configured pairs (direction × policy_side). Config-driven series are pruned when the latest run no longer reports them.
+- **Cluster-validator metrics**: fixed-cardinality vectors (`nvca_cluster_validator_ready`, `_last_run_timestamp_seconds`, `_last_run_duration_seconds`) yield 1 series each and are updated in place on every run (no per-run churn). `_check_status` has 18 possible `check` label values. The init-to-zero baseline emits all 18; after the first summary, a compute-plane run emits up to 10 series and a control-plane run up to 15, depending on which conditional checks ran. `_endpoint_reachable` is bounded by the customer's `networkChecks` config (typically <20 entries); `_netpol_pair_passed` is bounded by 4 x the number of configured pairs (direction x policy_side). Config-driven series are pruned when the latest run no longer reports them.
 - **Upstream request metric** (`nvca_upstream_request_total`): 6 series fixed (3 operations × 2 statuses, pre-initialized)
 - **Scheduler workload count** (`nvca_scheduler_workload_count`): 4 series fixed (2 schedulers × 2 workload kinds, pre-initialized)
 
-Total expected cardinality per cluster: **159-254 time series** depending on configuration and active workload count.
+Total expected cardinality per cluster: **159-254 time series** for a compute-plane cluster, depending on configuration and active workload count. The upper bound is 259 for a control-plane cluster, and 262 while the 18-key init-to-zero baseline is active.
 
 ## Outbound Client Metrics (OpenTelemetry semconv)
 

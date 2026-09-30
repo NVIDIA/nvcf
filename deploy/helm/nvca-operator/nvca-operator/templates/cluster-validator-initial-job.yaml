@@ -21,9 +21,10 @@
 # preflight mode and publishes no summary, so without this run the first
 # summary waits for the CronJob's first tick, up to a full schedule interval,
 # with the agent reporting NVCF-Not-Ready and last_run 0 meanwhile. It runs the
-# CronJob's own spec once per install and upgrade: named for the release
-# revision so each gets a fresh Job, and not a Helm hook, so a Not-Ready
-# verdict cannot fail the release.
+# CronJob's own spec once per install and upgrade, named for the release
+# revision so each gets a fresh Job. It is not a Helm hook, but the stack
+# installs with waitForJobs, so a failed Job would still fail the release: it
+# runs report-only, publishing a Not-Ready verdict and completing.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -34,6 +35,6 @@ metadata:
     app.kubernetes.io/component: validation
 spec:
   ttlSecondsAfterFinished: 86400
-  {{- include "nvcaop.clusterValidatorJobSpec" . | nindent 2 }}
+  {{- include "nvcaop.clusterValidatorJobSpec" (dict "root" . "reportOnly" true) | nindent 2 }}
 {{- end }}
 {{- end }}
