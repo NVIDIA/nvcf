@@ -435,6 +435,7 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "gatewayNames" (list)
     "nodeToNodeProbeImage" ""
     "haMode" ""
+    "tolerations" (list)
     "networkChecks" (dict)
     "resources" (dict
       "requests" (dict "cpu" "100m" "memory" "64Mi")
@@ -465,3 +466,119 @@ stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 nvcr.io/nvidia/nvcf-byoc/cluster-validator
 {{- end -}}
 {{- end -}}
+
+{{/*
+The cluster-validator Job spec, shared by the CronJob and the one-shot Job the
+control-plane role runs at install, so the two cannot drift.
+*/}}
+{{- define "nvcaop.clusterValidatorJobSpec" -}}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
+parallelism: 1
+completions: 1
+backoffLimit: 2
+activeDeadlineSeconds: 600
+template:
+  metadata:
+    labels:
+      {{- include "nvcaop.baseSelectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: validation
+  spec:
+    serviceAccountName: {{ include "nvcaop.fullname" . }}-cluster-validator
+    automountServiceAccountToken: true
+    restartPolicy: Never
+    securityContext:
+      runAsUser: 65534
+      runAsGroup: 65534
+      fsGroup: 65534
+    {{- if or .Values.generateImagePullSecret (gt (len .Values.imagePullSecrets) 0) }}
+    imagePullSecrets:
+    {{- if .Values.generateImagePullSecret }}
+    - name: {{ (.Values.imagePullSecretName) | default "nvca-operator-image-pull" | quote }}
+    {{- end }}
+    {{- range .Values.imagePullSecrets }}
+    - name: {{ .name | quote }}
+    {{- end }}
+    {{- end }}
+    containers:
+      - name: cluster-validator
+        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.AppVersion $cv.image.tag }}
+        imagePullPolicy: {{ $cv.image.pullPolicy }}
+        env:
+          - name: VALIDATOR_CONFIG_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: VALIDATOR_CONFIG_NAME
+            value: {{ $cv.configMapName | quote }}
+          # Namespace the NVCA agent watches for the metrics summary; kept
+          # separate from the config namespace so a config-namespace
+          # override can't redirect metrics.
+          - name: VALIDATOR_SUMMARY_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          # Selects the check set: "control-plane" runs the gateway,
+          # storage, overlay and HA checks; "compute-plane" or unset runs
+          # the GPU set, and the schema rejects anything else. Without
+          # this the control-plane checks are unreachable from the chart.
+          - name: VALIDATOR_ROLE
+            value: {{ $cv.role | quote }}
+          # The CronJob runs beside an installed stack, so an empty
+          # control plane is a failure here rather than pre-install.
+          - name: VALIDATOR_POST_INSTALL
+            value: "true"
+          {{- if $cv.openBaoNamespace }}
+          # Relocated OpenBao: without this the Tier-2 quorum check
+          # silently skips its StatefulSet.
+          - name: NVCF_OPENBAO_NAMESPACE
+            value: {{ $cv.openBaoNamespace | quote }}
+          {{- end }}
+          {{- if $cv.envoyGatewayNamespace }}
+          # Set when the stack's controllerNamespace differs from the
+          # Envoy Gateway chart default.
+          - name: NVCF_ENVOY_GATEWAY_NAMESPACE
+            value: {{ $cv.envoyGatewayNamespace | quote }}
+          {{- end }}
+          {{- with $cv.gatewayNames }}
+          # Replaces route-based discovery of the NVCF Gateways.
+          - name: NVCF_GATEWAY_NAMES
+            value: {{ join "," . | quote }}
+          {{- end }}
+          {{- if $cv.nodeToNodeProbeImage }}
+          - name: NVCF_N2N_PROBE_IMAGE
+            value: {{ $cv.nodeToNodeProbeImage | quote }}
+          {{- end }}
+          {{- if $cv.haMode }}
+          # The stack's highAvailability.mode. Under "none" a
+          # single-replica quorum component is expected, not a failure.
+          - name: NVCF_HA_MODE
+            value: {{ $cv.haMode | quote }}
+          {{- end }}
+        resources:
+          requests:
+            cpu: {{ $cv.resources.requests.cpu | quote }}
+            memory: {{ $cv.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ $cv.resources.limits.cpu | quote }}
+            memory: {{ $cv.resources.limits.memory | quote }}
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+    tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      {{- with $cv.tolerations }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+    {{- if .Values.nodeSelector.value }}
+    nodeSelector:
+      {{ .Values.nodeSelector.key }}: {{ .Values.nodeSelector.value }}
+    {{- end }}
+{{- end }}

@@ -300,10 +300,19 @@ assert_cluster_validator_role() {
   assert_eq "" "$(yq "${init_env} | select(.name == \"VALIDATOR_POST_INSTALL\") | .value" "${rendered}")" \
     "${chart_label} init container leaves the post-install signal unset"
 
+  # Under the control-plane role the init container publishes no summary, so a
+  # one-shot Job runs the CronJob's own spec at install instead.
+  local initial_job='select(.kind == "Job" and .metadata.labels."app.kubernetes.io/component" == "validation")'
+  assert_eq "$(yq "${cron_env} | [.name, .value] | join(\"=\")" "${rendered}" | grep '=')" \
+    "$(yq "${initial_job} | .spec.template.spec.containers[0].env[] | [.name, .value] | join(\"=\")" "${rendered}" | grep '=')" \
+    "${chart_label} install-time Job runs the CronJob's spec under the control-plane role"
+
   helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
     --set clusterValidator.enabled=true >"${rendered}"
   assert_eq "" "$(yq "${init_env} | select(.name == \"VALIDATOR_PREFLIGHT\") | .value" "${rendered}")" \
     "${chart_label} init container writes the summary under the default role"
+  assert_eq "" "$(yq "${initial_job} | .metadata.name" "${rendered}" | grep -v '^---$' | grep -v '^$' || true)" \
+    "${chart_label} no install-time Job when the init container writes the summary"
 
   if helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
     --set clusterValidator.enabled=true --set "clusterValidator.role=controlplane" >/dev/null 2>&1; then

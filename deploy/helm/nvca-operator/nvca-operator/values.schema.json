@@ -1267,6 +1267,14 @@
                     "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets",
                     "default": ""
                 },
+                "tolerations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    },
+                    "description": "Extra tolerations for the validator CronJob pods, added to the control-plane ones",
+                    "default": []
+                },
                 "haMode": {
                     "type": "string",
                     "description": "The stack's highAvailability.mode; a quorum component below three replicas fails only under preferred or enforced",

@@ -533,6 +533,7 @@ networkPolicy:
 ## @param clusterValidator.envoyGatewayNamespace Namespace holding Envoy Gateway, when it is not envoy-gateway-system
 ## @param clusterValidator.gatewayNames Every NVCF Gateway as "namespace/name"; replaces discovery from the NVCF routes for the LoadBalancer and Tier-1 checks
 ## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. Defaults to busybox:1.36 from Docker Hub
+## @param clusterValidator.tolerations Extra tolerations for the validator CronJob pods, added to the control-plane ones
 ## @param clusterValidator.haMode The stack's highAvailability.mode (none, preferred or enforced). Below three replicas a quorum component fails only under preferred or enforced; unset reports it as not assessed
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
 ## @param clusterValidator.configMapName ConfigMap name for user-defined network checks (reachability + network policy validation)
@@ -570,6 +571,10 @@ clusterValidator:
   # under none that is the deployed shape. Unset, it is reported as not
   # assessed, since the cluster alone cannot tell the two apart.
   haMode: ""
+  # Added to the control-plane tolerations the validator Job always carries,
+  # for clusters whose control-plane nodes use other taints. A validator that
+  # cannot be scheduled never writes a summary.
+  tolerations: []
   image:
     repository: ""
     tag: ""  # defaults to .Chart.AppVersion (same as nvca-operator)

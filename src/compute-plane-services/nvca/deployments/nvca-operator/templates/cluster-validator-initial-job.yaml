@@ -15,26 +15,25 @@
 
 {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
 {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+{{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
 ---
+# Under the control-plane role the operator's init container runs in
+# preflight mode and publishes no summary, so without this run the first
+# summary waits for the CronJob's first tick, up to a full schedule interval,
+# with the agent reporting NVCF-Not-Ready and last_run 0 meanwhile. It runs the
+# CronJob's own spec once per install and upgrade: named for the release
+# revision so each gets a fresh Job, and not a Helm hook, so a Not-Ready
+# verdict cannot fail the release.
 apiVersion: batch/v1
-kind: CronJob
+kind: Job
 metadata:
-  name: {{ include "nvcaop.fullname" . }}-cluster-validator
+  name: {{ printf "%s-cluster-validator" (include "nvcaop.fullname" .) | trunc 52 | trimSuffix "-" }}-{{ .Release.Revision }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
     app.kubernetes.io/component: validation
 spec:
-  schedule: {{ $cv.schedule | quote }}
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
-  startingDeadlineSeconds: 300
-  jobTemplate:
-    metadata:
-      labels:
-        {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: validation
-    spec:
-      {{- include "nvcaop.clusterValidatorJobSpec" . | nindent 6 }}
+  ttlSecondsAfterFinished: 86400
+  {{- include "nvcaop.clusterValidatorJobSpec" . | nindent 2 }}
+{{- end }}
 {{- end }}

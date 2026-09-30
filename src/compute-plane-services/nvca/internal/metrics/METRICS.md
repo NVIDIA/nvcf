@@ -1402,7 +1402,7 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
 
 ## Cluster-Validator Metrics
 
-The cluster-validator runs as a short-lived process (init container + CronJob) so it cannot serve a `/metrics` endpoint directly. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
+The cluster-validator runs as a short-lived process so it cannot serve a `/metrics` endpoint directly. Under the default compute-plane role the operator's init container writes the first summary and the CronJob the rest. Under the control-plane role the init container runs in preflight mode and writes nothing, so a one-shot Job runs the CronJob's spec at each install and upgrade to write the first summary. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
 
 ### `nvca_cluster_validator_ready`
 
@@ -1520,6 +1520,12 @@ nvca_cluster_validator_endpoint_reachable{critical="true"} == 0
 # since time() - 0 is always far greater than the threshold.
 (time() - nvca_cluster_validator_last_run_timestamp_seconds > 21600)
   and nvca_cluster_validator_last_run_timestamp_seconds > 0
+
+# Alert: validator has never written a summary. The staleness alert above
+# excludes this case, so a validator that cannot run at all (image pull,
+# RBAC or scheduling failure) needs its own. The `for:` window covers the
+# first run after an install; use it on the alerting rule.
+nvca_cluster_validator_last_run_timestamp_seconds == 0
 ```
 
 ### Edge cases
