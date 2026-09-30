@@ -125,10 +125,13 @@ func TestCacheSeedServer_SweepRetiresStaleMirrors(t *testing.T) {
 	mk("stale", 48*time.Hour)
 	mk("fresh", time.Hour)
 	os.MkdirAll(filepath.Join(host, "mirrors", "filling.tmp"), 0o755)
-	if n := s.Sweep(time.Now()); n != 1 {
-		t.Fatalf("swept %d, want 1", n)
+	os.MkdirAll(filepath.Join(host, "mirrors", "died.tmp"), 0o755)
+	old := time.Now().Add(-3 * time.Hour)
+	os.Chtimes(filepath.Join(host, "mirrors", "died.tmp"), old, old)
+	if n := s.Sweep(time.Now()); n != 2 {
+		t.Fatalf("swept %d, want 2 (stale mirror and the temp dir of a fill that died)", n)
 	}
-	for name, want := range map[string]bool{"stale": false, "fresh": true, "filling.tmp": true} {
+	for name, want := range map[string]bool{"stale": false, "fresh": true, "filling.tmp": true, "died.tmp": false} {
 		_, err := os.Stat(filepath.Join(host, "mirrors", name))
 		if (err == nil) != want {
 			t.Errorf("%s present=%v want %v", name, err == nil, want)

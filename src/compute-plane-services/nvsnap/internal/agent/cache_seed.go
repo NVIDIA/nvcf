@@ -258,10 +258,21 @@ func (s *CacheSeedServer) Sweep(now time.Time) int {
 	}
 	n := 0
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasSuffix(e.Name(), ".tmp") {
+		if !e.IsDir() {
 			continue
 		}
 		dir := filepath.Join(s.HostFSRoot, s.Root, e.Name())
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			// A fill that died mid-copy leaves its temp dir; a fill in
+			// progress is younger than an hour.
+			if di, derr := os.Stat(dir); derr == nil && now.Sub(di.ModTime()) > time.Hour {
+				if err := os.RemoveAll(dir); err == nil {
+					n++
+					s.log().WithField("mirror", dir).Info("cache seed: removed stale temp dir from a failed fill")
+				}
+			}
+			continue
+		}
 		fi, err := os.Stat(filepath.Join(dir, modelvolume.SeedLastUsedFile))
 		last := time.Time{}
 		if err == nil {
