@@ -59,6 +59,28 @@ Run it once with `READERS=1` for the single-client baseline (under a
 second on the cluster measured) and once with `READERS=8` or more for the
 concurrent case. Re-running `run` after `cleanup` produces a fresh volume.
 
+## A measured run
+
+18 node GB300 cluster, NVMesh CSI v1.9.1, `READERS=8`, 2 GiB volume with
+900 MB written, busybox readers, 2026-09-30:
+
+```
+pod              sched_s  run_s  30s-timeouts
+repro-reader-0         0     22   0
+repro-reader-1         0      7   0
+repro-reader-2         0     24   0
+repro-reader-3         0     28   0
+repro-reader-4         0      6   0
+repro-reader-5         0     77   1
+repro-reader-6         9     15   0
+repro-reader-7         9     14   0
+created->running: min 6s  median 22s  max 77s; pods with a 30 s IO-enable timeout: 1
+```
+
+Same bytes, same volume, eight nodes: 6 s on the fastest node, 77 s on
+the slowest after one `Timed-out after waiting 30.0 seconds for volume
+... to have IO Enabled` and a kubelet retry.
+
 ## Related measurements
 
 The report that motivated this (24 h of node-driver logs on an 18 node

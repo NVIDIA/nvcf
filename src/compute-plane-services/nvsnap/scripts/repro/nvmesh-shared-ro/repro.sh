@@ -36,8 +36,13 @@ cleanup() {
 }
 [ "$cmd" = cleanup ] && { cleanup; exit 0; }
 
-selector=""
-[ -n "$NODE_SELECTOR" ] && selector="      nodeSelector: {\"${NODE_SELECTOR%%=*}\": \"${NODE_SELECTOR#*=}\"}"
+# nodeSelector lines at the two indentations they are used at (Job pod
+# template: 6 spaces; bare Pod spec: 2 spaces).
+selector="" ; podselector=""
+if [ -n "$NODE_SELECTOR" ]; then
+  selector="      nodeSelector: {\"${NODE_SELECTOR%%=*}\": \"${NODE_SELECTOR#*=}\"}"
+  podselector="  nodeSelector: {\"${NODE_SELECTOR%%=*}\": \"${NODE_SELECTOR#*=}\"}"
+fi
 
 say "1/4 source volume: ReadWriteOnce PVC $SIZE on $SC, filled with ${FILL_MB} MB"
 k create ns "$NS" --dry-run=client -o yaml | k apply -f - >/dev/null
@@ -126,7 +131,7 @@ kind: Pod
 metadata: {name: repro-reader-$i, namespace: $NS, labels: {app: nvmesh-ro-repro, role: reader}}
 spec:
   restartPolicy: Never
-$selector
+$podselector
   affinity:
     podAntiAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:
