@@ -80,16 +80,6 @@ class KeyOperationsDaoIntegrationTest {
     }
 
     @Test
-    void createRejectsExistingOperationId() {
-        UUID operationId = UUID.randomUUID();
-        dao.create(operation().operationId(operationId).build());
-
-        assertThatThrownBy(() -> dao.create(operation().operationId(operationId).build()))
-                .isInstanceOf(CassandraException.class)
-                .hasMessageContaining(operationId.toString());
-    }
-
-    @Test
     void updatePersistsProgressAndPagingState() {
         KeyOperationModel created = dao.create(operation().build());
 
@@ -115,6 +105,89 @@ class KeyOperationsDaoIntegrationTest {
                     assertThat(stored.getCreatedAt()).isEqualTo(TEST_TIME);
                     assertThat(stored.getUpdatedAt()).isEqualTo(later);
                     assertThat(stored.getNcaIds()).containsExactlyInAnyOrder("nca-1", "nca-2");
+                });
+    }
+
+    @Test
+    void createKeepsSuppliedIdStatusAndCounters() {
+        UUID operationId = UUID.randomUUID();
+
+        KeyOperationModel created = dao.create(operation()
+                                                       .operationId(operationId)
+                                                       .operationStatus(KeyOperationStatus.RUNNING)
+                                                       .matchedCount(7L)
+                                                       .completedCount(2L)
+                                                       .failedCount(1L)
+                                                       .build());
+
+        assertThat(created.getOperationId()).isEqualTo(operationId);
+        assertThat(dao.get(operationId))
+                .get()
+                .satisfies(stored -> {
+                    assertThat(stored.getOperationStatus()).isEqualTo(KeyOperationStatus.RUNNING);
+                    assertThat(stored.getMatchedCount()).isEqualTo(7L);
+                    assertThat(stored.getCompletedCount()).isEqualTo(2L);
+                    assertThat(stored.getFailedCount()).isEqualTo(1L);
+                });
+    }
+
+    @Test
+    void createDoesNotOverwriteExistingOperation() {
+        UUID operationId = UUID.randomUUID();
+        dao.create(operation().operationId(operationId).reason("first").build());
+
+        assertThatThrownBy(() -> dao.create(operation()
+                                                    .operationId(operationId)
+                                                    .reason("second")
+                                                    .build()))
+                .isInstanceOf(CassandraException.class)
+                .hasMessageContaining(operationId.toString());
+
+        assertThat(dao.get(operationId))
+                .get()
+                .extracting(KeyOperationModel::getReason)
+                .isEqualTo("first");
+    }
+
+    @Test
+    void updateWithNullClearsPagingStateOnCompletion() {
+        KeyOperationModel running = dao.update(dao.create(operation().build()).toBuilder()
+                                                       .operationStatus(KeyOperationStatus.RUNNING)
+                                                       .pagingState("opaque-paging-state")
+                                                       .build());
+
+        dao.update(running.toBuilder()
+                           .operationStatus(KeyOperationStatus.COMPLETED)
+                           .pagingState(null)
+                           .build());
+
+        assertThat(dao.get(running.getOperationId()))
+                .get()
+                .satisfies(stored -> {
+                    assertThat(stored.getOperationStatus())
+                            .isEqualTo(KeyOperationStatus.COMPLETED);
+                    assertThat(stored.getPagingState()).isNull();
+                    assertThat(stored.getReason()).isEqualTo("account offboarding");
+                });
+    }
+
+    @Test
+    void scopeSetsRoundTripWhenPartlyUnset() {
+        KeyOperationModel created = dao.create(operation()
+                                                       .issuerServiceIds(null)
+                                                       .userIds(null)
+                                                       .build());
+
+        assertThat(dao.get(created.getOperationId()))
+                .get()
+                .satisfies(stored -> {
+                    assertThat(stored.getNcaIds()).containsExactlyInAnyOrder("nca-1", "nca-2");
+                    assertThat(stored.getIssuerServiceIds()).isNullOrEmpty();
+                    assertThat(stored.getUserIds()).isNullOrEmpty();
+                    assertThat(stored.getCutoffAt()).isEqualTo(TEST_TIME);
+                    assertThat(stored.getActorType()).isEqualTo("SERVICE");
+                    assertThat(stored.getActorId()).isEqualTo("service-admin");
+                    assertThat(stored.getOperation()).isEqualTo("SUSPEND");
                 });
     }
 

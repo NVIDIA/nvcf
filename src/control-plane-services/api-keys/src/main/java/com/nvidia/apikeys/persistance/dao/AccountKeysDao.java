@@ -17,20 +17,23 @@
 
 package com.nvidia.apikeys.persistance.dao;
 
+import static com.datastax.oss.driver.api.core.data.ByteUtils.fromHexString;
+import static com.datastax.oss.driver.api.core.data.ByteUtils.toHexString;
+
 import com.nvidia.apikeys.config.exceptions.CassandraException;
 import com.nvidia.apikeys.persistance.models.KeyByAccountOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
 import com.nvidia.apikeys.persistance.repositories.KeyByAccountOwnerAndServiceRepository;
-import com.nvidia.apikeys.vo.AccountKeysPageVo;
+import com.nvidia.apikeys.vo.AccountKeysSliceVo;
 import com.nvidia.apikeys.vo.KeyByAccountOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyVo;
-import java.nio.ByteBuffer;
-import java.util.Base64;
+import com.nvidia.boot.exceptions.BadRequestException;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.cassandra.core.CassandraBatchOperations;
 import org.springframework.data.cassandra.core.CassandraTemplate;
 import org.springframework.data.cassandra.core.WriteResult;
@@ -44,9 +47,12 @@ import org.springframework.stereotype.Service;
  * Account-scoped key persistence. Writes the hash lookup row in keys and the management row in
  * keys_by_account_owner_and_service in one logged batch.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AccountKeysDao {
+
+    private static final String MESG_INVALID_CURSOR = "Invalid cursor: '%s'";
 
     private final KeyByAccountOwnerAndServiceRepository repository;
     private final KeyModelConverter keyConverter;
@@ -106,14 +112,14 @@ public class AccountKeysDao {
                 .toList();
     }
 
-    public AccountKeysPageVo listByAccount(String ncaId, int pageSize, String pagingState) {
-        return page(pageable -> repository.findByNcaId(ncaId, pageable), pageSize, pagingState);
+    public AccountKeysSliceVo listByAccount(String ncaId, int limit, String cursor) {
+        return slice(pageable -> repository.findByNcaId(ncaId, pageable), limit, cursor);
     }
 
-    public AccountKeysPageVo listByAccountAndService(
-            String ncaId, String issuerServiceId, int pageSize, String pagingState) {
-        return page(pageable -> repository.findByNcaIdAndIssuerServiceId(
-                ncaId, issuerServiceId, pageable), pageSize, pagingState);
+    public AccountKeysSliceVo listByAccountAndService(
+            String ncaId, String issuerServiceId, int limit, String cursor) {
+        return slice(pageable -> repository.findByNcaIdAndIssuerServiceId(
+                ncaId, issuerServiceId, pageable), limit, cursor);
     }
 
     public void delete(KeyByAccountOwnerAndServiceVo key) {
@@ -139,35 +145,32 @@ public class AccountKeysDao {
         }
     }
 
-    private AccountKeysPageVo page(
+    private AccountKeysSliceVo slice(
             Function<Pageable, Slice<KeyByAccountOwnerAndServiceModel>> query,
-            int pageSize, String pagingState) {
-        Slice<KeyByAccountOwnerAndServiceModel> slice = query.apply(pageRequest(pageSize,
-                                                                                pagingState));
-        List<KeyByAccountOwnerAndServiceVo> keys = slice.getContent().stream()
+            int limit, String cursor) {
+        Slice<KeyByAccountOwnerAndServiceModel> pagedResult;
+        try {
+            var byteBuffer = cursor == null ? null : fromHexString(cursor);
+            var pageRequest = CassandraPageRequest.of(PageRequest.of(0, limit), byteBuffer);
+            pagedResult = query.apply(pageRequest);
+        } catch (RuntimeException e) {
+            if (cursor == null) {
+                throw e;
+            }
+            var mesg = MESG_INVALID_CURSOR.formatted(cursor);
+            log.error(mesg);
+            throw new BadRequestException(mesg, e);
+        }
+
+        var keys = pagedResult.getContent().stream()
                 .map(accountKeyConverter::modelToVo)
                 .toList();
-        return new AccountKeysPageVo(keys, nextPagingState(slice));
-    }
-
-    private static CassandraPageRequest pageRequest(int pageSize, String pagingState) {
-        if (pagingState == null) {
-            return CassandraPageRequest.first(pageSize);
+        var builder = AccountKeysSliceVo.builder().keys(keys);
+        if (pagedResult.hasNext()) {
+            var pagingState = ((CassandraPageRequest) pagedResult.getPageable()).getPagingState();
+            builder.cursor(toHexString(pagingState));
+            builder.limit(limit);
         }
-        ByteBuffer state = ByteBuffer.wrap(Base64.getUrlDecoder().decode(pagingState));
-        return CassandraPageRequest.of(PageRequest.of(0, pageSize), state);
-    }
-
-    private static String nextPagingState(Slice<?> slice) {
-        if (!slice.hasNext()) {
-            return null;
-        }
-        ByteBuffer state = ((CassandraPageRequest) slice.nextPageable()).getPagingState();
-        if (state == null) {
-            return null;
-        }
-        byte[] bytes = new byte[state.remaining()];
-        state.duplicate().get(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        return builder.build();
     }
 }

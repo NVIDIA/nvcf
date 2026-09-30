@@ -23,6 +23,7 @@ import static com.nvidia.apikeys.TestData.KEY_VO_1;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
+import com.nvidia.apikeys.vo.KeyByAccountOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyVo;
 import java.time.Clock;
@@ -94,6 +95,35 @@ class KeyExpirationValidatorTest {
                 .build();
 
         assertThat(validator.validateStatus(KEY_BY_OWNER_AND_SERVICE_VO_1)).isEqualTo(expected);
+    }
+
+    @Test
+    void validateStatus_KeyByAccount_noChangesIfKeyNotExpired() {
+        when(clockMock.instant()).thenReturn(KEY_EXPIRES_AT_1.plusSeconds(-1));
+        var key = KeyByAccountOwnerAndServiceVo.from(KEY_VO_1);
+
+        assertThat(validator.validateStatus(key)).isEqualTo(key);
+    }
+
+    @Test
+    void validateStatus_KeyByAccount_noChangesIfKeySuspended() {
+        var key = KeyByAccountOwnerAndServiceVo.from(KEY_VO_1).toBuilder()
+                .keyStatus(KeyStatus.SUSPENDED)
+                .build();
+
+        assertThat(validator.validateStatus(key)).isEqualTo(key);
+    }
+
+    @Test
+    void validateStatus_KeyByAccount_setStatusToExpired() {
+        when(clockMock.instant()).thenReturn(KEY_EXPIRES_AT_1.plusSeconds(1));
+        var key = KeyByAccountOwnerAndServiceVo.from(KEY_VO_1);
+
+        var expected = key.toBuilder()
+                .keyStatus(KeyStatus.EXPIRED)
+                .build();
+
+        assertThat(validator.validateStatus(key)).isEqualTo(expected);
     }
 
 }

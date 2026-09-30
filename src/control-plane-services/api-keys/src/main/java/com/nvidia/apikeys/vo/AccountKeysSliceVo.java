@@ -18,11 +18,14 @@
 package com.nvidia.apikeys.vo;
 
 import java.util.List;
+import lombok.Builder;
 
 /**
- * One page of account-scoped keys. nextPagingState is null on the last page.
+ * One slice of account-scoped keys. cursor and limit are null on the last slice.
  */
-public record AccountKeysPageVo(
+@Builder
+public record AccountKeysSliceVo(
         List<KeyByAccountOwnerAndServiceVo> keys,
-        String nextPagingState) {
+        String cursor,
+        Integer limit) {
 }
