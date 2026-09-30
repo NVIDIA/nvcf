@@ -188,6 +188,15 @@ api:
   # http://ess-api.ess.svc.cluster.local:8080. The worker alias
   # (NVCF_ESS_WORKER_BASE_URL) stays on essServiceURL.
   essBaseURL: ""
+  jwt:
+    # Issuers accepted in addition to api.jwt.issuerUri, for callers signed by
+    # your own identity provider. The built-in issuer keeps working, so
+    # internal service-to-service traffic is unaffected. Both keys are
+    # required per entry; an empty list keeps the single built-in issuer.
+    #   trustedIssuers:
+    #     - issuerUri: https://issuer.example.test
+    #       jwkSetUri: https://issuer.example.test/.well-known/jwks.json
+    trustedIssuers: []
   remoteConfig:
     configData: {}
 
@@ -195,6 +204,9 @@ api:
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
 nvctApi:
   essBaseURL: ""
+  jwt:
+    # Additional trusted JWT issuers, mirroring api.jwt.trustedIssuers.
+    trustedIssuers: []
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to

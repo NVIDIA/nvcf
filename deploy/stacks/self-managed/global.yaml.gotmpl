@@ -948,6 +948,27 @@ api:
   {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
   {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI" . }}
   {{- end }}
+  {{- /* Spring reads the underscore-delimited number as a list index, binding these to
+         nvcf.security.jwt.trusted-issuers[<i>].issuer-uri / .jwk-set-uri */}}
+  {{- $apiTrustedIssuers := dig "api" "jwt" "trustedIssuers" list .Values }}
+  {{- if not (kindIs "slice" $apiTrustedIssuers) }}
+  {{- fail "api.jwt.trustedIssuers must be a list" }}
+  {{- end }}
+  {{- range $index, $entry := $apiTrustedIssuers }}
+  {{- if not (kindIs "map" $entry) }}
+  {{- fail "api.jwt.trustedIssuers entries must be maps with issuerUri and jwkSetUri" }}
+  {{- end }}
+  {{- $issuerUri := dig "issuerUri" "" $entry }}
+  {{- if or (not (kindIs "string" $issuerUri)) (eq (trim $issuerUri) "") }}
+  {{- fail "api.jwt.trustedIssuers[].issuerUri must be a non-empty string" }}
+  {{- end }}
+  {{- $jwkSetUri := dig "jwkSetUri" "" $entry }}
+  {{- if or (not (kindIs "string" $jwkSetUri)) (eq (trim $jwkSetUri) "") }}
+  {{- fail "api.jwt.trustedIssuers[].jwkSetUri must be a non-empty string" }}
+  {{- end }}
+  {{- $_ := set $apiEnv (printf "NVCF_SECURITY_JWT_TRUSTEDISSUERS_%d_ISSUERURI" $index) (trim $issuerUri) }}
+  {{- $_ := set $apiEnv (printf "NVCF_SECURITY_JWT_TRUSTEDISSUERS_%d_JWKSETURI" $index) (trim $jwkSetUri) }}
+  {{- end }}
   {{- if .Values.global.observability.tracing.enabled }}
   {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
   {{- end }}
@@ -1081,6 +1102,27 @@ nvctApi:
     {{- end }}
     {{- with dig "nvctApi" "jwt" "jwkSetUri" nil .Values }}
     SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
+    {{- end }}
+    {{- /* Spring reads the underscore-delimited number as a list index, binding these to
+           nvct.security.jwt.trusted-issuers[<i>].issuer-uri / .jwk-set-uri. */}}
+    {{- $nvctTrustedIssuers := dig "nvctApi" "jwt" "trustedIssuers" list .Values }}
+    {{- if not (kindIs "slice" $nvctTrustedIssuers) }}
+    {{- fail "nvctApi.jwt.trustedIssuers must be a list" }}
+    {{- end }}
+    {{- range $index, $entry := $nvctTrustedIssuers }}
+    {{- if not (kindIs "map" $entry) }}
+    {{- fail "nvctApi.jwt.trustedIssuers entries must be maps with issuerUri and jwkSetUri" }}
+    {{- end }}
+    {{- $issuerUri := dig "issuerUri" "" $entry }}
+    {{- if or (not (kindIs "string" $issuerUri)) (eq (trim $issuerUri) "") }}
+    {{- fail "nvctApi.jwt.trustedIssuers[].issuerUri must be a non-empty string" }}
+    {{- end }}
+    {{- $jwkSetUri := dig "jwkSetUri" "" $entry }}
+    {{- if or (not (kindIs "string" $jwkSetUri)) (eq (trim $jwkSetUri) "") }}
+    {{- fail "nvctApi.jwt.trustedIssuers[].jwkSetUri must be a non-empty string" }}
+    {{- end }}
+    NVCT_SECURITY_JWT_TRUSTEDISSUERS_{{ $index }}_ISSUERURI: {{ trim $issuerUri | quote }}
+    NVCT_SECURITY_JWT_TRUSTEDISSUERS_{{ $index }}_JWKSETURI: {{ trim $jwkSetUri | quote }}
     {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}

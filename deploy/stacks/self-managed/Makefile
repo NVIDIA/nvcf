@@ -28,6 +28,7 @@ test:
 	@tests/api-env-wiring.sh
 	@tests/apikeys-env-wiring.sh
 	@tests/ess-base-url-wiring.sh
+	@tests/jwt-trusted-issuers-wiring.sh
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
