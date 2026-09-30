@@ -750,9 +750,9 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 // fail at warning so they don't block the operator on optional registries.
 func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEntry) binaryCheckSpec {
 	id := "registry-cred-" + entry.Registry
-	severity := "warning"
+	severity := SeverityWarning
 	if entry.Critical {
-		severity = "error"
+		severity = SeverityError
 	}
 	return binaryCheckSpec{
 		ID:         id,

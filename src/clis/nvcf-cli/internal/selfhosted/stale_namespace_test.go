@@ -71,11 +71,8 @@ func TestProbeStaleNamespaces_TerminatingIsByPhase(t *testing.T) {
 
 func TestProbeStaleNamespaces_EmptyShellNoHelmSecrets(t *testing.T) {
 	// Namespace exists and is Active but holds no Helm release secrets ->
-	// leftover empty shell from a partial helm uninstall.
-	//
-	// A second namespace carries a real release so the driver is known to keep
-	// its state in-cluster. Without that the signal is unusable and correctly
-	// suppressed, which is what HELM_DRIVER=sql looks like.
+	// leftover empty shell from a partial helm uninstall. The second namespace
+	// carries a release and is not reported.
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
@@ -238,6 +235,7 @@ func TestStaleNamespaceCheck_CleanPasses(t *testing.T) {
 	}
 	r := staleNamespaceCheck(prober, "", []string{"nvcf", "sis"}).Run(context.Background())
 	assert.True(t, r.Passed)
+	assert.Equal(t, SeverityInfo, r.Severity, "a clean pass must not carry the error severity it starts with")
 }
 
 func TestStaleNamespaceCheck_MessageNamesAllStaleNamespaces(t *testing.T) {

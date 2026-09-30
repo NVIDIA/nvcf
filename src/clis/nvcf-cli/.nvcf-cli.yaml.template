@@ -150,8 +150,8 @@ api_keys_owner_id: svc@nvcf-api.local
 #
 # The Job needs a ServiceAccount, ClusterRole, and ClusterRoleBinding, which
 # the CLI creates and removes per run. The kubeconfig context therefore needs
-# permission to manage those objects; without it the probe reports a warning
-# instead of a result.
+# permission to manage those objects; without it the validator cannot run and
+# the check fails. Pass --skip-cluster-validation to run without it.
 #
 # Config key: cluster_validator_image
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_IMAGE
@@ -159,15 +159,17 @@ api_keys_owner_id: svc@nvcf-api.local
 #
 # When the value has no tag, the latest tag is discovered from the
 # registry (preferring stable releases over rc). If unset everywhere,
-# the validator probe is skipped with a warning.
+# the validator probe is skipped with a note on stderr.
 #
 # Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # Prod:    nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # cluster_validator_image: nvcr.io/nvidia/nvcf-byoc/cluster-validator
 
 # Extra container registries the control-plane validator probes for
-# reachability, as host:port. nvcr.io is always probed, so list only the
-# registries your stack pulls from in addition to it.
+# reachability, as host:port. The registries the install pulls from are
+# probed already: the validator image's registry, the stack's
+# global.image.registry, and quay.io for the cert-manager ACME solver. List
+# only registries beyond those.
 #
 # Config key: cluster_validator_registries (list)
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES (comma-separated)

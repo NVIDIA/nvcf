@@ -287,7 +287,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			results = append([]selfhosted.CheckResult{{
 				ID:       "force-fail-test-seam",
 				Category: "test",
-				Severity: "error",
+				Severity: selfhosted.SeverityError,
 				Passed:   false,
 				Message:  "forced failure (test seam)",
 			}}, results...)

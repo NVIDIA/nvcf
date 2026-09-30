@@ -315,6 +315,8 @@ func resolveClusterID(resp *client.RegisterClusterResponse) string {
 // avoid touching a real kubeconfig file.
 var loadKubeConfigFn = loadKubeConfig
 
+// currentKubeContextNameFn is a seam: tests must not depend on the developer's
+// kubeconfig, and hint output would otherwise vary by machine.
 var currentKubeContextNameFn = currentKubeContextName
 
 // currentKubeContextName returns the kubeconfig's current-context, or "" when
@@ -344,8 +346,6 @@ func effectiveKubeContext(kctx string) string {
 // When kctx is empty the kubeconfig's current-context is used, preserving
 // single-cluster behavior. The loading-rules chain follows the same priority
 // as kubectl: KUBECONFIG env var → ~/.kube/config.
-// currentKubeContextNameFn is a seam: tests must not depend on the developer's
-// kubeconfig, and hint output would otherwise vary by machine.
 func loadKubeConfig(kctx string) (*rest.Config, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}

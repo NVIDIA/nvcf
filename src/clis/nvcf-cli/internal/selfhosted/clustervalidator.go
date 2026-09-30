@@ -750,9 +750,10 @@ const clusterValidatorNoConfigName = "cluster-validator-no-config"
 const clusterValidatorRoleLabel = "nvcf.nvidia.com/validator-role"
 
 // clusterValidatorPreserveLabel marks objects an operator asked to keep with
-// --no-cleanup. The orphan sweeper skips them: without it a preserved run is
-// reclaimed anyway once it is older than the TTL, which makes the flag mean
-// "keep for 30 minutes".
+// --no-cleanup. The orphan sweeper keeps them for preservedValidatorTTL instead
+// of orphanValidatorRBACTTL: without the label a preserved run would be
+// reclaimed after 30 minutes, and with no limit at all a kept ClusterRole and
+// NGC-key Secret would stay forever.
 const clusterValidatorPreserveLabel = "nvcf.nvidia.com/validator-preserve"
 
 // clusterValidatorRBACName returns the ServiceAccount / ClusterRole /
@@ -788,9 +789,6 @@ func newValidatorRunID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// controlPlaneValidatorConfigTemplate is the baseline network-check ConfigMap for
-// control-plane preflight: nvcr.io reachability (critical) and NetworkPolicy
-// enforcement (non-critical). Extra registries are appended as non-critical probes.
 // controlPlaneValidatorEnforcementConfig follows the generated reachability
 // section in the control-plane validator ConfigMap.
 const controlPlaneValidatorEnforcementConfig = `enforcement:

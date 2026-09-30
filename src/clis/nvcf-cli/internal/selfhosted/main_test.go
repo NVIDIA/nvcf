@@ -24,13 +24,16 @@ import (
 
 // TestMain points HOME at an empty directory so no test reads the developer's
 // ~/.docker/config.json, or runs a credential helper it names. Tests that need
-// a docker config write their own under a temporary HOME.
+// a docker config write their own under a temporary HOME. HELM_DRIVER is
+// cleared too: an exported sql driver turns off the stale-namespace probe's
+// no-release signal, which the probe tests assert on.
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "selfhosted-test-home-")
 	if err != nil {
 		panic(err)
 	}
 	_ = os.Setenv("HOME", home)
+	_ = os.Unsetenv("HELM_DRIVER")
 	code := m.Run()
 	_ = os.RemoveAll(home)
 	os.Exit(code)

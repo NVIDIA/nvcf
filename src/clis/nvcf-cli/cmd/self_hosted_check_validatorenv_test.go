@@ -146,3 +146,40 @@ func TestCheck_PreSplitRunsBothValidatorRoles(t *testing.T) {
 	assert.Equal(t, "gpu-ctx", gpu.KubeContext)
 	assert.NotContains(t, cp.Env, "VALIDATOR_POST_INSTALL", "--pre is pre-install")
 }
+
+// NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES is read, and a comma-separated value is
+// split into separate registries rather than parsed as one host.
+func TestCheck_RegistriesEnvVarIsSplitOnCommas(t *testing.T) {
+	resetCheckFlags(t)
+	t.Setenv("NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES", "harbor.example.com:443, ghcr.io:443")
+	var mu sync.Mutex
+	var got selfhosted.ClusterValidatorParams
+	prev := newClusterValidatorForSelfHosted
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			mu.Lock()
+			defer mu.Unlock()
+			if p.Role == "control-plane" {
+				got = p
+			}
+			return selfhosted.ClusterValidatorResult{Passed: true}
+		}
+	}
+	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--json",
+		"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"})
+	_ = rootCmd.Execute()
+
+	mu.Lock()
+	defer mu.Unlock()
+	var regs []string
+	for _, r := range got.Registries {
+		regs = append(regs, r.Registry)
+	}
+	assert.Contains(t, regs, "harbor.example.com")
+	assert.Contains(t, regs, "ghcr.io")
+}
