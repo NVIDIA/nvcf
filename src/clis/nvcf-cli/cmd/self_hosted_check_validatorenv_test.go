@@ -183,3 +183,24 @@ func TestCheck_RegistriesEnvVarIsSplitOnCommas(t *testing.T) {
 	assert.Contains(t, regs, "harbor.example.com")
 	assert.Contains(t, regs, "ghcr.io")
 }
+
+// The stack's Gateways and HA mode reach the Job; an explicit setting wins.
+func TestClusterValidatorJobEnv_ForwardsStackGatewaysAndHAMode(t *testing.T) {
+	for _, k := range []string{"NVCF_GATEWAY_NAMES", "NVCF_HA_MODE"} {
+		t.Setenv(k, "")
+	}
+	stack := selfhosted.StackValues{HAMode: "none", Gateways: []string{"gw/grpc-gw", "gw/shared-gw"}}
+	env := clusterValidatorJobEnv(stack)
+	assert.Equal(t, "gw/grpc-gw,gw/shared-gw", env["NVCF_GATEWAY_NAMES"])
+	assert.Equal(t, "none", env["NVCF_HA_MODE"])
+
+	t.Setenv("NVCF_GATEWAY_NAMES", "edge/nvcf-gw")
+	t.Setenv("NVCF_HA_MODE", "preferred")
+	env = clusterValidatorJobEnv(stack)
+	assert.Equal(t, "edge/nvcf-gw", env["NVCF_GATEWAY_NAMES"])
+	assert.Equal(t, "preferred", env["NVCF_HA_MODE"])
+
+	t.Setenv("NVCF_HA_MODE", "")
+	env = clusterValidatorJobEnv(selfhosted.StackValues{})
+	assert.NotContains(t, env, "NVCF_HA_MODE", "no stack, no mode: the validator records sub-quorum as not assessed")
+}

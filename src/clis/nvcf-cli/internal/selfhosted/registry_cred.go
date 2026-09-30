@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -298,6 +299,12 @@ type StackValues struct {
 	ACMESolverRepository string
 	// EnvoyGatewayNamespace is ingress.gatewayApi.controllerNamespace.
 	EnvoyGatewayNamespace string
+	// HAMode is highAvailability.mode, defaulting to "none" as the stack's
+	// own template does when the key is unset. Empty when no file was read.
+	HAMode string
+	// Gateways are the NVCF Gateways the stack names under
+	// ingress.gatewayApi.gateways, as sorted, distinct namespace/name entries.
+	Gateways []string
 }
 
 // LoadStackValues reads files in order and layers each over the previous,
@@ -318,12 +325,42 @@ func LoadStackValues(files []string) StackValues {
 		found = true
 		mergeValues(merged, doc)
 	}
-	return StackValues{
+	values := StackValues{
 		Found:                 found,
 		ImageRegistry:         digString(merged, "global", "image", "registry"),
 		ACMESolverRepository:  digString(merged, "certManager", "acmesolver", "image", "repository"),
 		EnvoyGatewayNamespace: digString(merged, "ingress", "gatewayApi", "controllerNamespace"),
+		Gateways:              stackGateways(merged),
 	}
+	if found {
+		values.HAMode = digString(merged, "highAvailability", "mode")
+		if values.HAMode == "" {
+			values.HAMode = "none"
+		}
+	}
+	return values
+}
+
+// stackGateways returns the Gateways named under ingress.gatewayApi.gateways
+// that have both a name and a namespace, as sorted, distinct namespace/name
+// entries. An entry the environment left empty is one it does not use.
+func stackGateways(merged map[string]any) []string {
+	gateways, _ := digAny(merged, "ingress", "gatewayApi", "gateways").(map[string]any)
+	seen := map[string]bool{}
+	var out []string
+	for key := range gateways {
+		name := digString(gateways, key, "name")
+		ns := digString(gateways, key, "namespace")
+		if name == "" || ns == "" || strings.Contains(name, "/") || strings.Contains(ns, "/") {
+			continue
+		}
+		if entry := ns + "/" + name; !seen[entry] {
+			seen[entry] = true
+			out = append(out, entry)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // mergeValues deep-merges src into dst: maps merge key by key, anything else
@@ -341,16 +378,20 @@ func mergeValues(dst, src map[string]any) {
 }
 
 func digString(m map[string]any, keys ...string) string {
+	s, _ := digAny(m, keys...).(string)
+	return strings.TrimSpace(s)
+}
+
+func digAny(m map[string]any, keys ...string) any {
 	var cur any = m
 	for _, k := range keys {
 		mm, ok := cur.(map[string]any)
 		if !ok {
-			return ""
+			return nil
 		}
 		cur = mm[k]
 	}
-	s, _ := cur.(string)
-	return strings.TrimSpace(s)
+	return cur
 }
 
 // EnumerateRegistries builds the deduplicated list of registries to credential-

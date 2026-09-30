@@ -572,3 +572,39 @@ func TestProbeRegistryCredential_CriticalAnonymousIsNotVerified(t *testing.T) {
 	assert.NotContains(t, r.Message, "credentials valid")
 	assert.Contains(t, r.Message, "not verified")
 }
+
+// The launcher reads the stack's HA mode and NVCF Gateways, so the validator
+// is told rather than left to guess. An unset mode is "none", as the stack's
+// own template reads it, and a Gateway entry left empty is not in use.
+func TestLoadStackValues_HAModeAndGateways(t *testing.T) {
+	dir := t.TempDir()
+	base, env := dir+"/base.yaml", dir+"/prod.yaml"
+	require.NoError(t, writeFile(base, []byte(`
+ingress:
+  gatewayApi:
+    gateways:
+      shared: {name: "", namespace: ""}
+      grpc: {name: "", namespace: ""}
+      llmGrpc: {name: "", namespace: ""}
+`)))
+	require.NoError(t, writeFile(env, []byte(`
+highAvailability:
+  mode: enforced
+ingress:
+  gatewayApi:
+    gateways:
+      shared: {name: shared-gw, namespace: envoy-gateway-system}
+      grpc: {name: grpc-gw, namespace: envoy-gateway-system}
+      nats: {name: shared-gw, namespace: envoy-gateway-system}
+`)))
+	got := LoadStackValues([]string{base, env})
+	assert.Equal(t, "enforced", got.HAMode)
+	assert.Equal(t, []string{"envoy-gateway-system/grpc-gw", "envoy-gateway-system/shared-gw"}, got.Gateways,
+		"sorted, distinct, and without the unused llmGrpc entry")
+
+	got = LoadStackValues([]string{base})
+	assert.Equal(t, "none", got.HAMode, "unset reads as none, as the stack template does")
+	assert.Empty(t, got.Gateways)
+
+	assert.Empty(t, LoadStackValues(nil).HAMode, "no stack read means no mode to report")
+}

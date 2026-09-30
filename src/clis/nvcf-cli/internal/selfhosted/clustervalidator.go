@@ -447,6 +447,10 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 			// Read + write: the overlay and enforcement probes create and delete
 			// their own namespaces and pods.
 			{APIGroups: []string{""}, Resources: []string{"namespaces", "pods"}, Verbs: []string{"get", "list", "create", "delete"}},
+			// Events, list only: the overlay probe reads its pods' events to
+			// tell a slow first image pull, which publishes no pod IP until
+			// it returns, from a node that could not network the pod.
+			{APIGroups: []string{""}, Resources: []string{"events"}, Verbs: []string{"list"}},
 			{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"csidrivers", "storageclasses"}, Verbs: []string{"get", "list"}},
 			// NetworkPolicies: read for CNI detection; write for enforcement
 			// check which creates/updates/deletes policies in the temp namespace.

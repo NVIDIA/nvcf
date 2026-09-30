@@ -757,8 +757,20 @@ func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	if envoyNS != "" {
 		env["NVCF_ENVOY_GATEWAY_NAMESPACE"] = envoyNS
 	}
+	// The launcher knows the NVCF Gateways from the stack, so the validator
+	// need not rediscover them from route labels, and after install can fail
+	// a named Gateway that has no proxy. An explicit setting still wins.
 	if names := configValue("NVCF_GATEWAY_NAMES"); names != "" {
 		env["NVCF_GATEWAY_NAMES"] = names
+	} else if len(stack.Gateways) > 0 {
+		env["NVCF_GATEWAY_NAMES"] = strings.Join(stack.Gateways, ",")
+	}
+	// Below three replicas a quorum component is a lost quorum under an HA
+	// mode and the deployed shape under none; only the stack says which.
+	if mode := configValue("NVCF_HA_MODE"); mode != "" {
+		env["NVCF_HA_MODE"] = mode
+	} else if stack.HAMode != "" {
+		env["NVCF_HA_MODE"] = stack.HAMode
 	}
 	probe := strings.TrimSpace(viper.GetString("cluster_validator_probe_image"))
 	if probe == "" {

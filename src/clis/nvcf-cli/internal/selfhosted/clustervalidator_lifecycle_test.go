@@ -442,6 +442,7 @@ func TestEnsureClusterValidatorRBAC_LeastPrivilege(t *testing.T) {
 	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
 		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
 	require.NoError(t, err)
+	sawEvents := false
 	for _, r := range cr.Rules {
 		for _, v := range r.Verbs {
 			assert.NotEqual(t, "watch", v, "no rule needs watch")
@@ -451,8 +452,13 @@ func TestEnsureClusterValidatorRBAC_LeastPrivilege(t *testing.T) {
 			if res == "services" {
 				assert.ElementsMatch(t, []string{"get", "list"}, r.Verbs, "services are only read")
 			}
+			if res == "events" {
+				assert.Equal(t, []string{"list"}, r.Verbs, "the probe only lists its pods' events")
+				sawEvents = true
+			}
 		}
 	}
+	assert.True(t, sawEvents, "the overlay probe needs to list events")
 }
 
 // Only the control-plane Job reads a network-check ConfigMap. The compute-plane
