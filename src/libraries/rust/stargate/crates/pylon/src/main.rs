@@ -249,6 +249,26 @@ struct Args {
         value_name = "RANK"
     )]
     pylon_priority_ceiling: u32,
+    /// Longest wait for the first streamed output after upstream response
+    /// headers. Engines queue requests here, so set it above the longest
+    /// queue wait callers should tolerate
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_FIRST_OUTPUT_TIMEOUT.as_millis() as u64,
+        value_parser = clap::value_parser!(u64).range(1..),
+        env = "PYLON_FIRST_OUTPUT_TIMEOUT_MS",
+        value_name = "MS"
+    )]
+    pylon_first_output_timeout_ms: u64,
+    /// Longest gap between streamed outputs once generation has started
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_OUTPUT_CHUNK_TIMEOUT.as_millis() as u64,
+        value_parser = clap::value_parser!(u64).range(1..),
+        env = "PYLON_OUTPUT_CHUNK_TIMEOUT_MS",
+        value_name = "MS"
+    )]
+    pylon_output_chunk_timeout_ms: u64,
     /// Collect post-stream output quality metrics (gibberish checks)
     #[arg(long, default_value_t = false)]
     collect_quality_metrics: bool,
@@ -495,6 +515,20 @@ mod tests {
 
         assert_eq!(args.pylon_upstream_backend, defaults.upstream_backend);
         assert_eq!(args.pylon_priority_ceiling, defaults.priority_ceiling);
+        assert_eq!(
+            std::time::Duration::from_millis(args.pylon_first_output_timeout_ms),
+            defaults.first_output_timeout
+        );
+        assert_eq!(
+            std::time::Duration::from_millis(args.pylon_output_chunk_timeout_ms),
+            defaults.output_chunk_timeout
+        );
+    }
+
+    #[test]
+    fn pylon_stream_timeouts_reject_zero() {
+        assert!(try_parse_argv(&["--pylon-first-output-timeout-ms", "0"]).is_err());
+        assert!(try_parse_argv(&["--pylon-output-chunk-timeout-ms", "0"]).is_err());
     }
 
     #[test]

@@ -207,9 +207,17 @@ The local upstream may mark `429` or `503` retryable for pylon with
 `x-stargate-upstream-retryable: true`; pylon converts that to Stargate retry
 metadata and does not forward the upstream header downstream.
 
+Queued requests can wait a long time before their first output. Stargate waits
+up to `--quic-request-timeout-ms` (default 300000) for response headers from
+Pylon. Pylon waits up to `--pylon-first-output-timeout-ms` (default 300000)
+for the first streamed output and `--pylon-output-chunk-timeout-ms` (default
+30000) between outputs.
+
 Gateway rules:
 
 - Set `x-stargate-max-wait-ms` from the remaining request deadline.
+- Keep gateway request timeouts at or above these router timeouts, or requests
+  that are still queued fail at the gateway first.
 - Avoid blind external retries after a streaming request may have reached an
   upstream.
 - Keep the same `x-request-id` only for convergence retries that did not reach

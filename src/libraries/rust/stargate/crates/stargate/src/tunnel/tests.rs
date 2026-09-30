@@ -1638,6 +1638,31 @@ async fn health_check_succeeds_through_reverse_tunnel() {
 }
 
 #[tokio::test]
+async fn health_check_deadline_does_not_wait_for_the_request_timeout() {
+    // Answers well after the probe deadline, then lets fixture shutdown finish.
+    let slow_health = Router::new().route(
+        "/health",
+        get(|| async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            "ok"
+        }),
+    );
+    let fixture = ReverseTunnelFixture::start(slow_health, TunnelTransportProtocol::RawQuic).await;
+    let started_at = std::time::Instant::now();
+    let error = fixture
+        .proxy
+        .health_check_rtt_within(&fixture.generation, Duration::from_millis(200))
+        .await
+        .expect_err("a hung health probe must fail at its own deadline");
+    assert!(
+        format!("{error:#}").contains("health check timed out"),
+        "unexpected error: {error:#}"
+    );
+    assert!(started_at.elapsed() < Duration::from_secs(2));
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn handshake_nack_for_unregistered_server() {
     let state = Arc::new(StargateState::new());
     let (_proxy, addr, runtime) =

@@ -68,8 +68,12 @@ pub(super) const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 // Complete events are delivered incrementally, so one input chunk cannot make
 // the pylon retain an unbounded batch of parsed events.
 pub const DEFAULT_MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
-pub(super) const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
-pub(super) const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest wait for the first streamed output after upstream response headers.
+/// Engines hold queued requests here, so this must exceed the longest queue
+/// wait a caller should tolerate, not just normal time to first token.
+pub const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Longest gap between streamed outputs once generation has started.
+pub const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
 pub(super) const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
 pub(super) const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
