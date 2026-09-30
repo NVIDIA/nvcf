@@ -6,14 +6,13 @@ package webhook
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"path"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
@@ -52,6 +51,7 @@ const (
 	cacheSeedMount      = "/nvsnap-cache-seed"
 	cacheSubdir         = "cache"
 	lwsWorkerIndexLabel = "leaderworkerset.sigs.k8s.io/worker-index"
+	lwsSizeAnnotation   = "leaderworkerset.sigs.k8s.io/size"
 )
 
 var ordinalSuffix = regexp.MustCompile(`-(\d+)$`)
@@ -72,13 +72,36 @@ func podOrdinal(pod *corev1.Pod) int {
 	return 0
 }
 
-// cacheURI is the cache identity: engine configuration hash plus ordinal.
+// cacheURI is the cache set identity: the engine configuration hash. All
+// ranks of a group share it; each rank lives in its own directory inside.
 func (m *Mutator) cacheURI(pod *corev1.Pod) (string, bool) {
 	if m.Composer == nil {
 		return "", false
 	}
 	key := checkpointstore.ShortHash(checkpointstore.ComputeHash(m.Composer.Compose(pod, m.MainContainer)))[:16]
-	return fmt.Sprintf("cache://%s/%d", key, podOrdinal(pod)), true
+	return "cache://" + key, true
+}
+
+// groupSize is how many ranks the pod's group has: the LeaderWorkerSet
+// size annotation, else the owning StatefulSet's replicas, else 1. A set
+// is only collected once every rank is ready, so this must not guess low.
+func (m *Mutator) groupSize(ctx context.Context, pod *corev1.Pod) int {
+	if v, ok := pod.Annotations[lwsSizeAnnotation]; ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	for _, o := range pod.OwnerReferences {
+		if o.Kind != "StatefulSet" || m.CacheVolume == nil || m.CacheVolume.Kube == nil {
+			continue
+		}
+		sts, err := m.CacheVolume.Kube.AppsV1().StatefulSets(pod.Namespace).Get(ctx, o.Name, metav1.GetOptions{})
+		if err == nil && sts.Spec.Replicas != nil && *sts.Spec.Replicas > 0 {
+			return int(*sts.Spec.Replicas)
+		}
+		m.logger().WithError(err).WithField("statefulset", pod.Namespace+"/"+o.Name).Warn("cache volume: group size unknown; treating the pod as a group of one")
+	}
+	return 1
 }
 
 // cacheVolumePatches decorates a Block-mode model-volume reader with the
@@ -102,21 +125,6 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 	}
 	mp := newMetaPatcher(pod)
 	switch {
-	case st.Complete && m.CacheSeedMode == modelvolume.SeedModeAgent && m.CacheSeedImage != "":
-		// Agent-served seed: no claim, no second block attach. The init
-		// fetches the mirror from the agent on its own node, signed for
-		// this namespace and key; a miss means the engine compiles
-		// locally, exactly as without nvsnap.
-		if err := m.CacheVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
-			log.WithError(err).Warn("cache volume: record last use failed")
-		}
-		patches := mp.annotation(CacheURIAnnotation, uri)
-		if pod.Spec.InitContainers == nil && !initCreated {
-			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
-		}
-		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: m.agentSeedInit(pod, main, uri)})
-		log.Info("cache volume: complete; seeding the cachedir from the node agent")
-		return patches
 	case st.Complete:
 		if m.ReadOnlyMinter == nil {
 			return nil
@@ -129,18 +137,22 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		if err := m.CacheVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
 			log.WithError(err).Warn("cache volume: record last use failed")
 		}
+		ordinal := podOrdinal(pod)
 		patches := mp.annotation(CacheURIAnnotation, uri)
+		patches = append(patches, mp.annotation(modelvolume.CacheOrdinalAnnotation, strconv.Itoa(ordinal))...)
 		if pod.Spec.InitContainers == nil && !initCreated {
 			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
 		}
 		dst := path.Join(m.CacheDir, cacheSubdir)
+		src := path.Join(cacheSeedMount, strconv.Itoa(ordinal))
 		seed := corev1.Container{
 			Name:    cacheSeedInitName,
 			Image:   main.Image,
 			Command: []string{"/bin/sh", "-c"},
-			// Best effort by construction: a failed copy leaves an empty
-			// cache and the engine compiles as it would have anyway.
-			Args: []string{fmt.Sprintf("cp -a %s/. %s/ 2>/dev/null && chmod -R a+rwX %s 2>/dev/null; echo \"nvsnap: cache seeded $(find %s -type f | wc -l) files\"; exit 0", cacheSeedMount, dst, dst, dst)},
+			// The pod's own rank directory of the set. Best effort by
+			// construction: a failed or missing copy leaves an empty cache
+			// and the engine compiles as it would have anyway.
+			Args: []string{fmt.Sprintf("cp -a %s/. %s/ 2>/dev/null && chmod -R a+rwX %s 2>/dev/null; echo \"nvsnap: cache seeded rank %d, $(find %s -type f | wc -l) files\"; exit 0", src, dst, dst, ordinal, dst)},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: cacheSeedVolumeName, MountPath: cacheSeedMount, ReadOnly: true},
 				{Name: cacheDirVolumeName, MountPath: m.CacheDir},
@@ -158,75 +170,15 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		log.Info("cache volume: recent capture failure recorded; pod compiles locally")
 		return nil
 	default:
+		size := m.groupSize(ctx, pod)
 		patches := mp.label(CacheCaptureLabel, "true")
+		patches = append(patches, mp.label(modelvolume.CacheKeyLabel, modelvolume.Key(uri))...)
 		patches = append(patches, mp.annotation(CacheURIAnnotation, uri)...)
+		patches = append(patches, mp.annotation(modelvolume.CacheOrdinalAnnotation, strconv.Itoa(podOrdinal(pod)))...)
+		patches = append(patches, mp.annotation(modelvolume.CacheGroupSizeAnnotation, strconv.Itoa(size))...)
 		patches = append(patches, mp.annotation(CacheVolumeAnnotation, cacheDirVolumeName)...)
 		patches = append(patches, mp.annotation(CacheSubpathAnnotation, cacheSubdir)...)
-		log.Info("cache volume: none yet; pod marked for capture after Ready")
+		log.WithFields(logrus.Fields{"ordinal": podOrdinal(pod), "group_size": size}).Info("cache volume: no set yet; rank marked for collection after Ready")
 		return patches
 	}
-}
-
-// agentSeedInit is the init container that fetches the cache seed from
-// the node agent and unpacks it into the cachedir. It runs on the engine
-// image, like the volume seed: a tenant pod only holds the function's own
-// pull secrets, so an nvsnap image injected here would fail to pull
-// (ct1, 2026-09-30). Python is what every engine image has; curl and tar
-// are the fallback. Best effort by construction: every path exits 0, a
-// missed seed only costs the compile the engine would have done anyway.
-func (m *Mutator) agentSeedInit(pod *corev1.Pod, main *corev1.Container, uri string) corev1.Container {
-	agentURL := fmt.Sprintf("http://$(NVSNAP_HOST_IP):%d", MountPrepDefaultAgentPort)
-	if m.AgentBaseURL != "" {
-		agentURL = strings.TrimRight(m.AgentBaseURL, "/")
-	}
-	seedURL := fmt.Sprintf("%s/v1/cache-seed/%s?uri=%s&ns=%s", agentURL, modelvolume.Key(uri), url.QueryEscape(uri), url.QueryEscape(pod.Namespace))
-	dest := path.Join(m.CacheDir, cacheSubdir)
-	c := corev1.Container{
-		Name:    cacheSeedInitName,
-		Image:   main.Image,
-		Command: []string{"/bin/sh", "-c"},
-		Args:    []string{agentSeedScript(dest)},
-		Env: []corev1.EnvVar{
-			{Name: "NVSNAP_HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}},
-			{Name: "NVSNAP_SEED_URL", Value: seedURL},
-			{Name: "NVSNAP_SEED_TOKEN", Value: modelvolume.SeedToken(m.CacheSeedSecret, pod.Namespace, uri)},
-			{Name: "NVSNAP_SEED_TIMEOUT", Value: "180"},
-		},
-		VolumeMounts: []corev1.VolumeMount{{Name: cacheDirVolumeName, MountPath: m.CacheDir}},
-	}
-	modelvolume.Harden(&c, modelvolume.HoldResources, main.SecurityContext)
-	return c
-}
-
-// agentSeedScript polls the agent until the node mirror is ready (503),
-// then unpacks the tar into dest world-writable. Python first, curl and
-// tar as the fallback; any failure prints why and exits 0.
-func agentSeedScript(dest string) string {
-	py := `import os,sys,tarfile,time,urllib.request,urllib.error
-url=os.environ["NVSNAP_SEED_URL"].replace("$(NVSNAP_HOST_IP)",os.environ.get("NVSNAP_HOST_IP",""))
-dest=sys.argv[1]; deadline=time.time()+float(os.environ.get("NVSNAP_SEED_TIMEOUT","180")); t0=time.time()
-while True:
-    try:
-        r=urllib.request.urlopen(urllib.request.Request(url,headers={"X-Nvsnap-Seed-Token":os.environ.get("NVSNAP_SEED_TOKEN","")}),timeout=600)
-        n=0
-        with tarfile.open(fileobj=r,mode="r|") as tf:
-            for m in tf:
-                p=os.path.normpath(m.name)
-                if p.startswith("..") or os.path.isabs(p) or (m.issym() and (os.path.isabs(m.linkname) or os.path.normpath(os.path.join(os.path.dirname(p),m.linkname)).startswith(".."))): continue
-                if m.isdir() or m.isreg() or m.issym(): tf.extract(m,dest); n+=1
-        for root,ds,fs in os.walk(dest):
-            for d in ds: os.chmod(os.path.join(root,d),0o777)
-            for f in fs:
-                fp=os.path.join(root,f)
-                if not os.path.islink(fp): os.chmod(fp,0o777 if os.stat(fp).st_mode&0o111 else 0o666)
-        print("nvsnap: cache seeded %d entries from the node agent in %.0fs"%(n,time.time()-t0)); break
-    except urllib.error.HTTPError as e:
-        if e.code!=503: print("nvsnap: seed refused (%d); engine compiles locally"%e.code); break
-    except Exception as e:
-        err=str(e)
-        if time.time()>deadline: print("nvsnap: seed error (%s); engine compiles locally"%err); break
-    if time.time()>deadline: print("nvsnap: seed not ready within deadline; engine compiles locally"); break
-    time.sleep(5)
-`
-	return fmt.Sprintf(`mkdir -p %[1]s; if command -v python3 >/dev/null 2>&1; then python3 -c %[2]s %[1]s; else echo "nvsnap: no python3 in the engine image; engine compiles locally"; fi; exit 0`, dest, shellQuote(py))
 }

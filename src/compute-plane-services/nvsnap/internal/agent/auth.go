@@ -90,22 +90,7 @@ var unauthenticatedPaths = map[string]bool{
 	"/metrics": true,
 }
 
-// selfAuthenticatedPrefixes are routes that verify their own per-request
-// signature instead of the shared bearer token: the cache seed endpoint,
-// whose callers are workload pods that never see the token.
-var selfAuthenticatedPrefixes = []string{"/v1/cache-seed/"}
-
-func bypassesTokenGuard(path string) bool {
-	if unauthenticatedPaths[path] {
-		return true
-	}
-	for _, p := range selfAuthenticatedPrefixes {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
-}
+func bypassesTokenGuard(path string) bool { return unauthenticatedPaths[path] }
 
 // tokenGuard returns middleware enforcing mode against token.
 //

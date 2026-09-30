@@ -86,6 +86,11 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # StatefulSet replicas give the webhook a group's size, so a cache set
+  # is only collected once every rank is ready.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]

@@ -181,9 +181,6 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// rox PVC binds. Wired from agent --webhook-l2-wait-image
 		// (helm sets it from .Values.agent.l2.waitImage).
 		L2WaitImage:     a.config.Webhook.L2WaitImage,
-		CacheSeedMode:   a.config.ModelVolume.CacheSeed,
-		CacheSeedImage:  a.config.Webhook.L2WaitImage,
-		CacheSeedSecret: a.config.AuthToken,
 		NvSnapServerURL: a.config.CatalogURL,
 		// nvsnap#147: restore-entrypoint hostPath inject. Empty =
 		// default "/var/lib/nvsnap/bundle" (matches the agent

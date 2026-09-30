@@ -180,8 +180,6 @@ func main() {
 		"Host directory (mounted Bidirectional into the agent at the same path) where completed model volumes are bound for readers on block storage (default /var/lib/containerd/nvsnap-models)")
 	flag.DurationVar(&config.ModelVolume.ReapInterval, "model-volume-reap-interval", 0,
 		"How often the model volume reaper removes read-only PVs without a claim and abandoned primaries (0 = 10m)")
-	flag.StringVar(&config.ModelVolume.CacheSeed, "model-volume-cache-seed", "volume",
-		"How pods receive their compile-cache seed: volume (attach the read-only cache volume) or agent (fetch from the node agent's mirror)")
 	flag.DurationVar(&config.ModelVolume.Retention, "model-volume-retention", 0,
 		"How long a complete model or cache volume is kept after its last use before the reaper frees its storage (0 = keep forever)")
 	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,

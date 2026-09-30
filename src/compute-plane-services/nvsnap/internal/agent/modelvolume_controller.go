@@ -7,8 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tarstream"
+	"github.com/gorilla/mux"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -80,6 +85,12 @@ type ModelVolumeController struct {
 	// emptyDirs are materialised. Defaults: /host, /var/lib/kubelet/pods.
 	HostFSRoot     string
 	KubeletPodsDir string
+	// fetchRankFn is the seam tests use for remote ranks; nil means HTTP.
+	fetchRankFn func(ctx context.Context, uri string, r rankSource, dst string) error
+	// collectAttach attaches the set claim and returns its mount path and
+	// a release; nil means a mount-holder on this node.
+	collectAttach func(ctx context.Context, uri, sysNS, claim string) (dst string, release func(context.Context) error, err error)
+
 	// StagingAttempts bounds the copy retries per identity before the
 	// staged Job is dropped and readers are left to their fallback.
 	StagingAttempts int
@@ -243,7 +254,13 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		return
 	}
 	if pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
-		if pod.Spec.NodeName == c.NodeName && rootfsonly.IsPodReady(pod) && pod.DeletionTimestamp == nil {
+		switch {
+		case pod.Annotations[modelvolume.CacheRankReadyAnnotation] == "true":
+			// A rank became ready somewhere in the cluster: every agent
+			// re-runs the election; atomic claim creation picks one
+			// collector, the rest see AlreadyExists.
+			c.tryCollect(ctx, pod.Annotations[cacheURIAnnotation], c.log().WithFields(logrus.Fields{"cache": pod.Annotations[cacheURIAnnotation], "node": c.NodeName}))
+		case pod.Spec.NodeName == c.NodeName && rootfsonly.IsPodReady(pod) && pod.DeletionTimestamp == nil:
 			c.captureCache(ctx, pod)
 		}
 	}
@@ -526,10 +543,13 @@ const (
 	cacheSubpathAnnotation = "nvsnap.io/cache-subpath"
 )
 
-// captureCache turns a Ready pod's compile-cache subtree into the completed
-// cache volume for its key. The pod keeps serving; its emptyDir lives as
-// long as it does. Atomic claim creation decides which pod, of all those
-// sharing the key across the cluster, is the source.
+// captureCache is the cache-set flow for a Ready pod stamped for capture.
+// The pod's rank is not copied anywhere on its own: once its tree has
+// settled the agent records rank-ready and the byte count on the pod, and
+// whichever agent sees the whole group ready wins the election (atomic
+// claim creation) and collects every rank into one volume, its own from
+// the local emptyDir and the others streamed from their agents. One
+// attach, one volume per configuration.
 func (c *ModelVolumeController) captureCache(ctx context.Context, pod *corev1.Pod) {
 	if c.Cache == nil {
 		return
@@ -540,10 +560,10 @@ func (c *ModelVolumeController) captureCache(ctx context.Context, pod *corev1.Po
 	if vol == "" {
 		return
 	}
-	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "cache": uri, "node": c.NodeName})
-	key := "cache:" + uri
+	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "cache": uri, "ordinal": pod.Annotations[modelvolume.CacheOrdinalAnnotation], "node": c.NodeName})
+	key := "rank:" + string(pod.UID)
 	c.mu.Lock()
-	if c.inflight[key] || c.attempts[key] >= c.StagingAttempts {
+	if c.inflight[key] {
 		c.mu.Unlock()
 		return
 	}
@@ -592,25 +612,119 @@ func (c *ModelVolumeController) captureCache(ctx context.Context, pod *corev1.Po
 			log.WithFields(logrus.Fields{"bytes": bytes, "bytes_after": again, "files": files, "files_after": filesAgain}).Info("cache volume: tree still changing; retrying on the next event")
 			return
 		}
+		patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:"true",%q:%q}}}`, modelvolume.CacheRankReadyAnnotation, modelvolume.CacheRankBytesAnnotation, strconv.FormatInt(bytes, 10))
+		if _, err := c.Kube.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+			log.WithError(err).Warn("cache volume: mark rank ready failed")
+			return
+		}
+		log.WithFields(logrus.Fields{"bytes": bytes, "files": files}).Info("cache volume: rank ready for collection")
+		c.tryCollect(ctx, uri, log)
+	}()
+}
+
+// rankSource is one ready rank of a group: where its tree lives.
+type rankSource struct {
+	ordinal int
+	pod     *corev1.Pod
+	bytes   int64
+	src     string // host path of the cache subtree
+}
+
+// groupRanks lists the group's ready ranks and the group size. ok is false
+// until every ordinal 0..size-1 is ready.
+func (c *ModelVolumeController) groupRanks(ctx context.Context, uri string) ([]rankSource, int, bool, error) {
+	pods, err := c.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: modelvolume.CacheKeyLabel + "=" + modelvolume.Key(uri)})
+	if err != nil {
+		return nil, 0, false, err
+	}
+	size := 0
+	byOrdinal := map[int]rankSource{}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.DeletionTimestamp != nil || p.Annotations[cacheURIAnnotation] != uri {
+			continue
+		}
+		if n, err := strconv.Atoi(p.Annotations[modelvolume.CacheGroupSizeAnnotation]); err == nil && n > size {
+			size = n
+		}
+		if p.Annotations[modelvolume.CacheRankReadyAnnotation] != "true" {
+			continue
+		}
+		ord, err := strconv.Atoi(p.Annotations[modelvolume.CacheOrdinalAnnotation])
+		if err != nil {
+			continue
+		}
+		bytes, _ := strconv.ParseInt(p.Annotations[modelvolume.CacheRankBytesAnnotation], 10, 64)
+		if _, dup := byOrdinal[ord]; dup {
+			continue // two pods of one ordinal (a rolling group); first wins
+		}
+		byOrdinal[ord] = rankSource{ordinal: ord, pod: p, bytes: bytes,
+			src: filepath.Join(c.KubeletPodsDir, string(p.UID), "volumes", "kubernetes.io~empty-dir", p.Annotations[cacheVolumeAnnotation], p.Annotations[cacheSubpathAnnotation])}
+	}
+	if size == 0 {
+		size = 1
+	}
+	ranks := make([]rankSource, 0, size)
+	for o := 0; o < size; o++ {
+		r, ok := byOrdinal[o]
+		if !ok {
+			return nil, size, false, nil
+		}
+		ranks = append(ranks, r)
+	}
+	return ranks, size, true, nil
+}
+
+// tryCollect runs the election for the set and, when this agent wins,
+// collects every rank into the new volume.
+func (c *ModelVolumeController) tryCollect(ctx context.Context, uri string, log logrus.FieldLogger) {
+	key := "set:" + uri
+	c.mu.Lock()
+	if c.inflight[key] || c.attempts[key] >= c.StagingAttempts {
+		c.mu.Unlock()
+		return
+	}
+	c.inflight[key] = true
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.inflight, key)
+			c.mu.Unlock()
+		}()
+		st, err := c.Cache.Lookup(ctx, uri)
+		if err != nil || st.Complete || st.Failed {
+			return
+		}
+		ranks, size, ok, err := c.groupRanks(ctx, uri)
+		if err != nil {
+			log.WithError(err).Warn("cache volume: list group failed")
+			return
+		}
+		if !ok {
+			log.WithFields(logrus.Fields{"ready": len(ranks), "group_size": size}).Info("cache volume: waiting for the rest of the group")
+			return
+		}
+		var total int64
+		for _, r := range ranks {
+			total += r.bytes
+		}
 		sysNS := c.Cache.Cfg.SystemNamespace()
-		claim, created, err := c.Cache.ClaimSizedClaim(ctx, uri, sysNS, c.Cache.Cfg.VolumeSize(bytes))
+		claim, created, err := c.Cache.ClaimSizedClaim(ctx, uri, sysNS, c.Cache.Cfg.VolumeSize(total))
 		if err != nil {
 			log.WithError(err).Warn("cache volume: claim failed")
 			return
 		}
 		if !created {
-			return // another pod is the source for this key
+			return // another agent collects this set
 		}
 		start := time.Now()
-		if err := c.copyCache(ctx, uri, sysNS, claim, src); err != nil {
+		if err := c.collectSet(ctx, uri, sysNS, claim, ranks, log); err != nil {
 			c.mu.Lock()
 			c.attempts[key]++
 			n := c.attempts[key]
 			c.mu.Unlock()
-			log.WithError(err).WithField("attempt", n).Warn("cache volume: capture failed")
-			// Release the claim so another pod can become the source; on
-			// the last attempt record the failure so admissions stop
-			// waiting for this key for a while.
+			log.WithError(err).WithField("attempt", n).Warn("cache volume: collection failed")
 			if derr := c.Kube.CoreV1().PersistentVolumeClaims(sysNS).Delete(ctx, claim, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 				log.WithError(derr).Warn("cache volume: delete claim after failure failed")
 			}
@@ -621,23 +735,168 @@ func (c *ModelVolumeController) captureCache(ctx context.Context, pod *corev1.Po
 			}
 			return
 		}
-		log.WithFields(logrus.Fields{"bytes": bytes, "claim": sysNS + "/" + claim, "elapsed": time.Since(start).Round(time.Second).String()}).Info("cache volume: captured; later pods of this key seed from it")
+		log.WithFields(logrus.Fields{"ranks": len(ranks), "bytes": total, "claim": sysNS + "/" + claim, "elapsed": time.Since(start).Round(time.Second).String()}).Info("cache volume: set collected; later pods of this configuration seed from it")
 	}()
 }
 
-// copyCache waits for the claim, copies the subtree in, marks it complete.
-func (c *ModelVolumeController) copyCache(ctx context.Context, uri, sysNS, claim, src string) error {
+// collectSet attaches the set claim once and fills /<ordinal>/ for every
+// rank: local ranks through the copier, remote ranks streamed from the
+// agent on their node. Then complete and release.
+func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, claim string, ranks []rankSource, log logrus.FieldLogger) error {
 	if _, err := c.Cache.WaitBound(ctx, sysNS, claim, stagingBindTimeout); err != nil {
 		return err
 	}
-	if err := c.copyStaging(ctx, sysNS, claim, src); err != nil {
+	attach := c.collectAttach
+	if attach == nil {
+		attach = c.holderAttach
+	}
+	dst, release, err := attach(ctx, uri, sysNS, claim)
+	if err != nil {
 		return err
 	}
+	released := false
+	defer func() {
+		if !released {
+			cleanup, cancel := context.WithTimeout(context.Background(), checkpointstore.MountHolderDeleteTimeout+5*time.Second)
+			defer cancel()
+			_ = release(cleanup)
+		}
+	}()
+	for _, r := range ranks {
+		rankDst := filepath.Join(dst, strconv.Itoa(r.ordinal))
+		if r.pod.Spec.NodeName == c.NodeName {
+			if _, _, err := c.Copier.Copy(ctx, rankDst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: r.src}}); err != nil {
+				return fmt.Errorf("copy rank %d: %w", r.ordinal, err)
+			}
+			continue
+		}
+		if err := c.fetchRank(ctx, uri, r, rankDst); err != nil {
+			return fmt.Errorf("fetch rank %d from %s: %w", r.ordinal, r.pod.Spec.NodeName, err)
+		}
+	}
+	if err := release(ctx); err != nil {
+		return fmt.Errorf("release collect holder: %w", err)
+	}
+	released = true
 	if err := c.Cache.MarkComplete(ctx, uri, sysNS); err != nil {
 		return err
 	}
 	return c.Cache.ClearFailure(ctx, uri)
 }
+
+// holderAttach attaches the set claim through a mount-holder on this node
+// and waits for the detach on release, so the volume can be attached
+// read-only elsewhere afterwards.
+func (c *ModelVolumeController) holderAttach(ctx context.Context, uri, sysNS, claim string) (string, func(context.Context) error, error) {
+	pvc, err := c.Kube.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, claim, metav1.GetOptions{})
+	if err != nil {
+		return "", nil, fmt.Errorf("get claim %s/%s: %w", sysNS, claim, err)
+	}
+	entry, _ := c.log().(*logrus.Entry)
+	if entry == nil {
+		entry = logrus.NewEntry(logrus.New())
+	}
+	name := "nvsnap-cache-collect-" + modelvolume.Key(uri) + "-" + shortNode(c.NodeName)
+	h := checkpointstore.NewMountHolder(c.Kube, entry, sysNS, name, c.NodeName, claim, pvc.UID, c.HolderImage, c.HostFSRoot, c.HolderPullSecrets)
+	if err := h.Create(ctx); err != nil {
+		return "", nil, fmt.Errorf("create collect holder: %w", err)
+	}
+	release := func(rctx context.Context) error {
+		if err := h.Delete(rctx); err != nil {
+			return err
+		}
+		deadline := time.Now().Add(stagingDetachTimeout)
+		for {
+			detached, err := c.Cache.Detached(rctx, pvc.Spec.VolumeName)
+			if err != nil || detached || time.Now().After(deadline) {
+				return err
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+	if err := h.WaitRunning(ctx); err != nil {
+		_ = release(ctx)
+		return "", nil, fmt.Errorf("collect holder not running: %w", err)
+	}
+	dst, err := h.PVMountPath()
+	if err != nil {
+		_ = release(ctx)
+		return "", nil, err
+	}
+	return dst, release, nil
+}
+
+// fetchRank streams one remote rank from the agent on its node into dst,
+// with bounded retries. The peer address is that node's agent pod; the
+// request carries the agent token through the shared peer transport.
+func (c *ModelVolumeController) fetchRank(ctx context.Context, uri string, r rankSource, dst string) error {
+	fetch := c.fetchRankFn
+	if fetch == nil {
+		fetch = c.fetchRankHTTP
+	}
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err = fetch(ctx, uri, r, dst); err == nil {
+			return nil
+		}
+		select {
+		case <-time.After(time.Duration(attempt) * 5 * time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
+func (c *ModelVolumeController) fetchRankHTTP(ctx context.Context, uri string, r rankSource, dst string) error {
+	agents, err := c.Kube.CoreV1().Pods(c.Cache.Cfg.SystemNamespace()).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=nvsnap-agent", FieldSelector: "spec.nodeName=" + r.pod.Spec.NodeName})
+	if err != nil || len(agents.Items) == 0 || agents.Items[0].Status.PodIP == "" {
+		return fmt.Errorf("no agent found on node %s: %v", r.pod.Spec.NodeName, err)
+	}
+	u := fmt.Sprintf("http://%s:%d/v1/cache-rank/%s/%d", agents.Items[0].Status.PodIP, agentAPIPort, modelvolume.Key(uri), r.ordinal)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := peerHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("peer returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	_, _, err = tarstream.Extract(resp.Body, dst, false)
+	return err
+}
+
+// ServeRank answers GET /v1/cache-rank/{key}/{ordinal}: the tar of a
+// ready rank whose pod runs on this node, for the collecting agent.
+func (c *ModelVolumeController) ServeRank(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key, ordinal := vars["key"], vars["ordinal"]
+	pods, err := c.Kube.CoreV1().Pods("").List(r.Context(), metav1.ListOptions{LabelSelector: modelvolume.CacheKeyLabel + "=" + key, FieldSelector: "spec.nodeName=" + c.NodeName})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Annotations[modelvolume.CacheOrdinalAnnotation] != ordinal || p.Annotations[modelvolume.CacheRankReadyAnnotation] != "true" {
+			continue
+		}
+		src := filepath.Join(c.HostFSRoot, c.KubeletPodsDir, string(p.UID), "volumes", "kubernetes.io~empty-dir", p.Annotations[cacheVolumeAnnotation], p.Annotations[cacheSubpathAnnotation])
+		w.Header().Set("Content-Type", "application/x-tar")
+		if err := tarstream.Write(w, src, nil); err != nil {
+			c.log().WithError(err).WithField("pod", p.Namespace+"/"+p.Name).Warn("cache volume: rank stream failed")
+		}
+		return
+	}
+	http.Error(w, "no ready rank "+ordinal+" for key "+key+" on this node", http.StatusNotFound)
+}
+
+const agentAPIPort = 8081
 
 // copyStaged is one attempt: measure, claim, copy, complete.
 func (c *ModelVolumeController) copyStaged(ctx context.Context, uri, src string, log logrus.FieldLogger) error {

@@ -5,7 +5,7 @@ package webhook
 
 import (
 	"context"
-	"net/url"
+	appsv1 "k8s.io/api/apps/v1"
 	"strings"
 	"testing"
 
@@ -553,28 +553,43 @@ func TestCacheVolume_FirstPodMarkedForCapture(t *testing.T) {
 	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
 	completeModelPV(t, kc, uri)
 	m := cacheMutator(t, kc)
+	two := int32(2)
+	if _, err := kc.AppsV1().StatefulSets("sr-fn").Create(context.Background(), &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3", Namespace: "sr-fn"}, Spec: appsv1.StatefulSetSpec{Replicas: &two}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	pod := ngcFunctionPod()
 	pod.Name = "mini-service-kimi-k3-1"
+	pod.OwnerReferences = []metav1.OwnerReference{{Kind: "StatefulSet", Name: "mini-service-kimi-k3"}}
 	patches, err := m.Mutate(context.Background(), pod)
 	if err != nil {
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	if v.labels[CacheCaptureLabel] != "true" || !strings.HasPrefix(v.annotations[CacheURIAnnotation], "cache://") || !strings.HasSuffix(v.annotations[CacheURIAnnotation], "/1") ||
+	curi := v.annotations[CacheURIAnnotation]
+	if v.labels[CacheCaptureLabel] != "true" || !strings.HasPrefix(curi, "cache://") || strings.Contains(strings.TrimPrefix(curi, "cache://"), "/") ||
+		v.labels[modelvolume.CacheKeyLabel] != modelvolume.Key(curi) || v.annotations[modelvolume.CacheOrdinalAnnotation] != "1" || v.annotations[modelvolume.CacheGroupSizeAnnotation] != "2" ||
 		v.annotations[CacheVolumeAnnotation] != cacheDirVolumeName || v.annotations[CacheSubpathAnnotation] != "cache" {
-		t.Errorf("capture stamp: labels=%v ann=%v", v.labels, v.annotations)
+		t.Errorf("rank stamps: the set identity has no ordinal, the ordinal and the StatefulSet's replica count are stamped: labels=%v ann=%v", v.labels, v.annotations)
 	}
 	for _, c := range v.newInits {
 		if c.Name == cacheSeedInitName {
-			t.Error("no seed init without a complete cache volume")
+			t.Error("no seed init without a complete cache set")
 		}
 	}
-	// Same config, ordinal 0 is a different key.
+	// Ordinal 0 of the same configuration shares the set identity.
 	pod0 := ngcFunctionPod()
 	pod0.Name = "mini-service-kimi-k3-0"
+	pod0.OwnerReferences = pod.OwnerReferences
 	p0, _ := m.Mutate(context.Background(), pod0)
-	if a := viewMV(pod0, p0).annotations[CacheURIAnnotation]; !strings.HasSuffix(a, "/0") || strings.TrimSuffix(a, "/0") != strings.TrimSuffix(v.annotations[CacheURIAnnotation], "/1") {
-		t.Errorf("ordinal 0 shares the config hash and differs in ordinal: %s vs %s", a, v.annotations[CacheURIAnnotation])
+	if v0 := viewMV(pod0, p0); v0.annotations[CacheURIAnnotation] != curi || v0.annotations[modelvolume.CacheOrdinalAnnotation] != "0" {
+		t.Errorf("ordinal 0 shares the set: %v", v0.annotations)
+	}
+	// No owner: a group of one.
+	lone := ngcFunctionPod()
+	lone.Name = "vllm-single"
+	pl, _ := m.Mutate(context.Background(), lone)
+	if vl := viewMV(lone, pl); vl.annotations[modelvolume.CacheGroupSizeAnnotation] != "1" || vl.annotations[modelvolume.CacheOrdinalAnnotation] != "0" {
+		t.Errorf("lone pod is ordinal 0 of a group of one: %v", vl.annotations)
 	}
 }
 
@@ -625,7 +640,7 @@ func TestCacheVolume_CompleteSeedsCachedir(t *testing.T) {
 	if seed == nil {
 		t.Fatalf("seed init missing: %v", v.newInits)
 	}
-	if seed.Image != pod.Spec.Containers[0].Image || !strings.Contains(seed.Args[0], "cp -a /nvsnap-cache-seed/. /opt/nvsnap/cache/") || !strings.HasSuffix(seed.Args[0], "exit 0") ||
+	if seed.Image != pod.Spec.Containers[0].Image || !strings.Contains(seed.Args[0], "cp -a /nvsnap-cache-seed/0/. /opt/nvsnap/cache/") || !strings.HasSuffix(seed.Args[0], "exit 0") ||
 		seed.SecurityContext == nil || seed.SecurityContext.Capabilities == nil || seed.Resources.Limits.Cpu().IsZero() {
 		t.Errorf("seed init copies best effort with the baselines: %+v", seed)
 	}
@@ -786,78 +801,4 @@ func TestModelVolume_HFHomeOnLanding_ModulesCacheMovedOffVolume(t *testing.T) {
 	if v := viewMV(plain, patches); v.env["HF_MODULES_CACHE"] != "" {
 		t.Errorf("no HF_HOME on the landing: nothing to move, got %q", v.env["HF_MODULES_CACHE"])
 	}
-}
-
-// Agent-served seeding: with cacheSeed=agent a complete cache adds a seed
-// init that fetches from the node agent with a token signed for this
-// namespace and key. No read-only cache claim is minted and no second
-// volume is attached; the cachedir is the only mount.
-func TestCacheVolume_CompleteSeedsFromNodeAgent(t *testing.T) {
-	kc := fake.NewSimpleClientset()
-	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
-	completeModelPV(t, kc, uri)
-	m := cacheMutator(t, kc)
-	m.CacheSeedMode = modelvolume.SeedModeAgent
-	m.CacheSeedImage = "nvcr.io/org/nvsnap-l2-wait:v0.0.2"
-	m.CacheSeedSecret = "agent-token"
-	m.AgentBaseURL = "http://nvsnap-agent-local.nvsnap-system.svc.cluster.local:8081"
-	pod := ngcFunctionPod()
-	pod.Name = "mini-service-kimi-k3-0"
-	curi, ok := m.cacheURI(pod)
-	if !ok {
-		t.Fatal("pod must have a cache identity")
-	}
-	cpv := &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: "pvc-c", Labels: map[string]string{modelvolume.CacheLabel: modelvolume.Key(curi), modelvolume.CompleteLabel: "true"}},
-		Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}, PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
-			PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-c:v"}}}}
-	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), cpv, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	patches, err := m.Mutate(context.Background(), pod)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v := viewMV(pod, patches)
-	if _, ok := v.volumes[cacheSeedVolumeName]; ok {
-		t.Error("agent mode attaches no cache seed volume")
-	}
-	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), m.CacheVolume.Cfg.ReadOnlyClaimName(curi), metav1.GetOptions{}); err == nil {
-		t.Error("agent mode mints no read-only cache claim in the pod namespace")
-	}
-	var seed *corev1.Container
-	for i := range v.newInits {
-		if v.newInits[i].Name == cacheSeedInitName {
-			seed = &v.newInits[i]
-		}
-	}
-	if seed == nil {
-		t.Fatalf("seed init missing: %v", v.newInits)
-	}
-	wantURL := m.AgentBaseURL + "/v1/cache-seed/" + modelvolume.Key(curi) + "?uri=" + url.QueryEscape(curi) + "&ns=sr-fn"
-	env := map[string]string{}
-	for _, e := range seed.Env {
-		env[e.Name] = e.Value
-	}
-	if seed.Image != pod.Spec.Containers[0].Image || env["NVSNAP_SEED_URL"] != wantURL || !strings.Contains(seed.Args[0], "python3 -c") || !strings.Contains(seed.Args[0], "/opt/nvsnap/cache") || !strings.HasSuffix(seed.Args[0], "exit 0") {
-		t.Errorf("seed init runs on the engine image (tenant pull secrets), fetches from the node agent, exits 0: image=%s url=%q", seed.Image, env["NVSNAP_SEED_URL"])
-	}
-	if env["NVSNAP_SEED_TOKEN"] != modelvolume.SeedToken("agent-token", "sr-fn", curi) {
-		t.Error("seed token is signed for this namespace and cache key")
-	}
-	if len(seed.VolumeMounts) != 1 || seed.VolumeMounts[0].Name != cacheDirVolumeName || seed.SecurityContext == nil || seed.Resources.Limits.Cpu().IsZero() {
-		t.Errorf("seed init mounts only the cachedir and carries the baselines: %+v", seed)
-	}
-	if got := mpvLastUsed(t, kc, "pvc-c"); got == "" {
-		t.Error("admission against a complete cache records last use")
-	}
-}
-
-func mpvLastUsed(t *testing.T, kc *fake.Clientset, pv string) string {
-	t.Helper()
-	got, err := kc.CoreV1().PersistentVolumes().Get(context.Background(), pv, metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return got.Annotations[modelvolume.LastUsedAnnotation]
 }

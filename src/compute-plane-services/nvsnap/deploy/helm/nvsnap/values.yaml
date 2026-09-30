@@ -142,12 +142,6 @@ agent:
     # last pod admitted against it. Past this, with no reader bound, the
     # reaper frees its storage. Set to 0 to keep volumes forever.
     retention: 168h
-    # How a pod receives its compile-cache seed. "volume" attaches the
-    # read-only cache volume to every pod (one extra block attach per
-    # pod). "agent" fetches it from the agent on the pod's node, which
-    # keeps one mirror per cache key, so a pod attaches only its model
-    # volume. Needs agent.l2.waitImage.
-    cacheSeed: volume
 
   election:
     enabled: false

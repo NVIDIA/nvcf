@@ -97,6 +97,21 @@ const (
 	CaptureLabel = "nvsnap.io/model-capture"
 	// CaptureVolumeAnnotation names the pod volume the engine downloads into.
 	CaptureVolumeAnnotation = "nvsnap.io/model-capture-volume"
+	// Cache set: the compile caches of one configuration, all ranks in one
+	// volume. Stamped by the webhook on capture candidates and read by the
+	// agents that collect them.
+	//
+	// CacheKeyLabel is the set key on pods, for listing a group.
+	CacheKeyLabel = "nvsnap.io/cache-key"
+	// CacheOrdinalAnnotation is the pod's rank in its group.
+	CacheOrdinalAnnotation = "nvsnap.io/cache-ordinal"
+	// CacheGroupSizeAnnotation is how many ranks the set must contain.
+	CacheGroupSizeAnnotation = "nvsnap.io/cache-group-size"
+	// CacheRankReadyAnnotation is set by the agent on the pod's node once
+	// the rank's cache tree has settled; CacheRankBytesAnnotation is its size.
+	CacheRankReadyAnnotation = "nvsnap.io/cache-rank-ready"
+	CacheRankBytesAnnotation = "nvsnap.io/cache-rank-bytes"
+
 	// LastUsedAnnotation on a primary PV is the RFC 3339 time a pod last
 	// admitted against it (or it completed). Retention counts from here.
 	LastUsedAnnotation = "nvsnap.io/last-used"
