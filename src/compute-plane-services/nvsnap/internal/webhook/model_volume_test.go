@@ -744,3 +744,45 @@ func TestModelVolume_EngineNGCDownload_LaterPodReadsCapturedVolume(t *testing.T)
 		t.Errorf("read-only claim minted at admission of a complete volume: %v", err)
 	}
 }
+
+// A chart that points HF_HOME at the model directory (the nemoton-3-omni
+// dynamo chart) makes transformers write trust_remote_code modules into
+// $HF_HOME/modules, which is the read-only shared volume for every
+// reader. The webhook moves that cache next to the other per-pod caches;
+// a chart that set HF_MODULES_CACHE itself is left alone.
+func TestModelVolume_HFHomeOnLanding_ModulesCacheMovedOffVolume(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "HF_HOME", Value: "/config/models"})
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.env["HF_MODULES_CACHE"] != "/opt/nvsnap/cache/hf_modules" {
+		t.Errorf("HF_MODULES_CACHE must leave the read-only landing, got %q (env %v)", v.env["HF_MODULES_CACHE"], v.env)
+	}
+	if v.env["HF_HOME"] != "" {
+		t.Errorf("HF_HOME itself stays with the model: %v", v.env)
+	}
+
+	own := ngcFunctionPod()
+	own.Spec.Containers[0].Env = append(own.Spec.Containers[0].Env, corev1.EnvVar{Name: "HF_HOME", Value: "/config/models"}, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: "/tmp/mods"})
+	patches, err = m.Mutate(context.Background(), own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := viewMV(own, patches); v.env["HF_MODULES_CACHE"] != "" {
+		t.Errorf("a chart-set HF_MODULES_CACHE is respected, got patch %q", v.env["HF_MODULES_CACHE"])
+	}
+
+	plain := ngcFunctionPod() // HF_HOME unset: HOME already points at the cachedir
+	patches, err = m.Mutate(context.Background(), plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := viewMV(plain, patches); v.env["HF_MODULES_CACHE"] != "" {
+		t.Errorf("no HF_HOME on the landing: nothing to move, got %q", v.env["HF_MODULES_CACHE"])
+	}
+}

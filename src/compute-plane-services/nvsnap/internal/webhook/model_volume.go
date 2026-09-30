@@ -483,6 +483,15 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 		rel := strings.TrimPrefix(e.Value, path.Join(m.CacheDir, "cache"))
 		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: e.Name, Value: root + rel}))
 	}
+	// transformers writes trust_remote_code module sources to
+	// HF_MODULES_CACHE, which defaults to $HF_HOME/modules. Charts that
+	// point HF_HOME at the model directory then write into the shared
+	// volume, which is read-only for every reader (GB300, 2026-09-30:
+	// "Read-only file system: /config/models/modules"). Keep that cache
+	// with the other per-pod caches unless the chart placed it itself.
+	if hfHomeUnderLanding(main, land) && !hasEnv(main, "HF_MODULES_CACHE") {
+		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: path.Join(root, "hf_modules")}))
+	}
 	if m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.CacheDir != "" {
 		// Block mode keeps the local cachedir emptyDir the capture reads,
 		// and shares the compile caches through a per-key cache volume.
@@ -492,6 +501,36 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 		patches = append(patches, m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), initCreated)...)
 	}
 	return patches
+}
+
+// hfHomeUnderLanding reports whether the container's literal HF_HOME is
+// the landing path or inside the volume mounted there.
+func hfHomeUnderLanding(main *corev1.Container, land modelid.Landing) bool {
+	hf := ""
+	for _, e := range main.Env {
+		if e.Name == "HF_HOME" {
+			hf = e.Value
+		}
+	}
+	if hf == "" {
+		return false
+	}
+	hf = path.Clean(hf)
+	for _, base := range []string{landingMount(land), land.Path} {
+		if base != "" && (hf == base || strings.HasPrefix(hf, base+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(c *corev1.Container, name string) bool {
+	for _, e := range c.Env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // cacheDirVolumeOnly adds the /opt/nvsnap emptyDir for compile caches
