@@ -4186,7 +4186,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv(t *testing.T) {
 				envType: tt.envType,
 			}
 
-			command, args, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb)
+			command, args, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb, getRequestsNamespace(tt.nb))
 
 			// Verify command
 			assert.Equal(t, []string{"/otelcol-contrib"}, command)
@@ -4385,7 +4385,7 @@ func TestGetOTelCollectorContainer(t *testing.T) {
 				},
 			}
 
-			containers := bc.getOTelCollectorContainer(tt.nb)
+			containers := bc.getOTelCollectorContainer(tt.nb, getRequestsNamespace(tt.nb))
 
 			if tt.expectContainer {
 				require.Len(t, containers, tt.expectedLength)
@@ -4757,7 +4757,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 				},
 			}
 
-			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb)
+			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb, getRequestsNamespace(tt.nb))
 
 			// Create map for easier lookup
 			envMap := make(map[string]string)
@@ -4845,7 +4845,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_FNDSEndpoint(t *testing.T) {
 				},
 			}
 
-			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb)
+			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb, getRequestsNamespace(tt.nb))
 
 			// Find and verify FNDS endpoint env var
 			var found bool
@@ -5504,6 +5504,48 @@ func TestNewAgentConfigConfigMapRejectsStaticGPUCapacityOnDynamicBackend(t *test
 	}
 	_, err = bc.newAgentConfigConfigMap(ctx, nb)
 	require.NoError(t, err)
+}
+
+func TestNewAgentConfigConfigMapRequestsNamespaceOverride(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	mergeCM, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{agentConfigFile: "agent:\n  requestsNamespace: Team_X\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	_, err = bc.newAgentConfigConfigMap(ctx, nb)
+	require.Error(t, err)
+	assert.True(t, isInvalidAgentConfigError(err))
+	assert.ErrorContains(t, err, `worker.requestsNamespace "Team_X" is not a valid namespace name`)
+
+	mergeCM.Data[agentConfigFile] = "agent:\n  requestsNamespace: team-x\n"
+	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, mergeCM, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	cm, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+	cfg, err := nvcaconfig.DecodeConfig([]byte(cm.Data[agentConfigFile]))
+	require.NoError(t, err)
+	assert.Equal(t, "team-x", cfg.Agent.RequestsNamespace)
+}
+
+func TestOTelCollectorEnvUsesEffectiveRequestsNamespace(t *testing.T) {
+	bc := &BackendK8sCache{envType: nvidiaiov1.EnvTypeProd}
+	nb := &nvidiaiov1.NVCFBackend{}
+
+	_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(nb, "team-x")
+
+	assert.Contains(t, env, corev1.EnvVar{Name: NVCAOTelCollectorRequestsNamespaceEnvVar, Value: "team-x"})
 }
 
 func TestGetEffectiveOTelCollectorConfig(t *testing.T) {
