@@ -12,6 +12,7 @@ states:
     fullOverrides:
       - addons.llm.enabled=true
       - addons.vanityGateway.enabled=true
+      - rateLimiter.enabled=true
   - plane: control-plane
     path: deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl
     fullOverrides:
