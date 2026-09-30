@@ -149,22 +149,22 @@ impl StargateControlPlane for TestTlsControlPlaneService {
         );
         let mut stream = request.into_inner();
         let registrations = self.registrations.clone();
+        if let Some(terminal) = self.registration_terminal.clone() {
+            return Ok(Response::new(Box::pin(async_stream::stream! {
+                if let Ok(Some(registration)) = stream.message().await {
+                    let _ = registrations.send(registration);
+                }
+                yield terminal;
+            })));
+        }
         tokio::spawn(async move {
             if let Ok(Some(registration)) = stream.message().await {
                 let _ = registrations.send(registration);
             }
         });
-        let stream = tokio_stream::once(
-            self.registration_terminal
-                .clone()
-                .unwrap_or_else(|| Ok(InferenceServerAck::default())),
-        );
-        let stream: TestRegistrationStream = if self.registration_terminal.is_some() {
-            Box::pin(stream)
-        } else {
-            Box::pin(stream.chain(tokio_stream::pending()))
-        };
-        Ok(Response::new(stream))
+        Ok(Response::new(Box::pin(
+            tokio_stream::once(Ok(InferenceServerAck::default())).chain(tokio_stream::pending()),
+        )))
     }
 }
 
@@ -1665,14 +1665,12 @@ async fn registration_stream_termination_delays_reconnect_and_cancels_promptly()
 
         wait_for_tracing_event_count(&subscriber, message, 1).await;
         server.registration_authorities.recv().await.unwrap();
-        assert!(
-            tokio::time::timeout(
-                Duration::from_millis(100),
-                server.registration_authorities.recv(),
-            )
-            .await
-            .is_err(),
-            "stream termination must delay reconnect"
+        server.registrations.recv().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            subscriber.event_count("attempting Stargate gRPC connection"),
+            1,
+            "stream termination must delay the next connection attempt",
         );
         assert_metrics(
             &metrics,
