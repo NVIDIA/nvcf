@@ -169,7 +169,11 @@ RUN chmod +x /criu-bundle/cuda-checkpoint
 RUN chmod +x /criu-bundle/*
 
 # Configure library path
-RUN echo "/criu-bundle/lib" > /etc/ld.so.conf.d/criu.conf && ldconfig
+# ldconfig segfaults under qemu-user when cross-building arm64. The bundle
+# does not depend on the cache: criu carries an rpath to /criu-bundle/lib and
+# criu-wrapper passes --library-path. The version check below proves it.
+RUN echo "/criu-bundle/lib" > /etc/ld.so.conf.d/criu.conf && \
+    (ldconfig || ldconfig.real || echo "ldconfig failed; bundle uses rpath")
 
 # Verify CRIU and crit work
 RUN echo "=== CRIU version ===" && /criu-bundle/criu --version && \
