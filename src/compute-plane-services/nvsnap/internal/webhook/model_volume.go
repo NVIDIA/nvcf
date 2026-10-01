@@ -11,7 +11,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
@@ -166,7 +165,7 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
 	}
 	if st.Complete && m.ModelVolume.Cfg.ReaderMode() != modelvolume.ReaderHostPath {
-		patches = append(patches, m.modelPrewarmPatches(pod, main, land, !captureSource)...)
+		patches = m.modelPrewarmPatches(pod, main, land, patches)
 	}
 	patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
 	return patches, nil
@@ -176,51 +175,23 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // volume into the node's page cache before the engine starts.
 const modelPrewarmName = "nvsnap-model-prewarm"
 
-// modelPrewarmResources let the sweep keep its readers busy and keep what
-// they read. CPU is limited so eight dd processes get real cores without
-// taking the node. Memory is deliberately unlimited: page cache is charged
-// to the cgroup that faults it in, and a memory limit below the model size
-// makes the kernel evict the sweep's own pages as it reads, so the engine
-// finds only the last limit's worth warm. Measured on GB300 with a 512Mi
-// limit (2026-10-01): the sweep finished in 8 to 14 s and the engine still
-// read 33 GB in 43 to 45 s, the same as with no sweep at all. The pages
-// are reclaimable and move to the pod cgroup when the init exits.
-var modelPrewarmResources = corev1.ResourceRequirements{
-	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
-	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")},
-}
-
-// modelPrewarmPatches appends the page-cache sweep the cachedir restore
-// already has to a reader of a complete model volume. The engine's
-// safetensors loader walks the shards from one thread, and over a network
-// block device that single stream is latency-bound: measured on GB300 with
-// NVMesh (2026-10-01), 33 GB took 40 to 45 s cold and 9 s once the node's
-// page cache held it. The sweep reads the volume with parallel byte-range
-// readers first, so the engine's read hits memory. Same knobs as the
-// restore sweep: NVSNAP_PREWARM on the engine container, else the storage
-// profile. Best-effort by construction; it never fails the pod.
-// bootstrapped says an earlier patch already created /spec/initContainers.
-func (m *Mutator) modelPrewarmPatches(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, bootstrapped bool) []PatchOp {
-	if !m.prewarmWanted(*main) {
-		return nil
-	}
+// modelPrewarmPatches gives a reader of a complete model volume the
+// page-cache sweep (reader_steps.go). The engine's safetensors loader walks
+// the shards from one thread, and over a network block device that single
+// stream is latency-bound: measured on GB300 with NVMesh (2026-10-01),
+// 33 GB took 40 to 45 s cold and 9 s once the node's page cache held it.
+// The step runs as the engine does and never fails the pod. patches are
+// the admission's patches so far; the result extends them.
+func (m *Mutator) modelPrewarmPatches(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, patches []PatchOp) []PatchOp {
 	name := land.VolumeName
 	if name == "" {
 		name = modelVolumeName
 	}
-	mount := landingMount(land)
-	init := corev1.Container{
-		Name:         modelPrewarmName,
-		Image:        main.Image,
-		Command:      []string{"sh", "-c", prewarmCommand(mount, m.prewarmWorkers())},
-		VolumeMounts: []corev1.VolumeMount{{Name: name, MountPath: mount, ReadOnly: true}},
+	sweep, ok := m.sweepStep(modelPrewarmName, main, volumeAt{Volume: name, Path: landingMount(land)}, inheritPosture)
+	if !ok {
+		return patches
 	}
-	modelvolume.Harden(&init, modelPrewarmResources, main.SecurityContext)
-	var patches []PatchOp
-	if pod.Spec.InitContainers == nil && !bootstrapped {
-		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
-	}
-	return append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: init})
+	return appendInits(pod, patches, sweep)
 }
 
 // downloadStep derives the Job's container from the pod: the chart's own
@@ -555,10 +526,8 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	if m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.CacheDir != "" {
 		// Block mode keeps the local cachedir emptyDir the capture reads,
 		// and shares the compile caches through a per-key cache volume.
-		cd := m.cacheDirVolumeOnly(pod, main)
-		patches = append(patches, cd...)
-		initCreated := len(cd) > 0 && pod.Spec.InitContainers == nil
-		patches = append(patches, m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), initCreated)...)
+		patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
+		patches = m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
 	}
 	return patches
 }

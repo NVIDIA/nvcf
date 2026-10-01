@@ -108,12 +108,7 @@ func (m *Mutator) autoInjectPatches(pod *corev1.Pod) []PatchOp {
 	// Replaces the previous four-init-container fan-out (get-uvloop,
 	// get-libuv, get-libzmq, get-nvsnap) — same effect, fewer container
 	// startups + one image pull on cold nodes.
-	initContainer := autoInjectInitContainer(m.AutoInject.Agent)
-	if len(pod.Spec.InitContainers) == 0 {
-		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{initContainer}})
-	} else {
-		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: initContainer})
-	}
+	patches = appendInitValues(pod, patches, autoInjectInitContainer(m.AutoInject.Agent))
 
 	// 3. Mount nvsnap-lib on the main container.
 	mount := map[string]any{

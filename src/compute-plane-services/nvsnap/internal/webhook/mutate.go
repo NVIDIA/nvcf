@@ -744,8 +744,6 @@ func (m *Mutator) buildPatches(
 			Value: []any{},
 		})
 	}
-	needInitArray := pod.Spec.InitContainers == nil
-	bootstrappedInit := false
 
 	// addedVolumes dedupes spec.volumes entries by Volume.Name. K8s
 	// kubelet pod-worker treats each spec.volumes entry independently, but
@@ -781,15 +779,7 @@ func (m *Mutator) buildPatches(
 			Path:  fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
 			Value: pm.VolumeMount,
 		})
-		for i := range pm.InitContainers {
-			if needInitArray && !bootstrappedInit {
-				patches = append(patches, PatchOp{
-					Op: "add", Path: "/spec/initContainers", Value: []any{},
-				})
-				bootstrappedInit = true
-			}
-			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: pm.InitContainers[i]})
-		}
+		patches = appendInits(pod, patches, pm.InitContainers...)
 		// Track what we just added so a duplicate (e.g. extract path
 		// matching a user-data path) doesn't double-mount.
 		customerMountPaths[vm.MountPath] = struct{}{}
@@ -931,7 +921,7 @@ func (m *Mutator) buildPatches(
 	//     would be a no-op so we just skip emitting it.
 	if useInitContainer && len(initMounts) > 0 {
 		if err := m.emitMountPrepInitContainer(
-			&patches, &bootstrappedInit, needInitArray,
+			pod, &patches,
 			overlayKey, hash, overlayTargetNode, initMounts,
 		); err != nil {
 			return nil, fmt.Errorf("emit nvsnap-mount-prep init container: %w", err)

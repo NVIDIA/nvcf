@@ -183,7 +183,10 @@ not.
    function namespaces block it.
    A `pvc` reader of a complete volume also gets `nvsnap-model-prewarm`,
    the parallel byte-range sweep the checkpoint restore has, as the last
-   init container: the engine's safetensors loader reads the shards from
+   init container. The sweep, the seed copy and the init-list bootstrap
+   are one implementation for both branches (`internal/webhook/
+   reader_steps.go`); the branches decide what to mount, not how a pod
+   reads it. The sweep runs: the engine's safetensors loader reads the shards from
    one thread, and over a network block device that single stream is
    latency-bound (GB300 with NVMesh, 2026-10-01: 33 GB in 40 to 45 s
    cold, 9 s once the node's page cache held it). The sweep runs in the

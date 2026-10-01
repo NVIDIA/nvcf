@@ -106,10 +106,7 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 		patches = append(patches, restore...)
 		patches = append(patches, gatePatch(pod))
 		if m.L2WaitImage != "" {
-			// The restore decoration created /spec/initContainers if it was
-			// missing, so an insert at index 0 is valid here.
-			waitC := buildL2WaitContainer(m.L2WaitImage, m.NvSnapServerURL, hash, m.L2WaitTimeout)
-			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: waitC})
+			patches = prependInit(pod, patches, buildL2WaitContainer(m.L2WaitImage, m.NvSnapServerURL, hash, m.L2WaitTimeout))
 		}
 		log.WithField("claim", pm.Volume.PersistentVolumeClaim.ClaimName).Info("election: follower; gated until the capture is promoted")
 		return patches, nil

@@ -6,7 +6,6 @@ package webhook
 import (
 	"context"
 	"fmt"
-	"path"
 	"regexp"
 	"strconv"
 
@@ -107,71 +106,55 @@ func (m *Mutator) groupSize(ctx context.Context, pod *corev1.Pod) int {
 // cacheVolumePatches decorates a Block-mode model-volume reader with the
 // compile-cache volume: complete, the read-only claim is minted in the
 // pod's namespace and a seed init fills the cachedir from it; otherwise
-// the pod is marked for capture. initCreated says whether an earlier
-// patch already created /spec/initContainers.
-func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, log logrus.FieldLogger, initCreated bool) []PatchOp {
+// the pod is marked for capture. patches are the admission's patches so
+// far; the result extends them.
+func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, log logrus.FieldLogger, patches []PatchOp) []PatchOp {
 	if m.CacheVolume == nil || m.CacheDir == "" {
-		return nil
+		return patches
 	}
 	uri, ok := m.cacheURI(pod)
 	if !ok {
-		return nil
+		return patches
 	}
 	log = log.WithField("cache", uri)
 	st, err := m.CacheVolume.Lookup(ctx, uri)
 	if err != nil {
 		log.WithError(err).Warn("cache volume: lookup failed; pod compiles locally")
-		return nil
+		return patches
 	}
 	mp := newMetaPatcher(pod)
 	switch {
 	case st.Complete:
 		if m.ReadOnlyMinter == nil {
-			return nil
+			return patches
 		}
 		claim := m.CacheVolume.Cfg.ReadOnlyClaimName(uri)
 		if err := m.ReadOnlyMinter.MintReadOnlyFromPVLabels(ctx, st.PrimaryPV, m.CacheVolume.Cfg.ReadOnlyPVName(uri, pod.Namespace), claim, pod.Namespace, m.CacheVolume.Cfg.ReadOnlyLabels(uri)); err != nil {
 			log.WithError(err).Warn("cache volume: mint read-only claim failed; pod compiles locally")
-			return nil
+			return patches
 		}
 		if err := m.CacheVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
 			log.WithError(err).Warn("cache volume: record last use failed")
 		}
 		ordinal := podOrdinal(pod)
-		patches := mp.annotation(CacheURIAnnotation, uri)
+		patches = append(patches, mp.annotation(CacheURIAnnotation, uri)...)
 		patches = append(patches, mp.annotation(modelvolume.CacheOrdinalAnnotation, strconv.Itoa(ordinal))...)
-		if pod.Spec.InitContainers == nil && !initCreated {
-			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
-		}
-		dst := path.Join(m.CacheDir, cacheSubdir)
-		src := path.Join(cacheSeedMount, strconv.Itoa(ordinal))
-		seed := corev1.Container{
-			Name:    cacheSeedInitName,
-			Image:   main.Image,
-			Command: []string{"/bin/sh", "-c"},
-			// The pod's own rank directory of the set. Best effort by
-			// construction: a failed or missing copy leaves an empty cache
-			// and the engine compiles as it would have anyway.
-			Args: []string{fmt.Sprintf("cp -a %s/. %s/ 2>/dev/null && chmod -R a+rwX %s 2>/dev/null; echo \"nvsnap: cache seeded rank %d, $(find %s -type f | wc -l) files\"; exit 0", src, dst, dst, ordinal, dst)},
-			VolumeMounts: []corev1.VolumeMount{
-				{Name: cacheSeedVolumeName, MountPath: cacheSeedMount, ReadOnly: true},
-				{Name: cacheDirVolumeName, MountPath: m.CacheDir},
-			},
-		}
-		modelvolume.Harden(&seed, modelvolume.HoldResources, main.SecurityContext)
-		patches = append(patches,
-			PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: cacheSeedVolumeName, VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim, ReadOnly: true}}}},
-			PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: seed},
-		)
+		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: cacheSeedVolumeName, VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim, ReadOnly: true}}}})
+		// The pod's own rank directory of the set lands in its cachedir
+		// (reader_steps.go): the engine then finds its compile caches at
+		// the same path, writable.
+		seed := seedStep(cacheSeedInitName, main, volumeAt{Volume: cacheSeedVolumeName, Path: cacheSeedMount}, strconv.Itoa(ordinal),
+			volumeAt{Volume: cacheDirVolumeName, Path: m.CacheDir}, cacheSubdir, fmt.Sprintf("rank %d", ordinal), inheritPosture)
+		patches = appendInits(pod, patches, seed)
 		log.WithField("claim", claim).Info("cache volume: complete; seeding the cachedir from the read-only claim")
 		return patches
 	case st.Failed:
 		log.Info("cache volume: recent capture failure recorded; pod compiles locally")
-		return nil
+		return patches
 	default:
 		size := m.groupSize(ctx, pod)
-		patches := mp.label(CacheCaptureLabel, "true")
+		patches = append(patches, mp.label(CacheCaptureLabel, "true")...)
 		patches = append(patches, mp.label(modelvolume.CacheKeyLabel, modelvolume.Key(uri))...)
 		patches = append(patches, mp.annotation(CacheURIAnnotation, uri)...)
 		patches = append(patches, mp.annotation(modelvolume.CacheOrdinalAnnotation, strconv.Itoa(podOrdinal(pod)))...)
