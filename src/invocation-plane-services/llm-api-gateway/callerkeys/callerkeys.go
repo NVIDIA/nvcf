@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -115,7 +116,9 @@ func (s *KeySet) Refresh(ctx context.Context, store Store, interval time.Duratio
 				telemetry.Logger(ctx).Error().Err(err).Msg("caller key refresh failed; keeping the previous keys")
 				continue
 			}
-			s.keys.Store(&keys)
+			if previous := s.keys.Swap(&keys); previous == nil || !slices.Equal(*previous, keys) {
+				telemetry.Logger(ctx).Info().Int("keys", len(keys)).Msg("caller keys changed")
+			}
 		}
 	}
 }
@@ -162,9 +165,14 @@ func (s *KeySet) Lookup(apiKey string) (string, bool) {
 		return "", false
 	}
 
+	keys := s.keys.Load()
+	if keys == nil {
+		return "", false
+	}
+
 	hash := sha256.Sum256([]byte(apiKey))
 	id, ok := "", false
-	for _, k := range *s.keys.Load() {
+	for _, k := range *keys {
 		if subtle.ConstantTimeCompare(hash[:], k.hash[:]) == 1 {
 			id, ok = k.id, true
 		}

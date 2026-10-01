@@ -219,15 +219,36 @@ func TestKeySetRefresh_ValidFileChange_AppliesWithoutRestart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			keys, path, _ := startRefresh(t)
+			keys, path, logs := startRefresh(t)
 			replaceKeyFile(t, path, tc.newContent)
 
 			require.Eventually(t, func() bool {
 				_, ok := keys.Lookup(tc.apiKey)
 				return ok == tc.wantOK
 			}, 5*time.Second, 5*time.Millisecond)
+			require.Contains(t, logs.String(), `"message":"caller keys changed"`)
 		})
 	}
+}
+
+func TestKeySetRefresh_UnchangedFile_LogsNothing(t *testing.T) {
+	t.Parallel()
+
+	keys, _, logs := startRefresh(t)
+	// Let several refreshes run.
+	time.Sleep(50 * time.Millisecond)
+
+	_, ok := keys.Lookup("demo-ui-key")
+	require.True(t, ok)
+	require.Empty(t, logs.String())
+}
+
+func TestKeySetLookup_ZeroValue_RejectsKey(t *testing.T) {
+	t.Parallel()
+
+	var keys KeySet
+	_, ok := keys.Lookup("demo-ui-key")
+	require.False(t, ok)
 }
 
 func TestKeySetRefresh_InvalidFile_KeepsLastGoodSetAndLogsError(t *testing.T) {
