@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+filegroup(
+    name = "upgrade_test_migrations",
+    testonly = True,
+    srcs = [
+        "03_init_tables.up.sql",
+        "04_add_multi_tenant_schema.up.sql",
+        "05_add_owner_status_indexes.up.sql",
+    ],
+    visibility = ["//src/control-plane-services/api-keys:__pkg__"],
+)
