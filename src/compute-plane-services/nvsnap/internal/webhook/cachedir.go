@@ -110,12 +110,19 @@ type cacheEnvEntry struct{ Name, Value string }
 //     share it (NIM writes ngc/, HF writes hub/ — no collision). Keeping
 //     them OUT of <root>/cache is what stops the seed-copy from dragging
 //     the whole model into the writable emptyDir every restore.
+//   - switches: VLLM_ENABLE_STARTUP_PLAN makes vLLM (0.27+) persist its
+//     KV-memory profiling result under VLLM_CACHE_ROOT/startup_plan, so
+//     a warm boot skips the memory measurement and the CUDA-graph memory
+//     estimation pass. Off by default upstream; a stale plan is ignored
+//     by fingerprint and free-memory checks, so it is safe to force on.
+//     Anything the engine can write to disk should land in the cache.
 func defaultCacheEnvTemplate() []cacheEnvEntry {
 	return []cacheEnvEntry{
 		{"HOME", "{cache}"},
 		{"TORCHINDUCTOR_CACHE_DIR", "{cache}/torchinductor"},
 		{"TRITON_CACHE_DIR", "{cache}/.triton/cache"},
 		{"VLLM_CACHE_ROOT", "{cache}/.cache/vllm"},
+		{"VLLM_ENABLE_STARTUP_PLAN", "1"},
 		{"CUDA_CACHE_PATH", "{cache}/.nv/ComputeCache"},
 		{"NIM_CACHE_PATH", "{model}"},
 		{"HF_HOME", "{model}"},

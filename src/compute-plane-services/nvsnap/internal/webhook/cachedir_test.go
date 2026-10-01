@@ -107,13 +107,14 @@ func cacheDirPod() *corev1.Pod {
 // side re-emits (path consistency is the whole mechanism).
 func TestCacheDirEnvVars(t *testing.T) {
 	want := map[string]string{
-		"HOME":                    "/opt/nvsnap/cache",
-		"TORCHINDUCTOR_CACHE_DIR": "/opt/nvsnap/cache/torchinductor",
-		"NIM_CACHE_PATH":          "/opt/nvsnap/model",
-		"TRITON_CACHE_DIR":        "/opt/nvsnap/cache/.triton/cache",
-		"VLLM_CACHE_ROOT":         "/opt/nvsnap/cache/.cache/vllm",
-		"CUDA_CACHE_PATH":         "/opt/nvsnap/cache/.nv/ComputeCache",
-		"HF_HOME":                 "/opt/nvsnap/model",
+		"HOME":                     "/opt/nvsnap/cache",
+		"TORCHINDUCTOR_CACHE_DIR":  "/opt/nvsnap/cache/torchinductor",
+		"NIM_CACHE_PATH":           "/opt/nvsnap/model",
+		"TRITON_CACHE_DIR":         "/opt/nvsnap/cache/.triton/cache",
+		"VLLM_CACHE_ROOT":          "/opt/nvsnap/cache/.cache/vllm",
+		"VLLM_ENABLE_STARTUP_PLAN": "1",
+		"CUDA_CACHE_PATH":          "/opt/nvsnap/cache/.nv/ComputeCache",
+		"HF_HOME":                  "/opt/nvsnap/model",
 	}
 	got := map[string]string{}
 	for _, e := range cacheDirEnvVars("/opt/nvsnap") {
