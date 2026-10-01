@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS api_keys_api.owner_status_by_account_and_service
     PRIMARY KEY ((nca_id, owner_type, owner_id, issuer_service_id))
 );
 
+-- Discover owner status across accounts independently of key records.
+CREATE CUSTOM INDEX IF NOT EXISTS owner_status_by_account_owner_idx
+    ON api_keys_api.owner_status_by_account (owner_id)
+    USING 'StorageAttachedIndex';
+
+CREATE CUSTOM INDEX IF NOT EXISTS owner_status_by_account_and_service_owner_idx
+    ON api_keys_api.owner_status_by_account_and_service (owner_id)
+    USING 'StorageAttachedIndex';
+
 CREATE TABLE IF NOT EXISTS api_keys_api.key_operations_by_id
 (
     operation_id       UUID,

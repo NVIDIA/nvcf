@@ -18,7 +18,6 @@
 package com.nvidia.apikeys.persistance;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
@@ -33,32 +32,30 @@ import org.junit.jupiter.api.Test;
 class OwnerStatusMigrationIntegrationTest {
 
     @Test
-    void migrationIndexesExistingStatusesAndCanBeReapplied() throws IOException {
+    void migrationAddsOwnerIndexesAndPreservesLegacyKeysWhenReapplied() throws IOException {
         Session session = IntegrationTestConfiguration.CQL_SESSION;
         // The deployment keyspace is separate from the suite's local schema.
         session.execute("CREATE KEYSPACE api_keys_api WITH replication = "
                 + "{'class': 'SimpleStrategy', 'replication_factor': 1}");
         try {
             applyMigration(session, "03_init_tables.up.sql");
+            session.execute("INSERT INTO api_keys_api.keys (api_key_hash, status, key_details)"
+                    + " VALUES ('legacy-hash', 'ACTIVE', 'legacy-details')");
+            session.execute("INSERT INTO api_keys_api.keys_by_owner_and_service"
+                    + " (owner_type, owner_id, issuer_service_id, key_id, key_status)"
+                    + " VALUES ('USER', 'alice', 'service-a', 'legacy-key', 'ACTIVE')");
             applyMigration(session, "04_add_multi_tenant_schema.up.sql");
             seedStatuses(session);
 
-            for (String table : new String[] {
-                    "owner_status_by_account", "owner_status_by_account_and_service"}) {
-                assertThatThrownBy(() -> session.execute("SELECT * FROM api_keys_api."
-                        + table + " WHERE owner_id = 'alice'"))
-                        .isInstanceOf(InvalidQueryException.class)
-                        .hasMessageContaining("ALLOW FILTERING");
-            }
-
-            applyMigration(session, "05_add_owner_status_indexes.up.sql");
-            // Cassandra builds new indexes over existing records asynchronously.
+            // Cassandra makes newly created indexes available asynchronously.
             await().atMost(Duration.ofSeconds(30))
                     .ignoreException(InvalidQueryException.class)
                     .untilAsserted(() -> assertStatusesDiscoverable(session));
 
-            applyMigration(session, "05_add_owner_status_indexes.up.sql");
+            assertLegacyKeysPreserved(session);
+            applyMigration(session, "04_add_multi_tenant_schema.up.sql");
             assertStatusesDiscoverable(session);
+            assertLegacyKeysPreserved(session);
         } finally {
             session.execute("DROP KEYSPACE api_keys_api");
         }
@@ -81,7 +78,6 @@ class OwnerStatusMigrationIntegrationTest {
     }
 
     private static void assertStatusesDiscoverable(Session session) {
-        assertThat(session.execute("SELECT * FROM api_keys_api.keys").all()).isEmpty();
         assertThat(session.execute("SELECT * FROM api_keys_api.keys_by_account_owner_and_service")
                 .all()).isEmpty();
         assertThat(session.execute("SELECT nca_id, owner_type, owner_status FROM "
@@ -107,6 +103,20 @@ class OwnerStatusMigrationIntegrationTest {
                     .extracting(row -> row.getString("nca_id"), row -> row.getString("owner_status"))
                     .containsExactly(tuple("account-a", "SUSPENDED"));
         }
+    }
+
+    private static void assertLegacyKeysPreserved(Session session) {
+        assertThat(session.execute("SELECT api_key_hash, status, key_details, nca_id"
+                + " FROM api_keys_api.keys").all())
+                .extracting(row -> row.getString("api_key_hash"), row -> row.getString("status"),
+                        row -> row.getString("key_details"), row -> row.getString("nca_id"))
+                .containsExactly(tuple("legacy-hash", "ACTIVE", "legacy-details", null));
+        assertThat(session.execute("SELECT owner_type, owner_id, issuer_service_id, key_id, key_status"
+                + " FROM api_keys_api.keys_by_owner_and_service").all())
+                .extracting(row -> row.getString("owner_type"), row -> row.getString("owner_id"),
+                        row -> row.getString("issuer_service_id"), row -> row.getString("key_id"),
+                        row -> row.getString("key_status"))
+                .containsExactly(tuple("USER", "alice", "service-a", "legacy-key", "ACTIVE"));
     }
 
     private static void applyMigration(Session session, String filename) throws IOException {
