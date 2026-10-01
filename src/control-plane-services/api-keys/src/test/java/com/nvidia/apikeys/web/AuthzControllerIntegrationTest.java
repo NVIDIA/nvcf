@@ -112,6 +112,7 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                 """
                         {"namespace":"nvcf","result":{"allowed":true,\
                         "ncaId":"test-nca-id",\
+                        "ownerNcaId":"test-nca-id",\
                         "ownerId":"yreDV0J-umh_ZWUVuJ2aBgtFCfvZeRjMw9hF6dvurUs",\
                         "policy":{"aud":"nvidia-cloud-functions-ncp-service-id-aketm",\
                         "policy":"test-policy-one"}\
@@ -203,6 +204,32 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                 "{\"namespace\":\"nvcf\",\"result\":{\"allowed\":false},\"rule_name\":\"apikey.allow\"}",
                 response.getBody());
         assertThat(response.getHeaders().getCacheControl()).contains("max-age=60");
+    }
+
+    // A caller must not assume ownerNcaId is always present in the result: it's omitted here,
+    // the same shape a caller would see from a pod still running a version that predates the
+    // field during a rolling upgrade.
+    @Test
+    void runAuthz_shouldOmitOwnerNcaId_whenKeyIntrospectionFails() {
+        String namespace = "nvcf";
+        String policyName = "apikey.allow";
+        String requestBody =
+                "{" +
+                "    \"input\": {" +
+                "        \"apiKey\": \"nvcfapi-test-non-existing-api-key-value\"" +
+                "    }" +
+                "}";
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/v1/namespaces/{namespace}/evaluations/{policy-name}",
+                HttpMethod.POST, entity, String.class, namespace, policyName);
+
+        assertThat(response.getStatusCode()).isEqualTo(OK);
+        assertThat(response.getBody()).doesNotContain("ownerNcaId");
     }
 
     @Test

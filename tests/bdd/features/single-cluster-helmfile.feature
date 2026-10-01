@@ -263,10 +263,14 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Given environment variable "SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES" is set
       And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I successfully run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-helm-function-missing-resources --helm-chart ${SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
+      When I successfully create function "bdd-helm-function-missing-resources" from Helm chart "${SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES}" with CLI options:
+        | option               | value      |
+        | --helm-chart-service | entrypoint |
+        | --inference-url      | /echo      |
+        | --inference-port     | 8000       |
+        | --health-uri         | /health    |
+        | --health-port        | 8000       |
+        | --health-timeout     | PT30S      |
 
       When I run command:
         """
@@ -284,12 +288,14 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       # Function creation and deployment both cross the ReVal chart-rendering
       # boundary. A deployed ReVal pod alone does not prove this path works.
-      # TODO(#1871): Replace this raw command with a table-backed Helm function
-      # create step so the options remain readable.
-      When I successfully run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-helm-function --helm-chart ${SAMPLE_HELM_FUNCTION_CHART} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
+      When I successfully create function "bdd-helm-function" from Helm chart "${SAMPLE_HELM_FUNCTION_CHART}" with CLI options:
+        | option               | value      |
+        | --helm-chart-service | entrypoint |
+        | --inference-url      | /echo      |
+        | --inference-port     | 8000       |
+        | --health-uri         | /health    |
+        | --health-port        | 8000       |
+        | --health-timeout     | PT30S      |
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
