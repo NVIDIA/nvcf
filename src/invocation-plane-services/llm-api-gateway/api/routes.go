@@ -48,6 +48,7 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 	})
 	e.GET("/v1/models", handlers.ListModels)
 	e.GET(modelsPathPrefix+"*", handlers.RetrieveModel)
+	e.GET("/v1/registry", handlers.Registry)
 
 	group := e.Group(
 		"",

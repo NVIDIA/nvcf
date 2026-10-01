@@ -72,6 +72,12 @@ func (systemClock) Tick(d time.Duration) <-chan time.Time { return time.Tick(d) 
 // listing for all callers.
 type listingKey struct{}
 
+// catalogListing is one router listing and when this gateway fetched it.
+type catalogListing struct {
+	*provider.ModelListing
+	refreshedAt time.Time
+}
+
 // modelCatalog caches the router's model listing for ttl and remembers when
 // this process first saw each model. It keeps nothing past ttl: once the
 // cached listing expires, a failed refresh fails the caller.
@@ -79,7 +85,7 @@ type modelCatalog struct {
 	lister provider.ModelLister
 	clock  catalogClock
 	// listings is nil when ttl is zero, so every call reaches the router.
-	listings *otter.Cache[listingKey, *provider.ModelListing]
+	listings *otter.Cache[listingKey, *catalogListing]
 
 	mu        sync.Mutex
 	firstSeen map[string]int64
@@ -92,9 +98,9 @@ func newModelCatalog(lister provider.ModelLister, ttl time.Duration, clock catal
 		firstSeen: map[string]int64{},
 	}
 	if ttl > 0 {
-		catalog.listings = otter.Must(&otter.Options[listingKey, *provider.ModelListing]{
+		catalog.listings = otter.Must(&otter.Options[listingKey, *catalogListing]{
 			MaximumSize:      1,
-			ExpiryCalculator: otter.ExpiryWriting[listingKey, *provider.ModelListing](ttl),
+			ExpiryCalculator: otter.ExpiryWriting[listingKey, *catalogListing](ttl),
 			Clock:            clock,
 		})
 	}
@@ -127,18 +133,18 @@ func (c *modelCatalog) models(ctx context.Context) ([]openAIModel, error) {
 // Concurrent callers share one load and errors are not cached. The load
 // ignores the triggering caller's cancellation so it cannot fail the others;
 // the provider's timeout bounds it.
-func (c *modelCatalog) current(ctx context.Context) (*provider.ModelListing, error) {
+func (c *modelCatalog) current(ctx context.Context) (*catalogListing, error) {
 	if c.listings == nil {
 		return c.load(ctx)
 	}
-	return c.listings.Get(ctx, listingKey{}, otter.LoaderFunc[listingKey, *provider.ModelListing](
-		func(ctx context.Context, _ listingKey) (*provider.ModelListing, error) {
+	return c.listings.Get(ctx, listingKey{}, otter.LoaderFunc[listingKey, *catalogListing](
+		func(ctx context.Context, _ listingKey) (*catalogListing, error) {
 			return c.load(context.WithoutCancel(ctx))
 		},
 	))
 }
 
-func (c *modelCatalog) load(ctx context.Context) (*provider.ModelListing, error) {
+func (c *modelCatalog) load(ctx context.Context) (*catalogListing, error) {
 	if c.lister == nil {
 		return nil, errModelListingUnsupported
 	}
@@ -149,13 +155,13 @@ func (c *modelCatalog) load(ctx context.Context) (*provider.ModelListing, error)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	seenAt := c.clock.Now().Unix()
+	refreshedAt := c.clock.Now()
 	for _, id := range listing.ModelIDs {
 		if _, ok := c.firstSeen[id]; !ok {
-			c.firstSeen[id] = seenAt
+			c.firstSeen[id] = refreshedAt.Unix()
 		}
 	}
-	return listing, nil
+	return &catalogListing{ModelListing: listing, refreshedAt: refreshedAt}, nil
 }
 
 func (h *Handlers) ListModels(c echo.Context) error {

@@ -331,7 +331,7 @@ func TestModelsEndpoints_RouterFailsAfterCacheExpires_ReturnsBadGateway(t *testi
 			require.Equal(t, http.StatusOK, rec.Code, "served from the fresh cache: %s", rec.Body.String())
 
 			gateway.advance(3 * time.Second)
-			for _, target := range []string{"/v1/models", "/v1/models/meta/llama-3.1-8b-instruct"} {
+			for _, target := range []string{"/v1/models", "/v1/models/meta/llama-3.1-8b-instruct", "/v1/registry"} {
 				rec := gateway.get(t, target)
 				require.Equal(t, http.StatusBadGateway, rec.Code, "%s: %s", target, rec.Body.String())
 				require.JSONEq(t, modelListingUnavailableBody, rec.Body.String(), target)

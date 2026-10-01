@@ -82,7 +82,7 @@ type StargateConfig struct {
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
 	// ListingCacheTTL is how long one router model listing response is reused
-	// by the model endpoints. Zero refreshes on every call.
+	// by the model and registry endpoints. Zero refreshes on every call.
 	ListingCacheTTL time.Duration
 }
 

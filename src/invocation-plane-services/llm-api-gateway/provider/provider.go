@@ -108,4 +108,19 @@ type ModelLister interface {
 type ModelListing struct {
 	// ModelIDs holds the models the router can route right now.
 	ModelIDs []string `json:"model_ids"`
+	// Models holds every registered model, routable or not.
+	Models []RegisteredModel `json:"models"`
+}
+
+// RegisteredModel is one model in the router listing with its clusters.
+type RegisteredModel struct {
+	ModelID  string                `json:"model_id"`
+	Clusters []ClusterRegistration `json:"clusters"`
+}
+
+// ClusterRegistration counts one cluster's servers for a model.
+type ClusterRegistration struct {
+	ClusterID         string `json:"cluster_id"`
+	RegisteredServers uint32 `json:"registered_servers"`
+	HealthyServers    uint32 `json:"healthy_servers"`
 }
