@@ -131,6 +131,20 @@ impl RoutingTargetState {
         }
     }
 
+    pub(super) fn routes_registration(&self, registration: &Arc<RegistrationGeneration>) -> bool {
+        match &*self.generation.lock() {
+            RoutingTargetGeneration::Active { clusters, .. } => clusters
+                .get(registration.cluster_id())
+                .is_some_and(|cluster_state| {
+                    cluster_state
+                        .generation
+                        .lock()
+                        .contains_registration(registration)
+                }),
+            RoutingTargetGeneration::Retired => false,
+        }
+    }
+
     pub(super) fn active_backend_count(&self) -> usize {
         match &*self.generation.lock() {
             RoutingTargetGeneration::Active {

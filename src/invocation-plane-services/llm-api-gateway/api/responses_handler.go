@@ -119,7 +119,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		)
 	}
 
-	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model)
+	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model, h.handlers.bareModelNamesEnabled())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -479,6 +479,7 @@ func (h *ResponsesHandlers) finalizeNativeResponsesUsage(
 			ctx,
 			responsesEndpointPath,
 			requestFunctionID(c),
+			requestRoutedModel(c),
 			usage,
 			stream,
 		)

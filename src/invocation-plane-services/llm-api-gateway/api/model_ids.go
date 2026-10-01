@@ -69,9 +69,13 @@ func routingKeyFromOpenAIModelID(modelID string) string {
 func normalizeOpenAIRequestModel(
 	reqCtx *requestctx.RequestContext,
 	model string,
+	bareModelNames bool,
 ) (routedModel string, err error) {
 	if model == "" {
 		return "", echo.NewHTTPError(http.StatusBadRequest, "model is required")
+	}
+	if bareModelNames {
+		return model, nil
 	}
 
 	routingKey, routedModel, hasPrefix := splitOpenAIModelID(model)
@@ -99,6 +103,12 @@ func normalizeOpenAIRequestModel(
 	}
 
 	return routedModel, nil
+}
+
+// bareModelNamesEnabled reports whether the whole request model is the model name,
+// with no routing-key prefix. Controlled by BARE_MODEL_NAMES_ENABLED.
+func (h *Handlers) bareModelNamesEnabled() bool {
+	return h != nil && h.config != nil && h.config.BareModelNamesEnabled
 }
 
 func setRoutingMethodForModel(reqCtx *requestctx.RequestContext, model string) {

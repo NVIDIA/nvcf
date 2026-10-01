@@ -46,6 +46,9 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 		c.Response().Header().Set(echo.HeaderAllow, http.MethodGet)
 		return c.NoContent(http.StatusMethodNotAllowed)
 	})
+	e.GET("/v1/models", handlers.ListModels)
+	e.GET(modelsPathPrefix+"*", handlers.RetrieveModel)
+	e.GET("/v1/registry", handlers.Registry)
 
 	group := e.Group(
 		"",

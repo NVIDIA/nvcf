@@ -28,6 +28,7 @@ import (
 
 	zlog "github.com/rs/zerolog/log"
 
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -35,7 +36,10 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-const defaultGatewayShutdownTimeout = 5 * time.Second
+const (
+	defaultGatewayShutdownTimeout = 5 * time.Second
+	callerKeysRefreshInterval     = 30 * time.Second
+)
 
 func main() {
 	cfg, err := config.LoadFromEnv()
@@ -43,6 +47,12 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to load configuration")
 	}
 	telemetry.SetServiceName(cfg.Telemetry.ServiceName)
+	if err := cfg.CheckCallerAuth(); err != nil {
+		zlog.Fatal().Err(err).Msg("refusing to start without caller authentication")
+	}
+	if cfg.AllowAnonymous {
+		zlog.Warn().Msg("ALLOW_ANONYMOUS is set: callers are not authenticated")
+	}
 
 	observability, err := telemetry.Init(context.Background(), telemetry.RuntimeConfig{
 		MetricsPort:        cfg.Telemetry.MetricsPort,
@@ -77,13 +87,27 @@ func main() {
 		authClient = nvcf.NewCachedClient(grpcAuthClient)
 	}
 
-	e, err := server.New(cfg, inferenceProvider, authClient)
+	var callerKeys *callerkeys.KeySet
+	var callerKeyStore callerkeys.Store
+	if cfg.CallerKeysFile != "" {
+		callerKeyStore = callerkeys.NewFileStore(cfg.CallerKeysFile)
+		callerKeys, err = callerkeys.Load(context.Background(), callerKeyStore)
+		if err != nil {
+			zlog.Fatal().Err(err).Msg("failed to load caller keys")
+		}
+	}
+
+	e, err := server.New(cfg, inferenceProvider, authClient, callerKeys)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("failed to initialize gateway")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if callerKeys != nil {
+		go callerKeys.Refresh(ctx, callerKeyStore, callerKeysRefreshInterval)
+	}
 
 	if err := runGateway(
 		ctx,

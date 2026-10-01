@@ -16,36 +16,28 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "server",
-    srcs = ["server.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/server",
+    name = "callerkeys",
+    srcs = ["callerkeys.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/invocation-plane-services/llm-api-gateway/api",
-        "//src/invocation-plane-services/llm-api-gateway/callerkeys",
-        "//src/invocation-plane-services/llm-api-gateway/config",
-        "//src/invocation-plane-services/llm-api-gateway/provider",
-        "//src/invocation-plane-services/llm-api-gateway/ratelimit",
-        "//src/invocation-plane-services/llm-api-gateway/ratelimitsync",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
-        "//src/invocation-plane-services/llm-api-gateway/util",
-        "@com_github_labstack_echo_v4//:echo",
-        "@com_github_labstack_echo_v4//middleware",
+        "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
 
 alias(
     name = "go_default_library",
-    actual = ":server",
+    actual = ":callerkeys",
     visibility = ["//visibility:public"],
 )
 
 go_test(
-    name = "server_test",
-    srcs = ["server_test.go"],
-    embed = [":server"],
+    name = "callerkeys_test",
+    srcs = ["callerkeys_test.go"],
+    embed = [":callerkeys"],
     deps = [
-        "//src/invocation-plane-services/llm-api-gateway/config",
-        "//src/invocation-plane-services/llm-api-gateway/provider",
+        "@com_github_rs_zerolog//:zerolog",
+        "@com_github_stretchr_testify//require",
     ],
 )

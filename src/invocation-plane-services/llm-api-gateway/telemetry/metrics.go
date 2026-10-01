@@ -46,6 +46,10 @@ func FunctionIDAttribute(functionID string) attribute.KeyValue {
 	return attribute.String("function_id", functionID)
 }
 
+func ModelAttribute(model string) attribute.KeyValue {
+	return attribute.String("model", model)
+}
+
 var DurationBuckets = []float64{
 	0.005,
 	0.01,

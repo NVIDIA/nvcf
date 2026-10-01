@@ -34,6 +34,26 @@ The gateway currently serves:
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
+- `GET /v1/models` and `GET /v1/models/{id}`
+- `GET /v1/registry`
+
+`GET /v1/models` lists the models the LLM Request Router can route, in OpenAI
+list format and sorted by `id`. A model is listed exactly when
+`GET /v1/registry` shows it `Healthy`; both read the same field of one router
+listing. It covers only registrations without a routing key. `created` is when
+this gateway process first saw the model, so it resets
+on restart. `GET /v1/models/{id}` accepts ids that contain slashes and returns
+404 for an unlisted model. Both return 502 when the router listing call fails
+and the cached listing has expired.
+
+`GET /v1/registry` lists every model the router has registered, routable or
+not, sorted by `model`. Each model has a `health` of `Healthy` when any cluster
+has `healthyServers` above 0, otherwise `Unhealthy`, and its `clusters` sorted
+by `clusterId` with `registeredServers` and `healthyServers` (one server is one
+Pylon replica). `generatedAt` is when the gateway fetched the router listing
+the response is built from. `?model=<name>` limits the response to one model:
+an unlisted name returns an empty `models` list and an empty name returns 400.
+It shares the cached listing and the 502 behavior of `GET /v1/models`.
 
 ## Request Routing
 
@@ -115,8 +135,8 @@ mise run run
 those files exist.
 
 `mise run run` does not start Stargate. By default the gateway targets
-`http://127.0.0.1:8000`. NVCF gRPC auth is optional for local bootstrapping; if
-`NVCF_GRPC_ADDR` is not set, the auth middleware is disabled.
+`http://127.0.0.1:8000`. When neither `NVCF_GRPC_ADDR` nor `CALLER_KEYS_FILE`
+is set, it sets `ALLOW_ANONYMOUS=true`, so callers are not authenticated.
 
 If `RATE_LIMIT_SYNC_TRANSPORT` is set to `pubsub` or `nats`, run the sync
 consumer as a separate process:
@@ -146,11 +166,15 @@ Useful overrides:
   413 (default `0`, no limit)
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
+- `STARGATE_LISTING_CACHE_TTL` to set how long the model and registry
+  endpoints reuse one router listing response (default `3s`, `0s` calls the
+  router every time)
 - `NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT` to cap how long one response write
   may stall on a client that stopped reading (default `60s`, `0s` disables).
   It applies only while a write is in progress, so long streams, long
   generations, and upstream pauses are not cut off.
-- `NVCF_GRPC_ADDR` to enable NVCF gRPC auth
+- `NVCF_GRPC_ADDR` to enable NVCF gRPC auth. The gateway refuses to start
+  without `NVCF_GRPC_ADDR` or `CALLER_KEYS_FILE` unless `ALLOW_ANONYMOUS=true`.
 - `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
   fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for
   OAuth2 client-credentials auth.
@@ -160,6 +184,24 @@ Useful overrides:
 - `NVCF_GRPC_TIMEOUT` to cap each gRPC auth or policy call
 - `RATE_LIMIT_ENABLED=false` to disable rate limiting locally
 - `RATE_LIMIT_FAIL_OPEN=false` to make Olric or limiter failures fatal
+- `BARE_MODEL_NAMES_ENABLED=true` to treat the whole request `model` as the
+  model name with an empty routing key, for use without the NVCF control
+  plane. Such requests skip NVCF auth, and the caller's `Authorization` and
+  `X-Routing-Key` headers are not forwarded. Do not enable it where untrusted
+  callers can reach the gateway.
+- `CALLER_KEYS_FILE` to authenticate callers with static API keys instead of
+  NVCF auth (Helm: `callerKeys`). The YAML file lists `keys` entries, each an
+  `id` and the hex SHA-256 of a key; it holds no plain keys. Every route except
+  `/healthz`, `/readyz`, and `/info` then needs `Authorization: Bearer <key>`
+  and returns 401 without a listed key. The key is not forwarded to the
+  router, and logs show `api-key:<id>`. The gateway re-reads the file every
+  30 s, so added and removed keys apply without a restart; a file that fails
+  to load or validate keeps the previous keys and logs an error. It cannot be
+  combined with `NVCF_GRPC_ADDR`.
+- `ALLOW_ANONYMOUS=true` to start without caller authentication and admit
+  callers without a key (Helm: `config.allowAnonymous`). The gateway logs a
+  warning at startup. It cannot be combined with `NVCF_GRPC_ADDR` or
+  `CALLER_KEYS_FILE`.
 - `OLRIC_ENABLED=false` to skip starting the embedded Olric node
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering
@@ -224,6 +266,7 @@ Run it with the embedded Olric rate limiter enabled:
 docker run --rm -p 8080:8080 \
   -e OLRIC_ENABLED=true \
   -e STARGATE_URL=http://host.docker.internal:8000 \
+  -e ALLOW_ANONYMOUS=true \
   llm-api-gateway:dev
 ```
 

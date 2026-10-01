@@ -47,7 +47,24 @@ type Config struct {
 	// are only counted and logged so enforcement can roll out per
 	// environment.
 	ModelURIAllowlistEnabled bool
+	// BareModelNamesEnabled treats the whole request model as the model name with
+	// an empty routing key, for deployments without the NVCF control plane.
+	// Requests then skip NVCF auth, so keep it off for untrusted callers.
+	BareModelNamesEnabled bool
+	// CallerKeysFile authenticates callers against static API keys instead of
+	// NVCF auth. Empty disables it.
+	CallerKeysFile string
+	// AllowAnonymous lets the gateway start with no authenticator and admit
+	// callers without a key.
+	AllowAnonymous bool
 }
+
+var (
+	errNoCallerAuth = errors.New(
+		"no caller authentication configured: set NVCF_GRPC_ADDR or CALLER_KEYS_FILE, or ALLOW_ANONYMOUS=true")
+	errAnonymousWithCallerAuth = errors.New(
+		"ALLOW_ANONYMOUS cannot be combined with NVCF_GRPC_ADDR or CALLER_KEYS_FILE")
+)
 
 type ServerConfig struct {
 	Addr              string
@@ -77,6 +94,9 @@ type StargateConfig struct {
 	URL            string
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
+	// ListingCacheTTL is how long one router model listing response is reused
+	// by the model and registry endpoints. Zero refreshes on every call.
+	ListingCacheTTL time.Duration
 }
 
 type NVCFConfig struct {
@@ -207,9 +227,10 @@ func Default() *Config {
 			Region:                "global",
 		},
 		Stargate: StargateConfig{
-			URL:            "http://127.0.0.1:8000",
-			ConnectTimeout: 2 * time.Second,
-			RequestTimeout: 0,
+			URL:             "http://127.0.0.1:8000",
+			ConnectTimeout:  2 * time.Second,
+			RequestTimeout:  0,
+			ListingCacheTTL: 3 * time.Second,
 		},
 		NVCF: NVCFConfig{
 			GRPCAddr:    "",
@@ -260,6 +281,20 @@ func LoadFromEnv() (*Config, error) {
 		cfg.ModelURIAllowlistEnabled = v
 	}
 
+	if v, ok := errs.boolean("BARE_MODEL_NAMES_ENABLED"); ok {
+		cfg.BareModelNamesEnabled = v
+	}
+
+	if v, ok := errs.boolean("ALLOW_ANONYMOUS"); ok {
+		cfg.AllowAnonymous = v
+	}
+	if path := os.Getenv("CALLER_KEYS_FILE"); path != "" {
+		cfg.CallerKeysFile = path
+		if cfg.NVCF.GRPCAddr != "" {
+			errs.add("CALLER_KEYS_FILE", path, errors.New("CALLER_KEYS_FILE and NVCF_GRPC_ADDR are mutually exclusive"))
+		}
+	}
+
 	// SecretsPath is populated by applyStargateNVCFEnv above.
 	cfg.Telemetry.TracingAccessToken = loadTracingAccessToken(cfg.NVCF.SecretsPath)
 
@@ -267,6 +302,19 @@ func LoadFromEnv() (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// CheckCallerAuth applies the gateway's fail-closed startup rule. LoadFromEnv
+// does not, because the rate-limit sync worker shares Config and serves no callers.
+func (c *Config) CheckCallerAuth() error {
+	hasAuthenticator := c.NVCF.GRPCAddr != "" || c.CallerKeysFile != ""
+	switch {
+	case hasAuthenticator && c.AllowAnonymous:
+		return errAnonymousWithCallerAuth
+	case !hasAuthenticator && !c.AllowAnonymous:
+		return errNoCallerAuth
+	}
+	return nil
 }
 
 // loadTracingAccessToken reads the Lightstep access token for the OTLP
@@ -338,6 +386,14 @@ func applyStargateNVCFEnv(cfg *Config, errs *envErrs) {
 
 	if timeout, ok := errs.duration("STARGATE_REQUEST_TIMEOUT"); ok {
 		cfg.Stargate.RequestTimeout = timeout
+	}
+
+	if ttl, ok := errs.duration("STARGATE_LISTING_CACHE_TTL"); ok {
+		if ttl < 0 {
+			errs.add("STARGATE_LISTING_CACHE_TTL", ttl.String(), errors.New("must be >= 0"))
+		} else {
+			cfg.Stargate.ListingCacheTTL = ttl
+		}
 	}
 
 	if grpcAddr := os.Getenv("NVCF_GRPC_ADDR"); grpcAddr != "" {

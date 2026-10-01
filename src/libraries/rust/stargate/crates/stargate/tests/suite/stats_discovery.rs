@@ -457,7 +457,7 @@ async fn http_model_discovery_and_debug_state_follow_live_registration() {
         .register("http-inspection-backend-beta", "http-inspection-beta")
         .await;
 
-    let grpc_models = fixture
+    let grpc_response = fixture
         .client
         .list_models(list_models_request(
             None,
@@ -465,15 +465,26 @@ async fn http_model_discovery_and_debug_state_follow_live_registration() {
         ))
         .await
         .expect("ListModels RPC failed")
-        .into_inner()
-        .model_ids;
+        .into_inner();
+    let registered_model_ids: Vec<&str> = grpc_response
+        .models
+        .iter()
+        .map(|model| model.model_id.as_str())
+        .collect();
+    assert_eq!(
+        registered_model_ids,
+        ["http-inspection-alpha", "http-inspection-beta"]
+    );
 
     let model_body = get_json(
         fixture.http_addr,
         "/v1/models?model_ids=%20http-inspection-alpha%20&model_ids=http-inspection-beta",
     )
     .await;
-    assert_eq!(model_body["model_ids"], serde_json::json!(grpc_models));
+    assert_eq!(
+        model_body,
+        serde_json::to_value(&grpc_response).expect("ListModelsResponse should serialize")
+    );
 
     let invalid_filter_response = reqwest::Client::new()
         .get(format!(

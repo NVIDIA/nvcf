@@ -1148,6 +1148,105 @@ async fn list_active_models_ignores_empty_target_generations() {
     );
 }
 
+fn model_listing(model_id: &str, clusters: &[(&str, u32, u32)]) -> ModelListing {
+    ModelListing {
+        model_id: model_id.to_string(),
+        clusters: clusters
+            .iter()
+            .map(
+                |&(cluster_id, registered_servers, healthy_servers)| ClusterListing {
+                    cluster_id: cluster_id.to_string(),
+                    registered_servers,
+                    healthy_servers,
+                },
+            )
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn list_registered_models_counts_registered_and_routable_servers_per_cluster() {
+    let scenario = RegistrationScenario::new(Some("rk-list"));
+    let b_active = scenario.start_in("b-active", "cluster-b", 1111);
+    let b_inactive = scenario.start_in("b-inactive", "cluster-b", 2222);
+    let a_active = scenario.start_in("a-active", "cluster-a", 3333);
+    let idle = scenario.start_in("idle", "cluster-idle", 4444);
+    let other_key = scenario.start_keyed("other-key", 5555, "rk-other");
+
+    scenario.activate(&b_active, "model-x").await;
+    scenario
+        .publish_default_stats(&b_inactive, "model-x", Inactive, Some(7))
+        .await;
+    scenario.activate(&a_active, "model-x").await;
+    scenario
+        .publish_default_stats(&idle, "model-idle", Inactive, Some(7))
+        .await;
+    scenario.activate(&other_key, "model-x").await;
+
+    assert_eq!(
+        scenario
+            .state
+            .list_registered_models(Some("rk-list"), &[])
+            .await,
+        vec![
+            model_listing("model-idle", &[("cluster-idle", 1, 0)]),
+            model_listing("model-x", &[("cluster-a", 1, 1), ("cluster-b", 2, 1)]),
+        ]
+    );
+    assert_eq!(
+        scenario
+            .state
+            .list_active_models(Some("rk-list"), &[])
+            .await,
+        vec!["model-x".to_string()],
+        "a registered but unroutable model must stay out of model_ids"
+    );
+    assert_eq!(
+        scenario
+            .state
+            .list_registered_models(Some("rk-list"), &["model-idle".to_string()])
+            .await,
+        vec![model_listing("model-idle", &[("cluster-idle", 1, 0)])]
+    );
+    assert_eq!(
+        scenario.state.list_registered_models(None, &[]).await,
+        Vec::new(),
+        "registrations with another routing key must not be listed"
+    );
+}
+
+#[tokio::test]
+async fn list_registered_models_counts_only_open_registrations_as_healthy() {
+    let scenario = RegistrationScenario::new(None);
+    let ending = scenario.start_in("ending", "cluster-shared", 1111);
+    let open = scenario.start_in("open", "cluster-shared", 2222);
+    scenario.activate(&ending, "model-x").await;
+    scenario.activate(&open, "model-x").await;
+
+    // end_registration drops the registry record before routing cleanup
+    // finishes; hold the listing in that window.
+    scenario.state.registrations.end_registration(ending);
+
+    assert_eq!(
+        scenario.state.list_registered_models(None, &[]).await,
+        vec![model_listing("model-x", &[("cluster-shared", 1, 1)])]
+    );
+}
+
+#[tokio::test]
+async fn list_registered_models_drops_ended_registrations() {
+    let scenario = RegistrationScenario::new(None);
+    let running = scenario.start("ended", 1111);
+    scenario.activate(&running, "model-ended").await;
+
+    scenario.state.end_registration(running).await;
+
+    assert_eq!(
+        scenario.state.list_registered_models(None, &[]).await,
+        Vec::new()
+    );
+}
+
 #[test]
 #[should_panic(expected = "routed snapshot inference-server ID must match exact registration")]
 fn routed_cluster_rejects_snapshot_identity_mismatch() {

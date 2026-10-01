@@ -66,6 +66,10 @@ llmApiGateway:
     requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
+    # How long GET /v1/models and GET /v1/registry reuse one router model
+    # listing response.
+    # 0s calls the router on every request.
+    requestRouterListingCacheTtl: 3s
     # Longest a single response write may stall on a client that stopped
     # reading. Applies only while a write is in progress, so it does not cap
     # total response time or upstream pauses. 0s disables the bound.
@@ -75,6 +79,14 @@ llmApiGateway:
     nvcfGrpcTimeout: 2s
     rateLimitEnabled: true
     rateLimitFailOpen: true
+    # Treat the whole request model as the model name, with no routing-key
+    # prefix and no NVCF auth. For deployments without the NVCF control plane.
+    # Do not enable where untrusted callers can reach the gateway.
+    bareModelNamesEnabled: false
+    # Start without caller authentication and admit callers without a key.
+    # The gateway refuses to start with neither nvcfGrpcAddr nor callerKeys
+    # unless this is true, and refuses to start when it is combined with them.
+    allowAnonymous: false
     localFunctionId: ""
     defaultModel: ""
     defaultRpm: 120
@@ -109,6 +121,19 @@ llmApiGateway:
 
   vault:
     audience: ""
+
+  # Authenticate callers with static API keys instead of NVCF auth, for
+  # deployments without the NVCF control plane. Mutually exclusive with NVCF
+  # auth: set config.nvcfGrpcAddr to "" or the gateway refuses to start.
+  callerKeys:
+    enabled: false
+    # Existing Secret holding the caller key file, which lists hashes only:
+    #   keys:
+    #     - id: demo-ui
+    #       sha256: <64 hex SHA-256 of the key>
+    secretName: ""
+    # Key in the Secret that holds the file.
+    secretKey: caller-keys.yaml
 
   metrics:
     enabled: false
