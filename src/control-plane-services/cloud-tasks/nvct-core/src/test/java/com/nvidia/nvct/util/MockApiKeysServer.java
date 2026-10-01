@@ -68,6 +68,7 @@ public class MockApiKeysServer {
             boolean allowed) {
         var result = new ApiKeyValidationResult(allowed,
                                                 ncaId,
+                                                ncaId,
                                                 ownerId,
                                                 new Policy(resources,
                                                            scopes,
