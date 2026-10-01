@@ -217,12 +217,14 @@ public class AccountService {
     // granted access to another account. For non-ApiKey authentication (JWT,
     // NotaryService) -- including admin/super-admin JWTs that aren't mapped to any single NCA
     // Id -- owner and authorized account are the same, so this falls back to the already-
-    // resolved ncaId instead of doing a fresh lookup that can fail for those tokens.
+    // resolved ncaId instead of doing a fresh lookup that can fail for those tokens. Same fallback
+    // when the key validation response carries no ownerNcaId.
     public String getOwnerNcaId(Authentication authentication, String resolvedNcaId) {
         if (authentication.getPrincipal() instanceof DefaultOAuth2AuthenticatedPrincipal principal
                 && principal.getAttributes() != null
                 && principal.getAttributes()
-                .get(POLICY_RESULT_ATTRIBUTE) instanceof ApiKeyValidationResult policyResult) {
+                .get(POLICY_RESULT_ATTRIBUTE) instanceof ApiKeyValidationResult policyResult
+                && StringUtils.isNotBlank(policyResult.ownerNcaId())) {
             return policyResult.ownerNcaId();
         }
 
