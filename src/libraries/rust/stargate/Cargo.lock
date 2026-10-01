@@ -3491,6 +3491,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "stargate-routing-sim"
+version = "0.15.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rand 0.9.3",
+ "serde",
+ "serde_json",
+ "stargate",
+ "stargate-proto",
+ "stargate-protocol",
+]
+
+[[package]]
 name = "stargate-runtime"
 version = "0.15.2"
 dependencies = [

@@ -335,6 +335,7 @@ crate.from_cargo(
             "stargate-bench",
             "stargate-forwarding",
             "stargate-k8s-router",
+            "stargate-routing-sim",
             "stargate-runtime",
             "stargate-telemetry",
             "stargate-tls",

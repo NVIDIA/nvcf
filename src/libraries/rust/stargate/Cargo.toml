@@ -27,6 +27,7 @@ members = [
   "crates/stargate-k8s-router",
   "crates/mock-dynamo",
   "crates/stargate-bench",
+  "crates/stargate-routing-sim",
   "crates/pylon",
 ]
 resolver = "3"
