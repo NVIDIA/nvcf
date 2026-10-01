@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strings"
@@ -30,9 +31,9 @@ import (
 )
 
 const (
-	registryHealthy   = "Healthy"
-	registryUnhealthy = "Unhealthy"
-	registryModelArg  = "model"
+	registryHealthy         = "Healthy"
+	registryUnhealthy       = "Unhealthy"
+	registryModelQueryParam = "model"
 )
 
 type registryResponse struct {
@@ -55,29 +56,43 @@ type registryCluster struct {
 // Registry serves GET /v1/registry from the same cached router listing as
 // GET /v1/models. An unlisted model filter is an empty list, not a 404.
 func (h *Handlers) Registry(c echo.Context) error {
-	filters, hasFilter := c.QueryParams()[registryModelArg]
+	filters, hasFilter := c.QueryParams()[registryModelQueryParam]
 	if hasFilter && filters[0] == "" {
 		return emptyModelFilter()
 	}
+	var filter string
+	if hasFilter {
+		filter = filters[0]
+	}
 
-	listing, err := h.modelCatalog.current(c.Request().Context())
+	response, err := h.modelCatalog.registry(c.Request().Context(), filter)
 	if err != nil {
 		return modelListingUnavailable(err)
+	}
+	return c.JSON(http.StatusOK, response)
+}
+
+// registry returns the registered models sorted by model, limited to filter
+// unless it is empty.
+func (c *modelCatalog) registry(ctx context.Context, filter string) (registryResponse, error) {
+	listing, err := c.current(ctx)
+	if err != nil {
+		return registryResponse{}, err
 	}
 
 	result := make([]registryModel, 0, len(listing.Models))
 	for _, model := range listing.Models {
-		if hasFilter && model.ModelID != filters[0] {
+		if filter != "" && model.ModelID != filter {
 			continue
 		}
 		result = append(result, newRegistryModel(model))
 	}
 	slices.SortFunc(result, func(a, b registryModel) int { return strings.Compare(a.Model, b.Model) })
 
-	return c.JSON(http.StatusOK, registryResponse{
+	return registryResponse{
 		GeneratedAt: listing.refreshedAt.UTC().Format(time.RFC3339),
 		Models:      result,
-	})
+	}, nil
 }
 
 func newRegistryModel(model provider.RegisteredModel) registryModel {
@@ -104,7 +119,7 @@ func emptyModelFilter() error {
 	return echo.NewHTTPError(http.StatusBadRequest, models.ErrorResponse{Error: models.Error{
 		Code:    "invalid_model_filter",
 		Message: "The model filter must not be empty",
-		Param:   registryModelArg,
+		Param:   registryModelQueryParam,
 		Type:    "invalid_request_error",
 	}})
 }

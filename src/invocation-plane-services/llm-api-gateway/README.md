@@ -165,7 +165,8 @@ Useful overrides:
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
 - `STARGATE_LISTING_CACHE_TTL` to set how long the model and registry
-  endpoints reuse one router listing response (default `3s`, `0s` calls the router every time)
+  endpoints reuse one router listing response (default `3s`, `0s` calls the
+  router every time)
 - `NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT` to cap how long one response write
   may stall on a client that stopped reading (default `60s`, `0s` disables).
   It applies only while a write is in progress, so long streams, long
