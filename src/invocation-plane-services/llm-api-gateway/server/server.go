@@ -27,6 +27,7 @@ import (
 	echoMiddleware "github.com/labstack/echo/v4/middleware"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
@@ -39,6 +40,7 @@ func New(
 	cfg *config.Config,
 	inferenceProvider provider.InferenceProvider,
 	authClient api.InvocationAuthClient,
+	callerKeys *callerkeys.KeySet,
 ) (*echo.Echo, error) {
 	if cfg != nil && cfg.Telemetry.ServiceName != "" {
 		telemetry.SetServiceName(cfg.Telemetry.ServiceName)
@@ -50,6 +52,7 @@ func New(
 	e.Use(echoMiddleware.Recover())
 	e.Use(api.NewContextMiddleware(cfg))
 	e.Use(api.NewNVCFAuthMiddleware(authClient))
+	e.Use(api.NewCallerKeyAuthMiddleware(callerKeys))
 
 	// Start replaces e.Start, which would overwrite this handler.
 	e.Server.Handler = api.WithFinalWriteDeadline(e, cfg.Server.InferenceWriteTimeout)

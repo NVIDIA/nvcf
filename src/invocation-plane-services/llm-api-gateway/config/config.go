@@ -51,6 +51,9 @@ type Config struct {
 	// an empty routing key, for deployments without the NVCF control plane.
 	// Requests then skip NVCF auth, so keep it off for untrusted callers.
 	BareModelNamesEnabled bool
+	// CallerKeysFile authenticates callers against static API keys instead of
+	// NVCF auth. Empty disables it.
+	CallerKeysFile string
 }
 
 type ServerConfig struct {
@@ -270,6 +273,13 @@ func LoadFromEnv() (*Config, error) {
 
 	if v, ok := errs.boolean("BARE_MODEL_NAMES_ENABLED"); ok {
 		cfg.BareModelNamesEnabled = v
+	}
+
+	if path := os.Getenv("CALLER_KEYS_FILE"); path != "" {
+		cfg.CallerKeysFile = path
+		if cfg.NVCF.GRPCAddr != "" {
+			errs.add("CALLER_KEYS_FILE", path, errors.New("CALLER_KEYS_FILE and NVCF_GRPC_ADDR are mutually exclusive"))
+		}
 	}
 
 	// SecretsPath is populated by applyStargateNVCFEnv above.

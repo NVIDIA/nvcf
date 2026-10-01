@@ -124,6 +124,11 @@ spec:
             - name: vault-config-templates
               mountPath: /vault/config/templates
               readOnly: true
+            {{- if .Values.llmApiGateway.callerKeys.enabled }}
+            - name: caller-keys
+              mountPath: /etc/llm-api-gateway/caller-keys
+              readOnly: true
+            {{- end }}
       volumes:
         - name: vault-token
           projected:
@@ -138,3 +143,13 @@ spec:
             items:
               - key: secrets.json.tmpl
                 path: secrets.json.tmpl
+        {{- with .Values.llmApiGateway.callerKeys }}
+        {{- if .enabled }}
+        - name: caller-keys
+          secret:
+            secretName: {{ required "llmApiGateway.callerKeys.secretName is required when callerKeys.enabled is true" .secretName | quote }}
+            items:
+              - key: {{ .secretKey | quote }}
+                path: caller-keys.yaml
+        {{- end }}
+        {{- end }}

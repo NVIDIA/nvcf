@@ -188,6 +188,13 @@ Useful overrides:
   plane. Such requests skip NVCF auth, and the caller's `Authorization` and
   `X-Routing-Key` headers are not forwarded. Do not enable it where untrusted
   callers can reach the gateway.
+- `CALLER_KEYS_FILE` to authenticate callers with static API keys instead of
+  NVCF auth (Helm: `callerKeys`). The YAML file lists `keys` entries, each an
+  `id` and the hex SHA-256 of a key; it holds no plain keys. Every route except
+  `/healthz`, `/readyz`, and `/info` then needs `Authorization: Bearer <key>`
+  and returns 401 without a listed key. The key is not forwarded to the
+  router, and logs show `api-key:<id>`. The file is read once at startup. It
+  cannot be combined with `NVCF_GRPC_ADDR`.
 - `OLRIC_ENABLED=false` to skip starting the embedded Olric node
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering

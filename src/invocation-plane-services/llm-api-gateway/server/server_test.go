@@ -320,7 +320,7 @@ func TestNewWrapsEchoWithFinalWriteDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := New(cfg, inferenceProvider, nil)
+	e, err := New(cfg, inferenceProvider, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func startGatewayWithConfig(t *testing.T, cfg *config.Config, proto protocol) *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := New(cfg, inferenceProvider, nil)
+	e, err := New(cfg, inferenceProvider, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

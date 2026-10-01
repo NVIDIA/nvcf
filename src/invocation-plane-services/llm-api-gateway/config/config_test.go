@@ -90,6 +90,32 @@ func TestLoadFromEnvReadsBareModelNames(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvReadsCallerKeysFile(t *testing.T) {
+	t.Setenv("CALLER_KEYS_FILE", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if cfg.CallerKeysFile != "/etc/llm-api-gateway/caller-keys/caller-keys.yaml" {
+		t.Fatalf("caller keys file = %q, want the configured path", cfg.CallerKeysFile)
+	}
+}
+
+func TestLoadFromEnvRejectsCallerKeysWithNVCFAuth(t *testing.T) {
+	t.Setenv("CALLER_KEYS_FILE", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
+	t.Setenv("NVCF_GRPC_ADDR", "api.nvcf.svc.cluster.local:9090")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv() error = nil, want an error for caller keys with NVCF auth")
+	}
+	if !strings.Contains(err.Error(), "CALLER_KEYS_FILE and NVCF_GRPC_ADDR are mutually exclusive") {
+		t.Fatalf("LoadFromEnv() error = %v, want it to name both settings", err)
+	}
+}
+
 func TestLoadFromEnvReadsMetricsPort(t *testing.T) {
 	t.Setenv("METRICS_PORT", "0")
 

@@ -22,6 +22,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/api",
+        "//src/invocation-plane-services/llm-api-gateway/callerkeys",
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/provider",
         "//src/invocation-plane-services/llm-api-gateway/ratelimit",

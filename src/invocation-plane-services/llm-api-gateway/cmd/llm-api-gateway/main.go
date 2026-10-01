@@ -28,6 +28,7 @@ import (
 
 	zlog "github.com/rs/zerolog/log"
 
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -77,7 +78,15 @@ func main() {
 		authClient = nvcf.NewCachedClient(grpcAuthClient)
 	}
 
-	e, err := server.New(cfg, inferenceProvider, authClient)
+	var callerKeys *callerkeys.KeySet
+	if cfg.CallerKeysFile != "" {
+		callerKeys, err = callerkeys.Load(context.Background(), callerkeys.NewFileStore(cfg.CallerKeysFile))
+		if err != nil {
+			zlog.Fatal().Err(err).Msg("failed to load caller keys")
+		}
+	}
+
+	e, err := server.New(cfg, inferenceProvider, authClient, callerKeys)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("failed to initialize gateway")
 	}
