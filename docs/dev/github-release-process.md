@@ -20,8 +20,8 @@ The workflow reads these repository variables:
   are created as drafts.
 
 The literal fallbacks in the workflow's `env:` block are `false` and
-`true` respectively, which reads as dry-run. **Those are not the
-behavior here.** They are the safe default for a context with neither
+`true` respectively, which reads as dry-run. Those are not the
+behavior here. They are the safe default for a context with neither
 variable set -- a fork, or a re-created repository -- so a misconfigured
 checkout cannot cut real releases. The values above are what runs; they
 live in repository settings rather than in source, so confirm them there
@@ -300,6 +300,13 @@ That reads `VERSION`, creates `release-deploy/stacks/self-managed/vX.Y`
 holding the default branch's content, and opens a pull request setting
 `VERSION` to `X.Y+1.0` on the default branch.
 
+The branch cut is manual. Pushing the new release branch triggers `auto`
+when publishing is enabled; there is no second manual release step.
+It does not wait for the default-branch `VERSION` bump pull request to
+merge. If the train has no stable tags, the first release uses the
+branch's `VERSION`. If it already has stable tags,
+the content comparison below decides whether to cut another patch.
+
 The release branch is rooted at a synthetic commit
 (`chore(release): snapshot default branch for linear history`) carrying
 the selected tree, not at the default branch head, because the release
@@ -314,20 +321,41 @@ error, and an open bump pull request is reported rather than replaced.
 
 ### Releasing on the train
 
-Every push to the release branch runs `auto`, which cuts `X.Y.0` the
-first time and the next patch each time after. Backporting a fix is
-what ships a stack patch. `VERSION` on the branch must state the train
-the branch name claims, or the run fails rather than publishing a
-version for a train the branch does not hold.
+Every push to the release branch runs `auto`. With no stable tag on
+the train, it releases the branch's `VERSION`, normally `X.Y.0`.
+Otherwise, a change to the stack's tree cuts one patch above the
+highest existing stable tag on that train. Conventional Commit types
+do not decide whether a stack releases. `VERSION` on the branch must
+state the train the branch name claims, or the run fails rather than
+publishing a version for a train the branch does not hold.
 
-A push that does not change the stack's own tree cuts nothing. Not every
-push to a maintenance branch is a backport: bootstrapping the branch,
-editing `VERSION`, and backporting CI all land here and none of them
-change what the stack deploys. The comparison is between the tree at the
-train's newest tag and the tree at HEAD, at the service path, with the
-version file excluded. It is a tree comparison rather than a commit walk
+Once the train has a stable tag, a push that does not change the stack's
+own tree cuts nothing. Not every push to a maintenance branch is a
+backport: bootstrapping the branch, editing `VERSION`, and backporting
+CI all land here and none of them change what the stack deploys. The
+comparison is between the tree at the train's newest tag and the tree
+at HEAD, at the service path, with the version file excluded. It is a
+tree comparison rather than a commit walk
 because a release branch is rooted at a synthetic commit, so the train's
 tags are usually not ancestors of HEAD.
+
+For example, to ship self-managed stack `1.0.2` after `1.0.1`:
+
+1. Open a pull request with the stack fix targeting
+   `release-deploy/stacks/self-managed/v1.0`. Reuse this branch; a patch
+   does not need a new branch cut.
+2. Merge the fix. The release-branch push starts `auto`, which creates
+   `deploy/stacks/self-managed/v1.0.2` if the stack tree changed since
+   `1.0.1`. The branch's `VERSION` can remain `1.0.0`; its patch field
+   does not select the next patch once stable tags exist.
+3. The tag workflow prepares the GitHub Release and its inventory.
+   The workflow publishes any configured Helm chart before it creates
+   the GitHub Release. Image publishing follows the bridge described
+   above, after the tag and release are mirrored.
+
+Re-running `auto` at an already-tagged commit creates no additional
+patch. Merging the default-branch `VERSION` bump pull request also
+creates no stack release, because stacks do not release from `main`.
 
 ### Opening a train at a commit that predates this model
 
@@ -340,9 +368,10 @@ cuts from the default branch.
 
 Bootstrap such a branch by backporting `.github/workflows/release-tags.yml`,
 `tools/ci/github-release`, and `tools/ci/github-release-subprojects.json`
-alongside the `VERSION` file. That commit changes nothing under the stack
-path, so it publishes no version; the first release on the branch is the
-first backport that touches the stack.
+alongside the `VERSION` file. If the train already has a stable tag and
+the stack tree is unchanged, that commit publishes no version. If the
+train has no stable tags, the bootstrap push releases the branch's
+`VERSION`.
 
 ### Building an unreleased tree
 
