@@ -54,6 +54,6 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 	)
 	handlers.AsOpenAIChatHandlers().RegisterRoutes(group)
 	handlers.AsResponsesHandlers().RegisterRoutes(group)
-	// proxy handlers only contain embedding route for now, but could be extended to other routes in the future
+	// Native proxy endpoints preserve the backend wire protocol.
 	handlers.AsOpenAIProxyHandlers().RegisterRoutes(group)
 }

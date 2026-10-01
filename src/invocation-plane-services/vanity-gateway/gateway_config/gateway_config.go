@@ -344,8 +344,8 @@ const (
 	FunctionTypeLLM     FunctionType = "LLM"
 )
 
-// llmGatewaySections are the OpenAI-compatible sections the LLM Gateway serves.
-var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings"}
+// llmGatewaySections are the native protocol sections the LLM Gateway serves.
+var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings", "messages"}
 
 type V2Config struct {
 	OpenAI struct {
@@ -354,6 +354,7 @@ type V2Config struct {
 		Completions      map[string]ModelFunctionDetails `json:"completions"`
 		Embeddings       map[string]ModelFunctionDetails `json:"embeddings"`
 		Responses        map[string]ModelFunctionDetails `json:"responses"`
+		Messages         map[string]ModelFunctionDetails `json:"messages"`
 		ImageGenerations map[string]ModelFunctionDetails `json:"imageGenerations"`
 		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
 		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
@@ -529,6 +530,7 @@ func (c *GatewayConfig) openAISections() map[string]map[string]ModelFunctionDeta
 		"completions":      c.OpenAI.Completions,
 		"embeddings":       c.OpenAI.Embeddings,
 		"responses":        c.OpenAI.Responses,
+		"messages":         c.OpenAI.Messages,
 		"imageGenerations": c.OpenAI.ImageGenerations,
 		"imageEdits":       c.OpenAI.ImageEdits,
 		"imageVariations":  c.OpenAI.ImageVariations,

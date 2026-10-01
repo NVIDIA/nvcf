@@ -175,6 +175,7 @@ func registerOpenAI(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 	r.Method(http.MethodPost, "/v1/chat/completions", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(openAIDirector.ServeChatCompletions)))
 	r.Method(http.MethodPost, "/v1/completions", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(openAIDirector.ServeCompletions)))
 	r.Method(http.MethodPost, "/v1/embeddings", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(openAIDirector.ServeEmbeddings)))
+	r.Method(http.MethodPost, "/v1/messages", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(openAIDirector.ServeMessages)))
 	r.Method(http.MethodPost, "/v1/responses", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(openAIDirector.ServeResponses)))
 	r.Method(http.MethodPost, "/v1/images/generations", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(openAIDirector.ServeImageGenerations)))
 	r.Method(http.MethodPost, "/v1/images/edits", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(openAIDirector.ServeImageEdits)))

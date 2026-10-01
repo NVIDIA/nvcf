@@ -1,6 +1,6 @@
 # LLM Gateway
 
-The LLM Gateway handles OpenAI-compatible invocation for NVCF LLM functions in
+The LLM Gateway handles OpenAI-compatible and native Anthropic Messages invocation for NVCF LLM functions in
 self-managed deployments. Use LLM functions when requests should enter through
 the LLM invocation route and NVCF should route them by function and model.
 
@@ -11,7 +11,7 @@ gateway load balancer and use the `Host` header for routing:
 export GATEWAY_ADDR=<gateway-address>
 ```
 
-Requests use the OpenAI `model` field in this format:
+Requests use the `model` field in this format:
 
 ```text
 <function-id>/<model-name>
@@ -19,7 +19,7 @@ Requests use the OpenAI `model` field in this format:
 
 The gateway uses `<function-id>` as the routing key for NVCF authorization and backend selection. It forwards `<model-name>` to the upstream model server.
 
-Requests must already be OpenAI-compatible when they reach the LLM invocation route. Any model-specific prompt formatting or tokenizer behavior belongs in the upstream model server.
+Requests must use the native protocol for the selected endpoint when they reach the LLM invocation route. Any model-specific prompt formatting or tokenizer behavior belongs in the upstream model server.
 
 ## Request Flow
 
@@ -27,14 +27,14 @@ The LLM Gateway path has these runtime components:
 
 ![LLM invocation path](images/nvcf-llm-invocation-path.svg)
 
-1. Client sends an OpenAI-compatible request to the LLM invocation route.
+1. Client sends a native protocol request to the LLM invocation route.
 2. LLM API Gateway extracts the routing key from the `model` field, validates authorization, applies request and token rate limits, and validates endpoint-specific request fields.
 3. LLM API Gateway forwards the request to LLM request router with routing metadata such as request ID, routing key, model name, routing method, token estimate, and cache affinity key when present.
 4. LLM request router selects a healthy backend for the requested function and model.
 5. The `pylon` sidecar on the selected workload forwards the request to the user container through the configured inference port.
-6. The user container handles the OpenAI-compatible route and returns the response through the same path.
+6. The user container handles the selected route and returns the response through the same path.
 
-The function container must expose the declared OpenAI-compatible paths on its inference port. Use `inferenceUrl: "/"` for LLM functions unless the container needs a different base path.
+The function container must expose the declared protocol paths on its inference port. Use `inferenceUrl: "/"` for LLM functions unless the container needs a different base path.
 
 ### Multi-Cluster View
 
@@ -73,23 +73,24 @@ Set `functionType` to `LLM` and define model routing metadata under `models[].ll
 ```
 
 `apiBodyFormat` accepts `CUSTOM` and `PREDICT_V2`; if omitted, it defaults to
-`CUSTOM`. Use `CUSTOM` for OpenAI-compatible LLM functions. `OPENAI_CHAT` is
+`CUSTOM`. Use `CUSTOM` for LLM functions with native OpenAI or Anthropic Messages requests. `OPENAI_CHAT` is
 not an accepted value and the create-function API rejects it with
 `400 Bad Request`.
 
 The body-format field does not select the LLM protocol or an OpenAI endpoint.
 `functionType: "LLM"` selects the LLM invocation path, and `llmConfig.uris`
-declares the OpenAI-compatible paths implemented by the container. The client
-request body is the native OpenAI-compatible body for the selected path; the
+declares the paths implemented by the container. The client
+request body uses the native protocol for the selected path; the
 gateway does not wrap it in a second NVCF envelope.
 
-`llmConfig.uris` declares the OpenAI-compatible paths the model supports. Supported LLM paths are:
+`llmConfig.uris` declares the paths the model supports. Supported LLM paths are:
 
 | Path | Behavior |
 | --- | --- |
 | `/v1/chat/completions` | Supports streaming and non-streaming chat completion requests. |
 | `/v1/responses` | Supports native Responses API requests. Streaming clients receive server-sent events (SSE). Non-streaming clients receive the terminal Responses JSON object. |
 | `/v1/embeddings` | Supports embeddings requests with string or string array input. |
+| `/v1/messages` | Preserves native Anthropic Messages JSON responses and server-sent events, including tool and thinking content blocks. |
 
 `nvcf-cli` accepts `round_robin`, `power_of_two`, `groq_multiregion`,
 `pulsar`, or `random` for `llmConfig.routingMethod`.
@@ -221,6 +222,88 @@ The gateway accepts `input` as a string or an array of strings. Empty input is r
 
 Embeddings requests do not use session stickiness.
 
+### Anthropic Messages
+
+Use `/v1/messages` with a backend that implements the native Anthropic Messages
+API. Add `/v1/messages` to that model's `llmConfig.uris`. The gateway does not
+translate between Anthropic and OpenAI protocols.
+
+```bash
+curl -N -sS -X POST "http://${GATEWAY_ADDR}/v1/messages" \
+  -H "Host: llm.invocation.${GATEWAY_ADDR}" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "x-multi-turn-session-id: messages-example" \
+  -d '{
+    "model": "<function-id>/dummy-model",
+    "max_tokens": 256,
+    "stream": true,
+    "system": "Answer briefly.",
+    "messages": [{"role": "user", "content": "Say hello."}]
+  }'
+```
+
+Set `stream` to `false` or omit it for a native JSON response. The gateway
+requires a positive `max_tokens` and a non-empty `messages` array. The backend
+validates content blocks, tools, thinking settings, and beta feature support.
+Upstream status codes, error bodies, and SSE event bytes pass through.
+
+The gateway preserves `anthropic-version`, all `anthropic-beta` values,
+`Content-Type`, `Accept`, `User-Agent`, request IDs, and W3C trace headers. It
+requests identity response encoding so usage can be observed without decoding
+or changing the response. NVCF authentication uses `Authorization: Bearer`.
+Credentials, internal routing headers, and other unlisted headers stop before
+the model API. The gateway also removes the top-level `extra-headers` body
+member. Native Anthropic `metadata` and backend extension fields are preserved.
+
+Token admission estimates system, messages, and tools and reserves
+`max_tokens` for output. JSON usage and streaming `message_start` and
+`message_delta` usage reconcile the reservation. Streaming counts are
+cumulative. Cached input counts are included in input-token accounting.
+Accounting observation caps each JSON response, SSE line, and event data
+buffer at 1 MiB. Oversized or malformed usage is ignored for accounting
+while response bytes continue to the client. When usable usage is absent,
+the gateway releases the output reservation and retains the input estimate.
+
+The existing `MODEL_URI_ALLOWLIST_ENABLED` mode applies to Messages: an
+undeclared path is logged in the default mode and rejected in enforce mode.
+An absent or empty URI list keeps the existing allowlist behavior.
+
+For Vanity Gateway aliases, configure `v2config.openai.messages` on the
+existing API host. The section supports the same model mapping, custom-header
+validation, discovery, and shadow settings as other JSON endpoints:
+
+```json
+{
+  "v2config": {
+    "openai": {
+      "host": "api.example.com",
+      "messages": {
+        "native-model": {
+          "modelName": "dummy-model",
+          "functionID": "<function-id>",
+          "functionType": "LLM"
+        }
+      }
+    }
+  }
+}
+```
+
+For Claude Code, set `ANTHROPIC_BASE_URL` to the LLM invocation origin,
+`ANTHROPIC_AUTH_TOKEN` to the NVCF API key, and select
+`<function-id>/<model-name>` as the model. A Vanity Gateway alias instead uses
+its configured public model name. `/v1/messages/count_tokens` is not added by
+this change. Backend compatibility still needs a real Claude Code tool-loop
+smoke test.
+
+This feature requires compatible LLM API Gateway, Stargate router, Pylon
+worker, and Vanity Gateway builds. Upgrade the gateway and worker sides
+together. Source support does not establish availability in a published
+stack release; release owners must publish the images and charts and update
+the self-managed and compute-plane inventories and catalog after qualification.
+
 ## Model Routing And Upstream Paths
 
 The client-facing `model` value must include a routing key and model name:
@@ -235,11 +318,14 @@ The configured `llmConfig.uris` must match the paths served by the container. Fo
 
 ## Session Stickiness
 
-The LLM Gateway supports sticky routing for multi-turn OpenAI-compatible requests on `/v1/chat/completions` and `/v1/responses`.
+The LLM Gateway supports sticky routing for multi-turn OpenAI-compatible requests on `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`.
 
 Sticky routing is not supported on `/v1/embeddings`.
 
-To identify related requests, set `prompt_cache_key` in the request body. You
+For Messages, send `x-multi-turn-session-id` on related requests. Without it,
+the gateway derives affinity from the messages payload.
+
+For OpenAI endpoints, set `prompt_cache_key` in the request body. You
 can also send the `x-multi-turn-session-id` response header value back as the
 `x-multi-turn-session-id` request header on the next request.
 

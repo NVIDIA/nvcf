@@ -64,6 +64,7 @@ type OpenAIDirector struct {
 	completions        ModelMapping
 	embeddings         ModelMapping
 	responses          ModelMapping
+	messages           ModelMapping
 	imageGenerations   ModelMapping
 	imageEdits         ModelMapping
 	imageVariations    ModelMapping
@@ -297,6 +298,11 @@ func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *reg
 		return nil, err
 	}
 
+	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Messages), privateModelMatcher)
+	if err != nil {
+		return nil, err
+	}
+
 	imageGenerations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageGenerations), privateModelMatcher)
 	if err != nil {
 		return nil, err
@@ -319,6 +325,7 @@ func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *reg
 		completions.modelNameToModelInfo,
 		embeddings.modelNameToModelInfo,
 		responses.modelNameToModelInfo,
+		messages.modelNameToModelInfo,
 		imageGenerations.modelNameToModelInfo,
 		imageEdits.modelNameToModelInfo,
 		imageVariations.modelNameToModelInfo,
@@ -337,6 +344,7 @@ func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *reg
 		completions:        completions,
 		embeddings:         embeddings,
 		responses:          responses,
+		messages:           messages,
 		imageGenerations:   imageGenerations,
 		imageEdits:         imageEdits,
 		imageVariations:    imageVariations,
@@ -397,6 +405,7 @@ func (d *OpenAIDirector) getFilteredModels() []ModelInfo {
 		d.completions.modelNameToNVCFUrl,
 		d.embeddings.modelNameToNVCFUrl,
 		d.responses.modelNameToNVCFUrl,
+		d.messages.modelNameToNVCFUrl,
 		d.imageGenerations.modelNameToNVCFUrl,
 		d.imageEdits.modelNameToNVCFUrl,
 		d.imageVariations.modelNameToNVCFUrl,
@@ -484,6 +493,10 @@ func (d *OpenAIDirector) ServeResponses(writer http.ResponseWriter, request *htt
 	d.proxyModelMappedRequest(writer, request, d.responses.modelNameToNVCFUrl)
 }
 
+func (d *OpenAIDirector) ServeMessages(writer http.ResponseWriter, request *http.Request) {
+	d.proxyModelMappedRequest(writer, request, d.messages.modelNameToNVCFUrl)
+}
+
 func (d *OpenAIDirector) ServeImageGenerations(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.imageGenerations.modelNameToNVCFUrl)
 }
@@ -533,6 +546,7 @@ func (d *OpenAIDirector) GetModel(writer http.ResponseWriter, request *http.Requ
 		d.embeddings.modelNameToModelInfo,
 		d.chatCompletions.modelNameToModelInfo,
 		d.responses.modelNameToModelInfo,
+		d.messages.modelNameToModelInfo,
 		d.imageGenerations.modelNameToModelInfo,
 		d.imageEdits.modelNameToModelInfo,
 		d.imageVariations.modelNameToModelInfo,
@@ -549,6 +563,7 @@ func (d *OpenAIDirector) GetModel(writer http.ResponseWriter, request *http.Requ
 		d.embeddings.modelNameToNVCFUrl,
 		d.chatCompletions.modelNameToNVCFUrl,
 		d.responses.modelNameToNVCFUrl,
+		d.messages.modelNameToNVCFUrl,
 		d.imageGenerations.modelNameToNVCFUrl,
 		d.imageEdits.modelNameToNVCFUrl,
 		d.imageVariations.modelNameToNVCFUrl,

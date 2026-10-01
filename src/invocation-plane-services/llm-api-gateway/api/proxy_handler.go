@@ -44,6 +44,7 @@ var hopByHopHeaders = map[string]struct{}{
 
 func (h *OpenAIProxyHandlers) RegisterRoutes(group *echo.Group) {
 	group.POST("/v1/embeddings", h.Embeddings)
+	group.POST(messagesEndpointPath, h.Messages)
 }
 
 func (h *OpenAIProxyHandlers) forwardJSONRequest(
@@ -104,6 +105,18 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 	contentLength int64,
 	inputTokens int,
 ) (*provider.ProxyResponse, error) {
+	return h.dispatchEstimatedProxyRequest(c, reqCtx, headers, body, contentLength, inputTokens, inputTokens)
+}
+
+func (h *OpenAIProxyHandlers) dispatchEstimatedProxyRequest(
+	c *GatewayContext,
+	reqCtx *requestctx.RequestContext,
+	headers http.Header,
+	body io.ReadCloser,
+	contentLength int64,
+	inputTokens int,
+	tokenEstimate int,
+) (*provider.ProxyResponse, error) {
 	if h.handlers.proxyProvider == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "proxy endpoint is not configured")
 	}
@@ -127,7 +140,7 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 			Header:        headers,
 			Body:          body,
 			InputTokens:   inputTokens,
-			TokenEstimate: inputTokens,
+			TokenEstimate: tokenEstimate,
 		},
 	)
 	if err != nil {

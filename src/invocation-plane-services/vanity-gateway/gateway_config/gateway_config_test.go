@@ -1549,6 +1549,8 @@ func llmModelConfig(section string, entry ModelFunctionDetails) *GatewayConfig {
 		cfg.OpenAI.ChatCompletions = entries
 	case "responses":
 		cfg.OpenAI.Responses = entries
+	case "messages":
+		cfg.OpenAI.Messages = entries
 	case "embeddings":
 		cfg.OpenAI.Embeddings = entries
 	case "completions":
@@ -1660,4 +1662,31 @@ v2config:
 	assert.True(t, cfg.HasLLMGatewayRoute())
 	assert.True(t, cfg.OpenAI.ChatCompletions["llama"].TargetsLLMGateway())
 	assert.False(t, cfg.OpenAI.ChatCompletions["phi"].TargetsLLMGateway())
+}
+
+func TestMessagesConfigValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		headers   CustomHeaders
+		shadow    string
+		wantError string
+	}{
+		{name: "protocol headers", headers: CustomHeaders{"anthropic-version": "2023-06-01", "anthropic-beta": "tools-test"}},
+		{name: "invalid header", headers: CustomHeaders{"Host": "override.test"}, wantError: "customHeaders"},
+		{name: "missing shadow", shadow: "missing", wantError: "shadow"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := llmModel()
+			entry.CustomHeaders = tc.headers
+			entry.ShadowModelName = tc.shadow
+			cfg := llmModelConfig("messages", entry)
+			err := cfg.Validate()
+			if tc.wantError == "" {
+				require.NoError(t, err)
+				require.True(t, cfg.HasLLMGatewayRoute())
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+		})
+	}
 }
