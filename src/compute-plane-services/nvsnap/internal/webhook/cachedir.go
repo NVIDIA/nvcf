@@ -249,7 +249,8 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 		}
 	}
 
-	patches := make([]PatchOp, 0, 5+len(m.cacheEnvVars(m.CacheDir)))
+	envs := m.cacheEnvFor(m.CacheDir+"/cache", m.CacheDir+"/model")
+	patches := make([]PatchOp, 0, 5+len(envs))
 	if pod.Spec.Volumes == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes", Value: []any{}})
 	}
@@ -280,7 +281,7 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 		Path:  fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
 		Value: corev1.VolumeMount{Name: cacheDirVolumeName, MountPath: m.CacheDir},
 	})
-	for _, e := range m.cacheEnvVars(m.CacheDir) {
+	for _, e := range envs {
 		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
 	patches = append(patches, m.cacheDirInitPatches(pod, &main)...)

@@ -119,3 +119,70 @@ func TestReaderSteps_PostureAndResources(t *testing.T) {
 		t.Error("NVSNAP_PREWARM=0 turns the sweep off in every branch")
 	}
 }
+
+// One rule for the cachedir env in both branches: cache paths follow the
+// branch's cache root, model paths follow its model root or are dropped
+// when the branch keeps the model elsewhere, and switches apply as written.
+// The identity roots reproduce the template exactly, which is what the
+// checkpoint-restore branch relies on.
+func TestCacheEnvFor_OneRuleForBothBranches(t *testing.T) {
+	m := &Mutator{CacheDir: "/opt/nvsnap"}
+	want := map[string]string{}
+	for _, e := range cacheDirEnvVars("/opt/nvsnap") {
+		want[e.Name] = e.Value
+	}
+	if _, ok := want["VLLM_ENABLE_STARTUP_PLAN"]; !ok {
+		t.Fatal("the default template carries a switch; this test depends on it")
+	}
+
+	identity := map[string]string{}
+	for _, e := range m.cacheEnvFor("/opt/nvsnap/cache", "/opt/nvsnap/model") {
+		identity[e.Name] = e.Value
+	}
+	if len(identity) != len(want) {
+		t.Fatalf("identity roots must keep every entry: got %v want %v", identity, want)
+	}
+	for k, v := range want {
+		if identity[k] != v {
+			t.Errorf("identity: %s = %q, want %q", k, identity[k], v)
+		}
+	}
+
+	rebased := map[string]string{}
+	for _, e := range m.cacheEnvFor("/config/models/.nvsnap/cache/abc", "") {
+		rebased[e.Name] = e.Value
+	}
+	if rebased["TORCHINDUCTOR_CACHE_DIR"] != "/config/models/.nvsnap/cache/abc/torchinductor" || rebased["HOME"] != "/config/models/.nvsnap/cache/abc" {
+		t.Errorf("cache paths follow the cache root: %v", rebased)
+	}
+	if _, has := rebased["HF_HOME"]; has {
+		t.Errorf("model paths are dropped when the branch keeps the model elsewhere: %v", rebased)
+	}
+	if _, has := rebased["NIM_CACHE_PATH"]; has {
+		t.Errorf("model paths are dropped when the branch keeps the model elsewhere: %v", rebased)
+	}
+	if rebased["VLLM_ENABLE_STARTUP_PLAN"] != "1" {
+		t.Errorf("switches apply as written in every branch: %v", rebased)
+	}
+
+	moved := map[string]string{}
+	for _, e := range m.cacheEnvFor("/c", "/m/weights") {
+		moved[e.Name] = e.Value
+	}
+	if moved["HF_HOME"] != "/m/weights" || moved["NIM_CACHE_PATH"] != "/m/weights" || moved["TRITON_CACHE_DIR"] != "/c/.triton/cache" {
+		t.Errorf("model paths follow a model root when given: %v", moved)
+	}
+
+	for _, tc := range []struct {
+		v    string
+		want cacheEnvClass
+	}{
+		{"/opt/nvsnap/cache/x", envCachePath}, {"/opt/nvsnap/cache", envCachePath},
+		{"/opt/nvsnap/model", envModelPath}, {"/opt/nvsnap", envModelPath},
+		{"/opt/nvsnapx/cache", envSwitch}, {"1", envSwitch}, {"/tmp/other", envSwitch},
+	} {
+		if got := classifyCacheEnv(corev1.EnvVar{Value: tc.v}, "/opt/nvsnap"); got != tc.want {
+			t.Errorf("classify %q = %v, want %v", tc.v, got, tc.want)
+		}
+	}
+}

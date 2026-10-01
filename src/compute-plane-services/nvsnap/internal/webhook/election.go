@@ -95,7 +95,7 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 		}
 		patches := mp.stamp(hash, election.RoleFollower)
 		patches = append(patches, mp.label(election.GatedLabel, "true")...)
-		restore, err := m.cacheDirRestorePatches(pod, pm.Volume, m.cacheEnvVars(m.CacheDir))
+		restore, err := m.cacheDirRestorePatches(pod, pm.Volume, m.cacheEnvFor(m.CacheDir+"/cache", m.CacheDir+"/model"))
 		if err != nil {
 			return nil, err
 		}

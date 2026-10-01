@@ -19,6 +19,7 @@ package webhook
 
 import (
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -170,6 +171,65 @@ func (m *Mutator) prewarmWorkers() int {
 		return checkpointstore.DefaultPrewarmParallelism
 	}
 	return m.StorageProfile.PrewarmWorkers()
+}
+
+// cacheEnvClass is what a rendered cachedir env entry points at.
+type cacheEnvClass int
+
+const (
+	// envCachePath is a path under <CacheDir>/cache: a compile cache that
+	// moves with the pod's writable cache root.
+	envCachePath cacheEnvClass = iota
+	// envModelPath is a path under <CacheDir>/model or <CacheDir> itself:
+	// the model, which lives wherever the branch put the model.
+	envModelPath
+	// envSwitch is any other value: a flag such as VLLM_ENABLE_STARTUP_PLAN=1
+	// that applies as written wherever the caches live.
+	envSwitch
+)
+
+// classifyCacheEnv is the one rule for what a template entry means. Both
+// branches go through it, so a new kind of entry reaches every pod the
+// same way or fails one shared test.
+func classifyCacheEnv(e corev1.EnvVar, cacheDir string) cacheEnvClass {
+	switch {
+	case strings.HasPrefix(e.Value, cacheDir+"/cache"):
+		return envCachePath
+	case e.Value == cacheDir || strings.HasPrefix(e.Value, cacheDir+"/"):
+		return envModelPath
+	default:
+		return envSwitch
+	}
+}
+
+// cacheEnvFor renders the cachedir env template for a pod whose caches
+// live under cacheRoot and whose model lives under modelRoot. Cache paths
+// are rebased onto cacheRoot, model paths onto modelRoot or dropped when
+// modelRoot is empty (the branch's landing volume holds the model and the
+// chart addresses it itself), switches apply as written. The
+// checkpoint-restore branch passes the agent's own roots, which is the
+// identity; the model-volume branch passes its per-pod cache root.
+func (m *Mutator) cacheEnvFor(cacheRoot, modelRoot string) []corev1.EnvVar {
+	cacheBase, modelBase := m.CacheDir+"/cache", m.CacheDir+"/model"
+	var out []corev1.EnvVar
+	for _, e := range m.cacheEnvVars(m.CacheDir) {
+		switch classifyCacheEnv(e, m.CacheDir) {
+		case envCachePath:
+			out = append(out, corev1.EnvVar{Name: e.Name, Value: cacheRoot + strings.TrimPrefix(e.Value, cacheBase)})
+		case envModelPath:
+			if modelRoot == "" {
+				continue
+			}
+			if strings.HasPrefix(e.Value, modelBase) {
+				out = append(out, corev1.EnvVar{Name: e.Name, Value: modelRoot + strings.TrimPrefix(e.Value, modelBase)})
+			} else {
+				out = append(out, e)
+			}
+		default:
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // initListCreated reports whether a patch so far already created the pod's

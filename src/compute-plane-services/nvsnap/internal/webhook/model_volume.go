@@ -507,20 +507,11 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	if main.Env == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/env", m.MainContainer), Value: []any{}})
 	}
-	cacheRoot := path.Join(m.CacheDir, "cache")
-	for _, e := range m.cacheEnvVars(m.CacheDir) {
-		switch {
-		case strings.HasPrefix(e.Value, cacheRoot):
-			// Cache paths move under this branch's cache root.
-			patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: e.Name, Value: root + strings.TrimPrefix(e.Value, cacheRoot)}))
-		case strings.HasPrefix(e.Value, m.CacheDir):
-			// Model entries (HF_HOME, NIM_CACHE_PATH) stay with the landing volume.
-		default:
-			// Switches such as VLLM_ENABLE_STARTUP_PLAN=1 apply as written.
-			// Dropping them here is how the startup plan missed the first
-			// salted capture on GB300 (2026-10-01).
-			patches = append(patches, appendEnv(m.MainContainer, e))
-		}
+	// Caches under this branch's root; the model stays with the landing
+	// volume, which the chart addresses itself; switches as written
+	// (reader_steps.go, one rule for both branches).
+	for _, e := range m.cacheEnvFor(root, "") {
+		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
 	// transformers writes trust_remote_code module sources to
 	// HF_MODULES_CACHE, which defaults to $HF_HOME/modules. Charts that
