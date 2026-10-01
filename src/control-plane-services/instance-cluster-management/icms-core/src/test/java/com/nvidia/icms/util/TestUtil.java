@@ -149,7 +149,7 @@ public class TestUtil {
 
     public static final String NGC_CLUSTER_MANAGEMENT_SCOPE = "cluster-management";
 
-    public static final String NGC_CLUSTER_LISTING_SCOPE = "cluster_listing";
+    public static final String NGC_CLUSTER_MANAGEMENT_READ_SCOPE = "read:cluster-management";
 
     public static final String NGC_GPU_LISTING_SCOPE = "gpu_listing";
     public static final String NGC_REGION_LISTING_SCOPE = "regions_listing";

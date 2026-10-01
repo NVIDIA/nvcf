@@ -363,7 +363,7 @@ class NvcaAccountControllerTest extends IntegrationTest {
     }
 
     @Test
-    void getClusters_clusterListingScope_success()
+    void getClusters_readClusterManagementScope_success()
             throws Exception {
         // Prepare
         when(clusterManagementService.getClusters(DUMMY_BYOC_NCA_ID, null,
@@ -375,7 +375,7 @@ class NvcaAccountControllerTest extends IntegrationTest {
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .header(HttpHeaders.AUTHORIZATION,
                                         JwtKeyUtils.getAuthHeader(DUMMY_CUSTOMER_1,
-                                                                  TestUtil.NGC_CLUSTER_LISTING_SCOPE)))
+                                                                  TestUtil.NGC_CLUSTER_MANAGEMENT_READ_SCOPE)))
                 .andExpect(MockMvcResultMatchers.status().isOk());
 
         // Assert

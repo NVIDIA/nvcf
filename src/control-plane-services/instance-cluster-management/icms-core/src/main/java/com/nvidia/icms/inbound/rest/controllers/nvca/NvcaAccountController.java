@@ -135,7 +135,7 @@ public class NvcaAccountController {
     }
 
     @GetMapping("{ncaId}/clusters")
-    @PreAuthorize("hasAuthority('cluster-management') or hasAuthority('cluster_listing')")
+    @PreAuthorize("hasAuthority('cluster-management') or hasAuthority('read:cluster-management')")
     @Operation(summary = "Get NVCA Clusters",
             description = "API to get the cluster details for given NcaId",
             responses = {
