@@ -81,6 +81,7 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
 
 - Install-time values are layered after generated stack-aware values.
 - Use `yq` carefully for nested keys and quoted strings.
-- Keep `Chart.yaml` name/version changes in the vendoring script when they are
-  part of the self-managed packaging contract.
+- `Chart.yaml` name and version are set at packaging time, not in git. The
+  published name and version come from the release that packages the chart, and
+  `appVersion` is stamped from the nvca release it installs.
 - Never commit real service keys or rendered secret material.

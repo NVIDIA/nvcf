@@ -337,7 +337,7 @@ webhook:
 ## @section NGC Configuration
 
 ## @param ngcConfig.username Username for the registry authentication
-## @param ngcConfig.serviceKey ServiceKey (password) for authentication. If unset, a Secret with name set to ngcConfig.serviceKeySecretName is expected to exist in the cluster in the release namespace.
+## @param ngcConfig.serviceKey ServiceKey (password) for authentication. The chart ships no default, so a direct install must set it while generateImagePullSecret is true: the generated pull secret is built from this value and rendering fails without it. To use a pre-existing Secret named by ngcConfig.serviceKeySecretName instead, also set generateImagePullSecret=false. Self-managed installs are exempt; the compute-plane stack sets generateImagePullSecret=false and the stack values renderer supplies a placeholder key.
 ## @param ngcConfig.serviceKeySecretName Secret containing NGC ServiceKey (password) for authentication (default: ngc-service-key). If the ngcConfig.serviceKey is not set, the secret with this name must be created manually in the release namespace.
 ## @param ngcConfig.serviceKeySecretKeyName Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).
 ## @param ngcConfig.apiURL NGC API URL for requesting auth tokens

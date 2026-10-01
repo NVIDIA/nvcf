@@ -2902,6 +2902,32 @@ class DecoupledVersionSourceTest(unittest.TestCase):
                 "the package must declare the leader release this tag shipped, not the tip",
             )
 
+    def test_a_prerelease_chart_tag_does_not_block_the_refresh(self):
+        """semverish_sort_key ranks 1.29.0-rc.1 above both 1.28.5 and 1.29.0.
+
+        Picking the baseline with latest_service_tag would hand back the rc, and
+        the stable check would then abandon the refresh instead of falling back,
+        so the chart would stop shipping new operator versions entirely.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "deploy/helm/nvca-operator/v1.28.5")
+            git(root, "tag", "deploy/helm/nvca-operator/v1.29.0-rc.1")
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "feat(nvca): add a thing")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0")
+
+            self.github_release.publish_app_version_refresh(
+                root, self.chart_service(), self.metadata(version_source=False),
+                dry_run=False, draft=False,
+            )
+
+            self.assertTrue(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.28.6").strip(),
+                "the refresh must bump from the newest STABLE tag, not the prerelease",
+            )
+
     def test_refresh_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"

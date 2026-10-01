@@ -1656,7 +1656,15 @@ def publish_app_version_refresh(root, service, metadata, dry_run, draft):
         )
         return
 
-    last_tag = latest_service_tag(service, root)
+    # Same selection the leader side uses, and for the same reason:
+    # latest_service_tag orders a prerelease above the stable release it leads
+    # to, and ignores reachability. Either would hand back a tag this branch
+    # never shipped, and the stable check below would then abandon the refresh
+    # entirely rather than fall back.
+    stable = stable_reachable_versions(root, service)
+    last_tag = (
+        sorted(stable, key=lambda item: semverish_sort_key(item[0]))[-1][1] if stable else ""
+    )
     if not last_tag:
         # Never released. Its own first release will stamp the leader anyway.
         print(f"[github-release] {service['id']}: no release yet; nothing to refresh")
