@@ -55,9 +55,10 @@ no merge logic. If a rank has no live pod the round is skipped; the next
 warm deployment tries again.
 
 Delta detection by the seed marker. The seed init already copies the
-rank into the emptyDir with mtimes preserved and then writes a marker
-file. After Ready and the settle period the agent lists files under the
-cachedir newer than the marker. Any file means a delta; the count and
+rank into the emptyDir with mtimes preserved (`cp -a`); it gains one
+line that writes a marker file after the copy. After Ready and the
+settle period the agent lists files under the cachedir newer than the
+marker. Any file means a delta; the count and
 bytes are stamped on the pod as `nvsnap.io/cache-rank-delta` and
 `cache-rank-delta-bytes`. Touched-but-unchanged files only cost a
 harmless re-copy.
@@ -77,14 +78,31 @@ the configuration changes.
 |---|---|
 | seed init (reader_steps.go) | writes `<cachedir>/.nvsnap-seeded` after the copy |
 | agent, after Ready + settle | delta scan against the marker; stamps delta annotations; calls the existing election with a generation suffix |
-| modelvolume Lookup | returns the newest complete generation; `Generation` on State |
+| modelvolume Lookup | today returns the first complete primary in list order (modelvolume.go, Lookup), which is arbitrary once there are two; it must sort by the generation label and return the newest; `Generation` on State |
 | collector | unchanged streaming; marks the new primary with `generation`, `refreshed-from`, `delta-fingerprint` and the time |
 | webhook complete branch | mints the read-only view from the generation Lookup returned (no change to the pod shape) |
-| reaper | retires superseded generations with no bound reader after the normal retention; superseded generations never get a new view |
+| reaper | today keys "has a live reader" by identity (reaper.go, `live[identityKey(pv)]`), so a reader bound to generation 2 would keep generation 1 alive forever; liveness must be tracked per primary PV through its own read-only views, then superseded generations retire under the normal retention and never get a new view |
 | values | `agent.cacheVolume.refreshCooldown: 30m`, `agent.cacheVolume.refresh: true` |
 
 Nothing changes for the model volume, the cold capture, or a cluster
 without warm deltas. A set that never gains files never refreshes.
+
+## Verified against the code, and what is assumed
+
+Verified: the rank endpoint `GET /v1/cache-rank/{key}/{ordinal}` and the
+tar stream it serves; the atomic-Create election; the mount-holder
+attach; `cp -a` in the seed step; the measured 25 to 28 s versus 3 s
+capture and 62 to 70 s versus 93 to 100 s start times; the two places
+named in the table that need a change for generations (Lookup picks the
+first match today; the reaper keys liveness by identity today).
+
+Assumed, to confirm during the build: that NVMesh refuses or mishandles a
+read-write attach while shared read-only attaches are held. The
+generation design does not depend on the answer, it only removes the
+question. Known exposure, shared with the cold collection: a rank is
+streamed while its engine serves traffic, so a file being written at
+that instant can be captured partially; engines treat a bad cache entry
+as a miss, and the next refresh replaces it.
 
 ## Failure behaviour
 
