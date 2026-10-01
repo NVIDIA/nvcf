@@ -45,7 +45,7 @@ pub(super) async fn run_router_registration_stream(
     config: Arc<RegistrationSessionConfig>,
     stop: CancellationToken,
 ) {
-    let router_addr = router_endpoint.authority_addr().to_string();
+    let router_addr = router_endpoint.metric_addr();
     let mut last_certificate_failure = None;
 
     loop {

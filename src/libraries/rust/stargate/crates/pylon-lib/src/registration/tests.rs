@@ -707,6 +707,20 @@ fn grpc_endpoint_display_omits_userinfo_path_and_query() {
         "https://authority.example:443 via https://dial.example:443"
     );
     assert_eq!(grpc_endpoint("http://").to_string(), "<invalid endpoint>");
+    assert_eq!(target.metric_addr(), "https://authority.example:443");
+}
+
+#[test]
+fn grpc_metric_addresses_preserve_ordinary_router_labels() {
+    for address in [
+        "router-a",
+        "router-a:50071",
+        "[::1]:50071",
+        "https://router-a:443/",
+    ] {
+        let target = grpc_endpoint_with_dial(address, "https://dial.example:443");
+        assert_eq!(target.metric_addr(), address);
+    }
 }
 
 #[test]
@@ -1639,6 +1653,50 @@ async fn registration_http_errors_keep_transport_causes_without_sensitive_urls()
     assert!(detail.contains(&std::error::Error::source(&error).unwrap().to_string()));
     assert!(!detail.contains("private-password"));
     assert!(!detail.contains("private-query"));
+}
+
+#[tokio::test]
+async fn registration_metrics_omit_endpoint_query_credentials() {
+    let ca = TestCertificateAuthority::new("server-ca");
+    let mut server = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let metrics = PylonMetrics::new().unwrap();
+    let mut config = test_registration_config();
+    config.grpc_tls_ca_cert_pem = Some(ca.pem());
+    config.forwarding.metrics = Some(metrics.clone());
+    let config = Arc::new(RegistrationSessionConfig::try_from(config).unwrap());
+    let authority = [
+        "https://authority.example:443",
+        "/private?token=",
+        "do-not-log-this-token",
+    ]
+    .concat();
+    let target = grpc_endpoint_with_dial(&authority, &server.dial_url);
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(run_router_registration_stream(target, config, stop.clone()));
+    server.first_registration().await;
+    assert_eq!(
+        server.registration_authorities.recv().await.as_deref(),
+        Some("authority.example:443")
+    );
+    stop.cancel();
+    tokio::time::timeout(TEST_WAIT, task)
+        .await
+        .unwrap()
+        .unwrap();
+    server.shutdown().await;
+
+    let body = metrics.gather_text().unwrap();
+    assert!(body.contains("pylon_registration_stream_connected"));
+    assert!(!body.contains("do-not-log-this-token"), "{body}");
+    assert!(!body.contains("/private"), "{body}");
+    assert_metrics(
+        &metrics,
+        &[
+            r#"pylon_model_advertised_status{model="model-a",router="https://authority.example:443",status="inactive"} 1"#,
+            r#"pylon_registration_stream_connected{router="https://authority.example:443"} 0"#,
+            r#"pylon_reverse_tunnel_connected{router="https://authority.example:443"} 0"#,
+        ],
+    );
 }
 
 #[tokio::test]

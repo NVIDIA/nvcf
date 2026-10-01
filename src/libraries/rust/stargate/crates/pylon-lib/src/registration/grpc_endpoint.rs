@@ -53,6 +53,29 @@ impl StargateGrpcEndpoint {
         &self.authority_addr
     }
 
+    pub(super) fn metric_addr(&self) -> String {
+        let Ok(uri) = self.authority_endpoint().parse::<http::Uri>() else {
+            return "<invalid endpoint>".into();
+        };
+        let Some(authority) = uri.authority() else {
+            return "<invalid endpoint>".into();
+        };
+        let authority = authority.as_str();
+        let safe_authority = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        if authority == safe_authority && uri.query().is_none() && matches!(uri.path(), "" | "/") {
+            return self.authority_addr().to_string();
+        }
+        if self.authority_addr().starts_with("http://")
+            || self.authority_addr().starts_with("https://")
+        {
+            format!("{}://{safe_authority}", uri.scheme_str().unwrap_or("http"))
+        } else {
+            safe_authority.to_string()
+        }
+    }
+
     pub(super) fn dial_endpoint(&self) -> String {
         normalize_addr(&self.dial_addr)
     }
