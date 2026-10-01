@@ -316,6 +316,8 @@ type State struct {
 	// Pods admitted while this holds are left alone and download for
 	// themselves; the record expires so a later deployment retries.
 	Failed bool
+	// PrimaryBytes is PrimaryPV's capacity, what a reader's sweep would read.
+	PrimaryBytes int64
 	// Generation of PrimaryPV (1 when unannotated); PrimaryCreated is its
 	// creation time, the reference for the refresh cooldown.
 	Generation     int
@@ -462,6 +464,9 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 		}
 		if best != nil {
 			st.Exists, st.Complete, st.PrimaryPV = true, true, best.Name
+			if q, ok := best.Spec.Capacity[corev1.ResourceStorage]; ok {
+				st.PrimaryBytes = q.Value()
+			}
 			st.Generation, st.PrimaryCreated = Generation(best), best.CreationTimestamp.Time
 			st.DeltaFingerprint = best.Annotations[DeltaFingerprintAnnotation]
 			st.RefreshStable = best.Annotations[RefreshStableAnnotation] == "true"

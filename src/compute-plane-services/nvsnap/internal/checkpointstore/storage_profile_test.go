@@ -193,3 +193,15 @@ pd.csi.storage.gke.io/hyperdisk-ml:
 		}
 	}
 }
+
+func TestStorageProfile_PrewarmLimit(t *testing.T) {
+	if got := (StorageProfile{}).PrewarmLimit(); got != DefaultPrewarmMaxBytes {
+		t.Errorf("default = %d", got)
+	}
+	if got := (StorageProfile{PrewarmMaxBytes: "2Ti"}).PrewarmLimit(); got != int64(2)<<40 {
+		t.Errorf("2Ti = %d", got)
+	}
+	if got := (StorageProfile{PrewarmMaxBytes: "nonsense"}).PrewarmLimit(); got != DefaultPrewarmMaxBytes {
+		t.Errorf("bad value falls back to the default, got %d", got)
+	}
+}

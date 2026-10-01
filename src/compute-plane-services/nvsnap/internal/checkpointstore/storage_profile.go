@@ -32,6 +32,7 @@ package checkpointstore
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/dynamic"
@@ -81,6 +82,13 @@ type StorageProfile struct {
 	// PrewarmParallelism is the number of concurrent readers in the sweep.
 	// 0 means DefaultPrewarmParallelism.
 	PrewarmParallelism int `json:"prewarmParallelism,omitempty"`
+	// PrewarmMaxBytes caps the volume size the sweep is applied to, as a
+	// Kubernetes quantity ("256Gi"). A tree larger than the node's page
+	// cache evicts its own early pages while the sweep reads the late
+	// ones, so the engine finds most of it cold anyway and the sweep only
+	// costs time (GB300, 2026-10-01: a 1.56 TB tree on a 902 GiB node,
+	// about 12 min per pod for nothing). Empty means DefaultPrewarmMaxBytes.
+	PrewarmMaxBytes string `json:"prewarmMaxBytes,omitempty"`
 	// ModelVolume configures the write-once model volume for Helm
 	// functions (docs/proposals/helm-shared-model-volume.md). Mode "block"
 	// is the default for shared-volume strategies (NVMesh): the writer's
@@ -116,6 +124,23 @@ const DefaultPrewarmParallelism = 6
 // PrewarmEnabled reports the profile's prewarm default (on when unset).
 func (p StorageProfile) PrewarmEnabled() bool {
 	return p.Prewarm == nil || *p.Prewarm
+}
+
+// DefaultPrewarmMaxBytes is the largest volume the sweep is applied to
+// when a profile does not set prewarmMaxBytes: 256 GiB fits the page cache
+// of every GPU node class in use with room for the engine.
+const DefaultPrewarmMaxBytes = int64(256) << 30
+
+// PrewarmLimit returns the largest volume size the sweep is applied to.
+func (p StorageProfile) PrewarmLimit() int64 {
+	if p.PrewarmMaxBytes == "" {
+		return DefaultPrewarmMaxBytes
+	}
+	q, err := resource.ParseQuantity(p.PrewarmMaxBytes)
+	if err != nil || q.Value() <= 0 {
+		return DefaultPrewarmMaxBytes
+	}
+	return q.Value()
 }
 
 // PrewarmWorkers returns the reader count, defaulted and clamped to >= 1.

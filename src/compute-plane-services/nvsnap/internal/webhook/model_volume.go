@@ -165,7 +165,14 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
 	}
 	if st.Complete && m.ModelVolume.Cfg.ReaderMode() != modelvolume.ReaderHostPath {
-		patches = m.modelPrewarmPatches(pod, main, land, patches)
+		if limit := m.prewarmLimit(); st.PrimaryBytes > limit {
+			// Larger than the node can keep in page cache: the sweep would
+			// evict its own pages and only cost time (1.56 TB on 902 GiB,
+			// GB300 2026-10-01). The engine reads the volume directly.
+			log.WithFields(logrus.Fields{"bytes": st.PrimaryBytes, "prewarm_max_bytes": limit}).Info("model volume: too large for a page-cache sweep; no prewarm")
+		} else {
+			patches = m.modelPrewarmPatches(pod, main, land, patches)
+		}
 	}
 	patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
 	return patches, nil

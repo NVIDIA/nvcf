@@ -171,6 +171,15 @@ func (m *Mutator) prewarmWanted(main corev1.Container) bool {
 	return m.StorageProfile.PrewarmEnabled()
 }
 
+// prewarmLimit is the largest volume the sweep is applied to, from the
+// storage profile or the default without one.
+func (m *Mutator) prewarmLimit() int64 {
+	if m.StorageProfile == nil {
+		return checkpointstore.DefaultPrewarmMaxBytes
+	}
+	return m.StorageProfile.PrewarmLimit()
+}
+
 // prewarmWorkers is the sweep's reader count from the storage profile, or
 // the default without one.
 func (m *Mutator) prewarmWorkers() int {

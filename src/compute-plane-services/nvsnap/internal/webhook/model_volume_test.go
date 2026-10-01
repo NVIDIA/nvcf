@@ -398,7 +398,7 @@ func TestModelVolume_ReaderBlockPVC_CompletePrewarms(t *testing.T) {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
 		Spec: corev1.PersistentVolumeSpec{
-			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("512Gi")},
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("100Gi")},
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
 			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
 		},
@@ -458,6 +458,34 @@ func TestModelVolume_ReaderBlockPVC_CompletePrewarms(t *testing.T) {
 	}
 	if find(viewMV(pod, patches)) != nil {
 		t.Errorf("incomplete volume: nothing to sweep yet")
+	}
+
+	// A volume larger than the page cache can hold gets no sweep: it would
+	// evict its own pages and only cost time.
+	big := pv.DeepCopy()
+	big.Name, big.Spec.Capacity = "pvc-huge", corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1600Gi")}
+	big.Labels[modelvolume.IdentityLabel] = modelvolume.Key("ngc://org/team/kimi-k3:hf")
+	m, _ = mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset(big))
+	pod = ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	for i := range pod.Spec.Containers[0].Env {
+		if pod.Spec.Containers[0].Env[i].Name == "NGC_MODEL_NAME" {
+			pod.Spec.Containers[0].Env[i].Value = "org/team/kimi-k3:hf"
+		}
+	}
+	for i := range pod.Spec.InitContainers {
+		for j := range pod.Spec.InitContainers[i].Env {
+			if pod.Spec.InitContainers[i].Env[j].Name == "NGC_MODEL_NAME" {
+				pod.Spec.InitContainers[i].Env[j].Value = "org/team/kimi-k3:hf"
+			}
+		}
+	}
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if find(viewMV(pod, patches)) != nil {
+		t.Errorf("a 1600Gi volume exceeds the default 256Gi sweep cap: no prewarm")
 	}
 }
 
