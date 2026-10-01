@@ -39,6 +39,7 @@ helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
   --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
   --set llmApiGateway.config.nvcfGrpcInsecure=true \
+  --set llmApiGateway.config.nvcfGrpcAddr= \
   --set llmApiGateway.config.allowAnonymous=true \
   --set llmApiGateway.metrics.enabled=true \
   --set llmApiGateway.metrics.serviceMonitor.enabled=true \
