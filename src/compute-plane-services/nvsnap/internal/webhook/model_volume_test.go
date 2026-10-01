@@ -194,6 +194,9 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
 		t.Errorf("the pod's own init becomes a wait:\n%s", s)
 	}
+	if v.env["VLLM_ENABLE_STARTUP_PLAN"] != "1" {
+		t.Errorf("template switches that are not paths apply as written: env %v", v.env)
+	}
 	if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" || v.env["HF_HOME"] != "" {
 		t.Errorf("Block mode: compile caches to the local cachedir, model env untouched: %v", v.env)
 	}
