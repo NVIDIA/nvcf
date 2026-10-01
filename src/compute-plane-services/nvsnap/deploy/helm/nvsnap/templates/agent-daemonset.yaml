@@ -148,6 +148,11 @@ spec:
             # the image pushed yet).
             - --webhook-l2-wait-image={{ include "nvsnap.l2wait.image" . }}
             {{- end }}
+            {{- if .Values.webhook.cacheSalt }}
+            # Operator salt in every cache identity: bump to start fresh
+            # captures cluster-wide (values: webhook.cacheSalt).
+            - --webhook-cache-salt={{ .Values.webhook.cacheSalt }}
+            {{- end }}
             {{- if .Values.agent.l2.hostBundleRoot }}
             # nvsnap#147 / nvsnap#184: override the default
             # on-host directory the agent stages the restore bundle

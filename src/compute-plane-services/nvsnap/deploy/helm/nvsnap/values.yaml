@@ -494,6 +494,15 @@ webhook:
   # is stale.
   inject: true
 
+  # Operator salt folded into every cache identity the webhook composes.
+  # The identity covers image, model, arguments, cache-relevant env, driver
+  # and GPU class, but not a change whose effect exists only on a fresh
+  # capture: a new agent.cacheEnvTemplate, for instance, since warm pods
+  # replay the env stamped at capture. Set any new string to start fresh
+  # captures cluster-wide; the old sets age out under modelVolume.retention.
+  # Empty (default) leaves identities unchanged. Rolls the agents.
+  cacheSalt: ""
+
   # The dnsName the cert SAN matches and the apiserver dials.
   # Format: <service-name>.<namespace>.svc.cluster.local
   serviceName: nvsnap-webhook

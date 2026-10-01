@@ -183,6 +183,30 @@ func TestCompose_DistinguishesByConfig(t *testing.T) {
 	}
 }
 
+// A cluster salt changes every identity; the same salt is stable; the pod
+// annotation still applies on top.
+func TestCompose_ClusterSalt(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Image: "vllm/vllm-openai:v0.11.2", Args: []string{"vllm serve --model m"}}}}}
+	plain := (&HashInputComposer{CUDADriverMajor: 580}).Compose(pod, 0)
+	a := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0)
+	b := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0)
+	c := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-02"}).Compose(pod, 0)
+	if checkpointstore.ComputeHash(plain) == checkpointstore.ComputeHash(a) {
+		t.Error("a cluster salt must change the identity")
+	}
+	if checkpointstore.ComputeHash(a) != checkpointstore.ComputeHash(b) {
+		t.Error("the same cluster salt must be stable")
+	}
+	if checkpointstore.ComputeHash(a) == checkpointstore.ComputeHash(c) {
+		t.Error("a different cluster salt must change the identity again")
+	}
+	pod.Annotations = map[string]string{CacheSaltAnnotation: "chart"}
+	if d := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0); checkpointstore.ComputeHash(d) == checkpointstore.ComputeHash(a) {
+		t.Error("the pod annotation still applies on top of the cluster salt")
+	}
+}
+
 func TestCompose_DistinguishesByDriverMajor(t *testing.T) {
 	mk := func() *corev1.Pod {
 		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{

@@ -58,6 +58,11 @@ type WebhookConfig struct {
 	// retry cadence and snap+clone wall time).
 	L2WaitImage string
 
+	// CacheSalt is folded into every cache identity the webhook composes
+	// (rootfsonly.HashInputComposer.Salt). Bump it to start fresh captures
+	// cluster-wide; empty leaves identities unchanged.
+	CacheSalt string
+
 	// HostBundleRoot is the on-host path the agent DaemonSet stages
 	// the restore bundle into (default /var/lib/nvsnap/bundle). Function
 	// pods mount {root}/nvsnap + {root}/nvsnap-lib via hostPath. Changing
@@ -163,6 +168,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		ReadOnlyMinter:    a.modelReadOnlyMinter(),
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
+			Salt:            a.config.Webhook.CacheSalt,
 		},
 		// EnsureLocal is intentionally left nil for the demo / for-speed
 		// flow. The Mutator emits nodeAffinity = CapturedOnNodes, which

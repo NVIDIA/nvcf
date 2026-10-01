@@ -187,6 +187,8 @@ func main() {
 
 	flag.StringVar(&config.Webhook.L2WaitImage, "webhook-l2-wait-image", "",
 		"Image ref for the nvsnap-l2-wait init container injected onto restore pods (nvsnap#147)")
+	flag.StringVar(&config.Webhook.CacheSalt, "webhook-cache-salt", "",
+		"Operator salt folded into every cache identity; bump it to start fresh captures cluster-wide (empty: identities unchanged)")
 
 	// nvsnap#147 second half: on-host directory where the
 	// nvsnap-agent DaemonSet stages the restore bundle. Function pods
