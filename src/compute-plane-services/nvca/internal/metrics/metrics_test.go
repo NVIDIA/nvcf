@@ -2433,7 +2433,8 @@ func hasLabel(m *promdto.Metric, key string) bool {
 // per-run series churn.
 func TestClusterValidatorMetrics_BaselineThenUpdateInPlace(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg),
+		WithClusterValidatorEnabled(true))
 	m := FromContext(ctx)
 	require.NotNil(t, m)
 	t.Cleanup(func() { m.Destroy() })
@@ -2464,6 +2465,29 @@ func TestClusterValidatorMetrics_BaselineThenUpdateInPlace(t *testing.T) {
 	assert.Equal(t, 1.0, ready[0].GetGauge().GetValue())
 
 	// LastRunTimestamp exposes the run time as a value (not a label).
+	lrt := gatherClusterValidatorSeries(t, reg, ClusterValidatorLastRunTimestampMetricName)
+	require.Len(t, lrt, 1)
+	assert.Equal(t, float64(1781175999), lrt[0].GetGauge().GetValue())
+}
+
+// Where the validator does not run, no baseline is published: last_run at 0
+// would read as a validator that never ran, and a "never ran" alert would
+// fire forever. A summary still publishes the series, enabled or not.
+func TestClusterValidatorMetrics_NoBaselineUnlessEnabled(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	m := FromContext(ctx)
+	require.NotNil(t, m)
+	t.Cleanup(func() { m.Destroy() })
+
+	for _, name := range []string{ClusterValidatorReadyMetricName, ClusterValidatorLastRunTimestampMetricName,
+		ClusterValidatorCheckStatusMetricName} {
+		assert.Empty(t, gatherClusterValidatorSeries(t, reg, name), name)
+	}
+
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 1781175999, VerdictReady: true, Checks: map[string]bool{"control_plane": true},
+	})
 	lrt := gatherClusterValidatorSeries(t, reg, ClusterValidatorLastRunTimestampMetricName)
 	require.Len(t, lrt, 1)
 	assert.Equal(t, float64(1781175999), lrt[0].GetGauge().GetValue())

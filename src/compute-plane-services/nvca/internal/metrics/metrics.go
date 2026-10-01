@@ -320,6 +320,9 @@ type Metrics struct {
 	// clusterValidatorMu.
 	clusterValidatorLastEmitted *clusterValidatorEmittedSet
 	clusterValidatorMu          sync.Mutex
+	// clusterValidatorEnabled gates the cluster-validator baseline; see
+	// WithClusterValidatorEnabled.
+	clusterValidatorEnabled bool
 
 	// Workload result metrics
 	WorkloadResultTotal *prometheus.CounterVec
@@ -420,6 +423,15 @@ func WithKataRuntimeIsolationEnabled(enabled bool) DefaultMetricsOption {
 			}
 			m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(val)
 		}
+	}
+}
+
+// WithClusterValidatorEnabled publishes the cluster-validator baseline (every
+// fixed gauge at 0 until the first summary) when the validator runs on this
+// cluster. Without it the validator's series appear with its first summary.
+func WithClusterValidatorEnabled(enabled bool) DefaultMetricsOption {
+	return func(m *Metrics) {
+		m.clusterValidatorEnabled = enabled
 	}
 }
 
@@ -812,7 +824,11 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// Initialize the fixed-cardinality cluster-validator gauges to 0 so they
 	// appear on the first Prometheus scrape — same "absent metric" pattern as
 	// KataRuntimeIsolationEnabled. Each run updates these series in place.
-	m.emitClusterValidatorBaseline()
+	// Only where the validator runs: elsewhere the baseline would read as a
+	// validator that never ran, and a "never ran" alert would fire forever.
+	if m.clusterValidatorEnabled {
+		m.emitClusterValidatorBaseline()
+	}
 
 	// Workload result metric (uses default labels)
 	m.WorkloadResultTotal = promFactory.NewCounterVec(prometheus.CounterOpts{

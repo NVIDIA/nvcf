@@ -174,6 +174,10 @@ type BackendK8sCache struct {
 	// identitySource controls the identity mechanism: auto, psat, or spire.
 	identitySource string
 
+	// clusterValidatorEnabled is passed to the agent, which publishes the
+	// cluster-validator metrics baseline only where the validator runs.
+	clusterValidatorEnabled bool
+
 	// gracefulShutdown is set to true when the operator is shutting down gracefully.
 	// When true, the reconciliation loop will skip cleanup of NVCFBackend resources
 	// and let the shutdown handler manage the cleanup instead.
@@ -386,6 +390,12 @@ func (b *BackendK8sCacheBuilder) WithIdentitySource(identitySource string) *Back
 	return &next
 }
 
+func (b *BackendK8sCacheBuilder) WithClusterValidatorEnabled(enabled bool) *BackendK8sCacheBuilder {
+	next := *b
+	next.clusterValidatorEnabled = enabled
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) WithClusterSource(clusterSource nvcaoptypes.ClusterSource) *BackendK8sCacheBuilder {
 	next := *b
 	next.clusterSource = clusterSource
@@ -439,6 +449,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		taskEnvOverridesB64:                b.taskEnvOverridesB64,
 		identitySource:                     b.identitySource,
 		clusterSource:                      b.clusterSource,
+		clusterValidatorEnabled:            b.clusterValidatorEnabled,
 	}
 
 	if c.operatorNamespace == "" {

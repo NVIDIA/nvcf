@@ -183,16 +183,18 @@ func setupEnforcementEnv(
 		return nil, false
 	}
 
-	if err := waitForPodReady(ctx, client, ns, enforcementServerPod, podTimeout); err != nil {
+	// The IP comes from the read that saw the pod Ready. A second read only
+	// adds a request that a transient error can fail.
+	server, err := waitForPodReady(ctx, client, ns, enforcementServerPod, podTimeout)
+	if err != nil {
 		printError(log, fmt.Sprintf("Server pod not ready: %v", err))
 		state.Warnings = append(state.Warnings,
 			"Network Policy Enforcement: server pod failed to start")
 		return nil, false
 	}
-
-	serverIP, err := getPodIP(ctx, client, ns, enforcementServerPod)
-	if err != nil {
-		printError(log, fmt.Sprintf("Could not get server IP: %v", err))
+	serverIP := server.Status.PodIP
+	if serverIP == "" {
+		printError(log, fmt.Sprintf("Server pod %s/%s is Ready but has no IP", ns, enforcementServerPod))
 		state.Warnings = append(state.Warnings,
 			"Network Policy Enforcement: server pod has no IP")
 		return nil, false
@@ -531,17 +533,20 @@ func probeConnectivityWithDelay(
 	return succeeded, err
 }
 
-// waitForPodReady polls until the named pod has the Ready condition.
-func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) error {
+// waitForPodReady polls until the named pod has the Ready condition, and
+// returns the pod as that read saw it.
+func waitForPodReady(
+	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
+) (*corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
 		if !time.Now().Before(deadline) {
 			if lastErr != nil {
-				return fmt.Errorf("pod %s/%s did not become ready within %v (last error: %w)",
+				return nil, fmt.Errorf("pod %s/%s did not become ready within %v (last error: %w)",
 					ns, name, timeout, lastErr)
 			}
-			return fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
+			return nil, fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
 		}
 
 		getCtx, cancel := attemptContext(ctx, deadline)
@@ -555,7 +560,7 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 			// error no longer explains a timeout.
 			lastErr = nil
 		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
-			return fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
+			return nil, fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
 		default:
 			// A slow or throttled Get is not the pod's answer. The per-attempt
 			// cap turned an APF-queued Get into a hard failure of the whole
@@ -565,16 +570,16 @@ func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name 
 		}
 		if err == nil {
 			if isPodReady(pod) {
-				return nil
+				return pod, nil
 			}
 			if pod.Status.Phase == corev1.PodFailed {
-				return fmt.Errorf("pod %s/%s entered Failed phase", ns, name)
+				return nil, fmt.Errorf("pod %s/%s entered Failed phase", ns, name)
 			}
 		}
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(2 * time.Second):
 		}
 	}
@@ -589,13 +594,12 @@ const pollAttemptTimeout = 10 * time.Second
 // time left before deadline. An attempt that times out is an ordinary
 // transient error to the caller's retry loop.
 //
-// The one-second floor is deliberate. waitForDaemonSetPods and
-// waitForDaemonSetDesiredCount check their deadline after each attempt, so the
-// last attempt usually starts just past it (the deadline expires during the
-// sleep). Without the floor that attempt is cancelled at once, and
-// waitForDaemonSetPods reports "listing failed" instead of classifying the pods,
-// turning a real CNI fault into UNKNOWN. The loops that check the deadline
-// first can overrun it by at most the floor.
+// The one-second floor is deliberate. waitForProbePods checks its deadline
+// after each attempt, so its last attempt usually starts just past it (the
+// deadline expires during the sleep). Without the floor that attempt is
+// cancelled at once, and the probe reports the pods unobserved instead of
+// classifying them, turning a real CNI fault into UNKNOWN. The loops that
+// check the deadline first can overrun it by at most the floor.
 func attemptContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, max(min(pollAttemptTimeout, time.Until(deadline)), time.Second))
 }
@@ -654,17 +658,6 @@ func isPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
-}
-
-func getPodIP(ctx context.Context, client kubernetes.Interface, ns, name string) (string, error) {
-	pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
-	}
-	if pod.Status.PodIP == "" {
-		return "", fmt.Errorf("pod %s/%s has no IP assigned", ns, name)
-	}
-	return pod.Status.PodIP, nil
 }
 
 // ---------------------------------------------------------------------------

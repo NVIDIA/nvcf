@@ -300,26 +300,33 @@ assert_cluster_validator_role() {
   assert_eq "" "$(yq "${init_env} | select(.name == \"VALIDATOR_POST_INSTALL\") | .value" "${rendered}")" \
     "${chart_label} init container leaves the post-install signal unset"
 
-  # Under the control-plane role the init container publishes no summary, so a
-  # one-shot Job runs the CronJob's own spec at install instead. The stack
-  # waits for Jobs, so it runs report-only and a Not-Ready verdict cannot fail
-  # the release; the CronJob's runs still fail.
-  local initial_job='select(.kind == "Job" and .metadata.labels."app.kubernetes.io/component" == "validation")'
-  local initial_env="${initial_job} | .spec.template.spec.containers[0].env[]"
-  assert_eq "$(yq "${cron_env} | [.name, .value] | join(\"=\")" "${rendered}" | grep '=')" \
-    "$(yq "${initial_env} | select(.name != \"VALIDATOR_REPORT_ONLY\") | [.name, .value] | join(\"=\")" "${rendered}" | grep '=')" \
-    "${chart_label} install-time Job runs the CronJob's spec under the control-plane role"
-  assert_eq "true" "$(yq "${initial_env} | select(.name == \"VALIDATOR_REPORT_ONLY\") | .value" "${rendered}")" \
-    "${chart_label} install-time Job is report-only"
-  assert_eq "" "$(yq "${cron_env} | select(.name == \"VALIDATOR_REPORT_ONLY\") | .value" "${rendered}")" \
-    "${chart_label} CronJob runs still fail on a Not-Ready verdict"
+  # Under the control-plane role the init container publishes no summary, so
+  # the operator runs the CronJob once at startup. No Job is rendered: a Job in
+  # the release made the install wait on the validator and fail with it.
+  local operator_env='select(.kind == "Deployment") | .spec.template.spec.containers[0].env[]'
+  local validation_job='select(.kind == "Job" and .metadata.labels."app.kubernetes.io/component" == "validation")'
+  assert_eq "$(yq 'select(.kind == "CronJob") | .metadata.name' "${rendered}")" \
+    "$(yq "${operator_env} | select(.name == \"NVCA_CLUSTER_VALIDATOR_CRONJOB\") | .value" "${rendered}")" \
+    "${chart_label} operator runs the CronJob once at startup under the control-plane role"
+  assert_eq "true" "$(yq "${operator_env} | select(.name == \"NVCA_CLUSTER_VALIDATOR_ENABLED\") | .value" "${rendered}")" \
+    "${chart_label} operator is told the validator runs"
+  assert_eq "" "$(yq "${validation_job} | .metadata.name" "${rendered}" | grep -v '^---$' | grep -v '^$' || true)" \
+    "${chart_label} no validation Job in the release"
 
   helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
-    --set clusterValidator.enabled=true >"${rendered}"
+    --set clusterValidator.enabled=true --set "tolerations[0].key=dedicated" \
+    --set "tolerations[0].operator=Exists" >"${rendered}"
   assert_eq "" "$(yq "${init_env} | select(.name == \"VALIDATOR_PREFLIGHT\") | .value" "${rendered}")" \
     "${chart_label} init container writes the summary under the default role"
-  assert_eq "" "$(yq "${initial_job} | .metadata.name" "${rendered}" | grep -v '^---$' | grep -v '^$' || true)" \
-    "${chart_label} no install-time Job when the init container writes the summary"
+  assert_eq "" "$(yq "${operator_env} | select(.name == \"NVCA_CLUSTER_VALIDATOR_CRONJOB\") | .value" "${rendered}")" \
+    "${chart_label} no startup run when the init container writes the summary"
+  assert_eq "dedicated" "$(yq 'select(.kind == "CronJob") | .spec.jobTemplate.spec.template.spec.tolerations[] |
+      select(.key == "dedicated") | .key' "${rendered}")" \
+    "${chart_label} validator Job carries the operator's tolerations"
+
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}"
+  assert_eq "" "$(yq "${operator_env} | select(.name == \"NVCA_CLUSTER_VALIDATOR_ENABLED\") | .value" "${rendered}")" \
+    "${chart_label} operator is not told the validator runs when it is disabled"
 
   if helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
     --set clusterValidator.enabled=true --set "clusterValidator.role=controlplane" >/dev/null 2>&1; then
@@ -327,17 +334,6 @@ assert_cluster_validator_role() {
     return 1
   fi
   printf 'ok %s schema rejects an unknown clusterValidator.role\n' "${chart_label}"
-
-  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
-    --set clusterValidator.enabled=true --set "clusterValidator.haMode=none" >"${rendered}"
-  assert_eq "none" "$(yq "${cron_env} | select(.name == \"NVCF_HA_MODE\") | .value" "${rendered}")" \
-    "${chart_label} CronJob receives the HA mode"
-  if helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
-    --set clusterValidator.enabled=true --set "clusterValidator.haMode=ha" >/dev/null 2>&1; then
-    printf 'FAIL %s schema accepted an unknown clusterValidator.haMode\n' "${chart_label}" >&2
-    return 1
-  fi
-  printf 'ok %s schema rejects an unknown clusterValidator.haMode\n' "${chart_label}"
 
   if helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
     --set clusterValidator.enabled=true --set "clusterValidator.gatewayNames={gateway}" >/dev/null 2>&1; then

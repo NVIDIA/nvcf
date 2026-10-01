@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"slices"
@@ -915,11 +916,11 @@ const (
 	// Without it, both Envoy checks probe a namespace that does not exist and
 	// report a live gateway as missing.
 	envoyGatewayNamespaceEnv = "NVCF_ENVOY_GATEWAY_NAMESPACE"
-	// nvcfGatewayNamesEnv lists the NVCF Gateways, comma-separated, as "name"
-	// or "namespace/name", replacing discovery from the NVCF routes. Envoy
-	// Gateway puts every Gateway's proxy in its controller namespace by
-	// default, so the Envoy checks need the NVCF Gateways to tell NVCF's
-	// proxies from another team's.
+	// nvcfGatewayNamesEnv lists the NVCF Gateways, comma-separated, each as
+	// "namespace/name", replacing discovery from the NVCF routes; a bare name
+	// is ignored with a warning. Envoy Gateway puts every Gateway's proxy in
+	// its controller namespace by default, so the Envoy checks need the NVCF
+	// Gateways to tell NVCF's proxies from another team's.
 	nvcfGatewayNamesEnv = "NVCF_GATEWAY_NAMES"
 	// Labels Envoy Gateway stamps on proxy Services and Deployments. A
 	// per-Gateway proxy carries its Gateway's name and namespace; a
@@ -931,6 +932,9 @@ const (
 	// envoyGatewayControllerSelector matches the controller Deployment's pods
 	// only, excluding the data-plane proxies and certgen Job in the same namespace.
 	envoyGatewayControllerSelector = "control-plane=envoy-gateway"
+	// envoyGatewayControllerName is the controllerName of a GatewayClass that
+	// Envoy Gateway runs. Only such a Gateway has an Envoy proxy to look for.
+	envoyGatewayControllerName = "gateway.envoyproxy.io/gatewayclass-controller"
 )
 
 // gatewayRouteRequirements are the route types this repo's own charts apply,
@@ -1604,15 +1608,17 @@ func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kub
 	}
 }
 
-// checkNodeToNode verifies overlay-network connectivity across all schedulable
-// nodes using a DaemonSet-based probe. A server DaemonSet is deployed on every
-// schedulable node; a checker pod on node[0] connects to each server pod IP on
-// nodes[1..N-1].
+// checkNodeToNode verifies overlay-network connectivity across the nodes that
+// can run work, using a DaemonSet-based probe. A server DaemonSet runs on every
+// Ready, uncordoned node that is not fenced off (nodeToNodeTargets); a checker
+// pod on one of them, picked at random each run, connects to the server pod
+// IP on each of the others.
 //
-// The topology is a single-source star, not a full mesh: it proves node[0]
-// reaches every other node, which catches a dead overlay and most single-node
-// isolation. It does not prove node[i] reaches node[j] for i,j != 0, and it
-// does not probe the reverse direction back toward node[0].
+// The topology is a single-source star, not a full mesh: one run proves the
+// checker's node reaches every other node, which catches a dead overlay and
+// most single-node isolation. It does not prove node[i] reaches node[j] for
+// two other nodes, nor the reverse direction; picking the checker's node at
+// random lets successive runs cover different paths.
 //
 // This check creates a namespace, a DaemonSet, and a pod, so the ServiceAccount
 // must hold create/delete on all three. Any rejection of those creates, and a
@@ -1649,10 +1655,12 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		return
 	}
 
-	// The probe tolerates every taint, so it lands on every node, and a pod is
-	// expected only where it can start: a Ready node that is not cordoned. A
-	// NotReady node cannot run it, and a taint the probe did not tolerate used
-	// to leave a GPU-tainted or partly NotReady cluster permanently UNKNOWN.
+	// The probe tolerates every taint, so it reaches control-plane and GPU
+	// nodes, and is pinned to the nodes it is expected on: Ready, not
+	// cordoned, and not fenced off. Tolerating every taint would otherwise
+	// also place it on NotReady and draining nodes, where it cannot run and
+	// its pod cannot be deleted, so the probe namespace would stay
+	// Terminating until the node returns.
 	probeNodes, skippedNodes := nodeToNodeTargets(nodes.Items)
 	if len(skippedNodes) > 0 {
 		printInfo(log, fmt.Sprintf("  Not probed: %s", strings.Join(skippedNodes, ", ")))
@@ -1680,6 +1688,8 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	suffix := rand.String(6)
 	dsName := nodeToNodeDSName + "-" + suffix
 	checkerName := nodeToNodeCheckerName + "-" + suffix
+	// checkerPods holds every checker pod this run created, for the cleanup.
+	var checkerPods []string
 	dsLabels := map[string]string{
 		"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
 		"app.kubernetes.io/component":  "n2n-server",
@@ -1710,7 +1720,9 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 			return f(delCtx)
 		}
 		_ = del(func(c context.Context) error { return client.AppsV1().DaemonSets(ns).Delete(c, dsName, opts) })
-		_ = del(func(c context.Context) error { return client.CoreV1().Pods(ns).Delete(c, checkerName, opts) })
+		for _, name := range checkerPods {
+			_ = del(func(c context.Context) error { return client.CoreV1().Pods(ns).Delete(c, name, opts) })
+		}
 		if err := del(func(c context.Context) error {
 			return client.CoreV1().Namespaces().Delete(c, ns, metav1.DeleteOptions{})
 		}); err != nil && !apierrors.IsNotFound(err) {
@@ -1719,7 +1731,7 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	}()
 
 	if _, err := client.AppsV1().DaemonSets(ns).Create(
-		ctx, buildNodeToNodeDaemonSet(dsName, ns, dsLabels, image), metav1.CreateOptions{},
+		ctx, buildNodeToNodeDaemonSet(dsName, ns, dsLabels, image, probeNodes), metav1.CreateOptions{},
 	); err != nil {
 		// Any create error means the probe was never admitted, which says
 		// nothing about the overlay. Classifying by status code split one
@@ -1743,15 +1755,17 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		return
 	}
 
-	outcome := classifyProbeNodes(pods, probeNodes, probePullingPods(ctx, client, ns))
+	sandboxes, eventsRead := probeSandboxEvents(ctx, client, ns)
+	outcome := classifyProbeNodes(pods, probeNodes, sandboxes, eventsRead, time.Now())
 	if len(outcome.networkFaults) > 0 {
 		// A pod the node scheduled but could not give an address to is the
 		// fault this check exists for, whatever the other nodes did.
 		printError(log, fmt.Sprintf("Probe pods got no pod IP on %d node(s): %s",
 			len(outcome.networkFaults), strings.Join(outcome.networkFaults, ", ")))
 		state.Recommendations = append(state.Recommendations,
-			"Check the CNI on the listed nodes: the pod was scheduled but never got a pod IP. "+
-				"Look for FailedCreatePodSandBox events and the CNI daemon's logs there.")
+			"Check the CNI on the listed nodes: the pod was scheduled but its sandbox, and so its pod IP, "+
+				"was never created. Look for FailedCreatePodSandBox events and the CNI daemon's and "+
+				"container runtime's logs there.")
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
@@ -1775,40 +1789,17 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		}
 	}
 
-	// Select checkerNode from a Running server pod so it is guaranteed to be
-	// a node where the DaemonSet actually scheduled.
-	serverPods := outcome.running
-	checkerNode := serverPods[0].Spec.NodeName
-	var targetIPs []string
-	for i := range serverPods {
-		if serverPods[i].Spec.NodeName != checkerNode && serverPods[i].Status.PodIP != "" {
-			targetIPs = append(targetIPs, serverPods[i].Status.PodIP)
-			log.Infof("  Server pod on %s: %s", serverPods[i].Spec.NodeName, serverPods[i].Status.PodIP)
-		}
-	}
-
-	if _, err := client.CoreV1().Pods(ns).Create(
-		ctx, buildNodeToNodeCheckerPod(checkerName, ns, checkerNode, targetIPs, image), metav1.CreateOptions{},
-	); err != nil {
-		// Same reasoning as the DaemonSet create above.
-		notObserved(fmt.Sprintf("checker pod was not admitted in %s: %v", ns, err), "")
+	run, unobserved := runNodeToNodeChecker(ctx, client, ns, checkerName, image, outcome.running, &checkerPods)
+	if unobserved != "" {
+		notObserved(unobserved, "")
 		return
 	}
-
-	// An error here means no result was read: the checker never finished, or
-	// its status could not be fetched. A connection failure is reported as a
-	// Failed phase, not an error. The terminal pod comes back with the
-	// result, so the exit code is read from it rather than fetched again: a
-	// 429 on a second Get lost a real connection failure to UNKNOWN.
-	succeeded, checker, err := waitForPodDone(ctx, client, ns, checkerName, nodeToNodeCheckerTimeout)
-	if err != nil {
-		notObserved(fmt.Sprintf("checker pod did not report a result: %v", err), "")
-		return
-	}
+	checkerNode, succeeded, checker := run.node, run.succeeded, run.pod
+	log.Infof("  Checker on %s, server pods on %d other node(s)", checkerNode, run.targets)
 
 	if succeeded {
 		printSuccess(log, fmt.Sprintf("Node-to-node overlay verified: %s -> %d node(s) reachable on port %d",
-			checkerNode, len(targetIPs), nodeToNodeTestPort))
+			checkerNode, run.targets, nodeToNodeTestPort))
 		ok := true
 		state.NodeToNodeOK = &ok
 		return
@@ -1832,6 +1823,66 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	state.NodeToNodeOK = &ok
 }
 
+// checkerRun is what the node-to-node checker pod reported.
+type checkerRun struct {
+	node      string
+	targets   int
+	succeeded bool
+	pod       *corev1.Pod
+}
+
+// runNodeToNodeChecker runs the checker pod on one node to dial the server pod
+// on each of the others, and returns its result, or why no result was read.
+// The node is picked at random so successive runs test different paths. A
+// node whose kubelet refuses the checker (a node at its pod limit) is passed
+// over for the next: a refusal says nothing about the overlay, and always
+// picking the same node made it UNKNOWN on every run. created collects every
+// checker pod made, for the cleanup.
+func runNodeToNodeChecker(
+	ctx context.Context, client kubernetes.Interface, ns, namePrefix, image string, servers []corev1.Pod,
+	created *[]string,
+) (checkerRun, string) {
+	var refusals []string
+	for _, i := range rand.Perm(len(servers)) {
+		if len(refusals) == nodeToNodeCheckerAttempts {
+			break
+		}
+		run := checkerRun{node: servers[i].Spec.NodeName}
+		var targetIPs []string
+		for j := range servers {
+			if servers[j].Spec.NodeName != run.node && servers[j].Status.PodIP != "" {
+				targetIPs = append(targetIPs, servers[j].Status.PodIP)
+			}
+		}
+		run.targets = len(targetIPs)
+		name := fmt.Sprintf("%s-%d", namePrefix, len(refusals))
+		*created = append(*created, name)
+		if _, err := client.CoreV1().Pods(ns).Create(
+			ctx, buildNodeToNodeCheckerPod(name, ns, run.node, targetIPs, image), metav1.CreateOptions{},
+		); err != nil {
+			// As for the DaemonSet: any rejection means the probe was never
+			// admitted, which says nothing about the overlay.
+			return run, fmt.Sprintf("checker pod was not admitted in %s: %v", ns, err)
+		}
+		// An error here means no result was read: the checker never finished,
+		// or its status could not be fetched. A connection failure is reported
+		// as a Failed phase, not an error. The terminal pod comes back with
+		// the result, so the exit code is read from it rather than fetched
+		// again: a 429 on a second Get lost a real connection failure to
+		// UNKNOWN.
+		var err error
+		run.succeeded, run.pod, err = waitForPodDone(ctx, client, ns, name, nodeToNodeCheckerTimeout)
+		if err != nil {
+			return run, fmt.Sprintf("checker pod did not report a result: %v", err)
+		}
+		if run.succeeded || !checkerRefused(run.pod) {
+			return run, ""
+		}
+		refusals = append(refusals, fmt.Sprintf("%s (%s)", run.node, run.pod.Status.Reason))
+	}
+	return checkerRun{}, "the kubelet refused the checker pod on " + strings.Join(refusals, ", ")
+}
+
 // nodeToNodeDeleteTimeout bounds each probe cleanup delete.
 const nodeToNodeDeleteTimeout = 20 * time.Second
 
@@ -1839,21 +1890,65 @@ const nodeToNodeDeleteTimeout = 20 * time.Second
 // that leave a node's pod down on purpose need not wait it out.
 var nodeToNodeDSTimeout = 2 * time.Minute
 
+// nodeToNodeCheckerAttempts bounds how many nodes the checker pod is tried on
+// when the kubelet refuses it.
+const nodeToNodeCheckerAttempts = 3
+
+// nodeFencingTaints mark a node that is NotReady, being drained or removed,
+// or without a working pod network. A probe pod there tests nothing, and on a
+// node that is gone it cannot be deleted. The probe tolerates every taint so
+// that it reaches control-plane and GPU nodes, which leaves this list to keep
+// it off these.
+var nodeFencingTaints = map[string]bool{
+	corev1.TaintNodeNotReady:                         true,
+	corev1.TaintNodeUnreachable:                      true,
+	corev1.TaintNodeUnschedulable:                    true,
+	corev1.TaintNodeNetworkUnavailable:               true,
+	corev1.TaintNodeOutOfService:                     true,
+	"node.cloudprovider.kubernetes.io/uninitialized": true,
+	"node.cilium.io/agent-not-ready":                 true,
+	"karpenter.sh/disrupted":                         true,
+	"karpenter.sh/disruption":                        true,
+	"ToBeDeletedByClusterAutoscaler":                 true,
+	"virtual-kubelet.io/provider":                    true,
+}
+
 // nodeToNodeTargets returns the nodes a probe pod is expected to start on, a
-// Ready node that is not cordoned, and a note for each node left out.
+// Ready node that is not cordoned and not fenced off, and a note for each node
+// left out.
 func nodeToNodeTargets(nodes []corev1.Node) (targets, skipped []string) {
 	for i := range nodes {
 		n := &nodes[i]
-		switch {
+		switch why := nodeFenced(n); {
 		case n.Spec.Unschedulable:
 			skipped = append(skipped, n.Name+" (cordoned)")
 		case !isNodeReady(n):
 			skipped = append(skipped, n.Name+" (NotReady)")
+		case why != "":
+			skipped = append(skipped, n.Name+" ("+why+")")
 		default:
 			targets = append(targets, n.Name)
 		}
 	}
 	return targets, skipped
+}
+
+// nodeFenced returns why a Ready node is still not one to probe, or "".
+func nodeFenced(n *corev1.Node) string {
+	if n.DeletionTimestamp != nil {
+		return "being deleted"
+	}
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeNetworkUnavailable && c.Status == corev1.ConditionTrue {
+			return "network unavailable"
+		}
+	}
+	for _, t := range n.Spec.Taints {
+		if nodeFencingTaints[t.Key] {
+			return "tainted " + t.Key
+		}
+	}
+	return ""
 }
 
 func isNodeReady(n *corev1.Node) bool {
@@ -1865,27 +1960,34 @@ func isNodeReady(n *corev1.Node) bool {
 	return false
 }
 
+// probeSnapshotMaxAge is how old the last pod list may be when the wait ends
+// and still be classified. An older one shows the pods as they were, not as
+// they are: listed right after the DaemonSet was created, every pod would
+// read as a node that never networked it.
+var probeSnapshotMaxAge = 15 * time.Second
+
 // waitForProbePods waits until every expected node has a Running probe pod
 // with an IP, and returns the pods from the last successful list either way:
 // the caller decides what a straggler means. A list that fails after earlier
 // ones succeeded does not discard what they showed, since the final attempt
-// usually starts just past the deadline. Only never listing at all, or a
-// permission error, leaves nothing to classify.
+// usually starts just past the deadline, but only a list from close to the
+// deadline is returned. Never listing at all, a stale last list, or a
+// permission error leaves nothing to classify.
 func waitForProbePods(
 	ctx context.Context, client kubernetes.Interface, ns, selector string, expected []string, timeout time.Duration,
 ) ([]corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	var lastPods []corev1.Pod
-	listed := false
+	var listedAt time.Time
 	for {
 		listCtx, cancel := attemptContext(ctx, deadline)
 		pods, err := client.CoreV1().Pods(ns).List(listCtx, metav1.ListOptions{LabelSelector: selector})
 		cancel()
 		switch {
 		case err == nil:
-			listed, lastPods = true, pods.Items
-			if len(classifyProbeNodes(lastPods, expected, nil).running) == len(expected) {
+			listedAt, lastPods = time.Now(), pods.Items
+			if len(classifyProbeNodes(lastPods, expected, nil, false, listedAt).running) == len(expected) {
 				return lastPods, nil
 			}
 		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
@@ -1896,8 +1998,13 @@ func waitForProbePods(
 			lastErr = err
 		}
 		if time.Now().After(deadline) {
-			if !listed {
+			if listedAt.IsZero() {
 				return nil, &probeNotObservedError{reason: fmt.Sprintf("listing probe pods: %v", lastErr)}
+			}
+			if age := time.Since(listedAt); age > probeSnapshotMaxAge {
+				return nil, &probeNotObservedError{reason: fmt.Sprintf(
+					"the last successful probe pod list is %s old; listing has failed since: %v",
+					age.Round(time.Second), lastErr)}
 			}
 			return lastPods, nil
 		}
@@ -1955,11 +2062,23 @@ type probeOutcome struct {
 	pullFailed bool
 }
 
+// probeSandboxGrace is how long a scheduled probe pod may go with no sandbox
+// event before that absence counts against the node's pod network.
+const probeSandboxGrace = time.Minute
+
 // classifyProbeNodes decides, per expected node, what its probe pod says.
-// pulling names pods with an image pull in progress: the kubelet publishes no
-// pod IP until the sync blocked on that pull returns, so without it a slow
-// first pull looks exactly like a node that could not network the pod.
-func classifyProbeNodes(pods []corev1.Pod, expected []string, pulling map[string]bool) probeOutcome {
+// sandboxes holds what each pod's events say about its sandbox, and
+// eventsRead whether they could be read. The kubelet creates the sandbox, and
+// with it the pod's network, before it pulls or starts anything, but
+// publishes the pod IP only once that sync returns. So a pod with no IP whose
+// events show a pull or a container start has a working pod network; one
+// whose sandbox creation failed does not, and neither does one that has gone
+// a minute after scheduling with no sandbox event at all (a hung CNI plugin
+// reports nothing until the runtime times it out). With the events unread,
+// a pod with no IP is undecided rather than a fault.
+func classifyProbeNodes(
+	pods []corev1.Pod, expected []string, sandboxes map[string]sandboxEvidence, eventsRead bool, now time.Time,
+) probeOutcome {
 	byNode := map[string][]*corev1.Pod{}
 	for i := range pods {
 		p := &pods[i]
@@ -1993,12 +2112,19 @@ func classifyProbeNodes(pods []corev1.Pod, expected []string, pulling map[string
 		reason := probePodBlocker(pick)
 		switch {
 		case reason != "":
-		case pulling[pick.Name]:
-			reason = "image still pulling"
 		case pick.Spec.NodeName == "":
 			reason = "not scheduled"
 		case pick.Status.PodIP != "":
 			reason = "networked but not yet Running"
+		case sandboxes[pick.Name] == sandboxCreated:
+			reason = "sandbox created, pod IP not yet reported (image pull or start in progress)"
+		case sandboxes[pick.Name] == sandboxFailed:
+			out.networkFaults = append(out.networkFaults, node)
+			continue
+		case !eventsRead:
+			reason = "pod events could not be read, so whether its sandbox exists is undecided"
+		case now.Sub(scheduledAt(pick)) < probeSandboxGrace:
+			reason = "scheduled too recently to judge"
 		default:
 			out.networkFaults = append(out.networkFaults, node)
 			continue
@@ -2032,34 +2158,90 @@ func probePodNode(p *corev1.Pod) string {
 	return ""
 }
 
-// probePullingPods returns the probe pods with an image pull in progress, from
-// their events: a Pulling event and no Pulled or sandbox failure after it. It
-// returns nil when the events cannot be read, which leaves a pod with no IP
-// classified as a network fault, as before.
-func probePullingPods(ctx context.Context, client kubernetes.Interface, ns string) map[string]bool {
-	listCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
-	defer cancel()
-	events, err := client.CoreV1().Events(ns).List(listCtx, metav1.ListOptions{})
+// sandboxEvidence is what a probe pod's events say about its sandbox.
+type sandboxEvidence int
+
+const (
+	// The zero value: no sandbox event yet.
+	_ sandboxEvidence = iota
+	// sandboxCreated: an image pull or container start followed the sandbox,
+	// so the pod network was set up.
+	sandboxCreated
+	// sandboxFailed: creating the sandbox failed, which only the pod network
+	// or the container runtime explains.
+	sandboxFailed
+)
+
+// sandboxEventReasons are the kubelet events that settle a pod's sandbox.
+var sandboxEventReasons = map[string]sandboxEvidence{
+	"Pulling":                sandboxCreated,
+	"Pulled":                 sandboxCreated,
+	"Created":                sandboxCreated,
+	"Started":                sandboxCreated,
+	"FailedCreatePodSandBox": sandboxFailed,
+}
+
+// probeSandboxEvents reads each probe pod's sandbox evidence from its events,
+// the latest one deciding: a sandbox that failed and was then created on
+// retry counts as created. It reports false when the events could not be
+// read, which leaves a pod with no IP undecided.
+func probeSandboxEvents(
+	ctx context.Context, client kubernetes.Interface, ns string,
+) (map[string]sandboxEvidence, bool) {
+	var events *corev1.EventList
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		listCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
+		events, err = client.CoreV1().Events(ns).List(listCtx, metav1.ListOptions{})
+		cancel()
+		if err == nil || apierrors.IsForbidden(err) || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	sort.SliceStable(events.Items, func(i, j int) bool {
 		return eventTime(&events.Items[i]).Before(eventTime(&events.Items[j]))
 	})
-	pulling := map[string]bool{}
+	sandboxes := map[string]sandboxEvidence{}
 	for i := range events.Items {
 		e := &events.Items[i]
 		if e.InvolvedObject.Kind != "Pod" {
 			continue
 		}
-		switch e.Reason {
-		case "Pulling":
-			pulling[e.InvolvedObject.Name] = true
-		case "Pulled", "FailedCreatePodSandBox":
-			delete(pulling, e.InvolvedObject.Name)
+		if evidence, ok := sandboxEventReasons[e.Reason]; ok {
+			sandboxes[e.InvolvedObject.Name] = evidence
 		}
 	}
-	return pulling
+	return sandboxes, true
+}
+
+// scheduledAt is when p was bound to its node, or when it was created when
+// that is not recorded.
+func scheduledAt(p *corev1.Pod) time.Time {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
+			return c.LastTransitionTime.Time
+		}
+	}
+	return p.CreationTimestamp.Time
+}
+
+// checkerRefused reports whether the kubelet refused the checker pod at
+// admission (OutOfpods, OutOfcpu): it ends Failed with a reason and no
+// container ever ran.
+func checkerRefused(pod *corev1.Pod) bool {
+	if pod == nil || pod.Status.Phase != corev1.PodFailed || pod.Status.Reason == "" {
+		return false
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Terminated != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // eventTime is when an event last happened, whichever field the source set.
@@ -2125,9 +2307,9 @@ func probePodBlocker(p *corev1.Pod) string {
 	return ""
 }
 
-// nodeToNodeTolerations tolerates every taint, so the probe lands on every
-// node, including a dedicated control plane and GPU nodes. Which of those
-// nodes a pod is expected on is decided from node readiness instead.
+// nodeToNodeTolerations tolerates every taint, so the probe reaches every node
+// it is pinned to, including a dedicated control plane and GPU nodes. Which
+// nodes those are is decided by nodeToNodeTargets.
 func nodeToNodeTolerations() []corev1.Toleration {
 	return []corev1.Toleration{{Operator: corev1.TolerationOpExists}}
 }
@@ -2145,7 +2327,12 @@ func nodeToNodeSecurityContext() *corev1.SecurityContext {
 	}
 }
 
-func buildNodeToNodeDaemonSet(name, namespace string, labels map[string]string, image string) *appsv1.DaemonSet {
+// buildNodeToNodeDaemonSet builds the probe server DaemonSet, pinned to nodes:
+// it tolerates every taint, so without the pin it would also land on the
+// nodes nodeToNodeTargets leaves out.
+func buildNodeToNodeDaemonSet(
+	name, namespace string, labels map[string]string, image string, nodes []string,
+) *appsv1.DaemonSet {
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
 		Spec: appsv1.DaemonSetSpec{
@@ -2157,6 +2344,15 @@ func buildNodeToNodeDaemonSet(name, namespace string, labels map[string]string, 
 					// Cleanup is handled by deleting the DaemonSet in the deferred sweep.
 					RestartPolicy: corev1.RestartPolicyAlways,
 					Tolerations:   nodeToNodeTolerations(),
+					Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+							NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+								MatchFields: []corev1.NodeSelectorRequirement{{
+									Key: metav1.ObjectNameField, Operator: corev1.NodeSelectorOpIn, Values: nodes,
+								}},
+							}},
+						},
+					}},
 					Containers: []corev1.Container{{
 						Name:  "server",
 						Image: image,
@@ -2418,8 +2614,10 @@ type gatewayOwnership struct {
 	source   string
 	// err means ownership is unknown and must not be read as an empty set.
 	err error
-	// invalid holds configured entries that were ignored.
-	invalid []string
+	// invalid holds configured entries that were ignored, and unlisted the
+	// Gateways the NVCF routes attach to that a configured list leaves out.
+	invalid  []string
+	unlisted []string
 
 	surface         gatewayAPISurface
 	routes          dynamic.Interface
@@ -2440,6 +2638,17 @@ func resolveGatewayOwnershipIn(
 	own.invalid = invalid
 	if len(configured) > 0 {
 		own.gateways, own.source = configured, nvcfGatewayNamesEnv
+		// A configured list replaces discovery, so a Gateway it leaves out is
+		// not assessed. Discover anyway, best effort, to say so.
+		if surfaceErr == nil {
+			if discovered, err := discoverNVCFGatewaysIn(ctx, surface, routes); err == nil {
+				for _, e := range discovered.sorted() {
+					if !configured[e] {
+						own.unlisted = append(own.unlisted, e)
+					}
+				}
+			}
+		}
 		return own
 	}
 	if surfaceErr != nil {
@@ -2455,16 +2664,23 @@ func resolveGatewayOwnershipIn(
 	return own
 }
 
-// reportInvalid warns once per check about ignored gateway-name entries.
+// reportInvalid warns once per run about ignored gateway-name entries, and
+// about NVCF Gateways a configured list leaves out.
 func (o *gatewayOwnership) reportInvalid(log *logrus.Entry, state *ValidationState) {
-	if len(o.invalid) == 0 {
-		return
+	if len(o.invalid) > 0 {
+		msg := fmt.Sprintf("ignoring %s entries without a namespace: %s; name each Gateway as namespace/name",
+			nvcfGatewayNamesEnv, strings.Join(o.invalid, ", "))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
+		o.invalid = nil
 	}
-	msg := fmt.Sprintf("ignoring %s entries without a namespace: %s; name each Gateway as namespace/name",
-		nvcfGatewayNamesEnv, strings.Join(o.invalid, ", "))
-	printWarning(log, msg)
-	state.Warnings = append(state.Warnings, "Gateway names: "+msg)
-	o.invalid = nil
+	if len(o.unlisted) > 0 {
+		msg := fmt.Sprintf("NVCF routes also attach to %s, which %s leaves out, so the checks do not assess "+
+			"them; list every NVCF Gateway", strings.Join(o.unlisted, ", "), nvcfGatewayNamesEnv)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
+		o.unlisted = nil
+	}
 }
 
 // gatewayClasses lists the NVCF Gateways' classes on first use. Only a
@@ -2637,6 +2853,11 @@ var rolloutProgressingReasons = map[string]bool{
 // controller has to say it is still rolling: either it has not observed the
 // new generation yet, or its Progressing reason is a rollout step. A
 // ReplicaFailure is never a rollout. A paused Deployment is held, not rolling.
+//
+// A Deployment with no progress deadline (progressDeadlineSeconds at its
+// MaxInt32 sentinel) has no Progressing condition at all, since the
+// controller keeps it only to report the deadline. There, pods of an older
+// ReplicaSet still running beside too few updated ones are the rollout.
 func deploymentRollingOut(d *appsv1.Deployment, want int32) bool {
 	if d.Spec.Paused {
 		return false
@@ -2653,7 +2874,19 @@ func deploymentRollingOut(d *appsv1.Deployment, want int32) bool {
 			progressing = c.Status == corev1.ConditionTrue && rolloutProgressingReasons[c.Reason]
 		}
 	}
-	return d.Status.ObservedGeneration < d.Generation || (d.Status.UpdatedReplicas < want && progressing)
+	if d.Status.ObservedGeneration < d.Generation {
+		return true
+	}
+	if !hasProgressDeadline(d) {
+		return d.Status.UpdatedReplicas < want && d.Status.Replicas > d.Status.UpdatedReplicas
+	}
+	return d.Status.UpdatedReplicas < want && progressing
+}
+
+// hasProgressDeadline reports whether the Deployment controller tracks a
+// progress deadline for d. MaxInt32 is the API's "no deadline" sentinel.
+func hasProgressDeadline(d *appsv1.Deployment) bool {
+	return d.Spec.ProgressDeadlineSeconds == nil || *d.Spec.ProgressDeadlineSeconds != math.MaxInt32
 }
 
 // deploymentRolloutStalled reports whether the Deployment controller has given
@@ -2714,10 +2947,12 @@ type tier1Scan struct {
 	// Envoy Gateway runs a proxy Deployment per Gateway, or one per class in
 	// merged-gateways mode, beside its controller, including for other
 	// teams' Gateways, so only NVCF's proxies are assessed. GatewayNamespace
-	// mode puts each proxy beside its Gateway, so those namespaces are
-	// searched too (proxyOnly), for proxies only.
+	// mode puts each proxy beside its Gateway, so the Gateway namespaces hold
+	// proxies too (gatewayNS); those not otherwise scanned are searched for
+	// proxies only (proxyOnly).
 	envoyNS    string
 	namespaces []string
+	gatewayNS  map[string]bool
 	proxyOnly  map[string]bool
 	shared     map[string]bool
 	// noGatewaysPostInstall: installed with no NVCF Gateway named anywhere,
@@ -2741,9 +2976,6 @@ type tier1Scan struct {
 	skippedProxies   int
 	unattributed     int
 	unattributedDown []string
-	// proxySeen records the NVCF Gateways that have a proxy, so an installed
-	// control plane with a Gateway that has none fails.
-	proxySeen map[string]bool
 }
 
 func newTier1Scan(own *gatewayOwnership, state *ValidationState) *tier1Scan {
@@ -2751,12 +2983,13 @@ func newTier1Scan(own *gatewayOwnership, state *ValidationState) *tier1Scan {
 		log: state.Log, state: state, own: own,
 		envoyNS:               envoyGatewayNamespaceName(),
 		namespaces:            controlPlaneNamespaceSet(),
+		gatewayNS:             map[string]bool{},
 		proxyOnly:             map[string]bool{},
 		shared:                sharedTier1Namespaces(),
 		noGatewaysPostInstall: own.err == nil && len(own.gateways) == 0 && state.PostInstall,
-		proxySeen:             map[string]bool{},
 	}
 	for _, ns := range own.gateways.namespaces(scan.envoyNS) {
+		scan.gatewayNS[ns] = true
 		if !slices.Contains(scan.namespaces, ns) {
 			scan.namespaces = append(scan.namespaces, ns)
 			scan.proxyOnly[ns] = true
@@ -2797,7 +3030,7 @@ func (s *tier1Scan) assess(ctx context.Context, ns string, d *appsv1.Deployment)
 	if d.Spec.Replicas != nil {
 		want = *d.Spec.Replicas
 	}
-	proxy := isEnvoyProxy(d.Labels) && (ns == s.envoyNS || s.proxyOnly[ns])
+	proxy := isEnvoyProxy(d.Labels) && (ns == s.envoyNS || s.gatewayNS[ns])
 	if s.proxyOnly[ns] && !proxy {
 		return
 	}
@@ -2844,9 +3077,6 @@ func (s *tier1Scan) assess(ctx context.Context, ns string, d *appsv1.Deployment)
 // any other Deployment, and reports whether it did.
 func (s *tier1Scan) settleProxy(ctx context.Context, ns string, d *appsv1.Deployment, want int32) bool {
 	entries, known := s.own.proxyOwner(ctx, d.Labels)
-	for _, e := range entries {
-		s.proxySeen[e] = true
-	}
 	if !known || s.noGatewaysPostInstall {
 		s.unattributed++
 		if want == 0 || d.Status.ReadyReplicas < want {
@@ -2895,27 +3125,175 @@ func (s *tier1Scan) reportProxyAttribution() bool {
 }
 
 // checkGatewayCoverage fails an installed control plane with an NVCF Gateway
-// that has no proxy: route discovery skipping a proxy-less Gateway is exactly
-// the outage the post-install signal is for. It is undecidable while a
-// proxy's owner is unknown, since that proxy may be the one, and it reports
-// whether the check itself could not be completed.
+// that does not exist, or that Envoy Gateway runs and that has no Ready
+// proxy: route discovery skipping a proxy-less Gateway is exactly the outage
+// the post-install signal is for. A Gateway another implementation runs is
+// not judged, since its data plane is not an Envoy proxy. It reports whether
+// coverage could not be decided, which leaves the row unknown: anything the
+// check could not look at is undecided, never a pass.
 func (s *tier1Scan) checkGatewayCoverage(ctx context.Context, client kubernetes.Interface) bool {
-	if !s.state.PostInstall || s.own.err != nil || s.unattributed > 0 {
+	if !s.state.PostInstall {
 		return false
 	}
-	proxyNamespaces := append([]string{s.envoyNS}, s.own.gateways.namespaces(s.envoyNS)...)
-	missing, err := missingGatewayProxies(ctx, client, s.own, s.proxySeen, proxyNamespaces)
-	if err != nil {
-		s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", err))
+	if s.own.err != nil {
+		// The NVCF Gateways are unknown, so a missing proxy would go unseen.
+		s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", s.own.err))
 		return true
 	}
-	for _, e := range missing {
-		s.gatewayGaps = append(s.gatewayGaps, "NVCF Gateway "+e+" has no Envoy proxy")
+	if len(s.own.gateways) == 0 {
+		// No NVCF Gateway is named: reportProxyAttribution says so.
+		return false
 	}
-	if len(missing) > 0 {
+	classOf, envoyClasses, err := nvcfGatewayImplementations(ctx, s.own.surface, s.own.routes, s.own.gateways)
+	if err != nil {
+		s.warn(fmt.Sprintf("could not tell which NVCF Gateways Envoy Gateway runs, so their proxies were not "+
+			"confirmed: %v", err))
+		return true
+	}
+	var envoyEntries []string
+	envoyByClass := map[string][]string{}
+	for _, e := range s.own.gateways.sorted() {
+		class, exists := classOf[e]
+		switch {
+		case !exists:
+			s.gatewayGaps = append(s.gatewayGaps, "NVCF Gateway "+e+" does not exist")
+		case envoyClasses[class]:
+			envoyEntries = append(envoyEntries, e)
+			envoyByClass[class] = append(envoyByClass[class], e)
+		}
+	}
+	undecided := false
+	if len(envoyEntries) > 0 {
+		gaps, err := s.envoyProxyGaps(ctx, client, envoyEntries, envoyByClass)
+		if err != nil {
+			s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", err))
+			undecided = true
+		}
+		s.gatewayGaps = append(s.gatewayGaps, gaps...)
+	}
+	if len(s.gatewayGaps) > 0 {
 		s.checkedCount++
 	}
-	return false
+	return undecided
+}
+
+// envoyProxyGaps returns a finding for each of entries, the NVCF Gateways
+// Envoy Gateway runs, that has no proxy with a Ready pod. byClass maps each of
+// their classes to its entries, for merged-gateways proxies.
+func (s *tier1Scan) envoyProxyGaps(
+	ctx context.Context, client kubernetes.Interface, entries []string, byClass map[string][]string,
+) ([]string, error) {
+	proxies, err := listEnvoyProxies(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	ready, found := map[string]bool{}, map[string][]string{}
+	for _, p := range proxies {
+		for _, e := range s.own.gateways.entriesForProxy(p.labels, byClass) {
+			found[e] = append(found[e], p.ref)
+			if p.ready {
+				ready[e] = true
+			}
+		}
+	}
+	var gaps []string
+	for _, e := range entries {
+		switch {
+		case ready[e]:
+		case len(found[e]) > 0:
+			gaps = append(gaps, fmt.Sprintf("NVCF Gateway %s has no Ready Envoy proxy (%s)",
+				e, strings.Join(found[e], ", ")))
+		default:
+			gaps = append(gaps, "NVCF Gateway "+e+" has no Envoy proxy")
+		}
+	}
+	return gaps, nil
+}
+
+// envoyProxy is an Envoy Gateway data-plane workload, and whether any of its
+// pods is Ready.
+type envoyProxy struct {
+	ref    string
+	labels map[string]string
+	ready  bool
+}
+
+// listEnvoyProxies returns every Envoy proxy Deployment and DaemonSet in the
+// cluster. Searching every namespace finds them wherever Envoy Gateway runs,
+// including a controller namespace the validator was not told about, and
+// GatewayNamespace mode's proxies beside their Gateways.
+func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoyProxy, error) {
+	seen := map[string]bool{}
+	var out []envoyProxy
+	add := func(kind, ns, name string, labels map[string]string, ready bool) {
+		ref := kind + " " + ns + "/" + name
+		if !seen[ref] && isEnvoyProxy(labels) {
+			seen[ref] = true
+			out = append(out, envoyProxy{ref: ref, labels: labels, ready: ready})
+		}
+	}
+	for _, label := range []string{owningGatewayNameLabel, owningGatewayClassLabel} {
+		opts := metav1.ListOptions{LabelSelector: label}
+		deployments, err := client.AppsV1().Deployments(metav1.NamespaceAll).List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("listing Envoy proxy Deployments: %w", err)
+		}
+		for i := range deployments.Items {
+			d := &deployments.Items[i]
+			add("Deployment", d.Namespace, d.Name, d.Labels, d.Status.ReadyReplicas > 0)
+		}
+		daemonSets, err := client.AppsV1().DaemonSets(metav1.NamespaceAll).List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("listing Envoy proxy DaemonSets: %w", err)
+		}
+		for i := range daemonSets.Items {
+			ds := &daemonSets.Items[i]
+			add("DaemonSet", ds.Namespace, ds.Name, ds.Labels, ds.Status.NumberReady > 0)
+		}
+	}
+	return out, nil
+}
+
+// nvcfGatewayImplementations returns the class of each NVCF Gateway that
+// exists, and the classes Envoy Gateway runs.
+func nvcfGatewayImplementations(
+	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface, g gatewaySet,
+) (classOf map[string]string, envoyClasses map[string]bool, err error) {
+	gatewayVersion, classVersion := surface.servedVersion("gateways"), surface.servedVersion("gatewayclasses")
+	if gatewayVersion == "" || classVersion == "" {
+		return nil, nil, errors.New("the cluster does not serve the Gateway API gateways and gatewayclasses")
+	}
+	if routes == nil {
+		return nil, nil, errors.New("no client available to list gateways")
+	}
+	gateways, err := routes.Resource(schema.GroupVersionResource{
+		Group: gatewayAPIGroup, Version: gatewayVersion, Resource: "gateways",
+	}).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing gateways: %w", err)
+	}
+	classOf = map[string]string{}
+	for i := range gateways.Items {
+		gw := &gateways.Items[i]
+		if entry := gw.GetNamespace() + "/" + gw.GetName(); g[entry] {
+			classOf[entry], _, _ = unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
+		}
+	}
+	classes, err := routes.Resource(schema.GroupVersionResource{
+		Group: gatewayAPIGroup, Version: classVersion, Resource: "gatewayclasses",
+	}).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing gatewayclasses: %w", err)
+	}
+	envoyClasses = map[string]bool{}
+	for i := range classes.Items {
+		c := &classes.Items[i]
+		if controller, _, _ := unstructured.NestedString(c.Object, "spec", "controllerName"); controller ==
+			envoyGatewayControllerName {
+			envoyClasses[c.GetName()] = true
+		}
+	}
+	return classOf, envoyClasses, nil
 }
 
 func (s *tier1Scan) setOK(ok bool) {
@@ -3015,51 +3393,24 @@ func (s *tier1Scan) verdictNothingAssessed(proxiesUnobserved bool) {
 	}
 }
 
-// missingGatewayProxies returns the NVCF Gateways with no Envoy proxy among
-// the Deployments already seen or the DaemonSets in namespaces, since an
-// EnvoyProxy can run the data plane as a DaemonSet.
-func missingGatewayProxies(
-	ctx context.Context, client kubernetes.Interface, own *gatewayOwnership, seen map[string]bool, namespaces []string,
-) ([]string, error) {
-	pending := func() []string {
-		var out []string
-		for _, e := range own.gateways.sorted() {
-			if !seen[e] {
-				out = append(out, e)
-			}
-		}
-		return out
-	}
-	if len(pending()) == 0 {
-		return nil, nil
-	}
-	for _, ns := range namespaces {
-		list, err := client.AppsV1().DaemonSets(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("listing DaemonSets in %s: %w", ns, err)
-		}
-		for i := range list.Items {
-			if l := list.Items[i].Labels; isEnvoyProxy(l) {
-				entries, _ := own.proxyOwner(ctx, l)
-				for _, e := range entries {
-					seen[e] = true
-				}
-			}
-		}
-	}
-	return pending(), nil
-}
-
 // checkTier2StatefulSets verifies quorum membership and node placement for
 // Tier-2 stateful components (NATS JetStream, OpenBao Raft, Cassandra).
 // Any StatefulSet with an odd spec.replicas of 3 or more is treated as a quorum
 // component and checked for:
 //  1. readyReplicas == spec.replicas
-//  2. all pods on distinct nodes
+//  2. all pods on distinct nodes, when the StatefulSet spreads its pods
 //
-// A StatefulSet mid-RollingUpdate with one pod down passes with a warning:
-// it rolls one pod at a time, so that is the steady state for the duration of
-// any upgrade. More than one pod down fails.
+// Whether a component is meant to be highly available is read from what was
+// rendered rather than passed in: the stack gives its quorum StatefulSets pod
+// anti-affinity under highAvailability.mode preferred or enforced, and none
+// under mode none. A spread component below three replicas has lost its
+// quorum. One that is not spread is checked for readiness only, since one
+// replica and co-located pods are what mode none deploys.
+//
+// A StatefulSet mid-RollingUpdate with one pod down passes with a warning
+// while the rollout can finish: it rolls one pod at a time, so that is the
+// steady state for the duration of any upgrade. More than one pod down, or a
+// rollout that stops making progress, fails.
 //
 // Any odd-sized StatefulSet of three or more in the control-plane namespaces
 // is assessed. The stack's own quorum components (knownQuorumComponents) are
@@ -3087,17 +3438,18 @@ type tier2Scan struct {
 
 	failures      []string
 	skippedParity []string
-	// nonHA holds known quorum components running below three replicas under
-	// highAvailability.mode none, which is what that mode deploys.
-	nonHA        []string
+	// unspread holds assessed StatefulSets with no pod anti-affinity, whose
+	// placement is not judged: highAvailability.mode none renders none.
+	unspread     []string
 	checkedCount int
 	deniedCount  int
 	rollingCount int
 	// rollingUnderReplicated bounds the rollout skip, as in Tier-1.
 	rollingUnderReplicated int
-	// placementUnknown counts StatefulSets whose pods could not be listed, so
-	// an unreadable namespace cannot masquerade as a clean placement result.
-	placementUnknown int
+	// podsUnknown counts StatefulSets whose pods could not be listed, so an
+	// unreadable namespace cannot masquerade as a clean placement or rollout
+	// result.
+	podsUnknown int
 }
 
 func (s *tier2Scan) warn(msg string) {
@@ -3133,17 +3485,30 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 	}
 	want := *sts.Spec.Replicas
 	known := isKnownQuorumComponent(ns, sts.Name)
-	if want < minQuorumSize {
-		s.assessSubQuorum(ns, sts.Name, want, known)
+	spread := spreadsAcrossNodes(sts)
+	switch {
+	case known && want == 0:
+		// Scaled to zero is the component down, however it was installed.
+		s.fail("%s/%s: scaled to zero replicas", ns, sts.Name)
+		s.checkedCount++
 		return
-	}
-	if want%2 == 0 && !known {
-		// Even replica counts are not a quorum shape this check can reason
-		// about for an unknown workload, so record it rather than assess it.
-		// The known components are assessed at any size: a 4-node Cassandra
-		// ring at 0/4 is down, whatever its parity.
+	case known && want < minQuorumSize && spread:
+		// Anti-affinity is what an HA mode renders, and an HA mode runs at
+		// least three members: this one has lost its quorum.
+		s.fail("%s/%s: spec.replicas=%d, below the quorum minimum of %d for a StatefulSet spread for "+
+			"high availability (its pods carry anti-affinity)", ns, sts.Name, want, minQuorumSize)
+		s.checkedCount++
+		return
+	case !known && (want < minQuorumSize || want%2 == 0):
+		// Not a quorum shape this check can reason about for an unknown
+		// workload, so record it rather than assess it. The known components
+		// are assessed at any size: a 4-node Cassandra ring at 0/4 is down,
+		// whatever its parity, and a single replica down is the component down.
 		s.skippedParity = append(s.skippedParity, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
 		return
+	}
+	if !spread {
+		s.unspread = append(s.unspread, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
 	}
 
 	oneDownRolling, decided := s.assessRollout(ns, sts, want)
@@ -3155,6 +3520,10 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 		s.fail("%s/%s: readyReplicas=%d (need %d)", ns, sts.Name, sts.Status.ReadyReplicas, want)
 		return
 	}
+	if !oneDownRolling && !spread {
+		// Ready, and its placement is not something it asked for.
+		return
+	}
 
 	selector := metav1.FormatLabelSelector(sts.Spec.Selector)
 	pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
@@ -3162,47 +3531,48 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 		// Not a placement failure: we could not look. Recording it in failures
 		// would report a broken quorum for an RBAC gap on pods, while the
 		// identical gap on statefulsets is correctly reported as unknown.
-		s.warn(fmt.Sprintf("%s/%s: could not list pods for placement check: %v", ns, sts.Name, err))
-		s.placementUnknown++
+		s.warn(fmt.Sprintf("%s/%s: could not list pods: %v", ns, sts.Name, err))
+		s.podsUnknown++
 		return
 	}
 
 	// A rollout with one pod down is tolerated only while it can still
-	// finish. With no progress deadline on a StatefulSet, the down pod is the
-	// evidence: a crash-looping new pod, or an old-revision pod held back by a
-	// partition, stays down on every run.
+	// finish. A StatefulSet has no progress deadline, so the pods are the
+	// evidence: one that cannot start, one the rollout will not replace, or
+	// no progress at all for too long.
 	if oneDownRolling {
-		if reason := stalledRolloutPod(sts, pods.Items); reason != "" {
+		revisionCreated := updateRevisionCreated(ctx, client, ns, sts)
+		if reason := stalledRollout(sts, pods.Items, revisionCreated, time.Now()); reason != "" {
 			s.fail("%s/%s: readyReplicas=%d (need %d), rolling update is not progressing: %s",
 				ns, sts.Name, sts.Status.ReadyReplicas, want, reason)
 			return
 		}
 		s.rollingUnderReplicated++
 	}
-	s.assessPlacement(ns, sts, pods.Items)
+	if spread {
+		s.assessPlacement(ns, sts, pods.Items)
+	}
 }
 
-// assessSubQuorum judges a StatefulSet below three replicas. A known quorum
-// component there has lost quorum under an HA install and fails, but is the
-// documented shape under highAvailability.mode none. Only the launcher knows
-// which, so an unset mode records it as not assessed rather than guessing.
-// Anything else is recorded too, so an all-sub-quorum cluster cannot reach the
-// trivial-pass exit having examined nothing.
-func (s *tier2Scan) assessSubQuorum(ns, name string, want int32, known bool) {
-	switch mode := haMode(); {
-	case known && want == 0:
-		// Scaled to zero is the component down in any mode.
-		s.fail("%s/%s: scaled to zero replicas", ns, name)
-		s.checkedCount++
-	case known && (mode == "preferred" || mode == "enforced"):
-		s.fail("%s/%s: spec.replicas=%d, below the quorum minimum of %d for highAvailability.mode %s",
-			ns, name, want, minQuorumSize, mode)
-		s.checkedCount++
-	case known && mode == "none":
-		s.nonHA = append(s.nonHA, fmt.Sprintf("%s/%s (replicas=%d)", ns, name, want))
-	default:
-		s.skippedParity = append(s.skippedParity, fmt.Sprintf("%s/%s (replicas=%d)", ns, name, want))
+// spreadsAcrossNodes reports whether sts asks for its pods on distinct nodes,
+// through pod anti-affinity or a hostname topology spread. The stack renders
+// anti-affinity on its quorum StatefulSets only under highAvailability.mode
+// preferred or enforced, so this tells an HA install from a non-HA one
+// without being told the mode, and follows an operator's own placement
+// override too.
+func spreadsAcrossNodes(sts *appsv1.StatefulSet) bool {
+	spec := &sts.Spec.Template.Spec
+	if a := spec.Affinity; a != nil && a.PodAntiAffinity != nil &&
+		(len(a.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) > 0 ||
+			len(a.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution) > 0) {
+		return true
 	}
+	for i := range spec.TopologySpreadConstraints {
+		if spec.TopologySpreadConstraints[i].TopologyKey == corev1.LabelHostname {
+			return true
+		}
+	}
+	return false
 }
 
 // assessRollout handles a RollingUpdate in flight. StatefulSets roll one pod
@@ -3262,9 +3632,9 @@ func (s *tier2Scan) deniedWarning() string {
 }
 
 func (s *tier2Scan) verdict() {
-	if len(s.nonHA) > 0 {
-		printInfo(s.log, fmt.Sprintf("  Not a quorum under highAvailability.mode none: %s",
-			strings.Join(s.nonHA, ", ")))
+	if len(s.unspread) > 0 {
+		printInfo(s.log, fmt.Sprintf("  Placement not assessed (no pod anti-affinity, as highAvailability.mode "+
+			"none renders): %s", strings.Join(s.unspread, ", ")))
 	}
 	if len(s.skippedParity) > 0 {
 		s.warn(fmt.Sprintf("%d StatefulSet(s) not assessed (not a quorum shape this check covers): %s",
@@ -3288,11 +3658,11 @@ func (s *tier2Scan) verdict() {
 		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d namespace(s) were not readable",
 			s.checkedCount, s.deniedCount))
 		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
-	case s.placementUnknown > 0:
-		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but placement was not assessed for %d",
-			s.checkedCount, s.placementUnknown))
+	case s.podsUnknown > 0:
+		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but the pods of %d could not be read",
+			s.checkedCount, s.podsUnknown))
 		s.state.Warnings = append(s.state.Warnings,
-			"Tier-2 StatefulSets: status unknown (pod placement could not be read for one or more StatefulSets)")
+			"Tier-2 StatefulSets: status unknown (the pods of one or more StatefulSets could not be read)")
 	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown: same rule as Tier-1. A NATS StatefulSet at
 		// 2/3 mid-RollingUpdate is what an upgrade looks like, and reporting
@@ -3323,11 +3693,17 @@ func (s *tier2Scan) verdictNothingAssessed() {
 		// check never looked at.
 		s.state.Warnings = append(s.state.Warnings,
 			"Tier-2 StatefulSets: status unknown (no quorum-shaped StatefulSet was assessed)")
-	case s.placementUnknown > 0:
-		printWarning(s.log, fmt.Sprintf("Placement not assessed for %d StatefulSet(s); pods were not readable",
-			s.placementUnknown))
+	case s.podsUnknown > 0:
+		printWarning(s.log, fmt.Sprintf("Pods not readable for %d StatefulSet(s)", s.podsUnknown))
+	case s.state.PostInstall:
+		// Installed, yet no quorum component is here. The stack can leave
+		// NATS, OpenBao and Cassandra to run elsewhere, so this is a warning
+		// rather than a failure, but it must not read as a clean pass.
+		s.warn("no quorum StatefulSet (NATS, OpenBao, Cassandra) found in the control-plane namespaces after " +
+			"install; expected only if they run outside this cluster")
+		s.setOK(true)
 	default:
-		printInfo(s.log, "  No quorum StatefulSets (odd spec.replicas >= 3) found (pre-install or non-HA install)")
+		printInfo(s.log, "  No quorum StatefulSets found (pre-install state)")
 		s.setOK(true)
 	}
 }
@@ -3513,16 +3889,6 @@ var knownQuorumComponents = map[string][]string{
 	"cassandra-system": {"cassandra"},
 }
 
-// haModeEnv carries the stack's highAvailability.mode. Only the launcher knows
-// it: a single-replica Cassandra is correct under "none" and a lost quorum
-// under "preferred" or "enforced", and the cluster looks the same either way.
-const haModeEnv = "NVCF_HA_MODE"
-
-// haMode returns the normalized highAvailability.mode, or "" when unset.
-func haMode() string {
-	return strings.ToLower(strings.TrimSpace(os.Getenv(haModeEnv)))
-}
-
 // stuckWaitingReasons are container waiting reasons that do not clear on their
 // own, so a pod showing one is not a rollout step in progress.
 var stuckWaitingReasons = map[string]bool{
@@ -3539,43 +3905,137 @@ var stuckWaitingReasons = map[string]bool{
 // rather than starting. A healthy replacement comes up without restarting.
 const stalledRolloutRestarts = 3
 
-// stalledRolloutPod reports why the pod a one-down StatefulSet rollout is
-// waiting on cannot become Ready, or "" when the rollout can still finish. A
-// missing pod is the controller between deleting and recreating it, which is
-// progress.
-func stalledRolloutPod(sts *appsv1.StatefulSet, pods []corev1.Pod) string {
+// stalledRolloutAfter bounds how long a one-down rollout may go without
+// progress: no pod created or deleted and no new update revision. The pod
+// reasons below catch the stalls that announce themselves; this catches the
+// rest, such as a replacement that is never created (refused by admission or
+// a quota), one stuck in ContainerCreating, or a member that never joins.
+var stalledRolloutAfter = 15 * time.Minute
+
+// stalledRollout reports why a one-down StatefulSet rollout cannot finish, or
+// "" when it still can. revisionCreated is when the update revision was
+// created, which dates the start of the rollout; zero when it is unknown.
+func stalledRollout(sts *appsv1.StatefulSet, pods []corev1.Pod, revisionCreated, now time.Time) string {
+	lastProgress := revisionCreated
+	owned := 0
 	for i := range pods {
 		p := &pods[i]
-		if !metav1.IsControlledBy(p, sts) || isPodReady(p) {
+		if !metav1.IsControlledBy(p, sts) {
 			continue
 		}
-		// The controller replaces pods with the update revision. A down pod
-		// still on another revision is one the rollout is not replacing, such
-		// as an old-revision pod below a partition.
-		if rev := p.Labels[appsv1.ControllerRevisionHashLabelKey]; rev != "" && rev != sts.Status.UpdateRevision {
-			return fmt.Sprintf("pod %s is down on revision %s, not the update revision %s",
-				p.Name, rev, sts.Status.UpdateRevision)
+		owned++
+		lastProgress = laterOf(lastProgress, p.CreationTimestamp.Time)
+		if p.DeletionTimestamp != nil {
+			// The controller deletes each pod it replaces, whatever its
+			// revision or readiness, so a terminating pod is the rollout
+			// moving. The time bound covers one that never finishes.
+			lastProgress = laterOf(lastProgress, p.DeletionTimestamp.Time)
+			continue
 		}
-		if p.Status.Phase == corev1.PodFailed {
-			return fmt.Sprintf("pod %s failed", p.Name)
+		if isPodReady(p) {
+			continue
 		}
-		for _, c := range p.Status.Conditions {
-			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
-				return fmt.Sprintf("pod %s cannot be scheduled: %s", p.Name, c.Reason)
-			}
+		if reason := stalledPodReason(sts, p); reason != "" {
+			return reason
 		}
-		statuses := append(append([]corev1.ContainerStatus{}, p.Status.InitContainerStatuses...),
-			p.Status.ContainerStatuses...)
-		for _, cs := range statuses {
-			if w := cs.State.Waiting; w != nil && stuckWaitingReasons[w.Reason] {
-				return fmt.Sprintf("pod %s container %s is in %s", p.Name, cs.Name, w.Reason)
-			}
-			if cs.RestartCount >= stalledRolloutRestarts {
-				return fmt.Sprintf("pod %s container %s has restarted %d times", p.Name, cs.Name, cs.RestartCount)
+	}
+	if lastProgress.IsZero() || (owned < int(*sts.Spec.Replicas) && revisionCreated.IsZero()) {
+		// Nothing dates the rollout, or a pod is missing and when the rollout
+		// began is unknown: a missing pod is usually the controller between
+		// deleting a pod and recreating it.
+		return ""
+	}
+	if idle := now.Sub(lastProgress); idle > stalledRolloutAfter {
+		return fmt.Sprintf("no progress for %s: no pod created or deleted, and no new revision, since %s",
+			idle.Round(time.Minute), lastProgress.UTC().Format(time.RFC3339))
+	}
+	return ""
+}
+
+// stalledPodReason reports why a down pod of a rolling StatefulSet will not
+// become Ready on its own, or "" when it may still.
+func stalledPodReason(sts *appsv1.StatefulSet, p *corev1.Pod) string {
+	// A partition holds pods below it on their old revision: the rollout
+	// will not replace one that is down there, so it stays down.
+	if rev := p.Labels[appsv1.ControllerRevisionHashLabelKey]; rev != "" && rev != sts.Status.UpdateRevision {
+		if partition := rollingUpdatePartition(sts); partition > 0 {
+			if ordinal := podOrdinal(sts, p); ordinal >= 0 && ordinal < partition {
+				return fmt.Sprintf("pod %s is down below the rollout partition %d, so the rollout will not replace it",
+					p.Name, partition)
 			}
 		}
 	}
+	if p.Status.Phase == corev1.PodFailed {
+		return fmt.Sprintf("pod %s failed", p.Name)
+	}
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			return fmt.Sprintf("pod %s cannot be scheduled: %s", p.Name, c.Reason)
+		}
+	}
+	statuses := append(append([]corev1.ContainerStatus{}, p.Status.InitContainerStatuses...),
+		p.Status.ContainerStatuses...)
+	for _, cs := range statuses {
+		if w := cs.State.Waiting; w != nil && stuckWaitingReasons[w.Reason] {
+			return fmt.Sprintf("pod %s container %s is in %s", p.Name, cs.Name, w.Reason)
+		}
+		if cs.RestartCount >= stalledRolloutRestarts {
+			return fmt.Sprintf("pod %s container %s has restarted %d times", p.Name, cs.Name, cs.RestartCount)
+		}
+	}
 	return ""
+}
+
+// rollingUpdatePartition is the ordinal below which a RollingUpdate leaves
+// pods on their old revision, 0 when there is none.
+func rollingUpdatePartition(sts *appsv1.StatefulSet) int {
+	if ru := sts.Spec.UpdateStrategy.RollingUpdate; ru != nil && ru.Partition != nil {
+		return int(*ru.Partition)
+	}
+	return 0
+}
+
+// podOrdinal is a StatefulSet pod's ordinal, from its pod-index label or its
+// name, or -1 when neither gives one.
+func podOrdinal(sts *appsv1.StatefulSet, p *corev1.Pod) int {
+	raw, ok := p.Labels[appsv1.PodIndexLabel]
+	if !ok {
+		var found bool
+		raw, found = strings.CutPrefix(p.Name, sts.Name+"-")
+		if !found {
+			return -1
+		}
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
+}
+
+// updateRevisionCreated is when the StatefulSet's update revision was
+// created, which is when its current rollout began, or the zero time when the
+// revision cannot be read.
+func updateRevisionCreated(
+	ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet,
+) time.Time {
+	if sts.Status.UpdateRevision == "" {
+		return time.Time{}
+	}
+	getCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
+	defer cancel()
+	rev, err := client.AppsV1().ControllerRevisions(ns).Get(getCtx, sts.Status.UpdateRevision, metav1.GetOptions{})
+	if err != nil {
+		return time.Time{}
+	}
+	return rev.CreationTimestamp.Time
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // isKnownQuorumComponent reports whether the StatefulSet ns/name is one of the

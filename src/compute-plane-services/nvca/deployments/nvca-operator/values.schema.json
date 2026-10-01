@@ -1275,17 +1275,6 @@
                     "description": "Extra tolerations for the validator CronJob pods, added to the control-plane ones",
                     "default": []
                 },
-                "haMode": {
-                    "type": "string",
-                    "description": "The stack's highAvailability.mode; a quorum component below three replicas fails only under preferred or enforced",
-                    "enum": [
-                        "",
-                        "none",
-                        "preferred",
-                        "enforced"
-                    ],
-                    "default": ""
-                },
                 "networkChecks": {
                     "type": [
                         "object",

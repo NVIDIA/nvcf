@@ -21,6 +21,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -74,7 +77,24 @@ const (
 	// injects this with its own namespace when it constructs the agent
 	// Deployment.
 	SummaryConfigMapNamespaceEnv = "VALIDATOR_SUMMARY_NAMESPACE"
+
+	// EnabledEnv says the chart runs the cluster-validator. The chart sets it
+	// on the operator, and the operator on the agent, which publishes the
+	// metrics baseline only then: on a cluster without the validator, a
+	// last_run of 0 would read as a validator that never ran, forever.
+	EnabledEnv = "NVCA_CLUSTER_VALIDATOR_ENABLED"
+
+	// InitialRunCronJobEnv names the cluster-validator CronJob the operator
+	// runs once at startup. The chart sets it under the control-plane role,
+	// where the operator's init container publishes no summary.
+	InitialRunCronJobEnv = "NVCA_CLUSTER_VALIDATOR_CRONJOB"
 )
+
+// Enabled reports whether EnabledEnv is set to a true value.
+func Enabled() bool {
+	v, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(EnabledEnv)))
+	return err == nil && v
+}
 
 // ValidatorSummary is the structured wire format the validator writes to
 // SummaryConfigMapName at the end of every run. The fixed fields

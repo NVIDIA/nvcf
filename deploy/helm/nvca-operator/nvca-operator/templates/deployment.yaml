@@ -142,6 +142,20 @@ spec:
               fieldPath: metadata.namespace
         - name: DEPLOYMENT_NAME
           value: {{ include "nvcaop.fullname" . | quote }}
+        {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+        {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+        # The agent publishes the cluster-validator metrics baseline only
+        # where the validator runs.
+        - name: NVCA_CLUSTER_VALIDATOR_ENABLED
+          value: "true"
+        {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
+        # The init container publishes no summary under the control-plane
+        # role, so the operator runs the CronJob once at startup instead. It is
+        # not a release resource, so the install does not wait on it.
+        - name: NVCA_CLUSTER_VALIDATOR_CRONJOB
+          value: {{ printf "%s-cluster-validator" (include "nvcaop.fullname" .) | quote }}
+        {{- end }}
+        {{- end }}
         - name: NGC_API_URL
           value: {{ .Values.ngcConfig.apiURL }}
         - name: NGC_SERVICE_KEY_FILE

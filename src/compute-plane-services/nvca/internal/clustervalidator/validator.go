@@ -424,12 +424,22 @@ func printSummary(state *ValidationState) error {
 			Critical: isCritical,
 		})
 	}
-	if state.EnforcementOK != nil {
+	switch {
+	case state.EnforcementOK != nil:
 		checks = append(checks, check{
 			Passed:   *state.EnforcementOK,
 			PassMsg:  "Network Policy Enforcement: Active Validation Passed",
 			FailMsg:  "Network Policy Enforcement: Active Validation Failed",
 			Critical: state.EnforcementCritical,
+		})
+	case state.EnforcementCritical:
+		// The check was configured as critical but produced no result: its
+		// setup failed, or an API error cut it short. Dropping the row would
+		// certify a precondition nothing looked at.
+		checks = append(checks, check{
+			Critical:   true,
+			Unknown:    true,
+			UnknownMsg: "Network Policy Enforcement: Status Unknown (check did not complete)",
 		})
 	}
 

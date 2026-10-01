@@ -55,6 +55,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcalogging "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -571,6 +572,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 		nvcametrics.WithContainerCrashAndRestartTotalDefaultContainerNames(GetDefaultWorkloadContainerNamesToWatch()),
 		nvcametrics.WithKataRuntimeIsolationEnabled(opts.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrKataRuntimeIsolation)),
 		nvcametrics.WithMaintenanceMode(opts.MaintenanceMode),
+		nvcametrics.WithClusterValidatorEnabled(clustervalidator.Enabled()),
 	}
 	if opts.MetricsRegisterer != nil {
 		metricsOpts = append(metricsOpts, nvcametrics.WithRegisterer(opts.MetricsRegisterer))

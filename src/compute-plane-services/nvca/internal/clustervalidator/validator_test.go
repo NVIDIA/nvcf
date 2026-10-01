@@ -1292,3 +1292,35 @@ func TestRun_PrintsTheRoleMarker(t *testing.T) {
 		assert.Contains(t, buf.String(), want, "role %q", role)
 	}
 }
+
+// A critical enforcement check that ends without a result (its server pod
+// never got an IP, an API error cut it short) is UNKNOWN and blocks the
+// verdict, rather than being dropped from it. A non-critical one is not shown.
+func TestPrintSummary_CriticalEnforcementWithoutResultIsUnknown(t *testing.T) {
+	run := func(critical bool) (error, string) {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			EnforcementCritical:      critical,
+			K8sVersion:               "v1.30.0",
+			TotalNodes:               "1",
+		}
+		return printSummary(state), buf.String()
+	}
+	err, out := run(true)
+	assert.Error(t, err)
+	assert.Contains(t, out, "Network Policy Enforcement: Status Unknown")
+
+	err, out = run(false)
+	assert.NoError(t, err)
+	assert.NotContains(t, out, "Network Policy Enforcement")
+}

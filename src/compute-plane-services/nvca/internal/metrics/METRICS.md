@@ -1402,7 +1402,9 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
 
 ## Cluster-Validator Metrics
 
-The cluster-validator runs as a short-lived process so it cannot serve a `/metrics` endpoint directly. Under the default compute-plane role the operator's init container writes the first summary and the CronJob the rest. Under the control-plane role the init container runs in preflight mode and writes nothing, so a one-shot Job runs the CronJob's spec at each install and upgrade to write the first summary. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
+The cluster-validator runs as a short-lived process so it cannot serve a `/metrics` endpoint directly. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. Under the default compute-plane role the operator's init container writes the first summary and the CronJob the rest. Under the control-plane role the init container runs in preflight mode and writes nothing, so the operator runs the CronJob once at startup to write the first summary; it runs again when an upgrade changes the validator's spec. That run is not part of the Helm release, so an install never waits on it or fails with it.
+
+The agent publishes these metrics only where the validator runs (`clusterValidator.enabled`, passed to the agent by the operator). Elsewhere no `nvca_cluster_validator_*` series exist, so an alert on them cannot fire for a cluster that has no validator. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
 
 ### `nvca_cluster_validator_ready`
 
@@ -1410,7 +1412,7 @@ Overall verdict for the latest cluster-validator run. **This is the load-bearing
 
 - **Type**: Gauge
 - **Value**: 1 if the run passed all critical checks (NVCF-Ready), 0 otherwise (NVCF-Not-Ready)
-- **Labels**: default labels only (initialized to 0 until the first run completes)
+- **Labels**: default labels only (initialized to 0 until the first run completes, where the validator runs)
 
 ### `nvca_cluster_validator_check_status`
 
@@ -1524,7 +1526,8 @@ nvca_cluster_validator_endpoint_reachable{critical="true"} == 0
 # Alert: validator has never written a summary. The staleness alert above
 # excludes this case, so a validator that cannot run at all (image pull,
 # RBAC or scheduling failure) needs its own. The `for:` window covers the
-# first run after an install; use it on the alerting rule.
+# first run after an install; use it on the alerting rule. The series exists
+# only where the validator is enabled, so this cannot fire elsewhere.
 nvca_cluster_validator_last_run_timestamp_seconds == 0
 ```
 
@@ -1533,6 +1536,7 @@ nvca_cluster_validator_last_run_timestamp_seconds == 0
 | Scenario | Effect on metrics |
 |---|---|
 | Agent boots before any validator run | Fixed-cardinality gauges at 0. No config-driven (endpoint/netpol) series until first run. |
+| Validator not enabled on the cluster | No `nvca_cluster_validator_*` series at all. |
 | Agent restart after a successful run | Reconciler's initial List delivers an Add event; metrics populated immediately. |
 | Validator pod panics mid-run | ConfigMap not updated; last-good metrics retained. Operator detects via `_last_run_timestamp_seconds` staleness. |
 | Summary ConfigMap deleted | Last-good metrics **preserved** — an accidental delete (kubectl, GC sweep, reinstall) must not wipe the SLI. Genuine staleness is caught by the `_last_run_timestamp_seconds` alert. |

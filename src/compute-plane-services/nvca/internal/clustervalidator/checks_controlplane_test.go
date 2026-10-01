@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -323,7 +324,10 @@ func TestCheckNodeToNode_TaintedNodeIsProbedNotReadyIsNot(t *testing.T) {
 
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.True(t, *state.NodeToNodeOK)
-	assert.Contains(t, f.checkerCmd, "10.0.0.2", "the GPU-tainted node is a probe target")
+	// The checker runs on one of the two nodes, picked at random, and dials
+	// the other, so the GPU-tainted node is probed either way.
+	assert.NotEqual(t, strings.Contains(f.checkerCmd, "10.0.0.1"), strings.Contains(f.checkerCmd, "10.0.0.2"),
+		"the checker on one node dials the other: %s", f.checkerCmd)
 	assert.NotContains(t, strings.Join(state.Warnings, "; "), "node-3",
 		"a NotReady node is not expected to run the probe, so it is no coverage gap")
 }
@@ -395,7 +399,7 @@ func TestCheckNodeToNode_CleansUpProbeResources(t *testing.T) {
 	assert.True(t, strings.HasPrefix(createdNS, nodeToNodeNSPrefix),
 		"probe namespace %q must carry the sweepable prefix %q", createdNS, nodeToNodeNSPrefix)
 	assert.True(t, deleted["daemonsets"], "deferred cleanup must delete the server DaemonSet")
-	assert.True(t, deleted["pods"], "deferred cleanup must delete the checker pod")
+	assert.False(t, deleted["pods"], "no checker pod was created on this path, so none is deleted")
 	assert.True(t, deleted["namespaces"], "deferred cleanup must delete the probe namespace")
 }
 
@@ -591,6 +595,8 @@ func TestCheckTier1Deployments_ForbiddenIsNotAPass(t *testing.T) {
 
 // makeQuorumSTS builds a StatefulSet plus the pods its selector matches, so the
 // co-location scan has something to walk. nodes gives one node name per pod.
+// makeQuorumSTS builds a StatefulSet in the shape an HA mode renders: its
+// pods carry hostname anti-affinity. withoutSpread removes it, as mode none.
 func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []runtime.Object {
 	sel := map[string]string{"app": name}
 	// IsControlledBy compares the controller reference UID, so the fixture needs
@@ -602,6 +608,17 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: sel},
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Affinity: &corev1.Affinity{
+				PodAntiAffinity: &corev1.PodAntiAffinity{
+					PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
+						Weight: 100,
+						PodAffinityTerm: corev1.PodAffinityTerm{
+							LabelSelector: &metav1.LabelSelector{MatchLabels: sel},
+							TopologyKey:   corev1.LabelHostname,
+						},
+					}},
+				},
+			}}},
 		},
 		Status: appsv1.StatefulSetStatus{
 			ReadyReplicas:   ready,
@@ -612,7 +629,10 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 	for i, node := range nodes {
 		objs = append(objs, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("%s-%d", name, i), Namespace: ns, Labels: sel,
+				// Created just now, as a real pod is always dated: a rollout
+				// over these is recent. createdAt re-dates them.
+				CreationTimestamp: metav1.Now(),
+				Name:              fmt.Sprintf("%s-%d", name, i), Namespace: ns, Labels: sel,
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: "apps/v1", Kind: "StatefulSet",
 					Name: name, UID: uid, Controller: &controller,
@@ -625,6 +645,13 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 			},
 		})
 	}
+	return objs
+}
+
+// withoutSpread drops the StatefulSet's pod anti-affinity, the shape
+// highAvailability.mode none renders.
+func withoutSpread(objs []runtime.Object) []runtime.Object {
+	objs[0].(*appsv1.StatefulSet).Spec.Template.Spec.Affinity = nil
 	return objs
 }
 
@@ -1262,8 +1289,15 @@ func TestEnvoyGatewayNamespaceName_HonoursOverride(t *testing.T) {
 // NodeName on the checker bypasses the scheduler but not taint admission.
 func TestBuildNodeToNodeDaemonSet_ToleratesEveryTaint(t *testing.T) {
 	everything := []corev1.Toleration{{Operator: corev1.TolerationOpExists}}
-	ds := buildNodeToNodeDaemonSet("n2n", "ns", map[string]string{"a": "b"}, "img")
+	ds := buildNodeToNodeDaemonSet("n2n", "ns", map[string]string{"a": "b"}, "img", []string{"node-1", "node-2"})
 	assert.Equal(t, everything, ds.Spec.Template.Spec.Tolerations)
+	// Tolerating everything, it is pinned to the nodes it is expected on.
+	required := ds.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	terms := required.NodeSelectorTerms
+	require.Len(t, terms, 1)
+	assert.Equal(t, []corev1.NodeSelectorRequirement{{
+		Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{"node-1", "node-2"},
+	}}, terms[0].MatchFields)
 	pod := buildNodeToNodeCheckerPod("checker", "ns", "node-1", []string{"10.0.0.1"}, "img")
 	assert.Equal(t, everything, pod.Spec.Tolerations)
 }
@@ -1396,7 +1430,7 @@ func TestCheckTier2StatefulSets_PodListDenialIsUnknownNotFailure(t *testing.T) {
 
 	assert.Nil(t, state.Tier2StatefulSetsOK,
 		"an unreadable pod list is not evidence of a broken quorum")
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "placement check")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not list pods")
 }
 
 // The wait returns as soon as every expected node has a Running pod with an
@@ -1450,7 +1484,18 @@ func TestWaitForProbePods_KeepsTheLastSuccessfulList(t *testing.T) {
 	pods, err := waitForProbePods(context.Background(), client, "probe", selector, nodes, time.Second)
 	require.NoError(t, err)
 	assert.Len(t, pods, 2)
-	assert.Equal(t, []string{"node-2"}, classifyProbeNodes(pods, nodes, nil).networkFaults)
+	assert.Equal(t, []string{"node-2"}, classifyProbeNodes(pods, nodes, nil, true, time.Now()).networkFaults)
+
+	// A list older than the freshness bound shows the pods as they were when
+	// it was taken, not as they are, so it is not classified at all.
+	prev := probeSnapshotMaxAge
+	probeSnapshotMaxAge = 200 * time.Millisecond
+	t.Cleanup(func() { probeSnapshotMaxAge = prev })
+	calls = 0
+	_, err = waitForProbePods(context.Background(), client, "probe", selector, nodes, time.Second)
+	var unobserved *probeNotObservedError
+	require.ErrorAs(t, err, &unobserved)
+	assert.Contains(t, unobserved.reason, "old")
 }
 
 // A pod list that fails until the deadline observed nothing at all.
@@ -1593,30 +1638,37 @@ func TestClassifyProbeNodes(t *testing.T) {
 	}
 	evicted := probePod("node-2", "Failed", "", "")
 	evicted.Status.Reason = "Evicted"
+	creating := func() []corev1.Pod { return second(probePod("node-2", "Pending", "", "ContainerCreating")) }
+	justScheduled := probePod("node-2", "Pending", "", "ContainerCreating")
+	justScheduled.CreationTimestamp = metav1.NewTime(time.Now().Add(-5 * time.Second))
+	created := map[string]sandboxEvidence{"b": sandboxCreated}
 	cases := []struct {
-		name      string
-		pods      []corev1.Pod
-		pulling   map[string]bool
-		fault     bool
-		gap       string
-		pullError bool
+		name       string
+		pods       []corev1.Pod
+		sandboxes  map[string]sandboxEvidence
+		eventsRead bool
+		fault      bool
+		gap        string
+		pullError  bool
 	}{
-		{"pod never created", []corev1.Pod{running}, nil, false, "no probe pod was created", false},
+		{"pod never created", []corev1.Pod{running}, nil, true, false, "no probe pod was created", false},
 		{"image pull backoff", second(probePod("node-2", "Pending", "", "ImagePullBackOff")),
-			nil, false, "ImagePullBackOff", true},
+			nil, true, false, "ImagePullBackOff", true},
 		{"first pull error", second(probePod("node-2", "Pending", "", "ErrImagePull")),
-			nil, false, "ErrImagePull", true},
+			nil, true, false, "ErrImagePull", true},
 		{"container cannot start", second(probePod("node-2", "Running", "", "CrashLoopBackOff")),
-			nil, false, "CrashLoopBackOff", false},
-		{"kubelet eviction", second(evicted), nil, false, "rejected by the kubelet (Evicted)", false},
-		{"first pull still running", second(probePod("node-2", "Pending", "", "ContainerCreating")),
-			map[string]bool{"b": true}, false, "image still pulling", false},
-		{"cni never gave an IP", second(probePod("node-2", "Pending", "", "ContainerCreating")), nil, true, "", false},
-		{"running without IP", second(probePod("node-2", "Running", "", "")), nil, true, "", false},
+			nil, true, false, "CrashLoopBackOff", false},
+		{"kubelet eviction", second(evicted), nil, true, false, "rejected by the kubelet (Evicted)", false},
+		{"pull or start under way", creating(), created, true, false, "sandbox created", false},
+		{"sandbox creation failed", creating(), map[string]sandboxEvidence{"b": sandboxFailed}, true, true, "", false},
+		{"no sandbox long after scheduling", creating(), nil, true, true, "", false},
+		{"events unreadable", creating(), nil, false, false, "pod events could not be read", false},
+		{"scheduled moments ago", second(justScheduled), nil, true, false, "scheduled too recently", false},
+		{"running without IP", second(probePod("node-2", "Running", "", "")), nil, true, true, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classifyProbeNodes(tc.pods, nodes, tc.pulling)
+			got := classifyProbeNodes(tc.pods, nodes, tc.sandboxes, tc.eventsRead, time.Now())
 			assert.Len(t, got.running, 1)
 			if tc.fault {
 				assert.Equal(t, []string{"node-2"}, got.networkFaults)
@@ -1631,6 +1683,27 @@ func TestClassifyProbeNodes(t *testing.T) {
 	}
 }
 
+// Every kubelet event that follows sandbox creation says the sandbox exists,
+// Pulled included (an image already on the node is Pulled without Pulling);
+// the latest event decides, so a sandbox created on retry counts as created.
+func TestProbeSandboxEvents(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	events := []corev1.Event{
+		podEvent("pulled-only", "Pulled", 0),
+		podEvent("retried", "FailedCreatePodSandBox", 0), podEvent("retried", "Started", 1),
+		podEvent("failed", "Pulling", 0), podEvent("failed", "FailedCreatePodSandBox", 1),
+		podEvent("scheduled-only", "Scheduled", 0),
+	}
+	client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.EventList{Items: events}, nil
+	})
+	got, read := probeSandboxEvents(context.Background(), client, "ns")
+	require.True(t, read)
+	assert.Equal(t, map[string]sandboxEvidence{
+		"pulled-only": sandboxCreated, "retried": sandboxCreated, "failed": sandboxFailed,
+	}, got)
+}
+
 // An unbound DaemonSet pod has no spec.nodeName, but the controller pins it to
 // its node through a metadata.name affinity field, so a capacity-blocked pod
 // still names its node.
@@ -1639,7 +1712,7 @@ func TestClassifyProbeNodes_UnscheduledPodNamesItsNode(t *testing.T) {
 	pending := probePod("", "Pending", "", "")
 	pending.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}
 	pending.Spec.Affinity = daemonSetNodeAffinity("node-2")
-	got := classifyProbeNodes([]corev1.Pod{running, pending}, []string{"node-1", "node-2"}, nil)
+	got := classifyProbeNodes([]corev1.Pod{running, pending}, []string{"node-1", "node-2"}, nil, true, time.Now())
 	require.Len(t, got.gaps, 1)
 	assert.Equal(t, "node-2: Unschedulable", got.gaps[0])
 }
@@ -1777,13 +1850,34 @@ func route(kind, ns, name, chart string, parents ...map[string]interface{}) *uns
 }
 
 func routeClient(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
-	kinds := map[schema.GroupVersionResource]string{}
+	kinds := map[schema.GroupVersionResource]string{gatewayClassGVR: "GatewayClassList"}
 	for kind, v := range routeVersions {
 		kinds[schema.GroupVersionResource{
 			Group: gatewayAPIGroup, Version: v, Resource: strings.ToLower(kind) + "s",
 		}] = kind + "List"
 	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, objs...)
+}
+
+var gatewayClassGVR = schema.GroupVersionResource{Group: gatewayAPIGroup, Version: "v1", Resource: "gatewayclasses"}
+
+// envoyGatewayClient holds the given Gateways and two GatewayClasses: "eg",
+// run by Envoy Gateway, and "istio", run by another implementation.
+func envoyGatewayClient(t *testing.T, gws ...*unstructured.Unstructured) *dynamicfake.FakeDynamicClient {
+	t.Helper()
+	dyn := gatewayClient(t, gws...)
+	for name, controller := range map[string]string{
+		"eg": envoyGatewayControllerName, "istio": "istio.io/gateway-controller",
+	} {
+		class := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": gatewayAPIGroup + "/v1",
+			"kind":       "GatewayClass",
+			"metadata":   map[string]interface{}{"name": name},
+			"spec":       map[string]interface{}{"controllerName": controller},
+		}}
+		require.NoError(t, dyn.Tracker().Create(gatewayClassGVR, class, ""))
+	}
+	return dyn
 }
 
 // Every served route kind the NVCF stack renders, at its served version.
@@ -1878,14 +1972,24 @@ func TestDiscoverNVCFGateways_ListErrorIsNotEmpty(t *testing.T) {
 	assert.Empty(t, empty)
 }
 
-// The configured list replaces discovery outright.
-func TestResolveNVCFGateways_ConfiguredSkipsDiscovery(t *testing.T) {
+// The configured list replaces discovery: it alone decides the set. A Gateway
+// the NVCF routes attach to that the list leaves out is reported, since the
+// checks do not assess it.
+func TestResolveNVCFGateways_ConfiguredReplacesDiscovery(t *testing.T) {
 	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw")
 	dyn := routeClient(route("HTTPRoute", "nvcf", "r", "nvcf-gateway-routes-1.0.0", parentRef("name", "other")))
 	got, _, err := resolveNVCFGateways(context.Background(), routeDiscoveryClient(), dyn)
 	require.NoError(t, err)
 	assert.Equal(t, gatewaySet{"gw/shared-gw": true}, got)
-	assert.Empty(t, dyn.Actions(), "a configured list must not trigger route discovery")
+
+	surface, surfaceErr := discoverGatewayAPIResources(routeDiscoveryClient())
+	own := resolveGatewayOwnershipIn(context.Background(), surface, surfaceErr, dyn)
+	assert.Equal(t, []string{"nvcf/other"}, own.unlisted)
+	state := &ValidationState{Log: testLog()}
+	own.reportInvalid(state.Log, state)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "nvcf/other, which "+nvcfGatewayNamesEnv+" leaves out")
+	own.reportInvalid(state.Log, state)
+	assert.Len(t, state.Warnings, 1, "reported once per run")
 }
 
 func discoveredStack() *dynamicfake.FakeDynamicClient {
@@ -2267,7 +2371,8 @@ func TestCheckNodeToNode_CapacityBlockedNodeIsACoverageGap(t *testing.T) {
 }
 
 // A first image pull longer than the wait is not a CNI fault: the kubelet
-// publishes no pod IP until the pull returns, and the Pulling event says so.
+// creates the sandbox before it pulls, but publishes no pod IP until the pull
+// returns. Pulling, Pulled, Created and Started all say the sandbox exists.
 func TestCheckNodeToNode_SlowFirstPullIsNotANetworkFault(t *testing.T) {
 	pulling := probePod("node-3", "Pending", "", "ContainerCreating")
 	pulling.Name = "s-3"
@@ -2278,18 +2383,23 @@ func TestCheckNodeToNode_SlowFirstPullIsNotANetworkFault(t *testing.T) {
 		runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pulling,
 	}
 
-	f := newN2NFixture(t, nodes(), servers,
-		[]corev1.Event{podEvent("s-3", "Scheduled", 0), podEvent("s-3", "Pulling", 1)}, checkerExit(0))
-	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.True(t, *state.NodeToNodeOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: image still pulling")
+	for _, events := range [][]corev1.Event{
+		{podEvent("s-3", "Scheduled", 0), podEvent("s-3", "Pulling", 1)},
+		{podEvent("s-3", "Pulling", 0), podEvent("s-3", "Pulled", 1)},
+		{podEvent("s-3", "Pulled", 0), podEvent("s-3", "Created", 1), podEvent("s-3", "Started", 2)},
+	} {
+		f := newN2NFixture(t, nodes(), servers, events, checkerExit(0))
+		state := &ValidationState{Log: testLog()}
+		checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
+		require.NotNil(t, state.NodeToNodeOK)
+		assert.True(t, *state.NodeToNodeOK)
+		assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: sandbox created")
+	}
 
 	// A sandbox failure after the pull started is the network after all.
-	f = newN2NFixture(t, nodes(), servers,
+	f := newN2NFixture(t, nodes(), servers,
 		[]corev1.Event{podEvent("s-3", "Pulling", 0), podEvent("s-3", "FailedCreatePodSandBox", 1)}, checkerExit(0))
-	state = &ValidationState{Log: testLog()}
+	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.False(t, *state.NodeToNodeOK)
@@ -2315,6 +2425,63 @@ func TestCheckNodeToNode_ConnectionFailureSurvivesAThrottledRead(t *testing.T) {
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.False(t, *state.NodeToNodeOK)
 	assert.NotEmpty(t, state.Recommendations)
+}
+
+// A node that is NotReady, being drained or removed, or without a pod network
+// is not probed, even though the probe tolerates every taint: a pod there
+// tests nothing and may never be deleted. A GPU taint is no such fence.
+func TestNodeToNodeTargets_SkipsFencedNodes(t *testing.T) {
+	tainted := func(name, key string) corev1.Node {
+		n := *makeNode(name, true, 0)
+		n.Spec.Taints = []corev1.Taint{{Key: key, Effect: corev1.TaintEffectNoSchedule}}
+		return n
+	}
+	noNetwork := *makeNode("no-network", true, 0)
+	noNetwork.Status.Conditions = append(noNetwork.Status.Conditions,
+		corev1.NodeCondition{Type: corev1.NodeNetworkUnavailable, Status: corev1.ConditionTrue})
+	now := metav1.Now()
+	deleting := *makeNode("deleting", true, 0)
+	deleting.DeletionTimestamp = &now
+	targets, skipped := nodeToNodeTargets([]corev1.Node{
+		*makeNode("ready", true, 0),
+		tainted("gpu", "nvidia.com/gpu"),
+		*makeNode("not-ready", false, 0),
+		tainted("disrupted", "karpenter.sh/disrupted"),
+		tainted("scale-down", "ToBeDeletedByClusterAutoscaler"),
+		tainted("cilium", "node.cilium.io/agent-not-ready"),
+		tainted("virtual", "virtual-kubelet.io/provider"),
+		noNetwork, deleting,
+	})
+	assert.Equal(t, []string{"ready", "gpu"}, targets)
+	assert.Len(t, skipped, 7)
+}
+
+// The kubelet can refuse the NodeName-pinned checker on a node at its pod
+// limit. That says nothing about the overlay, so the checker moves to another
+// node rather than leaving the row UNKNOWN on every run.
+func TestCheckNodeToNode_RefusedCheckerMovesToAnotherNode(t *testing.T) {
+	refused := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "OutOfpods"}}
+	calls := 0
+	f := newN2NFixture(t, []*corev1.Node{makeNode("node-1", true, 0), makeNode("node-2", true, 0)},
+		[]corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2")},
+		nil, func() (*corev1.Pod, error) {
+			calls++
+			if calls == 1 {
+				return refused, nil
+			}
+			return checkerPod(0), nil
+		})
+	var deletedPods []string
+	f.client.PrependReactor("delete", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		deletedPods = append(deletedPods, a.(ktesting.DeleteAction).GetName())
+		return true, nil, nil
+	})
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
+	require.NotNil(t, state.NodeToNodeOK)
+	assert.True(t, *state.NodeToNodeOK)
+	assert.Equal(t, 2, calls, "the second node's checker ran")
+	assert.Len(t, deletedPods, 2, "both checker pods are cleaned up")
 }
 
 // The checker is pinned with NodeName, so a full node rejects it at kubelet
@@ -2755,7 +2922,8 @@ func rollingNATSWithDownPod(readyNodes []string, rev string, mutate func(*corev1
 	controller := true
 	down := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "nats-2", Namespace: "nats-system",
+			CreationTimestamp: metav1.Now(),
+			Name:              "nats-2", Namespace: "nats-system",
 			Labels: map[string]string{"app": "nats", appsv1.ControllerRevisionHashLabelKey: rev},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: "apps/v1", Kind: "StatefulSet", Name: "nats", UID: sts.UID, Controller: &controller,
@@ -2793,7 +2961,7 @@ func TestCheckTier2StatefulSets_StalledRolloutFails(t *testing.T) {
 	for name, objs := range map[string][]runtime.Object{
 		"crash-looping new pod":   rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", crashLoop),
 		"restarting new pod":      rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", restarting),
-		"old pod below partition": rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", nil),
+		"old pod below partition": belowPartition(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", nil)),
 	} {
 		state := runTier2(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)
@@ -2823,38 +2991,153 @@ func TestCheckTier2StatefulSets_TolerateRolloutStillChecksPlacement(t *testing.T
 	assert.False(t, *state.Tier2StatefulSetsOK)
 }
 
-// Below three replicas, a known quorum component fails only under an HA mode.
-// Under highAvailability.mode none a single-replica Cassandra is the
-// documented shape; with the mode unknown it is recorded, not failed.
-func TestCheckTier2StatefulSets_SubQuorumFollowsTheHAMode(t *testing.T) {
-	run := func(mode string, objs ...runtime.Object) *ValidationState {
-		t.Setenv(haModeEnv, mode)
-		state := &ValidationState{Log: testLog()}
-		checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(objs...), state)
-		return state
+// belowPartition holds pods below ordinal 3 on their old revision, so the
+// fixture's nats-2 is one the rollout will not replace.
+func belowPartition(objs []runtime.Object) []runtime.Object {
+	partition := int32(3)
+	objs[0].(*appsv1.StatefulSet).Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
+		Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
 	}
-	single := func() []runtime.Object {
-		return makeQuorumSTS("cassandra", "cassandra-system", 1, 1, []string{"node-1"})
-	}
-	healthyNATS := func() []runtime.Object {
-		return makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
-	}
+	return objs
+}
 
-	for _, mode := range []string{"preferred", "Enforced"} {
-		state := run(mode, append(single(), healthyNATS()...)...)
-		require.NotNil(t, state.Tier2StatefulSetsOK, mode)
-		assert.False(t, *state.Tier2StatefulSetsOK, "a lost quorum under %s", mode)
+// The controller deletes the pod it replaces, so a terminating old-revision pod
+// that is NotReady while it drains is the rollout moving, not stalling, even
+// when every pod and the revision are old: the deletion is the progress.
+func TestCheckTier2StatefulSets_TerminatingOldRevisionPodIsProgress(t *testing.T) {
+	old := time.Now().Add(-2 * time.Hour)
+	terminating := func(p *corev1.Pod) {
+		now := metav1.Now()
+		p.DeletionTimestamp = &now
+		p.Status.Phase = corev1.PodRunning
 	}
-
-	state := run("none", single()...)
-	require.NotNil(t, state.Tier2StatefulSetsOK)
-	assert.True(t, *state.Tier2StatefulSetsOK, "single-replica is what mode none deploys")
-
-	state = run("", append(single(), healthyNATS()...)...)
+	objs := withRevision(createdAt(belowPartition(
+		rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", terminating)), old), old)
+	state := runTier2(objs)
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "cassandra-system/cassandra",
-		"with the mode unknown it is reported as not assessed")
+
+	// Without a partition an old-revision pod that is down but not stuck is
+	// one the rollout still reaches.
+	state = runTier2(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", nil))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+}
+
+// withRevision adds the update revision as a ControllerRevision created at
+// created, which dates the start of the rollout.
+func withRevision(objs []runtime.Object, created time.Time) []runtime.Object {
+	sts := objs[0].(*appsv1.StatefulSet)
+	return append(objs, &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{
+		Name: sts.Status.UpdateRevision, Namespace: sts.Namespace, CreationTimestamp: metav1.NewTime(created),
+	}})
+}
+
+// createdAt dates every pod in objs.
+func createdAt(objs []runtime.Object, created time.Time) []runtime.Object {
+	for _, o := range objs {
+		if p, ok := o.(*corev1.Pod); ok {
+			p.CreationTimestamp = metav1.NewTime(created)
+		}
+	}
+	return objs
+}
+
+// A one-down rollout that makes no progress for too long fails however its
+// down pod looks: a replacement never created, one stuck in ContainerCreating,
+// or one Running but never Ready. A recent one is still tolerated.
+func TestCheckTier2StatefulSets_RolloutWithoutProgressFails(t *testing.T) {
+	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-time.Minute)
+	creating := func(p *corev1.Pod) {
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name:  "nats",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+		}}
+	}
+	notJoining := func(p *corev1.Pod) { p.Status.Phase = corev1.PodRunning }
+	missing := func() []runtime.Object {
+		objs := makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"})
+		objs[0].(*appsv1.StatefulSet).Status.UpdateRevision = "nats-r2"
+		return objs
+	}
+	down := func(mutate func(*corev1.Pod)) []runtime.Object {
+		return rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", mutate)
+	}
+	for name, objs := range map[string][]runtime.Object{
+		"never created":      withRevision(createdAt(missing(), old), old),
+		"ContainerCreating":  withRevision(createdAt(down(creating), old), old),
+		"Running, not Ready": createdAt(down(notJoining), old),
+	} {
+		state := runTier2(objs)
+		require.NotNil(t, state.Tier2StatefulSetsOK, name)
+		assert.False(t, *state.Tier2StatefulSetsOK, name)
+	}
+
+	for name, objs := range map[string][]runtime.Object{
+		"just started, pod not yet recreated": withRevision(createdAt(missing(), old), recent),
+		"replacement created recently":        withRevision(createdAt(down(creating), recent), old),
+		"start unknown, pod missing":          createdAt(missing(), old),
+	} {
+		state := runTier2(objs)
+		require.NotNil(t, state.Tier2StatefulSetsOK, name)
+		assert.True(t, *state.Tier2StatefulSetsOK, name)
+	}
+}
+
+// HA is read from what was rendered. A component with pod anti-affinity is an
+// HA install and below three replicas has lost quorum. Without it, as mode
+// none renders, one replica is the deployed shape and placement is not judged,
+// but readiness still is: a crashed single Cassandra is the database down.
+func TestCheckTier2StatefulSets_HAIsReadFromAntiAffinity(t *testing.T) {
+	single := func(ready int32) []runtime.Object {
+		return makeQuorumSTS("cassandra", "cassandra-system", 1, ready, []string{"node-1"})
+	}
+
+	state := runTier2(single(1))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK, "spread for HA, but below the quorum minimum")
+
+	state = runTier2(withoutSpread(single(1)))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "one replica is what mode none deploys")
+
+	state = runTier2(withoutSpread(single(0)))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK, "a single replica that is down is still down")
+
+	state = runTier2(withoutSpread(makeQuorumSTS("nats", "nats-system", 3, 3,
+		[]string{"node-1", "node-1", "node-1"})))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "co-located on a single node is what mode none allows")
+}
+
+// A StatefulSet without anti-affinity has its placement left alone, but its
+// rollout is still held to the same rule: one that cannot finish fails.
+func TestCheckTier2StatefulSets_UnspreadStalledRolloutFails(t *testing.T) {
+	crashLoop := func(p *corev1.Pod) {
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name:  "nats",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		}}
+	}
+	state := runTier2(withoutSpread(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", crashLoop)))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK)
+}
+
+// After install, finding no quorum StatefulSet at all is reported rather than
+// read as a pre-install pass.
+func TestCheckTier2StatefulSets_NoneFoundAfterInstallWarns(t *testing.T) {
+	state := &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(), state)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "no quorum StatefulSet")
+
+	state = &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(), state)
+	assert.Empty(t, state.Warnings, "before install, nothing to report")
 }
 
 // The rule matches the stack's own components only: by exact name, in their
@@ -2884,7 +3167,13 @@ func proxyDeployment(name, gwNS, gw string, ready int32) *appsv1.Deployment {
 
 func runTier1(t *testing.T, postInstall bool, routes dynamic.Interface, objs ...runtime.Object) *ValidationState {
 	t.Helper()
-	client := routeDiscoveryClient()
+	client := gatewayDiscoveryClient(
+		gatewayAPIGroup+"/v1/httproutes",
+		gatewayAPIGroup+"/v1/grpcroutes",
+		gatewayAPIGroup+"/v1alpha2/tcproutes",
+		gatewayAPIGroup+"/v1/gateways",
+		gatewayAPIGroup+"/v1/gatewayclasses",
+	)
 	for _, o := range objs {
 		var err error
 		switch v := o.(type) {
@@ -2901,7 +3190,9 @@ func runTier1(t *testing.T, postInstall bool, routes dynamic.Interface, objs ...
 }
 
 // A failed ownership lookup leaves a Ready proxy nothing to say against the
-// tier, so the row passes; only a proxy that is not Ready leaves it UNKNOWN.
+// tier, so before install the row passes. After install the NVCF Gateways
+// must each have a proxy, which cannot be confirmed without knowing them, so
+// the row is UNKNOWN rather than a pass.
 func TestCheckTier1Deployments_ReadyProxiesOfUnknownOwnerPass(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "")
@@ -2909,10 +3200,17 @@ func TestCheckTier1Deployments_ReadyProxiesOfUnknownOwnerPass(t *testing.T) {
 	denied.PrependReactor("list", "*", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 	})
-	state := runTier1(t, true, denied, proxyDeployment("envoy-a", "gw", "shared-gw", 2),
-		proxyDeployment("envoy-b", "gw", "grpc-gw", 2))
+	proxies := func() []runtime.Object {
+		return []runtime.Object{proxyDeployment("envoy-a", "gw", "shared-gw", 2),
+			proxyDeployment("envoy-b", "gw", "grpc-gw", 2)}
+	}
+	state := runTier1(t, false, denied, proxies()...)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
+
+	state = runTier1(t, true, denied, proxies()...)
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not confirm every NVCF Gateway has a proxy")
 }
 
 // Installed, with no route or setting naming an NVCF Gateway, NVCF's own
@@ -2933,25 +3231,142 @@ func TestCheckTier1Deployments_PostInstallWithoutNVCFRoutesAssessesProxies(t *te
 	assert.True(t, *state.Tier1DeploymentsOK)
 }
 
-// Installed, every named NVCF Gateway needs a proxy. A proxy run as a
-// DaemonSet counts.
+// Installed, every named NVCF Gateway that Envoy Gateway runs needs a proxy
+// with a Ready pod. A proxy run as a DaemonSet counts once one of its pods is
+// Ready; one with none serves nothing.
 func TestCheckTier1Deployments_PostInstallNamedGatewayNeedsAProxy(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw,gw/nats-gw")
+	gateways := func() dynamic.Interface {
+		return envoyGatewayClient(t, gatewayObject("gw", "shared-gw", "eg"), gatewayObject("gw", "nats-gw", "eg"))
+	}
+	shared := func() runtime.Object { return proxyDeployment("envoy-shared", "gw", "shared-gw", 2) }
+	natsDS := func(ready int32) *appsv1.DaemonSet {
+		return &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "envoy-nats", Namespace: envoyGatewayNamespace,
+			Labels: map[string]string{owningGatewayNameLabel: "nats-gw", owningGatewayNamespaceLabel: "gw"}},
+			Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 3, NumberReady: ready}}
+	}
 
-	state := runTier1(t, true, routeClient(), proxyDeployment("envoy-shared", "gw", "shared-gw", 2))
+	state := runTier1(t, true, gateways(), shared())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.False(t, *state.Tier1DeploymentsOK, "gw/nats-gw has no proxy")
 
-	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "envoy-nats", Namespace: envoyGatewayNamespace,
-		Labels: map[string]string{owningGatewayNameLabel: "nats-gw", owningGatewayNamespaceLabel: "gw"}}}
-	state = runTier1(t, true, routeClient(), proxyDeployment("envoy-shared", "gw", "shared-gw", 2), ds)
+	state = runTier1(t, true, gateways(), shared(), natsDS(0))
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "a DaemonSet with no Ready pod serves nothing")
+
+	state = runTier1(t, true, gateways(), shared(), natsDS(1))
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
 
-	state = runTier1(t, false, routeClient(), proxyDeployment("envoy-shared", "gw", "shared-gw", 2))
+	state = runTier1(t, false, gateways(), shared())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK, "before install a Gateway may not have its proxy yet")
+}
+
+// Coverage applies to Gateways Envoy Gateway runs. Another implementation's
+// Gateway has no Envoy proxy to find; a Gateway that does not exist fails; and
+// a proxy is found wherever it runs: beside its Gateway in an already scanned
+// namespace (GatewayNamespace mode), or in a controller namespace the
+// validator was not told about.
+func TestCheckTier1Deployments_GatewayCoverageByImplementation(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+	inNamespace := func(d *appsv1.Deployment, ns string) *appsv1.Deployment {
+		d.Namespace = ns
+		return d
+	}
+	two := int32(2)
+	api := func() *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 1},
+			Spec:   appsv1.DeploymentSpec{Replicas: &two},
+			Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 2}}
+	}
+
+	state := runTier1(t, true, envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "istio")), api())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "an Istio Gateway has no Envoy proxy to look for")
+
+	state = runTier1(t, true, envoyGatewayClient(t), api())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "a named Gateway that does not exist is a finding")
+
+	for _, ns := range []string{"nvcf", "custom-envoy-system"} {
+		state = runTier1(t, true, envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg")),
+			inNamespace(proxyDeployment("envoy-nvcf", "nvcf", "nvcf-gw", 2), ns), api())
+		require.NotNil(t, state.Tier1DeploymentsOK, ns)
+		assert.True(t, *state.Tier1DeploymentsOK, "a proxy in %s covers the Gateway", ns)
+	}
+}
+
+// GatewayNamespace mode puts a Gateway's proxy beside it, in a namespace
+// Tier-1 already scans. A proxy there is attributed like one in the Envoy
+// namespace: another team's down proxy is not counted against NVCF.
+func TestCheckTier1Deployments_ProxyInScannedGatewayNamespaceIsAttributed(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+	foreign := proxyDeployment("envoy-team-b", "nvcf", "team-b-gw", 0)
+	foreign.Namespace = "nvcf"
+	nvcfProxy := proxyDeployment("envoy-nvcf", "nvcf", "nvcf-gw", 2)
+	nvcfProxy.Namespace = "nvcf"
+	state := runTier1(t, false, routeClient(), foreign, nvcfProxy)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "team-b's down proxy is not NVCF's")
+}
+
+// Every way of not being able to look leaves coverage undecided, and the row
+// UNKNOWN, rather than passing or failing it: the classes cannot be listed,
+// or the proxies cannot be.
+func TestCheckTier1Deployments_GatewayCoverageUndecidedIsUnknown(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+
+	classesDenied := envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg"))
+	classesDenied.PrependReactor("list", "gatewayclasses", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: gatewayAPIGroup, Resource: "gatewayclasses"}, "", fmt.Errorf("denied"))
+	})
+	state := runTier1(t, true, classesDenied)
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not tell which NVCF Gateways Envoy Gateway runs")
+
+	client := gatewayDiscoveryClient(gatewayAPIGroup+"/v1/gateways", gatewayAPIGroup+"/v1/gatewayclasses")
+	client.PrependReactor("list", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+	})
+	state = &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier1Deployments(context.Background(), client,
+		envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg")), state)
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "listing Envoy proxy DaemonSets")
+}
+
+// A Deployment with no progress deadline has no Progressing condition. A
+// healthy rollout of one, sitting at its readiness floor with old pods still
+// running, is tolerated as it is with a deadline.
+func TestCheckTier1Deployments_RolloutWithoutProgressDeadlineIsTolerated(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	three, noDeadline := int32(3), int32(math.MaxInt32)
+	one := intstr.FromInt32(1)
+	zero := intstr.FromInt32(0)
+	rolling := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 2},
+		Spec: appsv1.DeploymentSpec{Replicas: &three, ProgressDeadlineSeconds: &noDeadline,
+			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{MaxUnavailable: &one, MaxSurge: &zero}}},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 3, UpdatedReplicas: 1, ReadyReplicas: 2},
+	}
+	state := runTier1(t, false, routeClient(), rolling)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK)
+
+	// Without old pods it is no rollout: a finished ReplicaSet short a pod.
+	finished := rolling.DeepCopy()
+	finished.Status.Replicas, finished.Status.UpdatedReplicas = 2, 2
+	state = runTier1(t, false, routeClient(), finished)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK)
 }
 
 // Gateway names must be namespace/name. A bare name could match another

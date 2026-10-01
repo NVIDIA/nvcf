@@ -564,6 +564,9 @@ func TestSetupNVCADeployment_OverrideEnvironmentVars(t *testing.T) {
 		clients:              clients,
 		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
 		envType:              nvidiaiov1.EnvTypeStage,
+		// The agent learns the validator runs here, so it publishes the
+		// metrics baseline. TestSetupNVCADeployment covers it unset.
+		clusterValidatorEnabled: true,
 	}
 
 	overrideVars := map[string]string{
@@ -656,6 +659,7 @@ func TestSetupNVCADeployment_OverrideEnvironmentVars(t *testing.T) {
 		assert.Equal(t, wantValue, ev.Value, "override env var %q value", name)
 		assert.Nil(t, ev.ValueFrom, "override env var %q should use literal Value, not ValueFrom", name)
 	}
+	assert.Equal(t, "true", envByName[clustervalidator.EnabledEnv].Value)
 }
 
 func TestSetupNVCADeployment_Vault(t *testing.T) {

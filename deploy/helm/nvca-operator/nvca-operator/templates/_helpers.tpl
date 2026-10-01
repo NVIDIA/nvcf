@@ -434,7 +434,6 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "envoyGatewayNamespace" ""
     "gatewayNames" (list)
     "nodeToNodeProbeImage" ""
-    "haMode" ""
     "tolerations" (list)
     "networkChecks" (dict)
     "resources" (dict
@@ -468,13 +467,11 @@ nvcr.io/nvidia/nvcf-byoc/cluster-validator
 {{- end -}}
 
 {{/*
-The cluster-validator Job spec, shared by the CronJob and the one-shot Job the
-control-plane role runs at install, so the two cannot drift. Takes a dict:
-"root" is the chart context, and "reportOnly" marks the install-time Job.
+The cluster-validator CronJob's Job spec. Under the control-plane role the
+operator also runs it once at startup, from the CronJob itself, so the two
+cannot drift.
 */}}
 {{- define "nvcaop.clusterValidatorJobSpec" -}}
-{{- $reportOnly := .reportOnly -}}
-{{- with .root -}}
 {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
 parallelism: 1
 completions: 1
@@ -551,20 +548,6 @@ template:
           - name: NVCF_N2N_PROBE_IMAGE
             value: {{ $cv.nodeToNodeProbeImage | quote }}
           {{- end }}
-          {{- if $cv.haMode }}
-          # The stack's highAvailability.mode. Under "none" a
-          # single-replica quorum component is expected, not a failure.
-          - name: NVCF_HA_MODE
-            value: {{ $cv.haMode | quote }}
-          {{- end }}
-          {{- if $reportOnly }}
-          # The install-time Job is a release resource, and the stack waits
-          # for Jobs: a Not-Ready verdict publishes its summary and completes
-          # rather than failing the install or upgrade. The CronJob's runs
-          # still fail.
-          - name: VALIDATOR_REPORT_ONLY
-            value: "true"
-          {{- end }}
         resources:
           requests:
             cpu: {{ $cv.resources.requests.cpu | quote }}
@@ -588,9 +571,13 @@ template:
       {{- with $cv.tolerations }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
+      {{- /* The operator's own tolerations go with its nodeSelector: pinned to
+             tainted nodes, the Job would otherwise never schedule. */}}
+      {{- with .Values.tolerations }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
     {{- if .Values.nodeSelector.value }}
     nodeSelector:
       {{ .Values.nodeSelector.key }}: {{ .Values.nodeSelector.value }}
     {{- end }}
-{{- end }}
 {{- end }}

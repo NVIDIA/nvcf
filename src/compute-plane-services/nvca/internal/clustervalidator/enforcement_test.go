@@ -201,8 +201,10 @@ func TestWaitForPodReady_AlreadyReady(t *testing.T) {
 		},
 	}
 	client := fake.NewSimpleClientset(pod)
-	err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
+	got, err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
 	assert.NoError(t, err)
+	require.NotNil(t, got, "the Ready pod is returned")
+	assert.Equal(t, "srv", got.Name)
 }
 
 func TestWaitForPodReady_Failed(t *testing.T) {
@@ -211,7 +213,7 @@ func TestWaitForPodReady_Failed(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	}
 	client := fake.NewSimpleClientset(pod)
-	err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
+	_, err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Failed phase")
 }
@@ -220,7 +222,7 @@ func TestWaitForPodReady_NotFound(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	err := waitForPodReady(ctx, client, "ns", "missing", 200*time.Millisecond)
+	_, err := waitForPodReady(ctx, client, "ns", "missing", 200*time.Millisecond)
 	assert.Error(t, err)
 }
 
@@ -331,7 +333,7 @@ func finishesWithin(t *testing.T, limit time.Duration, fn func()) {
 func TestWaitForPodReady_HungGetEndsAtTheDeadline(t *testing.T) {
 	client := hangingClient(t)
 	finishesWithin(t, 5*time.Second, func() {
-		err := waitForPodReady(context.Background(), client, "ns", "srv", time.Second)
+		_, err := waitForPodReady(context.Background(), client, "ns", "srv", time.Second)
 		assert.Error(t, err)
 	})
 }
@@ -354,44 +356,41 @@ func TestWaitForPod_ExpiredBudgetMakesNoCall(t *testing.T) {
 		calls++
 		return false, nil, nil
 	})
-	require.Error(t, waitForPodReady(context.Background(), client, "ns", "srv", 0))
-	_, _, err := waitForPodDone(context.Background(), client, "ns", "p", 0)
+	_, err := waitForPodReady(context.Background(), client, "ns", "srv", 0)
+	require.Error(t, err)
+	_, _, err = waitForPodDone(context.Background(), client, "ns", "p", 0)
 	require.Error(t, err)
 	assert.Zero(t, calls)
 }
 
 // ---------------------------------------------------------------------------
-// getPodIP
+// server pod IP
 // ---------------------------------------------------------------------------
 
-func TestGetPodIP(t *testing.T) {
-	t.Run("has IP", func(t *testing.T) {
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "srv", Namespace: "ns"},
-			Status:     corev1.PodStatus{PodIP: "10.0.0.5"},
+// The server's IP comes from the read that saw it Ready. A separate read for
+// the IP was unretried, so one transient error after Ready dropped a critical
+// enforcement check from the verdict.
+func TestSetupEnforcementEnv_IPComesFromTheReadyRead(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	ready := false
+	client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		return true, a.(ktesting.CreateAction).GetObject(), nil
+	})
+	client.PrependReactor("get", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if ready {
+			return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 		}
-		client := fake.NewSimpleClientset(pod)
-		ip, err := getPodIP(context.Background(), client, "ns", "srv")
-		assert.NoError(t, err)
-		assert.Equal(t, "10.0.0.5", ip)
+		ready = true
+		return true, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: enforcementServerPod, Namespace: "ns"},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.9",
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+		}, nil
 	})
-
-	t.Run("no IP", func(t *testing.T) {
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "srv", Namespace: "ns"},
-			Status:     corev1.PodStatus{},
-		}
-		client := fake.NewSimpleClientset(pod)
-		_, err := getPodIP(context.Background(), client, "ns", "srv")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no IP")
-	})
-
-	t.Run("pod not found", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
-		_, err := getPodIP(context.Background(), client, "ns", "missing")
-		assert.Error(t, err)
-	})
+	state := &ValidationState{Log: testLog()}
+	env, ok := setupEnforcementEnv(context.Background(), client, state, "ns", "img", 5*time.Second)
+	require.True(t, ok, "warnings: %v", state.Warnings)
+	assert.Equal(t, "10.0.0.9", env.serverIP)
 }
 
 // ---------------------------------------------------------------------------
@@ -644,7 +643,8 @@ func TestWaitForPodReady_RetriesTransientErrors(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	require.NoError(t, waitForPodReady(context.Background(), client, "ns", "srv", 10*time.Second))
+	_, err := waitForPodReady(context.Background(), client, "ns", "srv", 10*time.Second)
+	require.NoError(t, err)
 	assert.Greater(t, calls, 1)
 
 	denied := fake.NewSimpleClientset()
@@ -652,7 +652,8 @@ func TestWaitForPodReady_RetriesTransientErrors(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "srv", fmt.Errorf("denied"))
 	})
 	start := time.Now()
-	require.Error(t, waitForPodReady(context.Background(), denied, "ns", "srv", 30*time.Second))
+	_, err = waitForPodReady(context.Background(), denied, "ns", "srv", 30*time.Second)
+	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "a denial cannot change inside the deadline")
 }
 
@@ -668,7 +669,7 @@ func TestWaitForPodReady_NotFoundClearsAnEarlierTransientError(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	err := waitForPodReady(context.Background(), client, "ns", "missing", 3*time.Second)
+	_, err := waitForPodReady(context.Background(), client, "ns", "missing", 3*time.Second)
 	require.Error(t, err)
 	assert.Greater(t, calls, 1)
 	assert.NotContains(t, err.Error(), "slow down")

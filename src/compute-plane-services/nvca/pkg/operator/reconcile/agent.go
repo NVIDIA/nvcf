@@ -178,6 +178,14 @@ type AgentOptions struct {
 	// VaultOAuthClientMountPathTemplate is the template for constructing the
 	// Vault OAuth client mount path. Use %s as placeholder for clientID.
 	VaultOAuthClientMountPathTemplate string
+
+	// ClusterValidatorEnabled says the chart runs the cluster-validator, so
+	// the agent publishes its metrics baseline before the first summary.
+	ClusterValidatorEnabled bool
+	// ClusterValidatorCronJob names the cluster-validator CronJob in the
+	// operator's namespace to run once at startup. The chart sets it under
+	// the control-plane role, where nothing else writes the first summary.
+	ClusterValidatorCronJob string
 }
 
 type Agent struct {
@@ -439,6 +447,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if a.ClusterValidatorCronJob != "" {
+		go startInitialValidatorRun(ctx, backendK8sClients.K8s, a.PodNamespace, a.ClusterValidatorCronJob)
+	}
 
 	// TODO: source this directly from values and default URL's based on that.
 	envType := nvidiaiov1.EnvTypeProd
@@ -493,6 +504,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithEnvOverrides(a.FunctionEnvOverridesB64, a.TaskEnvOverridesB64).
 		WithIdentitySource(a.IdentitySource).
 		WithClusterSource(a.ClusterSource).
+		WithClusterValidatorEnabled(a.ClusterValidatorEnabled).
 		Start(ctx)
 
 	if err != nil {
