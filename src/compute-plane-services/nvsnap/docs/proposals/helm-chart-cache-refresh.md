@@ -19,7 +19,7 @@ collector, same election. One new idea: a set has generations.
 
 ```mermaid
 flowchart TD
-    A[warm worker Ready + settle] --> B{files in the cachedir newer than the seed marker?}
+    A[warm worker Ready + settle] --> B{paths in the cachedir that are not in the seed index?}
     B -- no --> Z[nothing to do]
     B -- yes --> C[agent on that node stamps cache-rank-delta and delta bytes on the pod]
     C --> D{all ranks of the group live and set complete and cooldown passed?}
@@ -54,14 +54,18 @@ the same path the cold collection uses. No attach of the old generation,
 no merge logic. If a rank has no live pod the round is skipped; the next
 warm deployment tries again.
 
-Delta detection by the seed marker. The seed init already copies the
-rank into the emptyDir with mtimes preserved (`cp -a`); it gains one
-line that writes a marker file after the copy. After Ready and the
-settle period the agent lists files under the cachedir newer than the
-marker. Any file means a delta; the count and
-bytes are stamped on the pod as `nvsnap.io/cache-rank-delta` and
-`cache-rank-delta-bytes`. Touched-but-unchanged files only cost a
-harmless re-copy.
+Delta detection by path against a seed index. The seed init already
+copies the rank into the emptyDir (`cp -a`); it gains one line that
+writes the list of seeded relative paths to `<cachedir>/.nvsnap-seeded`.
+After Ready and the settle period the agent lists files under the
+cachedir whose path is not in that index, ignoring lock files, logs and
+`tmp` directories. Measured on GB300 (2026-10-01, six minutes of
+traffic): a warm start rewrites 15 bookkeeping files (empty locks, the
+autotune table re-saved, the JIT log) and writes nothing during serving,
+so a path-based delta is empty on an ordinary warm start and non-empty
+only when the engine produced something new. The count and bytes are
+stamped on the pod as `nvsnap.io/cache-rank-delta` and
+`cache-rank-delta-bytes`.
 
 Bounded. A refresh needs: the set complete, at least one rank with a
 delta, every rank of the group live, and no refresh of this set within
@@ -76,8 +80,8 @@ the configuration changes.
 
 | Piece | Change |
 |---|---|
-| seed init (reader_steps.go) | writes `<cachedir>/.nvsnap-seeded` after the copy |
-| agent, after Ready + settle | delta scan against the marker; stamps delta annotations; calls the existing election with a generation suffix |
+| seed init (reader_steps.go) | writes the seeded path list to `<cachedir>/.nvsnap-seeded` after the copy |
+| agent, after Ready + settle | path-set delta against the index, ignoring locks, logs and tmp; stamps delta annotations; calls the existing election with a generation suffix |
 | modelvolume Lookup | today returns the first complete primary in list order (modelvolume.go, Lookup), which is arbitrary once there are two; it must sort by the generation label and return the newest; `Generation` on State |
 | collector | unchanged streaming; marks the new primary with `generation`, `refreshed-from`, `delta-fingerprint` and the time |
 | webhook complete branch | mints the read-only view from the generation Lookup returned (no change to the pod shape) |
@@ -116,9 +120,10 @@ as a miss, and the next refresh replaces it.
 
 ## Verification
 
-1. Unit: Lookup picks the newest complete generation; seed marker written;
-   delta scan ignores files older than the marker; cooldown and loop
-   guard; reaper retires a superseded generation only when unbound.
+1. Unit: Lookup picks the newest complete generation; seed index
+   written; delta scan reports only paths absent from the index and
+   ignores locks, logs and tmp; cooldown and loop guard; reaper retires
+   a superseded generation only when unbound.
 2. GB300: deploy Omni warm against the current set, confirm the delta
    stamp names the Mamba kernel directory, confirm generation 2 is
    collected and complete. Deploy again: no compile, graph capture 3 s,
