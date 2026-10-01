@@ -486,6 +486,21 @@ pages. The ct1 storage-profile overlay copied from dev1 also had
 `prewarm: false`, which silently dropped the step; the agent reads that
 ConfigMap once at start.
 
+Startup plan, 2026-10-01, two warm runs against a set captured with
+`VLLM_ENABLE_STARTUP_PLAN=1` (forced by `webhook.cacheSalt`): every worker
+applies the persisted plan, the profiling run is 1 s and the 26 s CUDA
+graph memory estimation pass is gone. First starts did not get faster:
+CUDA graph capture went from 3 s to 25 to 28 s because FlashInfer JIT
+compiles the Mamba selective-state-update decode kernel there, a variant
+the cold run never produced (the set's own FlashInfer log shows no
+compile) and the no-plan warm runs never needed. Restarted containers,
+whose emptyDir already holds that kernel, start in 62 to 70 s against
+73 to 95 s without the plan, which is the plan's real value. Admission
+to Ready 184 to 210 s. The gap is structural: a set is collected once
+and never learns what a warm start compiles later. Follow-up: set
+refresh, an append-only re-collection when a warm worker's cache gains
+files the set lacks.
+
 NVMesh shared read-only attach can take up to 30 s under 8 to 16
 concurrent clients on this cluster (IO-enable timeouts, kubelet retries);
 that is the storage layer, not this design, and it costs a few pods up to
