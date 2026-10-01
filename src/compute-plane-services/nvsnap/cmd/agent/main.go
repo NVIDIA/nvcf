@@ -184,6 +184,10 @@ func main() {
 		"How long a complete model or cache volume is kept after its last use before the reaper frees its storage (0 = keep forever)")
 	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
 		"How long a reader waits for the writer's download before downloading itself (default 1h)")
+	flag.BoolVar(&config.ModelVolume.RefreshDisabled, "cache-set-refresh-disabled", false,
+		"Turn off cache set refresh: warm ranks that gained files no longer propose a new generation of their set")
+	flag.DurationVar(&config.ModelVolume.RefreshCooldown, "cache-set-refresh-cooldown", 0,
+		"Least time between generations of one cache set (default 30m)")
 
 	flag.StringVar(&config.Webhook.L2WaitImage, "webhook-l2-wait-image", "",
 		"Image ref for the nvsnap-l2-wait init container injected onto restore pods (nvsnap#147)")

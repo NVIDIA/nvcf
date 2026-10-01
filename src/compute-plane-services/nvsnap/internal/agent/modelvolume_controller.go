@@ -5,14 +5,18 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tarstream"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 	"github.com/gorilla/mux"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,6 +104,15 @@ type ModelVolumeController struct {
 	// CacheWarmup is the wait after a pod is Ready before its cachedir is
 	// looked at. Zero means 30 seconds.
 	CacheWarmup time.Duration
+	// RefreshDisabled turns set refresh off; RefreshCooldown is the least
+	// time between a generation's creation and the next refresh of the
+	// same set (zero: 30 minutes). docs/proposals/helm-chart-cache-refresh.md.
+	RefreshDisabled bool
+	RefreshCooldown time.Duration
+	// deltaScan is the warm-rank scan (seam for tests): new files not in
+	// the seed index, their bytes, a fingerprint, and whether an index was
+	// found at all.
+	deltaScan func(src string) (files int, bytes int64, fingerprint string, indexed bool, err error)
 	// CacheSettle is how long the cache tree must stay unchanged (bytes
 	// and file count) before it is captured. Readiness is not "compiled":
 	// a tensor-parallel worker reports Ready before its torch.compile
@@ -252,6 +265,18 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 			c.captureModel(ctx, pod, uri)
 		}
 		return
+	}
+	if pod.Labels[cacheCaptureLabel] != "true" && pod.Labels[modelvolume.CacheKeyLabel] != "" && pod.Annotations[cacheURIAnnotation] != "" {
+		// A warm rank seeded from a complete set. Once Ready and settled
+		// its cachedir is compared with the seed index; a rank that gained
+		// files proposes a refresh and every agent runs that election.
+		curi := pod.Annotations[cacheURIAnnotation]
+		switch {
+		case pod.Annotations[modelvolume.CacheRankDeltaAnnotation] == "true":
+			c.tryRefresh(ctx, curi, c.log().WithFields(logrus.Fields{"cache": curi, "node": c.NodeName}))
+		case pod.Spec.NodeName == c.NodeName && rootfsonly.IsPodReady(pod) && pod.DeletionTimestamp == nil && pod.Annotations[modelvolume.CacheRankReadyAnnotation] != "true":
+			c.scanWarmRank(ctx, pod)
+		}
 	}
 	if pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
 		switch {
@@ -719,7 +744,7 @@ func (c *ModelVolumeController) tryCollect(ctx context.Context, uri string, log 
 			return // another agent collects this set
 		}
 		start := time.Now()
-		if err := c.collectSet(ctx, uri, sysNS, claim, ranks, log); err != nil {
+		if err := c.collectSet(ctx, uri, sysNS, claim, ranks, nil, log); err != nil {
 			c.mu.Lock()
 			c.attempts[key]++
 			n := c.attempts[key]
@@ -742,7 +767,7 @@ func (c *ModelVolumeController) tryCollect(ctx context.Context, uri string, log 
 // collectSet attaches the set claim once and fills /<ordinal>/ for every
 // rank: local ranks through the copier, remote ranks streamed from the
 // agent on their node. Then complete and release.
-func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, claim string, ranks []rankSource, log logrus.FieldLogger) error {
+func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, claim string, ranks []rankSource, meta map[string]string, log logrus.FieldLogger) error {
 	if _, err := c.Cache.WaitBound(ctx, sysNS, claim, stagingBindTimeout); err != nil {
 		return err
 	}
@@ -778,7 +803,7 @@ func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, clai
 		return fmt.Errorf("release collect holder: %w", err)
 	}
 	released = true
-	if err := c.Cache.MarkComplete(ctx, uri, sysNS); err != nil {
+	if err := c.Cache.MarkCompleteClaim(ctx, uri, sysNS, claim, meta); err != nil {
 		return err
 	}
 	return c.Cache.ClearFailure(ctx, uri)
@@ -796,7 +821,7 @@ func (c *ModelVolumeController) holderAttach(ctx context.Context, uri, sysNS, cl
 	if entry == nil {
 		entry = logrus.NewEntry(logrus.New())
 	}
-	name := "nvsnap-cache-collect-" + modelvolume.Key(uri) + "-" + shortNode(c.NodeName)
+	name := "nvsnap-cache-collect-" + modelvolume.Key(uri) + strings.TrimPrefix(claim, c.Cache.Cfg.ClaimName(uri)) + "-" + shortNode(c.NodeName)
 	h := checkpointstore.NewMountHolder(c.Kube, entry, sysNS, name, c.NodeName, claim, pvc.UID, c.HolderImage, c.HostFSRoot, c.HolderPullSecrets)
 	if err := h.Create(ctx); err != nil {
 		return "", nil, fmt.Errorf("create collect holder: %w", err)
@@ -1215,4 +1240,253 @@ func (c *ModelVolumeController) servePVCReader(ctx context.Context, pod *corev1.
 		return
 	}
 	log.WithField("claim", modelvolume.ReadOnlyClaimName(uri)).Info("model volume: read-only claim minted for reader")
+}
+
+// scanWarmRank measures a warm rank after Ready and the settle period,
+// marks it rank-ready so it can be listed and streamed, and when its
+// cachedir holds files the seed index did not, marks the delta and
+// proposes a refresh (docs/proposals/helm-chart-cache-refresh.md).
+func (c *ModelVolumeController) scanWarmRank(ctx context.Context, pod *corev1.Pod) {
+	if c.RefreshDisabled {
+		return
+	}
+	uri, vol, sub := pod.Annotations[cacheURIAnnotation], pod.Annotations[cacheVolumeAnnotation], pod.Annotations[cacheSubpathAnnotation]
+	if vol == "" {
+		return
+	}
+	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "cache": uri, "ordinal": pod.Annotations[modelvolume.CacheOrdinalAnnotation], "node": c.NodeName})
+	key := "warm:" + string(pod.UID)
+	c.mu.Lock()
+	if c.inflight[key] {
+		c.mu.Unlock()
+		return
+	}
+	c.inflight[key] = true
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.inflight, key)
+			c.mu.Unlock()
+		}()
+		warm := c.CacheWarmup
+		if warm == 0 {
+			warm = 30 * time.Second
+		}
+		select {
+		case <-time.After(warm):
+		case <-ctx.Done():
+			return
+		}
+		src := filepath.Join(c.KubeletPodsDir, string(pod.UID), "volumes", "kubernetes.io~empty-dir", vol, sub)
+		bytes, files, err := c.treeStat(filepath.Join(c.HostFSRoot, src))
+		if err != nil || bytes <= 0 {
+			log.WithError(err).Info("cache volume: warm rank not measurable yet")
+			return
+		}
+		settle := c.CacheSettle
+		if settle == 0 {
+			settle = 20 * time.Second
+		}
+		select {
+		case <-time.After(settle):
+		case <-ctx.Done():
+			return
+		}
+		if again, filesAgain, err := c.treeStat(filepath.Join(c.HostFSRoot, src)); err != nil || again != bytes || filesAgain != files {
+			log.Info("cache volume: warm rank still changing; retrying on the next event")
+			return
+		}
+		scan := c.deltaScan
+		if scan == nil {
+			scan = scanSeedDelta
+		}
+		newFiles, newBytes, fp, indexed, err := scan(filepath.Join(c.HostFSRoot, src))
+		if err != nil {
+			log.WithError(err).Warn("cache volume: warm rank delta scan failed")
+			return
+		}
+		if !indexed {
+			log.Info("cache volume: warm rank has no seed index; nothing to compare")
+			return
+		}
+		ann := map[string]string{modelvolume.CacheRankReadyAnnotation: "true", modelvolume.CacheRankBytesAnnotation: strconv.FormatInt(bytes, 10)}
+		if newFiles > 0 {
+			ann[modelvolume.CacheRankDeltaAnnotation] = "true"
+			ann[modelvolume.CacheRankDeltaBytesAnnotation] = strconv.FormatInt(newBytes, 10)
+			ann[modelvolume.CacheRankDeltaFingerprintAnnotation] = fp
+		}
+		body, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": ann}})
+		if _, err := c.Kube.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
+			log.WithError(err).Warn("cache volume: mark warm rank failed")
+			return
+		}
+		if newFiles == 0 {
+			log.WithField("files", files).Info("cache volume: warm rank matches the set")
+			return
+		}
+		log.WithFields(logrus.Fields{"new_files": newFiles, "new_bytes": newBytes, "fingerprint": fp}).Info("cache volume: warm rank gained files the set lacks; proposing a refresh")
+		c.tryRefresh(ctx, uri, log)
+	}()
+}
+
+// scanSeedDelta lists the files under root that the seed index does not
+// name, ignoring bookkeeping the engine rewrites on every start: lock
+// files, logs and tmp directories (GB300, 2026-10-01: 15 such files per
+// warm start, nothing else). indexed is false when there is no index.
+func scanSeedDelta(root string) (int, int64, string, bool, error) {
+	raw, err := os.ReadFile(filepath.Join(root, webhook.SeedIndexFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, "", false, nil
+		}
+		return 0, 0, "", false, err
+	}
+	seeded := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			seeded[line] = true
+		}
+	}
+	var added []string
+	var bytes int64
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, werr error) error {
+		if werr != nil || d.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr != nil || seeded[rel] || deltaIgnored(rel) {
+			return nil
+		}
+		if info, ierr := d.Info(); ierr == nil {
+			bytes += info.Size()
+		}
+		added = append(added, rel)
+		return nil
+	})
+	if err != nil {
+		return 0, 0, "", true, err
+	}
+	sort.Strings(added)
+	sum := sha256.Sum256([]byte(strings.Join(added, "\n")))
+	return len(added), bytes, hex.EncodeToString(sum[:8]), true, nil
+}
+
+// deltaIgnored names the per-start bookkeeping a delta scan skips.
+func deltaIgnored(rel string) bool {
+	base := filepath.Base(rel)
+	if base == webhook.SeedIndexFile || strings.HasSuffix(base, ".lock") || strings.HasSuffix(base, ".log") {
+		return true
+	}
+	for _, part := range strings.Split(filepath.Dir(rel), string(filepath.Separator)) {
+		if part == "locks" || part == "tmp" {
+			return true
+		}
+	}
+	return false
+}
+
+// tryRefresh runs the refresh election for a complete set: when a rank
+// reports a delta, every rank of the group is listed and ready, the
+// cooldown since the serving generation has passed and the same delta
+// has not been collected before, one agent collects a new generation from
+// the warm ranks. Readers of the old generation are unaffected.
+func (c *ModelVolumeController) tryRefresh(ctx context.Context, uri string, log logrus.FieldLogger) {
+	if c.RefreshDisabled {
+		return
+	}
+	key := "refresh:" + uri
+	c.mu.Lock()
+	if c.inflight[key] || c.attempts[key] >= c.StagingAttempts {
+		c.mu.Unlock()
+		return
+	}
+	c.inflight[key] = true
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.inflight, key)
+			c.mu.Unlock()
+		}()
+		st, err := c.Cache.Lookup(ctx, uri)
+		if err != nil || !st.Complete || st.Failed {
+			return
+		}
+		if st.RefreshStable {
+			return
+		}
+		cooldown := c.RefreshCooldown
+		if cooldown == 0 {
+			cooldown = 30 * time.Minute
+		}
+		if since := time.Since(st.PrimaryCreated); since < cooldown {
+			log.WithFields(logrus.Fields{"generation": st.Generation, "since": since.Round(time.Second).String(), "cooldown": cooldown.String()}).Info("cache volume: refresh proposed inside the cooldown; waiting")
+			return
+		}
+		ranks, ready, size, ok, err := c.groupRanks(ctx, uri)
+		if err != nil {
+			log.WithError(err).Warn("cache volume: list group failed")
+			return
+		}
+		if !ok {
+			log.WithFields(logrus.Fields{"ready": ready, "group_size": size}).Info("cache volume: refresh waits for the rest of the group")
+			return
+		}
+		deltas := map[int]string{}
+		var total int64
+		for _, r := range ranks {
+			total += r.bytes
+			if r.pod.Annotations[modelvolume.CacheRankDeltaAnnotation] == "true" {
+				deltas[r.ordinal] = r.pod.Annotations[modelvolume.CacheRankDeltaFingerprintAnnotation]
+			}
+		}
+		if len(deltas) == 0 {
+			return
+		}
+		fp := refreshFingerprint(deltas)
+		if fp == st.DeltaFingerprint {
+			if err := c.Cache.MarkRefreshStable(ctx, st.PrimaryPV); err != nil {
+				log.WithError(err).Warn("cache volume: mark set stable failed")
+			}
+			log.WithField("fingerprint", fp).Info("cache volume: the same delta came back after a refresh; the engine rewrites these files every start, set marked stable")
+			return
+		}
+		gen := st.Generation + 1
+		sysNS := c.Cache.Cfg.SystemNamespace()
+		claim := c.Cache.Cfg.GenerationClaimName(uri, gen)
+		_, created, err := c.Cache.ClaimSizedClaimNamed(ctx, claim, uri, sysNS, c.Cache.Cfg.VolumeSize(total))
+		if err != nil {
+			log.WithError(err).Warn("cache volume: refresh claim failed")
+			return
+		}
+		if !created {
+			return // another agent refreshes this set
+		}
+		meta := map[string]string{modelvolume.GenerationAnnotation: strconv.Itoa(gen), modelvolume.RefreshedFromAnnotation: st.PrimaryPV, modelvolume.DeltaFingerprintAnnotation: fp}
+		start := time.Now()
+		if err := c.collectSet(ctx, uri, sysNS, claim, ranks, meta, log); err != nil {
+			c.mu.Lock()
+			c.attempts[key]++
+			c.mu.Unlock()
+			log.WithError(err).Warn("cache volume: refresh collection failed")
+			if derr := c.Kube.CoreV1().PersistentVolumeClaims(sysNS).Delete(ctx, claim, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				log.WithError(derr).Warn("cache volume: delete refresh claim after failure failed")
+			}
+			return
+		}
+		log.WithFields(logrus.Fields{"generation": gen, "ranks": len(ranks), "bytes": total, "claim": sysNS + "/" + claim, "fingerprint": fp, "elapsed": time.Since(start).Round(time.Second).String()}).Info("cache volume: set refreshed; later pods of this configuration seed from the new generation")
+	}()
+}
+
+// refreshFingerprint identifies a set-wide delta: the per-rank
+// fingerprints of the ranks that reported one, by ordinal.
+func refreshFingerprint(deltas map[int]string) string {
+	parts := make([]string, 0, len(deltas))
+	for o, f := range deltas {
+		parts = append(parts, strconv.Itoa(o)+":"+f)
+	}
+	sort.Strings(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, ",")))
+	return hex.EncodeToString(sum[:8])
 }

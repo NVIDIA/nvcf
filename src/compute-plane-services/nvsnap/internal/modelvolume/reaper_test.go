@@ -216,3 +216,35 @@ func TestReaper_RetiresCompletePrimariesPastRetention(t *testing.T) {
 		t.Error("primary-forever must survive with Retention 0")
 	}
 }
+
+// Generations of one set are judged apart: a view that names its source
+// keeps only that primary alive, so a superseded generation retires while
+// the serving one, bound through a labelled view, survives.
+func TestReaper_SupersededGenerationRetiresWhileServingOneIsRead(t *testing.T) {
+	ctx := context.Background()
+	key := "abc123def4567890"
+	complete := map[string]string{CacheLabel: key, CompleteLabel: "true"}
+	live := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sr-live"}}
+	old := pvFixture("set-g1", complete, "nvsnap-system", "nvsnap-cache-"+key, corev1.VolumeReleased, false, 30*24*time.Hour)
+	old.Annotations = map[string]string{LastUsedAnnotation: time.Now().Add(-9 * 24 * time.Hour).UTC().Format(time.RFC3339)}
+	newer := pvFixture("set-g2", complete, "nvsnap-system", "nvsnap-cache-"+key+"-g2", corev1.VolumeReleased, false, 20*24*time.Hour)
+	newer.Annotations = map[string]string{LastUsedAnnotation: time.Now().Add(-9 * 24 * time.Hour).UTC().Format(time.RFC3339), GenerationAnnotation: "2"}
+	view := pvFixture("set-g2-ro", map[string]string{CacheLabel: key, "nvsnap.io/role": "reader-shared", SourcePVLabel: "set-g2"}, "sr-live", "nvsnap-cache-"+key+"-ro", corev1.VolumeBound, true, time.Hour)
+	kc := fake.NewSimpleClientset(live, old, newer, view)
+	r := &Reaper{Kube: kc, Retention: 7 * 24 * time.Hour}
+	res, err := r.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RetiredPrimaries != 1 {
+		t.Errorf("retired %d, want 1 (the superseded generation): %+v", res.RetiredPrimaries, res)
+	}
+	if _, err := kc.CoreV1().PersistentVolumes().Get(ctx, "set-g1", metav1.GetOptions{}); err == nil {
+		t.Error("generation 1 has no bound view and is past retention: retired")
+	}
+	for _, keep := range []string{"set-g2", "set-g2-ro"} {
+		if _, err := kc.CoreV1().PersistentVolumes().Get(ctx, keep, metav1.GetOptions{}); err != nil {
+			t.Errorf("%s must survive: a live namespace reads generation 2", keep)
+		}
+	}
+}

@@ -50,6 +50,11 @@ import (
 // are best-effort by construction: nothing here may keep a pod from
 // starting.
 
+// SeedIndexFile, written at the root of a seeded cache, lists the relative
+// paths the seed placed there, one per line, sorted. The agent compares the
+// cachedir against it after the engine is Ready to find what was added.
+const SeedIndexFile = ".nvsnap-seeded"
+
 // volumeAt is a pod volume and the path a step reads or writes it at.
 type volumeAt struct {
 	Volume string
@@ -137,8 +142,10 @@ func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir strin
 		Name:    name,
 		Image:   main.Image,
 		Command: []string{"/bin/sh", "-c"},
-		Args: []string{fmt.Sprintf("if [ -d %[1]s ]; then cp -a %[1]s/. %[2]s/ 2>/dev/null; chmod -R a+rwX %[2]s 2>/dev/null; fi; echo \"nvsnap: seeded %[3]s, $(find %[2]s -type f 2>/dev/null | wc -l) files\"; exit 0",
-			from, to, label)},
+		// The index of seeded paths lets the agent tell what the engine
+		// adds later (docs/proposals/helm-chart-cache-refresh.md).
+		Args: []string{fmt.Sprintf("if [ -d %[1]s ]; then cp -a %[1]s/. %[2]s/ 2>/dev/null; chmod -R a+rwX %[2]s 2>/dev/null; fi; mkdir -p %[2]s && (cd %[2]s && find . -type f ! -name %[4]s | sed 's|^\\./||' | sort > %[4]s) 2>/dev/null; echo \"nvsnap: seeded %[3]s, $(find %[2]s -type f 2>/dev/null | wc -l) files\"; exit 0",
+			from, to, label, SeedIndexFile)},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: src.Volume, MountPath: src.Path, ReadOnly: true},
 			{Name: dst.Volume, MountPath: dst.Path},

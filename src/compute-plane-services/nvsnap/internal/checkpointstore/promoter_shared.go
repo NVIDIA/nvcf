@@ -583,7 +583,10 @@ func (p *SharedVolumePromoter) MintReadOnlyFromPVLabels(ctx context.Context, pri
 			return fmt.Errorf("set primary PV %s reclaim=Retain: %w", primary.Name, err)
 		}
 	}
-	labels := map[string]string{labelNamespace: ns}
+	// nvsnap.io/source-pv (modelvolume.SourcePVLabel) names the primary a
+	// view was minted from, so the reaper judges generations of one set
+	// apart.
+	labels := map[string]string{labelNamespace: ns, "nvsnap.io/source-pv": primary.Name}
 	for k, v := range extra {
 		labels[k] = v
 	}
@@ -596,7 +599,7 @@ func (p *SharedVolumePromoter) MintReadOnlyFromPVLabels(ctx context.Context, pri
 		return fmt.Errorf("get ro claim %s/%s: %w", ns, roClaim, err)
 	}
 	sc := p.StorageClass
-	pvcLabels := map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": "reader", labelNamespace: ns}
+	pvcLabels := map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": "reader", labelNamespace: ns, "nvsnap.io/source-pv": primary.Name}
 	for k, v := range extra {
 		pvcLabels[k] = v
 	}

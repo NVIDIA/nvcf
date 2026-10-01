@@ -41,6 +41,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,6 +112,28 @@ const (
 	// the rank's cache tree has settled; CacheRankBytesAnnotation is its size.
 	CacheRankReadyAnnotation = "nvsnap.io/cache-rank-ready"
 	CacheRankBytesAnnotation = "nvsnap.io/cache-rank-bytes"
+	// CacheRankDeltaAnnotation marks a warm rank whose cachedir holds
+	// files the seeded set did not have; the bytes and a fingerprint of
+	// the new paths ride along. Any such rank proposes a set refresh
+	// (docs/proposals/helm-chart-cache-refresh.md).
+	CacheRankDeltaAnnotation            = "nvsnap.io/cache-rank-delta"
+	CacheRankDeltaBytesAnnotation       = "nvsnap.io/cache-rank-delta-bytes"
+	CacheRankDeltaFingerprintAnnotation = "nvsnap.io/cache-rank-delta-fingerprint"
+	// GenerationAnnotation on a complete set primary counts refreshes;
+	// absent means 1. Lookup serves the newest complete generation.
+	GenerationAnnotation = "nvsnap.io/cache-generation"
+	// RefreshedFromAnnotation names the primary a refreshed generation
+	// was collected to replace.
+	RefreshedFromAnnotation = "nvsnap.io/cache-refreshed-from"
+	// DeltaFingerprintAnnotation records the delta that produced a
+	// generation; the same delta proposed again means the engine rewrites
+	// those files every start, and the set is marked stable instead.
+	DeltaFingerprintAnnotation = "nvsnap.io/cache-delta-fingerprint"
+	// RefreshStableAnnotation stops further refreshes of a set.
+	RefreshStableAnnotation = "nvsnap.io/cache-refresh-stable"
+	// SourcePVLabel on a read-only view names the primary it was minted
+	// from, so liveness and retirement work per generation.
+	SourcePVLabel = "nvsnap.io/source-pv"
 
 	// LastUsedAnnotation on a primary PV is the RFC 3339 time a pod last
 	// admitted against it (or it completed). Retention counts from here.
@@ -192,6 +215,16 @@ func (c Config) prefix() string {
 
 // ClaimName is the primary claim for uri.
 func (c Config) ClaimName(uri string) string { return c.prefix() + Key(uri) }
+
+// GenerationClaimName is the primary claim for generation gen of uri:
+// the first generation keeps ClaimName, later ones carry a suffix so the
+// election for a refresh is its own atomic Create.
+func (c Config) GenerationClaimName(uri string, gen int) string {
+	if gen <= 1 {
+		return c.ClaimName(uri)
+	}
+	return c.ClaimName(uri) + "-g" + strconv.Itoa(gen)
+}
 
 // ReadOnlyClaimName is the per-namespace read-only claim for uri.
 func (c Config) ReadOnlyClaimName(uri string) string { return c.prefix() + Key(uri) + "-ro" }
@@ -278,6 +311,22 @@ type State struct {
 	// Pods admitted while this holds are left alone and download for
 	// themselves; the record expires so a later deployment retries.
 	Failed bool
+	// Generation of PrimaryPV (1 when unannotated); PrimaryCreated is its
+	// creation time, the reference for the refresh cooldown.
+	Generation     int
+	PrimaryCreated time.Time
+	// DeltaFingerprint is the delta that produced this generation, empty
+	// for a cold capture; RefreshStable says no further refresh runs.
+	DeltaFingerprint string
+	RefreshStable    bool
+}
+
+// Generation reads a primary's generation annotation; absent means 1.
+func Generation(pv *corev1.PersistentVolume) int {
+	if n, err := strconv.Atoi(pv.Annotations[GenerationAnnotation]); err == nil && n > 1 {
+		return n
+	}
+	return 1
 }
 
 // FailureRecordName is the ConfigMap that records a given-up model download.
@@ -315,7 +364,12 @@ func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size
 // Get before the Create is not an election (five agents once passed
 // through that gap together, ct1 2026-09-30), so there is none.
 func (p *Provisioner) ClaimSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (name string, created bool, err error) {
-	name = p.Cfg.ClaimName(uri)
+	return p.ClaimSizedClaimNamed(ctx, p.Cfg.ClaimName(uri), uri, ns, size)
+}
+
+// ClaimSizedClaimNamed is ClaimSizedClaim for a claim of a given name,
+// such as a later generation of a set.
+func (p *Provisioner) ClaimSizedClaimNamed(ctx context.Context, name, uri, ns string, size resource.Quantity) (string, bool, error) {
 	mode := corev1.ReadWriteOnce
 	if p.Cfg.Mode == ModeRWX {
 		mode = corev1.ReadWriteMany
@@ -336,7 +390,7 @@ func (p *Provisioner) ClaimSizedClaim(ctx context.Context, uri, ns string, size 
 			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: size}},
 		},
 	}
-	_, err = p.Kube.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{})
+	_, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{})
 	switch {
 	case err == nil:
 		return name, true, nil
@@ -389,12 +443,23 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 		if err != nil {
 			return State{}, fmt.Errorf("list volumes for %s: %w", uri, err)
 		}
+		// Several complete primaries are generations of one set; the
+		// newest serves, the rest age out.
+		var best *corev1.PersistentVolume
 		for i := range pvs.Items {
 			pv := &pvs.Items[i]
 			if pv.Labels["nvsnap.io/role"] == "reader-shared" || pv.Spec.CSI == nil || pv.Spec.CSI.ReadOnly {
 				continue
 			}
-			st.Exists, st.Complete, st.PrimaryPV = true, true, pv.Name
+			if best == nil || Generation(pv) > Generation(best) || (Generation(pv) == Generation(best) && pv.CreationTimestamp.After(best.CreationTimestamp.Time)) {
+				best = pv
+			}
+		}
+		if best != nil {
+			st.Exists, st.Complete, st.PrimaryPV = true, true, best.Name
+			st.Generation, st.PrimaryCreated = Generation(best), best.CreationTimestamp.Time
+			st.DeltaFingerprint = best.Annotations[DeltaFingerprintAnnotation]
+			st.RefreshStable = best.Annotations[RefreshStableAnnotation] == "true"
 			return st, nil
 		}
 	}
@@ -424,11 +489,18 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 // Job's node, and NVMesh refuses read-only attaches elsewhere until that
 // attachment is gone (dev1 2026-09-26). Idempotent.
 func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
-	name := p.Cfg.ClaimName(uri)
+	return p.MarkCompleteClaim(ctx, uri, ns, p.Cfg.ClaimName(uri), nil)
+}
+
+// MarkCompleteClaim is MarkComplete for a named claim, stamping meta as
+// annotations on the primary (a refreshed generation's number, origin
+// and delta fingerprint).
+func (p *Provisioner) MarkCompleteClaim(ctx context.Context, uri, ns, name string, meta map[string]string) error {
 	pvc, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) && p.Cfg.Mode == ModeBlock {
-			if st, lerr := p.Lookup(ctx, uri); lerr == nil && st.Complete {
+			gen, _ := strconv.Atoi(meta[GenerationAnnotation])
+			if st, lerr := p.Lookup(ctx, uri); lerr == nil && st.Complete && (gen <= 1 || st.Generation >= gen) {
 				return nil // released already
 			}
 		}
@@ -455,6 +527,9 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 			}
 			pv.Annotations[IdentityAnnotation] = uri
 			pv.Annotations[LastUsedAnnotation] = time.Now().UTC().Format(time.RFC3339)
+			for k, v := range meta {
+				pv.Annotations[k] = v
+			}
 			pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 			if _, err := p.Kube.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
 				return fmt.Errorf("label volume %s complete: %w", pv.Name, err)
@@ -796,4 +871,12 @@ func Harden(c *corev1.Container, resources corev1.ResourceRequirements, from *co
 	if sc.SeccompProfile == nil && from.SeccompProfile != nil {
 		sc.SeccompProfile = from.SeccompProfile.DeepCopy()
 	}
+}
+
+// MarkRefreshStable records on the serving primary that no further
+// refresh of this set runs: the same delta came back after a refresh.
+func (p *Provisioner) MarkRefreshStable(ctx context.Context, pvName string) error {
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:"true"}}}`, RefreshStableAnnotation)
+	_, err := p.Kube.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	return err
 }

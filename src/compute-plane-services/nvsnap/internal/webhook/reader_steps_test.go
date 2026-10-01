@@ -97,6 +97,9 @@ func TestReaderSteps_PostureAndResources(t *testing.T) {
 	if !strings.Contains(seed.Args[0], "cp -a /ro/3/. /rw/cache/") || !strings.Contains(seed.Args[0], "chmod -R a+rwX /rw/cache") || !strings.HasSuffix(seed.Args[0], "exit 0") {
 		t.Errorf("seed copies the subdirectory into the destination and never fails: %q", seed.Args[0])
 	}
+	if !strings.Contains(seed.Args[0], "sort > "+SeedIndexFile) || !strings.Contains(seed.Args[0], "! -name "+SeedIndexFile) {
+		t.Errorf("seed writes the index of seeded paths for the refresh delta scan: %q", seed.Args[0])
+	}
 	if len(seed.VolumeMounts) != 2 || !seed.VolumeMounts[0].ReadOnly || seed.VolumeMounts[1].ReadOnly {
 		t.Errorf("seed mounts the source read-only and the destination writable: %+v", seed.VolumeMounts)
 	}

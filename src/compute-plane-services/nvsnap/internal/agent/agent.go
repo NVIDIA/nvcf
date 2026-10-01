@@ -231,6 +231,11 @@ type ModelVolumeConfig struct {
 	// at the same path, where completed model volumes are bound for
 	// readers on block storage. Default /var/lib/containerd/nvsnap-models.
 	HostRoot string
+	// RefreshDisabled turns cache set refresh off; RefreshCooldown is the
+	// least time between generations of one set (zero: 30 minutes).
+	// docs/proposals/helm-chart-cache-refresh.md.
+	RefreshDisabled bool
+	RefreshCooldown time.Duration
 	// ReapInterval is how often the reaper removes read-only model PVs
 	// without a claim and abandoned primaries. Zero means ten minutes.
 	ReapInterval time.Duration
@@ -683,6 +688,8 @@ func (a *Agent) Run(ctx context.Context) error {
 			HolderPullSecrets: l2PullSecrets(a.config.L2),
 			Copier:            NewAgentCopier("/host", a.log.WithField("subsys", "modelvolume.copy")),
 			Cache:             a.cacheVolume,
+			RefreshDisabled:   a.config.ModelVolume.RefreshDisabled,
+			RefreshCooldown:   a.config.ModelVolume.RefreshCooldown,
 			Log:               a.log.WithField("subsys", "modelvolume"),
 		}
 		a.mvc = mvc

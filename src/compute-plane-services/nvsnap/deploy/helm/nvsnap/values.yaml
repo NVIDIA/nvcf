@@ -143,6 +143,16 @@ agent:
     # reaper frees its storage. Set to 0 to keep volumes forever.
     retention: 168h
 
+  # Compile cache sets learn what warm starts compile
+  # (docs/proposals/helm-chart-cache-refresh.md). A warm rank whose
+  # cachedir gained files the seeded set lacks proposes a refresh; one
+  # agent collects a new generation of the set from the warm ranks and
+  # later pods seed from it. refresh: false turns this off.
+  # refreshCooldown is the least time between generations of one set.
+  cacheVolume:
+    refresh: true
+    refreshCooldown: 30m
+
   election:
     enabled: false
     # Bound on the leader's cold start plus capture. Past it the server

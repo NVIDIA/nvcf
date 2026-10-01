@@ -350,3 +350,39 @@ func TestClaimSizedClaim_ExactlyOneCreator(t *testing.T) {
 		t.Error("an existing claim is never re-created")
 	}
 }
+
+// Lookup serves the newest complete generation of a set and reports it;
+// an unannotated primary is generation 1.
+func TestLookup_ServesNewestGeneration(t *testing.T) {
+	ctx := context.Background()
+	uri := "cache://abc123"
+	mk := func(name, gen string, age time.Duration) *corev1.PersistentVolume {
+		pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(time.Now().Add(-age)),
+			Labels: map[string]string{CacheLabel: Key(uri), CompleteLabel: "true"}, Annotations: map[string]string{}},
+			Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "d", VolumeHandle: name}}}}
+		if gen != "" {
+			pv.Annotations[GenerationAnnotation] = gen
+			pv.Annotations[DeltaFingerprintAnnotation] = "fp-" + gen
+		}
+		return pv
+	}
+	kc := fake.NewSimpleClientset(mk("g1", "", 3*time.Hour), mk("g3", "3", time.Hour), mk("g2", "2", 2*time.Hour))
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, Kind: KindCache, Namespace: "nvsnap-system"}}
+	st, err := p.Lookup(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Complete || st.PrimaryPV != "g3" || st.Generation != 3 || st.DeltaFingerprint != "fp-3" || st.RefreshStable {
+		t.Errorf("newest generation served: %+v", st)
+	}
+	if err := p.MarkRefreshStable(ctx, "g3"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := p.Lookup(ctx, uri); !st.RefreshStable {
+		t.Errorf("stable flag read back: %+v", st)
+	}
+	cc := Config{Kind: KindCache}
+	if cc.GenerationClaimName(uri, 1) != cc.ClaimName(uri) || cc.GenerationClaimName(uri, 2) != cc.ClaimName(uri)+"-g2" {
+		t.Error("generation 1 keeps the plain claim name; later ones carry a suffix")
+	}
+}

@@ -113,13 +113,15 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 		namespaces[ns] = exists
 		return exists
 	}
-	// Identities with a read-only PV bound in a namespace that still
-	// exists have a live reader; retention never touches those.
+	// A primary with a read-only view bound in a namespace that still
+	// exists has a live reader; retention never touches it. Views name
+	// their primary (SourcePVLabel) so generations of one set are judged
+	// apart; a view without the label keeps its whole identity alive.
 	live := map[string]bool{}
 	for i := range pvs.Items {
 		pv := &pvs.Items[i]
 		if isReadOnlyModelPV(pv) && pv.Status.Phase == corev1.VolumeBound && pv.Spec.ClaimRef != nil && nsExists(pv.Spec.ClaimRef.Namespace) {
-			live[identityKey(pv)] = true
+			live[viewSourceKey(pv)] = true
 		}
 	}
 	for i := range pvs.Items {
@@ -128,14 +130,14 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 		switch {
 		case isPrimaryModelPV(pv) && pv.Labels[CompleteLabel] == "true" && pv.Status.Phase == corev1.VolumeReleased && r.Retention > 0:
 			last := lastUsed(pv)
-			if r.now().Sub(last) < r.Retention || live[identityKey(pv)] || attached[pv.Name] {
+			if r.now().Sub(last) < r.Retention || live[pv.Name] || live[identityKey(pv)] || attached[pv.Name] {
 				continue
 			}
 			// Read-only views of this primary first: they are Retain PV
 			// objects over the same storage and would be left dangling.
 			for j := range pvs.Items {
 				ro := &pvs.Items[j]
-				if !isReadOnlyModelPV(ro) || identityKey(ro) != identityKey(pv) || attached[ro.Name] {
+				if !isReadOnlyModelPV(ro) || !viewOf(ro, pv) || attached[ro.Name] {
 					continue
 				}
 				if derr := r.deletePV(ctx, ro.Name); derr != nil {
@@ -315,6 +317,24 @@ func (r *Reaper) Run(ctx context.Context, interval time.Duration) {
 
 // identityKey is the volume's key in its label namespace, so a model and
 // a cache with the same short hash never collide.
+// viewSourceKey is what a bound read-only view keeps alive: its source
+// primary by name when labelled, else its whole identity.
+func viewSourceKey(ro *corev1.PersistentVolume) string {
+	if src := ro.Labels[SourcePVLabel]; src != "" {
+		return src
+	}
+	return identityKey(ro)
+}
+
+// viewOf reports whether ro is a read-only view of primary pv: by source
+// label when present, else by identity (views minted before the label).
+func viewOf(ro, pv *corev1.PersistentVolume) bool {
+	if src := ro.Labels[SourcePVLabel]; src != "" {
+		return src == pv.Name
+	}
+	return identityKey(ro) == identityKey(pv)
+}
+
 func identityKey(pv *corev1.PersistentVolume) string {
 	if k := pv.Labels[CacheLabel]; k != "" {
 		return "cache:" + k

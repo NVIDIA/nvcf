@@ -139,6 +139,13 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		ordinal := podOrdinal(pod)
 		patches = append(patches, mp.annotation(CacheURIAnnotation, uri)...)
 		patches = append(patches, mp.annotation(modelvolume.CacheOrdinalAnnotation, strconv.Itoa(ordinal))...)
+		// The same group identity a capture pod carries, so a warm rank can
+		// be measured, listed and streamed by the agents when the set is
+		// refreshed (docs/proposals/helm-chart-cache-refresh.md).
+		patches = append(patches, mp.label(modelvolume.CacheKeyLabel, modelvolume.Key(uri))...)
+		patches = append(patches, mp.annotation(modelvolume.CacheGroupSizeAnnotation, strconv.Itoa(m.groupSize(ctx, pod)))...)
+		patches = append(patches, mp.annotation(CacheVolumeAnnotation, cacheDirVolumeName)...)
+		patches = append(patches, mp.annotation(CacheSubpathAnnotation, cacheSubdir)...)
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: cacheSeedVolumeName, VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim, ReadOnly: true}}}})
 		// The pod's own rank directory of the set lands in its cachedir
