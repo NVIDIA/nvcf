@@ -379,7 +379,8 @@
           ]
         }
       ],
-      "app_version_source": "nvca"
+      "app_version_source": "nvca",
+      "version_source": "nvca"
     },
     {
       "id": "cassandra-migrations",
