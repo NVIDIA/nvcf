@@ -382,9 +382,30 @@ func TestEnsureClusterValidatorRBAC_GrantsGatewayAPIReads(t *testing.T) {
 			}
 		}
 	}
-	for _, res := range []string{"gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes"} {
+	for _, res := range []string{"gateways", "gatewayclasses", "httproutes", "grpcroutes", "tcproutes", "udproutes"} {
 		assert.True(t, granted[res], res)
 	}
+	// Tier-2 dates a rolling StatefulSet's rollout from its update revision.
+	assert.True(t, rbacRuleCovers(cr.Rules, "apps", "controllerrevisions", "get"))
+}
+
+// The extra tolerations reach the Job beside the control-plane ones it always
+// carries, so a cluster whose nodes use other taints can schedule it.
+func TestRunClusterValidator_ExtraTolerationsReachTheJob(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "key")
+	client := lifecycleClient(succeeded, "")
+	var job *batchv1.Job
+	client.PrependReactor("create", "jobs", func(a ktesting.Action) (bool, runtime.Object, error) {
+		job = a.(ktesting.CreateAction).GetObject().(*batchv1.Job).DeepCopy()
+		return false, nil, nil
+	})
+	extra := corev1.Toleration{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "infra",
+		Effect: corev1.TaintEffectNoSchedule}
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1", "", false,
+		clusterValidatorComputePlaneRole, nil, nil, extra)
+	require.NoError(t, res.Err)
+	require.NotNil(t, job)
+	assert.Equal(t, append(clusterValidatorTolerations(), extra), job.Spec.Template.Spec.Tolerations)
 }
 
 // The control-plane validator receives the enumerated registries and the

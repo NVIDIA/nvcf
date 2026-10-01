@@ -31,6 +31,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
+	corev1 "k8s.io/api/core/v1"
 
 	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/kubectx"
@@ -38,20 +39,21 @@ import (
 )
 
 var (
-	checkPre                        bool
-	checkControlPlane               bool
-	checkComputePlane               bool
-	checkAll                        bool
-	checkClusterName                string
-	checkLocalOnly                  bool
-	checkSkipInotifyCheck           bool
-	checkSkipClusterValidation      bool
-	checkClusterValidatorImage      string
-	checkClusterValidatorPullSecret string
-	checkClusterValidatorNoCleanup  bool
-	checkClusterValidatorRegistries []string
-	checkClusterValidatorProbeImage string
-	checkShowLogs                   bool
+	checkPre                         bool
+	checkControlPlane                bool
+	checkComputePlane                bool
+	checkAll                         bool
+	checkClusterName                 string
+	checkLocalOnly                   bool
+	checkSkipInotifyCheck            bool
+	checkSkipClusterValidation       bool
+	checkClusterValidatorImage       string
+	checkClusterValidatorPullSecret  string
+	checkClusterValidatorNoCleanup   bool
+	checkClusterValidatorRegistries  []string
+	checkClusterValidatorTolerations []string
+	checkClusterValidatorProbeImage  string
+	checkShowLogs                    bool
 )
 
 // Test seam.
@@ -125,6 +127,14 @@ func init() {
 			"Can also be set in nvcf-cli config as cluster_validator_registries (list).")
 	_ = viper.BindPFlag("cluster_validator_registries",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-registries"))
+	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorTolerations, "cluster-validator-tolerations", nil,
+		"Tolerations added to the validator Job, for clusters whose nodes carry taints other than the "+
+			"control-plane ones it always tolerates. Format: key[=value][:effect], effect one of NoSchedule, "+
+			"PreferNoSchedule or NoExecute (e.g. dedicated=infra:NoSchedule). Repeatable or comma-separated. "+
+			"Env: NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS. "+
+			"Can also be set in nvcf-cli config as cluster_validator_tolerations (list).")
+	_ = viper.BindPFlag("cluster_validator_tolerations",
+		selfHostedCheckCmd.Flags().Lookup("cluster-validator-tolerations"))
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorProbeImage, "cluster-validator-probe-image", "",
 		"Image for the control-plane validator's node-to-node overlay probe (needs sh and busybox-style nc). "+
 			"Defaults to busybox:1.36 from Docker Hub; set a mirror for air-gapped clusters. "+
@@ -145,6 +155,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		// Each poll is a new validator run, so --no-cleanup would keep a full
 		// set of RBAC, Secret, ConfigMap and Job for every poll.
 		return fmt.Errorf("--no-cleanup keeps one run's objects for debugging and cannot be combined with --wait")
+	}
+	if _, err := configuredValidatorTolerations(); err != nil {
+		return err
 	}
 
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
@@ -490,6 +503,51 @@ func configuredValidatorRegistries() []string {
 	return out
 }
 
+// configuredValidatorTolerations parses the validator Job's extra tolerations
+// from the flag, env var, or config file. Each is key[=value][:effect]: with
+// a value it matches that value, without one any; with no effect it matches
+// every effect.
+func configuredValidatorTolerations() ([]corev1.Toleration, error) {
+	var out []corev1.Toleration
+	for _, raw := range viper.GetStringSlice("cluster_validator_tolerations") {
+		for _, entry := range strings.Split(raw, ",") {
+			if entry = strings.TrimSpace(entry); entry == "" {
+				continue
+			}
+			t, err := parseToleration(entry)
+			if err != nil {
+				return nil, fmt.Errorf("--cluster-validator-tolerations %q: %w", entry, err)
+			}
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+var tolerationEffects = map[string]corev1.TaintEffect{
+	"noschedule":       corev1.TaintEffectNoSchedule,
+	"prefernoschedule": corev1.TaintEffectPreferNoSchedule,
+	"noexecute":        corev1.TaintEffectNoExecute,
+}
+
+func parseToleration(entry string) (corev1.Toleration, error) {
+	t := corev1.Toleration{Operator: corev1.TolerationOpExists}
+	if rest, effect, ok := strings.Cut(entry, ":"); ok {
+		e, known := tolerationEffects[strings.ToLower(effect)]
+		if !known {
+			return t, fmt.Errorf("effect must be NoSchedule, PreferNoSchedule or NoExecute, got %q", effect)
+		}
+		t.Effect, entry = e, rest
+	}
+	if key, value, ok := strings.Cut(entry, "="); ok {
+		t.Operator, t.Value, entry = corev1.TolerationOpEqual, value, key
+	}
+	if t.Key = entry; t.Key == "" {
+		return t, fmt.Errorf("a taint key is required")
+	}
+	return t, nil
+}
+
 // computePlaneIsTargeted reports whether the compute-plane validator should run:
 // --compute-plane, --all, or --pre in ModeSingle. --pre in ModeSplit does not
 // target it because separate clusters have no implicit compute-plane role.
@@ -640,6 +698,8 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	registries := cfg.Registries
 	validatorEnv := clusterValidatorJobEnv(
 		selfhosted.LoadStackValues(resolveStackValuesFiles()))
+	// Validated before the run starts.
+	validatorTolerations, _ := configuredValidatorTolerations()
 	cpValidatorEnv := validatorEnvForRole(validatorEnv, checkControlPlane)
 	gpuValidatorEnv := validatorEnvForRole(validatorEnv, checkComputePlane)
 
@@ -679,15 +739,16 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		if runControlPlane {
 			eg.Go(func() error {
 				rc := selfhosted.RoleConfig{
-					KubeContext:                selfHostedControlPlaneContext,
-					ClusterValidator:           cpClusterValidator,
-					ClusterValidatorImage:      clusterValidatorImage,
-					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-					ClusterValidatorEnv:        cpValidatorEnv,
-					ClusterValidatorRegistries: registries,
-					StaleNamespaceProber:       staleNSProber,
-					StackDir:                   localStackDir(selfHostedControlPlaneStack),
+					KubeContext:                 selfHostedControlPlaneContext,
+					ClusterValidator:            cpClusterValidator,
+					ClusterValidatorImage:       clusterValidatorImage,
+					ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
+					ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
+					ClusterValidatorEnv:         cpValidatorEnv,
+					ClusterValidatorTolerations: validatorTolerations,
+					ClusterValidatorRegistries:  registries,
+					StaleNamespaceProber:        staleNSProber,
+					StackDir:                    localStackDir(selfHostedControlPlaneStack),
 				}
 				cpResults = selfhosted.RunPreflightForRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
 				return nil
@@ -696,16 +757,17 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		if runComputePlane {
 			eg.Go(func() error {
 				rc := selfhosted.RoleConfig{
-					KubeContext:                selfHostedComputePlaneContext,
-					SISURL:                     icmsURL,
-					InotifyProber:              inotifyProber,
-					ClusterValidator:           clusterValidator,
-					ClusterValidatorImage:      clusterValidatorImage,
-					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-					ClusterValidatorEnv:        gpuValidatorEnv,
-					StaleNamespaceProber:       staleNSProber,
-					StackDir:                   localStackDir(selfHostedComputePlaneStack),
+					KubeContext:                 selfHostedComputePlaneContext,
+					SISURL:                      icmsURL,
+					InotifyProber:               inotifyProber,
+					ClusterValidator:            clusterValidator,
+					ClusterValidatorImage:       clusterValidatorImage,
+					ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
+					ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
+					ClusterValidatorEnv:         gpuValidatorEnv,
+					ClusterValidatorTolerations: validatorTolerations,
+					StaleNamespaceProber:        staleNSProber,
+					StackDir:                    localStackDir(selfHostedComputePlaneStack),
 				}
 				gpuResults = selfhosted.RunPreflightForRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
 				return nil
@@ -745,31 +807,33 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 
 		if runControlPlane {
 			cpRC := selfhosted.RoleConfig{
-				SISURL:                     icmsURL,
-				ClusterValidator:           cpClusterValidator,
-				ClusterValidatorImage:      clusterValidatorImage,
-				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-				ClusterValidatorEnv:        cpValidatorEnv,
-				ClusterValidatorRegistries: registries,
-				StaleNamespaceProber:       staleForControlPlane,
-				StackDir:                   localStackDir(selfHostedControlPlaneStack),
-				ExtraStaleNamespaces:       cpExtraNamespaces,
+				SISURL:                      icmsURL,
+				ClusterValidator:            cpClusterValidator,
+				ClusterValidatorImage:       clusterValidatorImage,
+				ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
+				ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
+				ClusterValidatorEnv:         cpValidatorEnv,
+				ClusterValidatorTolerations: validatorTolerations,
+				ClusterValidatorRegistries:  registries,
+				StaleNamespaceProber:        staleForControlPlane,
+				StackDir:                    localStackDir(selfHostedControlPlaneStack),
+				ExtraStaleNamespaces:        cpExtraNamespaces,
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, cpCfg, selfhosted.RoleControlPlane, cpRC, sink)...)
 		}
 		if runComputePlane {
 			gpuRC := selfhosted.RoleConfig{
-				SISURL:                     icmsURL,
-				InotifyProber:              inotifyProber,
-				ClusterValidator:           clusterValidator,
-				ClusterValidatorImage:      clusterValidatorImage,
-				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-				ClusterValidatorEnv:        gpuValidatorEnv,
-				StaleNamespaceProber:       staleForComputePlane,
-				StackDir:                   localStackDir(selfHostedComputePlaneStack),
+				SISURL:                      icmsURL,
+				InotifyProber:               inotifyProber,
+				ClusterValidator:            clusterValidator,
+				ClusterValidatorImage:       clusterValidatorImage,
+				ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
+				ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
+				ClusterValidatorEnv:         gpuValidatorEnv,
+				ClusterValidatorTolerations: validatorTolerations,
+				StaleNamespaceProber:        staleForComputePlane,
+				StackDir:                    localStackDir(selfHostedComputePlaneStack),
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
@@ -826,13 +890,6 @@ func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 		env["NVCF_GATEWAY_NAMES"] = names
 	} else if len(stack.Gateways) > 0 {
 		env["NVCF_GATEWAY_NAMES"] = strings.Join(stack.Gateways, ",")
-	}
-	// Below three replicas a quorum component is a lost quorum under an HA
-	// mode and the deployed shape under none; only the stack says which.
-	if mode := configValue("NVCF_HA_MODE"); mode != "" {
-		env["NVCF_HA_MODE"] = mode
-	} else if stack.HAMode != "" {
-		env["NVCF_HA_MODE"] = stack.HAMode
 	}
 	probe := strings.TrimSpace(viper.GetString("cluster_validator_probe_image"))
 	if probe == "" {

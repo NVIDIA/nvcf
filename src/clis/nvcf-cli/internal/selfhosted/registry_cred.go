@@ -299,9 +299,6 @@ type StackValues struct {
 	ACMESolverRepository string
 	// EnvoyGatewayNamespace is ingress.gatewayApi.controllerNamespace.
 	EnvoyGatewayNamespace string
-	// HAMode is highAvailability.mode, defaulting to "none" as the stack's
-	// own template does when the key is unset. Empty when no file was read.
-	HAMode string
 	// Gateways are the NVCF Gateways the stack names under
 	// ingress.gatewayApi.gateways, as sorted, distinct namespace/name entries.
 	Gateways []string
@@ -331,12 +328,6 @@ func LoadStackValues(files []string) StackValues {
 		ACMESolverRepository:  digString(merged, "certManager", "acmesolver", "image", "repository"),
 		EnvoyGatewayNamespace: digString(merged, "ingress", "gatewayApi", "controllerNamespace"),
 		Gateways:              stackGateways(merged),
-	}
-	if found {
-		values.HAMode = digString(merged, "highAvailability", "mode")
-		if values.HAMode == "" {
-			values.HAMode = "none"
-		}
 	}
 	return values
 }

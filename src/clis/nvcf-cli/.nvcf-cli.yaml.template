@@ -193,6 +193,17 @@ api_keys_owner_id: svc@nvcf-api.local
 #
 # cluster_validator_probe_image: harbor.example.com/library/busybox:1.36
 
+# Tolerations added to the validator Job, beside the control-plane ones it
+# always carries, for clusters whose nodes use other taints. Each entry is
+# key[=value][:effect], with effect NoSchedule, PreferNoSchedule or NoExecute.
+#
+# Config key: cluster_validator_tolerations
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS (comma-separated)
+# Command-line flag: --cluster-validator-tolerations
+#
+# cluster_validator_tolerations:
+#   - dedicated=infra:NoSchedule
+
 # ==============================================================================
 # General Settings
 # ==============================================================================

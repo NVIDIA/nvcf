@@ -131,6 +131,10 @@ type ClusterValidatorParams struct {
 	// Env is passed to the validator container: namespace overrides, the
 	// probe image, and whether the control plane is expected to be installed.
 	Env map[string]string
+	// Tolerations are added to the control-plane ones the Job always
+	// carries, for clusters whose nodes use other taints, as the chart's
+	// clusterValidator.tolerations does.
+	Tolerations []corev1.Toleration
 }
 
 // Err is non-nil only when the run failed to execute (RBAC bootstrap,
@@ -164,14 +168,15 @@ func NewClusterValidator() ClusterValidator {
 		if err != nil {
 			return ClusterValidatorResult{Err: fmt.Errorf("building kubernetes client: %w", err)}
 		}
-		return runClusterValidator(ctx, client, p.Image, p.PullSecret, p.NoCleanup, p.Role, p.Registries, p.Env)
+		return runClusterValidator(ctx, client, p.Image, p.PullSecret, p.NoCleanup, p.Role, p.Registries, p.Env,
+			p.Tolerations...)
 	}
 }
 
 // Testable core. Pass a fake clientset to unit-test without a real cluster.
 func runClusterValidator(
 	ctx context.Context, client kubernetes.Interface, image, pullSecret string, noCleanup bool, role string,
-	registries []RegistryEntry, env map[string]string,
+	registries []RegistryEntry, env map[string]string, tolerations ...corev1.Toleration,
 ) ClusterValidatorResult {
 	if image == "" {
 		// Defensive: callers gate on configured image before invoking the
@@ -275,7 +280,8 @@ func runClusterValidator(
 	// so a role-wide sweep could only ever hit an overlapping run's live Job.
 	jobName := fmt.Sprintf("%s-%d", clusterValidatorName, time.Now().UnixNano())
 	job, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
-		vctx, buildClusterValidatorJob(jobName, image, pullSecret, role, runID, noCleanup, env), metav1.CreateOptions{},
+		vctx, buildClusterValidatorJob(jobName, image, pullSecret, role, runID, noCleanup, env, tolerations...),
+		metav1.CreateOptions{},
 	)
 	if err != nil {
 		// A create cut off by an interrupt or a dropped connection may still
@@ -568,12 +574,15 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 			// Deployments/StatefulSets: list for Tier-1/Tier-2 HA readiness checks.
 			// DaemonSets: create/delete for the node-to-node DaemonSet probe; list to watch pod readiness.
 			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"get", "list"}},
+			// ControllerRevisions: the creation time of a rolling StatefulSet's
+			// update revision dates its rollout, which Tier-2 bounds.
+			{APIGroups: []string{"apps"}, Resources: []string{"controllerrevisions"}, Verbs: []string{"get"}},
 			{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"get", "list", "create", "delete"}},
 			// Gateway API: the validator follows every NVCF route kind's
 			// parentRefs to learn which Gateways are NVCF's, and reads those
-			// Gateways' classes.
+			// Gateways' classes and the controllers that run them.
 			{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{
-				"gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes",
+				"gateways", "gatewayclasses", "httproutes", "grpcroutes", "tcproutes", "udproutes",
 			}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/version", "/healthz"}, Verbs: []string{"get"}},
 		},
@@ -1023,7 +1032,10 @@ func parseRegistryHostPort(s string) (host string, port int) {
 // buildClusterValidatorJob creates the validator Job. PullIfNotPresent reuses
 // locally-imported images. VALIDATOR_PREFLIGHT=true skips the summary ConfigMap
 // write. VALIDATOR_ROLE selects the check set (control-plane vs compute-plane).
-func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCleanup bool, env map[string]string) *batchv1.Job {
+func buildClusterValidatorJob(
+	name, image, pullSecret, role, runID string, noCleanup bool, env map[string]string,
+	tolerations ...corev1.Toleration,
+) *batchv1.Job {
 	backoff := int32(0)
 	// Pod shape mirrors deployments/nvca-operator/templates/cronjob.yaml, which
 	// runs this same image. Two producers of one pod spec now exist in two
@@ -1040,7 +1052,7 @@ func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCle
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: clusterValidatorRBACName(role, runID),
 		RestartPolicy:      corev1.RestartPolicyNever,
-		Tolerations:        clusterValidatorTolerations(),
+		Tolerations:        append(clusterValidatorTolerations(), tolerations...),
 		SecurityContext: &corev1.PodSecurityContext{
 			RunAsUser:  &runAsUser,
 			RunAsGroup: &runAsUser,

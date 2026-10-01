@@ -125,6 +125,7 @@ func resetCheckFlags(t *testing.T) {
 		checkClusterValidatorNoCleanup = false
 		checkClusterValidatorRegistries = nil
 		checkClusterValidatorProbeImage = ""
+		checkClusterValidatorTolerations = nil
 		checkShowLogs = false
 		selfHostedJSON, selfHostedPlain = false, false
 		selfHostedOutput = "text"
@@ -141,6 +142,7 @@ func resetCheckFlags(t *testing.T) {
 			"cluster_validator_image":       "cluster-validator-image",
 			"cluster_validator_registries":  "cluster-validator-registries",
 			"cluster_validator_probe_image": "cluster-validator-probe-image",
+			"cluster_validator_tolerations": "cluster-validator-tolerations",
 		} {
 			_ = viper.BindPFlag(key, selfHostedCheckCmd.Flags().Lookup(flag))
 		}

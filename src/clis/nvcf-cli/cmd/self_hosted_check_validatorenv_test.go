@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 
 	"nvcf-cli/internal/selfhosted"
 )
@@ -195,23 +196,79 @@ func TestCheck_RegistriesEnvVarIsSplitOnCommas(t *testing.T) {
 	assert.Contains(t, regs, "ghcr.io")
 }
 
-// The stack's Gateways and HA mode reach the Job; an explicit setting wins.
-func TestClusterValidatorJobEnv_ForwardsStackGatewaysAndHAMode(t *testing.T) {
-	for _, k := range []string{"NVCF_GATEWAY_NAMES", "NVCF_HA_MODE"} {
-		t.Setenv(k, "")
-	}
-	stack := selfhosted.StackValues{HAMode: "none", Gateways: []string{"gw/grpc-gw", "gw/shared-gw"}}
+// The stack's Gateways reach the Job; an explicit setting wins. No HA mode is
+// forwarded: the validator reads it from the anti-affinity the stack renders.
+func TestClusterValidatorJobEnv_ForwardsStackGateways(t *testing.T) {
+	t.Setenv("NVCF_GATEWAY_NAMES", "")
+	t.Setenv("NVCF_HA_MODE", "preferred")
+	stack := selfhosted.StackValues{Gateways: []string{"gw/grpc-gw", "gw/shared-gw"}}
 	env := clusterValidatorJobEnv(stack)
 	assert.Equal(t, "gw/grpc-gw,gw/shared-gw", env["NVCF_GATEWAY_NAMES"])
-	assert.Equal(t, "none", env["NVCF_HA_MODE"])
+	assert.NotContains(t, env, "NVCF_HA_MODE")
 
 	t.Setenv("NVCF_GATEWAY_NAMES", "edge/nvcf-gw")
-	t.Setenv("NVCF_HA_MODE", "preferred")
 	env = clusterValidatorJobEnv(stack)
 	assert.Equal(t, "edge/nvcf-gw", env["NVCF_GATEWAY_NAMES"])
-	assert.Equal(t, "preferred", env["NVCF_HA_MODE"])
+}
 
-	t.Setenv("NVCF_HA_MODE", "")
-	env = clusterValidatorJobEnv(selfhosted.StackValues{})
-	assert.NotContains(t, env, "NVCF_HA_MODE", "no stack, no mode: the validator records sub-quorum as not assessed")
+// --cluster-validator-tolerations reaches the validator Job of both roles, so
+// a cluster whose nodes carry other taints can schedule it, as the chart's
+// clusterValidator.tolerations allows. A malformed entry fails the command
+// before anything runs.
+func TestCheck_ValidatorTolerationsReachBothRoles(t *testing.T) {
+	resetCheckFlags(t)
+	var mu sync.Mutex
+	got := map[string][]corev1.Toleration{}
+	prev := newClusterValidatorForSelfHosted
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			mu.Lock()
+			defer mu.Unlock()
+			got[p.Role] = p.Tolerations
+			return selfhosted.ClusterValidatorResult{Passed: true}
+		}
+	}
+	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json",
+		"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0",
+		"--cluster-validator-tolerations", "dedicated=infra:NoSchedule,special"})
+	_ = rootCmd.Execute()
+
+	want := []corev1.Toleration{
+		{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "infra", Effect: corev1.TaintEffectNoSchedule},
+		{Key: "special", Operator: corev1.TolerationOpExists},
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, want, got["control-plane"])
+	assert.Equal(t, want, got["compute-plane"])
+
+	resetCheckFlags(t)
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json",
+		"--cluster-validator-tolerations", "dedicated:Sometimes"})
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "effect must be NoSchedule, PreferNoSchedule or NoExecute")
+}
+
+func TestParseToleration(t *testing.T) {
+	for in, want := range map[string]corev1.Toleration{
+		"dedicated=infra:NoSchedule": {Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "infra",
+			Effect: corev1.TaintEffectNoSchedule},
+		"example.com/role:noexecute": {Key: "example.com/role", Operator: corev1.TolerationOpExists,
+			Effect: corev1.TaintEffectNoExecute},
+		"special": {Key: "special", Operator: corev1.TolerationOpExists},
+	} {
+		got, err := parseToleration(in)
+		require.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, in := range []string{":NoSchedule", "=v", "k:Never"} {
+		_, err := parseToleration(in)
+		assert.Error(t, err, in)
+	}
 }

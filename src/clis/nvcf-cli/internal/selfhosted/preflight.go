@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	corev1 "k8s.io/api/core/v1"
 
 	"nvcf-cli/internal/selfhosted/progress"
 )
@@ -372,6 +373,9 @@ type RoleConfig struct {
 
 	// ClusterValidatorEnv is passed to the validator container for both roles.
 	ClusterValidatorEnv map[string]string
+	// ClusterValidatorTolerations are added to the validator Job's
+	// control-plane tolerations.
+	ClusterValidatorTolerations []corev1.Toleration
 }
 
 // categorySpec groups a set of checks under a named category. Categories run
@@ -478,6 +482,7 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 			validatorRoleControlPlane,
 			rc.ClusterValidatorRegistries,
 			rc.ClusterValidatorEnv,
+			rc.ClusterValidatorTolerations...,
 		))
 	}
 	return cat
@@ -520,6 +525,7 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 			validatorRoleComputePlane,
 			nil, // registries: compute-plane doesn't use the ConfigMap reachability list
 			rc.ClusterValidatorEnv,
+			rc.ClusterValidatorTolerations...,
 		))
 	}
 	return cat
@@ -632,7 +638,7 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 // set via VALIDATOR_ROLE; registries extends the ConfigMap reachability list.
 func clusterValidatorCheck(
 	cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool, role string,
-	registries []RegistryEntry, env map[string]string,
+	registries []RegistryEntry, env map[string]string, tolerations ...corev1.Toleration,
 ) binaryCheckSpec {
 	const id = "cluster-validator"
 	return binaryCheckSpec{
@@ -651,6 +657,7 @@ func clusterValidatorCheck(
 				Role:        role,
 				Registries:  registries,
 				Env:         env,
+				Tolerations: tolerations,
 			})
 			r.Logs = result.Logs
 			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)
