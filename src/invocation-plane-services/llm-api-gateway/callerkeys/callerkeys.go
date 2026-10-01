@@ -88,7 +88,7 @@ type key struct {
 func Load(ctx context.Context, store Store) (*KeySet, error) {
 	entries, err := store.Entries(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load caller keys: %w", err)
 	}
 
 	keys := make([]key, 0, len(entries))

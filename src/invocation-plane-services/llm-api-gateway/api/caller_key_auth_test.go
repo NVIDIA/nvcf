@@ -47,19 +47,43 @@ const (
 	listedCallerKeyHash = "276932c4694447817ad43a6afceb8f8a64657038679602b46ce8dc254b18bbcd"
 )
 
-// callerKeyEndpoints are the six endpoints that require a caller key.
-var callerKeyEndpoints = []struct {
+type callerKeyEndpoint struct {
 	name   string
 	method string
 	path   string
-	body   string
+	// body is a request body template that takes the model name, or empty.
+	body string
+}
+
+// callerKeyInferenceEndpoints route to the router by the model in the body.
+var callerKeyInferenceEndpoints = []callerKeyEndpoint{
+	{
+		name:   "chat completions",
+		method: http.MethodPost,
+		path:   "/v1/chat/completions",
+		body:   `{"model":%q,"messages":[{"role":"user","content":"hi"}]}`,
+	},
+	{name: "responses", method: http.MethodPost, path: "/v1/responses", body: `{"model":%q,"input":"hi"}`},
+	{name: "embeddings", method: http.MethodPost, path: "/v1/embeddings", body: `{"model":%q,"input":"hi"}`},
+}
+
+// callerKeyEndpoints are all endpoints that require a caller key.
+var callerKeyEndpoints = append([]callerKeyEndpoint{
+	{name: "list models", method: http.MethodGet, path: "/v1/models"},
+	{name: "retrieve model", method: http.MethodGet, path: "/v1/models/" + bareModelName},
+	{name: "registry", method: http.MethodGet, path: "/v1/registry"},
+}, callerKeyInferenceEndpoints...)
+
+// callerKeyModelNameForms are the two ways a request can name a model, each
+// with the setting that accepts it.
+var callerKeyModelNameForms = []struct {
+	name           string
+	isBareEnabled  bool
+	model          string
+	wantRoutingKey []string
 }{
-	{"chat completions", http.MethodPost, "/v1/chat/completions", `{"model":%q,"messages":[{"role":"user","content":"hi"}]}`},
-	{"responses", http.MethodPost, "/v1/responses", `{"model":%q,"input":"hi"}`},
-	{"embeddings", http.MethodPost, "/v1/embeddings", `{"model":%q,"input":"hi"}`},
-	{"list models", http.MethodGet, "/v1/models", ""},
-	{"retrieve model", http.MethodGet, "/v1/models/" + bareModelName, ""},
-	{"registry", http.MethodGet, "/v1/registry", ""},
+	{"bare model name", true, bareModelName, nil},
+	{"routing-key/model name", false, "fn-alpha/" + bareModelName, []string{"fn-alpha"}},
 }
 
 // newCallerKeyAPI wires the gateway with caller keys the way server.go does,
@@ -138,58 +162,50 @@ func TestCallerKeyAuth_Endpoint_RequiresListedKey(t *testing.T) {
 		{"listed key", "Bearer " + listedCallerKey, http.StatusOK},
 	}
 
-	for _, credential := range credentials {
-		for _, endpoint := range callerKeyEndpoints {
-			t.Run(credential.name+"/"+endpoint.name, func(t *testing.T) {
-				t.Parallel()
+	for _, form := range callerKeyModelNameForms {
+		for _, credential := range credentials {
+			for _, endpoint := range callerKeyEndpoints {
+				t.Run(form.name+"/"+credential.name+"/"+endpoint.name, func(t *testing.T) {
+					t.Parallel()
 
-				e, received := newCallerKeyAPI(t, true)
-				rec := httptest.NewRecorder()
-				e.ServeHTTP(rec, newCallerKeyRequest(
-					endpoint.method, endpoint.path, endpoint.body, bareModelName, credential.authorization,
-				))
+					e, received := newCallerKeyAPI(t, form.isBareEnabled)
+					rec := httptest.NewRecorder()
+					e.ServeHTTP(rec, newCallerKeyRequest(
+						endpoint.method, endpoint.path, endpoint.body, form.model, credential.authorization,
+					))
 
-				require.Equal(t, credential.wantStatus, rec.Code, rec.Body.String())
-				if credential.wantStatus != http.StatusUnauthorized {
-					return
-				}
-				var got models.ErrorResponse
-				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got), rec.Body.String())
-				require.Equal(t, models.Error{
-					Code:    "invalid_api_key",
-					Message: "Missing or invalid API key",
-					Type:    "invalid_request_error",
-				}, got.Error)
-				require.Empty(t, received, "request must not reach the router")
-			})
+					require.Equal(t, credential.wantStatus, rec.Code, rec.Body.String())
+					if credential.wantStatus != http.StatusUnauthorized {
+						return
+					}
+					var got models.ErrorResponse
+					require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got), rec.Body.String())
+					require.Equal(t, models.Error{
+						Code:    "invalid_api_key",
+						Message: "Missing or invalid API key",
+						Type:    "invalid_request_error",
+					}, got.Error)
+					require.Empty(t, received, "request must not reach the router")
+				})
+			}
 		}
 	}
 }
 
 // TestCallerKeyAuth_ModelNameForms_RouteWithModelRoutingKey sends a listed key
-// with caller-supplied X-Routing-Key and X-Priority. The authorizer adds no
+// with a caller-supplied X-Routing-Key. The authorizer adds no
 // routing key or priority, and the caller's key never reaches the router.
 func TestCallerKeyAuth_ModelNameForms_RouteWithModelRoutingKey(t *testing.T) {
 	t.Parallel()
 
-	settings := []struct {
-		name           string
-		isBareEnabled  bool
-		model          string
-		wantRoutingKey []string
-	}{
-		{"bare model name", true, bareModelName, nil},
-		{"routing-key/model name", false, "fn-alpha/" + bareModelName, []string{"fn-alpha"}},
-	}
-
-	for _, setting := range settings {
-		for _, endpoint := range callerKeyEndpoints[:3] {
-			t.Run(setting.name+"/"+endpoint.name, func(t *testing.T) {
+	for _, form := range callerKeyModelNameForms {
+		for _, endpoint := range callerKeyInferenceEndpoints {
+			t.Run(form.name+"/"+endpoint.name, func(t *testing.T) {
 				t.Parallel()
 
-				e, received := newCallerKeyAPI(t, setting.isBareEnabled)
+				e, received := newCallerKeyAPI(t, form.isBareEnabled)
 				req := newCallerKeyRequest(
-					endpoint.method, endpoint.path, endpoint.body, setting.model, "Bearer "+listedCallerKey,
+					endpoint.method, endpoint.path, endpoint.body, form.model, "Bearer "+listedCallerKey,
 				)
 				req.Header.Set("X-Routing-Key", "caller-routing-key")
 				rec := httptest.NewRecorder()
@@ -199,7 +215,7 @@ func TestCallerKeyAuth_ModelNameForms_RouteWithModelRoutingKey(t *testing.T) {
 				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 				routerHeaders := <-received
 				require.Equal(t, bareModelName, routerHeaders.Get("X-Model"))
-				require.Equal(t, setting.wantRoutingKey, routerHeaders.Values("X-Routing-Key"))
+				require.Equal(t, form.wantRoutingKey, routerHeaders.Values("X-Routing-Key"))
 				require.Empty(t, routerHeaders.Values(echo.HeaderAuthorization))
 				require.Empty(t, routerHeaders.Values("X-Priority"))
 			})
@@ -232,7 +248,7 @@ func TestCallerKeyAuth_AuthenticatedRequest_LogsKeyIDNotKey(t *testing.T) {
 
 	e, received := newCallerKeyAPI(t, true)
 	rec := httptest.NewRecorder()
-	endpoint := callerKeyEndpoints[0]
+	endpoint := callerKeyInferenceEndpoints[0]
 	e.ServeHTTP(rec, newCallerKeyRequest(
 		endpoint.method, endpoint.path, endpoint.body, bareModelName, "Bearer "+listedCallerKey,
 	))
@@ -240,5 +256,7 @@ func TestCallerKeyAuth_AuthenticatedRequest_LogsKeyIDNotKey(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	<-received
 	require.Contains(t, logs.String(), `"subject":"api-key:demo-ui"`)
+	// The upstream request log carries the auth result's rate-limit key.
+	require.Contains(t, logs.String(), `"rate_limit_key":"demo-ui"`)
 	require.NotContains(t, logs.String(), listedCallerKey)
 }

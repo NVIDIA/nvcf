@@ -82,13 +82,17 @@ func TestLoad_InvalidFile_FailsToLoad(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "duplicate id",
-			content: "keys:\n  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n  - {id: demo-ui, sha256: " + laptopKeyHash + "}\n",
+			name: "duplicate id",
+			content: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: demo-ui, sha256: " + laptopKeyHash + "}\n",
 			wantErr: `duplicate caller key id "demo-ui"`,
 		},
 		{
-			name:    "duplicate hash",
-			content: "keys:\n  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n  - {id: laptop, sha256: " + demoUIKeyHash + "}\n",
+			name: "duplicate hash",
+			content: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + demoUIKeyHash + "}\n",
 			wantErr: `caller key "laptop" repeats the sha256 of another key`,
 		},
 		{
