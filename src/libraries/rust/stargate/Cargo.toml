@@ -28,6 +28,7 @@ members = [
   "crates/mock-dynamo",
   "crates/mock-engine",
   "crates/stargate-bench",
+  "crates/stargate-routing-sim",
   "crates/pylon",
 ]
 resolver = "3"
