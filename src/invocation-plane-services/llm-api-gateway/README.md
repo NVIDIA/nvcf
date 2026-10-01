@@ -193,8 +193,10 @@ Useful overrides:
   `id` and the hex SHA-256 of a key; it holds no plain keys. Every route except
   `/healthz`, `/readyz`, and `/info` then needs `Authorization: Bearer <key>`
   and returns 401 without a listed key. The key is not forwarded to the
-  router, and logs show `api-key:<id>`. The file is read once at startup. It
-  cannot be combined with `NVCF_GRPC_ADDR`.
+  router, and logs show `api-key:<id>`. The gateway re-reads the file every
+  30 s, so added and removed keys apply without a restart; a file that fails
+  to load or validate keeps the previous keys and logs an error. It cannot be
+  combined with `NVCF_GRPC_ADDR`.
 - `OLRIC_ENABLED=false` to skip starting the embedded Olric node
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering

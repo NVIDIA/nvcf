@@ -27,8 +27,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
+	"sync/atomic"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 // Entry is one caller key as a store holds it: a name and the hex SHA-256 of
@@ -74,9 +79,10 @@ func (s *FileStore) Entries(_ context.Context) ([]Entry, error) {
 	return file.Keys, nil
 }
 
-// KeySet is a validated, in-memory set of caller keys.
+// KeySet is a validated, in-memory set of caller keys. Refresh replaces the
+// keys while lookups run.
 type KeySet struct {
-	keys []key
+	keys atomic.Pointer[[]key]
 }
 
 type key struct {
@@ -86,6 +92,38 @@ type key struct {
 
 // Load reads entries from store and validates them into a KeySet.
 func Load(ctx context.Context, store Store) (*KeySet, error) {
+	keys, err := loadKeys(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	set := &KeySet{}
+	set.keys.Store(&keys)
+	return set, nil
+}
+
+// Refresh reloads the keys from store every interval until ctx is done. A
+// reload that fails keeps the current keys and logs an error.
+func (s *KeySet) Refresh(ctx context.Context, store Store, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			keys, err := loadKeys(ctx, store)
+			if err != nil {
+				telemetry.Logger(ctx).Error().Err(err).Msg("caller key refresh failed; keeping the previous keys")
+				continue
+			}
+			if previous := s.keys.Swap(&keys); previous == nil || !slices.Equal(*previous, keys) {
+				telemetry.Logger(ctx).Info().Int("keys", len(keys)).Msg("caller keys changed")
+			}
+		}
+	}
+}
+
+func loadKeys(ctx context.Context, store Store) ([]key, error) {
 	entries, err := store.Entries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load caller keys: %w", err)
@@ -118,7 +156,7 @@ func Load(ctx context.Context, store Store) (*KeySet, error) {
 
 		keys = append(keys, key{id: entry.ID, hash: hash})
 	}
-	return &KeySet{keys: keys}, nil
+	return keys, nil
 }
 
 // Lookup returns the id of the key whose hash matches the SHA-256 of apiKey.
@@ -127,9 +165,14 @@ func (s *KeySet) Lookup(apiKey string) (string, bool) {
 		return "", false
 	}
 
+	keys := s.keys.Load()
+	if keys == nil {
+		return "", false
+	}
+
 	hash := sha256.Sum256([]byte(apiKey))
 	id, ok := "", false
-	for _, k := range s.keys {
+	for _, k := range *keys {
 		if subtle.ConstantTimeCompare(hash[:], k.hash[:]) == 1 {
 			id, ok = k.id, true
 		}
