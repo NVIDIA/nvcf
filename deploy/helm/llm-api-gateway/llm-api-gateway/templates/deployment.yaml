@@ -125,6 +125,8 @@ spec:
               mountPath: /vault/config/templates
               readOnly: true
             {{- if .Values.llmApiGateway.callerKeys.enabled }}
+            # A directory mount, not subPath: kubelet updates it when the
+            # Secret changes, and the gateway re-reads the file every 30 s.
             - name: caller-keys
               mountPath: /etc/llm-api-gateway/caller-keys
               readOnly: true

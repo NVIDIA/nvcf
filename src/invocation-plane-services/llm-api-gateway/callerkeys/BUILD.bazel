@@ -20,7 +20,10 @@ go_library(
     srcs = ["callerkeys.go"],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys",
     visibility = ["//visibility:public"],
-    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+    deps = [
+        "//src/invocation-plane-services/llm-api-gateway/telemetry",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
 )
 
 alias(
@@ -33,5 +36,8 @@ go_test(
     name = "callerkeys_test",
     srcs = ["callerkeys_test.go"],
     embed = [":callerkeys"],
-    deps = ["@com_github_stretchr_testify//require"],
+    deps = [
+        "@com_github_rs_zerolog//:zerolog",
+        "@com_github_stretchr_testify//require",
+    ],
 )

@@ -36,7 +36,10 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-const defaultGatewayShutdownTimeout = 5 * time.Second
+const (
+	defaultGatewayShutdownTimeout = 5 * time.Second
+	callerKeysRefreshInterval     = 30 * time.Second
+)
 
 func main() {
 	cfg, err := config.LoadFromEnv()
@@ -79,8 +82,10 @@ func main() {
 	}
 
 	var callerKeys *callerkeys.KeySet
+	var callerKeyStore callerkeys.Store
 	if cfg.CallerKeysFile != "" {
-		callerKeys, err = callerkeys.Load(context.Background(), callerkeys.NewFileStore(cfg.CallerKeysFile))
+		callerKeyStore = callerkeys.NewFileStore(cfg.CallerKeysFile)
+		callerKeys, err = callerkeys.Load(context.Background(), callerKeyStore)
 		if err != nil {
 			zlog.Fatal().Err(err).Msg("failed to load caller keys")
 		}
@@ -93,6 +98,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if callerKeys != nil {
+		go callerKeys.Refresh(ctx, callerKeyStore, callerKeysRefreshInterval)
+	}
 
 	if err := runGateway(
 		ctx,

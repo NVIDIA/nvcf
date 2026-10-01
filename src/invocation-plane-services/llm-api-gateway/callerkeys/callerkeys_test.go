@@ -18,11 +18,16 @@ limitations under the License.
 package callerkeys
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -135,4 +140,141 @@ func TestLoad_MissingFile_FailsToLoad(t *testing.T) {
 
 	_, err := Load(context.Background(), NewFileStore(filepath.Join(t.TempDir(), "absent.yaml")))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// syncBuffer collects log output written by the refresh goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// replaceKeyFile swaps the file in one rename, as Kubernetes swaps a projected
+// Secret, so a refresh never reads a half-written file.
+func replaceKeyFile(t *testing.T, path string, content string) {
+	t.Helper()
+	tmp := path + ".tmp"
+	require.NoError(t, os.WriteFile(tmp, []byte(content), 0o600))
+	require.NoError(t, os.Rename(tmp, path))
+}
+
+// startRefresh loads the demo-ui key from a new file and refreshes it every
+// few milliseconds until the test ends.
+func startRefresh(t *testing.T) (*KeySet, string, *syncBuffer) {
+	t.Helper()
+	path := writeKeyFile(t, "keys:\n  - {id: demo-ui, sha256: "+demoUIKeyHash+"}\n")
+	store := NewFileStore(path)
+	keys, err := Load(context.Background(), store)
+	require.NoError(t, err)
+
+	logs := &syncBuffer{}
+	ctx, cancel := context.WithCancel(zerolog.New(logs).WithContext(context.Background()))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		keys.Refresh(ctx, store, 5*time.Millisecond)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return keys, path, logs
+}
+
+func TestKeySetRefresh_ValidFileChange_AppliesWithoutRestart(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		newContent string
+		apiKey     string
+		wantOK     bool
+	}{
+		{
+			name: "added key becomes valid",
+			newContent: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			apiKey: "laptop-key",
+			wantOK: true,
+		},
+		{
+			name:       "removed key becomes invalid",
+			newContent: "keys:\n  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			apiKey:     "demo-ui-key",
+			wantOK:     false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			keys, path, _ := startRefresh(t)
+			replaceKeyFile(t, path, tc.newContent)
+
+			require.Eventually(t, func() bool {
+				_, ok := keys.Lookup(tc.apiKey)
+				return ok == tc.wantOK
+			}, 5*time.Second, 5*time.Millisecond)
+		})
+	}
+}
+
+func TestKeySetRefresh_InvalidFile_KeepsLastGoodSetAndLogsError(t *testing.T) {
+	t.Parallel()
+
+	// Each file also lists the laptop key, which must not become valid.
+	for _, tc := range []struct {
+		name       string
+		newContent string
+		wantLog    string
+	}{
+		{
+			name:       "malformed yaml",
+			newContent: "keys: [{id: laptop, sha256: " + laptopKeyHash + "}\n",
+			wantLog:    "parse caller key file",
+		},
+		{
+			name: "duplicate id",
+			newContent: "keys:\n" +
+				"  - {id: laptop, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			wantLog: `duplicate caller key id \"laptop\"`,
+		},
+		{
+			name: "duplicate hash",
+			newContent: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + laptopKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			wantLog: "repeats the sha256 of another key",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			keys, path, logs := startRefresh(t)
+			replaceKeyFile(t, path, tc.newContent)
+
+			require.Eventually(t, func() bool {
+				return strings.Contains(logs.String(), tc.wantLog)
+			}, 5*time.Second, 5*time.Millisecond)
+			require.Contains(t, logs.String(), `"level":"error"`)
+
+			id, ok := keys.Lookup("demo-ui-key")
+			require.True(t, ok)
+			require.Equal(t, "demo-ui", id)
+			_, ok = keys.Lookup("laptop-key")
+			require.False(t, ok)
+		})
+	}
 }
