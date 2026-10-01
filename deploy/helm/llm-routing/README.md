@@ -1,10 +1,10 @@
-# NVCF Lite on DGX Spark
+# LLM routing stack on DGX Spark
 
 Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Operator on an existing ARM64 DGX Spark Kubernetes cluster. This proof of concept (POC) uses exactly two GPUs to serve full GLM-5.3 `UD-IQ2_M` and validates inference through authenticated gateway requests. It installs no Kubernetes cluster, GPU driver, GPU Operator, device plugin, or host network configuration.
 
 ## Overview
 
-This is the supported standalone POC entry point. It replaces the earlier CPU-only fixture deployment. The compatible gateway/router/operator implementation is pinned in [source.lock.json](spark/source.lock.json), with the reviewed [operator/chart patch](spark/patches/stack-fixes.patch). `prepare` fetches that public source into your external work directory. All app images and stack/operator charts come from the same source. Change gateway/router code in that prepared checkout when iterating this recipe.
+This is the supported entry point for the standalone LLM routing stack POC. It replaces the earlier CPU-only fixture deployment. The compatible gateway/router/operator implementation is pinned in [source.lock.json](spark/source.lock.json), with the reviewed [operator/chart patch](spark/patches/stack-fixes.patch). `prepare` fetches that public source into your external work directory. All app images and stack/operator charts come from the same source. Change gateway/router code in that prepared checkout when iterating this recipe.
 
 The two-node runtime, direct/gateway chat, streaming, auth and recovery configuration has been exercised on Sparks. The generalized runner has offline render and regression coverage. Its read-only existing-installation attachment and portable client also passed against the running GLM deployment, including auth failures and retained routes. A deployment from this published recipe onto a fresh cluster has not yet been rehearsed. Do not treat render success as deployment success.
 
