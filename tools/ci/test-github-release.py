@@ -39,6 +39,45 @@ def git_out(root, *args):
     ).stdout
 
 
+def quiesce_git_maintenance(repo):
+    """Stop git doing background work inside a repo that is about to be deleted.
+
+    receive-pack runs `gc --auto` once a push lands and, because gc.autoDetach
+    defaults on, does not wait for it. The tests push and then leave the
+    enclosing TemporaryDirectory immediately, so that detached child is still
+    walking objects/pack while shutil.rmtree is unlinking it, which surfaces as
+    an intermittent "Directory not empty".
+
+    Both halves are closed here: gc should not start, and if it does it runs in
+    the foreground where the push waits for it.
+    """
+    settings = (
+        ("receive.autogc", "false"),
+        ("gc.auto", "0"),
+        ("gc.autoDetach", "false"),
+        ("maintenance.auto", "false"),
+    )
+    for key, value in settings:
+        subprocess.run(
+            ["git", "-C", str(repo), "config", key, value],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+
+def init_bare_remote(remote):
+    """Create a bare remote for the push-mode tests, with maintenance disabled."""
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    quiesce_git_maintenance(remote)
+
+
+
 class SubprocessShim:
     """Stands in for the module's `subprocess`, intercepting only `gh` calls.
 
@@ -85,6 +124,7 @@ class GithubReleaseTest(unittest.TestCase):
         git(root, "init")
         git(root, "config", "user.email", "test@example.com")
         git(root, "config", "user.name", "Test User")
+        quiesce_git_maintenance(root)
 
     def seed_nvca_service(self, root):
         service_dir = root / "src/compute-plane-services/nvca"
@@ -299,12 +339,7 @@ class GithubReleaseTest(unittest.TestCase):
             root = Path(tmp) / "repo"
             remote = Path(tmp) / "remote.git"
             root.mkdir()
-            subprocess.run(
-                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            init_bare_remote(remote)
             self.init_java_repo(root)
             git(root, "remote", "add", "origin", str(remote))
             git(root, "push", "origin", "HEAD")
@@ -1659,6 +1694,46 @@ class GithubReleaseTest(unittest.TestCase):
                 )
                 self.assertTrue(service.get("release_branch_only"))
 
+    def helm_absent_chart_output(self, registry, reference):
+        """Return what helm prints for a version absent from a readable repository.
+
+        Recorded from helm 3.21.4, the version release-tags.yml pins, by pulling a
+        version that does not exist from a public repository:
+
+            Error: failed to perform "FetchReference" on source: \
+                registry-1.docker.io/bitnamicharts/nginx:999.999.999: not found
+
+        oras picks the operation name by source target, so only the trailing
+        "<chart>:<version>: not found" is load bearing.
+        """
+        return (
+            f'Error: failed to perform "FetchReference" on source: '
+            f"{registry}/{reference}: not found\n"
+        )
+
+    def helm_denied_output(self, registry, reference):
+        """Return what helm prints when the repository is not readable.
+
+        Recorded the same way against a registry that hides unknown repositories
+        behind auth. The response is 403, not 404, which is why an absence check
+        cannot simply look for the words "not found".
+        """
+        return (
+            f'Error: failed to perform "FetchReference" on source: '
+            f'GET "https://{registry}/v2/{reference.split(":")[0]}/manifests/'
+            f'{reference.split(":")[1]}": '
+            "response status code 403: denied: requested access to the resource is denied\n"
+        )
+
+    def helm_unauthorized_output(self, registry, reference):
+        """Return what helm prints with no usable registry credentials."""
+        return (
+            f'Error: failed to perform "FetchReference" on source: '
+            f'GET "https://{registry}/v2/{reference.split(":")[0]}/manifests/'
+            f'{reference.split(":")[1]}": '
+            "response status code 401: unauthorized: authentication required\n"
+        )
+
     def chart_release_metadata(self):
         """Return minimal release metadata for the chart publication tests."""
         return {
@@ -1851,8 +1926,13 @@ class GithubReleaseTest(unittest.TestCase):
             self.github_release.helm_registry_login = (
                 lambda registry, _key: calls.append(("login", registry))
             )
-            self.github_release.pull_release_chart = (
-                lambda *_args: (1, "manifest unknown: not found", [])
+            self.github_release.pull_release_chart = lambda *_args: (
+                1,
+                self.helm_absent_chart_output(
+                    "nvcr.io/example/ncp-dev",
+                    "helm-nvcf-nats-auth-callout-service:1.2.0",
+                ),
+                [],
             )
             self.github_release.run = lambda args, **_kwargs: calls.append(tuple(args))
 
@@ -1895,13 +1975,77 @@ class GithubReleaseTest(unittest.TestCase):
 
             self.assertEqual(selected_roots, [replay_root])
 
-    def test_only_registry_missing_signals_allow_a_chart_push(self):
-        """Only explicit missing-artifact responses may permit a chart push."""
-        self.assertTrue(self.github_release.missing_helm_chart_output("manifest unknown"))
-        self.assertTrue(self.github_release.missing_helm_chart_output("status code: 404"))
-        self.assertFalse(
-            self.github_release.missing_helm_chart_output("credentials file not found")
+    def test_recorded_absent_chart_output_allows_a_chart_push(self):
+        """The message a real registry sends for an absent version must read as absent.
+
+        This is the case that matters: it is the only route to `helm push`, and
+        every new chart version takes it.
+        """
+        reference = "helm-nvcf-nats-auth-callout-service:1.2.0"
+        self.assertTrue(
+            self.github_release.missing_helm_chart_output(
+                self.helm_absent_chart_output("nvcr.io/example/ncp-dev", reference),
+                reference,
+            )
         )
+        self.assertTrue(
+            self.github_release.missing_helm_chart_output(
+                'Error: failed to perform "FetchReference" on source: '
+                "registry-1.docker.io/bitnamicharts/nginx:999.999.999: not found\n",
+                "bitnamicharts/nginx:999.999.999",
+            )
+        )
+
+    def test_absence_is_recognised_whichever_operation_oras_names(self):
+        """oras labels the same condition "Resolve" or "FetchReference" by source target."""
+        reference = "helm-nvcf-nats-auth-callout-service:1.2.0"
+        for operation in ("FetchReference", "Resolve"):
+            with self.subTest(operation=operation):
+                self.assertTrue(
+                    self.github_release.missing_helm_chart_output(
+                        f'Error: failed to perform "{operation}" on source: '
+                        f"nvcr.io/example/ncp-dev/{reference}: not found\n",
+                        reference,
+                    )
+                )
+
+    def test_absence_verdict_is_anchored_to_the_requested_chart(self):
+        """A not-found naming some other artifact must not authorise this push."""
+        self.assertFalse(
+            self.github_release.missing_helm_chart_output(
+                self.helm_absent_chart_output(
+                    "nvcr.io/example/ncp-dev", "helm-nvcf-some-other-chart:9.9.9"
+                ),
+                "helm-nvcf-nats-auth-callout-service:1.2.0",
+            )
+        )
+
+    def test_registry_refusals_never_read_as_an_absent_chart(self):
+        """An unreadable repository must never be mistaken for an empty one.
+
+        Pushing on a refusal would overwrite a released chart we merely failed to
+        read, so these have to stay on the safe side of the branch.
+        """
+        reference = "helm-nvcf-nats-auth-callout-service:1.2.0"
+        registry = "nvcr.io/example/ncp-dev"
+        for name, output in (
+            ("denied", self.helm_denied_output(registry, reference)),
+            ("unauthorized", self.helm_unauthorized_output(registry, reference)),
+            ("missing credentials", "credentials file not found"),
+        ):
+            with self.subTest(case=name):
+                self.assertFalse(
+                    self.github_release.missing_helm_chart_output(output, reference)
+                )
+
+    def test_legacy_registry_missing_signals_still_allow_a_chart_push(self):
+        """Older registries and clients report absence differently; keep accepting them."""
+        reference = "helm-nvcf-nats-auth-callout-service:1.2.0"
+        for output in ("manifest unknown", "status code: 404", "response status code 404"):
+            with self.subTest(output=output):
+                self.assertTrue(
+                    self.github_release.missing_helm_chart_output(output, reference)
+                )
 
     def test_existing_chart_is_only_accepted_when_content_matches(self):
         """An existing immutable version is reusable only when its content matches."""
@@ -1948,7 +2092,10 @@ class GithubReleaseTest(unittest.TestCase):
             self.github_release.helm_registry_login = lambda *_args: None
             self.github_release.pull_release_chart = lambda *_args: (
                 1,
-                "unauthorized: authentication required",
+                self.helm_unauthorized_output(
+                    "nvcr.io/example",
+                    "helm-nvcf-nats-auth-callout-service:1.2.0",
+                ),
                 [],
             )
 
@@ -2280,12 +2427,7 @@ class GithubReleaseTest(unittest.TestCase):
             root = Path(tmp) / "repo"
             remote = Path(tmp) / "remote.git"
             root.mkdir()
-            subprocess.run(
-                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            init_bare_remote(remote)
             self.nvca_repo_with_tag(root)
             git(root, "remote", "add", "origin", str(remote))
             git(root, "push", "origin", "HEAD")
@@ -2456,10 +2598,7 @@ class MultiPathReleaseTest(unittest.TestCase):
         self.commit_all(root, "seed")
         git(root, "tag", "src/compute-plane-services/nvca/v3.12.1")
         if remote is not None:
-            subprocess.run(
-                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
+            init_bare_remote(remote)
             git(root, "remote", "add", "origin", str(remote))
             git(root, "push", "origin", "HEAD")
         self.github_release.create_release = lambda tag, title, notes, draft, dry_run: None

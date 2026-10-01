@@ -1010,10 +1010,29 @@ def helm_archive_signature(path):
     return signature
 
 
-def missing_helm_chart_output(output):
-    """Return whether Helm's output specifically reports an absent OCI artifact."""
+def missing_helm_chart_output(output, reference):
+    """Return whether Helm's output reports that this exact OCI artifact is absent.
+
+    Helm resolves an OCI chart through oras, which turns a registry 404 into a
+    not-found error and renders the chain as "... on source: <reference>: not found".
+    Anything else the registry says, including an auth refusal, arrives as
+    "response status code <n>", so it cannot reach the push branch.
+
+    `reference` is the chart:version actually requested, and the verdict is
+    anchored to it. A 404 on some other artifact, or an unrelated "not found"
+    such as a missing credentials file, must not read as an absent chart. The
+    operation name in the message is deliberately not matched: oras chooses
+    "FetchReference" or "Resolve" for the same condition depending on the source
+    target, so it is an implementation detail rather than a contract.
+    """
     lowered = output.lower()
-    return any(phrase in lowered for phrase in ("manifest unknown", "status code: 404"))
+    if any(
+        phrase in lowered
+        for phrase in ("manifest unknown", "status code: 404", "response status code 404")
+    ):
+        return True
+    suffix = f"{reference.lower()}: not found"
+    return any(line.rstrip().endswith(suffix) for line in lowered.splitlines())
 
 
 def publish_release_chart(root, service, version, dry_run, app_version=None):
@@ -1049,7 +1068,7 @@ def publish_release_chart(root, service, version, dry_run, app_version=None):
                 )
             print(f"[github-release] Helm chart {chart_name}:{version} is already published unchanged")
             return
-        if not missing_helm_chart_output(output):
+        if not missing_helm_chart_output(output, f"{chart_name}:{version}"):
             sys.stdout.write(output)
             raise SystemExit(f"could not determine whether Helm chart {chart_name}:{version} exists")
 
