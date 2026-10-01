@@ -181,6 +181,15 @@ not.
    In both modes the init waits for the marker and falls back to its own
    download at the deadline. No pod ever needs network access to nvsnap;
    function namespaces block it.
+   A `pvc` reader of a complete volume also gets `nvsnap-model-prewarm`,
+   the parallel byte-range sweep the checkpoint restore has, as the last
+   init container: the engine's safetensors loader reads the shards from
+   one thread, and over a network block device that single stream is
+   latency-bound (GB300 with NVMesh, 2026-10-01: 33 GB in 40 to 45 s
+   cold, 9 s once the node's page cache held it). The sweep runs in the
+   engine image with real CPU limits, honours `NVSNAP_PREWARM` on the
+   engine container and the storage profile's reader count, and never
+   fails the pod.
 
 5. Compile caches (webhook env + agent). All caches are redirected to a
    cache location keyed by image digest plus identity plus role-neutral
@@ -450,6 +459,17 @@ each, under live multimodal traffic.
 | Attaches per worker | model only (cache lands in the emptyDir) | model and set, two |
 | Cache volumes in the cluster | 1 per configuration (was 8, one per rank) | |
 | Ready | ~10 min | 136 to 273 s from creation |
+
+Second warm run, 2026-10-01, same function, admission to Ready 228 to
+278 s against 490 s for the same version with nvsnap injection off
+(`webhook.inject=false`): compile inside the profiling run 54 s to 0.9 s,
+FlashInfer autotune 145 s to 2.5 s (105 configs loaded), CUDA graph
+capture 3 s either way. Left per worker: 25 s process start, 40 to 45 s
+weight read from the NVMesh read-only volume (12.5 s from local disk,
+9 s from page cache), 26 s CUDA graph memory estimation, 13 s to Ready.
+The weight read is what the model prewarm in mechanism 4 targets; the
+estimation pass is what `VLLM_ENABLE_STARTUP_PLAN=1` in the cachedir env
+template removes on the next capture.
 
 NVMesh shared read-only attach can take up to 30 s under 8 to 16
 concurrent clients on this cluster (IO-enable timeouts, kubelet retries);
