@@ -752,6 +752,7 @@ async fn start_queue_mismatch_test_tunnel(
     config.tunnel_protocol = tunnel_protocol;
     config.inference_server_id = Some("inst-a".to_string());
     config.forwarding.metrics = Some(metrics.clone());
+    config.forwarding.queue_mismatch_retry = crate::PylonQueueMismatchRetryConfig::strict();
     config.forwarding.queue_mismatch_retry.enabled = enabled;
     config.forwarding.queue_mismatch_retry.retry_after_ms = Some(125);
     assert!(

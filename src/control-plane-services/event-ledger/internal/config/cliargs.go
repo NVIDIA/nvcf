@@ -80,6 +80,10 @@ func (c *CliArgs) SetupAuth() {
 	c.int64("auth.policy.creds-refresh-interval", 300, "Interval in seconds to periodically refresh credentials from file (recommended: 300)", true)
 	c.string("auth.policy.subject-field", "subject", "Policy input field name for JWT subject", true)
 	c.string("auth.policy.api-key-field", "apiKey", "Policy input field name for API key tokens", true)
+	c.bool("auth.introspection.enabled", false, "Enable SIS introspection of NVCA's PSAT for callers without an OpenBao JWT", true)
+	c.string("auth.introspection.url", "", "SIS token introspection endpoint URL", true)
+	c.int("auth.introspection.timeout-seconds", 10, "SIS introspection call timeout in seconds", true)
+	c.int("auth.introspection.cache-ttl-seconds", 300, "SIS introspection result cache TTL in seconds", true)
 }
 
 // SetupDatabase defines database providers arguments and configuration settings
