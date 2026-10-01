@@ -349,7 +349,8 @@ For example, to ship self-managed stack `1.0.2` after `1.0.1`:
    `1.0.1`. The branch's `VERSION` can remain `1.0.0`; its patch field
    does not select the next patch once stable tags exist.
 3. The tag workflow prepares the GitHub Release and its inventory.
-   Artifact publishing follows the image publishing bridge described
+   The workflow publishes any configured Helm chart before it creates
+   the GitHub Release. Image publishing follows the bridge described
    above, after the tag and release are mirrored.
 
 Re-running `auto` at an already-tagged commit creates no additional
