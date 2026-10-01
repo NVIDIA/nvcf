@@ -1025,6 +1025,11 @@ invocation:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+{{- $configuredNvctApiRemoteConfigData := dig "nvctApi" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredNvctApiRemoteConfigData) }}
+{{- fail "nvctApi.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $nvctApiRemoteConfigData := deepCopy $configuredNvctApiRemoteConfigData }}
 nvctApi:
   fullnameOverride: nvct-api
   {{- if $haEnabled }}
@@ -1056,6 +1061,12 @@ nvctApi:
     {{- with dig "nvctApi" "image" "tag" nil .Values }}
     tag: {{ . | quote }}
     {{- end }}
+
+  {{- if $nvctApiRemoteConfigData }}
+  remoteConfig:
+    configData:
+      {{- toYaml $nvctApiRemoteConfigData | nindent 6 }}
+  {{- end }}
 
   env:
     NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
