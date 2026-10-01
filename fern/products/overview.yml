@@ -22,7 +22,15 @@ navigation:
         path: ../../docs/overview/compatibility-matrix.md
       - page: "1.0.1 Release Notes"
         path: ../../docs/overview/release-notes/1.0.1.md
-      - page: "0.6.1 to 1.0.1 Upgrade"
+      - link: "0.6.2 Release Notes (draft)"
+        href: /nvcf/self-managed/0.6.2/0-6-2-release-notes
+      - link: "0.6.1 to 0.6.2 Upgrade (draft)"
+        href: /nvcf/self-managed/0.6.2/0-6-1-to-0-6-2-upgrade
+      - page: "0.6.2 to 1.0.1 Upgrade"
+        path: ../../docs/overview/release-notes/0.6.2-to-1.0.1-upgrade.md
+        slug: 0-6-2-to-1-0-1-upgrade
+      - page: "Previous 0.6.1 Upgrade URL"
+        hidden: true
         path: ../../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
         slug: 0-6-1-to-1-0-1-upgrade
       - page: "(Legacy) 0.6.1 Release Notes"

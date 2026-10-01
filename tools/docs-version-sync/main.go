@@ -51,6 +51,10 @@ func run(args []string) error {
 	stackSourceCommit := flags.String("stack-source-commit", "", "immutable owning stack source commit for inventory generation")
 	compareFrom := flags.String("compare-release-set-from", "", "directory containing previous release-set inventory JSON files")
 	compareTo := flags.String("compare-release-set-to", "", "directory containing current release-set inventory JSON files")
+	legacyInventory := flags.String("legacy-inventory", "", "exact historical self-managed inventory JSON to snapshot")
+	legacyOutput := flags.String("legacy-output", "", "staging directory for a legacy catalog and generated pages")
+	legacySource := flags.String("legacy-source", "", "legacy documentation source directory name, for example v0.6.1")
+	legacyDraft := flags.Bool("legacy-draft", false, "allow a release candidate for an explicitly unqualified legacy draft")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -65,6 +69,25 @@ func run(args []string) error {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
+	}
+	if *legacyInventory != "" || *legacyOutput != "" || *legacySource != "" || *legacyDraft {
+		if *legacyInventory == "" || *legacyOutput == "" || *legacySource == "" || *stackVersion == "" {
+			return fmt.Errorf("legacy snapshots require --legacy-inventory, --legacy-output, --legacy-source, and --stack-version")
+		}
+		if *updateCatalog || *inventoryOutput != "" || *freezeStack != "" || *freezeVersion != "" ||
+			*computeStackVersion != "" || *observabilityStackVersion != "" || *compareFrom != "" || *compareTo != "" ||
+			*inventoryConfig != "" || *allowUnavailableSourceCharts || *stackSourceTag != "" || *stackSourceCommit != "" {
+			return fmt.Errorf("legacy snapshots cannot be combined with current-release sync, freeze, or inventory generation")
+		}
+		if *catalogPath == "" {
+			*catalogPath = filepath.Join(repoRoot, "docs/version-catalog/main.yaml")
+		}
+		return exportLegacySnapshot(repoRoot, legacySnapshotOptions{
+			inventoryPath: resolveRepoPath(repoRoot, *legacyInventory),
+			catalogPath:   resolveRepoPath(repoRoot, *catalogPath),
+			outputPath:    resolveRepoPath(repoRoot, *legacyOutput),
+			source:        *legacySource, version: *stackVersion, draft: *legacyDraft, check: *check,
+		})
 	}
 	if *compareFrom != "" || *compareTo != "" {
 		if *compareFrom == "" || *compareTo == "" {
