@@ -424,15 +424,15 @@ selfManaged:
     enabled: false
     imageRepository: ""
     imageTag: 0.160.0-nv-0.2.5
-  ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
+  ## @param selfManaged.icmsServiceURL (REQUIRED for self-managed clusters) URL of the ICMS service. Set the endpoint generated during cluster registration.
   icmsServiceURL: ""
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
   icmsServiceHostHeaderOverride: ""
-  ## @param selfManaged.revalServiceURL URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.
+  ## @param selfManaged.revalServiceURL (REQUIRED for self-managed clusters) URL of the ReVal service. Set the endpoint generated during cluster registration.
   revalServiceURL: ""
   ## @param selfManaged.revalServiceHostHeaderOverride Optional Host header override for selfManaged.revalServiceURL.
   revalServiceHostHeaderOverride: ""
-  ## @param selfManaged.natsURL URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.
+  ## @param selfManaged.natsURL (REQUIRED for self-managed clusters) URL of the NATS service. Set the endpoint generated during cluster registration.
   natsURL: ""
   ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.
   natsHostOverride: ""
