@@ -52,6 +52,7 @@ pub struct FunctionMetadata {
 pub struct ApiClient {
     pub subject: String,
     pub nca_id: String,
+    pub owner_nca_id: String,
 }
 
 pub const HEALTH_CACHE_TTL: u16 = 1;
@@ -118,6 +119,7 @@ impl ApiMock {
                 None => client.nca_id.clone(),
                 Some(nca_id) => nca_id,
             },
+            client_owner_nca_id: client.owner_nca_id.clone(),
         }))
     }
 
