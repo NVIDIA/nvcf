@@ -66,6 +66,9 @@ llmApiGateway:
     requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
+    # How long GET /v1/models, /v1/models/{id} and /v1/registry reuse one router
+    # listing response. 0s calls the router on every request.
+    requestRouterListingCacheTtl: 3s
     # Longest a single response write may stall on a client that stopped
     # reading. Applies only while a write is in progress, so it does not cap
     # total response time or upstream pauses. 0s disables the bound.
@@ -75,6 +78,14 @@ llmApiGateway:
     nvcfGrpcTimeout: 2s
     rateLimitEnabled: true
     rateLimitFailOpen: true
+    # Treat the whole request model as the model name, with no routing-key
+    # prefix and no NVCF auth. For deployments without the NVCF control plane.
+    # Do not enable where untrusted callers can reach the gateway.
+    bareModelNamesEnabled: false
+    # In staticKeys mode, serve GET /v1/models, /v1/models/{id} and
+    # /v1/registry without a key. Inference still needs one. Logged as a
+    # warning at startup.
+    publicReadEndpoints: false
     localFunctionId: ""
     defaultModel: ""
     defaultRpm: 120
@@ -94,27 +105,16 @@ llmApiGateway:
     staticKeys:
       # Existing Secret with key api-keys.json, mounted read-only at
       # /etc/llm-api-gateway/auth and passed as API_KEYS_PATH. Required in
-      # staticKeys mode. The gateway re-reads the file at most every 60
-      # seconds, so key changes need no restart. Format:
+      # staticKeys mode. The gateway re-reads the file every 30 seconds, so
+      # key changes need no restart. Format:
       #   {"keys": [{"id": "team-a", "sha256": "<lowercase hex SHA-256 of the key>"}]}
       existingSecret: ""
-      # Request paths served in staticKeys mode, passed comma-joined as
-      # STATIC_ALLOWED_PATHS. Other paths return 403 after authentication.
-      allowedPaths:
-        - /v1/chat/completions
-    # Optional bearer the gateway sends to the request router in every mode.
-    # Read from the given key of the existing Secret existingSecret and passed
-    # as STARGATE_SERVICE_TOKEN. The caller's Authorization header is never
-    # forwarded.
-    serviceToken:
-      existingSecret: ""
-      key: token
 
   # TLS on the gateway listener. When enabled, the kubernetes.io/tls Secret
   # existingSecret is mounted read-only at /etc/llm-api-gateway/tls, its tls.crt
   # and tls.key are passed as TLS_CERT_FILE and TLS_KEY_FILE, and the probes use
-  # HTTPS. The gateway reads the files at startup, so a renewed certificate
-  # takes effect on the next pod restart.
+  # HTTPS. The gateway re-reads the files every 30 seconds, so a renewed
+  # certificate needs no restart.
   tls:
     enabled: false
     existingSecret: ""

@@ -12,9 +12,10 @@ The chart installs:
 - the `llm-request-router` chart (alias `llm-request-router`) in static
   credentials mode: it verifies the cluster token that Pylon transport pods
   present against SHA-256 hashes in its worker auth file, with no Vault Agent
-- the `llm-api-gateway` chart (alias `llm-api-gateway`) in `staticKeys` mode:
-  it verifies caller API keys against SHA-256 digests, serves HTTPS, and runs
-  without Vault
+- the `llm-api-gateway` chart (alias `llm-api-gateway`) in `staticKeys` mode
+  with bare model names: it verifies caller API keys against SHA-256 digests,
+  serves the model list and registry without a key, serves HTTPS, and runs
+  without the NVCF API or Vault
 - Secret `llm-gateway-stack-worker-credentials`, key `credentials.yaml`, the
   router's worker auth file:
 
@@ -26,6 +27,7 @@ The chart installs:
 
 - Secret `llm-gateway-stack-api-keys`, the gateway's key file
   `{"keys": [{"id": "<id>", "sha256": "<sha256>"}]}`
+
 - with `tls.selfSigned.enabled` (default), a CA and two certificates it signs:
   Secret `llm-gateway-stack-ca` (the CA, kept on uninstall), ConfigMap
   `llm-gateway-stack-ca` (the CA certificate in key `ca.crt`), Secret
@@ -49,7 +51,7 @@ To run this chart with Pylon Operator on a local k3d cluster, see the
 - The request router and gateway images in a registry the cluster can pull
   from. The chart sets no image registry or repository. The router image must
   support `--worker-auth-file` with the YAML worker auth file, and the gateway image must support
-  `API_KEYS_PATH` and `TLS_CERT_FILE`.
+  `API_KEYS_PATH`, `PUBLIC_READ_ENDPOINTS` and `TLS_CERT_FILE`.
 - The Pylon Operator chart, `deploy/helm/pylon-operator`, installed first: its
   generated cluster token is an input to this chart.
 
@@ -185,6 +187,10 @@ reads the names of the Secrets it renders, so change them there.
 | `llm-request-router.llmRequestRouter.tls.quicInsecure` | `false` |
 | `llm-api-gateway.llmApiGateway.replicaCount` | `1` |
 | `llm-api-gateway.llmApiGateway.config.requestRouterUrl` | `http://llm-request-router:8000` |
+| `llm-api-gateway.llmApiGateway.config.bareModelNamesEnabled` | `true` |
+| `llm-api-gateway.llmApiGateway.config.publicReadEndpoints` | `true` |
+| `llm-api-gateway.llmApiGateway.config.rateLimitEnabled` | `false` |
+| `llm-api-gateway.llmApiGateway.olric.enabled` | `false` |
 | `llm-api-gateway.llmApiGateway.auth.mode` | `staticKeys` |
 | `llm-api-gateway.llmApiGateway.auth.staticKeys.existingSecret` | `llm-gateway-stack-api-keys` |
 | `llm-api-gateway.llmApiGateway.vault.enabled` | `false` |
@@ -236,12 +242,8 @@ so it survives uninstall, and a reinstall under the same release name and
 namespace adopts it and keeps the trust transport pods already have. To issue a new CA, delete Secret
 `llm-gateway-stack-ca` and upgrade.
 
-The router reloads its certificate without a restart. The gateway reads its
-certificate at startup; restart it after the certificate changes:
-
-```bash
-kubectl -n llm-gateway rollout restart deployment/llm-api-gateway
-```
+The router and the gateway both reload their certificates without a restart;
+the gateway checks every 30 seconds.
 
 Tools that render charts without cluster access, such as Argo CD, cannot run
 `lookup` and would issue a new CA on every render. With them, and whenever
@@ -298,7 +300,7 @@ Give the operator the issuer's CA through its `trustBundle.configMap`.
   No pod restarts. A hash may appear only once across `sha256` and
   `sha256Hashes`; the render fails otherwise.
 - API keys: upgrade with the changed `apiKeys`. The gateway re-reads its key
-  file at most every 60 seconds.
+  file every 30 seconds; a file that fails to load keeps the previous keys.
 - To manage either Secret outside this chart, set `clusterCredential.create` or
   `apiKeysSecret.create` to false and create the Secret under the name in the
   subchart values.

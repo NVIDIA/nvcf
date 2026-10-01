@@ -187,12 +187,18 @@ render "${list_manifest}" \
 [ "$(worker_auth_hashes "${list_manifest}" | tr '\n' ' ')" = "sha256:${next_sha256} sha256:${cluster_sha256} " ] ||
   fail "clusterCredential.sha256Hashes alone must render every hash in order, with the sha256: prefix"
 
-# Gateway: static API keys from the stack's Secret, no NVCF API, TLS listener.
+# Gateway: static API keys from the stack's Secret, bare model names, public
+# discovery reads, no NVCF API, no rate limiting, TLS listener.
 ! gateway_config_has "${manifest}" NVCF_GRPC_ADDR || fail "gateway must not select NVCF auth"
 ! gateway_config_has "${manifest}" SECRETS_PATH || fail "gateway must not read Vault secrets"
 [ "$(env_value "${manifest}" "${gateway}" API_KEYS_PATH)" = "/etc/llm-api-gateway/auth/api-keys.json" ] ||
   fail "gateway must read the static API key file"
 ! has_env "${manifest}" "${gateway}" ALLOW_ANONYMOUS || fail "gateway must not allow anonymous access"
+[ "$(gateway_config "${manifest}" BARE_MODEL_NAMES_ENABLED)" = "true" ] || fail "gateway must accept bare model names"
+[ "$(gateway_config "${manifest}" PUBLIC_READ_ENDPOINTS)" = "true" ] || fail "gateway must serve discovery reads without a key"
+[ "$(gateway_config "${manifest}" RATE_LIMIT_ENABLED)" = "false" ] || fail "gateway must not rate limit"
+! gateway_config_has "${manifest}" OLRIC_ENABLED || fail "gateway must not run Olric"
+[ "$(count "${manifest}" Role "${gateway}-olric")" = "0" ] || fail "stack must not render the Olric Role"
 [ "$(volume_secret "${manifest}" "${gateway}" api-keys)" = "${api_keys_secret}" ] ||
   fail "gateway must mount the stack's API key Secret"
 [ "$(count "${manifest}" Secret "${api_keys_secret}")" = "1" ] || fail "stack must render the gateway API key Secret"
@@ -211,8 +217,10 @@ router_http_port="$(yq -r "select(.kind == \"Service\" and .metadata.name == \"$
 # No Vault anywhere.
 [ "$(vault_annotations "${manifest}" "${router}")" = "0" ] || fail "router must not carry Vault Agent annotations"
 [ "$(vault_annotations "${manifest}" "${gateway}")" = "0" ] || fail "gateway must not carry Vault Agent annotations"
-[ -z "$(deployment "${manifest}" "${gateway}" '(.spec.template.spec.volumes // []) | .[] | select(.name == "vault-token") | .name')" ] ||
-  fail "gateway must not mount the Vault token"
+[ -z "$(deployment "${manifest}" "${gateway}" '(.spec.template.spec.volumes // []) | .[] | select(.name | test("^vault-")) | .name')" ] ||
+  fail "gateway must not mount Vault volumes"
+[ "$(count "${manifest}" ConfigMap "${gateway}-vault-agent-tpl")" = "0" ] ||
+  fail "gateway must not render the Vault Agent template ConfigMap"
 
 # Self-signed TLS: CA, CA ConfigMap and two server Secrets.
 for secret in "${ca_name}" "${router_tls_secret}" "${gateway_tls_secret}"; do

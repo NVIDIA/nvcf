@@ -207,20 +207,6 @@ start a gateway nobody can reach. Renders nothing.
 {{- if not (dig "staticKeys" "existingSecret" "" $auth | toString | trim) -}}
 {{- fail "llmApiGateway.auth.staticKeys.existingSecret is required when llmApiGateway.auth.mode is staticKeys: name a Secret with key api-keys.json" -}}
 {{- end -}}
-{{- $paths := dig "staticKeys" "allowedPaths" (list) $auth -}}
-{{- if not $paths -}}
-{{- fail "llmApiGateway.auth.staticKeys.allowedPaths must list at least one path when llmApiGateway.auth.mode is staticKeys" -}}
-{{- end -}}
-{{- range $paths -}}
-{{- if not (regexMatch "^/[^,[:space:]]*$" (toString .)) -}}
-{{- fail (printf "llmApiGateway.auth.staticKeys.allowedPaths entries must start with / and contain no comma or whitespace, got %q" (toString .)) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- if dig "serviceToken" "existingSecret" "" $auth -}}
-{{- if not (regexMatch "^[-._a-zA-Z0-9]+$" (dig "serviceToken" "key" "" $auth | toString)) -}}
-{{- fail "llmApiGateway.auth.serviceToken.key must be a Secret key name when llmApiGateway.auth.serviceToken.existingSecret is set" -}}
-{{- end -}}
 {{- end -}}
 {{- if and (include "llm-api-gateway.tlsEnabled" .) (not (dig "tls" "existingSecret" "" .Values.llmApiGateway | toString | trim)) -}}
 {{- fail "llmApiGateway.tls.existingSecret is required when llmApiGateway.tls.enabled is true: name a kubernetes.io/tls Secret" -}}
@@ -232,7 +218,6 @@ Container env beyond the ConfigMap. Renders list items, or nothing.
 */}}
 {{- define "llm-api-gateway.env" -}}
 {{- $mode := include "llm-api-gateway.authMode" . -}}
-{{- $auth := .Values.llmApiGateway.auth | default dict -}}
 {{- if .Values.llmApiGateway.olric.enabled }}
 - name: POD_NAMESPACE
   valueFrom:
@@ -242,18 +227,9 @@ Container env beyond the ConfigMap. Renders list items, or nothing.
 {{- if eq $mode "staticKeys" }}
 - name: API_KEYS_PATH
   value: {{ printf "%s/api-keys.json" (include "llm-api-gateway.apiKeysMountPath" .) | quote }}
-- name: STATIC_ALLOWED_PATHS
-  value: {{ join "," (dig "staticKeys" "allowedPaths" (list) $auth) | quote }}
 {{- else if eq $mode "anonymous" }}
 - name: ALLOW_ANONYMOUS
   value: "true"
-{{- end }}
-{{- with dig "serviceToken" "existingSecret" "" $auth }}
-- name: STARGATE_SERVICE_TOKEN
-  valueFrom:
-    secretKeyRef:
-      name: {{ . | quote }}
-      key: {{ dig "serviceToken" "key" "" $auth | quote }}
 {{- end }}
 {{- if include "llm-api-gateway.tlsEnabled" . }}
 - name: TLS_CERT_FILE

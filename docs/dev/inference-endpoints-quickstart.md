@@ -429,15 +429,15 @@ curl --cacert "${WORK}/ca.crt" "${GW}/v1/models"
 {"object":"list","data":[{"id":"test-model","object":"model","created":0,"owned_by":"nvidia"}]}
 ```
 
-Show the registry, one entry per model with its cluster and the number of
-routable inference servers:
+Show the registry, one entry per registered model with its health and, per
+cluster, the registered and healthy inference servers:
 
 ```bash
 curl --cacert "${WORK}/ca.crt" "${GW}/v1/registry"
 ```
 
 ```json
-{"object":"list","data":[{"model":"test-model","clusterId":"spark-e2e","inferenceServers":1}]}
+{"generatedAt":"2026-10-01T09:12:05Z","models":[{"model":"test-model","health":"Healthy","clusters":[{"clusterId":"spark-e2e","registeredServers":1,"healthyServers":1}]}]}
 ```
 
 Stream a chat completion with the API key:
@@ -468,17 +468,16 @@ curl -s -w '\n%{http_code}\n' --cacert "${WORK}/ca.crt" "${GW}/v1/chat/completio
 ```
 
 ```text
-{"message":"bearer authorization is required"}
+{"error":{"code":"invalid_api_key","message":"Missing or invalid API key","param":"","type":"invalid_request_error"}}
 401
 ```
 
-In static API key mode:
+With the stack defaults:
 
-- `GET /v1/models` and `GET /v1/registry` need no key, because
-  `PUBLIC_READ_ENDPOINTS` defaults to `true`.
-- `POST /v1/chat/completions` needs a key.
-- `POST /v1/embeddings` returns 403. The gateway serves only the paths in
-  `STATIC_ALLOWED_PATHS`, which defaults to `/v1/chat/completions`.
+- `GET /v1/models`, `GET /v1/models/{id}` and `GET /v1/registry` need no key,
+  because the stack sets `config.publicReadEndpoints` to `true`.
+- `POST /v1/chat/completions`, `POST /v1/responses` and `POST /v1/embeddings`
+  need a key. The model behind the name must serve the endpoint.
 
 ## Run the tests
 
@@ -598,7 +597,7 @@ When the router rejects a token, `Registered` turns `False` with reason
 `RegistrationRejected`, and the operator emits `RegistrationStreamRejected`
 Warning Events. `run.sh` reads the token from the Secret, so `make deploy` and
 `make test` keep working after a rotation. API keys rotate through `apiKeys`
-in the same way; the gateway re-reads its key file at most every 60 seconds.
+in the same way; the gateway re-reads its key file every 30 seconds.
 
 ## Troubleshooting
 
@@ -662,13 +661,10 @@ kubectl -n llm-stack logs deployment/llm-api-gateway | grep <x-request-id>
 ```
 
 - No `completed upstream request` line: the gateway answered itself.
-  - 401 `bearer authorization is required`: no key.
-  - 401 `authentication failed`: an unknown key.
-  - 403 `endpoint "/v1/embeddings" is not enabled on this gateway`: a path
-    outside `STATIC_ALLOWED_PATHS`.
+  - 401 `invalid_api_key`: no key, or a key that is not in the caller key file.
   - 400: the request set `X-Priority`, which only the gateway may set.
-  - 502 or 504 from `/v1/models` or `/v1/registry`: the router failed or timed
-    out.
+  - 502 from `/v1/models` or `/v1/registry`: the router listing failed or
+    timed out, and the cached listing has expired.
 - A `completed upstream request` line with `upstream_status`: the router or
   the model server answered.
   - 404 with `no_eligible_candidates`: the router has no routable server for
@@ -680,17 +676,17 @@ kubectl -n llm-stack logs deployment/llm-api-gateway | grep <x-request-id>
 
 ### Registry states
 
-`GET /v1/registry` shows what the router can route to now:
+`GET /v1/registry` shows what the router has registered:
 
-- The model is listed with `inferenceServers` N: N inference servers are
-  routable. With `transport.replicas: 1`, N is 1.
-- The model is missing: no server is routable. The endpoint is not
-  `Registered`, its tunnel is down, the backend fails the router's health
-  probe, or the endpoint was deleted or scaled to zero. `Registered` stays
-  True while an unhealthy backend is registered.
-- `clusterId` lists several ids joined with `,`: the servers of that model
-  report different cluster ids. The gateway logs a warning.
-- 502 or 504: the gateway cannot reach the router.
+- `health` `Healthy`: at least one registered server is routable. The model
+  is also in `GET /v1/models`. With `transport.replicas: 1`, each cluster
+  counts at most one server.
+- `health` `Unhealthy`: registered, but no server is routable. The tunnel is
+  down or the backend fails the router's health probe.
+- The model is missing: nothing is registered. The endpoint is not
+  `Registered`, or it was deleted or scaled to zero. Check the
+  `InferenceEndpoint` status.
+- 502: the gateway cannot reach the router.
 
 `GET /v1/models` lists the same models, without the counts.
 

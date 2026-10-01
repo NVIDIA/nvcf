@@ -34,6 +34,7 @@ func (m observabilityMetrics) recordLLMUsage(
 	ctx context.Context,
 	endpoint string,
 	functionID string,
+	model string,
 	usage *models.ChatCompletionUsage,
 	stream bool,
 ) {
@@ -54,6 +55,7 @@ func (m observabilityMetrics) recordLLMUsage(
 			attribute.String("token_type", tokenType),
 			attribute.String("stream", streamValue),
 			telemetry.FunctionIDAttribute(functionID),
+			telemetry.ModelAttribute(model),
 		)
 	}
 	addTokens("prompt", usage.PromptTokens)
@@ -87,6 +89,13 @@ func requestFunctionID(c *GatewayContext) string {
 		return ""
 	}
 	return c.RequestContext().RoutingKey
+}
+
+func requestRoutedModel(c *GatewayContext) string {
+	if c == nil || c.RequestContext() == nil {
+		return ""
+	}
+	return c.RequestContext().RoutedModel
 }
 
 func boolLabel(value bool) string {

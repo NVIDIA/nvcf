@@ -14,13 +14,12 @@
 // limitations under the License.
 
 use std::future::Future;
-use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use stargate_proto::pb::ListModelsRequest;
 use stargate_proto::pb::stargate_model_discovery_client::StargateModelDiscoveryClient;
-use stargate_proto::pb::{ListModelsEntry, ListModelsRequest, ListModelsResponse};
 
 #[derive(Parser, Debug)]
 #[command(name = "stargate-list-models-probe")]
@@ -42,24 +41,16 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    run_probe_with(
-        &args,
-        |endpoint, request| async move { list_models(&endpoint, request).await },
-        &mut std::io::stdout(),
-    )
+    run_probe_with(&args, |endpoint, request| async move {
+        list_models(&endpoint, request).await
+    })
     .await
 }
 
-/// Polls `ListModels` until its `model_ids` equal the expected set, then
-/// writes the matched ids followed by one line per inference-server entry.
-async fn run_probe_with<F, Fut>(
-    args: &Args,
-    mut list_models_fn: F,
-    out: &mut impl Write,
-) -> Result<()>
+async fn run_probe_with<F, Fut>(args: &Args, mut list_models_fn: F) -> Result<()>
 where
     F: FnMut(String, ListModelsRequest) -> Fut,
-    Fut: Future<Output = Result<ListModelsResponse>>,
+    Fut: Future<Output = Result<Vec<String>>>,
 {
     let endpoint = endpoint_from_addr(&args.addr);
     let mut expected = args.expected_model_ids.clone();
@@ -68,15 +59,10 @@ where
     let mut last_error = "no attempts ran".to_string();
     for attempt in 1..=args.attempts {
         last_error = match list_models_fn(endpoint.clone(), list_models_request(args)).await {
-            Ok(response) => {
-                let mut actual = response.model_ids;
+            Ok(mut actual) => {
                 actual.sort();
                 if actual == expected {
-                    writeln!(out, "ListModels returned expected models: {actual:?}")
-                        .context("write probe output")?;
-                    for entry in &response.entries {
-                        writeln!(out, "{}", format_entry(entry)).context("write probe output")?;
-                    }
+                    println!("ListModels returned expected models: {actual:?}");
                     return Ok(());
                 }
                 format!(
@@ -95,7 +81,7 @@ where
     bail!("ListModels did not return expected models from {endpoint}: {last_error}")
 }
 
-async fn list_models(endpoint: &str, request: ListModelsRequest) -> Result<ListModelsResponse> {
+async fn list_models(endpoint: &str, request: ListModelsRequest) -> Result<Vec<String>> {
     let mut client = StargateModelDiscoveryClient::connect(endpoint.to_string())
         .await
         .with_context(|| format!("connect to {endpoint}"))?;
@@ -103,15 +89,8 @@ async fn list_models(endpoint: &str, request: ListModelsRequest) -> Result<ListM
         .list_models(request)
         .await
         .context("call ListModels")?
-        .into_inner())
-}
-
-/// Formats one entry on one line with debug-quoted strings.
-fn format_entry(entry: &ListModelsEntry) -> String {
-    format!(
-        "entry model_id={:?} inference_server_id={:?} cluster_id={:?}",
-        entry.model_id, entry.inference_server_id, entry.cluster_id
-    )
+        .into_inner()
+        .model_ids)
 }
 
 fn endpoint_from_addr(addr: &str) -> String {
@@ -133,6 +112,7 @@ fn list_models_request(args: &Args) -> ListModelsRequest {
 mod tests {
     use super::*;
 
+    use stargate_proto::pb::ListModelsResponse;
     use stargate_proto::pb::stargate_model_discovery_server::{
         StargateModelDiscovery, StargateModelDiscoveryServer,
     };
@@ -141,7 +121,7 @@ mod tests {
 
     #[derive(Clone)]
     struct TestDiscovery {
-        response: ListModelsResponse,
+        model_ids: Vec<String>,
     }
 
     #[tonic::async_trait]
@@ -154,7 +134,10 @@ mod tests {
             assert_eq!(request.routing_key, Some("tenant-a".to_string()));
             assert_eq!(request.model_ids, vec!["model-a".to_string()]);
 
-            Ok(Response::new(self.response.clone()))
+            Ok(Response::new(ListModelsResponse {
+                model_ids: self.model_ids.clone(),
+                ..Default::default()
+            }))
         }
     }
 
@@ -169,22 +152,7 @@ mod tests {
         }
     }
 
-    fn entry(model_id: &str, server_id: &str) -> ListModelsEntry {
-        ListModelsEntry {
-            model_id: model_id.to_string(),
-            cluster_id: format!("{server_id}-cluster"),
-            inference_server_id: server_id.to_string(),
-        }
-    }
-
-    fn response(model_ids: &[&str], entries: Vec<ListModelsEntry>) -> ListModelsResponse {
-        ListModelsResponse {
-            model_ids: model_ids.iter().map(|id| id.to_string()).collect(),
-            entries,
-        }
-    }
-
-    async fn spawn_list_models_server(response: ListModelsResponse) -> String {
+    async fn spawn_list_models_server(model_ids: Vec<String>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind to a loopback port");
@@ -206,7 +174,7 @@ mod tests {
         tokio::spawn(async move {
             tonic::transport::Server::builder()
                 .add_service(StargateModelDiscoveryServer::new(TestDiscovery {
-                    response,
+                    model_ids,
                 }))
                 .serve_with_incoming(incoming)
                 .await
@@ -239,21 +207,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn format_entry_quotes_fields() {
-        assert_eq!(
-            format_entry(&entry("model a", "pylon-1")),
-            "entry model_id=\"model a\" inference_server_id=\"pylon-1\" \
-             cluster_id=\"pylon-1-cluster\""
-        );
-    }
-
     #[tokio::test]
-    async fn list_models_returns_discovery_response_with_entries() {
-        let expected = response(&["model-z", "model-a"], vec![entry("model-a", "pylon-1")]);
-        let endpoint = spawn_list_models_server(expected.clone()).await;
+    async fn list_models_returns_model_ids_from_discovery_response() {
+        let endpoint =
+            spawn_list_models_server(vec!["model-z".to_string(), "model-a".to_string()]).await;
 
-        let actual = list_models(
+        let models = list_models(
             &endpoint,
             ListModelsRequest {
                 routing_key: Some("tenant-a".to_string()),
@@ -263,42 +222,26 @@ mod tests {
         .await
         .expect("ListModels call should succeed");
 
-        assert_eq!(actual, expected);
+        assert_eq!(models, vec!["model-z".to_string(), "model-a".to_string()]);
     }
 
     #[tokio::test]
-    async fn probe_loop_accepts_expected_models_in_any_order_and_prints_entries() {
+    async fn probe_loop_accepts_expected_models_in_any_order() {
         let mut args = args_with_addr("127.0.0.1:50071");
         args.expected_model_ids = vec!["model-a".to_string(), "model-z".to_string()];
         args.attempts = 1;
         let mut calls = 0;
-        let mut out = Vec::new();
 
-        run_probe_with(
-            &args,
-            |endpoint, request| {
-                calls += 1;
-                assert_eq!(endpoint, "http://127.0.0.1:50071");
-                assert_eq!(request.routing_key, Some("tenant-a".to_string()));
-                std::future::ready(Ok(response(
-                    &["model-z", "model-a"],
-                    vec![entry("model-a", "pylon-1"), entry("model-z", "pylon-2")],
-                )))
-            },
-            &mut out,
-        )
+        run_probe_with(&args, |endpoint, request| {
+            calls += 1;
+            assert_eq!(endpoint, "http://127.0.0.1:50071");
+            assert_eq!(request.routing_key, Some("tenant-a".to_string()));
+            std::future::ready(Ok(vec!["model-z".to_string(), "model-a".to_string()]))
+        })
         .await
         .expect("expected models should pass");
 
         assert_eq!(calls, 1);
-        assert_eq!(
-            String::from_utf8(out).expect("probe output should be UTF-8"),
-            "ListModels returned expected models: [\"model-a\", \"model-z\"]\n\
-             entry model_id=\"model-a\" inference_server_id=\"pylon-1\" \
-             cluster_id=\"pylon-1-cluster\"\n\
-             entry model_id=\"model-z\" inference_server_id=\"pylon-2\" \
-             cluster_id=\"pylon-2-cluster\"\n"
-        );
     }
 
     #[tokio::test]
@@ -308,17 +251,16 @@ mod tests {
         args.attempts = 2;
         args.interval_ms = 0;
         let mut calls = 0;
-        let mut out = Vec::new();
 
-        let err = run_probe_with(
-            &args,
-            |_endpoint, _request| {
-                calls += 1;
-                let model_id = if calls == 1 { "model-b" } else { "model-c" };
-                std::future::ready(Ok(response(&[model_id], vec![entry(model_id, "pylon-1")])))
-            },
-            &mut out,
-        )
+        let err = run_probe_with(&args, |_endpoint, _request| {
+            calls += 1;
+            let models = if calls == 1 {
+                vec!["model-b".to_string()]
+            } else {
+                vec!["model-c".to_string()]
+            };
+            std::future::ready(Ok(models))
+        })
         .await
         .expect_err("mismatched models should fail");
 
@@ -328,16 +270,11 @@ mod tests {
             "unexpected error: {message}"
         );
         assert_eq!(calls, 2);
-        assert!(out.is_empty(), "a failed probe should print nothing");
 
         args.attempts = 0;
-        let error = run_probe_with(
-            &args,
-            |_, _| std::future::ready(Ok(ListModelsResponse::default())),
-            &mut out,
-        )
-        .await
-        .expect_err("zero attempts should fail");
+        let error = run_probe_with(&args, |_, _| std::future::ready(Ok(Vec::new())))
+            .await
+            .expect_err("zero attempts should fail");
         assert!(error.to_string().ends_with("no attempts ran"));
     }
 }

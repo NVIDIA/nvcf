@@ -69,10 +69,12 @@ Call the gateway
     -H "Authorization: Bearer ${API_KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"model": "<modelName of an InferenceEndpoint>", "messages": [{"role": "user", "content": "Hello"}]}'
-{{- if eq $scheme "https" }}
 
-The gateway reads its certificate at startup. After the certificate changes,
-restart it:
+{{- if dig "config" "publicReadEndpoints" false $g }}
 
-  kubectl -n {{ $ns }} rollout restart deployment/{{ $gateway }}
+GET /v1/models and GET /v1/registry need no key while
+llm-api-gateway.llmApiGateway.config.publicReadEndpoints is true.
 {{- end }}
+
+The gateway re-reads its caller keys{{ if eq $scheme "https" }} and its certificate{{ end }} every 30 seconds, so
+changes need no restart.

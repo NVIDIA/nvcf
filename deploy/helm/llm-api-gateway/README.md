@@ -68,6 +68,7 @@ Important settings to review before deployment:
 - `llmApiGateway.config.requestRouterUrl` and timeout values for the LLM Request Router HTTP endpoint
 - `llmApiGateway.auth.*` for how callers authenticate. See [Authentication, Vault and TLS](#authentication-vault-and-tls)
 - `llmApiGateway.config.nvcfGrpc*` for the NVCF gRPC auth service used in `nvcf` mode
+- `llmApiGateway.config.bareModelNamesEnabled` to accept model names without a routing-key prefix, `llmApiGateway.config.publicReadEndpoints` to serve the model list and registry without a key in `staticKeys` mode, and `llmApiGateway.config.requestRouterListingCacheTtl` for how long those reads reuse one router listing
 - `llmApiGateway.metrics.enabled` to expose a metrics port on the Service and Deployment (default: `false`)
 - `llmApiGateway.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmApiGateway.olric.*` for embedded rate-limit state and peer discovery
@@ -84,7 +85,7 @@ anonymous access explicitly allowed. `llmApiGateway.auth.mode` selects one:
 | Mode | Gateway env | Needs |
 | --- | --- | --- |
 | `nvcf` (default) | `NVCF_GRPC_ADDR`, `NVCF_GRPC_INSECURE`, `NVCF_GRPC_TIMEOUT`, `SECRETS_PATH` | The NVCF LLM gRPC auth service and the Vault Agent token |
-| `staticKeys` | `API_KEYS_PATH`, `STATIC_ALLOWED_PATHS` | A Secret with key `api-keys.json` |
+| `staticKeys` | `API_KEYS_PATH` | A Secret with key `api-keys.json` |
 | `anonymous` | `ALLOW_ANONYMOUS=true` | Nothing. Development only |
 
 `nvcf` mode renders exactly what earlier chart versions rendered. The other
@@ -96,9 +97,6 @@ a Secret, and `tls.enabled` without a Secret fail the render.
 | --- | --- | --- |
 | `llmApiGateway.auth.mode` | `nvcf` | `nvcf`, `staticKeys` or `anonymous` |
 | `llmApiGateway.auth.staticKeys.existingSecret` | `""` | Secret with key `api-keys.json`, mounted read-only at `/etc/llm-api-gateway/auth`. Required in `staticKeys` mode |
-| `llmApiGateway.auth.staticKeys.allowedPaths` | `["/v1/chat/completions"]` | Request paths served in `staticKeys` mode, comma-joined into `STATIC_ALLOWED_PATHS`. Other paths return 403 |
-| `llmApiGateway.auth.serviceToken.existingSecret` | `""` | Optional Secret holding the bearer the gateway sends to the request router, passed as `STARGATE_SERVICE_TOKEN` |
-| `llmApiGateway.auth.serviceToken.key` | `token` | Key of that Secret |
 | `llmApiGateway.vault.enabled` | `true` | Vault Agent annotations, the `vault-token` and `vault-config-templates` volumes, and the agent template ConfigMap |
 | `llmApiGateway.vault.noVaultAnnotations` | unset | Legacy: drops only the Vault Agent annotations and keeps the volumes |
 | `llmApiGateway.tls.enabled` | `false` | Serve the listener over TLS. Probes switch to HTTPS |
@@ -116,6 +114,8 @@ A static-key install without Vault or the NVCF API:
 
 ```yaml
 llmApiGateway:
+  config:
+    bareModelNamesEnabled: true
   auth:
     mode: staticKeys
     staticKeys:
@@ -127,9 +127,8 @@ llmApiGateway:
     existingSecret: llm-api-gateway-tls
 ```
 
-The gateway re-reads the key file at most every 60 seconds, so key changes
-need no restart. It reads the TLS files at startup, so a renewed certificate
-takes effect on the next pod restart. With Vault enabled, every mode also
+The gateway re-reads the key file and the TLS files every 30 seconds, so key
+changes and a renewed certificate need no restart. With Vault enabled, every mode also
 reads an optional tracing token from `SECRETS_PATH`. The
 `llm-gateway-stack` chart wires this mode together with the request router,
 generated Secrets and a self-signed CA.

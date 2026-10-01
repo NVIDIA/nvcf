@@ -51,7 +51,7 @@ apiKeysSecret:
   # Render the gateway's key file Secret from apiKeys, named by
   # llm-api-gateway.llmApiGateway.auth.staticKeys.existingSecret, key
   # api-keys.json. Set false to create that Secret yourself. The gateway
-  # re-reads the file at most every 60 seconds.
+  # re-reads the file every 30 seconds.
   create: true
 
 tls:
@@ -135,6 +135,15 @@ llm-api-gateway:
     config:
       # The router Service in the same namespace, by its short name.
       requestRouterUrl: http://llm-request-router:8000
+      # No NVCF control plane: models are named without a routing-key prefix.
+      bareModelNamesEnabled: true
+      # The registry and model list are readable without a key, so the demo UI
+      # can browse them. Inference still needs a key.
+      publicReadEndpoints: true
+      # No rate limiting, so no Olric node and no RBAC for its peer discovery.
+      rateLimitEnabled: false
+    olric:
+      enabled: false
     auth:
       mode: staticKeys
       staticKeys:

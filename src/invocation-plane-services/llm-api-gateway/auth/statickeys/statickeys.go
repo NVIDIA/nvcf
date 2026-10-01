@@ -15,208 +15,174 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package statickeys authenticates gateway callers against a mounted file of
-// SHA-256 API key digests. It is the in-process InvocationAuthClient used in
-// static key mode, where there is no NVCF API to call.
+// Package statickeys authenticates gateway callers against static API keys
+// when the gateway runs without the NVCF control plane.
 package statickeys
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
-	"sync"
+	"slices"
+	"sync/atomic"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-// ReloadInterval bounds how often the key file is re-read. It matches the
-// NVCF API token cache TTL so both secrets rotate on the same cadence.
-const ReloadInterval = 60 * time.Second
+var errNoKeys = errors.New("caller key set has no keys")
 
-// ClientAuthIDPrefix prefixes the key id in InvocationAuthResponse.ClientAuthID.
-const ClientAuthIDPrefix = "api-key:"
-
-// Key ids end up in rate-limit store keys and logs, so they are restricted to
-// a conservative character set with no separators.
-var keyIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-
-var errAuthenticationFailed = status.Error(codes.Unauthenticated, "authentication failed")
-
-// File is the on-disk key file format.
-type File struct {
-	Keys []FileKey `json:"keys"`
+// Entry is one caller key as a store holds it: a name and the hex SHA-256 of
+// the plain key. Stores hold hashes only.
+type Entry struct {
+	ID     string `yaml:"id"`
+	SHA256 string `yaml:"sha256"`
 }
 
-// FileKey is one accepted API key: an id used for attribution and rate
-// limiting, and the lowercase hex SHA-256 digest of the key itself.
-type FileKey struct {
-	ID     string `json:"id"`
-	SHA256 string `json:"sha256"`
+// Store supplies caller key entries. The file is the first store; another
+// store can replace it without changing how keys are validated or matched.
+type Store interface {
+	Entries(ctx context.Context) ([]Entry, error)
+}
+
+// FileStore reads entries from a YAML file of the form
+//
+//	keys:
+//	  - id: demo-ui
+//	    sha256: <64 hex>
+type FileStore struct {
+	path string
+}
+
+func NewFileStore(path string) *FileStore {
+	return &FileStore{path: path}
+}
+
+func (s *FileStore) Entries(_ context.Context) ([]Entry, error) {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("read caller key file: %w", err)
+	}
+
+	var file struct {
+		Keys []Entry `yaml:"keys"`
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
+		return nil, fmt.Errorf("parse caller key file %s: %w", s.path, err)
+	}
+	return file.Keys, nil
+}
+
+// KeySet is a validated, in-memory set of caller keys. Refresh replaces the
+// keys while lookups run.
+type KeySet struct {
+	keys atomic.Pointer[[]key]
 }
 
 type key struct {
-	id     string
-	digest []byte
+	id   string
+	hash [sha256.Size]byte
 }
 
-// Authorizer implements the gateway's InvocationAuthClient with static API
-// keys. It is safe for concurrent use.
-type Authorizer struct {
-	path     string
-	interval time.Duration
-	now      func() time.Time
-	compare  func(x, y []byte) int
-
-	mu           sync.Mutex
-	keys         []key
-	loadErr      error
-	expiresAt    time.Time
-	loadedDigest [sha256.Size]byte
-	loggedErr    string
-}
-
-// New returns an Authorizer for the key file at path. The file is read on the
-// first request and at most once per ReloadInterval afterwards; until it is
-// present and valid every request is rejected.
-func New(path string) (*Authorizer, error) {
-	if path == "" {
-		return nil, errors.New("api keys path is required")
-	}
-	return &Authorizer{
-		path:     path,
-		interval: ReloadInterval,
-		now:      time.Now,
-		compare:  subtle.ConstantTimeCompare,
-	}, nil
-}
-
-// AuthorizeInvocation verifies clientAuthorizationToken against the key file.
-// The routing key is ignored: static key mode has none. Every failure is
-// reported as codes.Unauthenticated so the gateway answers 401.
-func (a *Authorizer) AuthorizeInvocation(
-	ctx context.Context,
-	clientAuthorizationToken string,
-	_ string,
-) (*nvcf.InvocationAuthResponse, error) {
-	keys, err := a.currentKeys(ctx)
-	if err != nil || clientAuthorizationToken == "" {
-		return nil, errAuthenticationFailed
-	}
-
-	presented := sha256.Sum256([]byte(clientAuthorizationToken))
-	// Compare against every key without returning early so the time taken
-	// does not reveal which key, if any, matched. Digests are unique within
-	// a file, so at most one key can match.
-	matched := -1
-	for i := range keys {
-		equal := a.compare(presented[:], keys[i].digest)
-		matched = subtle.ConstantTimeSelect(equal, i, matched)
-	}
-	if matched < 0 {
-		return nil, errAuthenticationFailed
-	}
-
-	id := keys[matched].id
-	return &nvcf.InvocationAuthResponse{
-		RoutingKey:   "",
-		ClientAuthID: ClientAuthIDPrefix + id,
-		RateLimitKey: id,
-	}, nil
-}
-
-// Close satisfies nvcf.Client; the authorizer holds no connections.
-func (a *Authorizer) Close() error {
-	return nil
-}
-
-func (a *Authorizer) currentKeys(ctx context.Context) ([]key, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	now := a.now()
-	if now.Before(a.expiresAt) {
-		return a.keys, a.loadErr
-	}
-	a.expiresAt = now.Add(a.interval)
-
-	data, err := os.ReadFile(a.path)
-	var keys []key
-	if err == nil {
-		keys, err = parse(data)
-	}
+// Load reads entries from store and validates them into a KeySet.
+func Load(ctx context.Context, store Store) (*KeySet, error) {
+	keys, err := loadKeys(ctx, store)
 	if err != nil {
-		// Fail closed: a missing or malformed file revokes every key rather
-		// than keeping the last good set, so deleting the file is a way to
-		// shut callers out.
-		a.keys, a.loadErr = nil, err
-		a.loadedDigest = [sha256.Size]byte{}
-		if msg := err.Error(); msg != a.loggedErr {
-			a.loggedErr = msg
-			telemetry.Logger(ctx).Error().
-				Err(err).
-				Str("api_keys_path", a.path).
-				Msg("static API key file unusable; rejecting all requests until it is valid")
-		}
 		return nil, err
 	}
+	set := &KeySet{}
+	set.keys.Store(&keys)
+	return set, nil
+}
 
-	a.keys, a.loadErr = keys, nil
-	a.loggedErr = ""
-	if digest := sha256.Sum256(data); digest != a.loadedDigest {
-		a.loadedDigest = digest
-		telemetry.Logger(ctx).Info().
-			Str("api_keys_path", a.path).
-			Int("key_count", len(keys)).
-			Msg("loaded static API key file")
+// Refresh reloads the keys from store every interval until ctx is done. A
+// reload that fails keeps the current keys and logs an error.
+func (s *KeySet) Refresh(ctx context.Context, store Store, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			keys, err := loadKeys(ctx, store)
+			if err != nil {
+				telemetry.Logger(ctx).Error().Err(err).Msg("caller key refresh failed; keeping the previous keys")
+				continue
+			}
+			if previous := s.keys.Swap(&keys); previous == nil || !slices.Equal(*previous, keys) {
+				telemetry.Logger(ctx).Info().Int("keys", len(keys)).Msg("caller keys changed")
+			}
+		}
+	}
+}
+
+func loadKeys(ctx context.Context, store Store) ([]key, error) {
+	entries, err := store.Entries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load caller keys: %w", err)
+	}
+	// With no keys every request fails; refuse the set so startup fails instead.
+	if len(entries) == 0 {
+		return nil, errNoKeys
+	}
+
+	keys := make([]key, 0, len(entries))
+	seenIDs := make(map[string]struct{}, len(entries))
+	seenHashes := make(map[[sha256.Size]byte]struct{}, len(entries))
+	for i, entry := range entries {
+		// The id becomes the rate-limit key, which must not be empty.
+		if entry.ID == "" {
+			return nil, fmt.Errorf("caller key %d: id is required", i+1)
+		}
+		if _, ok := seenIDs[entry.ID]; ok {
+			return nil, fmt.Errorf("duplicate caller key id %q", entry.ID)
+		}
+		seenIDs[entry.ID] = struct{}{}
+
+		var hash [sha256.Size]byte
+		if len(entry.SHA256) != hex.EncodedLen(sha256.Size) {
+			return nil, fmt.Errorf("caller key %q: sha256 is not 64 hex characters", entry.ID)
+		}
+		if _, err := hex.Decode(hash[:], []byte(entry.SHA256)); err != nil {
+			return nil, fmt.Errorf("caller key %q: sha256 is not 64 hex characters", entry.ID)
+		}
+		if _, ok := seenHashes[hash]; ok {
+			return nil, fmt.Errorf("caller key %q repeats the sha256 of another key", entry.ID)
+		}
+		seenHashes[hash] = struct{}{}
+
+		keys = append(keys, key{id: entry.ID, hash: hash})
 	}
 	return keys, nil
 }
 
-func parse(data []byte) ([]key, error) {
-	var file File
-	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("decode api key file: %w", err)
-	}
-	if len(file.Keys) == 0 {
-		return nil, errors.New("api key file contains no keys")
+// Lookup returns the id of the key whose hash matches the SHA-256 of apiKey.
+func (s *KeySet) Lookup(apiKey string) (string, bool) {
+	if apiKey == "" {
+		return "", false
 	}
 
-	keys := make([]key, 0, len(file.Keys))
-	seenIDs := make(map[string]struct{}, len(file.Keys))
-	seenDigests := make(map[string]struct{}, len(file.Keys))
-	for i, entry := range file.Keys {
-		if !keyIDPattern.MatchString(entry.ID) {
-			return nil, fmt.Errorf(
-				"api key file entry %d: id must match %s", i, keyIDPattern.String(),
-			)
-		}
-		if _, dup := seenIDs[entry.ID]; dup {
-			return nil, fmt.Errorf("api key file entry %d: duplicate id %q", i, entry.ID)
-		}
-		digest, err := hex.DecodeString(entry.SHA256)
-		if err != nil || len(digest) != sha256.Size {
-			return nil, fmt.Errorf(
-				"api key file entry %d (id %q): sha256 must be %d hex characters",
-				i, entry.ID, 2*sha256.Size,
-			)
-		}
-		if _, dup := seenDigests[string(digest)]; dup {
-			return nil, fmt.Errorf("api key file entry %d (id %q): duplicate sha256", i, entry.ID)
-		}
-		seenIDs[entry.ID] = struct{}{}
-		seenDigests[string(digest)] = struct{}{}
-		keys = append(keys, key{id: entry.ID, digest: digest})
+	keys := s.keys.Load()
+	if keys == nil {
+		return "", false
 	}
-	return keys, nil
+
+	hash := sha256.Sum256([]byte(apiKey))
+	id, ok := "", false
+	for _, k := range *keys {
+		if subtle.ConstantTimeCompare(hash[:], k.hash[:]) == 1 {
+			id, ok = k.id, true
+		}
+	}
+	return id, ok
 }

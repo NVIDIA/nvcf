@@ -20,10 +20,6 @@ package statickeys
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,426 +28,297 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"github.com/stretchr/testify/require"
 )
 
-func digestHex(secret string) string {
-	sum := sha256.Sum256([]byte(secret))
-	return hex.EncodeToString(sum[:])
-}
+// SHA-256 of the plain keys "demo-ui-key" and "laptop-key".
+const (
+	demoUIKeyHash = "276932c4694447817ad43a6afceb8f8a64657038679602b46ce8dc254b18bbcd"
+	laptopKeyHash = "9b7b36061a684541007d2c543574a1db801bc8f41f85ac5fdc0155fe72a9ec38"
+)
 
-func writeKeyFile(t *testing.T, path string, keys ...FileKey) {
+func writeKeyFile(t *testing.T, content string) string {
 	t.Helper()
-	data, err := json.Marshal(File{Keys: keys})
-	if err != nil {
-		t.Fatalf("marshal key file: %v", err)
-	}
-	writeRaw(t, path, string(data))
+	path := filepath.Join(t.TempDir(), "caller-keys.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
 }
 
-func writeRaw(t *testing.T, path string, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write key file: %v", err)
-	}
-}
-
-// fakeClock drives the reload interval without sleeping.
-type fakeClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func newFakeClock() *fakeClock {
-	return &fakeClock{now: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
-}
-
-func (c *fakeClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
-}
-
-func (c *fakeClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
-func newTestAuthorizer(t *testing.T, path string, clock *fakeClock) *Authorizer {
-	t.Helper()
-	a, err := New(path)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	a.now = clock.Now
-	return a
-}
-
-// logContext routes the authorizer's logs into buf.
-func logContext(buf *bytes.Buffer) context.Context {
-	logger := zerolog.New(buf)
-	return logger.WithContext(context.Background())
-}
-
-func requireUnauthenticated(t *testing.T, err error) {
-	t.Helper()
-	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("error = %v, want code Unauthenticated", err)
-	}
-	if st, _ := status.FromError(err); st.Message() != "authentication failed" {
-		t.Fatalf("error message = %q, want the generic message", st.Message())
-	}
-}
-
-func TestNewRequiresPath(t *testing.T) {
+func TestLoad_ValidFile_LooksUpKeyIDByPlainKey(t *testing.T) {
 	t.Parallel()
 
-	if _, err := New(""); err == nil {
-		t.Fatal("New(\"\") error = nil, want error")
-	}
-}
+	path := writeKeyFile(t, `keys:
+  - id: demo-ui
+    sha256: `+demoUIKeyHash+`
+  - id: presenter-laptop
+    sha256: `+laptopKeyHash+`
+`)
+	keys, err := Load(context.Background(), NewFileStore(path))
+	require.NoError(t, err)
 
-func TestAuthorizeInvocation(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	writeKeyFile(t, path,
-		FileKey{ID: "team-a", SHA256: digestHex("sk-team-a")},
-		FileKey{ID: "team-b", SHA256: strings.ToUpper(digestHex("sk-team-b"))},
-	)
-	a := newTestAuthorizer(t, path, newFakeClock())
-
-	tests := []struct {
+	for _, tc := range []struct {
 		name   string
-		token  string
+		apiKey string
 		wantID string
+		wantOK bool
 	}{
-		{name: "valid key", token: "sk-team-a", wantID: "team-a"},
-		{name: "valid key with uppercase digest in file", token: "sk-team-b", wantID: "team-b"},
-		{name: "wrong key", token: "sk-team-a-wrong"},
-		{name: "key of an id not in the file", token: "sk-team-c"},
-		{name: "digest presented instead of key", token: digestHex("sk-team-a")},
-		{name: "empty token", token: ""},
-	}
-
-	for _, tc := range tests {
+		{"first key", "demo-ui-key", "demo-ui", true},
+		{"second key", "laptop-key", "presenter-laptop", true},
+		{"unknown key", "other-key", "", false},
+		{"empty key", "", "", false},
+		{"hash presented as key", demoUIKeyHash, "", false},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := a.AuthorizeInvocation(context.Background(), tc.token, "ignored-routing-key")
-			if tc.wantID == "" {
-				requireUnauthenticated(t, err)
-				if resp != nil {
-					t.Fatalf("response = %+v, want nil", resp)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("AuthorizeInvocation() error = %v", err)
-			}
-			if resp.RoutingKey != "" {
-				t.Fatalf("routing key = %q, want empty", resp.RoutingKey)
-			}
-			if resp.ClientAuthID != "api-key:"+tc.wantID {
-				t.Fatalf("client auth id = %q, want api-key:%s", resp.ClientAuthID, tc.wantID)
-			}
-			if resp.RateLimitKey != tc.wantID {
-				t.Fatalf("rate limit key = %q, want %s", resp.RateLimitKey, tc.wantID)
-			}
-			if resp.Priority != nil {
-				t.Fatalf("priority = %d, want nil", *resp.Priority)
-			}
-			if resp.ModelSpecs != nil {
-				t.Fatalf("model specs = %v, want nil", resp.ModelSpecs)
-			}
-			if resp.ProjectID != "" || resp.AuthContext != nil {
-				t.Fatalf("unexpected project or auth context: %+v", resp)
-			}
+			t.Parallel()
+
+			id, ok := keys.Lookup(tc.apiKey)
+			require.Equal(t, tc.wantOK, ok)
+			require.Equal(t, tc.wantID, id)
 		})
 	}
 }
 
-func TestAuthorizeInvocationReturnsIndependentResponses(t *testing.T) {
+// The Helm chart mounts the key file as api-keys.json.
+func TestLoad_JSONFile_LooksUpKeyID(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	writeKeyFile(t, path, FileKey{ID: "team-a", SHA256: digestHex("sk-team-a")})
-	a := newTestAuthorizer(t, path, newFakeClock())
+	path := writeKeyFile(t, `{"keys": [{"id": "demo-ui", "sha256": "`+demoUIKeyHash+`"}]}`)
+	keys, err := Load(context.Background(), NewFileStore(path))
+	require.NoError(t, err)
 
-	first, err := a.AuthorizeInvocation(context.Background(), "sk-team-a", "")
-	if err != nil {
-		t.Fatalf("AuthorizeInvocation() error = %v", err)
-	}
-	first.RateLimitKey = "mutated"
-
-	second, err := a.AuthorizeInvocation(context.Background(), "sk-team-a", "")
-	if err != nil {
-		t.Fatalf("AuthorizeInvocation() error = %v", err)
-	}
-	if second.RateLimitKey != "team-a" {
-		t.Fatalf("rate limit key = %q, want team-a", second.RateLimitKey)
-	}
+	id, ok := keys.Lookup("demo-ui-key")
+	require.True(t, ok)
+	require.Equal(t, "demo-ui", id)
 }
 
-func TestAuthorizeInvocationRejectsMalformedFiles(t *testing.T) {
+func TestLoad_InvalidFile_FailsToLoad(t *testing.T) {
 	t.Parallel()
 
-	valid := digestHex("sk-team-a")
-	tests := []struct {
+	for _, tc := range []struct {
 		name    string
 		content string
+		wantErr string
 	}{
-		{name: "not json", content: "keys: [team-a]"},
-		{name: "trailing garbage", content: `{"keys":[{"id":"team-a","sha256":"` + valid + `"}]} extra`},
-		{name: "empty object", content: `{}`},
-		{name: "empty key list", content: `{"keys":[]}`},
-		{name: "missing id", content: `{"keys":[{"sha256":"` + valid + `"}]}`},
-		{name: "id with separator", content: `{"keys":[{"id":"team:a","sha256":"` + valid + `"}]}`},
-		{name: "missing digest", content: `{"keys":[{"id":"team-a"}]}`},
-		{name: "short digest", content: `{"keys":[{"id":"team-a","sha256":"abcd"}]}`},
-		{name: "non hex digest", content: `{"keys":[{"id":"team-a","sha256":"` + strings.Repeat("zz", 32) + `"}]}`},
 		{
 			name: "duplicate id",
-			content: `{"keys":[{"id":"team-a","sha256":"` + valid + `"},` +
-				`{"id":"team-a","sha256":"` + digestHex("sk-other") + `"}]}`,
+			content: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: demo-ui, sha256: " + laptopKeyHash + "}\n",
+			wantErr: `duplicate caller key id "demo-ui"`,
 		},
 		{
-			name: "duplicate digest",
-			content: `{"keys":[{"id":"team-a","sha256":"` + valid + `"},` +
-				`{"id":"team-b","sha256":"` + valid + `"}]}`,
+			name: "duplicate hash",
+			content: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + demoUIKeyHash + "}\n",
+			wantErr: `caller key "laptop" repeats the sha256 of another key`,
 		},
-	}
-
-	for _, tc := range tests {
+		{
+			name:    "short hash",
+			content: "keys:\n  - {id: demo-ui, sha256: " + demoUIKeyHash[:62] + "}\n",
+			wantErr: `caller key "demo-ui": sha256 is not 64 hex characters`,
+		},
+		{
+			name:    "long hash",
+			content: "keys:\n  - {id: demo-ui, sha256: " + demoUIKeyHash + "00}\n",
+			wantErr: `caller key "demo-ui": sha256 is not 64 hex characters`,
+		},
+		{
+			name:    "non-hex hash",
+			content: "keys:\n  - {id: demo-ui, sha256: " + "zz" + demoUIKeyHash[2:] + "}\n",
+			wantErr: `caller key "demo-ui": sha256 is not 64 hex characters`,
+		},
+		{
+			name:    "empty id",
+			content: "keys:\n  - {id: '', sha256: " + demoUIKeyHash + "}\n",
+			wantErr: "caller key 1: id is required",
+		},
+		{
+			name:    "unknown field",
+			content: "keys:\n  - {id: demo-ui, sha256: " + demoUIKeyHash + ", key: demo-ui-key}\n",
+			wantErr: "field key not found",
+		},
+		{
+			name:    "no keys",
+			content: "keys: []\n",
+			wantErr: "caller key set has no keys",
+		},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			path := filepath.Join(t.TempDir(), "api-keys.json")
-			writeRaw(t, path, tc.content)
-			a := newTestAuthorizer(t, path, newFakeClock())
-
-			// A key that is valid inside the malformed file is refused too:
-			// the whole file is rejected, not only the offending entry.
-			_, err := a.AuthorizeInvocation(context.Background(), "sk-team-a", "")
-			requireUnauthenticated(t, err)
+			_, err := Load(context.Background(), NewFileStore(writeKeyFile(t, tc.content)))
+			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 }
 
-func TestAuthorizeInvocationMissingFileFailsClosedAndLogsOnce(t *testing.T) {
+func TestLoad_MissingFile_FailsToLoad(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	clock := newFakeClock()
-	a := newTestAuthorizer(t, path, clock)
-
-	var logs bytes.Buffer
-	ctx := logContext(&logs)
-	for range 3 {
-		_, err := a.AuthorizeInvocation(ctx, "sk-team-a", "")
-		requireUnauthenticated(t, err)
-		// Cross the reload interval so the next call re-reads the file and
-		// fails again with the same error.
-		clock.Advance(ReloadInterval)
-	}
-
-	if got := strings.Count(logs.String(), "static API key file unusable"); got != 1 {
-		t.Fatalf("error logged %d times, want 1:\n%s", got, logs.String())
-	}
-	if strings.Contains(logs.String(), "sk-team-a") || strings.Contains(logs.String(), digestHex("sk-team-a")) {
-		t.Fatalf("logs contain the presented key or its digest:\n%s", logs.String())
-	}
+	_, err := Load(context.Background(), NewFileStore(filepath.Join(t.TempDir(), "absent.yaml")))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestAuthorizeInvocationLogsEachDistinctError(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	clock := newFakeClock()
-	a := newTestAuthorizer(t, path, clock)
-
-	var logs bytes.Buffer
-	ctx := logContext(&logs)
-
-	_, err := a.AuthorizeInvocation(ctx, "sk-team-a", "")
-	requireUnauthenticated(t, err)
-
-	writeRaw(t, path, "not json")
-	for range 2 {
-		clock.Advance(ReloadInterval)
-		_, err = a.AuthorizeInvocation(ctx, "sk-team-a", "")
-		requireUnauthenticated(t, err)
-	}
-
-	if got := strings.Count(logs.String(), "static API key file unusable"); got != 2 {
-		t.Fatalf("error logged %d times, want 2 (missing, then malformed):\n%s", got, logs.String())
-	}
+// syncBuffer collects log output written by the refresh goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
-func TestAuthorizeInvocationRecoversWhenFileBecomesValid(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	clock := newFakeClock()
-	a := newTestAuthorizer(t, path, clock)
-
-	var logs bytes.Buffer
-	ctx := logContext(&logs)
-
-	_, err := a.AuthorizeInvocation(ctx, "sk-team-a", "")
-	requireUnauthenticated(t, err)
-
-	writeKeyFile(t, path, FileKey{ID: "team-a", SHA256: digestHex("sk-team-a")})
-
-	// A failed read is cached for the reload interval as well.
-	clock.Advance(ReloadInterval - time.Nanosecond)
-	_, err = a.AuthorizeInvocation(ctx, "sk-team-a", "")
-	requireUnauthenticated(t, err)
-
-	clock.Advance(time.Nanosecond)
-	resp, err := a.AuthorizeInvocation(ctx, "sk-team-a", "")
-	if err != nil {
-		t.Fatalf("AuthorizeInvocation() after recovery error = %v", err)
-	}
-	if resp.RateLimitKey != "team-a" {
-		t.Fatalf("rate limit key = %q, want team-a", resp.RateLimitKey)
-	}
-	if got := strings.Count(logs.String(), "loaded static API key file"); got != 1 {
-		t.Fatalf("load logged %d times, want 1:\n%s", got, logs.String())
-	}
-
-	// Re-reading an unchanged file does not log again.
-	clock.Advance(ReloadInterval)
-	if _, err := a.AuthorizeInvocation(ctx, "sk-team-a", ""); err != nil {
-		t.Fatalf("AuthorizeInvocation() error = %v", err)
-	}
-	if got := strings.Count(logs.String(), "loaded static API key file"); got != 1 {
-		t.Fatalf("load logged %d times after an unchanged re-read, want 1", got)
-	}
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
 }
 
-func TestAuthorizeInvocationRotatedFile(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	writeKeyFile(t, path, FileKey{ID: "team-a", SHA256: digestHex("sk-old")})
-	clock := newFakeClock()
-	a := newTestAuthorizer(t, path, clock)
-	ctx := context.Background()
-
-	if _, err := a.AuthorizeInvocation(ctx, "sk-old", ""); err != nil {
-		t.Fatalf("old key before rotation: %v", err)
-	}
-
-	writeKeyFile(t, path,
-		FileKey{ID: "team-a", SHA256: digestHex("sk-new")},
-		FileKey{ID: "team-b", SHA256: digestHex("sk-team-b")},
-	)
-
-	// Within the reload interval the previous file stays in effect.
-	clock.Advance(ReloadInterval - time.Nanosecond)
-	if _, err := a.AuthorizeInvocation(ctx, "sk-old", ""); err != nil {
-		t.Fatalf("old key within reload interval: %v", err)
-	}
-	_, err := a.AuthorizeInvocation(ctx, "sk-new", "")
-	requireUnauthenticated(t, err)
-
-	clock.Advance(time.Nanosecond)
-	_, err = a.AuthorizeInvocation(ctx, "sk-old", "")
-	requireUnauthenticated(t, err)
-	resp, err := a.AuthorizeInvocation(ctx, "sk-new", "")
-	if err != nil {
-		t.Fatalf("new key after rotation: %v", err)
-	}
-	if resp.RateLimitKey != "team-a" {
-		t.Fatalf("rate limit key = %q, want team-a", resp.RateLimitKey)
-	}
-	resp, err = a.AuthorizeInvocation(ctx, "sk-team-b", "")
-	if err != nil {
-		t.Fatalf("added key after rotation: %v", err)
-	}
-	if resp.RateLimitKey != "team-b" {
-		t.Fatalf("rate limit key = %q, want team-b", resp.RateLimitKey)
-	}
-
-	// Deleting the file revokes every key at the next reload.
-	if err := os.Remove(path); err != nil {
-		t.Fatalf("remove key file: %v", err)
-	}
-	clock.Advance(ReloadInterval)
-	_, err = a.AuthorizeInvocation(ctx, "sk-new", "")
-	requireUnauthenticated(t, err)
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
-func TestAuthorizeInvocationComparesEveryKey(t *testing.T) {
+// replaceKeyFile swaps the file in one rename, as Kubernetes swaps a projected
+// Secret, so a refresh never reads a half-written file.
+func replaceKeyFile(t *testing.T, path string, content string) {
+	t.Helper()
+	tmp := path + ".tmp"
+	require.NoError(t, os.WriteFile(tmp, []byte(content), 0o600))
+	require.NoError(t, os.Rename(tmp, path))
+}
+
+// startRefresh loads the demo-ui key from a new file and refreshes it every
+// few milliseconds until the test ends.
+func startRefresh(t *testing.T) (*KeySet, string, *syncBuffer) {
+	t.Helper()
+	path := writeKeyFile(t, "keys:\n  - {id: demo-ui, sha256: "+demoUIKeyHash+"}\n")
+	store := NewFileStore(path)
+	keys, err := Load(context.Background(), store)
+	require.NoError(t, err)
+
+	logs := &syncBuffer{}
+	ctx, cancel := context.WithCancel(zerolog.New(logs).WithContext(context.Background()))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		keys.Refresh(ctx, store, 5*time.Millisecond)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return keys, path, logs
+}
+
+func TestKeySetRefresh_ValidFileChange_AppliesWithoutRestart(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	writeKeyFile(t, path,
-		FileKey{ID: "team-a", SHA256: digestHex("sk-team-a")},
-		FileKey{ID: "team-b", SHA256: digestHex("sk-team-b")},
-		FileKey{ID: "team-c", SHA256: digestHex("sk-team-c")},
-	)
-
-	tests := []struct {
-		token  string
-		wantID string
+	for _, tc := range []struct {
+		name       string
+		newContent string
+		apiKey     string
+		wantOK     bool
 	}{
-		{token: "sk-team-a", wantID: "team-a"},
-		{token: "sk-team-b", wantID: "team-b"},
-		{token: "sk-team-c", wantID: "team-c"},
-		{token: "sk-unknown"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.token, func(t *testing.T) {
+		{
+			name: "added key becomes valid",
+			newContent: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			apiKey: "laptop-key",
+			wantOK: true,
+		},
+		{
+			name:       "removed key becomes invalid",
+			newContent: "keys:\n  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			apiKey:     "demo-ui-key",
+			wantOK:     false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			a := newTestAuthorizer(t, path, newFakeClock())
-			calls := 0
-			a.compare = func(x, y []byte) int {
-				calls++
-				return subtle.ConstantTimeCompare(x, y)
-			}
+			keys, path, logs := startRefresh(t)
+			replaceKeyFile(t, path, tc.newContent)
 
-			resp, err := a.AuthorizeInvocation(context.Background(), tc.token, "")
-			if calls != 3 {
-				t.Fatalf("compared %d keys, want all 3", calls)
-			}
-			if tc.wantID == "" {
-				requireUnauthenticated(t, err)
-				return
-			}
-			if err != nil {
-				t.Fatalf("AuthorizeInvocation() error = %v", err)
-			}
-			if resp.RateLimitKey != tc.wantID {
-				t.Fatalf("rate limit key = %q, want %s", resp.RateLimitKey, tc.wantID)
-			}
+			require.Eventually(t, func() bool {
+				_, ok := keys.Lookup(tc.apiKey)
+				return ok == tc.wantOK
+			}, 5*time.Second, 5*time.Millisecond)
+			require.Contains(t, logs.String(), `"message":"caller keys changed"`)
 		})
 	}
 }
 
-func TestAuthorizeInvocationConcurrentUse(t *testing.T) {
+func TestKeySetRefresh_UnchangedFile_LogsNothing(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	writeKeyFile(t, path, FileKey{ID: "team-a", SHA256: digestHex("sk-team-a")})
-	clock := newFakeClock()
-	a := newTestAuthorizer(t, path, clock)
+	keys, _, logs := startRefresh(t)
+	// Let several refreshes run.
+	time.Sleep(50 * time.Millisecond)
 
-	var wg sync.WaitGroup
-	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if i%4 == 0 {
-				clock.Advance(ReloadInterval)
-			}
-			if _, err := a.AuthorizeInvocation(context.Background(), "sk-team-a", ""); err != nil {
-				t.Errorf("AuthorizeInvocation() error = %v", err)
-			}
-		}()
+	_, ok := keys.Lookup("demo-ui-key")
+	require.True(t, ok)
+	require.Empty(t, logs.String())
+}
+
+func TestKeySetLookup_ZeroValue_RejectsKey(t *testing.T) {
+	t.Parallel()
+
+	var keys KeySet
+	_, ok := keys.Lookup("demo-ui-key")
+	require.False(t, ok)
+}
+
+func TestKeySetRefresh_InvalidFile_KeepsLastGoodSetAndLogsError(t *testing.T) {
+	t.Parallel()
+
+	// Each file with keys also lists the laptop key, which must not become valid.
+	for _, tc := range []struct {
+		name       string
+		newContent string
+		wantLog    string
+	}{
+		{
+			name:       "malformed yaml",
+			newContent: "keys: [{id: laptop, sha256: " + laptopKeyHash + "}\n",
+			wantLog:    "parse caller key file",
+		},
+		{
+			name: "duplicate id",
+			newContent: "keys:\n" +
+				"  - {id: laptop, sha256: " + demoUIKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			wantLog: `duplicate caller key id \"laptop\"`,
+		},
+		{
+			name: "duplicate hash",
+			newContent: "keys:\n" +
+				"  - {id: demo-ui, sha256: " + laptopKeyHash + "}\n" +
+				"  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
+			wantLog: "repeats the sha256 of another key",
+		},
+		{
+			name:       "no keys",
+			newContent: "keys: []\n",
+			wantLog:    "caller key set has no keys",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			keys, path, logs := startRefresh(t)
+			replaceKeyFile(t, path, tc.newContent)
+
+			require.Eventually(t, func() bool {
+				return strings.Contains(logs.String(), tc.wantLog)
+			}, 5*time.Second, 5*time.Millisecond)
+			require.Contains(t, logs.String(), `"level":"error"`)
+
+			id, ok := keys.Lookup("demo-ui-key")
+			require.True(t, ok)
+			require.Equal(t, "demo-ui", id)
+			_, ok = keys.Lookup("laptop-key")
+			require.False(t, ok)
+		})
 	}
-	wg.Wait()
 }

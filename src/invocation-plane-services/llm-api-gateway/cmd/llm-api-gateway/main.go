@@ -20,7 +20,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,7 +27,6 @@ import (
 	"time"
 
 	echo "github.com/labstack/echo/v4"
-	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
@@ -39,7 +37,10 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-const defaultGatewayShutdownTimeout = 5 * time.Second
+const (
+	defaultGatewayShutdownTimeout = 5 * time.Second
+	callerKeysRefreshInterval     = 30 * time.Second
+)
 
 func main() {
 	cfg, err := config.LoadFromEnv()
@@ -47,6 +48,15 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to load configuration")
 	}
 	telemetry.SetServiceName(cfg.Telemetry.ServiceName)
+	if err := cfg.CheckCallerAuth(); err != nil {
+		zlog.Fatal().Err(err).Msg("refusing to start without caller authentication")
+	}
+	if cfg.AllowAnonymous {
+		zlog.Warn().Msg("ALLOW_ANONYMOUS is set: callers are not authenticated")
+	}
+	if cfg.PublicReadEndpoints && cfg.CallerKeysFile != "" {
+		zlog.Warn().Msg("PUBLIC_READ_ENDPOINTS is set: model and registry reads need no caller key")
+	}
 
 	observability, err := telemetry.Init(context.Background(), telemetry.RuntimeConfig{
 		MetricsPort:        cfg.Telemetry.MetricsPort,
@@ -66,12 +76,32 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to initialize inference provider")
 	}
 
-	authClient, authMode, err := newAuthClient(cfg, zlog.Logger)
-	if err != nil {
-		zlog.Fatal().Err(err).Msg("failed to initialize request authentication")
+	var authClient nvcf.Client
+	if cfg.NVCF.GRPCAddr != "" {
+		grpcAuthClient, err := nvcf.NewClient(nvcf.Config{
+			Addr:               cfg.NVCF.GRPCAddr,
+			SecretsPath:        cfg.NVCF.SecretsPath,
+			OAuth2ProviderHost: cfg.NVCF.OAuth2ProviderHost,
+			Insecure:           cfg.NVCF.GRPCInsecure,
+			Timeout:            cfg.NVCF.GRPCTimeout,
+		})
+		if err != nil {
+			zlog.Fatal().Err(err).Msg("failed to initialize nvcf grpc auth client")
+		}
+		authClient = nvcf.NewCachedClient(grpcAuthClient)
 	}
 
-	e, err := server.New(cfg, inferenceProvider, authClient)
+	var callerKeys *statickeys.KeySet
+	var callerKeyStore statickeys.Store
+	if cfg.CallerKeysFile != "" {
+		callerKeyStore = statickeys.NewFileStore(cfg.CallerKeysFile)
+		callerKeys, err = statickeys.Load(context.Background(), callerKeyStore)
+		if err != nil {
+			zlog.Fatal().Err(err).Msg("failed to load caller keys")
+		}
+	}
+
+	e, err := server.New(cfg, inferenceProvider, authClient, callerKeys)
 	if err != nil {
 		zlog.Fatal().Err(err).Msg("failed to initialize gateway")
 	}
@@ -79,12 +109,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	zlog.Info().
-		Str("addr", cfg.Server.Addr).
-		Str("auth_mode", string(authMode)).
-		Bool("public_read_endpoints", cfg.PublicReadEndpointsEnabled()).
-		Bool("tls", cfg.Server.TLSEnabled()).
-		Msg("starting llm api gateway")
+	if callerKeys != nil {
+		go callerKeys.Refresh(ctx, callerKeyStore, callerKeysRefreshInterval)
+	}
 
 	if err := runGateway(
 		ctx,
@@ -94,46 +121,6 @@ func main() {
 		e.Shutdown,
 	); err != nil {
 		zlog.Fatal().Err(err).Msg("gateway exited unexpectedly")
-	}
-}
-
-// newAuthClient builds the caller authenticator for the configured mode. It
-// fails closed: without NVCF_GRPC_ADDR or API_KEYS_PATH the gateway starts
-// only when ALLOW_ANONYMOUS is set, and then with a warning. A nil client
-// means anonymous access.
-func newAuthClient(cfg *config.Config, logger zerolog.Logger) (nvcf.Client, config.AuthMode, error) {
-	mode, err := cfg.AuthMode()
-	if err != nil {
-		return nil, "", err
-	}
-
-	switch mode {
-	case config.AuthModeNVCF:
-		grpcAuthClient, err := nvcf.NewClient(nvcf.Config{
-			Addr:               cfg.NVCF.GRPCAddr,
-			SecretsPath:        cfg.NVCF.SecretsPath,
-			OAuth2ProviderHost: cfg.NVCF.OAuth2ProviderHost,
-			Insecure:           cfg.NVCF.GRPCInsecure,
-			Timeout:            cfg.NVCF.GRPCTimeout,
-		})
-		if err != nil {
-			return nil, "", fmt.Errorf("initialize nvcf grpc auth client: %w", err)
-		}
-		return nvcf.NewCachedClient(grpcAuthClient), mode, nil
-	case config.AuthModeStaticKeys:
-		authorizer, err := statickeys.New(cfg.Auth.APIKeysPath)
-		if err != nil {
-			return nil, "", fmt.Errorf("initialize static api key authorizer: %w", err)
-		}
-		return authorizer, mode, nil
-	case config.AuthModeAnonymous:
-		logger.Warn().
-			Str("auth_mode", string(mode)).
-			Msg("ALLOW_ANONYMOUS is set and no authenticator is configured: " +
-				"the gateway accepts unauthenticated requests")
-		return nil, mode, nil
-	default:
-		return nil, "", fmt.Errorf("unsupported auth mode %q", mode)
 	}
 }
 

@@ -28,6 +28,7 @@ data:
   STARGATE_URL: {{ required "llmApiGateway.config.requestRouterUrl is required" $cfg.requestRouterUrl | quote }}
   STARGATE_CONNECT_TIMEOUT: {{ $cfg.requestRouterConnectTimeout | quote }}
   STARGATE_REQUEST_TIMEOUT: {{ $cfg.requestRouterRequestTimeout | quote }}
+  STARGATE_LISTING_CACHE_TTL: {{ $cfg.requestRouterListingCacheTtl | quote }}
   NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT: {{ $cfg.inferenceWriteTimeout | quote }}
   {{- /*
   NVCF_GRPC_ADDR selects NVCF auth and is mutually exclusive with the
@@ -45,6 +46,8 @@ data:
   {{- end }}
   RATE_LIMIT_ENABLED: {{ $cfg.rateLimitEnabled | toString | quote }}
   RATE_LIMIT_FAIL_OPEN: {{ $cfg.rateLimitFailOpen | toString | quote }}
+  BARE_MODEL_NAMES_ENABLED: {{ $cfg.bareModelNamesEnabled | toString | quote }}
+  PUBLIC_READ_ENDPOINTS: {{ $cfg.publicReadEndpoints | toString | quote }}
   {{- with .Values.llmApiGateway.olric }}
   {{- if .enabled }}
   OLRIC_ENABLED: "true"

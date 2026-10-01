@@ -82,9 +82,9 @@ func serveWithWriteDeadline(
 		return func(c echo.Context) error {
 			gc := NewGatewayContext(c)
 			gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-				RequestID:    "request-a",
-				RoutingKey:   "fn-alpha",
-				RateLimitKey: "org-alpha",
+				RequestID:  "request-a",
+				RoutingKey: "fn-alpha",
+				OrgID:      "org-alpha",
 			})
 			return next(gc)
 		}
@@ -281,9 +281,9 @@ func TestInferenceWriteTimeoutLogsOncePerRequest(t *testing.T) {
 				t.Fatal(err)
 			}
 			for key, want := range map[string]any{
-				"level":          "warn",
-				"function_id":    "fn-alpha",
-				"rate_limit_key": "org-alpha",
+				"level":       "warn",
+				"function_id": "fn-alpha",
+				"org_id":      "org-alpha",
 			} {
 				if entry[key] != want {
 					t.Errorf("%s = %v, want %v", key, entry[key], want)

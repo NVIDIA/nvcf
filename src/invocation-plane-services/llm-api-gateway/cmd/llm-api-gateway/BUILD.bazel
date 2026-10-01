@@ -28,7 +28,6 @@ go_library(
         "//src/invocation-plane-services/llm-api-gateway/server",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
         "@com_github_labstack_echo_v4//:echo",
-        "@com_github_rs_zerolog//:zerolog",
         "@com_github_rs_zerolog//log",
     ],
 )
@@ -48,9 +47,5 @@ go_test(
     name = "llm-api-gateway_test",
     srcs = ["main_test.go"],
     embed = [":llm-api-gateway_lib"],
-    deps = [
-        "//src/invocation-plane-services/llm-api-gateway/auth/statickeys",
-        "//src/invocation-plane-services/llm-api-gateway/config",
-        "@com_github_rs_zerolog//:zerolog",
-    ],
+    deps = ["//src/invocation-plane-services/llm-api-gateway/config"],
 )

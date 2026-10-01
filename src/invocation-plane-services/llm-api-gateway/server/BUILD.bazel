@@ -22,6 +22,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/api",
+        "//src/invocation-plane-services/llm-api-gateway/auth/statickeys",
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/internal/tlsreload",
         "//src/invocation-plane-services/llm-api-gateway/provider",
@@ -45,13 +46,8 @@ go_test(
     srcs = ["server_test.go"],
     embed = [":server"],
     deps = [
-        "//src/invocation-plane-services/llm-api-gateway/api",
-        "//src/invocation-plane-services/llm-api-gateway/auth/statickeys",
         "//src/invocation-plane-services/llm-api-gateway/config",
-        "//src/invocation-plane-services/llm-api-gateway/nvcf",
         "//src/invocation-plane-services/llm-api-gateway/provider",
         "@com_github_labstack_echo_v4//:echo",
-        "@org_golang_google_grpc//codes",
-        "@org_golang_google_grpc//status",
     ],
 )

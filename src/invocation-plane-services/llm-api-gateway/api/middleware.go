@@ -52,11 +52,11 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	requestDuration := telemetry.HTTPServerRequestDuration()
 	activeRequests := telemetry.HTTPActiveRequests()
 	var maxRequestBodyBytes int64
+	bareModelNamesEnabled := false
 	if cfg != nil {
 		maxRequestBodyBytes = cfg.Server.MaxRequestBodyBytes
+		bareModelNamesEnabled = cfg.BareModelNamesEnabled
 	}
-
-	bareModelIDs := cfg.StaticAuthMode()
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec echo.Context) error {
@@ -80,20 +80,18 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			// buffers the body, including the routing-key lookup. A rejected
 			// request still gets the span, metrics, and completion log.
 			bodyErr := bufferRequestBody(gc.Request(), maxRequestBodyBytes)
-			routingKey, model := "", ""
-			if bodyErr == nil {
-				routingKey, model = requestTarget(gc.Request(), bareModelIDs)
+			routingKey := ""
+			if bodyErr == nil && !bareModelNamesEnabled {
+				routingKey = requestRoutingKey(gc.Request())
 			}
 			targetRegion := targetRegionHeader(gc.Request().Header)
-			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
-			storeRequestContext(gc, requestContextInput{
-				requestID:    requestID,
-				bearerToken:  bearerToken,
-				routingKey:   routingKey,
-				model:        model,
-				targetRegion: targetRegion,
-				always:       bareModelIDs,
-			})
+			// With bare model names nothing validates the caller's bearer token,
+			// so it is not kept and never reaches the router.
+			bearerToken := ""
+			if !bareModelNamesEnabled {
+				bearerToken = bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
+			}
+			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion, bareModelNamesEnabled)
 
 			span.SetAttributes(
 				attribute.String("http.request.method", gc.Request().Method),
@@ -127,7 +125,11 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			}
 			statusCode := httpStatusCode(gc, err)
 			status := strconv.Itoa(statusCode)
-			finalAttrs := append(metricAttrs, attribute.String("status", status))
+			finalAttrs := append(
+				metricAttrs,
+				attribute.String("status", status),
+				telemetry.ModelAttribute(requestRoutedModel(gc)),
+			)
 			telemetry.AddWithContext(context.WithoutCancel(ctx), requestsTotal, 1, finalAttrs...)
 			telemetry.RecordWithContext(context.WithoutCancel(ctx), requestDuration, time.Since(requestStart).Seconds(), finalAttrs...)
 
@@ -162,28 +164,22 @@ func requestIDHeader(headers http.Header) string {
 	return uuid.NewString()
 }
 
-type requestContextInput struct {
-	requestID    string
-	bearerToken  string
-	routingKey   string
-	model        string
-	targetRegion string
-	// always stores a RequestContext even without a routing key. Static key
-	// mode sets it: there the routing key is always empty and every request
-	// must still reach the auth middleware with a context to enrich.
-	always bool
-}
-
-func storeRequestContext(gc *GatewayContext, in requestContextInput) {
-	if in.routingKey == "" && !in.always {
+func storeRequestContext(
+	gc *GatewayContext,
+	requestID string,
+	bearerToken string,
+	routingKey string,
+	targetRegion string,
+	bareModelNamesEnabled bool,
+) {
+	if routingKey == "" && !bareModelNamesEnabled {
 		return
 	}
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:    in.requestID,
-		BearerToken:  in.bearerToken,
-		RoutingKey:   in.routingKey,
-		Model:        in.model,
-		TargetRegion: in.targetRegion,
+		RequestID:    requestID,
+		BearerToken:  bearerToken,
+		RoutingKey:   routingKey,
+		TargetRegion: targetRegion,
 	})
 }
 
@@ -214,7 +210,7 @@ func logCompletedHTTPRequest(ctx context.Context, gc *GatewayContext, requestSta
 	if reqCtx := gc.RequestContext(); reqCtx != nil {
 		log = log.
 			Str("project_id", reqCtx.ProjectID).
-			Str("rate_limit_key", reqCtx.RateLimitKey).
+			Str("rate_limit_key", reqCtx.OrgID).
 			Str("routing_key", reqCtx.RoutingKey).
 			Str("target_region", reqCtx.TargetRegion)
 	}

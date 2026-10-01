@@ -69,7 +69,7 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	if err := json.Unmarshal(request.Messages, &messages); err != nil || len(messages) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "messages must be a non-empty array")
 	}
-	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model)
+	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model, h.handlers.bareModelNamesEnabled())
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 		telemetry.AddWithContext(ctx, h.handlers.observability.messagesUsage, 1, attribute.String("status", status), attribute.String("stream", boolLabel(request.Stream)), telemetry.FunctionIDAttribute(requestFunctionID(c)))
 		usage := observer.usage.chatUsage()
 		if status == "complete" {
-			h.handlers.observability.recordLLMUsage(ctx, messagesEndpointPath, requestFunctionID(c), usage, request.Stream)
+			h.handlers.observability.recordLLMUsage(ctx, messagesEndpointPath, requestFunctionID(c), routedModel, usage, request.Stream)
 		} else if generationPossible {
 			telemetry.Logger(ctx).Warn().Str("usage_status", status).Msg("Messages usage incomplete; retaining output reservation")
 		}
