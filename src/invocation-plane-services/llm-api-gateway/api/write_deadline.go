@@ -166,7 +166,7 @@ func (w *deadlineWriter) logTimeout(err error) {
 		if reqCtx := w.gc.RequestContext(); reqCtx != nil {
 			event = event.
 				Str("function_id", reqCtx.RoutingKey).
-				Str("org_id", reqCtx.OrgID)
+				Str("rate_limit_key", reqCtx.RateLimitKey)
 		}
 	}
 	event.Msg("inference response write timed out; client stopped reading")

@@ -29,6 +29,8 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+use crate::auth::{RegistrationAuthFailure, WorkerAuthReloadOutcome};
+
 pub const DEFAULT_PREFIX: &str = "stargate_";
 
 macro_rules! define_stargate_metrics {
@@ -106,6 +108,8 @@ define_stargate_metrics! {
         quic_connection_evictions_total("quic_connection_evictions_total", "Total number of QUIC connection pool evictions", ["inference_server_id", "reason"]);
         quic_hot_path_reconnect_total("quic_hot_path_reconnect_total", "Total number of direct QUIC reconnects attempted on the proxy hot path", ["inference_server_id", "result"]);
         tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
+        registration_auth_failures_total("registration_auth_failures_total", "Worker registration streams rejected by authentication: missing_token (no bearer token), unknown_credential (the token matches no trusted credential), cluster_mismatch (the registration names a cluster other than the credential's)", ["reason"]);
+        worker_auth_reloads_total("worker_auth_reloads_total", "Worker auth file reloads: success (a valid changed credential set was activated), rejected (a read or parse failure kept the last good set; a file that keeps failing the same way counts once)", ["outcome"]);
     }
     histograms {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
@@ -152,6 +156,12 @@ impl StargateMetrics {
                 .with_label_values(&[stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()])
                 .inc_by(0);
         }
+        for reason in RegistrationAuthFailure::ALL {
+            metrics.registration_auth_failures_total(reason).inc_by(0);
+        }
+        for outcome in WorkerAuthReloadOutcome::ALL {
+            metrics.worker_auth_reloads_total(outcome).inc_by(0);
+        }
         Ok(metrics)
     }
 
@@ -197,6 +207,8 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, quic_connection_evictions_total(inference_server_id: &str, reason: &str) => [inference_server_id, reason];
         GenericCounter<AtomicU64>, quic_hot_path_reconnect_total(inference_server_id: &str, result: &str) => [inference_server_id, result];
         GenericCounter<AtomicU64>, tls_reloads_total(outcome: stargate_tls::TlsReloadOutcome) => [stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()];
+        GenericCounter<AtomicU64>, registration_auth_failures_total(reason: RegistrationAuthFailure) => [reason.as_str()];
+        GenericCounter<AtomicU64>, worker_auth_reloads_total(outcome: WorkerAuthReloadOutcome) => [outcome.as_str()];
         Histogram, proxy_replay_buffer_bytes(model: &str) => [model];
         Histogram, proxy_duration_seconds(routing_key: Option<&str>, model: &str, inference_server_id: &str) => [routing_key.unwrap_or(""), model, inference_server_id];
         Histogram, routing_duration_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];
@@ -320,6 +332,66 @@ mod tests {
             !body.contains("stargate_requests_total"),
             "default stargate prefix leaked into custom metric output:\n{body}"
         );
+    }
+
+    #[test]
+    fn registration_auth_failures_are_pre_initialized_and_counted_by_reason() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+
+        let body = metrics.gather_text().expect("metrics should encode");
+        for reason in ["missing_token", "unknown_credential", "cluster_mismatch"] {
+            let sample =
+                format!("stargate_registration_auth_failures_total{{reason=\"{reason}\"}} 0");
+            assert!(body.contains(&sample), "missing {sample}:\n{body}");
+        }
+        assert_eq!(
+            body.matches("stargate_registration_auth_failures_total{")
+                .count(),
+            RegistrationAuthFailure::ALL.len(),
+            "only the bounded reasons may appear:\n{body}"
+        );
+
+        metrics
+            .registration_auth_failures_total(RegistrationAuthFailure::ClusterMismatch)
+            .inc();
+        metrics
+            .registration_auth_failures_total(RegistrationAuthFailure::UnknownCredential)
+            .inc_by(2);
+
+        let body = metrics.gather_text().expect("metrics should encode");
+        for sample in [
+            r#"stargate_registration_auth_failures_total{reason="missing_token"} 0"#,
+            r#"stargate_registration_auth_failures_total{reason="unknown_credential"} 2"#,
+            r#"stargate_registration_auth_failures_total{reason="cluster_mismatch"} 1"#,
+        ] {
+            assert!(body.contains(sample), "missing {sample}:\n{body}");
+        }
+    }
+
+    #[test]
+    fn worker_auth_reloads_are_pre_initialized_and_counted_by_outcome() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+
+        let body = metrics.gather_text().expect("metrics should encode");
+        for outcome in ["success", "rejected"] {
+            let sample = format!("stargate_worker_auth_reloads_total{{outcome=\"{outcome}\"}} 0");
+            assert!(body.contains(&sample), "missing {sample}:\n{body}");
+        }
+
+        metrics
+            .worker_auth_reloads_total(WorkerAuthReloadOutcome::Success)
+            .inc();
+        metrics
+            .worker_auth_reloads_total(WorkerAuthReloadOutcome::Rejected)
+            .inc_by(2);
+
+        let body = metrics.gather_text().expect("metrics should encode");
+        for sample in [
+            r#"stargate_worker_auth_reloads_total{outcome="success"} 1"#,
+            r#"stargate_worker_auth_reloads_total{outcome="rejected"} 2"#,
+        ] {
+            assert!(body.contains(sample), "missing {sample}:\n{body}");
+        }
     }
 
     #[test]

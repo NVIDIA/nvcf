@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "llm-api-gateway_lib",
@@ -21,11 +21,14 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/cmd/llm-api-gateway",
     visibility = ["//visibility:private"],
     deps = [
+        "//src/invocation-plane-services/llm-api-gateway/auth/statickeys",
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/nvcf",
         "//src/invocation-plane-services/llm-api-gateway/provider",
         "//src/invocation-plane-services/llm-api-gateway/server",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
+        "@com_github_labstack_echo_v4//:echo",
+        "@com_github_rs_zerolog//:zerolog",
         "@com_github_rs_zerolog//log",
     ],
 )
@@ -39,4 +42,15 @@ go_binary(
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
     },
+)
+
+go_test(
+    name = "llm-api-gateway_test",
+    srcs = ["main_test.go"],
+    embed = [":llm-api-gateway_lib"],
+    deps = [
+        "//src/invocation-plane-services/llm-api-gateway/auth/statickeys",
+        "//src/invocation-plane-services/llm-api-gateway/config",
+        "@com_github_rs_zerolog//:zerolog",
+    ],
 )

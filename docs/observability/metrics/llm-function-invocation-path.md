@@ -1,8 +1,8 @@
 # LLM Function Invocation Metrics Report
 
 This report covers the metrics available on the LLM function invocation path:
-the LLM API Gateway, the LLM Request Router, and the Stargate client sidecar in
-LLM function pods.
+the LLM API Gateway, the LLM Request Router, and the Pylon sidecar in LLM
+function pods.
 
 ## Scrape points
 
@@ -11,7 +11,7 @@ LLM function pods.
 | LLM API Gateway | `llm-api-gateway:9464/metrics` | `llm-api-gateway` | `llm_api_gateway_` |
 | Rate limit sync worker | `:9464/metrics` when deployed with `METRICS_PORT=9464` | `llm-api-gateway-rate-limit-sync-worker` | `llm_api_gateway_` |
 | LLM Request Router | `llm-request-router:9090/metrics` | `stargate` | `stargate_` |
-| Stargate client sidecar | `:9089/metrics` by default | `stargate-client` | `stargate_client_` |
+| Pylon sidecar | `:9089/metrics` by default | `pylon` | `pylon_` |
 
 The request-router chart passes `--metrics-port` and uses Stargate's default
 metric prefix and trace service name.
@@ -64,37 +64,46 @@ synchronizer and Pub/Sub metrics under the worker service name.
 | `stargate_routing_duration_seconds` | `routing_key`, `model` |
 | `stargate_active_inference_servers` | `routing_key`, `model` |
 
-## Stargate Client Sidecar
+## Pylon Sidecar
+
+Pylon, formerly the Stargate client, has used the `pylon_` metric prefix since
+release 0.15.
 
 | Metric | Labels |
 | --- | --- |
 | `target_info` | `service_version`, `service_name`, `commit` |
-| `stargate_client_requests_inflight` | `model` |
-| `stargate_client_requests_state` | `model`, `state` |
-| `stargate_client_requests_state_input_tokens` | `model`, `state` |
-| `stargate_client_requests_total` | `model`, `routing_key`, `status` |
-| `stargate_client_request_time_to_response_headers_seconds` | `model`, `routing_key` |
-| `stargate_client_request_time_to_first_output_seconds` | `model`, `routing_key` |
-| `stargate_client_request_time_to_first_token_seconds` | `model`, `routing_key` |
-| `stargate_client_request_duration_seconds` | `model`, `routing_key`, `status` |
-| `stargate_client_request_input_tokens_total` | `model`, `routing_key`, `status` |
-| `stargate_client_request_output_tokens_total` | `model`, `routing_key`, `status` |
-| `stargate_client_request_input_tokens` | `model`, `routing_key`, `status` |
-| `stargate_client_request_output_tokens` | `model`, `routing_key`, `status` |
-| `stargate_client_registration_stream_connected` | `router` |
-| `stargate_client_reverse_tunnel_connected` | `router` |
-| `stargate_client_model_input_tps` | `model` |
-| `stargate_client_model_output_tps` | `model` |
-| `stargate_client_model_max_input_tps` | `model` |
-| `stargate_client_model_max_output_tps` | `model` |
-| `stargate_client_model_queue_size` | `model` |
-| `stargate_client_model_queued_input_tokens` | `model` |
-| `stargate_client_model_kv_cache_capacity_tokens` | `model` |
-| `stargate_client_model_kv_cache_used_tokens` | `model` |
-| `stargate_client_model_kv_cache_free_tokens` | `model` |
-| `stargate_client_model_advertised_status` | `router`, `model`, `status` |
-| `stargate_client_retryable_responses_total` | `inference_server_id`, `reason`, `status` |
-| `stargate_client_nonretryable_failures_total` | `inference_server_id`, `reason` |
+| `pylon_requests_inflight` | `model` |
+| `pylon_requests_state` | `model`, `state` |
+| `pylon_requests_state_input_tokens` | `model`, `state` |
+| `pylon_requests_total` | `model`, `routing_key`, `status` |
+| `pylon_request_time_to_response_headers_seconds` | `model`, `routing_key` |
+| `pylon_request_time_to_first_output_seconds` | `model`, `routing_key` |
+| `pylon_request_time_to_first_token_seconds` | `model`, `routing_key` |
+| `pylon_request_duration_seconds` | `model`, `routing_key`, `status` |
+| `pylon_request_input_tokens_total` | `model`, `routing_key`, `status` |
+| `pylon_request_output_tokens_total` | `model`, `routing_key`, `status` |
+| `pylon_request_input_tokens` | `model`, `routing_key`, `status` |
+| `pylon_request_output_tokens` | `model`, `routing_key`, `status` |
+| `pylon_registration_stream_connected` | `router` |
+| `pylon_reverse_tunnel_connected` | `router` |
+| `pylon_registration_stream_closures_total` | `router`, `reason` |
+| `pylon_model_last_mean_input_tps` | `model` |
+| `pylon_model_output_tps` | `model` |
+| `pylon_model_max_output_tps` | `model` |
+| `pylon_model_queue_size` | `model` |
+| `pylon_model_queued_input_tokens` | `model` |
+| `pylon_model_kv_cache_capacity_tokens` | `model` |
+| `pylon_model_kv_cache_used_tokens` | `model` |
+| `pylon_model_kv_cache_free_tokens` | `model` |
+| `pylon_model_advertised_status` | `router`, `model`, `status` |
+| `pylon_retryable_responses_total` | `inference_server_id`, `reason`, `status` |
+| `pylon_nonretryable_failures_total` | `inference_server_id`, `reason` |
+
+`pylon_registration_stream_closures_total` counts registration streams to each
+router that closed or failed to open. The `reason` label is one of
+`unauthenticated`, `invalid_argument`, `permission_denied`, `unavailable`,
+`end_of_stream`, `io`, `connect`, or `other`, and every reason starts at zero
+for each router.
 
 Keep request IDs, session IDs, function IDs, organization IDs, project IDs,
 authorization values, raw prompts, and raw URLs out of metric labels.

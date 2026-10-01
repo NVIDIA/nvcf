@@ -41,11 +41,14 @@ use tower::util::MapRequestLayer;
 use crate::quic_http_tunnel::{TunnelError, TunnelForwardingConfig};
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
 use crate::runtime_state::{CurrentModelStats, PylonRuntimeState, gated_model_status};
-use crate::stats::PylonMetrics;
-use crate::test_support::{RecordedTracingEvent, RecordingTracingSubscriber};
+use crate::stats::{PylonMetrics, RegistrationStreamClosure};
+use crate::test_support::{
+    RecordedTracingEvent, RecordingTracingSubscriber, assert_tracing_event_field,
+};
 
 use super::discovery::*;
 use super::grpc_endpoint::*;
+use super::reconnect::*;
 use super::reverse_tunnel::*;
 use super::router_stream::*;
 use super::state::*;
@@ -368,6 +371,7 @@ fn test_registration_config() -> InferenceServerRegistrationConfig {
             ..Default::default()
         },
         min_update_interval: Duration::from_secs(2),
+        reconnect_max_backoff: DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF,
         reverse_tunnel: false,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,
@@ -544,6 +548,21 @@ fn registration_session_config_rejects_invalid_public_config() {
             config.inference_server_url = "quic://127.0.0.1:8090".to_string();
         },
     );
+    assert_invalid_registration_config(
+        "reconnect_max_backoff must be greater than zero",
+        |config| config.reconnect_max_backoff = Duration::ZERO,
+    );
+}
+
+#[test]
+fn registration_session_config_starts_reconnects_at_one_second_under_the_configured_cap() {
+    let mut config = test_registration_config();
+    config.reconnect_max_backoff = Duration::from_millis(7500);
+
+    let session = RegistrationSessionConfig::try_from(config).expect("session should build");
+
+    assert_eq!(session.reconnect_initial_backoff, Duration::from_secs(1));
+    assert_eq!(session.reconnect_max_backoff, Duration::from_millis(7500));
 }
 
 #[test]
@@ -1481,4 +1500,767 @@ async fn stop_watched_endpoint_signals_and_awaits_task() {
     stop_watched_endpoint(endpoint).await;
 
     exited_rx.await.expect("watched endpoint task should exit");
+}
+
+fn closure_samples(router: &str, counts: &[(&str, u64)]) -> Vec<String> {
+    [
+        "unauthenticated",
+        "invalid_argument",
+        "permission_denied",
+        "unavailable",
+        "end_of_stream",
+        "io",
+        "connect",
+        "other",
+    ]
+    .into_iter()
+    .map(|reason| {
+        let count = counts
+            .iter()
+            .find_map(|(counted, count)| (*counted == reason).then_some(*count))
+            .unwrap_or(0);
+        format!(
+            r#"pylon_registration_stream_closures_total{{reason="{reason}",router="{router}"}} {count}"#
+        )
+    })
+    .collect()
+}
+
+fn assert_closures(metrics: &PylonMetrics, router: &str, counts: &[(&str, u64)]) {
+    let samples = closure_samples(router, counts);
+    assert_metrics(
+        metrics,
+        &samples.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn registration_stream_closures_start_at_zero_for_every_reason() {
+    let metrics = PylonMetrics::new().expect("metrics should initialize");
+
+    let _closures = RegistrationStreamClosures::new(Some(metrics.as_ref()), "router-a");
+
+    assert_closures(&metrics, "router-a", &[]);
+}
+
+#[test]
+fn registration_stream_closure_reasons_follow_the_router_status_code() {
+    for (code, expected) in [
+        (tonic::Code::Unauthenticated, "unauthenticated"),
+        (tonic::Code::InvalidArgument, "invalid_argument"),
+        (tonic::Code::PermissionDenied, "permission_denied"),
+        (tonic::Code::Unavailable, "unavailable"),
+        (tonic::Code::AlreadyExists, "other"),
+        (tonic::Code::Internal, "other"),
+        (tonic::Code::Unknown, "other"),
+    ] {
+        assert_eq!(
+            closure_for_status(&Status::new(code, "test")).as_str(),
+            expected,
+            "{code:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn registration_open_failures_count_connect_status_and_local_errors() {
+    let metrics = PylonMetrics::new().expect("metrics should initialize");
+    let transport_error = tonic::transport::Endpoint::from_static("http://127.0.0.1:1")
+        .connect()
+        .await
+        .expect_err("nothing listens on port 1");
+    let mut closures = RegistrationStreamClosures::new(Some(metrics.as_ref()), "router-a");
+
+    closures.record_open_failure(&anyhow::Error::from(transport_error));
+    closures.record_open_failure(&anyhow::Error::from(Status::unauthenticated("bad token")));
+    closures.record_open_failure(
+        &anyhow::Error::from(Status::permission_denied("scope")).context("register"),
+    );
+    closures.record_open_failure(&anyhow::anyhow!("auth token file is unreadable"));
+    closures.record(RegistrationStreamClosure::Io);
+
+    assert_closures(
+        &metrics,
+        "router-a",
+        &[
+            ("connect", 1),
+            ("unauthenticated", 1),
+            ("permission_denied", 1),
+            ("other", 1),
+            ("io", 1),
+        ],
+    );
+}
+
+#[test]
+fn registration_stream_closure_logs_warn_once_per_reason_until_admitted() {
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let mut closures = RegistrationStreamClosures::new(None, "router-a");
+    let rejected = Status::unauthenticated("authentication failed");
+
+    closures.record_status(&rejected);
+    closures.record_status(&rejected);
+    closures.record_open_failure(&anyhow::anyhow!("token unreadable"));
+    closures.record_admitted();
+    closures.record_status(&rejected);
+
+    let levels = subscriber
+        .events()
+        .into_iter()
+        .filter(|event| {
+            event.fields.get("message").map(String::as_str)
+                == Some("stargate registration stream closed; retrying")
+        })
+        .map(|event| {
+            (
+                event.level,
+                event.fields.get("reason").cloned().unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        levels,
+        [
+            (tracing::Level::WARN, "unauthenticated".to_string()),
+            (tracing::Level::DEBUG, "unauthenticated".to_string()),
+            (tracing::Level::WARN, "other".to_string()),
+            (tracing::Level::WARN, "unauthenticated".to_string()),
+        ]
+    );
+    let first = &subscriber.events()[0];
+    assert_eq!(
+        first.fields.get("router").map(String::as_str),
+        Some("router-a")
+    );
+    assert_eq!(
+        first.fields.get("code").map(String::as_str),
+        Some("Unauthenticated")
+    );
+    assert_eq!(
+        first.fields.get("detail").map(String::as_str),
+        Some("authentication failed")
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TestRouterVerdict {
+    RejectAtOpen(tonic::Code),
+    RejectFirstUpdate(tonic::Code),
+    EndAfterFirstAck,
+}
+
+#[derive(Clone)]
+struct VerdictControlPlaneService {
+    verdict: TestRouterVerdict,
+    registrations: mpsc::UnboundedSender<InferenceServerRegistration>,
+}
+
+#[tonic::async_trait]
+impl StargateControlPlane for VerdictControlPlaneService {
+    type WatchStargatesStream = TestWatchStream;
+    type RegisterInferenceServerStream = TestRegistrationStream;
+
+    async fn watch_stargates(
+        &self,
+        _request: Request<WatchStargatesRequest>,
+    ) -> Result<Response<Self::WatchStargatesStream>, Status> {
+        Err(Status::unimplemented("not used by these tests"))
+    }
+
+    async fn register_inference_server(
+        &self,
+        request: Request<tonic::Streaming<InferenceServerRegistration>>,
+    ) -> Result<Response<Self::RegisterInferenceServerStream>, Status> {
+        if let TestRouterVerdict::RejectAtOpen(code) = self.verdict {
+            return Err(Status::new(code, "rejected by test router"));
+        }
+        let verdict = self.verdict;
+        let registrations = self.registrations.clone();
+        let mut inbound = request.into_inner();
+        let stream = async_stream::stream! {
+            if let Ok(Some(registration)) = inbound.message().await {
+                let _ = registrations.send(registration);
+                match verdict {
+                    TestRouterVerdict::RejectFirstUpdate(code) => {
+                        yield Err(Status::new(code, "rejected by test router"));
+                    }
+                    TestRouterVerdict::EndAfterFirstAck | TestRouterVerdict::RejectAtOpen(_) => {
+                        yield Ok(InferenceServerAck::default());
+                    }
+                }
+            }
+        };
+        Ok(Response::new(Box::pin(stream)))
+    }
+}
+
+struct VerdictControlPlane {
+    router_addr: String,
+    registrations: mpsc::UnboundedReceiver<InferenceServerRegistration>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl VerdictControlPlane {
+    async fn spawn(verdict: TestRouterVerdict) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test router should bind");
+        let router_addr = listener
+            .local_addr()
+            .expect("test router address should resolve")
+            .to_string();
+        let (registrations, registrations_rx) = mpsc::unbounded_channel();
+        let service = VerdictControlPlaneService {
+            verdict,
+            registrations,
+        };
+        let incoming = async_stream::stream! {
+            loop {
+                yield listener.accept().await.map(|(stream, _)| stream);
+            }
+        };
+        let task = tokio::spawn(async move {
+            Server::builder()
+                .add_service(StargateControlPlaneServer::new(service))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("test router should serve");
+        });
+        Self {
+            router_addr,
+            registrations: registrations_rx,
+            task,
+        }
+    }
+
+    async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+async fn wait_for_closure(metrics: &PylonMetrics, router: &str, reason: &str) {
+    let sample = format!(
+        r#"pylon_registration_stream_closures_total{{reason="{reason}",router="{router}"}} "#
+    );
+    tokio::time::timeout(TEST_WAIT, async {
+        loop {
+            let body = metrics.gather_text().expect("metrics should encode");
+            let count = body
+                .lines()
+                .find_map(|line| line.strip_prefix(sample.as_str()))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            if count > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected a {reason} closure for {router}"));
+}
+
+async fn run_against_verdict(
+    verdict: TestRouterVerdict,
+    expected_reason: &str,
+) -> Option<InferenceServerRegistration> {
+    let mut router = VerdictControlPlane::spawn(verdict).await;
+    let metrics = PylonMetrics::new().expect("metrics should initialize");
+    let mut config = test_registration_config();
+    config.forwarding.metrics = Some(metrics.clone());
+    let config = Arc::new(
+        RegistrationSessionConfig::try_from(config)
+            .expect("test registration session should build"),
+    );
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(run_router_registration_stream(
+        grpc_endpoint(&router.router_addr),
+        config,
+        stop.clone(),
+    ));
+
+    wait_for_closure(&metrics, &router.router_addr, expected_reason).await;
+    stop.cancel();
+    tokio::time::timeout(TEST_WAIT, task)
+        .await
+        .expect("registration task should stop promptly")
+        .expect("registration task should not panic");
+    let first_registration = router.registrations.try_recv().ok();
+    let other_reasons = closure_samples(&router.router_addr, &[])
+        .into_iter()
+        .filter(|sample| !sample.contains(&format!(r#"reason="{expected_reason}""#)))
+        .collect::<Vec<_>>();
+    assert_metrics(
+        &metrics,
+        &other_reasons.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    router.shutdown().await;
+    first_registration
+}
+
+#[tokio::test]
+async fn router_rejecting_the_credential_counts_an_unauthenticated_closure() {
+    let registration = run_against_verdict(
+        TestRouterVerdict::RejectAtOpen(tonic::Code::Unauthenticated),
+        "unauthenticated",
+    )
+    .await;
+
+    assert!(registration.is_none(), "a rejected open sends no update");
+}
+
+#[tokio::test]
+async fn router_rejecting_the_registration_counts_an_invalid_argument_closure() {
+    let registration = run_against_verdict(
+        TestRouterVerdict::RejectFirstUpdate(tonic::Code::InvalidArgument),
+        "invalid_argument",
+    )
+    .await;
+
+    let registration = registration.expect("the router should receive the registration");
+    assert_eq!(registration.inference_server_id, "inst-a");
+}
+
+#[tokio::test]
+async fn router_ending_the_ack_stream_counts_an_end_of_stream_closure() {
+    let registration =
+        run_against_verdict(TestRouterVerdict::EndAfterFirstAck, "end_of_stream").await;
+
+    assert!(registration.is_some());
+}
+
+const REOPEN_WAIT_MESSAGE: &str = "waiting before reopening stargate registration stream";
+const OPEN_FAILURE_MESSAGE: &str = "failed to open stargate gRPC stream; retrying";
+
+fn assert_duration_near(actual: Duration, expected: Duration) {
+    let difference = actual.abs_diff(expected);
+    assert!(
+        difference <= Duration::from_micros(1),
+        "expected {expected:?}, got {actual:?}"
+    );
+}
+
+#[test]
+fn reconnect_backoff_doubles_from_one_second_to_the_cap_and_resets() {
+    let mut backoff = ReconnectBackoff::new(
+        RECONNECT_INITIAL_BACKOFF,
+        DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF,
+    );
+    let mut schedule = |attempts: usize| {
+        (0..attempts)
+            .map(|_| backoff.next_base_delay())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        schedule(8),
+        [1, 2, 4, 8, 16, 30, 30, 30].map(Duration::from_secs)
+    );
+    backoff.reset();
+    assert_eq!(
+        (0..3)
+            .map(|_| backoff.next_base_delay())
+            .collect::<Vec<_>>(),
+        [1, 2, 4].map(Duration::from_secs)
+    );
+}
+
+#[test]
+fn reconnect_backoff_lowers_the_initial_delay_to_a_smaller_cap() {
+    let mut backoff = ReconnectBackoff::new(Duration::from_secs(1), Duration::from_millis(300));
+
+    for _ in 0..3 {
+        assert_eq!(backoff.next_base_delay(), Duration::from_millis(300));
+    }
+    for _ in 0..32 {
+        assert!(backoff.next_delay() <= Duration::from_millis(300));
+    }
+}
+
+#[test]
+fn reconnect_delay_jitter_stays_within_twenty_percent_and_under_the_cap() {
+    let base = Duration::from_secs(10);
+    let max = Duration::from_secs(30);
+    for (sample, expected) in [
+        (0.0, 8000),
+        (0.25, 9000),
+        (0.5, 10_000),
+        (0.75, 11_000),
+        (1.0, 12_000),
+        (-3.0, 8000),
+        (7.0, 12_000),
+        (f64::NAN, 10_000),
+    ] {
+        assert_duration_near(
+            jittered_reconnect_delay(base, max, sample),
+            Duration::from_millis(expected),
+        );
+    }
+
+    // At the cap the upward half of the jitter is clipped.
+    assert_eq!(jittered_reconnect_delay(max, max, 1.0), max);
+    assert_duration_near(
+        jittered_reconnect_delay(max, max, 0.0),
+        Duration::from_secs(24),
+    );
+
+    for _ in 0..1000 {
+        let sample = random_unit_interval();
+        assert!((0.0..1.0).contains(&sample), "sample {sample} out of range");
+    }
+    let mut backoff = ReconnectBackoff::new(RECONNECT_INITIAL_BACKOFF, max);
+    for _ in 0..3 {
+        for base_secs in [1, 2, 4, 8, 16, 30, 30] {
+            let base = Duration::from_secs(base_secs);
+            let delay = backoff.next_delay();
+            assert!(
+                delay >= base.mul_f64(0.8) - Duration::from_micros(1)
+                    && delay <= base.mul_f64(1.2).min(max),
+                "delay {delay:?} outside the jitter bounds of {base:?}"
+            );
+        }
+        backoff.reset();
+    }
+}
+
+#[test]
+fn open_failure_detail_joins_the_chain_and_keeps_status_code_and_message() {
+    let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
+    let wrapped = anyhow::Error::new(io).context("connect stargate");
+    assert_eq!(
+        open_failure_detail(wrapped.as_ref()),
+        "connect stargate: connection refused"
+    );
+    assert_eq!(
+        open_failure_detail(&Status::invalid_argument("cluster_id mismatch")),
+        "InvalidArgument: cluster_id mismatch"
+    );
+    assert_eq!(
+        open_failure_detail(&Status::new(tonic::Code::Unavailable, "")),
+        "Unavailable"
+    );
+}
+
+fn open_failure_events(subscriber: &RecordingTracingSubscriber) -> Vec<RecordedTracingEvent> {
+    subscriber
+        .events()
+        .into_iter()
+        .filter(|event| {
+            event.fields.get("message").map(String::as_str) == Some(OPEN_FAILURE_MESSAGE)
+        })
+        .collect()
+}
+
+#[test]
+fn stream_open_failure_log_warns_once_per_distinct_message_until_a_stream_opens() {
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let mut log = StreamOpenFailureLog::new("register_inference_server");
+    let plaintext = anyhow::anyhow!("custom CA for stargate gRPC requires an HTTPS dial endpoint");
+    let rejected = Status::unauthenticated("authentication failed");
+    let certificate = typed_tls_io_error(rustls::CertificateError::UnknownIssuer);
+
+    log.record("router-a", plaintext.as_ref(), Duration::from_secs(1));
+    log.record("router-a", plaintext.as_ref(), Duration::from_secs(2));
+    log.record("router-a", &certificate, Duration::from_secs(4));
+    log.record("router-a", plaintext.as_ref(), Duration::from_secs(4));
+    log.record("router-a", &rejected, Duration::from_secs(8));
+    log.record("router-a", &rejected, Duration::from_secs(16));
+    log.record_opened();
+    log.record("router-a", &rejected, Duration::from_secs(1));
+
+    let events = open_failure_events(&subscriber);
+    let summary = events
+        .iter()
+        .map(|event| {
+            (
+                event.level,
+                event.fields.get("error").cloned().unwrap_or_default(),
+                event.fields.get("retry_in_ms").cloned().unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let plaintext_detail = "custom CA for stargate gRPC requires an HTTPS dial endpoint";
+    let rejected_detail = "Unauthenticated: authentication failed";
+    assert_eq!(
+        summary,
+        [
+            (tracing::Level::WARN, plaintext_detail, "1000"),
+            (tracing::Level::DEBUG, plaintext_detail, "2000"),
+            (tracing::Level::DEBUG, plaintext_detail, "4000"),
+            (tracing::Level::WARN, rejected_detail, "8000"),
+            (tracing::Level::DEBUG, rejected_detail, "16000"),
+            (tracing::Level::WARN, rejected_detail, "1000"),
+        ]
+        .map(|(level, detail, retry)| (level, detail.to_string(), retry.to_string()))
+    );
+    assert_tracing_event_field(&events[0], "router", "router-a");
+    assert_tracing_event_field(&events[0], "operation", "register_inference_server");
+}
+
+#[tokio::test]
+async fn registration_stream_reports_a_custom_ca_on_a_plaintext_dial_once_and_backs_off() {
+    let ca = TestCertificateAuthority::new("grpc-ca");
+    let mut config = test_registration_config();
+    config.grpc_tls_ca_cert_pem = Some(ca.pem());
+    config.reconnect_max_backoff = Duration::from_millis(40);
+    let mut config = RegistrationSessionConfig::try_from(config)
+        .expect("test registration session should build");
+    config.reconnect_initial_backoff = Duration::from_millis(10);
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(run_router_registration_stream(
+        grpc_endpoint("http://127.0.0.1:1"),
+        Arc::new(config),
+        stop.clone(),
+    ));
+
+    wait_for_tracing_event_count(&subscriber, REOPEN_WAIT_MESSAGE, 4).await;
+    stop.cancel();
+    tokio::time::timeout(TEST_WAIT, task)
+        .await
+        .expect("registration task should stop promptly")
+        .expect("registration task should not panic");
+
+    let events = open_failure_events(&subscriber);
+    assert!(
+        events.len() >= 4,
+        "every open failure should log: {events:?}"
+    );
+    assert_eq!(events[0].level, tracing::Level::WARN);
+    assert!(
+        events[1..]
+            .iter()
+            .all(|event| event.level == tracing::Level::DEBUG),
+        "a repeated open failure should stay at debug: {events:?}"
+    );
+    assert_tracing_event_field(&events[0], "router", "http://127.0.0.1:1");
+    assert_tracing_event_field(&events[0], "operation", "register_inference_server");
+    assert_tracing_event_field(
+        &events[0],
+        "error",
+        "custom CA for stargate gRPC requires an HTTPS dial endpoint",
+    );
+    let retries = events
+        .iter()
+        .take(4)
+        .map(|event| {
+            event.fields["retry_in_ms"]
+                .parse::<u64>()
+                .expect("retry_in_ms should be an integer")
+        })
+        .collect::<Vec<_>>();
+    for (retry, base) in retries.iter().zip([10, 20, 40, 40]) {
+        assert!(
+            (base * 8 / 10 - 1..=(base * 12 / 10).min(40)).contains(retry),
+            "retry delays should follow the capped schedule: {retries:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn watch_discovery_reports_a_custom_ca_on_a_plaintext_dial_once() {
+    let ca = TestCertificateAuthority::new("grpc-ca");
+    let (topology_tx, topology_rx) = watch::channel(RegistrationRouterTopology::default());
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(run_watch_stargate_discovery(
+        vec!["http://127.0.0.1:1".to_string()],
+        Some(ca.pem()),
+        topology_tx,
+        stop.clone(),
+    ));
+
+    wait_for_tracing_event_count(&subscriber, OPEN_FAILURE_MESSAGE, 2).await;
+    stop.cancel();
+    tokio::time::timeout(TEST_WAIT, task)
+        .await
+        .expect("watch task should stop promptly")
+        .expect("watch task should not panic");
+
+    let events = open_failure_events(&subscriber);
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.level)
+            .take(2)
+            .collect::<Vec<_>>(),
+        [tracing::Level::WARN, tracing::Level::DEBUG]
+    );
+    assert_tracing_event_field(&events[0], "router", "http://127.0.0.1:1");
+    assert_tracing_event_field(&events[0], "operation", "watch_stargates");
+    assert_tracing_event_field(
+        &events[0],
+        "error",
+        "custom CA for stargate gRPC requires an HTTPS dial endpoint",
+    );
+    assert_tracing_event_field(
+        &events[0],
+        "retry_in_ms",
+        &WATCH_RECONNECT_DELAY.as_millis().to_string(),
+    );
+    assert!(topology_rx.borrow().published_routers().is_none());
+}
+
+/// Rejects every registration open except `accepted_attempt`, which it
+/// acknowledges once before ending the stream, and records when each open
+/// arrived.
+#[derive(Clone)]
+struct ScriptedControlPlaneService {
+    accepted_attempt: usize,
+    opens: Arc<std::sync::Mutex<Vec<std::time::Instant>>>,
+}
+
+#[tonic::async_trait]
+impl StargateControlPlane for ScriptedControlPlaneService {
+    type WatchStargatesStream = TestWatchStream;
+    type RegisterInferenceServerStream = TestRegistrationStream;
+
+    async fn watch_stargates(
+        &self,
+        _request: Request<WatchStargatesRequest>,
+    ) -> Result<Response<Self::WatchStargatesStream>, Status> {
+        Err(Status::unimplemented("not used by these tests"))
+    }
+
+    async fn register_inference_server(
+        &self,
+        request: Request<tonic::Streaming<InferenceServerRegistration>>,
+    ) -> Result<Response<Self::RegisterInferenceServerStream>, Status> {
+        let attempt = {
+            let mut opens = self
+                .opens
+                .lock()
+                .expect("recorded opens should not be poisoned");
+            opens.push(std::time::Instant::now());
+            opens.len() - 1
+        };
+        if attempt != self.accepted_attempt {
+            return Err(Status::invalid_argument("cluster_id mismatch"));
+        }
+        let mut inbound = request.into_inner();
+        let stream = async_stream::stream! {
+            if let Ok(Some(_registration)) = inbound.message().await {
+                yield Ok(InferenceServerAck::default());
+            }
+        };
+        Ok(Response::new(Box::pin(stream)))
+    }
+}
+
+async fn serve_scripted_control_plane(
+    service: ScriptedControlPlaneService,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test router should bind");
+    let router_addr = listener
+        .local_addr()
+        .expect("test router address should resolve")
+        .to_string();
+    let incoming = async_stream::stream! {
+        loop {
+            yield listener.accept().await.map(|(stream, _)| stream);
+        }
+    };
+    let task = tokio::spawn(async move {
+        Server::builder()
+            .add_service(StargateControlPlaneServer::new(service))
+            .serve_with_incoming(incoming)
+            .await
+            .expect("test router should serve");
+    });
+    (router_addr, task)
+}
+
+#[tokio::test]
+async fn registration_backoff_grows_across_rejections_and_resets_after_an_ack() {
+    const INITIAL: Duration = Duration::from_millis(20);
+    let opens = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (router_addr, router_task) = serve_scripted_control_plane(ScriptedControlPlaneService {
+        accepted_attempt: 3,
+        opens: opens.clone(),
+    })
+    .await;
+    let mut config = test_registration_config();
+    config.reconnect_max_backoff = Duration::from_secs(1);
+    let mut config = RegistrationSessionConfig::try_from(config)
+        .expect("test registration session should build");
+    config.reconnect_initial_backoff = INITIAL;
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(run_router_registration_stream(
+        grpc_endpoint(&router_addr),
+        Arc::new(config),
+        stop.clone(),
+    ));
+
+    wait_for_tracing_event_count(&subscriber, REOPEN_WAIT_MESSAGE, 5).await;
+    stop.cancel();
+    tokio::time::timeout(TEST_WAIT, task)
+        .await
+        .expect("registration task should stop promptly")
+        .expect("registration task should not panic");
+    router_task.abort();
+    let _ = router_task.await;
+
+    let delays = subscriber
+        .events()
+        .into_iter()
+        .filter(|event| {
+            event.fields.get("message").map(String::as_str) == Some(REOPEN_WAIT_MESSAGE)
+        })
+        .map(|event| {
+            Duration::from_millis(
+                event.fields["retry_in_ms"]
+                    .parse()
+                    .expect("retry_in_ms should be an integer"),
+            )
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+    // Opens 0-2 are rejected and double the delay, open 3 is acknowledged and
+    // restarts it before the stream ends, and open 4 is rejected again.
+    for (delay, factor) in delays.iter().zip([1, 2, 4, 1, 2]) {
+        let base = INITIAL * factor;
+        assert!(
+            *delay + Duration::from_millis(1) >= base.mul_f64(0.8) && *delay <= base.mul_f64(1.2),
+            "delay {delay:?} outside the jitter bounds of {base:?}: {delays:?}"
+        );
+    }
+    assert!(
+        delays[0] < delays[1] && delays[1] < delays[2],
+        "rejections should grow the delay: {delays:?}"
+    );
+    assert!(
+        delays[3] < delays[2] && delays[3] < delays[4],
+        "an ack should restart the delay: {delays:?}"
+    );
+
+    // Each reopen waited at least the logged (truncated) delay after the
+    // previous open reached the router.
+    let opens = opens
+        .lock()
+        .expect("recorded opens should not be poisoned")
+        .clone();
+    assert!(opens.len() >= 5, "expected five opens, got {}", opens.len());
+    for (index, pair) in opens.windows(2).take(4).enumerate() {
+        assert!(
+            pair[1] - pair[0] >= delays[index],
+            "open {} came {:?} after open {index}, before the {:?} backoff",
+            index + 1,
+            pair[1] - pair[0],
+            delays[index]
+        );
+    }
 }

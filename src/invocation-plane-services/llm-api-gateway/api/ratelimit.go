@@ -77,7 +77,10 @@ func (r CallerLimitResolver) ResolveLimits(
 ) ([]ratelimit.ResourceLimit, error) {
 	_ = r
 
-	if reqCtx == nil || reqCtx.Model == "" || reqCtx.RoutingKey == "" || reqCtx.OrgID == "" {
+	// The routing key is deliberately not required: static key mode always
+	// runs with an empty routing key, and rateLimitSubjectKey stays stable
+	// without one.
+	if reqCtx == nil || reqCtx.Model == "" || reqCtx.RateLimitKey == "" {
 		return nil, nil
 	}
 
@@ -106,18 +109,14 @@ func (r CallerLimitResolver) ResolveLimits(
 		TokensPerWeek:   parsedTokenLimits.tokensPerWeek,
 	}
 
-	switch {
-	case reqCtx.ProjectID != "":
+	if reqCtx.ProjectID != "" {
 		return []ratelimit.ResourceLimit{
-			scopedProjectLimit(baseLimit, reqCtx.OrgID, reqCtx.ProjectID, reqCtx.RoutingKey),
+			scopedProjectLimit(baseLimit, reqCtx.RateLimitKey, reqCtx.ProjectID, reqCtx.RoutingKey),
 		}, nil
-	case reqCtx.OrgID != "":
-		return []ratelimit.ResourceLimit{
-			scopedOrgLimit(baseLimit, reqCtx.OrgID, reqCtx.RoutingKey),
-		}, nil
-	default:
-		return nil, nil
 	}
+	return []ratelimit.ResourceLimit{
+		scopedOrgLimit(baseLimit, reqCtx.RateLimitKey, reqCtx.RoutingKey),
+	}, nil
 }
 
 type parsedTokenRateLimit struct {
@@ -651,27 +650,45 @@ func mergeRateLimitResults(
 
 func scopedOrgLimit(
 	base ratelimit.ResourceLimit,
-	orgID string,
+	rateLimitKey string,
 	routingKey string,
 ) ratelimit.ResourceLimit {
 	limit := base
-	limit.SubjectKey = rateLimitSubjectKey(orgID, "", routingKey)
-	limit.SubjectRepr = "org `" + orgID + "` routing key `" + routingKey + "`"
+	limit.SubjectKey = rateLimitSubjectKey(rateLimitKey, "", routingKey)
+	limit.SubjectRepr = rateLimitSubjectRepr(rateLimitKey, "", routingKey)
 	limit.Level = ratelimit.LevelOrg
 	return limit
 }
 
 func scopedProjectLimit(
 	base ratelimit.ResourceLimit,
-	orgID string,
+	rateLimitKey string,
 	projectID string,
 	routingKey string,
 ) ratelimit.ResourceLimit {
 	limit := base
-	limit.SubjectKey = rateLimitSubjectKey(orgID, projectID, routingKey)
-	limit.SubjectRepr = "org `" + orgID + "` project `" + projectID + "` routing key `" + routingKey + "`"
+	limit.SubjectKey = rateLimitSubjectKey(rateLimitKey, projectID, routingKey)
+	limit.SubjectRepr = rateLimitSubjectRepr(rateLimitKey, projectID, routingKey)
 	limit.Level = ratelimit.LevelProject
 	return limit
+}
+
+// rateLimitSubjectRepr keeps the NVCF wording, where the rate-limit key is
+// the org (NCA id), and names the key neutrally when there is no routing key.
+func rateLimitSubjectRepr(rateLimitKey string, projectID string, routingKey string) string {
+	var repr strings.Builder
+	if routingKey != "" {
+		repr.WriteString("org `" + rateLimitKey + "`")
+	} else {
+		repr.WriteString("rate limit key `" + rateLimitKey + "`")
+	}
+	if projectID != "" {
+		repr.WriteString(" project `" + projectID + "`")
+	}
+	if routingKey != "" {
+		repr.WriteString(" routing key `" + routingKey + "`")
+	}
+	return repr.String()
 }
 
 func chooseRequestResult(

@@ -247,7 +247,9 @@ mod test_support {
     use crate::routing_state::StargateState;
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz};
+    use super::{
+        DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz,
+    };
 
     pub(super) fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -308,7 +310,10 @@ mod test_support {
         let ready_token = CancellationToken::new();
         app.readiness = ReadinessState::warming_up(ready_token.clone());
 
-        assert_eq!(readyz(State(app.clone())).await, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            readyz(State(app.clone())).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
 
         ready_token.cancel();
 

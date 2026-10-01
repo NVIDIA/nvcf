@@ -139,6 +139,11 @@ Rules:
 - Live registration uniqueness is by `inference_server_id`.
 - A registration stream cannot change backend id, cluster id, URL, or reverse
   tunnel mode after its first message.
+- When the worker authenticator binds the credential to a cluster id, for
+  example `--worker-auth-file`, the registration's effective
+  `cluster_id` must equal it; otherwise the stream is rejected with
+  `INVALID_ARGUMENT`. Reverse tunnel handshakes presenting that credential must
+  target a registration with the same cluster id.
 - A backend is active for a model only when its model is active and its QUIC
   path has a forwarded `/health` RTT.
 - A cluster is routable only when at least one backend is active for the model.

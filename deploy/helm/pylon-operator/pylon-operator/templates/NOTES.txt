@@ -1,0 +1,108 @@
+{{- /*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/ -}}
+{{- $ns := .Release.Namespace -}}
+{{- $secret := include "pylon-operator.credentialSecretName" . -}}
+{{- $key := .Values.credential.key -}}
+{{- $jsonpath := printf "{.data.%s}" $key -}}
+{{- $exampleNs := "models" -}}
+{{- with .Values.watchNamespaces }}{{ $exampleNs = first . }}{{ end -}}
+Pylon Operator {{ .Chart.AppVersion }} is installed as release {{ .Release.Name }} in namespace {{ $ns }}.
+
+  Cluster id:           {{ .Values.clusterId }}
+  Router gRPC address:  {{ .Values.router.grpcAddress }}
+  Watched namespaces:   {{ if .Values.watchNamespaces }}{{ join ", " .Values.watchNamespaces }}{{ else }}all{{ end }}
+{{- if .Values.devInsecureTransport }}
+  Transport TLS:        verification disabled (--dev-insecure-transport). For local k3d clusters only.
+{{- end }}
+
+Cluster credential
+------------------
+{{- if include "pylon-operator.generateCredential" . }}
+The chart generated Secret {{ $secret }} with key {{ $key }}. Upgrades keep
+its value, and uninstall leaves it in place.
+{{- else if .Values.credential.existingSecret }}
+The operator reads the credential from the existing Secret {{ $secret }}, key {{ $key }}.
+{{- else }}
+The chart created no credential Secret. Create Secret {{ $secret }} with key
+{{ $key }} in namespace {{ $ns }}. Until it exists, the operator emits Warning
+Events with reason ClusterCredentialMissing and creates no transport
+Deployments:
+
+  kubectl -n {{ $ns }} create secret generic {{ $secret }} \
+    --from-literal={{ $key }}="$(openssl rand -hex 24)"
+{{- end }}
+
+Read the token:
+
+  kubectl -n {{ $ns }} get secret {{ $secret }} -o jsonpath='{{ $jsonpath }}' | base64 -d
+
+The router stores only its SHA-256 hash, as an entry of the form
+sha256:<64 hex>. Compute and print the entry:
+
+  TOKEN_HASH="sha256:$(kubectl -n {{ $ns }} get secret {{ $secret }} -o jsonpath='{{ $jsonpath }}' | base64 -d | shasum -a 256 | cut -d' ' -f1)"
+  echo "${TOKEN_HASH}"
+
+Add the entry under this cluster id in the llm-request-router worker auth
+file, the Secret named by llmRequestRouter.auth.credentialsSecret.name (key
+credentials.yaml):
+
+  clusters:
+    {{ .Values.clusterId }}:
+      - <TOKEN_HASH>
+
+For example, in the router's namespace:
+
+  printf 'clusters:\n  {{ .Values.clusterId }}:\n    - %s\n' "${TOKEN_HASH}" > credentials.yaml
+  kubectl -n <router-namespace> create secret generic llm-request-router-worker-credentials \
+    --from-file=credentials.yaml
+
+With the llm-gateway-stack chart, pass the entry in clusterCredential.sha256Hashes
+(or as clusterCredential.sha256). During rotation, list the new entry next to
+the old one until transport pods use the new token.
+
+Until the router trusts the hash, InferenceEndpoints report Registered=False
+with reason RegistrationRejected.
+
+Router TLS trust
+----------------
+{{- if .Values.trustBundle.configMap }}
+Transport pods trust the CA bundle in key ca.crt of ConfigMap
+{{ .Values.trustBundle.configMap }} in namespace {{ $ns }}. Until it exists, the
+operator emits Warning Events with reason TrustBundleMissing and creates no
+transport Deployments.
+{{- else }}
+No trust bundle is configured, so transport pods use Pylon's default TLS trust
+for the router. When a private CA issues the router certificate, put the CA in
+key ca.crt of a ConfigMap in namespace {{ $ns }} and set trustBundle.configMap.
+{{- end }}
+{{- if not .Values.installCRDs }}
+
+installCRDs is false. Install the InferenceEndpoint CRD
+(inferenceendpoints.pylon.nvidia.com) before creating InferenceEndpoints.
+{{- end }}
+
+Publish a model
+---------------
+Create an InferenceEndpoint next to the Service that fronts the backend:
+
+  apiVersion: pylon.nvidia.com/v1alpha1
+  kind: InferenceEndpoint
+  metadata:
+    name: llama-3-1-8b-instruct
+    namespace: {{ $exampleNs }}
+  spec:
+    modelName: meta/llama-3.1-8b-instruct
+    inferenceAPIFormat:
+      type: chat
+    service:
+      name: llama-3-1-8b-instruct
+      port: 8000
+    health:
+      path: /v1/health/ready
+
+Check its status:
+
+  kubectl get inferenceendpoints -A
+  kubectl -n {{ $exampleNs }} describe inferenceendpoint llama-3-1-8b-instruct

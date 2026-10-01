@@ -403,6 +403,38 @@
       "legacy_tag_prefix": "nvcf-worker-task-v"
     },
     {
+      "id": "pylon-operator",
+      "path": "src/compute-plane-services/pylon-operator",
+      "service_name": "nvcf-pylon-operator"
+    },
+    {
+      "id": "pylon-operator-helm",
+      "path": "deploy/helm/pylon-operator",
+      "service_name": "pylon-operator",
+      "deploys": [
+        "pylon-operator"
+      ]
+    },
+    {
+      "id": "llm-gateway-stack",
+      "path": "deploy/helm/llm-gateway-stack",
+      "service_name": "llm-gateway-stack",
+      "deploys": [
+        {
+          "service": "llm-api-gateway",
+          "values_paths": [
+            "llm-api-gateway.llmApiGateway.image.tag"
+          ]
+        },
+        {
+          "service": "stargate",
+          "values_paths": [
+            "llm-request-router.llmRequestRouter.image.tag"
+          ]
+        }
+      ]
+    },
+    {
       "id": "cloud-tasks",
       "path": "src/control-plane-services/cloud-tasks",
       "service_name": "nvcf-cloud-tasks"

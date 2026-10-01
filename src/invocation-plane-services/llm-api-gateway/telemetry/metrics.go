@@ -97,6 +97,8 @@ func InitializeMetrics() {
 	_ = authRequestsTotal()
 	_ = authRequestDuration()
 	preInitAuthMetrics()
+	_ = tlsCertificateExpiry()
+	preInitTLSReloadMetrics()
 }
 
 func Add(
@@ -458,6 +460,67 @@ func preInitAuthMetrics() {
 				attribute.String("grpc_status", code),
 			),
 		)
+	}
+}
+
+// TLSReloadOutcome is the outcome label on the TLS certificate reload counter.
+type TLSReloadOutcome string
+
+const (
+	// TLSReloadSuccess counts changed certificate files that loaded and
+	// replaced the served pair.
+	TLSReloadSuccess TLSReloadOutcome = "success"
+	// TLSReloadRejected counts reload attempts that failed. The last good
+	// pair stays in service and the attempt is retried on the next check.
+	TLSReloadRejected TLSReloadOutcome = "rejected"
+)
+
+// tlsReloadOutcomes is the bounded label set of the reload counter.
+var tlsReloadOutcomes = []TLSReloadOutcome{TLSReloadSuccess, TLSReloadRejected}
+
+// tlsCertificateExpiry reports the NotAfter of the served TLS leaf as a unix
+// timestamp. It has no sample until a certificate is loaded, so a plaintext
+// gateway never reports an expiry. Unexported so the only emission path is
+// RecordTLSCertificateExpiry.
+func tlsCertificateExpiry() otelmetric.Int64Gauge {
+	return must.Get(Meter().Int64Gauge(
+		metricPrefix+"tls_certificate_expiry_seconds",
+		otelmetric.WithUnit("s"),
+		otelmetric.WithDescription("Unix time at which the served TLS certificate expires (leaf NotAfter)."),
+	))
+}
+
+// tlsReloadsTotal counts TLS certificate reload attempts after startup, by
+// outcome. Unexported so the only emission path is RecordTLSReload.
+func tlsReloadsTotal() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"tls_reloads_total",
+		otelmetric.WithDescription("TLS certificate reload attempts after startup, by outcome."),
+	))
+}
+
+// RecordTLSCertificateExpiry sets the expiry gauge to the NotAfter of the
+// certificate now being served.
+func RecordTLSCertificateExpiry(ctx context.Context, notAfter time.Time) {
+	tlsCertificateExpiry().Record(ctx, notAfter.Unix())
+}
+
+// RecordTLSReload counts one reload attempt with the given outcome.
+func RecordTLSReload(ctx context.Context, outcome TLSReloadOutcome) {
+	tlsReloadsTotal().Add(ctx, 1, otelmetric.WithAttributes(
+		attribute.String("outcome", string(outcome)),
+	))
+}
+
+// preInitTLSReloadMetrics emits a zero sample for every reload outcome so
+// rate() and absent() work on the first scrape.
+func preInitTLSReloadMetrics() {
+	ctx := context.Background()
+	counter := tlsReloadsTotal()
+	for _, outcome := range tlsReloadOutcomes {
+		counter.Add(ctx, 0, otelmetric.WithAttributes(
+			attribute.String("outcome", string(outcome)),
+		))
 	}
 }
 

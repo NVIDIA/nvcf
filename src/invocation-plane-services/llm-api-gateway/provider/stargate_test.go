@@ -241,7 +241,8 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 		require.Equal(t, stargateChatCompletionsPath, r.URL.Path)
 		require.Equal(t, contentTypeJSON, r.Header.Get(headerContentType))
 		require.Equal(t, contentTypeSSE, r.Header.Get(headerAccept))
-		require.Equal(t, "Bearer secret-token", r.Header.Get(headerAuthorization))
+		// The caller's bearer stays at the gateway (G4).
+		require.Empty(t, r.Header.Values(headerAuthorization))
 		require.Equal(t, "req-123", r.Header.Get(headerRequestID))
 		require.Equal(t, "us-west1", r.Header.Get(headerTargetRegion))
 		require.Equal(t, "us-west1", r.Header.Get(headerLegacyTargetRegion))
@@ -1339,6 +1340,130 @@ func TestStargateProviderProxyOmitsPriorityWhenUnset(t *testing.T) {
 	defer response.Body.Close()
 
 	require.Equal(t, http.StatusOK, response.StatusCode)
+}
+
+// TestStargateProviderNeverForwardsCallerCredentials covers every outbound
+// code path: the caller's bearer and any client-supplied X-Routing-Key must
+// never reach the router, and the optional service token replaces the
+// caller's Authorization.
+func TestStargateProviderNeverForwardsCallerCredentials(t *testing.T) {
+	t.Parallel()
+
+	const callerToken = "sk-caller-secret"
+
+	paths := []string{"complete", "stream", "proxy"}
+	tests := []struct {
+		name           string
+		serviceToken   string
+		routingKey     string
+		wantAuth       []string
+		wantRoutingKey []string
+	}{
+		{name: "no service token, no routing key"},
+		{name: "no service token, context routing key", routingKey: "fn-proxy", wantRoutingKey: []string{"fn-proxy"}},
+		{
+			name:         "service token",
+			serviceToken: "router-service-token",
+			wantAuth:     []string{"Bearer router-service-token"},
+		},
+		{
+			name:           "service token and context routing key",
+			serviceToken:   "router-service-token",
+			routingKey:     "fn-proxy",
+			wantAuth:       []string{"Bearer router-service-token"},
+			wantRoutingKey: []string{"fn-proxy"},
+		},
+	}
+
+	for _, path := range paths {
+		for _, tc := range tests {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				captured := make(chan http.Header, 1)
+				provider, err := NewStargateProvider(config.StargateConfig{
+					URL:          "http://stargate.example",
+					ServiceToken: tc.serviceToken,
+				})
+				require.NoError(t, err)
+				provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					captured <- r.Header.Clone()
+					if path == "proxy" {
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header:     http.Header{headerContentType: []string{contentTypeJSON}},
+							Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
+							Request:    r,
+						}, nil
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{headerContentType: []string{contentTypeSSE}},
+						Body: io.NopCloser(strings.NewReader(sseChatBody(t, models.ChatCompletionChunk{
+							ID:     "chatcmpl-creds",
+							Object: models.ObjectChatCompletionChunk,
+							Model:  "meta/llama-3.1-8b-instruct",
+							Choices: []models.ChatCompletionChunkChoice{{
+								Index:        0,
+								Delta:        models.ChatCompletionChunkDelta{Content: ptr.To("ok")},
+								FinishReason: ptr.To(models.FinishReasonStop),
+							}},
+						}))),
+						Request: r,
+					}, nil
+				})}
+
+				reqCtx := &requestctx.RequestContext{
+					RequestID:   "req-creds",
+					BearerToken: callerToken,
+					RoutingKey:  tc.routingKey,
+					Model:       "meta/llama-3.1-8b-instruct",
+				}
+				chatRequest := &NormalizedRequest{ChatRequest: &models.ChatCompletionRequest{
+					Model: "meta/llama-3.1-8b-instruct",
+					Messages: &[]models.ChatMessage{{
+						Role:    models.ChatCompletionRoleUser,
+						Content: models.SingleTextContent("hello"),
+					}},
+				}}
+
+				switch path {
+				case "complete":
+					_, err = provider.Complete(context.Background(), reqCtx, chatRequest)
+					require.NoError(t, err)
+				case "stream":
+					events, err := provider.Stream(context.Background(), reqCtx, chatRequest)
+					require.NoError(t, err)
+					for event := range events {
+						require.NoError(t, event.Err)
+					}
+				case "proxy":
+					response, err := provider.Proxy(context.Background(), reqCtx, &ProxyRequest{
+						Method: http.MethodPost,
+						Path:   "/v1/embeddings",
+						// Inbound headers are cloned into the proxy request.
+						Header: http.Header{
+							headerAuthorization: []string{"Bearer " + callerToken},
+							headerRoutingKey:    []string{"smuggled-routing-key"},
+						},
+						Body: io.NopCloser(strings.NewReader(`{"model":"meta/llama-3.1-8b-instruct","input":"hi"}`)),
+					})
+					require.NoError(t, err)
+					require.NoError(t, response.Body.Close())
+				}
+
+				headers := <-captured
+				require.Equal(t, tc.wantAuth, headers.Values(headerAuthorization))
+				require.Equal(t, tc.wantRoutingKey, headers.Values(headerRoutingKey))
+				require.Equal(t, "meta/llama-3.1-8b-instruct", headers.Get(headerModel))
+				for name, values := range headers {
+					for _, value := range values {
+						require.NotContains(t, value, callerToken, "caller bearer leaked in header %s", name)
+					}
+				}
+			})
+		}
+	}
 }
 
 func sseChatBody(t *testing.T, chunks ...models.ChatCompletionChunk) string {

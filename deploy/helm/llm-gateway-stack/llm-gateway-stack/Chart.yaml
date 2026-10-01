@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v2
+name: llm-gateway-stack
+description: Single-cluster LLM gateway stack, the LLM API gateway and the LLM request router with static credentials and TLS, without Vault, cert-manager or the NVCF API
+type: application
+version: 0.0.0 # managed by semantic-release
+# No appVersion: the stack ships two images. Their tags are pinned per subchart
+# in values.yaml, where the release tooling moves them.
+dependencies:
+  - name: helm-nvcf-llm-request-router
+    alias: llm-request-router
+    version: "0.0.0"
+    repository: file://../../llm-request-router/llm-request-router
+  - name: helm-nvcf-llm-api-gateway
+    alias: llm-api-gateway
+    version: "0.0.0"
+    repository: file://../../llm-api-gateway/llm-api-gateway

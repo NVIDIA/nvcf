@@ -18,6 +18,7 @@ use std::time::Duration;
 mod client;
 mod discovery;
 mod grpc_endpoint;
+mod reconnect;
 mod reverse_tunnel;
 mod router_stream;
 mod state;
@@ -28,7 +29,9 @@ mod types;
 mod urls;
 
 pub use client::InferenceServerRegistrationClient;
-pub use types::{ClientError, InferenceServerRegistrationConfig};
+pub use types::{
+    ClientError, DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF, InferenceServerRegistrationConfig,
+};
 
 use urls::normalize_addr;
 

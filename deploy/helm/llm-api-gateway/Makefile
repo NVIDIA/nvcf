@@ -31,7 +31,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate test check-request-router-render check-default-ownership clean package push-oci
+.PHONY: install uninstall status lint template validate test check-request-router-render check-default-ownership check-auth-modes-render clean package push-oci
 
 install:
 ifndef values
@@ -69,7 +69,7 @@ template:
 validate: template
 	kubeconform -strict -summary -output pretty -kubernetes-version 1.31.5 bin/manifest.yaml
 
-test: check-request-router-render check-default-ownership
+test: check-request-router-render check-default-ownership check-auth-modes-render
 
 check-request-router-render:
 	@router_manifest="$$(helm template llm-request-router $(request_router_helm_dir) --namespace $(namespace) --set llmRequestRouter.image.repository=test)"; \
@@ -82,6 +82,9 @@ check-request-router-render:
 
 check-default-ownership:
 	@bash ./scripts/test-default-ownership.sh
+
+check-auth-modes-render:
+	@bash ./scripts/check-auth-modes-render.sh $(helm_dir)
 
 clean:
 	rm -rf ./packaged-charts bin

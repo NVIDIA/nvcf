@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: "2"
+run:
+  modules-download-mode: readonly
+  tests: true
+  allow-parallel-runners: true
+linters:
+  enable:
+    - goheader
+  settings:
+    goheader:
+      template-path: .goheader.tmpl
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: zz_generated\..*\.go
+        linters:
+          - goheader
+    paths:
+      - _output$
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator)
+        - blank
+        - dot
+        - alias
+        - localmodule
+      no-inline-comments: true
+      no-prefix-comments: true
+      custom-order: true
+      no-lex-order: true
+  exclusions:
+    generated: lax
+    paths:
+      - _output$
+      - third_party$
+      - builtin$
+      - examples$

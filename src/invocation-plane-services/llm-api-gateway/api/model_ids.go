@@ -101,6 +101,44 @@ func normalizeOpenAIRequestModel(
 	return routedModel, nil
 }
 
+// normalizeBareRequestModel validates a static key mode model id. The model
+// string is used as is: it carries no routing key, so a "/" is part of the
+// model name.
+func normalizeBareRequestModel(reqCtx *requestctx.RequestContext, model string) (string, error) {
+	if model == "" {
+		return "", echo.NewHTTPError(http.StatusBadRequest, "model is required")
+	}
+	if reqCtx != nil && reqCtx.RoutingKey != "" {
+		return "", echo.NewHTTPError(http.StatusBadRequest, "routing keys are not supported by this gateway")
+	}
+	return model, nil
+}
+
+// normalizeRequestModel resolves the routed model for the gateway's model id
+// scheme: bare model ids in static key mode, "<routing key>/<model>" in NVCF
+// mode.
+func (h *Handlers) normalizeRequestModel(reqCtx *requestctx.RequestContext, model string) (string, error) {
+	if h.bareModelIDs() {
+		return normalizeBareRequestModel(reqCtx, model)
+	}
+	return normalizeOpenAIRequestModel(reqCtx, model)
+}
+
+// missingRequestContextError is returned when a handler runs without a
+// request context. In NVCF mode that means the model carried no routing-key
+// prefix; static key mode always stores a context, so there it can only mean
+// the model is missing.
+func (h *Handlers) missingRequestContextError() error {
+	if h.bareModelIDs() {
+		return echo.NewHTTPError(http.StatusBadRequest, "model is required")
+	}
+	return echo.NewHTTPError(http.StatusBadRequest, "model prefix is required")
+}
+
+func (h *Handlers) bareModelIDs() bool {
+	return h != nil && h.config.StaticAuthMode()
+}
+
 func setRoutingMethodForModel(reqCtx *requestctx.RequestContext, model string) {
 	if reqCtx == nil {
 		return

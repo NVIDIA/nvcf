@@ -154,6 +154,7 @@ jobs:
           stargate|src/libraries/rust/stargate|false|go-root|build-container
           nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
           image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container
+          pylon-operator|src/compute-plane-services/pylon-operator|false|go-root|build-container
             nvcf-ui|src/uis/nvcf-ui|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json

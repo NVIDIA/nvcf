@@ -95,6 +95,8 @@ navigation:
     contents:
       - page: Architecture Overview
         path: ../../docs/dev/architecture.md
+      - page: Inference Endpoints Quickstart
+        path: ../../docs/dev/inference-endpoints-quickstart.md
       - section: Local Development
         skip-slug: true
         contents:

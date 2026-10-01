@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_test")
+
+go_test(
+    name = "integration_test",
+    srcs = ["integration_test.go"],
+    data = ["//src/compute-plane-services/pylon-operator:crds"],
+    env_inherit = ["KUBEBUILDER_ASSETS"],
+    # external: envtest starts kube-apiserver and etcd from binaries outside
+    # Bazel's hermetic inputs, so a cached green run would hide regressions.
+    # The test skips when KUBEBUILDER_ASSETS is unset. requires-kubebuilder
+    # is descriptive grouping.
+    tags = [
+        "external",
+        "requires-kubebuilder",
+    ],
+    deps = [
+        "//src/compute-plane-services/pylon-operator/api/v1alpha1",
+        "//src/compute-plane-services/pylon-operator/internal/config",
+        "//src/compute-plane-services/pylon-operator/internal/controller",
+        "//src/compute-plane-services/pylon-operator/internal/gpu",
+        "//src/compute-plane-services/pylon-operator/internal/metrics",
+        "//src/compute-plane-services/pylon-operator/internal/prober",
+        "//src/compute-plane-services/pylon-operator/internal/registration",
+        "//src/compute-plane-services/pylon-operator/internal/transport",
+        "@com_github_go_logr_logr//:logr",
+        "@com_github_go_logr_logr//testr",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//apps/v1:apps",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_api//discovery/v1:discovery",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/api/meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/runtime/serializer",
+        "@io_k8s_client_go//rest",
+        "@io_k8s_sigs_controller_runtime//:controller-runtime",
+        "@io_k8s_sigs_controller_runtime//pkg/builder",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@io_k8s_sigs_controller_runtime//pkg/envtest",
+        "@io_k8s_utils//ptr",
+    ],
+)

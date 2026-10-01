@@ -687,6 +687,26 @@ fn rendered_grouped_pylons_share_one_scaled_mock_backend() {
 }
 
 #[test]
+fn rendered_stargate_explicitly_allows_unauthenticated_benchmark_pylons() {
+    let rendered = render_default_test_manifest(&config());
+    let docs = parse_yaml_documents(&rendered.stargate);
+    let stargate = find_doc_by_kind_and_name(&docs, "StatefulSet", "stargate");
+    let args = stargate["spec"]["template"]["spec"]["containers"][0]["args"]
+        .as_sequence()
+        .expect("stargate container args should be a list");
+
+    assert!(
+        args.iter()
+            .any(|arg| arg.as_str() == Some("--allow-open-worker-auth")),
+        "benchmark stargate has no worker authenticator and must opt into open worker auth"
+    );
+    assert!(
+        !rendered.backends.contains("--allow-open-worker-auth"),
+        "only the stargate router takes the open worker auth opt-in"
+    );
+}
+
+#[test]
 fn rendered_manifests_include_tunnel_protocol() {
     let mut config = config();
     config.tunnel_protocol = stargate_protocol::TunnelTransportProtocol::WebTransport;

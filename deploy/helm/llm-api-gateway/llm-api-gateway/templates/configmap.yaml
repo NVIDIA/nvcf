@@ -14,6 +14,7 @@
 # limitations under the License.
 
 {{- $cfg := .Values.llmApiGateway.config }}
+{{- $authMode := include "llm-api-gateway.authMode" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -28,10 +29,20 @@ data:
   STARGATE_CONNECT_TIMEOUT: {{ $cfg.requestRouterConnectTimeout | quote }}
   STARGATE_REQUEST_TIMEOUT: {{ $cfg.requestRouterRequestTimeout | quote }}
   NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT: {{ $cfg.inferenceWriteTimeout | quote }}
+  {{- /*
+  NVCF_GRPC_ADDR selects NVCF auth and is mutually exclusive with the
+  API_KEYS_PATH that staticKeys mode sets, so only nvcf mode renders it.
+  SECRETS_PATH is the Vault Agent output: nvcf mode reads its service token
+  there, and every mode reads an optional tracing token from it.
+  */}}
+  {{- if eq $authMode "nvcf" }}
   NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
   NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}
   NVCF_GRPC_TIMEOUT: {{ $cfg.nvcfGrpcTimeout | quote }}
+  {{- end }}
+  {{- if or (eq $authMode "nvcf") (include "llm-api-gateway.vaultEnabled" .) }}
   SECRETS_PATH: "/vault/secrets/secrets.json"
+  {{- end }}
   RATE_LIMIT_ENABLED: {{ $cfg.rateLimitEnabled | toString | quote }}
   RATE_LIMIT_FAIL_OPEN: {{ $cfg.rateLimitFailOpen | toString | quote }}
   {{- with .Values.llmApiGateway.olric }}

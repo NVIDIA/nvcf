@@ -1,0 +1,5 @@
+bin/
+packaged-charts/
+# helm dependency build packages the file:// subcharts here. Chart.lock is
+# committed; the archives are rebuilt from the sibling chart sources.
+llm-gateway-stack/charts/

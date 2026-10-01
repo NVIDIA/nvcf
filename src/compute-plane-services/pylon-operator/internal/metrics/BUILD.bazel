@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "metrics",
+    srcs = ["metrics.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/metrics",
+    visibility = ["//src/compute-plane-services/pylon-operator:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/pylon-operator/api/v1alpha1",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metrics",
+    visibility = ["//src/compute-plane-services/pylon-operator:__subpackages__"],
+)
+
+go_test(
+    name = "metrics_test",
+    srcs = ["metrics_test.go"],
+    embed = [":metrics"],
+    deps = [
+        "//src/compute-plane-services/pylon-operator/api/v1alpha1",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+    ],
+)
