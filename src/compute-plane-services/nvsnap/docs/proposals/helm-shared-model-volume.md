@@ -474,6 +474,18 @@ The weight read is what the model prewarm in mechanism 4 targets; the
 estimation pass is what `VLLM_ENABLE_STARTUP_PLAN=1` in the cachedir env
 template removes on the next capture.
 
+Third warm run, 2026-10-01, with the model prewarm on (storage profile
+`prewarm: true`, 8 readers, no memory limit on the sweep): the sweep took
+8 to 19 s per worker and the engine's weight read fell from 40 to 45 s to
+9.6 to 10.9 s. Engine start to Ready 73 to 95 s (was 119 to 133 s);
+admission to Ready 154 to 194 s for the six workers that did not hit the
+engine's video segfault (was 228 to 278 s; plain cold 490 s). A first
+attempt with a 512Mi memory limit on the sweep changed nothing: page
+cache is charged to the reading cgroup, so the sweep evicted its own
+pages. The ct1 storage-profile overlay copied from dev1 also had
+`prewarm: false`, which silently dropped the step; the agent reads that
+ConfigMap once at start.
+
 NVMesh shared read-only attach can take up to 30 s under 8 to 16
 concurrent clients on this cluster (IO-enable timeouts, kubelet retries);
 that is the storage layer, not this design, and it costs a few pods up to
