@@ -1,62 +1,28 @@
 # LLM routing stack on DGX Spark
 
-Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Operator on an existing ARM64 DGX Spark Kubernetes cluster. This proof of concept (POC) serves full GLM-5.3 `UD-IQ2_M` on exactly two GPUs and validates inference through authenticated gateway requests.
+Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Operator on an existing ARM64 DGX Spark Kubernetes cluster. The stack serves full GLM-5.3 `UD-IQ2_M` on exactly two GPUs and validates inference through authenticated gateway requests.
 
 ## Overview
 
-- The stack uses the revision in [source.lock.json](spark/source.lock.json) and the bundled [operator/chart patch](spark/patches/stack-fixes.patch).
-- `prepare` fetches that public source into your external work directory. All application images and stack/operator charts come from that checkout.
-- Edit gateway/router code in the prepared checkout when [iterating the deployment](#update-only-gateway-or-router).
-
-Validation coverage:
-
-- The two-node runtime, direct/gateway chat, streaming, authentication and recovery configuration have been exercised on Sparks.
-- The runner has offline render and regression coverage. Its existing-installation attachment and portable client passed against the running GLM deployment, including auth failures and retained routes.
-- Fresh-cluster end-to-end validation of this published recipe remains pending.
+The stack uses the revision in [source.lock.json](spark/source.lock.json) and the bundled [operator/chart patch](spark/patches/stack-fixes.patch). `prepare` fetches that source into your external work directory for all application images and stack/operator charts. Edit gateway/router code in that checkout when [iterating the deployment](#update-only-gateway-or-router).
 
 ## Prerequisites
 
-### Cluster and access
-
-- A reachable Kubernetes cluster with ARM64 DGX Spark GB10 nodes, working pod networking, `cluster.local` DNS and NetworkPolicy enforcement.
-- An authorized kubeconfig and an explicit Kubernetes context for the target cluster.
-- Exactly two distinct model nodes, each advertising one `nvidia.com/gpu`, with the NVIDIA runtime class configured and the GPU available exclusively for GLM.
-- Driver `580.178.04` and CUDA 13 were tested. Qualify other versions before deployment.
-- Workload, Secret and ConfigMap access in the target namespace, plus permission to install the Pylon custom resource definition (CRD) and its role-based access control (RBAC) resources.
-- For a new deployment, use a new namespace. Resolve any existing Pylon CRD ownership and operator watch-scope overlap with the owner before proceeding.
-
-### Memory and storage
-
-- Each model node needs about 121.69 GiB of OS-visible shared CPU/GPU memory. The pre-load gate requires more than 113 GiB actual host `MemAvailable` per node.
-- Measure host memory directly. Kubelet capacity and CUDA free-memory reports describe different views of the same shared memory.
-- Use a separate ARM64 control node for gateway/router/operator. Sharing the leader requires the same memory gate and a separate placement qualification.
-- Use node-compatible `ReadWriteOnce` storage. A shared provider must support the required topology and performance.
-- Reserve 400 GiB on the leader for six weight shards, source, build and runtime artifacts, and 160 GiB on the worker for its loading cache.
-- Both persistent volume claims (PVCs) are retained on uninstall. Preserve model caches during cleanup.
-
-### Workstation and artifacts
-
-- Install Python 3.11+, Git, Helm 3.14+ or Helm 4, kubectl, Docker with Buildx, and ARM64 build capability on the workstation. Install k9s for interactive inspection.
-- Provide network access to GitHub source, public model downloads, build dependencies and container images. Authenticate to registries through your approved mechanism.
-- For the pinned Pylon version, keep `images.pullSecrets` empty. Configure registry access on nodes or pre-import application images on every node where Pylon can schedule.
-- Review the [external artifact terms](spark/NOTICE), including the custom GLM-5.3 model license, before downloading. Store weights, credentials and private deployment evidence outside Git.
-- The CUDA/build environment is pinned by digest in [backend.defaults.json](spark/backend.defaults.json). GLM runs through the compiled llama.cpp server inside that environment.
-- If mirroring the environment image, set `runtimeImage` to a verified equivalent digest and make it available on both model nodes before preflight.
+- Hardware: two dedicated DGX Spark GB10 model nodes with one GPU each, plus a separate ARM64 control node for gateway/router/operator. Each model node needs more than 113 GiB host `MemAvailable` before loading.
+- Kubernetes and storage: an existing ARM64 Kubernetes cluster containing these nodes, with pod networking, `cluster.local` DNS, NetworkPolicy enforcement and node-compatible `ReadWriteOnce` persistent storage. Reserve 400 GiB on the leader and 160 GiB on the worker.
+- GPU enablement: model nodes with a working NVIDIA driver, NVIDIA Container Toolkit configured for the container runtime, and a device plugin advertising `nvidia.com/gpu`. Use an installed `RuntimeClass` matching `runtimeClass` in the config (`nvidia` in the example).
+- Access: an authorized kubeconfig with an explicit context, cluster read access, and permission to create the namespace and install the Helm resources, including persistent volume claims (PVCs), the Pylon custom resource definition (CRD) and role-based access control (RBAC) resources.
+- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, kubectl, Docker with Buildx, and ARM64 build capability. Provide access to GitHub, model downloads, build dependencies and container images, with credentials for the chosen registry.
 
 ## Installation
 
-Choose the workflow for your cluster:
-
-- New deployment: follow the preparation, image distribution and deployment steps below in order.
-- Running deployment: use [the existing-installation workflow](#iterate-an-existing-installation-with-different-release-names). Define the path variables and `spark` helper below, then use `attach-existing` in place of `inventory`.
+Follow these steps for the first installation of the stack and GLM model.
 
 ### Configure and prepare
 
-1. Check out the POC branch and create an external work directory. Run from the repository root in one Bash session. Use a separate work directory for each installation.
+1. Start at the root of a repository checkout containing `deploy/helm/llm-routing/spark`. Use one Bash session and a separate external work directory for each installation.
 
    ```bash
-   git clone --branch feat/standalone-llm-routing https://github.com/NVIDIA/nvcf.git
-   cd nvcf
    SPARK_RECIPE="$(pwd)/deploy/helm/llm-routing/spark"
    SPARK_WORK="$HOME/llm-spark-work"
    mkdir -m 700 "$SPARK_WORK"
@@ -66,7 +32,7 @@ Choose the workflow for your cluster:
 2. Edit `config.json` with the actual deployment values.
 
    - Cluster: explicit context, unused namespace, release prefix and cluster ID.
-   - Nodes: distinct `nodes.leader` and `nodes.worker`. `nodes.control` may equal `nodes.leader` after qualifying that placement.
+   - Nodes: distinct `nodes.leader` and `nodes.worker`, with a separate `nodes.control` by default. To share the leader, qualify that placement with the same pre-load memory gate.
    - Runtime and storage: the installed runtime class and compatible storage class.
    - Images: registry prefix, fresh tag and distribution method. Keep `images.pullSecrets` empty for this Pylon version.
 
@@ -85,18 +51,19 @@ Check the results before continuing:
 - Optional `--source-dir /absolute/path` selects an already prepared checkout at that revision. Existing source edits are preserved.
 - `render` creates offline manifests and temporary Transport Layer Security (TLS) keys under the private work directory.
 - `inventory` records node identities, GPU allocations, workloads, `RuntimeClass` and `StorageClass`. It establishes cluster identity for later phases and requires available model GPUs.
-- CUDA correctness and memory qualification follow during preflight. Resolve namespace or CRD ownership conflicts before proceeding.
+- CUDA correctness and memory qualification follow during preflight. Resolve namespace, CRD ownership or operator watch-scope conflicts before proceeding.
+
+Keep configuration, credentials, downloaded weights and private deployment evidence outside Git.
 
 ### Build and distribute the application images
 
-The build produces four `linux/arm64` images: `gateway`, `router`, `pylon` and `operator`.
+The build produces four `linux/arm64` images: `gateway`, `router`, `pylon` and `operator`. Router and Pylon use Cargo profile `integration` for functional validation. Qualify performance separately. The operator image includes endpoint canary support.
 
-- Router and Pylon use Cargo profile `integration` for functional validation. Performance claims require separate qualification.
-- The operator image includes the tested endpoint canary support.
+The CUDA/build environment is pinned by digest in [backend.defaults.json](spark/backend.defaults.json). GLM runs through the compiled llama.cpp server inside that environment. If mirroring this image, set `runtimeImage` to a verified equivalent digest and make it available on both model nodes before preflight.
 
 #### Use a registry
 
-1. Select a registry repository you are authorized to write. Configure `IfNotPresent` and a fresh tag for each source revision.
+1. Select a registry repository you are authorized to write. Configure `IfNotPresent` and a fresh tag for each source revision. Give every node where Pylon can schedule registry pull access.
 2. Build and push the four application images under your configured prefix and tag.
 
    ```bash
@@ -129,14 +96,13 @@ The build produces four `linux/arm64` images: `gateway`, `router`, `pylon` and `
    spark import-images --archive "$SPARK_WORK/arm64-images.tar" --allow-containerd-import
    ```
 
-Importer behavior:
+Opt-in import Jobs access the selected nodes' containerd sockets with runtime administration privileges. The server exposes the dedicated archive directory and exits after acknowledgements. The importer verifies the archive checksum and imports into the `k8s.io` namespace, preserving containerd configuration.
 
-- Opt-in Jobs access the selected nodes' containerd sockets with runtime administration privileges.
-- The server exposes the dedicated archive directory and exits after acknowledgements.
-- The importer verifies the archive checksum and imports into the `k8s.io` namespace, preserving containerd configuration.
-- Keep the application archive below 1 GiB for the default importer. Increase its chart storage limit for larger archives.
+Keep the application archive below 1 GiB for the default importer. Increase its chart storage limit for larger archives.
 
 ### Deploy in order
+
+The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Run preflight qualification after changing these versions.
 
 Run each command individually. Wait for its acceptance gate to pass before continuing.
 
@@ -156,17 +122,15 @@ spark verify-gateway
 2. `stack`: Install operator/CRD/RBAC, the generated cluster credential, and gateway/router with static caller-key hashes and verified caller/tunnel TLS.
 3. `build-runtime`: Build the pinned llama.cpp CUDA runtime with remote procedure call (RPC) support on the leader. Record the build archive checksum for later integrity checks.
 4. `qualify`: Run upstream buffer-isolation and two-GPU matrix tests, then a dependent graph across the real RPC pair. Investigate a failed Job before proceeding.
-5. `download`: Download the six pinned GLM shards into the leader PVC and verify every size and SHA256.
+5. `download`: Review the [external artifact terms](spark/NOTICE), including the custom GLM-5.3 model license. Download the six pinned GLM shards into the leader PVC and verify every size and SHA256.
 6. `load`: Check memory headroom, replace the qualification servers with the two-node model layout and wait for direct health.
 7. `verify-direct`: Check arithmetic, sorting, final answers, incremental server-sent events (SSE), usage and `[DONE]` through a loopback port-forward to the GLM Service.
 8. `register`: Add `InferenceEndpoint/glm53-iq2` with the scoped canary settings. Require Ready, TransportReady and Registered.
 9. `verify-gateway`: Repeat requests through verified HTTPS and Pylon. Check missing/invalid keys, disallowed embeddings and each requested retained model.
 
-Runner behavior:
+Helm manages persistent resources, and every API operation uses the configured context. Once the runner records a loaded model, preparation phases are gated. Use [the recovery workflow](#recovery-and-limits) for restart testing.
 
-- Helm manages persistent resources. Every API operation uses the configured context.
-- Once the runner records a loaded model, use [the recovery workflow](#recovery-and-limits) for restart testing. Preparation phases are gated at that point.
-- A failed phase saves logs. Inspect its Jobs and resolve the cause before retrying. Failed Jobs and PVCs remain available for inspection.
+Failed phases save logs and retain Jobs and PVCs. Inspect those resources and resolve the cause before retrying.
 
 Pinned runtime:
 
@@ -177,18 +141,11 @@ Pinned runtime:
 
 ## Authentication and TLS
 
-Default credentials:
+The operator chart generates a cluster token. The runner handles it privately and passes its SHA256 to the router chart. It creates the caller key at `$SPARK_WORK/api-key` with mode 0600. To reuse an authorized key, set `apiKeyFile` in the external config. Keep the raw key because the gateway stores its hash.
 
-- The operator chart generates a cluster token. The runner handles it privately and passes its SHA256 to the router chart.
-- The runner creates the caller key at `$SPARK_WORK/api-key` with mode 0600. To reuse an authorized key, set `apiKeyFile` in the external config.
-- Keep the raw key file. The gateway stores its hash.
+The stack generates a certificate authority (CA) and listener/tunnel certificates. The runner saves the client CA at `$SPARK_WORK/ca.crt`. Client HTTPS and Pylon QUIC verify their CAs. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster. Keep that traffic on the trusted cluster network.
 
-Default TLS and request policy:
-
-- The stack generates a certificate authority (CA) and listener/tunnel certificates. The runner saves the client CA at `$SPARK_WORK/ca.crt`.
-- Client HTTPS and Pylon QUIC verify their CAs.
-- Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster. Keep that traffic on the trusted cluster network.
-- `/v1/models` and `/v1/registry` are public under the default policy. Chat requires the caller key, and the policy rejects embeddings.
+Under the default request policy, `/v1/models` and `/v1/registry` are public, chat requires the caller key, and embeddings are rejected.
 
 To use existing certificates:
 
@@ -200,7 +157,7 @@ To use existing certificates:
 
 ### Inspect the deployment
 
-1. Use the workstation with your authorized kubeconfig. If API access requires SSH forwarding, obtain an isolated kubeconfig and approved forwarding path from the cluster owner.
+1. Use the workstation with your authorized kubeconfig. Install k9s for interactive inspection. If API access requires SSH forwarding, obtain an isolated kubeconfig and approved forwarding path from the cluster owner.
 2. Read context and namespace from the config, then inspect the cluster and releases.
 
    ```bash
@@ -212,12 +169,9 @@ To use existing certificates:
    k9s --context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" --readonly
    ```
 
-Access and resource names:
+Each noninteractive remote command must supply its kubeconfig and context explicitly. Shell exports apply only to that shell session. Keep Kubernetes API forwarding separate from the gateway request port-forward below.
 
-- Each noninteractive remote command must supply its kubeconfig and context explicitly. Shell exports apply only to that shell session.
-- Keep Kubernetes API forwarding separate from the gateway request port-forward below.
-- `glm53-iq2` is the model InferenceEndpoint. `pylon-glm53-iq2` is the separate transport Deployment created by the operator.
-- GLM leader/worker Deployments and PVCs use your configured release prefix.
+`glm53-iq2` is the model InferenceEndpoint, and `pylon-glm53-iq2` is its operator-created transport Deployment. GLM leader/worker Deployments and PVCs use your configured release prefix.
 
 ### Custom chat, streaming and portable verification
 
@@ -251,12 +205,14 @@ For direct backend comparison:
 
 - Run `spark verify-direct` to let the runner open and close its own port-forward.
 - Alternatively, forward leader Service `<releasePrefix>-glm:8000` to local 18000 and run `client.py --url http://127.0.0.1:18000 --mode verify`.
-- Direct HTTP exercises the backend separately from gateway authentication and routing. Omit caller keys on this plaintext endpoint.
-- Bind port-forwards to loopback and give each active manual or runner check its own local port.
+
+Direct HTTP exercises the backend separately from gateway authentication and routing. Omit caller keys on this plaintext endpoint. Bind port-forwards to loopback and give each active manual or runner check its own local port.
 
 ## Maintenance
 
 ### Update only gateway or router
+
+To reuse a running stack from a new local work directory, [attach to it first](#update-an-existing-installation).
 
 1. Keep the GLM release and its PVCs running. Edit the selected service under `$SPARK_WORK/source`.
 2. Choose one component and a fresh tag, then build, distribute, update and verify it. The following commands use a registry. For preloaded images, replace the push with the import steps below before running `update`.
@@ -278,13 +234,9 @@ For preloaded images:
 2. Before `update`, run `spark import-images --archive /local/path/arm64-images.tar --component "$COMPONENT" --tag "$NEW_TAG" --allow-containerd-import`.
 3. Continue with `spark update` and `spark verify-gateway` from the commands above. A gateway/router import targets the configured control node.
 
-Update behavior:
+The update uses the prepared stack chart with `--reuse-values` and changes the selected image tag. It records old/new tags and compares pod identities to verify that other workloads stay unchanged. GLM keeps running with its existing weights.
 
-- The update uses the prepared stack chart with `--reuse-values` and changes the selected image tag.
-- It records old/new tags and compares pod identities to verify that other workloads stay unchanged. GLM keeps running with its existing weights.
-- A gateway update briefly interrupts its requests. A router update reconnects Pylon transports.
-- To publish source edits, update the public source pin or reviewed patch and follow [the pinned-stack validation steps](#updating-the-pinned-stack).
-- Review and release chart-template changes separately.
+A gateway update briefly interrupts its requests. A router update reconnects Pylon transports. To publish source edits, follow [the pinned-stack validation steps](#updating-the-pinned-stack). Review and release chart-template changes separately.
 
 To roll back the image update:
 
@@ -296,10 +248,11 @@ To roll back the image update:
    spark verify-gateway
    ```
 
-- Rollback verifies context, namespace, release and that the live tag still matches the recorded new tag.
-- It uses the exact prepared chart to restore the previous image tag. If another update has occurred, use that update's record instead.
+Rollback verifies context, namespace, release and that the live tag still matches the recorded new tag. It uses the exact prepared chart to restore the previous image tag. If another update has occurred, use that update's record instead.
 
-### Iterate an existing installation with different release names
+### Update an existing installation
+
+Use this workflow to connect a new local work directory to a running stack and GLM model. It preserves the loaded model while you update gateway/router.
 
 1. Create a separate external work directory and obtain an approved key file and cluster access settings from your team.
 2. Set the path variables and define the `spark` helper from [Configure and prepare](#configure-and-prepare). Use the attachment commands in step 4 for this workflow.
@@ -335,21 +288,17 @@ To roll back the image update:
    spark verify-gateway
    ```
 
-5. Follow the image build/distribution, `update` and `rollback` steps above with these explicit release names.
+5. Follow [Update only gateway or router](#update-only-gateway-or-router) with these explicit release names.
 
-Attachment behavior:
+`attach-existing` uses read-only API calls to verify node identities, Helm ownership, cluster ID, gateway/router repositories and the GLM Service reference. It saves local state and a public CA copy while preserving existing workloads.
 
-- `attach-existing` uses read-only API calls to verify node identities, Helm ownership, cluster ID, gateway/router repositories and the GLM Service reference.
-- It saves local state and a public CA copy while preserving existing workloads.
-- This attachment supports image iteration and request checks. Fresh-install, backend-registration and recovery phases are disabled.
+This attachment supports image iteration and request checks. Fresh-install, backend-registration and recovery phases are disabled.
 
 ### Updating the pinned stack
 
-Pin behavior:
+[spark/source.lock.json](spark/source.lock.json) selects a tested immutable source revision. Upstream integration or history changes leave this deployment pinned to that revision.
 
-- [spark/source.lock.json](spark/source.lock.json) selects a tested immutable commit. Upstream `feat/new-llm-stack` changes, merges or deletion leave this deployment pinned to that revision.
-- After an upstream merge or branch retirement, run `spark prepare` in a fresh external work directory to verify that the pinned commit remains fetchable.
-- Branch deletion can leave a commit fetchable. A squash or rebase merge may leave the old commit outside `main` ancestry. Use the fetch result to decide whether the pin needs attention.
+After upstream history changes, run `spark prepare` in a fresh external work directory to check that the pinned revision remains fetchable. Branch retirement can leave it available, while squash or rebase integration may leave it outside maintained upstream history. Use the fetch result to decide whether the pin needs attention.
 
 If the pin becomes unavailable, or you choose to adopt newer or merged code:
 
@@ -370,10 +319,9 @@ If the pin becomes unavailable, or you choose to adopt newer or merged code:
 
 3. Save and review the results from the target cluster.
 
-Recovery behavior:
+Helm interrupts the owned RPC worker. The check records a failed request or unavailable direct path, restores the worker in a `finally` block, then runs direct and gateway checks.
 
-- Helm interrupts the owned RPC worker. The check records a failed request or unavailable direct path, restores the worker in a `finally` block, then runs direct and gateway checks.
-- Observed on the tested two-node setup: about 25 minutes for a cold load and 10 minutes for recovery with cached weights. Measure these times in your environment.
+Observed on the tested two-node setup: about 25 minutes for a cold load and 10 minutes for recovery with cached weights. Measure these times in your environment.
 
 Runtime guards and capacity:
 
@@ -385,7 +333,7 @@ Runtime guards and capacity:
 - GLM uses endpoint canary timeout 180 seconds and interval 60 seconds, with generation and inference checks. Other endpoints retain their defaults.
 - Runtime settings are aggressive two-bit quantization, context 2048, one request slot and TCP/RPC. Qualify broader operating requirements before relying on them.
 
-Keep the runtime source and generated evidence for troubleshooting. Use your reviewed cleanup workflow for owned releases, preserving model caches and unrelated workloads.
+Keep the runtime source and generated evidence for troubleshooting. Both model PVCs remain after uninstall. Use your reviewed cleanup workflow for owned releases, preserving model caches and unrelated workloads.
 
 ## Local validation
 
@@ -399,7 +347,4 @@ Keep the runtime source and generated evidence for troubleshooting. Use your rev
    git diff --check
    ```
 
-Test configuration:
-
-- Set `testFixture: true` in a private test configuration to exercise the pinned sample and retained-route checks in an automated integration environment.
-- Treat those fixture results as routing-test evidence. Validate model behavior with the GLM request checks above.
+Set `testFixture: true` in a private test configuration to exercise the pinned sample and retained-route checks in an automated integration environment. Treat those results as routing-test evidence and validate model behavior with the GLM request checks above.
