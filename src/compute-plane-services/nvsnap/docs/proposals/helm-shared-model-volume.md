@@ -496,10 +496,21 @@ the cold run never produced (the set's own FlashInfer log shows no
 compile) and the no-plan warm runs never needed. Restarted containers,
 whose emptyDir already holds that kernel, start in 62 to 70 s against
 73 to 95 s without the plan, which is the plan's real value. Admission
-to Ready 184 to 210 s. The gap is structural: a set is collected once
-and never learns what a warm start compiles later. Follow-up: set
-refresh, a re-collection into a new generation when a warm worker's
-cache gains files the set lacks, in `helm-chart-cache-refresh.md`.
+to Ready 184 to 210 s. The rebuild turned out to be nvsnap's: the rank
+stream dropped modification times and ninja treated every seeded kernel
+as stale (fixed, PAX headers and mtimes restored to the nanosecond).
+
+Final warm run, 2026-10-01, set collected with correct timestamps,
+startup plan on, prewarm on, nothing else: graph capture 3 s on all
+eight workers, weight read 9.7 to 11.2 s, sweep 8 to 9 s, plan applied
+on all eight with no estimation pass. Engine start to Ready 65 to 74 s
+on clean first starts (73 to 95 s before the plan; 365 s plain cold);
+admission to Ready 183 to 223 s (490 s plain cold). What remains per
+worker is the engine's own 25 s process start, 10 s weight read, 1 s
+profile run, 3 s graph capture and 13 s to Ready, plus pod creation and
+NVMesh attach before the engine starts. Set refresh
+(`helm-chart-cache-refresh.md`) exists for engines that compile at
+startup what a cold run does not, and ships off by default.
 
 NVMesh shared read-only attach can take up to 30 s under 8 to 16
 concurrent clients on this cluster (IO-enable timeouts, kubelet retries);
