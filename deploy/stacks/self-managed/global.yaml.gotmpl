@@ -102,9 +102,8 @@ openbao:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
-      {{- if dig "openbao" "migrations" "image" "tag" "" .Values }}
-      tag: {{ dig "openbao" "migrations" "image" "tag" "" .Values }}
-      {{- end }}
+      # Preserve the 0.6.1 migrations image when updating the chart.
+      tag: {{ dig "openbao" "migrations" "image" "tag" "0.16.2" .Values }}
 
     # merge the rest of the user-supplied migrations block, but drop
     # its image sub-block so we don't clobber the defaults above
@@ -124,6 +123,7 @@ openbao:
     agentImage:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
+      tag: {{ $openbaoServerTag }}
     {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
     {{- . | nindent 4 }}
     {{- end }}
