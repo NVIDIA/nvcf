@@ -1,0 +1,573 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+openapi: 3.1.0
+info:
+  title: LLM API Gateway
+  description: |
+    OpenAI-compatible gateway for routing chat, responses, and embeddings traffic to NVCF functions through Stargate.
+
+    While request and response bodies follow the OpenAI API convention, the gateway adds an NVCF-specific transport contract:
+    - **Model routing**: Requests require either a composite `model` in the format `<function_id>/<model>` or an explicit `X-NVCF-Function-ID` header.
+    - **Error shape**: Gateway-generated errors return `{"message": "..."}` rather than OpenAI's nested `{"error": {...}}`.
+    - **Multi-turn stickiness**: Chat completions and responses accept `prompt_cache_key` and return `x-multi-turn-session-id` for session affinity.
+    - **Rate-limit signaling**: Responses include standard rate-limiting headers such as `X-RateLimit-Limit-Requests` and `X-RateLimit-Remaining-Requests`.
+    - **Path aliases**: In addition to `/v1/...`, endpoints are also reachable via `/openai/v1/...` and `/api/openai/v1/...`.
+  version: 0.14.0
+servers:
+  - url: http://localhost:8080
+    description: Local gateway
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      description: Returns HTTP 200/204 when the gateway process is alive.
+      responses:
+        '200':
+          description: Service is alive
+        '204':
+          description: Service is alive (no content)
+  /readyz:
+    get:
+      summary: Readiness probe
+      description: Returns HTTP 200/204 when the gateway is ready to receive traffic.
+      responses:
+        '200':
+          description: Service is ready
+        '204':
+          description: Service is ready (no content)
+  /info:
+    get:
+      summary: Build and version info
+      description: Returns build metadata and version information for the running gateway instance.
+      responses:
+        '200':
+          description: Gateway build information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InfoResponse'
+        '405':
+          description: Method not allowed (only GET is supported)
+  /v1/chat/completions:
+    post:
+      summary: Create chat completion
+      description: |
+        Creates a model response for the given chat conversation. Supports both streaming (Server-Sent Events) and non-streaming responses.
+
+        The `model` field should use the format `<function_id>/<model>` unless the `X-NVCF-Function-ID` header is provided.
+      parameters:
+        - $ref: '#/components/parameters/NVCF-Function-ID'
+        - $ref: '#/components/parameters/NVCF-Target-Region'
+        - $ref: '#/components/parameters/Request-ID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: Successful chat completion
+          headers:
+            x-multi-turn-session-id:
+              $ref: '#/components/headers/MultiTurnSessionID'
+            X-RateLimit-Limit-Requests:
+              $ref: '#/components/headers/RateLimit-Limit-Requests'
+            X-RateLimit-Remaining-Requests:
+              $ref: '#/components/headers/RateLimit-Remaining-Requests'
+            X-RateLimit-Reset-Requests:
+              $ref: '#/components/headers/RateLimit-Reset-Requests'
+            X-RateLimit-Limit-Tokens:
+              $ref: '#/components/headers/RateLimit-Limit-Tokens'
+            X-RateLimit-Remaining-Tokens:
+              $ref: '#/components/headers/RateLimit-Remaining-Tokens'
+            X-RateLimit-Reset-Tokens:
+              $ref: '#/components/headers/RateLimit-Reset-Tokens'
+            X-Request-ID:
+              $ref: '#/components/headers/Response-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream of ChatCompletionChunk objects
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '502':
+          $ref: '#/components/responses/BadGatewayError'
+      security:
+        - BearerAuth: []
+  /v1/responses:
+    post:
+      summary: Create native response
+      description: |
+        Alternative OpenAI-compatible responses API endpoint for generation tasks.
+
+        Accepts `prompt_cache_key` for conversation stickiness and returns `x-multi-turn-session-id`.
+      parameters:
+        - $ref: '#/components/parameters/NVCF-Function-ID'
+        - $ref: '#/components/parameters/NVCF-Target-Region'
+        - $ref: '#/components/parameters/Request-ID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResponsesRequest'
+      responses:
+        '200':
+          description: Successful response creation
+          headers:
+            x-multi-turn-session-id:
+              $ref: '#/components/headers/MultiTurnSessionID'
+            X-RateLimit-Limit-Requests:
+              $ref: '#/components/headers/RateLimit-Limit-Requests'
+            X-RateLimit-Remaining-Requests:
+              $ref: '#/components/headers/RateLimit-Remaining-Requests'
+            X-RateLimit-Reset-Requests:
+              $ref: '#/components/headers/RateLimit-Reset-Requests'
+            X-RateLimit-Limit-Tokens:
+              $ref: '#/components/headers/RateLimit-Limit-Tokens'
+            X-RateLimit-Remaining-Tokens:
+              $ref: '#/components/headers/RateLimit-Remaining-Tokens'
+            X-RateLimit-Reset-Tokens:
+              $ref: '#/components/headers/RateLimit-Reset-Tokens'
+            X-Request-ID:
+              $ref: '#/components/headers/Response-Request-ID'
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '502':
+          $ref: '#/components/responses/BadGatewayError'
+      security:
+        - BearerAuth: []
+  /v1/embeddings:
+    post:
+      summary: Create embeddings
+      description: |
+        Generates vector embeddings for the provided input text.
+
+        Proxied to backend NVCF functions supporting embedding models. Up to 2048 inputs supported per batch.
+      parameters:
+        - $ref: '#/components/parameters/NVCF-Function-ID'
+        - $ref: '#/components/parameters/NVCF-Target-Region'
+        - $ref: '#/components/parameters/Request-ID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEmbeddingRequest'
+      responses:
+        '200':
+          description: Successful embeddings response
+          headers:
+            X-RateLimit-Limit-Requests:
+              $ref: '#/components/headers/RateLimit-Limit-Requests'
+            X-RateLimit-Remaining-Requests:
+              $ref: '#/components/headers/RateLimit-Remaining-Requests'
+            X-RateLimit-Reset-Requests:
+              $ref: '#/components/headers/RateLimit-Reset-Requests'
+            X-RateLimit-Limit-Tokens:
+              $ref: '#/components/headers/RateLimit-Limit-Tokens'
+            X-RateLimit-Remaining-Tokens:
+              $ref: '#/components/headers/RateLimit-Remaining-Tokens'
+            X-RateLimit-Reset-Tokens:
+              $ref: '#/components/headers/RateLimit-Reset-Tokens'
+            X-Request-ID:
+              $ref: '#/components/headers/Response-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateEmbeddingResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '502':
+          $ref: '#/components/responses/BadGatewayError'
+      security:
+        - BearerAuth: []
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer authentication token identifying the caller
+  parameters:
+    NVCF-Function-ID:
+      name: X-NVCF-Function-ID
+      in: header
+      required: false
+      description: Target NVCF function identifier. If omitted, the function ID must be prefixed to `model` (e.g. `<function_id>/<model>`).
+      schema:
+        type: string
+    NVCF-Target-Region:
+      name: X-NVCF-Target-Region
+      in: header
+      required: false
+      description: Target deployment region hint for routing the request.
+      schema:
+        type: string
+    Request-ID:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Optional client-provided request ID for end-to-end tracing. Generated by the gateway if omitted.
+      schema:
+        type: string
+  headers:
+    MultiTurnSessionID:
+      description: Session identifier used to achieve multi-turn cache stickiness across consecutive requests.
+      schema:
+        type: string
+    RateLimit-Limit-Requests:
+      description: Maximum number of requests allowed in the current rate limit window.
+      schema:
+        type: integer
+    RateLimit-Remaining-Requests:
+      description: Number of remaining requests allowed in the current window.
+      schema:
+        type: integer
+    RateLimit-Reset-Requests:
+      description: Seconds until the request rate limit resets.
+      schema:
+        type: string
+    RateLimit-Limit-Tokens:
+      description: Maximum number of tokens allowed in the current rate limit window.
+      schema:
+        type: integer
+    RateLimit-Remaining-Tokens:
+      description: Number of remaining tokens allowed in the current window.
+      schema:
+        type: integer
+    RateLimit-Reset-Tokens:
+      description: Seconds until the token rate limit resets.
+      schema:
+        type: string
+    Retry-After:
+      description: Number of seconds to wait before retrying after a rate limit error.
+      schema:
+        type: integer
+    Response-Request-ID:
+      description: The correlation ID for this request.
+      schema:
+        type: string
+  responses:
+    BadRequestError:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GatewayError'
+    UnauthorizedError:
+      description: Missing or invalid authentication credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GatewayError'
+    RateLimitError:
+      description: Rate limit exceeded (request count or token quota)
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GatewayError'
+    InternalServerError:
+      description: Internal gateway error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GatewayError'
+    BadGatewayError:
+      description: Downstream NVCF function or Stargate error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GatewayError'
+  schemas:
+    GatewayError:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Human-readable error description returned by the gateway.
+    InfoResponse:
+      type: object
+      properties:
+        version:
+          type: string
+          description: Version of the gateway service
+        commit:
+          type: string
+          description: Git commit SHA
+        build_date:
+          type: string
+          description: Timestamp when the binary was built
+    ChatCompletionRequest:
+      type: object
+      required:
+        - model
+        - messages
+      properties:
+        model:
+          type: string
+          description: |
+            Model identifier. Must use the format `<function_id>/<model>` unless `X-NVCF-Function-ID` header is set.
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+          description: The list of messages comprising the conversation so far.
+        stream:
+          type: boolean
+          default: false
+          description: If true, sends partial message deltas as Server-Sent Events.
+        temperature:
+          type: number
+          nullable: true
+          description: Sampling temperature between 0 and 2.
+        top_p:
+          type: number
+          nullable: true
+          description: Nucleus sampling probability threshold.
+        n:
+          type: integer
+          nullable: true
+          description: How many chat completion choices to generate for each input message.
+        max_tokens:
+          type: integer
+          nullable: true
+          description: Maximum number of tokens to generate.
+        max_completion_tokens:
+          type: integer
+          nullable: true
+          description: Upper bound on the number of completion tokens generated.
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+          description: Up to 4 sequences where the API will stop generating further tokens.
+        presence_penalty:
+          type: number
+          nullable: true
+          description: Penalty for new tokens based on presence in the text so far.
+        frequency_penalty:
+          type: number
+          nullable: true
+          description: Penalty for new tokens based on existing frequency in the text.
+        prompt_cache_key:
+          type: string
+          description: NVCF extension key for sticky multi-turn session affinity.
+        service_tier:
+          type: string
+          enum: [default, flex, priority]
+          description: Service tier preference.
+        tools:
+          type: array
+          items:
+            type: object
+          description: A list of tools the model may call.
+        tool_choice:
+          oneOf:
+            - type: string
+            - type: object
+          description: Controls which (if any) tool is called by the model.
+        response_format:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [text, json_object, json_schema]
+    ChatMessage:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool, function]
+          description: The role of the messages author.
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+          description: The contents of the message.
+        name:
+          type: string
+          description: An optional name for the participant.
+        tool_calls:
+          type: array
+          items:
+            type: object
+          description: Tool call requests made by the model.
+        tool_call_id:
+          type: string
+          description: Tool call identifier that this message is responding to.
+    ChatCompletionResponse:
+      type: object
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the chat completion.
+        object:
+          type: string
+          example: chat.completion
+        created:
+          type: integer
+          description: Unix timestamp (in seconds) of creation.
+        model:
+          type: string
+          description: The model used for the completion.
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatCompletionChoice'
+        usage:
+          $ref: '#/components/schemas/CompletionUsage'
+    ChatCompletionChoice:
+      type: object
+      required:
+        - index
+        - message
+        - finish_reason
+      properties:
+        index:
+          type: integer
+          description: The index of the choice in the list of choices.
+        message:
+          $ref: '#/components/schemas/ChatMessage'
+        finish_reason:
+          type: string
+          enum: [stop, length, tool_calls, content_filter, null]
+          nullable: true
+    CompletionUsage:
+      type: object
+      required:
+        - prompt_tokens
+        - completion_tokens
+        - total_tokens
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+    ResponsesRequest:
+      type: object
+      required:
+        - model
+      properties:
+        model:
+          type: string
+          description: Model identifier in `<function_id>/<model>` format or bare model with `X-NVCF-Function-ID`.
+        stream:
+          type: boolean
+          default: false
+        prompt_cache_key:
+          type: string
+          description: Session cache key for multi-turn conversational stickiness.
+    CreateEmbeddingRequest:
+      type: object
+      required:
+        - model
+        - input
+      properties:
+        model:
+          type: string
+          description: Target embedding model identifier.
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+              maxItems: 2048
+          description: Input text or array of texts to embed.
+        encoding_format:
+          type: string
+          enum: [float, base64]
+          default: float
+        dimensions:
+          type: integer
+          description: The number of dimensions the resulting output embeddings should have.
+    CreateEmbeddingResponse:
+      type: object
+      required:
+        - object
+        - data
+        - model
+        - usage
+      properties:
+        object:
+          type: string
+          example: list
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingItem'
+        model:
+          type: string
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+    EmbeddingItem:
+      type: object
+      required:
+        - object
+        - index
+        - embedding
+      properties:
+        object:
+          type: string
+          example: embedding
+        index:
+          type: integer
+        embedding:
+          type: array
+          items:
+            type: number
