@@ -68,6 +68,14 @@ pub enum LoadBalancerAlgorithm {
     PulsarWaitAndWiden,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PulsarRendezvousWeight {
+    LastMeanInputTps,
+    #[default]
+    MaxInputTps,
+}
+
 impl LoadBalancerAlgorithm {
     pub const ALL: [Self; 6] = [
         Self::PowerOfN,
@@ -296,6 +304,7 @@ pub struct LoadBalancerAlgorithmConfig {
     pub max_input_work_seconds: Option<f64>,
     pub request_algorithms: HashMap<LoadBalancerAlgorithm, LoadBalancerModelConfig>,
     pub settings: LoadBalancerAlgorithmSettings,
+    pub(crate) rendezvous_weight: PulsarRendezvousWeight,
 }
 
 impl LoadBalancerAlgorithmConfig {
@@ -452,6 +461,7 @@ impl RawCommonAlgorithmConfig {
         self,
         settings: LoadBalancerAlgorithmSettings,
         consider_kv_free_tokens: Option<bool>,
+        rendezvous_weight: PulsarRendezvousWeight,
     ) -> Result<LoadBalancerAlgorithmConfig, String> {
         let algorithm = settings.algorithm();
         if !self.unsupported_fields.is_empty() {
@@ -474,6 +484,7 @@ impl RawCommonAlgorithmConfig {
             max_input_work_seconds: self.max_input_work_seconds,
             request_algorithms: self.request_algorithms,
             settings,
+            rendezvous_weight,
         })
     }
 }
@@ -509,6 +520,8 @@ enum RawLoadBalancerAlgorithmConfig {
     Pulsar {
         seed: Option<String>,
         consider_kv_free_tokens: Option<bool>,
+        #[serde(default)]
+        rendezvous_weight: PulsarRendezvousWeight,
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
@@ -517,6 +530,8 @@ enum RawLoadBalancerAlgorithmConfig {
         #[serde(flatten)]
         settings: WaitAndWidenAlgorithmConfig,
         consider_kv_free_tokens: Option<bool>,
+        #[serde(default)]
+        rendezvous_weight: PulsarRendezvousWeight,
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
@@ -529,43 +544,60 @@ impl RawLoadBalancerAlgorithmConfig {
         RawCommonAlgorithmConfig,
         LoadBalancerAlgorithmSettings,
         Option<bool>,
+        PulsarRendezvousWeight,
     ) {
         match self {
             Self::PowerOfN { settings, common } => (
                 common,
                 LoadBalancerAlgorithmSettings::PowerOfN(settings),
                 None,
+                PulsarRendezvousWeight::default(),
             ),
             Self::WaitAndWiden { settings, common } => (
                 common,
                 LoadBalancerAlgorithmSettings::WaitAndWiden(settings),
                 None,
+                PulsarRendezvousWeight::default(),
             ),
-            Self::RoundRobin(common) => (common, LoadBalancerAlgorithmSettings::RoundRobin, None),
-            Self::Random(common) => (common, LoadBalancerAlgorithmSettings::Random, None),
+            Self::RoundRobin(common) => (
+                common,
+                LoadBalancerAlgorithmSettings::RoundRobin,
+                None,
+                PulsarRendezvousWeight::default(),
+            ),
+            Self::Random(common) => (
+                common,
+                LoadBalancerAlgorithmSettings::Random,
+                None,
+                PulsarRendezvousWeight::default(),
+            ),
             Self::Pulsar {
                 seed,
                 consider_kv_free_tokens,
+                rendezvous_weight,
                 common,
             } => (
                 common,
                 LoadBalancerAlgorithmSettings::Pulsar(seed),
                 consider_kv_free_tokens,
+                rendezvous_weight,
             ),
             Self::PulsarWaitAndWiden {
                 settings,
                 consider_kv_free_tokens,
+                rendezvous_weight,
                 common,
             } => (
                 common,
                 LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(settings),
                 consider_kv_free_tokens,
+                rendezvous_weight,
             ),
         }
     }
 
     fn into_config(self) -> Result<LoadBalancerAlgorithmConfig, String> {
-        let (common, settings, consider_kv_free_tokens) = self.normalized();
+        let (common, settings, consider_kv_free_tokens, rendezvous_weight) = self.normalized();
         match &settings {
             LoadBalancerAlgorithmSettings::PowerOfN(config) => {
                 config.validated_sample_count()?;
@@ -578,7 +610,7 @@ impl RawLoadBalancerAlgorithmConfig {
             | LoadBalancerAlgorithmSettings::Random
             | LoadBalancerAlgorithmSettings::Pulsar(_) => {}
         }
-        common.into_config(settings, consider_kv_free_tokens)
+        common.into_config(settings, consider_kv_free_tokens, rendezvous_weight)
     }
 }
 

@@ -124,6 +124,7 @@ Use it only when the runtime has reliable KV state.
 Pylon publishes:
 
 - sticky completed-request input throughput: `last_mean_input_tps`
+- generation maximum input throughput: optional `max_input_tps`
 - volatile generation throughput: `output_tps` and `max_output_tps`
 - request phase counts and queue sizes
 - effective maximum engine concurrency
@@ -138,13 +139,28 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
+The maximum retains the greatest valid input-throughput observation until the
+model generation is replaced. Calibration, engine observations, and fallback
+request intervals update it; a configured initial TPS seeds it. Invalid samples
+and lower observations do not reduce it. It is absent before the first valid
+initialization or observation.
+
+Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
+the series when the model is removed or replaced with unknown maximum state.
+The additive protobuf field preserves older messages as an absent maximum.
 
 Shared clusters sum backend-local live load and union labels. Effective input
 capacity is:
 
 ```text
-sum(active_runtime_reports)
+mean input capacity = sum(active runtime mean reports)
+maximum input capacity = max(active generation peak reports)
 ```
+
+Maximum capacity is available only when every active backend in the shared
+engine cluster reports a valid maximum. Historical per-observer peaks are not
+additive. Pulsar uses maximum capacity by default; queue estimates still use
+mean capacity.
 
 Before registration, Pylon initializes each model generation from exactly one
 source. `--initial-input-tps` installs the configured value. Local calibration

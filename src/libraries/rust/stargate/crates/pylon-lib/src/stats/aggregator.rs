@@ -34,6 +34,7 @@ pub(super) const ENGINE_STATS_SOURCE: &str = "engine_stats_stream";
 #[derive(Debug, Default)]
 pub(super) struct ModelMetricsState {
     pub(super) last_mean_input_tps: f64,
+    pub(super) max_input_tps: Option<f64>,
     pub(super) max_engine_concurrency: Option<u64>,
     pub(super) chat_output_tps_samples: VecDeque<f64>,
     pub(super) chat_output_tps_sum: f64,
@@ -472,6 +473,7 @@ impl StatsAggregator {
                     .expect("configured input TPS must be positive and finite");
                 ModelMetricsState {
                     last_mean_input_tps: input_tps,
+                    max_input_tps: Some(input_tps),
                     input_tps_distribution,
                     aggregate_state_counted: true,
                     ..ModelMetricsState::default()
@@ -1050,15 +1052,16 @@ pub(super) fn apply_input_throughput_sample(
     let Some(input_tps) = tps_for_units(sample.units, duration, config.duration_floor) else {
         return false;
     };
+    let max_changed = model_state.observe_max_input_tps(input_tps);
     model_state.input_tps_distribution.update(input_tps);
     let mean_input_tps = model_state.input_tps_distribution.mean;
     if !model_state.input_tps_distribution.has_sufficient_data()
         || !valid_last_mean_input_tps(mean_input_tps)
     {
-        return false;
+        return max_changed;
     }
     if model_state.last_mean_input_tps == mean_input_tps {
-        return false;
+        return max_changed;
     }
     model_state.last_mean_input_tps = mean_input_tps;
     true
@@ -1087,6 +1090,18 @@ pub(super) struct ModelStatsSnapshotInputs {
 }
 
 impl ModelMetricsState {
+    pub(super) fn observe_max_input_tps(&mut self, input_tps: f64) -> bool {
+        if !valid_last_mean_input_tps(input_tps)
+            || self
+                .max_input_tps
+                .is_some_and(|maximum| input_tps <= maximum)
+        {
+            return false;
+        }
+        self.max_input_tps = Some(input_tps);
+        true
+    }
+
     pub(super) fn clear_live_output_tps(&mut self) -> bool {
         self.last_stats_event_at = None;
         if self.chat_output_tps_samples.is_empty() {
@@ -1107,6 +1122,7 @@ impl ModelMetricsState {
         };
         CurrentModelStats {
             last_mean_input_tps: self.last_mean_input_tps,
+            max_input_tps: self.max_input_tps,
             output_tps: active_chat_output_tps.max(average_with_sum(
                 &self.chat_output_tps_samples,
                 self.chat_output_tps_sum,

@@ -221,12 +221,11 @@ pub(crate) async fn chat_completions(
     let stream = req.stream == Some(true);
     info!(id = %id, model = %model, stream = stream, "received chat/completions request");
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
-    if stream {
-        state.emit_counters(&request_id, &model, 0, 0, false);
-    }
+    state.emit_counters(&request_id, &model, 0, 0, false);
     let kv_cache_access = state
         .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
         .await;
+    state.emit_counters(&request_id, &model, input_tokens, 0, false);
     let first_token_delay =
         state.ttft + Duration::from_millis(jitter_ms(&request_id, "ttft", state.ttft_jitter_ms));
     info!(
@@ -344,6 +343,7 @@ pub(crate) async fn responses(
     let kv_cache_access = state
         .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
         .await;
+    state.emit_counters(&request_id, &model, input_tokens, 0, false);
     let first_token_delay =
         state.ttft + Duration::from_millis(jitter_ms(&request_id, "ttft", state.ttft_jitter_ms));
 
@@ -554,8 +554,6 @@ fn stream_response(config: StreamResponseConfig) -> Response {
             ));
         }
         tokio::time::sleep(first_token_delay).await;
-
-        state.emit_counters(&request_id, &model, input_tokens, 0, false);
 
         if matches!(kind, StreamKind::Chat { .. }) {
             yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role));

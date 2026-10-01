@@ -1000,8 +1000,7 @@ backends:
   count: 1
   profile:
     name: balanced
-    service_time_ms: { ttft_mean: 150, ttft_jitter_ms: 10, decode_tokens_per_s: 50 }
-    registration: { last_mean_input_tps: 100.0 }
+    service_time_ms: { ttft_mean: 150, ttft_jitter_ms: 10, decode_tokens_per_s: 50, prefill_tokens_per_s: 100.0 }
 traffic_pattern:
   kind: uniform
   routing_keys: 1

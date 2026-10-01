@@ -110,7 +110,7 @@ Choose based on the routing goal and available backend statistics:
 | --- | --- | --- |
 | Compare a small random sample using TTFT or another load signal. | `power-of-n` | Signals required by the configured comparator. |
 | Minimize estimated time to first token across heterogeneous or remote clusters while controlling which TTFT bands are eligible. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
-| Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `last_mean_input_tps` for every participating cluster. |
+| Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `max_input_tps` for every participating cluster by default. |
 | Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
 
 Use `round-robin` for deterministic cycling and `random` for uniform random
@@ -248,8 +248,29 @@ Example with a 200 ms affinity wait and a 10 percent prefill estimate:
 
 `pulsar` creates a stable weighted rendezvous ranking from the seed, routing
 key, model ID, cache affinity key, and cluster ID. The weight is the cluster's
-positive finite `last_mean_input_tps`. Transient queue load does not change the
-base ranking.
+positive finite `max_input_tps` by default. Pylon retains this maximum for the
+model generation. Lower live throughput does not reduce the weight or change
+the base ranking. A new maximum, membership change, or generation replacement
+can change the ranking.
+
+Both Pulsar variants accept `rendezvous_weight`:
+
+| Value | Behavior |
+|---|---|
+| `max-input-tps` | Default. Use the generation maximum. Missing or invalid maximum data makes the cluster ineligible; there is no fallback to the mean. |
+| `last-mean-input-tps` | Explicit legacy mode. Use the last valid mean, which can change during traffic. |
+
+Queue and prefill estimates continue to use `last_mean_input_tps` in either mode.
+For a shared-engine cluster, the maximum is the greatest active backend peak,
+available only when every active backend reports a valid maximum. Historical
+peaks from observers of the same engine are not summed.
+
+Upgrade all Pylons and any registration relays, including
+`stargate-k8s-router`, before enabling maximum-based Stargates. Older relays
+decode and re-encode registrations without preserving the new field. Older
+Pylons omit it and make that cluster ineligible in the new
+default mode. Use explicit `last-mean-input-tps` during a mixed-version rollout
+if Pylons cannot be upgraded first.
 
 Retries walk the same ranking after excluding failed clusters. When
 `consider_kv_free_tokens` is enabled, a ranked candidate is skipped when it
