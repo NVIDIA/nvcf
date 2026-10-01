@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
@@ -164,8 +165,55 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		// chart's own script finds its markers on the read-only volume.
 		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
 	}
+	if st.Complete && m.ModelVolume.Cfg.ReaderMode() != modelvolume.ReaderHostPath {
+		patches = append(patches, m.modelPrewarmPatches(pod, main, land, !captureSource)...)
+	}
 	patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
 	return patches, nil
+}
+
+// modelPrewarmName is the init container that sweeps a complete model
+// volume into the node's page cache before the engine starts.
+const modelPrewarmName = "nvsnap-model-prewarm"
+
+// modelPrewarmResources let the sweep keep its readers busy: the limits of
+// a hold container would throttle eight dd processes to one core.
+var modelPrewarmResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
+	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+}
+
+// modelPrewarmPatches appends the page-cache sweep the cachedir restore
+// already has to a reader of a complete model volume. The engine's
+// safetensors loader walks the shards from one thread, and over a network
+// block device that single stream is latency-bound: measured on GB300 with
+// NVMesh (2026-10-01), 33 GB took 40 to 45 s cold and 9 s once the node's
+// page cache held it. The sweep reads the volume with parallel byte-range
+// readers first, so the engine's read hits memory. Same knobs as the
+// restore sweep: NVSNAP_PREWARM on the engine container, else the storage
+// profile. Best-effort by construction; it never fails the pod.
+// bootstrapped says an earlier patch already created /spec/initContainers.
+func (m *Mutator) modelPrewarmPatches(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, bootstrapped bool) []PatchOp {
+	if !m.prewarmWanted(*main) {
+		return nil
+	}
+	name := land.VolumeName
+	if name == "" {
+		name = modelVolumeName
+	}
+	mount := landingMount(land)
+	init := corev1.Container{
+		Name:         modelPrewarmName,
+		Image:        main.Image,
+		Command:      []string{"sh", "-c", prewarmCommand(mount, m.prewarmWorkers())},
+		VolumeMounts: []corev1.VolumeMount{{Name: name, MountPath: mount, ReadOnly: true}},
+	}
+	modelvolume.Harden(&init, modelPrewarmResources, main.SecurityContext)
+	var patches []PatchOp
+	if pod.Spec.InitContainers == nil && !bootstrapped {
+		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
+	}
+	return append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: init})
 }
 
 // downloadStep derives the Job's container from the pod: the chart's own

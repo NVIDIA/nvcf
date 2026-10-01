@@ -387,6 +387,74 @@ func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
 	}
 }
 
+// A reader of a complete block volume gets the page-cache sweep before the
+// engine starts; NVSNAP_PREWARM=0 on the engine container turns it off, and
+// a volume that is not complete yet gets none (nothing to sweep).
+func TestModelVolume_ReaderBlockPVC_CompletePrewarms(t *testing.T) {
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("512Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
+		},
+	}
+	find := func(v mvView) *corev1.Container {
+		for i := range v.newInits {
+			if v.newInits[i].Name == modelPrewarmName {
+				return &v.newInits[i]
+			}
+		}
+		return nil
+	}
+
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset(pv))
+	pod := ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pw := find(viewMV(pod, patches))
+	if pw == nil {
+		t.Fatalf("complete block volume: prewarm init expected")
+	}
+	if pw.Image != pod.Spec.Containers[0].Image {
+		t.Errorf("sweep runs in the engine image: %q", pw.Image)
+	}
+	if len(pw.VolumeMounts) != 1 || !pw.VolumeMounts[0].ReadOnly || !strings.Contains(pw.Command[2], pw.VolumeMounts[0].MountPath) {
+		t.Errorf("sweep mounts the model read-only and reads that path: %+v %q", pw.VolumeMounts, pw.Command[2])
+	}
+	if pw.Resources.Limits.Cpu().MilliValue() < 1000 || pw.SecurityContext == nil || pw.SecurityContext.Capabilities == nil {
+		t.Errorf("sweep needs real CPU limits and a hardened security context: %+v %+v", pw.Resources, pw.SecurityContext)
+	}
+	if last := patches[len(patches)-1]; last.Path == "/spec/initContainers" {
+		t.Errorf("init list bootstrap must precede the sweep, not follow it")
+	}
+
+	pod = ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "NVSNAP_PREWARM", Value: "0"})
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if find(viewMV(pod, patches)) != nil {
+		t.Errorf("NVSNAP_PREWARM=0 turns the sweep off")
+	}
+
+	m, _ = mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset())
+	pod = ngcFunctionPod()
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if find(viewMV(pod, patches)) != nil {
+		t.Errorf("incomplete volume: nothing to sweep yet")
+	}
+}
+
 func TestModelVolume_ReaderRWX_SharesClaim(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	m, _ := mvMutator(t, modelvolume.ModeRWX, election.RoleFollower, kc)
