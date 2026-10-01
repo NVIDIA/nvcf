@@ -50,18 +50,22 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.client.reactive.ClientHttpConnector;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.oauth2.client.AuthorizedClientServiceOAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.ClientAuthorizationException;
 import org.springframework.security.oauth2.client.InMemoryOAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
-import org.springframework.security.oauth2.client.web.reactive.function.client.ServletOAuth2AuthorizedClientExchangeFilterFunction;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
+import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.resources.ConnectionProvider;
 import reactor.netty.resources.LoopResources;
@@ -90,6 +94,12 @@ public final class OAuth2ClientUtils {
             "Upstream response with 5xx error %d";
     private static final String MESG_5XX_RESPONSE_WITH_DETAIL =
             "Upstream response with 5xx error %d - %s";
+    private static final String MESG_NO_ACCESS_TOKEN =
+            "No access token available for %s";
+
+    private static final AnonymousAuthenticationToken ANONYMOUS_AUTHENTICATION =
+            new AnonymousAuthenticationToken("anonymous", "anonymousUser",
+                    AuthorityUtils.createAuthorityList("ROLE_ANONYMOUS"));
 
     /**
      * Creates a {@link ClientHttpConnector} along with the Reactor Netty
@@ -207,7 +217,26 @@ public final class OAuth2ClientUtils {
         }
     }
 
-    public static ServletOAuth2AuthorizedClientExchangeFilterFunction getOauth2ExchangeFilter(
+    /**
+     * Builds a client-credentials {@link ExchangeFilterFunction} that attaches a bearer token to
+     * every outbound request, independently of the calling thread.
+     *
+     * <p>This deliberately does <em>not</em> use Spring Security's
+     * {@code ServletOAuth2AuthorizedClientExchangeFilterFunction}. That filter resolves the current
+     * {@code HttpServletRequest}/{@code HttpServletResponse} out of the Reactor context (populated
+     * from {@code RequestContextHolder} at subscribe time) and, since Spring Security 7.1.0, skips
+     * the token exchange entirely when they are absent - then sends the request with no
+     * {@code Authorization} header, so the upstream answers 401. Every ICMS caller that runs off the
+     * request thread ({@code @Async} listeners, {@code @Scheduled} tasks, NATS and SQS handlers) hits
+     * that path. See spring-projects/spring-security#19405.
+     *
+     * <p>All ICMS registrations use the {@code client_credentials} grant, which needs no servlet
+     * request, so the token is fetched straight from the {@code OAuth2AuthorizedClientManager}. Token
+     * caching and near-expiry refresh still come from the manager's
+     * {@code OAuth2AuthorizedClientService}. When no token can be obtained the request fails instead
+     * of going out unauthenticated.
+     */
+    public static ExchangeFilterFunction getOauth2ExchangeFilter(
             String clientRegistrationId,
             String tokenUri,
             String clientId,
@@ -230,10 +259,23 @@ public final class OAuth2ClientUtils {
                 new AuthorizedClientServiceOAuth2AuthorizedClientManager(
                         clientRegistrationRepository,
                         clientService);
-        var oauth2ExchangeFilter =
-                new ServletOAuth2AuthorizedClientExchangeFilterFunction(authorizedClientManager);
-        oauth2ExchangeFilter.setDefaultClientRegistrationId(clientRegistrationId);
-        return oauth2ExchangeFilter;
+        // Principal name keys the authorized-client cache. Keeping Spring Security's own anonymous
+        // principal preserves the cache identity this filter had before the 7.1.0 regression.
+        var authorizeRequest = OAuth2AuthorizeRequest
+                .withClientRegistrationId(clientRegistrationId)
+                .principal(ANONYMOUS_AUTHENTICATION)
+                .build();
+
+        return (request, next) -> Mono
+                // authorize() performs blocking token-endpoint I/O through RestClient internally.
+                .fromSupplier(() -> authorizedClientManager.authorize(authorizeRequest))
+                .subscribeOn(Schedulers.boundedElastic())
+                .switchIfEmpty(Mono.error(() -> new UnauthorizedException(
+                        MESG_NO_ACCESS_TOKEN.formatted(clientRegistrationId))))
+                .flatMap(authorizedClient -> next.exchange(ClientRequest.from(request)
+                        .headers(headers -> headers.setBearerAuth(
+                                authorizedClient.getAccessToken().getTokenValue()))
+                        .build()));
     }
 
     // Returns a retry filter for both token server and resource server. Retries twice on
