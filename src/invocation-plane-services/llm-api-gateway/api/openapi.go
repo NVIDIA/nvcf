@@ -36,7 +36,10 @@ const openAPIDocsHTML = `<!doctype html>
   </head>
   <body>
     <script id="api-reference" data-url="/openapi.yaml"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.25.130"
+      integrity="sha384-oyL8y2b0EvVxYsvg2qNlT8xHcsvmySaljIklWvbATuTrccZSyvWnsPnmOunYQL2R"
+      crossorigin="anonymous"></script>
   </body>
 </html>`
 

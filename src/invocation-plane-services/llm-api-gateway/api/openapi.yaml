@@ -353,24 +353,19 @@ components:
           default: false
           description: If true, sends partial message deltas as Server-Sent Events.
         temperature:
-          type: number
-          nullable: true
+          type: [number, "null"]
           description: Sampling temperature between 0 and 2.
         top_p:
-          type: number
-          nullable: true
+          type: [number, "null"]
           description: Nucleus sampling probability threshold.
         n:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: How many chat completion choices to generate for each input message.
         max_tokens:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Maximum number of tokens to generate.
         max_completion_tokens:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Upper bound on the number of completion tokens generated.
         stop:
           oneOf:
@@ -380,12 +375,10 @@ components:
                 type: string
           description: Up to 4 sequences where the API will stop generating further tokens.
         presence_penalty:
-          type: number
-          nullable: true
+          type: [number, "null"]
           description: Penalty for new tokens based on presence in the text so far.
         frequency_penalty:
-          type: number
-          nullable: true
+          type: [number, "null"]
           description: Penalty for new tokens based on existing frequency in the text.
         prompt_cache_key:
           type: string
@@ -477,9 +470,8 @@ components:
         message:
           $ref: '#/components/schemas/ChatMessage'
         finish_reason:
-          type: string
+          type: [string, "null"]
           enum: [stop, length, tool_calls, content_filter, null]
-          nullable: true
     CompletionUsage:
       type: object
       required:

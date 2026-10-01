@@ -103,17 +103,27 @@ func TestOpenAPISpecMatchesRegisteredRoutes(t *testing.T) {
 		}
 	}
 
-	// 2. Verify all primary public and inference endpoints are present in the OpenAPI spec
-	expectedInSpec := []string{
-		"/healthz",
-		"/readyz",
-		"/info",
-		"/v1/chat/completions",
-		"/v1/responses",
-		"/v1/embeddings",
+	// 2. Verify all registered public and inference routes are documented in the OpenAPI spec
+	undocumented := map[string]struct{}{
+		"GET /openapi.yaml": {},
+		"GET /docs":         {},
 	}
-
-	for _, path := range expectedInSpec {
-		assert.Contains(t, spec.Paths, path, "route %s is registered but missing from OpenAPI spec", path)
+	for _, route := range e.Routes() {
+		if _, isHTTP := validHTTPMethods[strings.ToLower(route.Method)]; !isHTTP {
+			continue
+		}
+		key := route.Method + " " + route.Path
+		if _, skip := undocumented[key]; skip {
+			continue
+		}
+		if route.Path == "/info" && route.Method != http.MethodGet {
+			continue
+		}
+		ops, ok := spec.Paths[route.Path]
+		if !assert.True(t, ok, "route %s is registered but missing from OpenAPI spec", key) {
+			continue
+		}
+		_, ok = ops[strings.ToLower(route.Method)]
+		assert.True(t, ok, "route %s is registered but its method is missing from OpenAPI spec", key)
 	}
 }
