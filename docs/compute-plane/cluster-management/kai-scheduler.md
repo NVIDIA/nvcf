@@ -15,7 +15,7 @@ its integration with KAI, not the KAI service itself.
 
 | Component | Responsibility |
 | --- | --- |
-| Platform operator | Install and configure KAI, enable it for NVCA, and manage monitoring, availability, and upgrades. |
+| Platform operator | Install and configure KAI, enable it for NVCF, and manage monitoring, availability, and upgrades. |
 | NVCA | Create NVCF workloads and assign their scheduler and queue. |
 | KAI Scheduler | Select eligible nodes and schedule the workload Pods. |
 
@@ -143,7 +143,7 @@ For compute plane environment values, use
 Preserve the other feature gates when updating the list. See
 [Managing Feature Flags](./configuration.md#managing-feature-flags).
 
-Installing KAI alone does not enable NVCA to use it. Both the KAI installation
+Installing KAI alone does not enable NVCF to use it. Both the KAI installation
 and the NVCA feature gate are required.
 
 ## Verify the integration
