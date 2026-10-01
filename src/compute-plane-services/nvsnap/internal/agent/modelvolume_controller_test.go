@@ -845,3 +845,33 @@ func TestModelVolumeController_CapturesEngineLandingFromReadyPod(t *testing.T) {
 	c.Handle(ctx, pod) // complete: a second Ready event is a no-op
 	time.Sleep(50 * time.Millisecond)
 }
+
+// A rank stamped while its cache was still empty (a follower whose
+// readiness comes from a stub) is re-measured at collection time, so the
+// set claim is sized from what the ranks hold, not from the stale stamp.
+func TestModelVolumeController_SetSizedFromFreshMeasurement(t *testing.T) {
+	ctx := context.Background()
+	kc, cache, c := cacheController(t, "node-a")
+	local := cacheFixture(t, kc, cache, "node-a", 0, 2, true)
+	remote := cacheFixture(t, kc, cache, "node-b", 1, 2, true)
+	c.treeStat = func(string) (int64, int64, error) { return 700 << 20, 900, nil }
+	c.Copier = &setCopier{}
+	mount := t.TempDir()
+	c.collectAttach = func(context.Context, string, string, string) (string, func(context.Context) error, error) {
+		return mount, func(context.Context) error { return nil }, nil
+	}
+	c.fetchRankFn = func(context.Context, string, rankSource, string) error { return nil }
+	c.rankSizeFn = func(_ context.Context, _ string, r rankSource) (int64, error) { return 550 << 20, nil }
+	// node-b stamped rank 1 at 1.2 MB when its engine had compiled nothing yet.
+	remote.Annotations[modelvolume.CacheRankReadyAnnotation] = "true"
+	remote.Annotations[modelvolume.CacheRankBytesAnnotation] = strconv.FormatInt(1206214, 10)
+	if _, err := kc.CoreV1().Pods("sr-fn").Update(ctx, remote, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, local)
+	waitUntil(t, "set complete", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123"); return st.Complete })
+	pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-staged", metav1.GetOptions{})
+	if size := pv.Spec.Capacity[corev1.ResourceStorage]; size.String() != "2Gi" {
+		t.Errorf("set sized from fresh measurements (700 MiB + 550 MiB + 10%% -> 2Gi), not from the 1.2 MB stamp: got %s", size.String())
+	}
+}

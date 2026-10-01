@@ -91,6 +91,9 @@ type ModelVolumeController struct {
 	KubeletPodsDir string
 	// fetchRankFn is the seam tests use for remote ranks; nil means HTTP.
 	fetchRankFn func(ctx context.Context, uri string, r rankSource, dst string) error
+	// rankSizeFn measures a remote rank's tree on its node (seam for
+	// tests); nil uses the peer agent's size query.
+	rankSizeFn func(ctx context.Context, uri string, r rankSource) (int64, error)
 	// collectAttach attaches the set claim and returns its mount path and
 	// a release; nil means a mount-holder on this node.
 	collectAttach func(ctx context.Context, uri, sysNS, claim string) (dst string, release func(context.Context) error, err error)
@@ -737,10 +740,7 @@ func (c *ModelVolumeController) tryCollect(ctx context.Context, uri string, log 
 			log.WithFields(logrus.Fields{"ready": ready, "group_size": size}).Info("cache volume: waiting for the rest of the group")
 			return
 		}
-		var total int64
-		for _, r := range ranks {
-			total += r.bytes
-		}
+		total := c.measureRanks(ctx, uri, ranks, log)
 		sysNS := c.Cache.Cfg.SystemNamespace()
 		claim, created, err := c.Cache.ClaimSizedClaim(ctx, uri, sysNS, c.Cache.Cfg.VolumeSize(total))
 		if err != nil {
@@ -919,6 +919,18 @@ func (c *ModelVolumeController) ServeRank(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		src := filepath.Join(c.HostFSRoot, c.KubeletPodsDir, string(p.UID), "volumes", "kubernetes.io~empty-dir", p.Annotations[cacheVolumeAnnotation], p.Annotations[cacheSubpathAnnotation])
+		if r.URL.Query().Get("stat") == "1" {
+			// The collector sizes the set from what the ranks hold now,
+			// not from the stamp made when the rank first reported Ready.
+			bytes, files, err := c.treeStat(src)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]int64{"bytes": bytes, "files": files})
+			return
+		}
 		w.Header().Set("Content-Type", "application/x-tar")
 		if err := tarstream.Write(w, src, nil); err != nil {
 			c.log().WithError(err).WithField("pod", p.Namespace+"/"+p.Name).Warn("cache volume: rank stream failed")
@@ -1479,9 +1491,8 @@ func (c *ModelVolumeController) tryRefresh(ctx context.Context, uri string, log 
 			return
 		}
 		deltas := map[int]string{}
-		var total int64
+		total := c.measureRanks(ctx, uri, ranks, log)
 		for _, r := range ranks {
-			total += r.bytes
 			if r.pod.Annotations[modelvolume.CacheRankDeltaAnnotation] == "true" {
 				deltas[r.ordinal] = r.pod.Annotations[modelvolume.CacheRankDeltaFingerprintAnnotation]
 			}
@@ -1534,4 +1545,66 @@ func refreshFingerprint(deltas map[int]string) string {
 	sort.Strings(parts)
 	sum := sha256.Sum256([]byte(strings.Join(parts, ",")))
 	return hex.EncodeToString(sum[:8])
+}
+
+// measureRanks sizes a set from what each rank holds at collection time.
+// The rank-ready stamp records the tree when the pod first reported Ready,
+// and a pod whose readiness comes from a stub (a multi-node follower's
+// health responder) reports Ready before its engine has compiled anything
+// (Kimi K3, GB300 2026-10-01: stamp 1.2 MB, tree 550 MB at collection; the
+// set claim was sized at 1Gi for 1.27 GB of content). Local ranks are
+// measured directly, remote ranks through the peer agent; a measurement
+// that fails or comes back smaller than the stamp keeps the stamp.
+func (c *ModelVolumeController) measureRanks(ctx context.Context, uri string, ranks []rankSource, log logrus.FieldLogger) int64 {
+	var total int64
+	for _, r := range ranks {
+		size := r.bytes
+		var fresh int64
+		var err error
+		if r.pod.Spec.NodeName == c.NodeName {
+			fresh, _, err = c.treeStat(filepath.Join(c.HostFSRoot, r.src))
+		} else {
+			measure := c.rankSizeFn
+			if measure == nil {
+				measure = c.rankSizeHTTP
+			}
+			fresh, err = measure(ctx, uri, r)
+		}
+		switch {
+		case err != nil:
+			log.WithError(err).WithField("ordinal", r.ordinal).Warn("cache volume: rank measurement failed; sizing from its stamp")
+		case fresh > size:
+			size = fresh
+		}
+		total += size
+	}
+	return total
+}
+
+func (c *ModelVolumeController) rankSizeHTTP(ctx context.Context, uri string, r rankSource) (int64, error) {
+	agents, err := c.Kube.CoreV1().Pods(c.Cache.Cfg.SystemNamespace()).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=nvsnap-agent", FieldSelector: "spec.nodeName=" + r.pod.Spec.NodeName})
+	if err != nil || len(agents.Items) == 0 || agents.Items[0].Status.PodIP == "" {
+		return 0, fmt.Errorf("no agent found on node %s: %v", r.pod.Spec.NodeName, err)
+	}
+	u := fmt.Sprintf("http://%s:%d/v1/cache-rank/%s/%d?stat=1", agents.Items[0].Status.PodIP, agentAPIPort, modelvolume.Key(uri), r.ordinal)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := peerHTTPClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return 0, fmt.Errorf("peer returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out struct {
+		Bytes int64 `json:"bytes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, err
+	}
+	return out.Bytes, nil
 }
