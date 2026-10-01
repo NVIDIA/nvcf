@@ -66,6 +66,7 @@ public class MockApiKeysServer {
         var response = new ApiKeyValidationResponse("nvcf", "apikey.allow",
                                                        new ApiKeyValidationResult(allowed,
                                                               ncaId,
+                                                              ncaId,
                                                               ownerId,
                                                               new ApiKeyValidationResult.Policy(resources,
                                                                                          scopes,
