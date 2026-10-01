@@ -18,6 +18,7 @@ limitations under the License.
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1550,7 +1551,7 @@ func llmModelConfig(section string, entry ModelFunctionDetails) *GatewayConfig {
 	case "responses":
 		cfg.OpenAI.Responses = entries
 	case "messages":
-		cfg.OpenAI.Messages = entries
+		cfg.Anthropic.Messages = entries
 	case "embeddings":
 		cfg.OpenAI.Embeddings = entries
 	case "completions":
@@ -1689,4 +1690,32 @@ func TestMessagesConfigValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAnthropicMessagesConfigNamespace(t *testing.T) {
+	var cfg GatewayConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+  "v2config": {
+   "openai": {"host": "api.example.com", "chatCompletions": {
+    "chat": {"modelName": "chat-model", "functionID": "chat-function"}
+   }},
+   "anthropic": {"messages": {
+    "native": {"modelName": "native-model", "functionID": "native-function", "functionType": "LLM"}
+   }}
+  }
+ }`), &cfg))
+	require.NoError(t, cfg.Validate())
+	require.True(t, cfg.HasLLMGatewayRoute())
+	require.Equal(t, "api.example.com", cfg.OpenAI.Host)
+	require.Equal(t, "chat-model", cfg.OpenAI.ChatCompletions["chat"].ModelName)
+	entry := cfg.Anthropic.Messages["native"]
+	require.Equal(t, "native-model", entry.ModelName)
+	// A model on another protocol cannot satisfy a Messages shadow target.
+	entry.ShadowModelName = "chat-model"
+	cfg.Anthropic.Messages["native"] = entry
+	require.ErrorContains(t, cfg.Validate(), "anthropic.messages.native: shadow target must reference another model in anthropic.messages")
+	entry.ShadowModelName = ""
+	entry.ModelName = ""
+	cfg.Anthropic.Messages["native"] = entry
+	require.ErrorContains(t, cfg.Validate(), "anthropic.messages.native: modelName is required")
 }

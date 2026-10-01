@@ -74,6 +74,14 @@ type ResponsesHandlers struct {
 	handlers *Handlers
 }
 
+type MessagesHandlers struct {
+	handlers *Handlers
+}
+
+func (h *Handlers) AsMessagesHandlers() *MessagesHandlers {
+	return &MessagesHandlers{handlers: h}
+}
+
 type OpenAIProxyHandlers struct {
 	handlers *Handlers
 }

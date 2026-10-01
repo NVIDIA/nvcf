@@ -704,7 +704,7 @@ func TestMessagesRoutingAndNativeToolLoop(t *testing.T) {
 	})
 	mappings := &config.GatewayConfig{}
 	mappings.OpenAI.Host = openAIHost
-	mappings.OpenAI.Messages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+	mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
 	require.NoError(t, mappings.Validate())
 	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
 	bodies := []string{
@@ -744,7 +744,7 @@ func TestMessagesShadowUsesSameNativeProtocol(t *testing.T) {
 	shadow := config.ModelFunctionDetails{ModelName: "native-shadow", FunctionID: "shadow-func", FunctionType: config.FunctionTypeLLM}
 	mappings := &config.GatewayConfig{}
 	mappings.OpenAI.Host = openAIHost
-	mappings.OpenAI.Messages = map[string]config.ModelFunctionDetails{"primary": primary, "shadow": shadow}
+	mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"primary": primary, "shadow": shadow}
 	require.NoError(t, mappings.Validate())
 	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
 	rec := httptest.NewRecorder()

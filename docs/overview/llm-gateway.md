@@ -270,15 +270,17 @@ The existing `MODEL_URI_ALLOWLIST_ENABLED` mode applies to Messages: an
 undeclared path is logged in the default mode and rejected in enforce mode.
 An absent or empty URI list keeps the existing allowlist behavior.
 
-For Vanity Gateway aliases, configure `v2config.openai.messages` on the
-existing API host. The section supports the same model mapping, custom-header
+For Vanity Gateway aliases, configure `v2config.anthropic.messages` on the
+existing shared API host, configured by `v2config.openai.host`. The section supports the same model mapping, custom-header
 validation, discovery, and shadow settings as other JSON endpoints:
 
 ```json
 {
   "v2config": {
     "openai": {
-      "host": "api.example.com",
+      "host": "api.example.com"
+    },
+    "anthropic": {
       "messages": {
         "native-model": {
           "modelName": "dummy-model",
@@ -318,7 +320,7 @@ The configured `llmConfig.uris` must match the paths served by the container. Fo
 
 ## Session Stickiness
 
-The LLM Gateway supports sticky routing for multi-turn OpenAI-compatible requests on `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`.
+The LLM Gateway supports sticky routing for multi-turn requests on `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`.
 
 Sticky routing is not supported on `/v1/embeddings`.
 

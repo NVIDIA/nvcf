@@ -59,7 +59,8 @@ const (
 	contentTypeMultipartFormData = "multipart/form-data"
 )
 
-type OpenAIDirector struct {
+// ModelDirector shares model routing across native OpenAI and Anthropic endpoints.
+type ModelDirector struct {
 	chatCompletions    ModelMapping
 	completions        ModelMapping
 	embeddings         ModelMapping
@@ -277,7 +278,7 @@ func buildModelMapping(
 	return ModelMapping{modelNameToNVCFUrl, modelNameToModelInfo}, nil
 }
 
-func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, llmGatewayDirector *LLMGatewayDirector, shadower *TrafficShadower) (*OpenAIDirector, error) {
+func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, llmGatewayDirector *LLMGatewayDirector, shadower *TrafficShadower) (*ModelDirector, error) {
 	chatCompletions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ChatCompletions), privateModelMatcher)
 	if err != nil {
 		return nil, err
@@ -298,7 +299,7 @@ func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *reg
 		return nil, err
 	}
 
-	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Messages), privateModelMatcher)
+	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.Anthropic.Messages), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +340,7 @@ func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *reg
 		return cmp.Compare(a.Id, b.Id)
 	})
 
-	return &OpenAIDirector{
+	return &ModelDirector{
 		chatCompletions:    chatCompletions,
 		completions:        completions,
 		embeddings:         embeddings,
@@ -377,7 +378,7 @@ func filterExpiredModels(models []ModelInfo, allMappings ...map[string]FunctionI
 }
 
 // getFilteredModels returns the filtered models list with lazy caching (1 minute TTL)
-func (d *OpenAIDirector) getFilteredModels() []ModelInfo {
+func (d *ModelDirector) getFilteredModels() []ModelInfo {
 	const cacheTTL = time.Minute
 
 	// Fast path: check if cache is fresh without acquiring write lock
@@ -477,39 +478,39 @@ func shadowModelNames(shadows []shadowConfig) []string {
 	return modelNames
 }
 
-func (d *OpenAIDirector) ServeCompletions(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeCompletions(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.completions.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ServeChatCompletions(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeChatCompletions(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.chatCompletions.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ServeEmbeddings(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeEmbeddings(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.embeddings.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ServeResponses(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeResponses(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.responses.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ServeMessages(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeMessages(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.messages.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ServeImageGenerations(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeImageGenerations(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.imageGenerations.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ServeImageEdits(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeImageEdits(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.imageEdits.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ServeImageVariations(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) ServeImageVariations(writer http.ResponseWriter, request *http.Request) {
 	d.proxyModelMappedRequest(writer, request, d.imageVariations.modelNameToNVCFUrl)
 }
 
-func (d *OpenAIDirector) ListModels(writer http.ResponseWriter, _ *http.Request) {
+func (d *ModelDirector) ListModels(writer http.ResponseWriter, _ *http.Request) {
 	// Get filtered models with lazy caching
 	activeModels := d.getFilteredModels()
 
@@ -526,7 +527,7 @@ func (d *OpenAIDirector) ListModels(writer http.ResponseWriter, _ *http.Request)
 	}
 }
 
-func (d *OpenAIDirector) GetModel(writer http.ResponseWriter, request *http.Request) {
+func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Request) {
 	// support "/" in model name to follow pre established format
 	company := chi.URLParam(request, "company")
 	model := chi.URLParam(request, "model")
@@ -582,7 +583,7 @@ func (d *OpenAIDirector) GetModel(writer http.ResponseWriter, request *http.Requ
 	}
 }
 
-func (d *OpenAIDirector) proxyModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) {
+func (d *ModelDirector) proxyModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) {
 	span := trace.SpanFromContext(request.Context())
 	span.SetAttributes(traceAttrEndpointType.String(traceAttrValueEndpointOpenAI))
 	setShadowSpanAttribute(span, request)
@@ -620,7 +621,7 @@ func (d *OpenAIDirector) proxyModelMappedRequest(writer http.ResponseWriter, req
 	proxyReturned = true
 }
 
-func (d *OpenAIDirector) resolveModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) (resolvedOpenAIRequest, bool) {
+func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) (resolvedOpenAIRequest, bool) {
 	body, err := extractOpenAIRequestBody(request)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
@@ -693,7 +694,7 @@ func (d *OpenAIDirector) resolveModelMappedRequest(writer http.ResponseWriter, r
 	}, false
 }
 
-func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, modelToNVCFUrl map[string]FunctionInfo) func(error) {
+func (d *ModelDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, modelToNVCFUrl map[string]FunctionInfo) func(error) {
 	if isShadowRequest(resolved.request) {
 		return func(error) {}
 	}
@@ -783,14 +784,14 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	return finishShadows(finishers)
 }
 
-func (d *OpenAIDirector) randomShadowBucket() int {
+func (d *ModelDirector) randomShadowBucket() int {
 	if d.shadowRandomBucket != nil {
 		return d.shadowRandomBucket()
 	}
 	return rand.IntN(100)
 }
 
-func (d *OpenAIDirector) rewriteShadowBody(body []byte, modelName string) ([]byte, error) {
+func (d *ModelDirector) rewriteShadowBody(body []byte, modelName string) ([]byte, error) {
 	if d.shadowBodyRewriter != nil {
 		return d.shadowBodyRewriter(body, modelName)
 	}
@@ -876,7 +877,7 @@ func shadowBucketForBearerCredential(credential []byte) int {
 
 // proxyToLLMGateway rewrites the request model to the functionID/modelName form
 // the LLM Gateway routes on, so vanity callers never see the function ID.
-func (d *OpenAIDirector) proxyToLLMGateway(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {
+func (d *ModelDirector) proxyToLLMGateway(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {
 	if d.llmGatewayDirector == nil {
 		writeBadGatewayProblem(writer, resolved.request, fmt.Errorf("LLM Gateway upstream is not configured"))
 		return nil
@@ -909,7 +910,7 @@ func (d *OpenAIDirector) proxyToLLMGateway(writer http.ResponseWriter, resolved 
 	)
 }
 
-func (d *OpenAIDirector) proxyResolvedRequest(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {
+func (d *ModelDirector) proxyResolvedRequest(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {
 	if resolved.functionInfo.sessionTimeout > 0 {
 		span := trace.SpanFromContext(resolved.request.Context())
 		span.SetAttributes(traceAttrSessionTimeoutSeconds.Int(int(resolved.functionInfo.sessionTimeout)))
@@ -1130,4 +1131,11 @@ func isModelExpired(eol time.Time) bool {
 
 	// Model is expired if current time is after the EOL time
 	return time.Now().After(eol)
+}
+
+// OpenAIDirector preserves the existing routing API for callers.
+type OpenAIDirector = ModelDirector
+
+func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, llmGatewayDirector *LLMGatewayDirector, shadower *TrafficShadower) (*ModelDirector, error) {
+	return NewModelDirector(mapping, privateModelMatcher, vanityDirector, llmGatewayDirector, shadower)
 }

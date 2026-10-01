@@ -56,4 +56,5 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 	handlers.AsResponsesHandlers().RegisterRoutes(group)
 	// Native proxy endpoints preserve the backend wire protocol.
 	handlers.AsOpenAIProxyHandlers().RegisterRoutes(group)
+	handlers.AsMessagesHandlers().RegisterRoutes(group)
 }

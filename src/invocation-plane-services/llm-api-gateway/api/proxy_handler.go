@@ -44,7 +44,6 @@ var hopByHopHeaders = map[string]struct{}{
 
 func (h *OpenAIProxyHandlers) RegisterRoutes(group *echo.Group) {
 	group.POST("/v1/embeddings", h.Embeddings)
-	group.POST(messagesEndpointPath, h.Messages)
 }
 
 func (h *OpenAIProxyHandlers) forwardJSONRequest(
@@ -82,7 +81,7 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 	return writeProxyResponse(c, resp)
 }
 
-func (h *OpenAIProxyHandlers) requireFunctionRequestContext(
+func (h *Handlers) requireFunctionRequestContext(
 	c *GatewayContext,
 ) (*requestctx.RequestContext, error) {
 	if c == nil {
@@ -105,10 +104,10 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 	contentLength int64,
 	inputTokens int,
 ) (*provider.ProxyResponse, error) {
-	return h.dispatchEstimatedProxyRequest(c, reqCtx, headers, body, contentLength, inputTokens, inputTokens)
+	return h.handlers.dispatchEstimatedProxyRequest(c, reqCtx, headers, body, contentLength, inputTokens, inputTokens)
 }
 
-func (h *OpenAIProxyHandlers) dispatchEstimatedProxyRequest(
+func (h *Handlers) dispatchEstimatedProxyRequest(
 	c *GatewayContext,
 	reqCtx *requestctx.RequestContext,
 	headers http.Header,
@@ -117,7 +116,7 @@ func (h *OpenAIProxyHandlers) dispatchEstimatedProxyRequest(
 	inputTokens int,
 	tokenEstimate int,
 ) (*provider.ProxyResponse, error) {
-	if h.handlers.proxyProvider == nil {
+	if h.proxyProvider == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "proxy endpoint is not configured")
 	}
 
@@ -130,7 +129,7 @@ func (h *OpenAIProxyHandlers) dispatchEstimatedProxyRequest(
 		headers.Del(echo.HeaderContentLength)
 	}
 
-	resp, err := h.handlers.proxyProvider.Proxy(
+	resp, err := h.proxyProvider.Proxy(
 		c.UserContext(),
 		reqCtx,
 		&provider.ProxyRequest{

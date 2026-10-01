@@ -354,11 +354,13 @@ type V2Config struct {
 		Completions      map[string]ModelFunctionDetails `json:"completions"`
 		Embeddings       map[string]ModelFunctionDetails `json:"embeddings"`
 		Responses        map[string]ModelFunctionDetails `json:"responses"`
-		Messages         map[string]ModelFunctionDetails `json:"messages"`
 		ImageGenerations map[string]ModelFunctionDetails `json:"imageGenerations"`
 		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
 		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
 	} `json:"openai"`
+	Anthropic struct {
+		Messages map[string]ModelFunctionDetails `json:"messages"`
+	} `json:"anthropic"`
 	Vanity map[string]VanityEntry `json:"vanity"`
 }
 
@@ -515,8 +517,8 @@ func validateSamplingMethod(location string, fieldName string, method ShadowSamp
 }
 
 func (c *GatewayConfig) Validate() error {
-	for sectionName, entries := range c.openAISections() {
-		if err := validateOpenAISection(sectionName, entries); err != nil {
+	for sectionName, entries := range c.modelSections() {
+		if err := validateModelSection(sectionName, entries); err != nil {
 			return err
 		}
 	}
@@ -524,49 +526,54 @@ func (c *GatewayConfig) Validate() error {
 	return c.validateVanityConfig()
 }
 
-func (c *GatewayConfig) openAISections() map[string]map[string]ModelFunctionDetails {
+func (c *GatewayConfig) modelSections() map[string]map[string]ModelFunctionDetails {
 	return map[string]map[string]ModelFunctionDetails{
-		"chatCompletions":  c.OpenAI.ChatCompletions,
-		"completions":      c.OpenAI.Completions,
-		"embeddings":       c.OpenAI.Embeddings,
-		"responses":        c.OpenAI.Responses,
-		"messages":         c.OpenAI.Messages,
-		"imageGenerations": c.OpenAI.ImageGenerations,
-		"imageEdits":       c.OpenAI.ImageEdits,
-		"imageVariations":  c.OpenAI.ImageVariations,
+		"openai.chatCompletions":  c.OpenAI.ChatCompletions,
+		"openai.completions":      c.OpenAI.Completions,
+		"openai.embeddings":       c.OpenAI.Embeddings,
+		"openai.responses":        c.OpenAI.Responses,
+		"anthropic.messages":      c.Anthropic.Messages,
+		"openai.imageGenerations": c.OpenAI.ImageGenerations,
+		"openai.imageEdits":       c.OpenAI.ImageEdits,
+		"openai.imageVariations":  c.OpenAI.ImageVariations,
 	}
 }
 
-func validateOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
-	modelNames, err := collectOpenAIModelNames(sectionName, entries)
+func sectionEndpoint(sectionName string) string {
+	_, endpoint, _ := strings.Cut(sectionName, ".")
+	return endpoint
+}
+
+func validateModelSection(sectionName string, entries map[string]ModelFunctionDetails) error {
+	modelNames, err := collectModelNames(sectionName, entries)
 	if err != nil {
 		return err
 	}
 
 	for modelKey, entry := range entries {
-		location := "openai." + sectionName + "." + modelKey
+		location := sectionName + "." + modelKey
 		if entry.SessionTimeout < 0 {
 			return fmt.Errorf("%s: sessionTimeout must be greater than or equal to 0", location)
 		}
 		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
 			return err
 		}
-		if err := validateFunctionType(location, sectionName, entry); err != nil {
+		if err := validateFunctionType(location, sectionEndpoint(sectionName), entry); err != nil {
 			return err
 		}
 	}
 
-	if isMultipartOpenAISection(sectionName) {
+	if isMultipartOpenAISection(sectionEndpoint(sectionName)) {
 		return validateMultipartOpenAISection(sectionName, entries)
 	}
-	return validateOpenAIShadowTargets(sectionName, entries, modelNames)
+	return validateModelShadowTargets(sectionName, entries, modelNames)
 }
 
-func collectOpenAIModelNames(sectionName string, entries map[string]ModelFunctionDetails) (map[string]struct{}, error) {
+func collectModelNames(sectionName string, entries map[string]ModelFunctionDetails) (map[string]struct{}, error) {
 	modelNames := make(map[string]struct{}, len(entries))
 	for entryKey, entry := range entries {
 		if entry.ModelName == "" {
-			return nil, fmt.Errorf("openai.%s.%s: modelName is required", sectionName, entryKey)
+			return nil, fmt.Errorf("%s.%s: modelName is required", sectionName, entryKey)
 		}
 		modelNames[entry.ModelName] = struct{}{}
 	}
@@ -580,7 +587,7 @@ func isMultipartOpenAISection(sectionName string) bool {
 
 func validateMultipartOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
 	for modelKey, entry := range entries {
-		location := "openai." + sectionName + "." + modelKey
+		location := sectionName + "." + modelKey
 		if err := validateShadowFormShape(location, entry); err != nil {
 			return err
 		}
@@ -591,9 +598,9 @@ func validateMultipartOpenAISection(sectionName string, entries map[string]Model
 	return nil
 }
 
-func validateOpenAIShadowTargets(sectionName string, entries map[string]ModelFunctionDetails, modelNames map[string]struct{}) error {
+func validateModelShadowTargets(sectionName string, entries map[string]ModelFunctionDetails, modelNames map[string]struct{}) error {
 	for modelKey, entry := range entries {
-		location := "openai." + sectionName + "." + modelKey
+		location := sectionName + "." + modelKey
 		shadowTargets, err := validateOpenAIShadowConfig(location, entry)
 		if err != nil {
 			return err
@@ -621,7 +628,7 @@ func validateShadowTargetNames(
 			return fmt.Errorf("%s: shadow target cannot reference the same model", shadowLocation)
 		}
 		if _, ok := modelNames[shadow.ModelName]; !ok {
-			return fmt.Errorf("%s: shadow target must reference another model in openai.%s", shadowLocation, sectionName)
+			return fmt.Errorf("%s: shadow target must reference another model in %s", shadowLocation, sectionName)
 		}
 	}
 	return nil
@@ -773,7 +780,7 @@ func validateFunctionType(location string, sectionName string, entry ModelFuncti
 
 // HasLLMGatewayRoute reports whether any model is routed to the LLM Gateway.
 func (c *GatewayConfig) HasLLMGatewayRoute() bool {
-	for _, entries := range c.openAISections() {
+	for _, entries := range c.modelSections() {
 		for _, entry := range entries {
 			if entry.TargetsLLMGateway() {
 				return true

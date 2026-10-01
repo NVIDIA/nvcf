@@ -35,9 +35,13 @@ type messagesRequest struct {
 	Tools     json.RawMessage `json:"tools"`
 }
 
-func (h *OpenAIProxyHandlers) Messages(ec echo.Context) error {
+func (h *MessagesHandlers) RegisterRoutes(group *echo.Group) {
+	group.POST(messagesEndpointPath, h.ServeMessages)
+}
+
+func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	c := must.As[*GatewayContext](ec)
-	reqCtx, err := h.requireFunctionRequestContext(c)
+	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
 	if err != nil {
 		return err
 	}
@@ -129,7 +133,7 @@ func (h *OpenAIProxyHandlers) Messages(ec echo.Context) error {
 		telemetry.RecordWithContext(c.UserContext(), h.handlers.observability.providerTime, time.Since(start).Seconds(), attribute.String("endpoint", messagesEndpointPath), attribute.String("phase", "total"), attribute.String("stream", boolLabel(request.Stream)), telemetry.FunctionIDAttribute(requestFunctionID(c)))
 	}()
 	headers := messagesForwardedHeaders(c.Request().Header)
-	resp, err := h.dispatchEstimatedProxyRequest(c, reqCtx, headers, io.NopCloser(bytes.NewReader(outboundBody)), int64(len(outboundBody)), inputTokens, inputTokens+request.MaxTokens)
+	resp, err := h.handlers.dispatchEstimatedProxyRequest(c, reqCtx, headers, io.NopCloser(bytes.NewReader(outboundBody)), int64(len(outboundBody)), inputTokens, inputTokens+request.MaxTokens)
 	if err != nil {
 		return err
 	}
