@@ -180,6 +180,8 @@ type ContentPartType string
 const (
 	ContentPartTypeText     ContentPartType = "text"
 	ContentPartTypeImageURL ContentPartType = "image_url"
+	ContentPartTypeAudioURL ContentPartType = "audio_url"
+	ContentPartTypeVideoURL ContentPartType = "video_url"
 	ContentPartTypeDocument ContentPartType = "document"
 )
 
@@ -190,6 +192,8 @@ func (t ContentPartType) String() string {
 var SupportedContentType = []ContentPartType{
 	ContentPartTypeText,
 	ContentPartTypeImageURL,
+	ContentPartTypeAudioURL,
+	ContentPartTypeVideoURL,
 	ContentPartTypeDocument,
 }
 
@@ -217,6 +221,22 @@ type ContentPartImageURL struct {
 
 func (cp ContentPartImageURL) ContentType() ContentPartType {
 	return ContentPartTypeImageURL
+}
+
+type ContentPartAudioURL struct {
+	URL string `json:"url"`
+}
+
+func (cp ContentPartAudioURL) ContentType() ContentPartType {
+	return ContentPartTypeAudioURL
+}
+
+type ContentPartVideoURL struct {
+	URL string `json:"url"`
+}
+
+func (cp ContentPartVideoURL) ContentType() ContentPartType {
+	return ContentPartTypeVideoURL
 }
 
 type ContentPartDocument struct {
@@ -547,6 +567,8 @@ type outboundContentPart struct {
 	Type     ContentPartType      `json:"type"`
 	Text     string               `json:"text,omitempty"`
 	ImageURL *ContentPartImageURL `json:"image_url,omitempty"`
+	AudioURL *ContentPartAudioURL `json:"audio_url,omitempty"`
+	VideoURL *ContentPartVideoURL `json:"video_url,omitempty"`
 	Document *ContentPartDocument `json:"document,omitempty"`
 }
 
@@ -573,6 +595,20 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: typed})
 		case ContentPartImageURL:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: &typed})
+		case *ContentPartAudioURL:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil audio_url content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeAudioURL, AudioURL: typed})
+		case ContentPartAudioURL:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeAudioURL, AudioURL: &typed})
+		case *ContentPartVideoURL:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil video_url content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeVideoURL, VideoURL: typed})
+		case ContentPartVideoURL:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeVideoURL, VideoURL: &typed})
 		case *ContentPartDocument:
 			if typed == nil {
 				return nil, errors.New("marshal content: nil document content part")
@@ -621,6 +657,8 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 			Type     ContentPartType      `json:"type"`
 			Text     string               `json:"text,omitempty"`
 			ImageURL *ContentPartImageURL `json:"image_url,omitempty"`
+			AudioURL *ContentPartAudioURL `json:"audio_url,omitempty"`
+			VideoURL *ContentPartVideoURL `json:"video_url,omitempty"`
 			Document *ContentPartDocument `json:"document,omitempty"`
 		}
 
@@ -642,6 +680,9 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 							Msg:   "document not supported with content type = text",
 						}
 					}
+					if rawPart.AudioURL != nil || rawPart.VideoURL != nil {
+						return &UnmarshalError{Field: "content", Msg: "audio_url and video_url not supported with content type = text"}
+					}
 					result = append(result, ContentPartText(rawPart.Text))
 				case ContentPartTypeImageURL:
 					if rawPart.ImageURL == nil || rawPart.ImageURL.URL == "" {
@@ -651,6 +692,16 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 						}
 					}
 					result = append(result, rawPart.ImageURL)
+				case ContentPartTypeAudioURL:
+					if rawPart.AudioURL == nil || rawPart.AudioURL.URL == "" {
+						return &UnmarshalError{Field: "audio_url.url", Msg: "no audio_url supplied in content of type audio_url"}
+					}
+					result = append(result, rawPart.AudioURL)
+				case ContentPartTypeVideoURL:
+					if rawPart.VideoURL == nil || rawPart.VideoURL.URL == "" {
+						return &UnmarshalError{Field: "video_url.url", Msg: "no video_url supplied in content of type video_url"}
+					}
+					result = append(result, rawPart.VideoURL)
 				case ContentPartTypeDocument:
 					if rawPart.Document == nil || rawPart.Document.Data == nil {
 						return &UnmarshalError{
