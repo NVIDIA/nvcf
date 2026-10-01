@@ -34,7 +34,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 class ApiKeyValidationResultTest {
 
-    private static final JsonMapper OBJECT_MAPPER = new JsonMapper();
+    private static final JsonMapper JSON_MAPPER = new JsonMapper();
 
     @Test
     void deserializesOwnerNcaIdFromResponse() {
@@ -44,7 +44,7 @@ class ApiKeyValidationResultTest {
                  "policy": {"resources": [], "scopes": [], "product": "nv-cloud-functions"}}
                 """;
 
-        var result = OBJECT_MAPPER.readValue(json, ApiKeyValidationResult.class);
+        var result = JSON_MAPPER.readValue(json, ApiKeyValidationResult.class);
 
         assertEquals("nca-1", result.ncaId());
         assertEquals("owner-nca-1", result.ownerNcaId());
