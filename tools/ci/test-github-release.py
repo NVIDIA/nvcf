@@ -39,6 +39,45 @@ def git_out(root, *args):
     ).stdout
 
 
+def quiesce_git_maintenance(repo):
+    """Stop git doing background work inside a repo that is about to be deleted.
+
+    receive-pack runs `gc --auto` once a push lands and, because gc.autoDetach
+    defaults on, does not wait for it. The tests push and then leave the
+    enclosing TemporaryDirectory immediately, so that detached child is still
+    walking objects/pack while shutil.rmtree is unlinking it, which surfaces as
+    an intermittent "Directory not empty".
+
+    Both halves are closed here: gc should not start, and if it does it runs in
+    the foreground where the push waits for it.
+    """
+    settings = (
+        ("receive.autogc", "false"),
+        ("gc.auto", "0"),
+        ("gc.autoDetach", "false"),
+        ("maintenance.auto", "false"),
+    )
+    for key, value in settings:
+        subprocess.run(
+            ["git", "-C", str(repo), "config", key, value],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+
+def init_bare_remote(remote):
+    """Create a bare remote for the push-mode tests, with maintenance disabled."""
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    quiesce_git_maintenance(remote)
+
+
+
 class SubprocessShim:
     """Stands in for the module's `subprocess`, intercepting only `gh` calls.
 
@@ -85,6 +124,7 @@ class GithubReleaseTest(unittest.TestCase):
         git(root, "init")
         git(root, "config", "user.email", "test@example.com")
         git(root, "config", "user.name", "Test User")
+        quiesce_git_maintenance(root)
 
     def seed_nvca_service(self, root):
         service_dir = root / "src/compute-plane-services/nvca"
@@ -299,12 +339,7 @@ class GithubReleaseTest(unittest.TestCase):
             root = Path(tmp) / "repo"
             remote = Path(tmp) / "remote.git"
             root.mkdir()
-            subprocess.run(
-                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            init_bare_remote(remote)
             self.init_java_repo(root)
             git(root, "remote", "add", "origin", str(remote))
             git(root, "push", "origin", "HEAD")
@@ -2280,12 +2315,7 @@ class GithubReleaseTest(unittest.TestCase):
             root = Path(tmp) / "repo"
             remote = Path(tmp) / "remote.git"
             root.mkdir()
-            subprocess.run(
-                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            init_bare_remote(remote)
             self.nvca_repo_with_tag(root)
             git(root, "remote", "add", "origin", str(remote))
             git(root, "push", "origin", "HEAD")
@@ -2456,10 +2486,7 @@ class MultiPathReleaseTest(unittest.TestCase):
         self.commit_all(root, "seed")
         git(root, "tag", "src/compute-plane-services/nvca/v3.12.1")
         if remote is not None:
-            subprocess.run(
-                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
+            init_bare_remote(remote)
             git(root, "remote", "add", "origin", str(remote))
             git(root, "push", "origin", "HEAD")
         self.github_release.create_release = lambda tag, title, notes, draft, dry_run: None
