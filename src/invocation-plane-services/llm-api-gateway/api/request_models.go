@@ -40,19 +40,6 @@ func requestRoutingKey(req *http.Request) string {
 	return routingKeyFromOpenAIModelID(requestModelID(req))
 }
 
-// requestTarget returns the routing key and model a request addresses. With
-// bareModelIDs (static key mode) the whole model string is the model id and
-// the routing key is always empty, so names such as
-// meta/llama-3.1-8b-instruct pass through unchanged. Otherwise the first
-// model segment is the routing key and the model is resolved later by the
-// handler.
-func requestTarget(req *http.Request, bareModelIDs bool) (routingKey string, model string) {
-	if bareModelIDs {
-		return "", requestModelID(req)
-	}
-	return requestRoutingKey(req), ""
-}
-
 func requestModelID(req *http.Request) string {
 	if req == nil || req.Body == nil {
 		return ""

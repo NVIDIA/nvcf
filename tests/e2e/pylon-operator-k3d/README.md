@@ -119,13 +119,12 @@ Assertions, each polled for up to `E2E_TIMEOUT` seconds:
   `REGISTERED`, `SERVERS` and `AGE`.
 - Through `kubectl port-forward` to the gateway, with TLS verified against the
   stack CA:
-  - `GET /v1/models` lists `test-model`.
-  - `GET /v1/registry` lists `test-model` with cluster `spark-e2e` and
-    `inferenceServers` 1.
+  - `GET /v1/models` without a key lists `test-model`.
+  - `GET /v1/registry` without a key lists `test-model` as `Healthy`, with
+    cluster `spark-e2e`, one registered server and one healthy server.
   - A streaming `POST /v1/chat/completions` with the API key returns 200 and
     Server-Sent Events `data:` lines ending in `data: [DONE]`.
   - The same request without a key returns 401.
-  - `POST /v1/embeddings` with the key returns 403.
 - Backend scaled to zero: `Ready=False/NoReadyEndpoints` while `Registered`
   stays `True`. Scaled back: `Ready`, `TransportReady` and `Registered` return
   to `True`.

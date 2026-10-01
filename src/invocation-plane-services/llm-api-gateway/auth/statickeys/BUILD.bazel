@@ -21,10 +21,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/invocation-plane-services/llm-api-gateway/nvcf",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
-        "@org_golang_google_grpc//codes",
-        "@org_golang_google_grpc//status",
+        "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
 
@@ -40,7 +38,6 @@ go_test(
     embed = [":statickeys"],
     deps = [
         "@com_github_rs_zerolog//:zerolog",
-        "@org_golang_google_grpc//codes",
-        "@org_golang_google_grpc//status",
+        "@com_github_stretchr_testify//require",
     ],
 )

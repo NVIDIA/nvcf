@@ -345,9 +345,9 @@ registry_lists_test_model() {
   body="$(compact "${out}" 2>/dev/null || true)"
   LAST_OBSERVED="HTTP ${code} ${body:0:300}"
   [ "${code}" = "200" ] || return 1
-  printf '%s' "${body}" | grep -q "\"model\":\"${MODEL}\"" || return 1
+  printf '%s' "${body}" | grep -q "\"model\":\"${MODEL}\",\"health\":\"Healthy\"" || return 1
   printf '%s' "${body}" | grep -q "\"clusterId\":\"${E2E_CLUSTER_ID}\"" || return 1
-  printf '%s' "${body}" | grep -Eq '"inferenceServers":1[,}]'
+  printf '%s' "${body}" | grep -Eq '"registeredServers":1,"healthyServers":1[,}]'
 }
 
 chat_body() {
@@ -376,16 +376,6 @@ chat_without_key_is_401() {
     --data "$(chat_body "${MODEL}")")"
   LAST_OBSERVED="HTTP ${code} $(head -c 200 "${out}" 2>/dev/null | tr '\n' ' ')"
   [ "${code}" = "401" ]
-}
-
-embeddings_is_403() {
-  local out="${E2E_WORK_DIR}/embeddings.json" code
-  code="$(gw POST /v1/embeddings "${out}" \
-    -H @"${AUTH_HEADER_FILE}" \
-    -H 'Content-Type: application/json' \
-    --data "{\"model\":\"${MODEL}\",\"input\":\"hi\"}")"
-  LAST_OBSERVED="HTTP ${code} $(head -c 200 "${out}" 2>/dev/null | tr '\n' ' ')"
-  [ "${code}" = "403" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -751,11 +741,10 @@ main() {
   fi
   pass "port-forward to svc/${GATEWAY_SERVICE} on 127.0.0.1:${E2E_GATEWAY_LOCAL_PORT}"
   expect "GET /v1/models lists ${MODEL}" "${T}" models_lists_test_model || true
-  expect "GET /v1/registry lists ${MODEL} with inferenceServers 1" "${T}" registry_lists_test_model || true
+  expect "GET /v1/registry lists ${MODEL} Healthy with 1 healthy server" "${T}" registry_lists_test_model || true
   expect "POST /v1/chat/completions with key streams SSE (200)" "${T}" chat_stream_ok || true
   log "chat stream: ${LAST_OBSERVED}"
   expect "POST /v1/chat/completions without key is 401" 30 chat_without_key_is_401 || true
-  expect "POST /v1/embeddings with key is 403" 30 embeddings_is_403 || true
   step_done
 
   section "Failure path: backend scaled to zero"

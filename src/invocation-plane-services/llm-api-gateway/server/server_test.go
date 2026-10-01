@@ -22,12 +22,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -40,18 +37,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	echo "github.com/labstack/echo/v4"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
@@ -342,7 +333,7 @@ func TestNewWrapsEchoWithFinalWriteDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := New(cfg, inferenceProvider, nil)
+	e, err := New(cfg, inferenceProvider, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +364,7 @@ func startGatewayWithConfig(t *testing.T, cfg *config.Config, proto protocol) *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := New(cfg, inferenceProvider, nil)
+	e, err := New(cfg, inferenceProvider, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,312 +487,6 @@ func pacedStargate(t *testing.T, gaps []time.Duration) *httptest.Server {
 	return upstream
 }
 
-const (
-	testModel  = "meta/llama-3.1-8b-instruct"
-	testAPIKey = "sk-static-e2e"
-)
-
-type routerRequest struct {
-	path      string
-	header    http.Header
-	bodyModel string
-}
-
-// stubRouter stands in for llm-request-router and records every request.
-type stubRouter struct {
-	mu       sync.Mutex
-	requests []routerRequest
-	server   *httptest.Server
-}
-
-func newStubRouter(t *testing.T) *stubRouter {
-	t.Helper()
-	r := &stubRouter{}
-	r.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		var payload struct {
-			Model string `json:"model"`
-		}
-		_ = json.NewDecoder(req.Body).Decode(&payload)
-		r.mu.Lock()
-		r.requests = append(r.requests, routerRequest{path: req.URL.Path, header: req.Header.Clone(), bodyModel: payload.Model})
-		r.mu.Unlock()
-
-		if req.Method == http.MethodGet && req.URL.Path == "/v1/models" {
-			w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-			_, _ = io.WriteString(w, `{"model_ids":["`+testModel+`"],"entries":[{"model_id":"`+testModel+
-				`","cluster_id":"spark-berlin","inference_server_id":"spark-berlin.models.llama.pylon-abc"}]}`)
-			return
-		}
-
-		w.Header().Set(echo.HeaderContentType, "text/event-stream")
-		_, _ = io.WriteString(w, `data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","created":1,`+
-			`"model":"`+testModel+`","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},`+
-			`"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
-	}))
-	t.Cleanup(r.server.Close)
-	return r
-}
-
-func (r *stubRouter) Requests() []routerRequest {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]routerRequest(nil), r.requests...)
-}
-
-func writeAPIKeyFile(t *testing.T) string {
-	t.Helper()
-	sum := sha256.Sum256([]byte(testAPIKey))
-	data, err := json.Marshal(statickeys.File{Keys: []statickeys.FileKey{
-		{ID: "team-a", SHA256: hex.EncodeToString(sum[:])},
-	}})
-	if err != nil {
-		t.Fatalf("marshal key file: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "api-keys.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write key file: %v", err)
-	}
-	return path
-}
-
-func newStaticModeGateway(t *testing.T, router *stubRouter, serviceToken string) *echo.Echo {
-	t.Helper()
-
-	cfg := config.Default()
-	cfg.Auth.APIKeysPath = writeAPIKeyFile(t)
-	cfg.Stargate.URL = router.server.URL
-	cfg.Stargate.ServiceToken = serviceToken
-
-	authorizer, err := statickeys.New(cfg.Auth.APIKeysPath)
-	if err != nil {
-		t.Fatalf("new authorizer: %v", err)
-	}
-	stargateProvider, err := provider.NewStargateProvider(cfg.Stargate)
-	if err != nil {
-		t.Fatalf("new stargate provider: %v", err)
-	}
-	e, err := New(cfg, stargateProvider, authorizer)
-	if err != nil {
-		t.Fatalf("server.New() error = %v", err)
-	}
-	return e
-}
-
-func TestStaticModeEndToEnd(t *testing.T) {
-	t.Parallel()
-
-	chatBody := `{"model":"` + testModel + `","messages":[{"role":"user","content":"hello"}]}`
-	tests := []struct {
-		name         string
-		method       string
-		path         string
-		body         string
-		bearer       string
-		serviceToken string
-		wantStatus   int
-		wantRouted   bool
-		wantAuth     []string
-	}{
-		{
-			name: "valid key reaches router with bare model", method: http.MethodPost,
-			path: "/v1/chat/completions", body: chatBody, bearer: testAPIKey,
-			wantStatus: http.StatusOK, wantRouted: true,
-		},
-		{
-			name: "service token replaces caller bearer", method: http.MethodPost,
-			path: "/v1/chat/completions", body: chatBody, bearer: testAPIKey, serviceToken: "router-token",
-			wantStatus: http.StatusOK, wantRouted: true, wantAuth: []string{"Bearer router-token"},
-		},
-		{
-			name: "missing key", method: http.MethodPost,
-			path: "/v1/chat/completions", body: chatBody,
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name: "wrong key", method: http.MethodPost,
-			path: "/v1/chat/completions", body: chatBody, bearer: "sk-not-a-key",
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name: "path outside STATIC_ALLOWED_PATHS", method: http.MethodPost,
-			path: "/v1/embeddings", body: `{"model":"` + testModel + `","input":"hello"}`, bearer: testAPIKey,
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "health probe stays open", method: http.MethodGet, path: "/healthz",
-			wantStatus: http.StatusOK,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			router := newStubRouter(t)
-			e := newStaticModeGateway(t, router, tc.serviceToken)
-
-			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-			if tc.bearer != "" {
-				req.Header.Set(echo.HeaderAuthorization, "Bearer "+tc.bearer)
-			}
-			req.Header.Set("X-Routing-Key", "smuggled-routing-key")
-			rec := httptest.NewRecorder()
-			e.ServeHTTP(rec, req)
-
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
-			}
-			requests := router.Requests()
-			if !tc.wantRouted {
-				if len(requests) != 0 {
-					t.Fatalf("router received %d requests, want 0", len(requests))
-				}
-				return
-			}
-			if len(requests) != 1 {
-				t.Fatalf("router received %d requests, want 1", len(requests))
-			}
-			got := requests[0]
-			if got.header.Get("X-Model") != testModel {
-				t.Fatalf("X-Model = %q, want %q", got.header.Get("X-Model"), testModel)
-			}
-			if got.bodyModel != testModel {
-				t.Fatalf("body model = %q, want %q", got.bodyModel, testModel)
-			}
-			if values := got.header.Values("X-Routing-Key"); len(values) != 0 {
-				t.Fatalf("X-Routing-Key = %q, want absent", values)
-			}
-			if values := got.header.Values(echo.HeaderAuthorization); !slices.Equal(values, tc.wantAuth) {
-				t.Fatalf("Authorization = %q, want %q", values, tc.wantAuth)
-			}
-			for name, values := range got.header {
-				for _, value := range values {
-					if strings.Contains(value, testAPIKey) {
-						t.Fatalf("caller API key reached the router in header %s", name)
-					}
-				}
-			}
-
-			var response struct {
-				Model string `json:"model"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if response.Model != testModel {
-				t.Fatalf("response model = %q, want %q", response.Model, testModel)
-			}
-		})
-	}
-}
-
-func TestNewRefusesStaticModeWithoutAuthorizer(t *testing.T) {
-	t.Parallel()
-
-	cfg := config.Default()
-	cfg.Auth.APIKeysPath = "/etc/llm-api-gateway/api-keys.json"
-	if _, err := New(cfg, provider.NewEchoProvider(), nil); err == nil {
-		t.Fatal("server.New() error = nil, want error for static mode without an authorizer")
-	}
-}
-
-type rejectingAuthClient struct{}
-
-func (rejectingAuthClient) AuthorizeInvocation(
-	context.Context, string, string,
-) (*nvcf.InvocationAuthResponse, error) {
-	return nil, status.Error(codes.Unauthenticated, "invalid key")
-}
-
-func TestNVCFModeEndToEnd(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		body        string
-		bearer      string
-		wantStatus  int
-		wantMessage string
-	}{
-		{
-			name:       "unauthenticated check without bearer",
-			body:       `{"model":"unauthenticated/check","messages":[]}`,
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:       "unauthenticated check with rejected bearer",
-			body:       `{"model":"unauthenticated/check","messages":[]}`,
-			bearer:     "sk-bad",
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			// NVCF mode keeps prefix parsing: "meta" is taken as the routing
-			// key and authorized against it.
-			name:        "namespaced model is parsed as routing key",
-			body:        `{"model":"` + testModel + `","messages":[{"role":"user","content":"hello"}]}`,
-			bearer:      "sk-bad",
-			wantStatus:  http.StatusUnauthorized,
-			wantMessage: "authentication failed",
-		},
-		{
-			name:        "model without slash",
-			body:        `{"model":"alpha-model","messages":[{"role":"user","content":"hello"}]}`,
-			bearer:      "sk-bad",
-			wantStatus:  http.StatusBadRequest,
-			wantMessage: "model prefix is required",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			e, err := New(config.Default(), provider.NewEchoProvider(), rejectingAuthClient{})
-			if err != nil {
-				t.Fatalf("server.New() error = %v", err)
-			}
-
-			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(tc.body))
-			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-			if tc.bearer != "" {
-				req.Header.Set(echo.HeaderAuthorization, "Bearer "+tc.bearer)
-			}
-			rec := httptest.NewRecorder()
-			e.ServeHTTP(rec, req)
-
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
-			}
-			if tc.wantMessage != "" && !strings.Contains(rec.Body.String(), tc.wantMessage) {
-				t.Fatalf("response body = %q, want it to contain %q", rec.Body.String(), tc.wantMessage)
-			}
-		})
-	}
-}
-
-func TestNewAppliesServerTimeouts(t *testing.T) {
-	t.Parallel()
-
-	cfg := config.Default()
-	cfg.Server.ReadHeaderTimeout = 3 * time.Second
-	cfg.Server.ReadTimeout = 4 * time.Second
-	cfg.Server.WriteTimeout = 5 * time.Second
-	cfg.Server.IdleTimeout = 6 * time.Second
-
-	e, err := New(cfg, provider.NewEchoProvider(), nil)
-	if err != nil {
-		t.Fatalf("server.New() error = %v", err)
-	}
-	// Start and StartTLS both serve on e.Server, so these limits cover TLS too.
-	s := e.Server
-	if s.ReadHeaderTimeout != 3*time.Second || s.ReadTimeout != 4*time.Second ||
-		s.WriteTimeout != 5*time.Second || s.IdleTimeout != 6*time.Second {
-		t.Fatalf("server timeouts = %v/%v/%v/%v",
-			s.ReadHeaderTimeout, s.ReadTimeout, s.WriteTimeout, s.IdleTimeout)
-	}
-}
-
 func TestStartTLSServesOnConfiguredServer(t *testing.T) {
 	t.Parallel()
 
@@ -864,7 +549,7 @@ func TestStartTLSServesRenewedCertificate(t *testing.T) {
 func TestStartTLSFailsWithoutLoadablePair(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(config.Default(), provider.NewEchoProvider(), nil)
+	e, err := New(config.Default(), provider.NewEchoProvider(), nil, nil)
 	if err != nil {
 		t.Fatalf("server.New() error = %v", err)
 	}
@@ -880,7 +565,7 @@ func TestStartTLSFailsWithoutLoadablePair(t *testing.T) {
 func startTLSGateway(t *testing.T, certFile, keyFile string, reloadInterval time.Duration) (*echo.Echo, string) {
 	t.Helper()
 
-	e, err := New(config.Default(), provider.NewEchoProvider(), nil)
+	e, err := New(config.Default(), provider.NewEchoProvider(), nil, nil)
 	if err != nil {
 		t.Fatalf("server.New() error = %v", err)
 	}
@@ -1005,129 +690,5 @@ func writeSelfSignedPair(t *testing.T, certFile, keyFile string, serial int64) {
 				t.Fatal(err)
 			}
 		}
-	}
-}
-
-type acceptingAuthClient struct{}
-
-func (acceptingAuthClient) AuthorizeInvocation(
-	context.Context, string, string,
-) (*nvcf.InvocationAuthResponse, error) {
-	return &nvcf.InvocationAuthResponse{ClientAuthID: "subject-123", RateLimitKey: "nca-456"}, nil
-}
-
-func TestDiscoveryEndpointsAuthPerMode(t *testing.T) {
-	t.Parallel()
-
-	const (
-		static    = "static-keys"
-		nvcfMode  = "nvcf"
-		anonymous = "anonymous"
-	)
-	yes, no := true, false
-	tests := []struct {
-		name        string
-		mode        string
-		publicReads *bool
-		nvcfAccepts bool
-		method      string
-		path        string
-		bearer      string
-		wantStatus  int
-	}{
-		{name: "static default serves models without key", mode: static,
-			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
-		{name: "static default serves registry without key", mode: static,
-			method: http.MethodGet, path: "/v1/registry", wantStatus: http.StatusOK},
-		{name: "static default POST models needs a key", mode: static,
-			method: http.MethodPost, path: "/v1/models", wantStatus: http.StatusUnauthorized},
-		{name: "static default POST models with key is outside the allowlist", mode: static,
-			method: http.MethodPost, path: "/v1/models", bearer: testAPIKey, wantStatus: http.StatusForbidden},
-		{name: "static private models without key", mode: static, publicReads: &no,
-			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusUnauthorized},
-		{name: "static private registry without key", mode: static, publicReads: &no,
-			method: http.MethodGet, path: "/v1/registry", wantStatus: http.StatusUnauthorized},
-		{name: "static private models with wrong key", mode: static, publicReads: &no,
-			method: http.MethodGet, path: "/v1/models", bearer: "sk-not-a-key", wantStatus: http.StatusUnauthorized},
-		{name: "static private registry with key needs no allowlist entry", mode: static, publicReads: &no,
-			method: http.MethodGet, path: "/v1/registry", bearer: testAPIKey, wantStatus: http.StatusOK},
-		{name: "anonymous default serves models", mode: anonymous,
-			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
-		{name: "anonymous default serves registry", mode: anonymous,
-			method: http.MethodGet, path: "/v1/registry", wantStatus: http.StatusOK},
-		{name: "anonymous private has no authenticator to require", mode: anonymous, publicReads: &no,
-			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
-		{name: "nvcf default models without bearer", mode: nvcfMode,
-			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusUnauthorized},
-		{name: "nvcf default registry with rejected bearer", mode: nvcfMode,
-			method: http.MethodGet, path: "/v1/registry", bearer: "nvapi-bad", wantStatus: http.StatusUnauthorized},
-		{name: "nvcf default models with accepted bearer", mode: nvcfMode, nvcfAccepts: true,
-			method: http.MethodGet, path: "/v1/models", bearer: "nvapi-ok", wantStatus: http.StatusOK},
-		{name: "nvcf public override serves models without bearer", mode: nvcfMode, publicReads: &yes,
-			method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusOK},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			router := newStubRouter(t)
-			cfg := config.Default()
-			cfg.Stargate.URL = router.server.URL
-			cfg.Auth.PublicReadEndpoints = tc.publicReads
-			var authClient api.InvocationAuthClient
-			switch tc.mode {
-			case static:
-				cfg.Auth.APIKeysPath = writeAPIKeyFile(t)
-				authorizer, err := statickeys.New(cfg.Auth.APIKeysPath)
-				if err != nil {
-					t.Fatalf("new authorizer: %v", err)
-				}
-				authClient = authorizer
-			case nvcfMode:
-				cfg.NVCF.GRPCAddr = "api.nvcf.example:9090"
-				authClient = rejectingAuthClient{}
-				if tc.nvcfAccepts {
-					authClient = acceptingAuthClient{}
-				}
-			case anonymous:
-				cfg.Auth.AllowAnonymous = true
-			}
-			stargateProvider, err := provider.NewStargateProvider(cfg.Stargate)
-			if err != nil {
-				t.Fatalf("new stargate provider: %v", err)
-			}
-			e, err := New(cfg, stargateProvider, authClient)
-			if err != nil {
-				t.Fatalf("server.New() error = %v", err)
-			}
-
-			req := httptest.NewRequest(tc.method, tc.path, nil)
-			if tc.bearer != "" {
-				req.Header.Set(echo.HeaderAuthorization, "Bearer "+tc.bearer)
-			}
-			rec := httptest.NewRecorder()
-			e.ServeHTTP(rec, req)
-
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
-			}
-			requests := router.Requests()
-			if tc.wantStatus != http.StatusOK {
-				if len(requests) != 0 {
-					t.Fatalf("router received %d requests, want 0", len(requests))
-				}
-				return
-			}
-			if len(requests) != 1 || requests[0].path != "/v1/models" {
-				t.Fatalf("router requests = %+v, want one GET /v1/models", requests)
-			}
-			if values := requests[0].header.Values(echo.HeaderAuthorization); len(values) != 0 {
-				t.Fatalf("Authorization = %q, want absent without a service token", values)
-			}
-			if !strings.Contains(rec.Body.String(), testModel) {
-				t.Fatalf("body = %s, want it to list %s", rec.Body.String(), testModel)
-			}
-		})
 	}
 }

@@ -19,6 +19,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +48,8 @@ func TestNVCFAuthHTTPErrorMapsCodes(t *testing.T) {
 		{"deadline -> 504", status.Error(codes.DeadlineExceeded, "slow"), http.StatusGatewayTimeout},
 		{"unavailable -> 503", status.Error(codes.Unavailable, "down"), http.StatusServiceUnavailable},
 		{"internal -> 502", status.Error(codes.Internal, "boom"), http.StatusBadGateway},
+		{"plain error -> 502", errors.New("boom"), http.StatusBadGateway},
+		{"ok status on an error -> 502", okStatusError{}, http.StatusBadGateway},
 	}
 
 	for _, tc := range cases {
@@ -96,8 +99,8 @@ func TestNVCFAuthMiddlewareEnrichesRequestContext(t *testing.T) {
 		if reqCtx.APIKeyID != "subject-123" {
 			t.Fatalf("api key id = %q, want subject-123", reqCtx.APIKeyID)
 		}
-		if reqCtx.RateLimitKey != "nca-456" {
-			t.Fatalf("rate limit key = %q, want nca-456", reqCtx.RateLimitKey)
+		if reqCtx.OrgID != "nca-456" {
+			t.Fatalf("org id = %q, want nca-456", reqCtx.OrgID)
 		}
 		if reqCtx.BearerToken != "sk-live" {
 			t.Fatalf("bearer token = %q, want sk-live", reqCtx.BearerToken)
@@ -424,10 +427,58 @@ func (s *stubInvocationAuthClient) AuthorizeInvocation(
 	s.authorizeCalls++
 	s.authorizeToken = clientAuthorizationToken
 	s.authorizeRoutingKey = routingKey
-	if s.authErr != nil {
-		return nil, s.authErr
+	return s.authResponse, s.authErr
+}
+
+// okStatusError is a non-nil error whose gRPC status code is OK.
+type okStatusError struct{}
+
+func (okStatusError) Error() string { return "auth failed" }
+
+func (okStatusError) GRPCStatus() *status.Status { return status.New(codes.OK, "") }
+
+func TestNVCFAuthMiddleware_AuthenticatorError_RejectsRequest(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unavailable", status.Error(codes.Unavailable, "down")},
+		{"plain error", errors.New("boom")},
+		{"ok status on an error", okStatusError{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handlerCalled := false
+			e := echo.New()
+			e.Use(NewContextMiddleware(config.Default()))
+			e.Use(NewNVCFAuthMiddleware(&stubInvocationAuthClient{authErr: tc.err}))
+			e.POST("/v1/chat/completions", func(c echo.Context) error {
+				handlerCalled = true
+				return c.NoContent(http.StatusNoContent)
+			})
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/chat/completions",
+				strings.NewReader(`{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`),
+			)
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer token-123")
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if handlerCalled {
+				t.Fatal("handler ran after an authenticator error")
+			}
+			if rec.Code < http.StatusBadRequest {
+				t.Fatalf("status = %d, want an error status", rec.Code)
+			}
+		})
 	}
-	return s.authResponse, nil
 }
 
 func TestNVCFAuthHTTPErrorDoesNotLeakTransportDetail(t *testing.T) {

@@ -104,7 +104,7 @@ probe_schemes() {  # probe_schemes <manifest>: one scheme per probe, "none" when
 
 assert_no_auth_env() {  # assert_no_auth_env <manifest> <label>
   local name
-  for name in API_KEYS_PATH STATIC_ALLOWED_PATHS ALLOW_ANONYMOUS STARGATE_SERVICE_TOKEN TLS_CERT_FILE TLS_KEY_FILE; do
+  for name in API_KEYS_PATH ALLOW_ANONYMOUS TLS_CERT_FILE TLS_KEY_FILE; do
     ! has_env "$1" "${name}" || fail "$2 must not set ${name}"
     ! has_config "$1" "${name}" || fail "$2 must not put ${name} in the ConfigMap"
   done
@@ -169,12 +169,15 @@ static_manifest="${tmp_dir}/static.yaml"
 render "${static_manifest}" \
   --set llmApiGateway.auth.mode=staticKeys \
   --set llmApiGateway.auth.staticKeys.existingSecret=gateway-api-keys \
-  --set llmApiGateway.vault.enabled=false
+  --set llmApiGateway.vault.enabled=false \
+  --set llmApiGateway.config.bareModelNamesEnabled=true \
+  --set llmApiGateway.config.publicReadEndpoints=true
 for key in NVCF_GRPC_ADDR NVCF_GRPC_INSECURE NVCF_GRPC_TIMEOUT; do
   ! has_config "${static_manifest}" "${key}" || fail "staticKeys mode must not set ${key}"
 done
 [ "$(env_value "${static_manifest}" API_KEYS_PATH)" = "${keys_mount}/api-keys.json" ] || fail "staticKeys mode must set API_KEYS_PATH to the mounted key file"
-[ "$(env_value "${static_manifest}" STATIC_ALLOWED_PATHS)" = "/v1/chat/completions" ] || fail "staticKeys mode must default STATIC_ALLOWED_PATHS to /v1/chat/completions"
+[ "$(config "${static_manifest}" BARE_MODEL_NAMES_ENABLED)" = "true" ] || fail "config.bareModelNamesEnabled must reach BARE_MODEL_NAMES_ENABLED"
+[ "$(config "${static_manifest}" PUBLIC_READ_ENDPOINTS)" = "true" ] || fail "config.publicReadEndpoints must reach PUBLIC_READ_ENDPOINTS"
 ! has_env "${static_manifest}" ALLOW_ANONYMOUS || fail "staticKeys mode must not allow anonymous access"
 assert_no_vault "${static_manifest}" "staticKeys mode without Vault"
 keys_volume="$(volume "${static_manifest}" api-keys)"
@@ -186,16 +189,14 @@ keys_mount_json="$(mount "${static_manifest}" api-keys)"
 [ "$(printf '%s' "${keys_mount_json}" | jq -r '.readOnly')" = "true" ] || fail "API key mount must be read-only"
 [ "$(printf '%s' "${keys_mount_json}" | jq -r '.subPath // ""')" = "" ] || fail "API key mount must not use subPath, which blocks Secret updates"
 
-paths_manifest="${tmp_dir}/static-paths.yaml"
-render "${paths_manifest}" \
+static_vault_manifest="${tmp_dir}/static-vault.yaml"
+render "${static_vault_manifest}" \
   --set llmApiGateway.auth.mode=staticKeys \
-  --set llmApiGateway.auth.staticKeys.existingSecret=gateway-api-keys \
-  --set 'llmApiGateway.auth.staticKeys.allowedPaths={/v1/chat/completions,/v1/models}'
-[ "$(env_value "${paths_manifest}" STATIC_ALLOWED_PATHS)" = "/v1/chat/completions,/v1/models" ] || fail "allowedPaths must be comma-joined into STATIC_ALLOWED_PATHS"
+  --set llmApiGateway.auth.staticKeys.existingSecret=gateway-api-keys
 # Vault stays on by default: the agent and its tracing-token file remain, NVCF auth does not.
-assert_vault_wired "${paths_manifest}" "staticKeys mode with Vault"
-[ "$(config "${paths_manifest}" SECRETS_PATH)" = "/vault/secrets/secrets.json" ] || fail "staticKeys mode with Vault must keep SECRETS_PATH"
-! has_config "${paths_manifest}" NVCF_GRPC_ADDR || fail "staticKeys mode with Vault must not set NVCF_GRPC_ADDR"
+assert_vault_wired "${static_vault_manifest}" "staticKeys mode with Vault"
+[ "$(config "${static_vault_manifest}" SECRETS_PATH)" = "/vault/secrets/secrets.json" ] || fail "staticKeys mode with Vault must keep SECRETS_PATH"
+! has_config "${static_vault_manifest}" NVCF_GRPC_ADDR || fail "staticKeys mode with Vault must not set NVCF_GRPC_ADDR"
 
 # ---------------------------------------------------------------------------
 # anonymous mode: neither authenticator.
@@ -210,15 +211,8 @@ render "${anonymous_manifest}" --set llmApiGateway.auth.mode=anonymous --set llm
 assert_no_vault "${anonymous_manifest}" "anonymous mode without Vault"
 
 # ---------------------------------------------------------------------------
-# Router service token and listener TLS.
+# Listener TLS.
 # ---------------------------------------------------------------------------
-
-token_manifest="${tmp_dir}/service-token.yaml"
-render "${token_manifest}" \
-  --set llmApiGateway.auth.serviceToken.existingSecret=router-service-token \
-  --set llmApiGateway.auth.serviceToken.key=bearer
-[ "$(deployment "${token_manifest}" '.spec.template.spec.containers[0].env[] | select(.name == "STARGATE_SERVICE_TOKEN") | .valueFrom.secretKeyRef | .name + "/" + .key')" = "router-service-token/bearer" ] ||
-  fail "serviceToken must reach STARGATE_SERVICE_TOKEN through a secretKeyRef"
 
 tls_manifest="${tmp_dir}/tls.yaml"
 render "${tls_manifest}" \
@@ -242,16 +236,9 @@ assert_render_fails "llmApiGateway.auth.mode must be nvcf, staticKeys or anonymo
   --set llmApiGateway.auth.mode=static-keys
 assert_render_fails "llmApiGateway.auth.staticKeys.existingSecret is required" \
   --set llmApiGateway.auth.mode=staticKeys
-assert_render_fails "llmApiGateway.auth.staticKeys.allowedPaths entries must start with /" \
-  --set llmApiGateway.auth.mode=staticKeys \
-  --set llmApiGateway.auth.staticKeys.existingSecret=gateway-api-keys \
-  --set 'llmApiGateway.auth.staticKeys.allowedPaths={v1/chat/completions}'
 assert_render_fails "llmApiGateway.tls.existingSecret is required" \
   --set llmApiGateway.tls.enabled=true
 assert_render_fails "llmApiGateway.config.nvcfGrpcAddr is required" \
   --set-string llmApiGateway.config.nvcfGrpcAddr=
-assert_render_fails "llmApiGateway.auth.serviceToken.key must be a Secret key name" \
-  --set llmApiGateway.auth.serviceToken.existingSecret=router-service-token \
-  --set-string llmApiGateway.auth.serviceToken.key=
 
 echo "llm-api-gateway auth mode render checks passed"

@@ -38,18 +38,12 @@ const (
 // endpointPath. Models with no spec or an empty uris list are allowed
 // unchanged. An undeclared endpoint is always counted and logged; enforce
 // controls whether the request is also refused with a 400.
-//
-// Static key mode has no per-model specs to consult; there the auth
-// middleware enforces STATIC_ALLOWED_PATHS on the request path instead.
 func (h *Handlers) requireModelURIAllowlist(
 	c *GatewayContext,
 	model string,
 	endpointPath string,
 	enforce bool,
 ) error {
-	if h.bareModelIDs() {
-		return nil
-	}
 	reqCtx := c.RequestContext()
 	if reqCtx == nil || reqCtx.ModelSpecs == nil {
 		return nil

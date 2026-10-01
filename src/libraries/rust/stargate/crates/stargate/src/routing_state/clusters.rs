@@ -16,9 +16,9 @@
 use super::keys::RoutingTargetKey;
 use super::registration::RegistrationGeneration;
 use super::snapshots::{
-    ActiveModelServer, ClusterBackendRemoval, ClusterBackendUpsert, RoutedClusterSnapshot,
-    RoutedClusterState, RoutedInferenceServerSnapshot, RoutingTargetGeneration,
-    RoutingTargetSnapshot, RoutingTargetState,
+    ClusterBackendRemoval, ClusterBackendUpsert, RoutedClusterSnapshot, RoutedClusterState,
+    RoutedInferenceServerSnapshot, RoutingTargetGeneration, RoutingTargetSnapshot,
+    RoutingTargetState,
 };
 use super::*;
 
@@ -128,6 +128,20 @@ impl RoutingTargetState {
                 clusters.values().cloned().collect()
             }
             RoutingTargetGeneration::Retired => Vec::new(),
+        }
+    }
+
+    pub(super) fn routes_registration(&self, registration: &Arc<RegistrationGeneration>) -> bool {
+        match &*self.generation.lock() {
+            RoutingTargetGeneration::Active { clusters, .. } => clusters
+                .get(registration.cluster_id())
+                .is_some_and(|cluster_state| {
+                    cluster_state
+                        .generation
+                        .lock()
+                        .contains_registration(registration)
+                }),
+            RoutingTargetGeneration::Retired => false,
         }
     }
 
@@ -375,44 +389,6 @@ impl RoutingLifecycle {
         model_ids: &[String],
     ) -> Vec<String> {
         active_model_ids(self.matching_targets(routing_key, model_ids).await)
-    }
-
-    /// Lists every active backend of the targets matching `routing_key` and
-    /// `model_ids`, reading the same per-cluster backend publications as
-    /// [`Self::candidates_for_target`]. Sorted by model id, then inference
-    /// server id, then cluster id.
-    pub(super) async fn list_active_model_servers(
-        &self,
-        routing_key: Option<&str>,
-        model_ids: &[String],
-    ) -> Vec<ActiveModelServer> {
-        let mut servers = Vec::new();
-        for (target, target_state) in self.matching_targets(routing_key, model_ids).await {
-            for cluster in target_state.cluster_states() {
-                servers.extend(
-                    cluster
-                        .backend_registrations()
-                        .into_iter()
-                        .map(|registration| ActiveModelServer {
-                            model_id: target.model_id.clone(),
-                            registration,
-                        }),
-                );
-            }
-        }
-        servers.sort_by(|left, right| {
-            (
-                left.model_id.as_str(),
-                left.registration.inference_server_id(),
-                left.registration.cluster_id(),
-            )
-                .cmp(&(
-                    right.model_id.as_str(),
-                    right.registration.inference_server_id(),
-                    right.registration.cluster_id(),
-                ))
-        });
-        servers
     }
 
     pub(super) async fn list_active_models_for_debug(&self) -> Vec<String> {

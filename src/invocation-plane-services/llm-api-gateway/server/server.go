@@ -20,7 +20,6 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -29,6 +28,7 @@ import (
 	echoMiddleware "github.com/labstack/echo/v4/middleware"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/tlsreload"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -42,14 +42,10 @@ func New(
 	cfg *config.Config,
 	inferenceProvider provider.InferenceProvider,
 	authClient api.InvocationAuthClient,
+	callerKeys *statickeys.KeySet,
 ) (*echo.Echo, error) {
 	if cfg != nil && cfg.Telemetry.ServiceName != "" {
 		telemetry.SetServiceName(cfg.Telemetry.ServiceName)
-	}
-
-	authMiddleware, err := newAuthMiddleware(cfg, authClient)
-	if err != nil {
-		return nil, err
 	}
 
 	e := echo.New()
@@ -57,7 +53,8 @@ func New(
 	e.HidePort = true
 	e.Use(echoMiddleware.Recover())
 	e.Use(api.NewContextMiddleware(cfg))
-	e.Use(authMiddleware)
+	e.Use(api.NewNVCFAuthMiddleware(authClient))
+	e.Use(api.NewCallerKeyAuthMiddleware(callerKeys, cfg != nil && cfg.PublicReadEndpoints))
 
 	// Start and StartTLS replace e.Start and e.StartTLS, which would overwrite
 	// this handler. Both serve on e.Server, so TLS gets the same handler and
@@ -137,25 +134,6 @@ func newTLSConfig(certs *tlsreload.Loader) *tls.Config {
 		MinVersion:     tls.VersionTLS12,
 		NextProtos:     []string{"h2", "http/1.1"},
 	}
-}
-
-// newAuthMiddleware picks the caller authentication for the configured mode.
-// Static key mode refuses to start without an authorizer; NVCF mode keeps
-// its historical pass-through for a nil client, which the gateway binary only
-// allows when ALLOW_ANONYMOUS is set. PUBLIC_READ_ENDPOINTS decides whether
-// the discovery reads bypass either middleware.
-func newAuthMiddleware(
-	cfg *config.Config,
-	authClient api.InvocationAuthClient,
-) (echo.MiddlewareFunc, error) {
-	publicReads := api.WithPublicReadEndpoints(cfg.PublicReadEndpointsEnabled())
-	if !cfg.StaticAuthMode() {
-		return api.NewNVCFAuthMiddleware(authClient, publicReads), nil
-	}
-	if authClient == nil {
-		return nil, errors.New("static API key mode requires an authorizer")
-	}
-	return api.NewStaticKeyAuthMiddleware(authClient, cfg.Auth.StaticAllowedPaths, publicReads), nil
 }
 
 func newRateLimiter(cfg *config.Config, e *echo.Echo) (ratelimit.RateLimiter, error) {

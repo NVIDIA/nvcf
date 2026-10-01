@@ -22,11 +22,9 @@ import (
 )
 
 type RequestContext struct {
-	RequestID string
-	APIKeyID  string // client auth subject; reserved for attribution, auditing, or future API-key policy hooks
-	// RateLimitKey is the auth-derived rate-limit subject: the NCA id in NVCF
-	// mode, the API key id in static key mode.
-	RateLimitKey     string
+	RequestID        string
+	APIKeyID         string // client auth subject; reserved for attribution, auditing, or future API-key policy hooks
+	OrgID            string // auth-derived rate limit key; currently used to scope rate limiting
 	ProjectID        string // used to further scope rate limiting when auth provides a project ID
 	BearerToken      string
 	RoutingKey       string
@@ -41,4 +39,8 @@ type RequestContext struct {
 	// when no priority config applies. Lower value is higher priority, 0 is
 	// highest. Forwarded to Stargate as the X-Priority header when set.
 	Priority *uint32
+	// RoutedModel is the X-Model value once the router answered 2xx, and empty
+	// otherwise. The router accepts only models it serves, so metrics can use
+	// it as a bounded label that callers cannot extend with arbitrary names.
+	RoutedModel string
 }

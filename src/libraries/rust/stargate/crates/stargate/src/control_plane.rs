@@ -29,15 +29,15 @@ use stargate_forwarding::{
 
 use crate::auth::{RegistrationAuthFailure, WorkerAuthenticator};
 use crate::discovery::Discovery;
-use crate::routing_state::{ActiveModelServer, StargateState};
+use crate::routing_state::StargateState;
 use stargate_runtime::CriticalTaskGroup;
 
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::stargate_control_plane_server::StargateControlPlane;
 use stargate_proto::pb::stargate_model_discovery_server::StargateModelDiscovery;
 use stargate_proto::pb::{
-    InferenceServerAck, InferenceServerRegistration, ListModelsEntry, ListModelsRequest,
-    ListModelsResponse, WatchStargatesRequest, WatchStargatesResponse,
+    InferenceServerAck, InferenceServerRegistration, ListModelsRequest, ListModelsResponse,
+    WatchStargatesRequest, WatchStargatesResponse,
 };
 
 mod registration;
@@ -333,51 +333,29 @@ impl StargateModelDiscovery for StargateService {
     }
 }
 
-/// Serves `ListModels` from one read of the local routing state, so
-/// `model_ids` always equals the distinct model ids of `entries`.
 pub(crate) async fn list_models_for_state(
     state: &StargateState,
     request: ListModelsRequest,
 ) -> Result<ListModelsResponse, &'static str> {
     let requested = normalize_list_models_request(request)?;
     let model_id_filter_count = requested.model_ids.len();
-    let servers = state
-        .list_active_model_servers(requested.routing_key.as_deref(), &requested.model_ids)
+    let model_ids = state
+        .list_active_models(requested.routing_key.as_deref(), &requested.model_ids)
         .await;
-    let response = list_models_response(servers);
+    let models = state
+        .list_registered_models(requested.routing_key.as_deref(), &requested.model_ids)
+        .await;
 
     debug!(
         routing_key = ?requested.routing_key,
         model_id_filter_count,
         return_all_models = model_id_filter_count == 0,
-        returned_model_count = response.model_ids.len(),
-        returned_entry_count = response.entries.len(),
+        returned_model_count = model_ids.len(),
+        registered_model_count = models.len(),
         "list_models completed"
     );
 
-    Ok(response)
-}
-
-/// Builds the response from servers sorted by model id, then inference server
-/// id.
-fn list_models_response(servers: Vec<ActiveModelServer>) -> ListModelsResponse {
-    let mut model_ids: Vec<String> = Vec::new();
-    let mut entries = Vec::with_capacity(servers.len());
-    for ActiveModelServer {
-        model_id,
-        registration,
-    } in servers
-    {
-        if model_ids.last() != Some(&model_id) {
-            model_ids.push(model_id.clone());
-        }
-        entries.push(ListModelsEntry {
-            model_id,
-            cluster_id: registration.cluster_id().to_owned(),
-            inference_server_id: registration.inference_server_id().to_owned(),
-        });
-    }
-    ListModelsResponse { model_ids, entries }
+    Ok(ListModelsResponse { model_ids, models })
 }
 
 fn normalize_list_models_request(
@@ -408,7 +386,10 @@ mod tests {
     use crate::discovery::SelfOnlyDiscovery;
     use crate::routing_state::{RegistrationIdentity, RunningRegistration};
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
-    use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
+    use stargate_proto::pb::{
+        ClusterListing, InferenceServerModelRegistration, InferenceServerStatus, ModelListing,
+        ModelStats,
+    };
     use stargate_runtime::CriticalTaskFailureReceiver;
 
     fn test_service(
@@ -504,11 +485,19 @@ mod tests {
         running
     }
 
-    fn entry(model_id: &str, inference_server_id: &str, cluster_id: &str) -> ListModelsEntry {
-        ListModelsEntry {
+    fn listing(model_id: &str, clusters: &[(&str, u32, u32)]) -> ModelListing {
+        ModelListing {
             model_id: model_id.to_string(),
-            cluster_id: cluster_id.to_string(),
-            inference_server_id: inference_server_id.to_string(),
+            clusters: clusters
+                .iter()
+                .map(
+                    |&(cluster_id, registered_servers, healthy_servers)| ClusterListing {
+                        cluster_id: cluster_id.to_string(),
+                        registered_servers,
+                        healthy_servers,
+                    },
+                )
+                .collect(),
         }
     }
 
@@ -526,7 +515,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_models_service_returns_model_ids_and_per_server_entries() {
+    async fn list_models_service_returns_routable_ids_and_registered_models() {
         use InferenceServerStatus::{Active, Inactive};
         let rtt = Some(Duration::from_millis(5));
         let state = Arc::new(StargateState::default());
@@ -557,10 +546,17 @@ mod tests {
             listed,
             ListModelsResponse {
                 model_ids: vec!["model-a".to_string(), "model-b".to_string()],
-                entries: vec![
-                    entry("model-a", "spark-1", "cluster-spark"),
-                    entry("model-a", "station-1", "station-1"),
-                    entry("model-b", "spark-1", "cluster-spark"),
+                models: vec![
+                    listing(
+                        "model-a",
+                        &[
+                            ("cluster-spark", 1, 1),
+                            ("no-rtt", 1, 0),
+                            ("station-1", 1, 1)
+                        ],
+                    ),
+                    listing("model-b", &[("cluster-spark", 1, 1)]),
+                    listing("model-inactive", &[("station-1", 1, 0)]),
                 ],
             }
         );
@@ -572,7 +568,10 @@ mod tests {
             filtered,
             ListModelsResponse {
                 model_ids: vec!["model-b".to_string()],
-                entries: vec![entry("model-b", "spark-1", "cluster-spark")],
+                models: vec![
+                    listing("model-b", &[("cluster-spark", 1, 1)]),
+                    listing("model-inactive", &[("station-1", 1, 0)]),
+                ],
             }
         );
 
@@ -595,7 +594,10 @@ mod tests {
             after_end,
             ListModelsResponse {
                 model_ids: vec!["model-a".to_string()],
-                entries: vec![entry("model-a", "station-1", "station-1")],
+                models: vec![
+                    listing("model-a", &[("no-rtt", 1, 0), ("station-1", 1, 1)]),
+                    listing("model-inactive", &[("station-1", 1, 0)]),
+                ],
             }
         );
 

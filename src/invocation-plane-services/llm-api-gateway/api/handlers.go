@@ -20,6 +20,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"time"
 
 	echo "github.com/labstack/echo/v4"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -35,10 +36,10 @@ type Handlers struct {
 	config        *config.Config
 	provider      provider.InferenceProvider
 	proxyProvider provider.OpenAIProxyProvider
-	modelLister   provider.ModelLister
 	rateLimiter   ratelimit.RateLimiter
 	limitResolver LimitResolver
 	observability observabilityMetrics
+	modelCatalog  *modelCatalog
 }
 
 type observabilityMetrics struct {
@@ -95,9 +96,12 @@ func NewHandlers(
 	if proxyProvider, ok := any(p).(provider.OpenAIProxyProvider); ok {
 		h.proxyProvider = proxyProvider
 	}
-	if modelLister, ok := any(p).(provider.ModelLister); ok {
-		h.modelLister = modelLister
+	var listingCacheTTL time.Duration
+	if cfg != nil {
+		listingCacheTTL = cfg.Stargate.ListingCacheTTL
 	}
+	modelLister, _ := any(p).(provider.ModelLister)
+	h.modelCatalog = newModelCatalog(modelLister, listingCacheTTL, systemClock{})
 	for _, opt := range opts {
 		if opt != nil {
 			opt(h)
@@ -118,10 +122,6 @@ func (h *Handlers) AsOpenAIProxyHandlers() *OpenAIProxyHandlers {
 	return &OpenAIProxyHandlers{handlers: h}
 }
 
-func (h *Handlers) AsModelRegistryHandlers() *ModelRegistryHandlers {
-	return &ModelRegistryHandlers{handlers: h}
-}
-
 func (h *Handlers) normalizeChatRequest(
 	c *GatewayContext,
 	request *models.ChatCompletionRequest,
@@ -129,14 +129,17 @@ func (h *Handlers) normalizeChatRequest(
 ) (*provider.NormalizedRequest, error) {
 	reqCtx := c.RequestContext()
 	if reqCtx == nil {
-		return nil, h.missingRequestContextError()
+		return nil, echo.NewHTTPError(
+			http.StatusBadRequest,
+			"model prefix is required",
+		)
 	}
 
 	if request.Messages == nil || len(*request.Messages) == 0 {
 		return nil, echo.NewHTTPError(http.StatusBadRequest, "messages is required")
 	}
 
-	routedModel, err := h.normalizeRequestModel(reqCtx, request.Model)
+	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model, h.bareModelNamesEnabled())
 	if err != nil {
 		return nil, err
 	}

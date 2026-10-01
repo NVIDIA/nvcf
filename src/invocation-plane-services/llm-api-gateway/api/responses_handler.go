@@ -113,10 +113,13 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 ) (*provider.NormalizedRequest, []byte, error) {
 	reqCtx := c.RequestContext()
 	if reqCtx == nil {
-		return nil, nil, h.handlers.missingRequestContextError()
+		return nil, nil, echo.NewHTTPError(
+			http.StatusBadRequest,
+			"model prefix is required",
+		)
 	}
 
-	routedModel, err := h.handlers.normalizeRequestModel(reqCtx, request.Model)
+	routedModel, err := normalizeOpenAIRequestModel(reqCtx, request.Model, h.handlers.bareModelNamesEnabled())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -476,6 +479,7 @@ func (h *ResponsesHandlers) finalizeNativeResponsesUsage(
 			ctx,
 			responsesEndpointPath,
 			requestFunctionID(c),
+			requestRoutedModel(c),
 			usage,
 			stream,
 		)

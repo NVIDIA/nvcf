@@ -49,13 +49,8 @@ import (
 const (
 	stargateChatCompletionsPath = "/v1/chat/completions"
 	stargateModelsPath          = "/v1/models"
-
-	// listModelsDefaultTimeout bounds a model list call when
-	// STARGATE_REQUEST_TIMEOUT is unset. Unlike a completion stream, a list
-	// has no reason to run long, and the discovery endpoints may be public.
-	listModelsDefaultTimeout = 10 * time.Second
-	// listModelsMaxBytes caps the router's model list response body.
-	listModelsMaxBytes = 4 << 20
+	listModelsTimeout           = 2 * time.Second
+	maxListModelsBodyBytes      = 4 << 20
 
 	headerAuthorization      = "Authorization"
 	headerContentType        = "Content-Type"
@@ -86,7 +81,6 @@ type StargateProvider struct {
 	baseURL                 *url.URL
 	client                  *http.Client
 	requestTimeout          time.Duration
-	serviceToken            string
 	upstreamRequestsTotal   otelmetric.Int64Counter
 	upstreamRequestDuration otelmetric.Float64Histogram
 }
@@ -124,7 +118,6 @@ func NewStargateProvider(cfg config.StargateConfig) (*StargateProvider, error) {
 			}),
 		)},
 		requestTimeout:          cfg.RequestTimeout,
-		serviceToken:            cfg.ServiceToken,
 		upstreamRequestsTotal:   telemetry.UpstreamRequestsTotal(),
 		upstreamRequestDuration: telemetry.UpstreamRequestDuration(),
 	}, nil
@@ -148,6 +141,7 @@ func (p *StargateProvider) Complete(
 		p.recordUpstreamRequest(ctx, reqCtx, start, 0, err)
 		return nil, err
 	}
+	recordRoutedModel(reqCtx, outbound, resp)
 
 	if err := checkHTTPError(resp); err != nil {
 		cancel()
@@ -188,6 +182,7 @@ func (p *StargateProvider) Stream(
 		p.recordUpstreamRequest(ctx, reqCtx, start, 0, err)
 		return nil, err
 	}
+	recordRoutedModel(reqCtx, outbound, resp)
 
 	if err := checkHTTPError(resp); err != nil {
 		cancel()
@@ -201,6 +196,37 @@ func (p *StargateProvider) Stream(
 	go p.readStream(requestCtx, cancel, resp.Body, events)
 
 	return events, nil
+}
+
+// ListModels reads the router's model listing, bounded by a fixed timeout. A
+// transport error, a non-2xx status, or an undecodable body fails the call.
+// It records no upstream metrics, which describe inference calls only.
+func (p *StargateProvider) ListModels(ctx context.Context) (*ModelListing, error) {
+	ctx, cancel := context.WithTimeout(ctx, listModelsTimeout)
+	defer cancel()
+
+	target := p.baseURL.ResolveReference(&url.URL{Path: stargateModelsPath})
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build router model listing request: %w", err)
+	}
+	request.Header.Set(headerAccept, contentTypeJSON)
+
+	resp, err := p.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("call router model listing: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("router model listing returned status %d", resp.StatusCode)
+	}
+
+	var listing ModelListing
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxListModelsBodyBytes)).Decode(&listing); err != nil {
+		return nil, fmt.Errorf("decode router model listing: %w", err)
+	}
+	return &listing, nil
 }
 
 func (p *StargateProvider) requestContext(
@@ -261,7 +287,7 @@ func (p *StargateProvider) recordUpstreamRequest(
 			Str("routing_key", reqCtx.RoutingKey).
 			Str("target_region", reqCtx.TargetRegion).
 			Str("project_id", reqCtx.ProjectID).
-			Str("rate_limit_key", reqCtx.RateLimitKey)
+			Str("rate_limit_key", reqCtx.OrgID)
 	}
 	log.Msg("completed upstream request")
 }
@@ -313,7 +339,9 @@ func (p *StargateProvider) newOutboundRequest(
 	if reqCtx.Priority != nil {
 		req.Header.Set(headerPriority, strconv.FormatUint(uint64(*reqCtx.Priority), 10))
 	}
-	p.setServiceAuthorization(req.Header)
+	if bearerToken := reqCtx.BearerToken; bearerToken != "" {
+		req.Header.Set(headerAuthorization, "Bearer "+bearerToken)
+	}
 
 	model := effectiveModel(reqCtx, request)
 	if model != "" {
@@ -327,12 +355,11 @@ func (p *StargateProvider) newOutboundRequest(
 	return req, nil
 }
 
-// setServiceAuthorization sets the gateway's own router credential. The
-// caller's bearer is never forwarded: with a shared static API key it would
-// reach every backend behind the router.
-func (p *StargateProvider) setServiceAuthorization(headers http.Header) {
-	if p.serviceToken != "" {
-		headers.Set(headerAuthorization, "Bearer "+p.serviceToken)
+// recordRoutedModel keeps the X-Model value only when the router answered 2xx.
+// Its unknown-model (404) and bad-header (400) answers must not create labels.
+func recordRoutedModel(reqCtx *requestctx.RequestContext, outbound *http.Request, resp *http.Response) {
+	if reqCtx != nil && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		reqCtx.RoutedModel = outbound.Header.Get(headerModel)
 	}
 }
 
@@ -378,11 +405,14 @@ func (p *StargateProvider) Proxy(
 	outbound.Header.Del(headerPriority)
 	// An inbound X-Routing-Method request header must never reach the router.
 	outbound.Header.Del(headerRoutingMethod)
-	// The caller's credentials stay at the gateway.
+	// Without a routing key (bare model names) the gateway authorized no
+	// routing scope, so a caller-supplied one must not reach the router either.
+	if reqCtx == nil || reqCtx.RoutingKey == "" {
+		outbound.Header.Del(headerRoutingKey)
+	}
+	// Only a bearer token that NVCF auth validated reaches the router; it is
+	// set again below.
 	outbound.Header.Del(headerAuthorization)
-	// The routing key comes only from the request context; a client-supplied
-	// value would let a caller pick another tenant's routing scope.
-	outbound.Header.Del(headerRoutingKey)
 
 	if reqCtx != nil {
 		if reqCtx.RequestID != "" {
@@ -406,8 +436,10 @@ func (p *StargateProvider) Proxy(
 		if reqCtx.Model != "" {
 			outbound.Header.Set(headerModel, reqCtx.Model)
 		}
+		if bearerToken := reqCtx.BearerToken; bearerToken != "" {
+			outbound.Header.Set(headerAuthorization, "Bearer "+bearerToken)
+		}
 	}
-	p.setServiceAuthorization(outbound.Header)
 	if request.InputTokens > 0 {
 		outbound.Header.Set(headerInputTokens, strconv.Itoa(request.InputTokens))
 	}
@@ -422,6 +454,7 @@ func (p *StargateProvider) Proxy(
 		p.recordUpstreamRequest(ctx, reqCtx, start, 0, err)
 		return nil, err
 	}
+	recordRoutedModel(reqCtx, outbound, resp)
 
 	p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, nil)
 	return &ProxyResponse{
@@ -429,51 +462,6 @@ func (p *StargateProvider) Proxy(
 		Header:     resp.Header.Clone(),
 		Body:       &proxyResponseBody{ReadCloser: resp.Body, cancel: cancel},
 	}, nil
-}
-
-// ListModels fetches the router's routable models from its GET /v1/models.
-// No caller header is forwarded: the request carries only the gateway's own
-// service token, when configured. A non-2xx status and an undecodable body are
-// returned as plain errors.
-func (p *StargateProvider) ListModels(ctx context.Context) (*RouterModelList, error) {
-	timeout := p.requestTimeout
-	if timeout <= 0 {
-		timeout = listModelsDefaultTimeout
-	}
-	requestCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	target := p.baseURL.ResolveReference(&url.URL{Path: stargateModelsPath})
-	outbound, err := http.NewRequestWithContext(requestCtx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("build router model list request: %w", err)
-	}
-	outbound.Header.Set(headerAccept, contentTypeJSON)
-	p.setServiceAuthorization(outbound.Header)
-
-	start := time.Now()
-	resp, err := p.client.Do(outbound)
-	if err != nil {
-		p.recordUpstreamRequest(ctx, nil, start, 0, err)
-		return nil, fmt.Errorf("router model list request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		err := fmt.Errorf("router model list returned status %d", resp.StatusCode)
-		p.recordUpstreamRequest(ctx, nil, start, resp.StatusCode, err)
-		return nil, err
-	}
-
-	var list RouterModelList
-	if err := json.NewDecoder(io.LimitReader(resp.Body, listModelsMaxBytes)).Decode(&list); err != nil {
-		err = fmt.Errorf("decode router model list: %w", err)
-		p.recordUpstreamRequest(ctx, nil, start, resp.StatusCode, err)
-		return nil, err
-	}
-
-	p.recordUpstreamRequest(ctx, nil, start, resp.StatusCode, nil)
-	return &list, nil
 }
 
 type proxyResponseBody struct {

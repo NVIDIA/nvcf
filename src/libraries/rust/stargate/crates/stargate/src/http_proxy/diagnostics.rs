@@ -80,6 +80,8 @@ fn list_models_request_from_query(query: Option<&str>) -> ListModelsRequest {
 
 #[cfg(test)]
 mod tests {
+    use stargate_proto::pb::{ClusterListing, ModelListing};
+
     use super::*;
 
     #[test]
@@ -90,24 +92,34 @@ mod tests {
         assert_eq!(request.model_ids, vec![" model-a ", "model-b"]);
     }
 
+    // The LLM API Gateway decodes these field names (provider.ModelListing).
     #[test]
-    fn http_model_discovery_serializes_model_ids_before_entries() {
+    fn http_list_models_serializes_the_proto_field_names() {
         let response = ListModelsResponse {
             model_ids: vec!["model-a".to_string()],
-            entries: vec![stargate_proto::pb::ListModelsEntry {
+            models: vec![ModelListing {
                 model_id: "model-a".to_string(),
-                cluster_id: "cluster-a".to_string(),
-                inference_server_id: "spark-1".to_string(),
+                clusters: vec![ClusterListing {
+                    cluster_id: "cluster-a".to_string(),
+                    registered_servers: 2,
+                    healthy_servers: 1,
+                }],
             }],
         };
 
-        let body = serde_json::to_string(&response).expect("response should serialize");
         assert_eq!(
-            body,
-            concat!(
-                r#"{"model_ids":["model-a"],"entries":[{"model_id":"model-a","#,
-                r#""cluster_id":"cluster-a","inference_server_id":"spark-1"}]}"#
-            )
+            serde_json::to_value(response).expect("ListModelsResponse serializes"),
+            serde_json::json!({
+                "model_ids": ["model-a"],
+                "models": [{
+                    "model_id": "model-a",
+                    "clusters": [{
+                        "cluster_id": "cluster-a",
+                        "registered_servers": 2,
+                        "healthy_servers": 1
+                    }]
+                }]
+            })
         );
     }
 }

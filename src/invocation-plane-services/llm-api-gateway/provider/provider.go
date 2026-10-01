@@ -99,21 +99,28 @@ type OpenAIProxyProvider interface {
 	) (*ProxyResponse, error)
 }
 
-// RouterModelList is the router's GET /v1/models response. It lists only
-// routable inference servers; ModelIDs is the distinct model ids of Entries.
-type RouterModelList struct {
-	ModelIDs []string           `json:"model_ids"`
-	Entries  []RouterModelEntry `json:"entries"`
-}
-
-// RouterModelEntry is one routable inference server serving one model.
-type RouterModelEntry struct {
-	ModelID           string `json:"model_id"`
-	ClusterID         string `json:"cluster_id"`
-	InferenceServerID string `json:"inference_server_id"`
-}
-
-// ModelLister lists the models the router can currently route to.
+// ModelLister reads the LLM Request Router's model listing.
 type ModelLister interface {
-	ListModels(ctx context.Context) (*RouterModelList, error)
+	ListModels(ctx context.Context) (*ModelListing, error)
+}
+
+// ModelListing is the router's GET /v1/models response.
+type ModelListing struct {
+	// ModelIDs holds the models the router can route right now.
+	ModelIDs []string `json:"model_ids"`
+	// Models holds every registered model, routable or not.
+	Models []RegisteredModel `json:"models"`
+}
+
+// RegisteredModel is one model in the router listing with its clusters.
+type RegisteredModel struct {
+	ModelID  string                `json:"model_id"`
+	Clusters []ClusterRegistration `json:"clusters"`
+}
+
+// ClusterRegistration counts one cluster's servers for a model.
+type ClusterRegistration struct {
+	ClusterID         string `json:"cluster_id"`
+	RegisteredServers uint32 `json:"registered_servers"`
+	HealthyServers    uint32 `json:"healthy_servers"`
 }

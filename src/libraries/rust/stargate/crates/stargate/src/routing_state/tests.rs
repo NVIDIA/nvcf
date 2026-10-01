@@ -111,18 +111,6 @@ impl RegistrationScenario {
             .unwrap()
     }
 
-    fn start_in_cluster(&self, id: &str, cluster_id: &str, port: u16) -> RunningRegistration {
-        self.state
-            .begin_registration(&RegistrationIdentity {
-                inference_server_id: id.to_string(),
-                cluster_id: cluster_id.to_string(),
-                inference_server_url: format!("quic://127.0.0.1:{port}"),
-                routing_key: self.routing_key.clone(),
-                reverse_tunnel: false,
-            })
-            .unwrap()
-    }
-
     fn update(
         &self,
         running: &RunningRegistration,
@@ -1160,144 +1148,102 @@ async fn list_active_models_ignores_empty_target_generations() {
     );
 }
 
-type ListedServer = (String, String, String);
-
-fn listed_servers(servers: Vec<ActiveModelServer>) -> Vec<ListedServer> {
-    servers
-        .into_iter()
-        .map(|server| {
-            (
-                server.model_id,
-                server.registration.inference_server_id().to_string(),
-                server.registration.cluster_id().to_string(),
+fn model_listing(model_id: &str, clusters: &[(&str, u32, u32)]) -> ModelListing {
+    ModelListing {
+        model_id: model_id.to_string(),
+        clusters: clusters
+            .iter()
+            .map(
+                |&(cluster_id, registered_servers, healthy_servers)| ClusterListing {
+                    cluster_id: cluster_id.to_string(),
+                    registered_servers,
+                    healthy_servers,
+                },
             )
-        })
-        .collect()
-}
-
-fn listed(model_id: &str, inference_server_id: &str, cluster_id: &str) -> ListedServer {
-    (
-        model_id.to_string(),
-        inference_server_id.to_string(),
-        cluster_id.to_string(),
-    )
+            .collect(),
+    }
 }
 
 #[tokio::test]
-async fn list_active_model_servers_lists_only_routable_backends() {
-    let scenario = RegistrationScenario::new(Some("rk-entries"));
-    let spark_b = scenario.start_in_cluster("spark-b", "cluster-spark", 1111);
-    let spark_a = scenario.start_in_cluster("spark-a", "cluster-spark", 2222);
-    let station = scenario.start_in_cluster("station", "station", 3333);
-    let without_rtt = scenario.start_in_cluster("no-rtt", "no-rtt", 4444);
-    let inactive = scenario.start_in_cluster("inactive", "inactive", 5555);
-    let other_key = scenario.start_keyed("other-key", 6666, "rk-other");
+async fn list_registered_models_counts_registered_and_routable_servers_per_cluster() {
+    let scenario = RegistrationScenario::new(Some("rk-list"));
+    let b_active = scenario.start_in("b-active", "cluster-b", 1111);
+    let b_inactive = scenario.start_in("b-inactive", "cluster-b", 2222);
+    let a_active = scenario.start_in("a-active", "cluster-a", 3333);
+    let idle = scenario.start_in("idle", "cluster-idle", 4444);
+    let other_key = scenario.start_keyed("other-key", 5555, "rk-other");
 
-    scenario.activate(&spark_b, "model-b").await;
-    let mut spark_a_update = scenario.update_default_stats(&spark_a, "model-b", Active);
-    spark_a_update.models.insert(
-        "model-a".to_string(),
-        InferenceServerModelRegistration {
-            stats: Some(ModelStats::default()),
-            status: Active as i32,
-        },
-    );
-    scenario.publish_connected(&spark_a, &spark_a_update).await;
-    scenario.activate(&station, "model-a").await;
+    scenario.activate(&b_active, "model-x").await;
     scenario
-        .publish_default_stats(&without_rtt, "model-a", Active, None)
+        .publish_default_stats(&b_inactive, "model-x", Inactive, Some(7))
         .await;
-    let mut inactive_update = scenario.update_default_stats(&inactive, "model-a", Inactive);
-    inactive_update.models.insert(
-        "model-inactive-only".to_string(),
-        InferenceServerModelRegistration {
-            stats: Some(ModelStats::default()),
-            status: Inactive as i32,
-        },
-    );
+    scenario.activate(&a_active, "model-x").await;
     scenario
-        .publish_connected(&inactive, &inactive_update)
+        .publish_default_stats(&idle, "model-idle", Inactive, Some(7))
         .await;
-    scenario.activate(&other_key, "model-a").await;
+    scenario.activate(&other_key, "model-x").await;
 
-    let servers = scenario
-        .state
-        .list_active_model_servers(Some("rk-entries"), &[])
-        .await;
-    assert!(
-        servers
-            .iter()
-            .filter(|server| server.registration.inference_server_id() == "spark-a")
-            .all(|server| Arc::ptr_eq(&server.registration, &spark_a.generation())),
-        "entries must carry the exact registration generation that published the route"
-    );
-    assert_eq!(
-        listed_servers(servers),
-        vec![
-            listed("model-a", "spark-a", "cluster-spark"),
-            listed("model-a", "station", "station"),
-            listed("model-b", "spark-a", "cluster-spark"),
-            listed("model-b", "spark-b", "cluster-spark"),
-        ]
-    );
     assert_eq!(
         scenario
             .state
-            .list_active_models(Some("rk-entries"), &[])
+            .list_registered_models(Some("rk-list"), &[])
             .await,
-        vec!["model-a", "model-b"],
-        "entries and model ids must describe the same routable targets"
-    );
-
-    let filtered = scenario
-        .state
-        .list_active_model_servers(
-            Some("rk-entries"),
-            &[
-                "model-b".to_string(),
-                "model-inactive-only".to_string(),
-                "model-b".to_string(),
-            ],
-        )
-        .await;
-    assert_eq!(
-        listed_servers(filtered),
         vec![
-            listed("model-b", "spark-a", "cluster-spark"),
-            listed("model-b", "spark-b", "cluster-spark"),
+            model_listing("model-idle", &[("cluster-idle", 1, 0)]),
+            model_listing("model-x", &[("cluster-a", 1, 1), ("cluster-b", 2, 1)]),
         ]
     );
     assert_eq!(
-        listed_servers(
-            scenario
-                .state
-                .list_active_model_servers(Some("rk-other"), &[])
-                .await
-        ),
-        vec![listed("model-a", "other-key", "other-key")]
-    );
-    assert!(
         scenario
             .state
-            .list_active_model_servers(None, &[])
-            .await
-            .is_empty(),
-        "unscoped listing must not include keyed registrations"
+            .list_active_models(Some("rk-list"), &[])
+            .await,
+        vec!["model-x".to_string()],
+        "a registered but unroutable model must stay out of model_ids"
     );
-
-    scenario
-        .publish_default_stats(&station, "model-a", Inactive, Some(5))
-        .await;
-    scenario.state.end_registration(spark_a).await;
     assert_eq!(
-        listed_servers(
-            scenario
-                .state
-                .list_active_model_servers(Some("rk-entries"), &[])
-                .await
-        ),
-        vec![listed("model-b", "spark-b", "cluster-spark")],
-        "deactivated and ended backends must leave the listing"
+        scenario
+            .state
+            .list_registered_models(Some("rk-list"), &["model-idle".to_string()])
+            .await,
+        vec![model_listing("model-idle", &[("cluster-idle", 1, 0)])]
+    );
+    assert_eq!(
+        scenario.state.list_registered_models(None, &[]).await,
+        Vec::new(),
+        "registrations with another routing key must not be listed"
+    );
+}
+
+#[tokio::test]
+async fn list_registered_models_counts_only_open_registrations_as_healthy() {
+    let scenario = RegistrationScenario::new(None);
+    let ending = scenario.start_in("ending", "cluster-shared", 1111);
+    let open = scenario.start_in("open", "cluster-shared", 2222);
+    scenario.activate(&ending, "model-x").await;
+    scenario.activate(&open, "model-x").await;
+
+    // end_registration drops the registry record before routing cleanup
+    // finishes; hold the listing in that window.
+    scenario.state.registrations.end_registration(ending);
+
+    assert_eq!(
+        scenario.state.list_registered_models(None, &[]).await,
+        vec![model_listing("model-x", &[("cluster-shared", 1, 1)])]
+    );
+}
+
+#[tokio::test]
+async fn list_registered_models_drops_ended_registrations() {
+    let scenario = RegistrationScenario::new(None);
+    let running = scenario.start("ended", 1111);
+    scenario.activate(&running, "model-ended").await;
+
+    scenario.state.end_registration(running).await;
+
+    assert_eq!(
+        scenario.state.list_registered_models(None, &[]).await,
+        Vec::new()
     );
 }
 

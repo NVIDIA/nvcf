@@ -163,7 +163,7 @@ impl ClusterRoutingGeneration {
         true
     }
 
-    fn contains_registration(&self, registration: &Arc<RegistrationGeneration>) -> bool {
+    pub(super) fn contains_registration(&self, registration: &Arc<RegistrationGeneration>) -> bool {
         backend_index(&self.backends, registration.inference_server_id())
             .is_ok_and(|index| Arc::ptr_eq(&self.backends[index].registration, registration))
     }
@@ -392,17 +392,6 @@ impl RoutedClusterState {
         backends
             .into_iter()
             .map(|backend| backend.as_ref().clone())
-            .collect()
-    }
-
-    /// Returns the exact registrations of the backends this cluster currently
-    /// routes to, in stable inference-server id order.
-    pub(super) fn backend_registrations(&self) -> Vec<Arc<RegistrationGeneration>> {
-        self.generation
-            .lock()
-            .backends
-            .iter()
-            .map(|backend| Arc::clone(&backend.registration))
             .collect()
     }
 

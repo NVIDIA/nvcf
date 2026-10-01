@@ -48,10 +48,10 @@ func TestNormalizeChatRequestRunsAdmissionBeforeFinalize(t *testing.T) {
 	handlers := NewHandlers(cfg, nil, limiter)
 	gc, _ := newRateLimitGatewayContext()
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:    "req-123",
-		RateLimitKey: "nca-456",
-		RoutingKey:   "fn-chat",
-		Model:        "company-name/model-name",
+		RequestID:  "req-123",
+		OrgID:      "nca-456",
+		RoutingKey: "fn-chat",
+		Model:      "company-name/model-name",
 		ModelSpecs: map[string]nvcf.ModelSpec{
 			"company-name/model-name": {
 				TokenRateLimit: "100-M,1000-D",
@@ -384,10 +384,10 @@ func TestNormalizeChatRequestUsesMinimumOutputReservationWithoutMaxTokens(t *tes
 	handlers := NewHandlers(cfg, nil, limiter)
 	gc, rec := newRateLimitGatewayContext()
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:    "req-default-output",
-		RateLimitKey: "nca-456",
-		RoutingKey:   "fn-chat",
-		Model:        "company-name/model-name",
+		RequestID:  "req-default-output",
+		OrgID:      "nca-456",
+		RoutingKey: "fn-chat",
+		Model:      "company-name/model-name",
 		ModelSpecs: map[string]nvcf.ModelSpec{
 			"company-name/model-name": {
 				TokenRateLimit: "100-M,1000-D",
@@ -454,10 +454,10 @@ func TestNormalizeChatRequestDoesNotConsumeRequestsWhenTokenAdmissionFails(t *te
 	handlers := NewHandlers(cfg, nil, limiter)
 	gc, rec := newRateLimitGatewayContext()
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:    "req-token-reject",
-		RateLimitKey: "nca-456",
-		RoutingKey:   "fn-chat",
-		Model:        "company-name/model-name",
+		RequestID:  "req-token-reject",
+		OrgID:      "nca-456",
+		RoutingKey: "fn-chat",
+		Model:      "company-name/model-name",
 		ModelSpecs: map[string]nvcf.ModelSpec{
 			"company-name/model-name": {
 				TokenRateLimit: "100-M,1000-D",
@@ -508,10 +508,10 @@ func TestNormalizeChatRequestCommitsEstimatedPromptTokens(t *testing.T) {
 	)
 	gc, _ := newRateLimitGatewayContext()
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:    "req-tokenized-input",
-		RateLimitKey: "nca-456",
-		RoutingKey:   "fn-chat",
-		Model:        "company-name/model-name",
+		RequestID:  "req-tokenized-input",
+		OrgID:      "nca-456",
+		RoutingKey: "fn-chat",
+		Model:      "company-name/model-name",
 		ModelSpecs: map[string]nvcf.ModelSpec{
 			"company-name/model-name": {
 				TokenRateLimit: "100-M,1000-D",
@@ -704,10 +704,10 @@ func TestNormalizeChatRequestParsesSingleTokenRateLimitUnits(t *testing.T) {
 			handlers := NewHandlers(cfg, nil, limiter)
 			gc, _ := newRateLimitGatewayContext()
 			gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-				RequestID:    "req-123",
-				RateLimitKey: "nca-456",
-				RoutingKey:   "fn-chat",
-				Model:        "company-name/model-name",
+				RequestID:  "req-123",
+				OrgID:      "nca-456",
+				RoutingKey: "fn-chat",
+				Model:      "company-name/model-name",
 				ModelSpecs: map[string]nvcf.ModelSpec{
 					"company-name/model-name": {
 						TokenRateLimit: tc.raw,
@@ -748,10 +748,10 @@ func TestNormalizeChatRequestParsesCombinedTokenRateLimitUnits(t *testing.T) {
 	handlers := NewHandlers(cfg, nil, limiter)
 	gc, _ := newRateLimitGatewayContext()
 	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
-		RequestID:    "req-123",
-		RateLimitKey: "nca-456",
-		RoutingKey:   "fn-chat",
-		Model:        "company-name/model-name",
+		RequestID:  "req-123",
+		OrgID:      "nca-456",
+		RoutingKey: "fn-chat",
+		Model:      "company-name/model-name",
 		ModelSpecs: map[string]nvcf.ModelSpec{
 			"company-name/model-name": {
 				TokenRateLimit: "100-S,9000-M,25000-H,100000-D,500000-W",
@@ -797,9 +797,9 @@ func TestCallerLimitResolverParsesTokenLimitLevels(t *testing.T) {
 	limits, err := CallerLimitResolver{}.ResolveLimits(
 		context.Background(),
 		&requestctx.RequestContext{
-			RateLimitKey: "nca-456",
-			RoutingKey:   "fn-chat",
-			Model:        "company-name/model-name",
+			OrgID:      "nca-456",
+			RoutingKey: "fn-chat",
+			Model:      "company-name/model-name",
 			ModelSpecs: map[string]nvcf.ModelSpec{
 				"company-name/model-name": {
 					TokenRateLimit: "9000-M,100000-D",

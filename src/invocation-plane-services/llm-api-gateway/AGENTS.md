@@ -46,20 +46,6 @@ present in this public snapshot.
   upstream requirement.
 - Do not hand-edit generated protobufs or mocks. Regenerate them from the
   owning source.
-- The gateway fails closed: it exits at startup unless `NVCF_GRPC_ADDR`,
-  `API_KEYS_PATH`, or `ALLOW_ANONYMOUS=true` is set. The local overlay and
-  `mise run run` set `ALLOW_ANONYMOUS=true`. Auth modes, the static key file
-  format, and the related env vars are documented in `README.md` under
-  Authentication.
-- NVCF mode parses `model` as `<routing_key>/<model>`. Static API key mode
-  (`API_KEYS_PATH`) keeps the whole `model` string with an empty routing key.
-  Model parsing and auth changes must keep both modes covered
-  (`api/static_mode_test.go`, `server/server_test.go`).
-- The caller's `Authorization` header must never reach Stargate. Only
-  `STARGATE_SERVICE_TOKEN` is sent upstream.
-- `GET /v1/models` and `GET /v1/registry` are built from the router's
-  `GET /v1/models` (`api/model_registry_handler.go`) and skip auth when
-  `PUBLIC_READ_ENDPOINTS` is true (default in static-keys and anonymous mode).
 - Chart and stack changes belong in the chart or stack subtree. Keep runtime
   env/config names aligned when cross-subtree follow-up is needed.
 

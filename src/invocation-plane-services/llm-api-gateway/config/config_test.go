@@ -21,8 +21,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +61,96 @@ func TestLoadFromEnvReadsInferenceWriteTimeout(t *testing.T) {
 
 	if cfg.Server.InferenceWriteTimeout != 0 {
 		t.Fatalf("inference write timeout = %s, want 0s", cfg.Server.InferenceWriteTimeout)
+	}
+}
+
+func TestLoadFromEnvReadsBareModelNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"unset defaults off", "", false},
+		{"enabled", "true", true},
+		{"disabled", "false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.value != "" {
+				t.Setenv("BARE_MODEL_NAMES_ENABLED", tc.value)
+			}
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+
+			if cfg.BareModelNamesEnabled != tc.want {
+				t.Fatalf("bare model names = %t, want %t", cfg.BareModelNamesEnabled, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvReadsCallerKeysFile(t *testing.T) {
+	t.Setenv("API_KEYS_PATH", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if cfg.CallerKeysFile != "/etc/llm-api-gateway/caller-keys/caller-keys.yaml" {
+		t.Fatalf("caller keys file = %q, want the configured path", cfg.CallerKeysFile)
+	}
+}
+
+func TestLoadFromEnvRejectsCallerKeysWithNVCFAuth(t *testing.T) {
+	t.Setenv("API_KEYS_PATH", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
+	t.Setenv("NVCF_GRPC_ADDR", "api.nvcf.svc.cluster.local:9090")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv() error = nil, want an error for caller keys with NVCF auth")
+	}
+	if !strings.Contains(err.Error(), "API_KEYS_PATH and NVCF_GRPC_ADDR are mutually exclusive") {
+		t.Fatalf("LoadFromEnv() error = %v, want it to name both settings", err)
+	}
+}
+
+func TestCheckCallerAuth_AuthSettings_EnforcesFailClosedRule(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		wantErr error
+	}{
+		{"no authenticator", nil, errNoCallerAuth},
+		{"no authenticator, anonymous off", map[string]string{"ALLOW_ANONYMOUS": "false"}, errNoCallerAuth},
+		{"nvcf auth", map[string]string{"NVCF_GRPC_ADDR": "api.nvcf.svc.cluster.local:9090"}, nil},
+		{"caller keys", map[string]string{"API_KEYS_PATH": "/etc/caller-keys.yaml"}, nil},
+		{"anonymous", map[string]string{"ALLOW_ANONYMOUS": "true"}, nil},
+		{"anonymous with nvcf auth", map[string]string{
+			"ALLOW_ANONYMOUS": "true",
+			"NVCF_GRPC_ADDR":  "api.nvcf.svc.cluster.local:9090",
+		}, errAnonymousWithCallerAuth},
+		{"anonymous with caller keys", map[string]string{
+			"ALLOW_ANONYMOUS": "true",
+			"API_KEYS_PATH":   "/etc/caller-keys.yaml",
+		}, errAnonymousWithCallerAuth},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+
+			if err := cfg.CheckCallerAuth(); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("CheckCallerAuth() error = %v, want %v", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -317,127 +405,55 @@ func TestLoadFromEnvRejectsInvalidMaxRequestBodyBytes(t *testing.T) {
 	}
 }
 
-func TestDefaultAuthConfig(t *testing.T) {
-	cfg := Default()
-
-	if cfg.StaticAuthMode() {
-		t.Fatal("static auth mode = true, want false by default")
-	}
-	if cfg.Auth.AllowAnonymous {
-		t.Fatal("allow anonymous = true, want false by default")
-	}
-	if !slices.Equal(cfg.Auth.StaticAllowedPaths, []string{"/v1/chat/completions"}) {
-		t.Fatalf("static allowed paths = %q, want [/v1/chat/completions]", cfg.Auth.StaticAllowedPaths)
-	}
-	if cfg.Server.TLSEnabled() {
-		t.Fatal("tls enabled = true, want false by default")
-	}
-	if cfg.Server.TLSReloadInterval != DefaultTLSReloadInterval || DefaultTLSReloadInterval != 30*time.Second {
-		t.Fatalf("tls reload interval = %s, want 30s", cfg.Server.TLSReloadInterval)
-	}
-	if cfg.Stargate.ServiceToken != "" {
-		t.Fatal("stargate service token is set by default")
-	}
-}
-
-func TestLoadFromEnvReadsAuthTLSAndServiceToken(t *testing.T) {
-	t.Setenv("API_KEYS_PATH", "/etc/llm-api-gateway/api-keys.json")
-	t.Setenv("ALLOW_ANONYMOUS", "true")
-	t.Setenv("STARGATE_SERVICE_TOKEN", "router-token")
-	t.Setenv("TLS_CERT_FILE", "/etc/tls/tls.crt")
-	t.Setenv("TLS_KEY_FILE", "/etc/tls/tls.key")
-
-	cfg, err := LoadFromEnv()
-	if err != nil {
-		t.Fatalf("LoadFromEnv() error = %v", err)
-	}
-
-	if cfg.Auth.APIKeysPath != "/etc/llm-api-gateway/api-keys.json" {
-		t.Fatalf("api keys path = %q", cfg.Auth.APIKeysPath)
-	}
-	if !cfg.StaticAuthMode() {
-		t.Fatal("static auth mode = false, want true when API_KEYS_PATH is set")
-	}
-	if !cfg.Auth.AllowAnonymous {
-		t.Fatal("allow anonymous = false, want true")
-	}
-	if cfg.Stargate.ServiceToken != "router-token" {
-		t.Fatalf("stargate service token = %q, want router-token", cfg.Stargate.ServiceToken)
-	}
-	if cfg.Server.TLSCertFile != "/etc/tls/tls.crt" || cfg.Server.TLSKeyFile != "/etc/tls/tls.key" {
-		t.Fatalf("tls files = %q, %q", cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
-	}
-	if !cfg.Server.TLSEnabled() {
-		t.Fatal("tls enabled = false, want true")
-	}
-}
-
-func TestLoadFromEnvStaticAllowedPaths(t *testing.T) {
+func TestLoadFromEnvReadsStargateListingCacheTTL(t *testing.T) {
 	tests := []struct {
-		name    string
-		raw     string
-		want    []string
-		wantErr bool
+		name  string
+		value string
+		want  time.Duration
 	}{
-		{name: "unset keeps default", raw: "", want: []string{"/v1/chat/completions"}},
-		{name: "single path", raw: "/v1/embeddings", want: []string{"/v1/embeddings"}},
-		{
-			name: "trims and drops empty entries",
-			raw:  " /v1/chat/completions , ,/v1/responses ",
-			want: []string{"/v1/chat/completions", "/v1/responses"},
-		},
-		{name: "only separators", raw: " , ", wantErr: true},
-		{name: "relative path", raw: "/v1/chat/completions,v1/embeddings", wantErr: true},
+		{name: "default", value: "", want: 3 * time.Second},
+		{name: "override", value: "10s", want: 10 * time.Second},
+		{name: "zero refreshes every call", value: "0s", want: 0},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("STATIC_ALLOWED_PATHS", tc.raw)
+			t.Setenv("STARGATE_LISTING_CACHE_TTL", tc.value)
 
 			cfg, err := LoadFromEnv()
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("LoadFromEnv() error = nil, want error")
-				}
-				if !strings.Contains(err.Error(), "STATIC_ALLOWED_PATHS") {
-					t.Fatalf("error %q does not mention STATIC_ALLOWED_PATHS", err.Error())
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("LoadFromEnv() error = %v", err)
 			}
-			if !slices.Equal(cfg.Auth.StaticAllowedPaths, tc.want) {
-				t.Fatalf("static allowed paths = %q, want %q", cfg.Auth.StaticAllowedPaths, tc.want)
+			if cfg.Stargate.ListingCacheTTL != tc.want {
+				t.Fatalf("listing cache ttl = %s, want %s", cfg.Stargate.ListingCacheTTL, tc.want)
 			}
 		})
 	}
 }
 
-func TestLoadFromEnvRejectsNVCFAndStaticKeysTogether(t *testing.T) {
-	t.Setenv("NVCF_GRPC_ADDR", "api.nvcf.example:9090")
-	t.Setenv("API_KEYS_PATH", "/etc/llm-api-gateway/api-keys.json")
+func TestLoadFromEnvRejectsInvalidStargateListingCacheTTL(t *testing.T) {
+	for _, value := range []string{"-1s", "3"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("STARGATE_LISTING_CACHE_TTL", value)
 
-	_, err := LoadFromEnv()
-	if err == nil {
-		t.Fatal("LoadFromEnv() error = nil, want error")
-	}
-	for _, want := range []string{"API_KEYS_PATH", "NVCF_GRPC_ADDR", "mutually exclusive"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error %q does not mention %q", err.Error(), want)
-		}
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "STARGATE_LISTING_CACHE_TTL") {
+				t.Fatalf("error %q does not mention STARGATE_LISTING_CACHE_TTL", err.Error())
+			}
+		})
 	}
 }
 
-func TestLoadFromEnvRejectsInvalidAllowAnonymous(t *testing.T) {
-	t.Setenv("ALLOW_ANONYMOUS", "sure")
+func TestDefaultTLSConfig(t *testing.T) {
+	cfg := Default()
 
-	_, err := LoadFromEnv()
-	if err == nil {
-		t.Fatal("LoadFromEnv() error = nil, want error")
+	if cfg.Server.TLSEnabled() {
+		t.Fatal("tls enabled = true, want false by default")
 	}
-	if !strings.Contains(err.Error(), "ALLOW_ANONYMOUS") {
-		t.Fatalf("error %q does not mention ALLOW_ANONYMOUS", err.Error())
+	if cfg.Server.TLSReloadInterval != DefaultTLSReloadInterval || DefaultTLSReloadInterval != 30*time.Second {
+		t.Fatalf("tls reload interval = %s, want 30s", cfg.Server.TLSReloadInterval)
 	}
 }
 
@@ -530,123 +546,36 @@ func TestServerConfigTLSEnabledFailsClosedOnHalfPair(t *testing.T) {
 	}
 }
 
-func TestConfigAuthMode(t *testing.T) {
+func TestLoadFromEnvReadsPublicReadEndpoints(t *testing.T) {
 	tests := []struct {
-		name           string
-		grpcAddr       string
-		apiKeysPath    string
-		allowAnonymous bool
-		wantMode       AuthMode
-		wantErr        error
+		name    string
+		raw     string
+		want    bool
+		wantErr bool
 	}{
-		{name: "nvcf", grpcAddr: "api.nvcf.example:9090", wantMode: AuthModeNVCF},
-		{name: "static keys", apiKeysPath: "/keys.json", wantMode: AuthModeStaticKeys},
-		{name: "nvcf ignores allow anonymous", grpcAddr: "api.nvcf.example:9090", allowAnonymous: true, wantMode: AuthModeNVCF},
-		{name: "static ignores allow anonymous", apiKeysPath: "/keys.json", allowAnonymous: true, wantMode: AuthModeStaticKeys},
-		{name: "anonymous only when allowed", allowAnonymous: true, wantMode: AuthModeAnonymous},
-		{name: "fails closed without authenticator", wantErr: ErrNoAuthConfigured},
-		{name: "mutually exclusive", grpcAddr: "api.nvcf.example:9090", apiKeysPath: "/keys.json", wantErr: errAuthModesExclusive},
+		{name: "default off", raw: "", want: false},
+		{name: "enabled", raw: "true", want: true},
+		{name: "disabled", raw: "false", want: false},
+		{name: "invalid", raw: "sometimes", wantErr: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Default()
-			cfg.NVCF.GRPCAddr = tc.grpcAddr
-			cfg.Auth.APIKeysPath = tc.apiKeysPath
-			cfg.Auth.AllowAnonymous = tc.allowAnonymous
+			t.Setenv("PUBLIC_READ_ENDPOINTS", tc.raw)
 
-			mode, err := cfg.AuthMode()
-			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("AuthMode() error = %v, want %v", err, tc.wantErr)
+			cfg, err := LoadFromEnv()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "PUBLIC_READ_ENDPOINTS") {
+					t.Fatalf("LoadFromEnv() error = %v, want one naming PUBLIC_READ_ENDPOINTS", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("AuthMode() error = %v", err)
-			}
-			if mode != tc.wantMode {
-				t.Fatalf("AuthMode() = %q, want %q", mode, tc.wantMode)
-			}
-			if cfg.StaticAuthMode() != (tc.wantMode == AuthModeStaticKeys) {
-				t.Fatalf("StaticAuthMode() = %v for mode %q", cfg.StaticAuthMode(), tc.wantMode)
-			}
-		})
-	}
-}
-
-func TestErrNoAuthConfiguredNamesEveryOption(t *testing.T) {
-	for _, want := range []string{"NVCF_GRPC_ADDR", "API_KEYS_PATH", "ALLOW_ANONYMOUS"} {
-		if !strings.Contains(ErrNoAuthConfigured.Error(), want) {
-			t.Fatalf("error %q does not name %s", ErrNoAuthConfigured.Error(), want)
-		}
-	}
-}
-
-func TestNilConfigAuthModeFailsClosed(t *testing.T) {
-	var cfg *Config
-	if cfg.StaticAuthMode() {
-		t.Fatal("nil config reports static auth mode")
-	}
-	if _, err := cfg.AuthMode(); !errors.Is(err, ErrNoAuthConfigured) {
-		t.Fatalf("AuthMode() error = %v, want ErrNoAuthConfigured", err)
-	}
-}
-
-func TestPublicReadEndpointsEnabled(t *testing.T) {
-	tests := []struct {
-		name           string
-		grpcAddr       string
-		apiKeysPath    string
-		allowAnonymous bool
-		raw            string
-		want           bool
-	}{
-		{name: "static keys default public", apiKeysPath: "/keys.json", want: true},
-		{name: "anonymous default public", allowAnonymous: true, want: true},
-		{name: "nvcf default authenticated", grpcAddr: "api.nvcf.example:9090", want: false},
-		{name: "no authenticator fails closed", want: false},
-		{name: "static keys override false", apiKeysPath: "/keys.json", raw: "false", want: false},
-		{name: "anonymous override false", allowAnonymous: true, raw: "false", want: false},
-		{name: "nvcf override true", grpcAddr: "api.nvcf.example:9090", raw: "true", want: true},
-		{name: "nvcf override false", grpcAddr: "api.nvcf.example:9090", raw: "0", want: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("NVCF_GRPC_ADDR", tc.grpcAddr)
-			t.Setenv("API_KEYS_PATH", tc.apiKeysPath)
-			t.Setenv("ALLOW_ANONYMOUS", strconv.FormatBool(tc.allowAnonymous))
-			t.Setenv("PUBLIC_READ_ENDPOINTS", tc.raw)
-
-			cfg, err := LoadFromEnv()
-			if err != nil {
 				t.Fatalf("LoadFromEnv() error = %v", err)
 			}
-			if tc.raw == "" && cfg.Auth.PublicReadEndpoints != nil {
-				t.Fatalf("public read endpoints override = %v, want nil when unset", *cfg.Auth.PublicReadEndpoints)
-			}
-			if got := cfg.PublicReadEndpointsEnabled(); got != tc.want {
-				t.Fatalf("PublicReadEndpointsEnabled() = %v, want %v", got, tc.want)
+			if cfg.PublicReadEndpoints != tc.want {
+				t.Fatalf("public read endpoints = %v, want %v", cfg.PublicReadEndpoints, tc.want)
 			}
 		})
-	}
-}
-
-func TestLoadFromEnvRejectsInvalidPublicReadEndpoints(t *testing.T) {
-	t.Setenv("PUBLIC_READ_ENDPOINTS", "sometimes")
-	_, err := LoadFromEnv()
-	if err == nil {
-		t.Fatal("LoadFromEnv() error = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "PUBLIC_READ_ENDPOINTS") {
-		t.Fatalf("error %q does not mention PUBLIC_READ_ENDPOINTS", err.Error())
-	}
-}
-
-func TestNilConfigPublicReadEndpointsFailsClosed(t *testing.T) {
-	var cfg *Config
-	if cfg.PublicReadEndpointsEnabled() {
-		t.Fatal("nil config reports public read endpoints")
 	}
 }
