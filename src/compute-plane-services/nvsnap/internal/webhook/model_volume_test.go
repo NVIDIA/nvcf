@@ -429,6 +429,9 @@ func TestModelVolume_ReaderBlockPVC_CompletePrewarms(t *testing.T) {
 	if pw.Resources.Limits.Cpu().MilliValue() < 1000 || pw.SecurityContext == nil || pw.SecurityContext.Capabilities == nil {
 		t.Errorf("sweep needs real CPU limits and a hardened security context: %+v %+v", pw.Resources, pw.SecurityContext)
 	}
+	if _, limited := pw.Resources.Limits[corev1.ResourceMemory]; limited {
+		t.Errorf("a memory limit below the model size evicts the sweep's own pages; the sweep must not carry one: %+v", pw.Resources.Limits)
+	}
 	if last := patches[len(patches)-1]; last.Path == "/spec/initContainers" {
 		t.Errorf("init list bootstrap must precede the sweep, not follow it")
 	}

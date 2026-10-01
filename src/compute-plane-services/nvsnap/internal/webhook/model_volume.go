@@ -176,11 +176,18 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // volume into the node's page cache before the engine starts.
 const modelPrewarmName = "nvsnap-model-prewarm"
 
-// modelPrewarmResources let the sweep keep its readers busy: the limits of
-// a hold container would throttle eight dd processes to one core.
+// modelPrewarmResources let the sweep keep its readers busy and keep what
+// they read. CPU is limited so eight dd processes get real cores without
+// taking the node. Memory is deliberately unlimited: page cache is charged
+// to the cgroup that faults it in, and a memory limit below the model size
+// makes the kernel evict the sweep's own pages as it reads, so the engine
+// finds only the last limit's worth warm. Measured on GB300 with a 512Mi
+// limit (2026-10-01): the sweep finished in 8 to 14 s and the engine still
+// read 33 GB in 43 to 45 s, the same as with no sweep at all. The pages
+// are reclaimable and move to the pod cgroup when the init exits.
 var modelPrewarmResources = corev1.ResourceRequirements{
 	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
-	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")},
 }
 
 // modelPrewarmPatches appends the page-cache sweep the cachedir restore
