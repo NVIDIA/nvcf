@@ -129,7 +129,6 @@ nvcf_java_test(
         "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
         "@nv_third_party_deps//:com_datastax_cassandra_cassandra_driver_core",
         "@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api",
-        "@nv_third_party_deps//:org_awaitility_awaitility",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",

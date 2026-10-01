@@ -19,7 +19,6 @@ package com.nvidia.apikeys.persistance;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
-import static org.awaitility.Awaitility.await;
 
 import com.datastax.driver.core.Session;
 import com.datastax.driver.core.exceptions.InvalidQueryException;
@@ -32,7 +31,8 @@ import org.junit.jupiter.api.Test;
 class OwnerStatusMigrationIntegrationTest {
 
     @Test
-    void migrationAddsOwnerIndexesAndPreservesLegacyKeysWhenReapplied() throws IOException {
+    void migrationAddsOwnerIndexesAndPreservesLegacyKeysWhenReapplied()
+            throws IOException, InterruptedException {
         Session session = IntegrationTestConfiguration.CQL_SESSION;
         // The deployment keyspace is separate from the suite's local schema.
         session.execute("CREATE KEYSPACE api_keys_api WITH replication = "
@@ -47,10 +47,7 @@ class OwnerStatusMigrationIntegrationTest {
             applyMigration(session, "04_add_multi_tenant_schema.up.sql");
             seedStatuses(session);
 
-            // Cassandra makes newly created indexes available asynchronously.
-            await().atMost(Duration.ofSeconds(30))
-                    .ignoreException(InvalidQueryException.class)
-                    .untilAsserted(() -> assertStatusesDiscoverable(session));
+            waitForStatusesDiscoverable(session);
 
             assertLegacyKeysPreserved(session);
             applyMigration(session, "04_add_multi_tenant_schema.up.sql");
@@ -58,6 +55,22 @@ class OwnerStatusMigrationIntegrationTest {
             assertLegacyKeysPreserved(session);
         } finally {
             session.execute("DROP KEYSPACE api_keys_api");
+        }
+    }
+
+    private static void waitForStatusesDiscoverable(Session session) throws InterruptedException {
+        // Cassandra makes newly created indexes available asynchronously.
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (true) {
+            try {
+                assertStatusesDiscoverable(session);
+                return;
+            } catch (AssertionError | InvalidQueryException error) {
+                if (System.nanoTime() - deadline >= 0) {
+                    throw error;
+                }
+            }
+            Thread.sleep(100);
         }
     }
 
