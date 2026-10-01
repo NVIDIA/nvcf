@@ -119,6 +119,11 @@ const (
 	CacheRankDeltaAnnotation            = "nvsnap.io/cache-rank-delta"
 	CacheRankDeltaBytesAnnotation       = "nvsnap.io/cache-rank-delta-bytes"
 	CacheRankDeltaFingerprintAnnotation = "nvsnap.io/cache-rank-delta-fingerprint"
+	// CacheSeedGenerationAnnotation on a seeded pod names the generation
+	// it was seeded from. Only ranks seeded from the serving generation
+	// take part in a refresh: an older rank's delta is already in the
+	// newer generation, or belongs to a tree that no longer serves.
+	CacheSeedGenerationAnnotation = "nvsnap.io/cache-seed-generation"
 	// GenerationAnnotation on a complete set primary counts refreshes;
 	// absent means 1. Lookup serves the newest complete generation.
 	GenerationAnnotation = "nvsnap.io/cache-generation"

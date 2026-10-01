@@ -144,6 +144,7 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		// refreshed (docs/proposals/helm-chart-cache-refresh.md).
 		patches = append(patches, mp.label(modelvolume.CacheKeyLabel, modelvolume.Key(uri))...)
 		patches = append(patches, mp.annotation(modelvolume.CacheGroupSizeAnnotation, strconv.Itoa(m.groupSize(ctx, pod)))...)
+		patches = append(patches, mp.annotation(modelvolume.CacheSeedGenerationAnnotation, strconv.Itoa(st.Generation))...)
 		patches = append(patches, mp.annotation(CacheVolumeAnnotation, cacheDirVolumeName)...)
 		patches = append(patches, mp.annotation(CacheSubpathAnnotation, cacheSubdir)...)
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: cacheSeedVolumeName, VolumeSource: corev1.VolumeSource{

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestWriteExtractRoundTrip(t *testing.T) {
@@ -55,5 +56,40 @@ func TestWriteExtractRoundTrip(t *testing.T) {
 	}
 	if fi, _ := os.Stat(filepath.Join(dest2, "autotune.json")); fi.Mode().Perm() != 0o644 {
 		t.Errorf("archive mode kept: %v", fi.Mode())
+	}
+}
+
+// Modification times survive the stream to the nanosecond: ninja-based
+// JIT caches compare them with the build times in .ninja_log.
+func TestWriteExtractPreservesModTimes(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "op"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "op", "k.so"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 1, 5, 12, 33, 123456789, time.UTC)
+	if err := os.Chtimes(filepath.Join(src, "op", "k.so"), want, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(src, "op"), want, want); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Extract(&buf, dst, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"op/k.so", "op"} {
+		st, err := os.Stat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.ModTime().Equal(want) {
+			t.Errorf("%s mtime = %s, want %s (nanoseconds included)", rel, st.ModTime().Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+		}
 	}
 }

@@ -42,12 +42,16 @@ import (
 // warmFixture is a pod seeded from a complete set: the reader stamps the
 // webhook adds on the complete branch, no capture label.
 func warmFixture(t *testing.T, c *ModelVolumeController, node string, ordinal, group int) *corev1.Pod {
+	return warmFixtureGen(t, c, node, ordinal, group, "1")
+}
+
+func warmFixtureGen(t *testing.T, c *ModelVolumeController, node string, ordinal, group int, seedGen string) *corev1.Pod {
 	t.Helper()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("omni-worker-%d", ordinal), Namespace: "sr-warm", UID: types.UID(fmt.Sprintf("warm-%s-%d", node, ordinal)),
 			Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "reader", modelvolume.CacheKeyLabel: modelvolume.Key("cache://abc123")},
 			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI, cacheURIAnnotation: "cache://abc123", cacheVolumeAnnotation: "nvsnap-cachedir", cacheSubpathAnnotation: "cache",
-				modelvolume.CacheOrdinalAnnotation: strconv.Itoa(ordinal), modelvolume.CacheGroupSizeAnnotation: strconv.Itoa(group)}},
+				modelvolume.CacheOrdinalAnnotation: strconv.Itoa(ordinal), modelvolume.CacheGroupSizeAnnotation: strconv.Itoa(group), modelvolume.CacheSeedGenerationAnnotation: seedGen}},
 		Spec:   corev1.PodSpec{NodeName: node},
 		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
 	}
@@ -194,7 +198,7 @@ func TestModelVolumeController_RefreshLoopGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.deltaScan = func(string) (int, int64, string, bool, error) { return 2, 2, "fp-same", true, nil }
-	r0 := warmFixture(t, c, "node-a", 0, 1)
+	r0 := warmFixtureGen(t, c, "node-a", 0, 1, "2")
 	c.Handle(ctx, r0)
 	waitUntil(t, "set marked stable", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123"); return st.RefreshStable })
 	if st, _ := cache.Lookup(ctx, "cache://abc123"); st.Generation != 2 {
@@ -205,7 +209,7 @@ func TestModelVolumeController_RefreshLoopGuard(t *testing.T) {
 	if err := kc.CoreV1().Pods("sr-warm").Delete(ctx, r0.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	r1 := warmFixture(t, c, "node-a", 0, 1)
+	r1 := warmFixtureGen(t, c, "node-a", 0, 1, "2")
 	c.Handle(ctx, r1)
 	waitUntil(t, "second delta stamped", func() bool { return podAnn(t, kc, r1)[modelvolume.CacheRankDeltaAnnotation] == "true" })
 	time.Sleep(50 * time.Millisecond)
@@ -273,4 +277,33 @@ func TestScanSeedDelta(t *testing.T) {
 	if again != files || fp2 != fp {
 		t.Errorf("the fingerprint is stable for the same delta")
 	}
+}
+
+// A rank seeded from generation 1 does not refresh a set already at
+// generation 2: its delta is what produced generation 2, or it reports
+// against a tree that no longer serves. A rank seeded from generation 2
+// with a new delta does.
+func TestModelVolumeController_RefreshOnlyFromServingGeneration(t *testing.T) {
+	ctx := context.Background()
+	kc, cache, c := refreshController(t)
+	pv := completeSet(t, c, time.Hour)
+	pv.Annotations[modelvolume.GenerationAnnotation] = "2"
+	if _, err := kc.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.deltaScan = func(string) (int, int64, string, bool, error) { return 3, 3, "fp-old", true, nil }
+	old := warmFixtureGen(t, c, "node-a", 0, 1, "1")
+	c.Handle(ctx, old)
+	waitUntil(t, "old rank delta stamped", func() bool { return podAnn(t, kc, old)[modelvolume.CacheRankDeltaAnnotation] == "true" })
+	time.Sleep(50 * time.Millisecond)
+	if st, _ := cache.Lookup(ctx, "cache://abc123"); st.Generation != 2 {
+		t.Fatalf("a generation-1 rank must not refresh a generation-2 set, got %d", st.Generation)
+	}
+	if err := kc.CoreV1().Pods("sr-warm").Delete(ctx, old.Name, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.deltaScan = func(string) (int, int64, string, bool, error) { return 2, 2, "fp-new", true, nil }
+	cur := warmFixtureGen(t, c, "node-a", 0, 1, "2")
+	c.Handle(ctx, cur)
+	waitUntil(t, "generation 3 complete", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123"); return st.Generation == 3 })
 }

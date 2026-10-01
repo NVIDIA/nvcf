@@ -658,6 +658,11 @@ type rankSource struct {
 // groupRanks lists the group's ready ranks, how many are ready, and the
 // group size. ok is false until every ordinal 0..size-1 is ready.
 func (c *ModelVolumeController) groupRanks(ctx context.Context, uri string) ([]rankSource, int, int, bool, error) {
+	return c.groupRanksWhere(ctx, uri, nil)
+}
+
+// groupRanksWhere is groupRanks over the pods keep accepts (nil: all).
+func (c *ModelVolumeController) groupRanksWhere(ctx context.Context, uri string, keep func(*corev1.Pod) bool) ([]rankSource, int, int, bool, error) {
 	pods, err := c.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: modelvolume.CacheKeyLabel + "=" + modelvolume.Key(uri)})
 	if err != nil {
 		return nil, 0, 0, false, err
@@ -666,7 +671,7 @@ func (c *ModelVolumeController) groupRanks(ctx context.Context, uri string) ([]r
 	byOrdinal := map[int]rankSource{}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		if p.DeletionTimestamp != nil || p.Annotations[cacheURIAnnotation] != uri {
+		if p.DeletionTimestamp != nil || p.Annotations[cacheURIAnnotation] != uri || (keep != nil && !keep(p)) {
 			continue
 		}
 		if n, err := strconv.Atoi(p.Annotations[modelvolume.CacheGroupSizeAnnotation]); err == nil && n > size {
@@ -1424,13 +1429,25 @@ func (c *ModelVolumeController) tryRefresh(ctx context.Context, uri string, log 
 			log.WithFields(logrus.Fields{"generation": st.Generation, "since": since.Round(time.Second).String(), "cooldown": cooldown.String()}).Info("cache volume: refresh proposed inside the cooldown; waiting")
 			return
 		}
-		ranks, ready, size, ok, err := c.groupRanks(ctx, uri)
+		// Only ranks seeded from the serving generation take part: a rank
+		// seeded from an older one already gave its delta to this
+		// generation, or reports against a tree that no longer serves.
+		serving := strconv.Itoa(st.Generation)
+		ranks, ready, size, ok, err := c.groupRanksWhere(ctx, uri, func(p *corev1.Pod) bool {
+			g := p.Annotations[modelvolume.CacheSeedGenerationAnnotation]
+			if g == "" {
+				g = "1"
+			}
+			return g == serving
+		})
 		if err != nil {
 			log.WithError(err).Warn("cache volume: list group failed")
 			return
 		}
 		if !ok {
-			log.WithFields(logrus.Fields{"ready": ready, "group_size": size}).Info("cache volume: refresh waits for the rest of the group")
+			if ready > 0 {
+				log.WithFields(logrus.Fields{"ready": ready, "group_size": size, "generation": st.Generation}).Info("cache volume: refresh waits for the rest of the group")
+			}
 			return
 		}
 		deltas := map[int]string{}

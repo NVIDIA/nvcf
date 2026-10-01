@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Write streams dir as a tar of relative paths. Names in skip (relative
@@ -45,6 +46,14 @@ func Write(w io.Writer, dir string, skip map[string]bool) error {
 		if herr != nil {
 			return herr
 		}
+		// PAX keeps the modification time to the nanosecond. Ninja-based
+		// JIT caches (FlashInfer cached_ops, sgl_kernel) decide reuse or
+		// rebuild by comparing each output's mtime with the build time
+		// recorded in .ninja_log; a copy stamped with the copy time, or
+		// truncated to seconds, rebuilds the whole op on every start
+		// (GB300, 2026-10-01: a 24 s Mamba kernel rebuilt on every warm
+		// start although the set carried it).
+		hdr.Format = tar.FormatPAX
 		hdr.Name = filepath.ToSlash(rel)
 		if info.IsDir() {
 			hdr.Name += "/"
@@ -78,9 +87,19 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 		return 0, 0, err
 	}
 	tr := tar.NewReader(r)
+	// Directory times are restored last: creating entries inside a
+	// directory updates its mtime.
+	type dirTime struct {
+		path string
+		at   time.Time
+	}
+	var dirs []dirTime
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			for i := len(dirs) - 1; i >= 0; i-- {
+				_ = os.Chtimes(dirs[i].path, dirs[i].at, dirs[i].at)
+			}
 			return files, bytes, nil
 		}
 		if err != nil {
@@ -101,6 +120,9 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 				return files, bytes, err
 			}
 			_ = os.Chmod(target, mode)
+			if !hdr.ModTime.IsZero() {
+				dirs = append(dirs, dirTime{target, hdr.ModTime})
+			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return files, bytes, err
@@ -121,6 +143,9 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 				return files, bytes, cerr
 			}
 			_ = os.Chmod(target, mode)
+			if !hdr.ModTime.IsZero() {
+				_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			}
 			files++
 			bytes += n
 		case tar.TypeSymlink:
