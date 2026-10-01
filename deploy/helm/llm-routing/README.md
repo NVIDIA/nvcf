@@ -53,8 +53,6 @@ Check the results before continuing:
 - `inventory` records node identities, GPU allocations, workloads, `RuntimeClass` and `StorageClass`. It establishes cluster identity for later phases and requires available model GPUs.
 - CUDA correctness and memory qualification follow during preflight. Resolve namespace, CRD ownership or operator watch-scope conflicts before proceeding.
 
-Keep configuration, credentials, downloaded weights and private deployment evidence outside Git.
-
 ### Build and distribute the application images
 
 Follow the [image build guide](spark/BUILDING.md) to build `gateway`, `router`, `pylon` and `operator` from the prepared source and distribute them to the nodes. It includes the build requirements and single-component rebuilds for later updates. Complete image distribution before continuing.
