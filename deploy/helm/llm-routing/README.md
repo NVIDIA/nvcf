@@ -89,7 +89,7 @@ spark verify-gateway
 
 Helm manages persistent resources, and every API operation uses the configured context. Once the runner records a loaded model, preparation phases are gated. Use [the recovery workflow](#recovery-and-limits) for restart testing.
 
-Failed phases save logs and retain Jobs and PVCs. Inspect those resources and resolve the cause before retrying.
+Failed Jobs and PVCs remain available for inspection. Resolve the cause before retrying. After an unsuccessful `qualify` phase, run `spark qualify --retry`. The runner saves the previous Job and pod status and available logs under `$SPARK_WORK/evidence`, then uses Helm to replace the qualification and chain Jobs with new attempt names. It refuses to replace an active Job. Only successful pods belonging to the new Jobs can satisfy the acceptance gates.
 
 Pinned runtime:
 

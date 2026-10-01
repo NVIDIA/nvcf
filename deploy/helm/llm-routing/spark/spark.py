@@ -135,7 +135,8 @@ class Recipe:
         values['runtime']['sha256'] = self.state.get('runtimeSha256', 'a'*64 if render else '')
         values['model']['lock'] = MODEL
         values['model']['register'] = register
-        values.setdefault('chain', {}).update(runtimeRelease=self.glm, artifactClaim=self.glm+'-artifacts', attempt=1)
+        values['qualification']['attempt'] = self.state.get('qualificationAttempt', values['qualification']['attempt'])
+        values.setdefault('chain', {}).update(runtimeRelease=self.glm, artifactClaim=self.glm+'-artifacts', attempt=self.state.get('chainAttempt', 1))
         return values
 
     def operator_values(self):
@@ -238,15 +239,20 @@ class Recipe:
         current = {n['metadata']['name']: n['metadata']['uid'] for n in live}
         require(all(current.get(name) == old.get(name) for name in self.c['nodes'].values()), 'The selected node identities changed or the context points to another cluster.')
 
-    def logs(self, component, release=None):
+    def logs(self, component, release=None, job=None):
         selector = 'app.kubernetes.io/instance='+(release or self.glm)+',app.kubernetes.io/component='+component
         # Job labels live on pod templates in these charts, so select pods.
         pods = json.loads(output(self.kc+['get', 'pods', '-l', selector, '-o', 'json']))['items']
+        if job:
+            pods = [p for p in pods if any(owner.get('kind') == 'Job' and owner['name'] == job
+                    for owner in p['metadata'].get('ownerReferences', []))]
         require(bool(pods), 'No pods for '+component)
         records = []
         for pod in pods:
             text = output(self.kc+['logs', pod['metadata']['name']])
             save(self.work/'evidence'/(pod['metadata']['name']+'.log'), text)
+            if job and pod['status']['phase'] != 'Succeeded':
+                continue
             for line in text.splitlines():
                 try:
                     record = json.loads(line)
@@ -256,9 +262,44 @@ class Recipe:
                     pass
         return records
 
-    def backend_phase(self, phase):
+    def retry_qualification(self):
+        require(not self.state.get('qualify'), 'Qualification already passed. Retry is for an unsuccessful qualification phase.')
+        prefixes = {'qualificationAttempt': self.glm+'-qualify-', 'chainAttempt': self.glm+'-chain-'}
+        jobs = json.loads(output(self.kc+['get', 'jobs', '-o', 'json']))['items']
+        jobs = [job for job in jobs if any(re.fullmatch(re.escape(prefix)+r'\d+', job['metadata']['name']) for prefix in prefixes.values())]
+        require(bool(jobs), 'No qualification or chain Jobs to retry.')
+        for job in jobs:
+            name = job['metadata']['name']
+            release = self.glm+'-chain' if name.startswith(prefixes['chainAttempt']) else self.glm
+            owner = job['metadata'].get('annotations', {})
+            require(owner.get('meta.helm.sh/release-name') == release and owner.get('meta.helm.sh/release-namespace') == self.c['namespace'], 'Unexpected Job ownership: '+name)
+            require(any(c['type'] in ('Complete', 'Failed') and c['status'] == 'True' for c in job.get('status', {}).get('conditions', [])), 'Job is still active: '+name)
+        evidence = self.work/'evidence'/('qualification-retry-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
+        save(evidence/'jobs.json', {'items': jobs})
+        pods = json.loads(output(self.kc+['get', 'pods', '-o', 'json']))['items']
+        job_uids = {job['metadata']['uid'] for job in jobs}
+        pods = [pod for pod in pods if any(owner.get('kind') == 'Job' and owner.get('uid') in job_uids for owner in pod['metadata'].get('ownerReferences', []))]
+        save(evidence/'pods.json', {'items': pods})
+        for pod in pods:
+            name = pod['metadata']['name']
+            try:
+                save(evidence/(name+'.log'), output(self.kc+['logs', name], stderr=subprocess.STDOUT))
+            except subprocess.CalledProcessError as error:
+                save(evidence/(name+'-log-error.txt'), error.output or str(error))
+                print('Could not retrieve logs for', name, '- saved the error with its pod status.')
+        values = self.backend_values('qualify')
+        defaults = {'qualificationAttempt': values['qualification']['attempt'], 'chainAttempt': values['chain']['attempt']}
+        for key, prefix in prefixes.items():
+            previous = [int(job['metadata']['name'][len(prefix):]) for job in jobs if job['metadata']['name'].startswith(prefix)]
+            self.state[key] = max([defaults[key], *previous]) + 1
+        self.state['download'] = False
+        self.stamp('qualify', False)
+        print('Saved previous qualification evidence:', evidence)
+
+    def backend_phase(self, phase, retry=False):
         self.bound_cluster()
         require(not self.state.get('serve'), 'The model has already been loaded. Use the update or explicit recovery commands, not preparation phases.')
+        require(not retry or phase == 'qualify', '--retry is supported only for qualify.')
         prerequisites = {'preflight': 'inventory', 'build': 'preflight', 'qualify': 'runtimeSha256', 'download': 'qualify', 'serve': 'download'}
         require(self.state.get(prerequisites[phase]), 'Missing successful '+prerequisites[phase]+' phase.')
         if phase == 'serve':
@@ -268,6 +309,10 @@ class Recipe:
                 require(available > 113*1024**3, 'Insufficient actual host memory on '+role)
         if phase == 'qualify':
             require(re.fullmatch(r'[a-f0-9]{64}', self.state['runtimeSha256']) is not None, 'Invalid built runtime checksum.')
+            if retry:
+                self.retry_qualification()
+            self.state['download'] = False
+            self.stamp('qualify', False)
         values = self.backend_values(phase)
         timeout = {'preflight': '30m', 'build': '120m', 'qualify': '20m', 'download': '360m', 'serve': '70m'}[phase]
         self.helm_apply(self.glm, HERE/'charts/gguf-backend', values, timeout, jobs=phase != 'serve')
@@ -282,11 +327,12 @@ class Recipe:
             if phase == 'download':
                 require(records[-1]['verifiedBytes'] == MODEL['weightFileBytes'] and records[-1]['verifiedFiles'] == 6, 'Model download incomplete.')
         elif phase == 'qualify':
-            records = self.logs('qualification')
+            records = self.logs('qualification', job=self.glm+'-qualify-'+str(values['qualification']['attempt']))
             require(bool(records), 'RPC qualification did not record PASS.')
             chain = self.backend_values('chain')
             self.helm_apply(self.glm+'-chain', HERE/'charts/gguf-backend', chain, '15m', jobs=True)
-            self.logs('chain-check')
+            records = self.logs('chain-check', job=self.glm+'-chain-'+str(chain['chain']['attempt']))
+            require(bool(records), 'RPC chain check did not record PASS.')
         self.stamp(phase)
 
     def deploy_stack(self):
@@ -492,7 +538,9 @@ def main():
     parser.add_argument('--result', type=pathlib.Path)
     parser.add_argument('--port', type=int, default=18443)
     parser.add_argument('--confirm-model-interruption', action='store_true')
+    parser.add_argument('--retry', action='store_true', help='Archive an unsuccessful qualification and run new qualification and chain Jobs.')
     args = parser.parse_args()
+    require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
     recipe = Recipe(json.loads(args.config.read_text()), args.work_dir, args.source_dir)
     if args.phase == 'prepare': recipe.prepare()
     elif args.phase == 'render': recipe.render()
@@ -507,7 +555,7 @@ def main():
         recipe.import_images(args.archive, args.allow_containerd_import, args.component, args.tag)
     elif args.phase == 'stack': recipe.deploy_stack()
     elif args.phase in ('preflight', 'build-runtime', 'qualify', 'download', 'load'):
-        recipe.backend_phase({'build-runtime': 'build', 'load': 'serve'}.get(args.phase, args.phase))
+        recipe.backend_phase({'build-runtime': 'build', 'load': 'serve'}.get(args.phase, args.phase), retry=args.retry)
     elif args.phase == 'verify-direct': recipe.verify(False, args.port)
     elif args.phase == 'register': recipe.register()
     elif args.phase == 'verify-gateway': recipe.verify(True, args.port)

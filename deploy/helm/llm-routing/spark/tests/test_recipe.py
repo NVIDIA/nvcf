@@ -112,6 +112,133 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(values['model']['args'][values['model']['args'].index('--ctx-size')+1], '2048')
         self.assertEqual(len(values['model']['lock']['files']), 6)
 
+    def qualification_job(self, suffix, condition='Failed', release=None):
+        release = release or self.recipe.glm
+        return {'metadata': {'name': self.recipe.glm+suffix, 'uid': suffix,
+                             'annotations': {'meta.helm.sh/release-name': release,
+                                             'meta.helm.sh/release-namespace': self.config['namespace']}},
+                'status': {'conditions': [{'type': condition, 'status': 'True'}]}}
+
+    def qualification_pod(self, name, job, phase='Succeeded'):
+        return {'metadata': {'name': name, 'ownerReferences': [{'kind': 'Job', 'name': job['metadata']['name'], 'uid': job['metadata']['uid']}]},
+                'status': {'phase': phase}}
+
+    def test_qualification_retry_archives_before_helm_and_persists_new_attempts(self):
+        self.recipe.state = {'runtimeSha256': 'a'*64, 'download': True}
+        jobs = [self.qualification_job('-qualify-5', 'Complete'),
+                self.qualification_job('-chain-3', 'Failed', self.recipe.glm+'-chain')]
+        pods = [self.qualification_pod('old-qualification', jobs[0]),
+                self.qualification_pod('failed-chain', jobs[1], 'Failed')]
+        pods.append({'metadata': {'name': 'unrelated'}, 'status': {'phase': 'Running'}})
+        responses = [json.dumps({'items': jobs}), json.dumps({'items': pods}), '{"result":"PASS"}', 'chain failed']
+
+        def check_archive(*args, **kwargs):
+            archived = list((self.recipe.work/'evidence').glob('qualification-retry-*'))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(json.loads((archived[0]/'jobs.json').read_text())['items'], jobs)
+            self.assertEqual(len(json.loads((archived[0]/'pods.json').read_text())['items']), 2)
+            self.assertEqual((archived[0]/'failed-chain.log').read_text(), 'chain failed')
+            saved = json.loads(self.recipe.state_path.read_text())
+            self.assertFalse(saved['qualify'])
+            self.assertFalse(saved['download'])
+
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=responses), patch.object(self.recipe, 'helm_apply', side_effect=check_archive) as helm, patch.object(self.recipe, 'logs', return_value=[{'result': 'PASS'}]) as logs:
+            self.recipe.backend_phase('qualify', retry=True)
+        self.assertEqual(helm.call_args_list[0].args[2]['qualification']['attempt'], 6)
+        self.assertEqual(helm.call_args_list[1].args[2]['chain']['attempt'], 4)
+        self.assertEqual(logs.call_args_list[0].kwargs['job'], self.recipe.glm+'-qualify-6')
+        self.assertEqual(logs.call_args_list[1].kwargs['job'], self.recipe.glm+'-chain-4')
+        resumed = spark.Recipe(self.config, self.tmp.name)
+        self.assertTrue(resumed.state['qualify'])
+        self.assertEqual(resumed.backend_values('qualify')['qualification']['attempt'], 6)
+        self.assertEqual(resumed.backend_values('chain')['chain']['attempt'], 4)
+
+    def test_retry_handles_legacy_failed_qualification_and_unavailable_pod_logs(self):
+        self.recipe.state = {'runtimeSha256': 'a'*64}
+        defaults = self.recipe.backend_values('qualify')
+        attempt = defaults['qualification']['attempt']
+        job = self.qualification_job('-qualify-'+str(attempt))
+        pod = self.qualification_pod('node-interrupted', job, 'Failed')
+        responses = [json.dumps({'items': [job]}), json.dumps({'items': [pod]}),
+                     spark.subprocess.CalledProcessError(1, ['kubectl', 'logs'], output='container logs unavailable')]
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=responses), patch.object(self.recipe, 'helm_apply', side_effect=RuntimeError('Helm interrupted')) as helm:
+            with self.assertRaisesRegex(RuntimeError, 'Helm interrupted'):
+                self.recipe.backend_phase('qualify', retry=True)
+        self.assertEqual(helm.call_args.args[2]['qualification']['attempt'], attempt+1)
+        self.assertEqual(helm.call_args.args[2]['chain']['attempt'], defaults['chain']['attempt']+1)
+        archived = list((self.recipe.work/'evidence').glob('qualification-retry-*'))[0]
+        self.assertEqual((archived/'node-interrupted-log-error.txt').read_text(), 'container logs unavailable')
+        resumed = spark.Recipe(self.config, self.tmp.name)
+        self.assertEqual(resumed.state['qualificationAttempt'], attempt+1)
+        self.assertFalse(resumed.state['qualify'])
+
+    def test_qualification_retry_refuses_active_or_foreign_jobs_before_mutation(self):
+        self.recipe.state = {'runtimeSha256': 'a'*64}
+        cases = [(self.qualification_job('-qualify-2', 'Running'), 'still active'),
+                 (self.qualification_job('-chain-1', release='another-owner'), 'ownership')]
+        for job, error in cases:
+            with self.subTest(error=error), patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps({'items': [job]})), patch.object(self.recipe, 'helm_apply') as helm:
+                with self.assertRaisesRegex(RuntimeError, error):
+                    self.recipe.backend_phase('qualify', retry=True)
+                helm.assert_not_called()
+                self.assertFalse(self.recipe.state_path.exists())
+
+    def test_current_job_acceptance_ignores_stale_and_failed_pod_pass_records(self):
+        current = self.qualification_job('-qualify-3', 'Complete')
+        old = self.qualification_job('-qualify-2', 'Complete')
+        pods = [self.qualification_pod('old-pass', old),
+                self.qualification_pod('current-failed', current, 'Failed'),
+                self.qualification_pod('current-complete', current)]
+        for current_log, expected in [('no PASS record', []), ('{"result":"PASS","current":true}', [{'result': 'PASS', 'current': True}])]:
+            with self.subTest(current_log=current_log), patch.object(spark, 'output', side_effect=[json.dumps({'items': pods}), '{"result":"PASS"}', current_log]) as output:
+                self.assertEqual(self.recipe.logs('qualification', job=current['metadata']['name']), expected)
+                names = [call.args[0][-1] for call in output.call_args_list[1:]]
+                self.assertNotIn('old-pass', names)
+
+    def test_qualification_does_not_pass_without_current_chain_evidence(self):
+        self.recipe.state = {'runtimeSha256': 'a'*64}
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply'), patch.object(self.recipe, 'logs', side_effect=[[{'result': 'PASS'}], []]):
+            with self.assertRaisesRegex(RuntimeError, 'chain check did not record PASS'):
+                self.recipe.backend_phase('qualify')
+        self.assertFalse(self.recipe.state.get('qualify'))
+
+    def test_failed_qualification_invalidates_previous_success_before_helm(self):
+        self.recipe.state = {'runtimeSha256': 'a'*64, 'qualify': True, 'download': True}
+
+        def fail_helm(*args, **kwargs):
+            saved = json.loads(self.recipe.state_path.read_text())
+            self.assertFalse(saved['qualify'])
+            self.assertFalse(saved['download'])
+            raise RuntimeError('qualification failed')
+
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply', side_effect=fail_helm):
+            with self.assertRaisesRegex(RuntimeError, 'qualification failed'):
+                self.recipe.backend_phase('qualify')
+        resumed = spark.Recipe(self.config, self.tmp.name)
+        self.assertFalse(resumed.state['qualify'])
+        self.assertFalse(resumed.state['download'])
+        with patch.object(resumed, 'bound_cluster'), patch.object(resumed, 'helm_apply') as helm:
+            for phase, prerequisite in [('download', 'qualify'), ('serve', 'download')]:
+                with self.subTest(phase=phase), self.assertRaisesRegex(RuntimeError, 'Missing successful '+prerequisite):
+                    resumed.backend_phase(phase)
+            helm.assert_not_called()
+
+    def test_retry_option_rejects_other_phases_before_recipe_creation(self):
+        for phase in ('load', 'download', 'stack', 'recover'):
+            args = ['spark.py', '--config', '/unused', '--work-dir', '/unused', phase, '--retry']
+            with self.subTest(phase=phase), patch.object(spark.sys, 'argv', args), patch.object(spark, 'Recipe') as recipe:
+                with self.assertRaisesRegex(RuntimeError, 'only for qualify'):
+                    spark.main()
+                recipe.assert_not_called()
+
+    def test_retry_does_not_replace_already_successful_qualification(self):
+        self.recipe.state = {'runtimeSha256': 'a'*64, 'qualify': True}
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output') as output, patch.object(self.recipe, 'helm_apply') as helm:
+            with self.assertRaisesRegex(RuntimeError, 'already passed'):
+                self.recipe.backend_phase('qualify', retry=True)
+            output.assert_not_called()
+            helm.assert_not_called()
+
     def test_image_update_only_changes_selected_tag_and_preserves_other_pods(self):
         values = self.recipe.stack_values('a'*64, 'b'*64)
         pods = [{'metadata': {'name': 'llm-api-gateway-old', 'uid': 'g1'}, 'status': {'phase': 'Running'}},
