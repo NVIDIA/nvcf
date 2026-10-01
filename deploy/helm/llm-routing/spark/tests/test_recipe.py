@@ -39,6 +39,19 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'outside the checkout'):
             spark.Recipe(self.config, HERE/'.work')
 
+    def test_extra_model_configuration_is_rejected_before_any_commands(self):
+        for field, value in [('retainedModels', ['legacy-model']), ('testFixture', True)]:
+            with self.subTest(field=field):
+                config = copy.deepcopy(self.config)
+                config[field] = value
+                directory = pathlib.Path(self.tmp.name)/'rejected'
+                with patch.object(spark, 'run') as run, patch.object(spark, 'output') as output:
+                    with self.assertRaisesRegex(RuntimeError, field):
+                        spark.Recipe(config, directory)
+                run.assert_not_called()
+                output.assert_not_called()
+                self.assertFalse(directory.exists())
+
     def test_preparation_cannot_unload_a_running_model(self):
         self.recipe.state = {'serve': True}
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply') as helm:
@@ -53,7 +66,7 @@ class RecipeTests(unittest.TestCase):
                 self.recipe.register()
             helm.assert_not_called()
 
-    def test_stack_generates_private_key_hash_and_no_default_fixture(self):
+    def test_stack_generates_private_key_hash_and_only_glm_stack_components(self):
         encoded = __import__('base64').b64encode(b'private-cluster-token').decode()
         responses = [json.dumps({'data': {'cluster-token': encoded}}), json.dumps({'data': {'ca.crt': 'public-ca'}})]
         with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply') as helm, patch.object(spark, 'output', side_effect=responses):
@@ -65,8 +78,31 @@ class RecipeTests(unittest.TestCase):
         stack_values = helm.call_args_list[1].args[2]
         self.assertNotIn(key, json.dumps(stack_values))
         self.assertEqual(stack_values['apiKeys'][0]['sha256'], hashlib.sha256(key.encode()).hexdigest())
-        self.assertNotIn('sample', self.recipe.components())
-        self.assertFalse(self.recipe.state['stack']['testFixture'])
+        self.assertEqual(self.recipe.components(), ['gateway', 'router', 'pylon', 'operator'])
+        self.assertEqual(self.recipe.state['stack']['apiKeyFile'], str(key_path.resolve()))
+
+    def test_direct_and_gateway_verification_use_the_glm_client(self):
+        self.recipe.state = {'stack': {'apiKeyFile': str(pathlib.Path(self.tmp.name)/'api-key'), 'testFixture': True}}
+        for gateway in (False, True):
+            with self.subTest(gateway=gateway):
+                with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward') as forward, patch.object(spark, 'run') as run:
+                    self.recipe.verify(gateway, 18443)
+                command = [str(value) for value in run.call_args.args[0]]
+                self.assertEqual(command[command.index('--mode')+1], 'verify')
+                self.assertNotIn('--retained-model', command)
+                self.assertEqual('--api-key-file' in command, gateway)
+                self.assertEqual('--ca-file' in command, gateway)
+                self.assertEqual(command[command.index('--url')+1], ('https' if gateway else 'http')+'://127.0.0.1:18443')
+                forward.assert_called_once_with(gateway, 18443)
+                self.assertTrue(self.recipe.state['gateway' if gateway else 'direct'])
+
+    def test_attached_installation_requires_glm_verification_before_update(self):
+        self.recipe.state = {'attachedExisting': True}
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), patch.object(spark, 'run') as run, patch.object(spark, 'output') as output:
+            with self.assertRaisesRegex(RuntimeError, 'Verify GLM'):
+                self.recipe.update('gateway', 'next-tag')
+        run.assert_not_called()
+        output.assert_not_called()
 
     def test_model_config_keeps_two_gpus_and_scoped_canary(self):
         values = self.recipe.backend_values(register=True, render=True)
@@ -79,7 +115,7 @@ class RecipeTests(unittest.TestCase):
     def test_image_update_only_changes_selected_tag_and_preserves_other_pods(self):
         values = self.recipe.stack_values('a'*64, 'b'*64)
         pods = [{'metadata': {'name': 'llm-api-gateway-old', 'uid': 'g1'}, 'status': {'phase': 'Running'}},
-                {'metadata': {'name': 'existing-qwen', 'uid': 'q1'}, 'status': {'phase': 'Running'}},
+                {'metadata': {'name': 'unrelated-workload', 'uid': 'u1'}, 'status': {'phase': 'Running'}},
                 {'metadata': {'name': self.recipe.glm+'-leader', 'uid': 'm1'}, 'status': {'phase': 'Running'}}]
         after = copy.deepcopy(pods)
         after[0]['metadata']['uid'] = 'g2'
@@ -93,6 +129,32 @@ class RecipeTests(unittest.TestCase):
         record = json.loads(results[0].read_text())
         self.assertEqual(record['previousTag'], self.config['images']['tag'])
         self.assertEqual(record['backendPodsChanged'], [])
+
+    def test_image_updates_detect_replacement_of_an_unrelated_running_pod(self):
+        values = self.recipe.stack_values('a'*64, 'b'*64)
+        pods = [{'metadata': {'name': 'unrelated-workload', 'uid': 'original'}, 'status': {'phase': 'Running'}}]
+        after = copy.deepcopy(pods)
+        after[0]['metadata']['uid'] = 'replacement'
+        for component in ('gateway', 'router'):
+            with self.subTest(component=component):
+                with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(spark, 'run'):
+                    with self.assertRaisesRegex(RuntimeError, 'Backend pods changed'):
+                        self.recipe.update(component, 'next-tag')
+                records = list((pathlib.Path(self.tmp.name)/'evidence').glob('update-*.json'))
+                record = json.loads(max(records, key=lambda path: path.stat().st_mtime_ns).read_text())
+                self.assertEqual(record['component'], component)
+                self.assertEqual(record['backendPodsChanged'], ['unrelated-workload'])
+
+    def test_rollback_restores_the_recorded_component_tag(self):
+        values = self.recipe.stack_values('a'*64, 'b'*64)
+        values['llm-request-router']['llmRequestRouter']['image']['tag'] = 'next-tag'
+        record = {'context': self.config['context'], 'namespace': self.config['namespace'], 'release': self.recipe.stack,
+                  'component': 'router', 'newTag': 'next-tag', 'previousTag': 'old-tag'}
+        path = pathlib.Path(self.tmp.name)/'rollback.json'
+        path.write_text(json.dumps(record))
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
+            self.recipe.rollback(path)
+        update.assert_called_once_with('router', 'old-tag')
 
     def test_rollback_refuses_a_subsequent_update(self):
         values = self.recipe.stack_values('a'*64, 'b'*64)

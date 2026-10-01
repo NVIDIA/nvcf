@@ -24,8 +24,7 @@ LOCK = json.loads((HERE/'source.lock.json').read_text())
 MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
               'router': 'src/libraries/rust/stargate', 'pylon': 'src/libraries/rust/stargate',
-              'operator': 'src/compute-plane-services/pylon-operator',
-              'sample': 'examples/function-samples/openai-compatible-sample'}
+              'operator': 'src/compute-plane-services/pylon-operator'}
 
 
 def require(condition, message):
@@ -62,6 +61,8 @@ def validate(c):
     require('/' in c['images']['prefix'] and not c['images']['prefix'].endswith('/'), 'Use registry/path as image prefix.')
     require(not c['images'].get('pullSecrets'), 'Pylon does not propagate image-pull secrets. Use nodes with registry access or pre-import all application images.')
     require(c.get('caConfigMap'), 'caConfigMap is required for verified QUIC and client TLS.')
+    require(not c.get('retainedModels'), 'Verification targets GLM. Remove retainedModels from the configuration.')
+    require(not c.get('testFixture'), 'The recipe deploys GLM. Remove testFixture from the configuration.')
 
 
 class Recipe:
@@ -226,7 +227,7 @@ class Recipe:
         save(self.work/'ca.crt', ca)
         self.stamp('attachedExisting')
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
-        self.stamp('stack', {'apiKeyFile': str(key), 'testFixture': False})
+        self.stamp('stack', {'apiKeyFile': str(key)})
         self.stamp('serve')
         print('Existing installation inspected without changing it. Run verify-gateway before update.')
 
@@ -306,10 +307,7 @@ class Recipe:
         self.helm_apply(self.stack, self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', values)
         ca = json.loads(output(self.kc+['get', 'configmap', self.c['caConfigMap'], '-o', 'json']))['data']['ca.crt']
         save(self.work/'ca.crt', ca)
-        if self.c.get('testFixture', False):
-            sample = {'image': self.image('sample'), 'imagePullPolicy': self.c['images']['pullPolicy'], 'nodeSelector': {'kubernetes.io/hostname': self.c['nodes']['control']}}
-            self.helm_apply(self.c['releasePrefix']+'-sample', HERE/'tests/sample-backend', sample)
-        self.stamp('stack', {'apiKeyFile': str(key_path), 'testFixture': self.c.get('testFixture', False)})
+        self.stamp('stack', {'apiKeyFile': str(key_path)})
 
     def register(self):
         require(not self.state.get('attachedExisting'), 'Do not re-register or adopt an attached existing backend.')
@@ -351,10 +349,6 @@ class Recipe:
                    '--output', str(self.work/'evidence'/('gateway.json' if gateway else 'direct.json'))]
         if gateway:
             command += ['--ca-file', str(self.work/'ca.crt'), '--api-key-file', self.state['stack']['apiKeyFile']]
-            if self.state['stack'].get('testFixture'):
-                command += ['--retained-model', 'test-model']
-            for model in self.c.get('retainedModels', []):
-                command += ['--retained-model', model]
         with self.forward(gateway, port):
             run(command)
         self.stamp('gateway' if gateway else 'direct')
@@ -370,7 +364,7 @@ class Recipe:
             run(command+[str(self.source/COMPONENTS[name])])
 
     def components(self):
-        return [name for name in COMPONENTS if name != 'sample' or self.c.get('testFixture', False)]
+        return list(COMPONENTS)
 
     def import_images(self, archive, allow, component=None, tag=None):
         require(allow, 'Import requires --allow-containerd-import, which grants the Jobs access to node runtime sockets.')
@@ -398,7 +392,7 @@ class Recipe:
     def update(self, component, tag):
         self.bound_cluster()
         self.source_check()
-        require(not self.state.get('attachedExisting') or self.state.get('gateway'), 'Verify the attached gateway and retained models before its first update.')
+        require(not self.state.get('attachedExisting') or self.state.get('gateway'), 'Verify GLM through the attached gateway before its first update.')
         chart, service = {'gateway': ('llm-api-gateway', 'llmApiGateway'), 'router': ('llm-request-router', 'llmRequestRouter')}[component]
         require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', tag) is not None, 'Invalid image tag.')
         values = json.loads(output(self.hm+['get', 'values', self.stack, '-o', 'json']))

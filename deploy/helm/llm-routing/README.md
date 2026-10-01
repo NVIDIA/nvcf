@@ -12,7 +12,7 @@ The stack uses the revision in [source.lock.json](spark/source.lock.json) and th
 - Kubernetes and storage: an existing ARM64 Kubernetes cluster containing these nodes, with pod networking, `cluster.local` DNS, NetworkPolicy enforcement and node-compatible `ReadWriteOnce` persistent storage. Reserve 400 GiB on the leader and 160 GiB on the worker.
 - GPU enablement: model nodes with a working NVIDIA driver, NVIDIA Container Toolkit configured for the container runtime, and a device plugin advertising `nvidia.com/gpu`. Use an installed `RuntimeClass` matching `runtimeClass` in the config (`nvidia` in the example).
 - Access: an authorized kubeconfig with an explicit context, cluster read access, and permission to create the namespace and install the Helm resources, including persistent volume claims (PVCs), the Pylon custom resource definition (CRD) and role-based access control (RBAC) resources.
-- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, kubectl, Docker with Buildx, and ARM64 build capability. Provide access to GitHub, model downloads, build dependencies and container images, with credentials for the chosen registry.
+- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, and kubectl. Provide access to GitHub, model downloads and container images, with credentials for the chosen registry.
 
 ## Installation
 
@@ -57,48 +57,9 @@ Keep configuration, credentials, downloaded weights and private deployment evide
 
 ### Build and distribute the application images
 
-The build produces four `linux/arm64` images: `gateway`, `router`, `pylon` and `operator`. Router and Pylon use Cargo profile `integration` for functional validation. Qualify performance separately. The operator image includes endpoint canary support.
+Follow the [image build guide](spark/BUILDING.md) to build `gateway`, `router`, `pylon` and `operator` from the prepared source and distribute them to the nodes. It includes the build requirements and single-component rebuilds for later updates. Complete image distribution before continuing.
 
-The CUDA/build environment is pinned by digest in [backend.defaults.json](spark/backend.defaults.json). GLM runs through the compiled llama.cpp server inside that environment. If mirroring this image, set `runtimeImage` to a verified equivalent digest and make it available on both model nodes before preflight.
-
-#### Use a registry
-
-1. Select a registry repository you are authorized to write. Configure `IfNotPresent` and a fresh tag for each source revision. Give every node where Pylon can schedule registry pull access.
-2. Build and push the four application images under your configured prefix and tag.
-
-   ```bash
-   spark build-images
-   spark push-images
-   ```
-
-#### Preload images on the nodes
-
-1. Run `spark build-images` and set `images.pullPolicy` to `Never`. Export the four local images, replacing the example prefix and tag with your configuration.
-
-   ```bash
-   IMAGE_PREFIX=registry.example.com/team/llm-poc
-   IMAGE_TAG=dev-1
-   docker save -o "$SPARK_WORK/arm64-images.tar" \
-     "$IMAGE_PREFIX/gateway:$IMAGE_TAG" "$IMAGE_PREFIX/router:$IMAGE_TAG" \
-     "$IMAGE_PREFIX/pylon:$IMAGE_TAG" "$IMAGE_PREFIX/operator:$IMAGE_TAG"
-   ```
-
-2. Copy the archive through your authorized transfer path to `containerd.archiveDirectory` on `containerd.archiveNode`.
-
-   - The example `/var/tmp/llm-poc-images` is a node directory. The serving Job's configured user ID (UID) needs read access to it and the archive.
-   - Set `containerd.nodeNames` to every ARM64 node where Pylon can schedule.
-   - For runtimes other than K3s, configure the actual containerd socket path and a compatible `ctr` client in the image-loader chart.
-
-3. Provision the large CUDA environment image separately through the registry or your normal node image-provisioning path. Use this helper for the four application images.
-4. Import the archive and inspect the retained import Jobs.
-
-   ```bash
-   spark import-images --archive "$SPARK_WORK/arm64-images.tar" --allow-containerd-import
-   ```
-
-Opt-in import Jobs access the selected nodes' containerd sockets with runtime administration privileges. The server exposes the dedicated archive directory and exits after acknowledgements. The importer verifies the archive checksum and imports into the `k8s.io` namespace, preserving containerd configuration.
-
-Keep the application archive below 1 GiB for the default importer. Increase its chart storage limit for larger archives.
+The NVIDIA CUDA environment image is separate from these four application images and is pinned by digest in [backend.defaults.json](spark/backend.defaults.json). GLM runs the compiled llama.cpp server inside that environment. Make the image available on both model nodes before preflight. If mirroring it, set `runtimeImage` to a verified equivalent digest.
 
 ### Deploy in order
 
@@ -126,7 +87,7 @@ spark verify-gateway
 6. `load`: Check memory headroom, replace the qualification servers with the two-node model layout and wait for direct health.
 7. `verify-direct`: Check arithmetic, sorting, final answers, incremental server-sent events (SSE), usage and `[DONE]` through a loopback port-forward to the GLM Service.
 8. `register`: Add `InferenceEndpoint/glm53-iq2` with the scoped canary settings. Require Ready, TransportReady and Registered.
-9. `verify-gateway`: Repeat requests through verified HTTPS and Pylon. Check missing/invalid keys, disallowed embeddings and each requested retained model.
+9. `verify-gateway`: Repeat GLM requests through verified HTTPS and Pylon. Check missing/invalid keys and disallowed embeddings.
 
 Helm manages persistent resources, and every API operation uses the configured context. Once the runner records a loaded model, preparation phases are gated. Use [the recovery workflow](#recovery-and-limits) for restart testing.
 
@@ -197,8 +158,7 @@ Each noninteractive remote command must supply its kubeconfig and context explic
 
 Verification options:
 
-- `verify` checks regular and streamed GLM requests, negative authentication cases and each requested retained model.
-- For an existing Qwen route, add `--retained-model Qwen/Qwen3-0.6B`. That separate deployment requires its own GPU beyond GLM's two.
+- `verify` checks regular and streamed GLM requests and negative authentication cases.
 - `--output /path/report.json` saves timing and content evidence with keys excluded.
 
 For direct backend comparison:
@@ -215,24 +175,15 @@ Direct HTTP exercises the backend separately from gateway authentication and rou
 To reuse a running stack from a new local work directory, [attach to it first](#update-an-existing-installation).
 
 1. Keep the GLM release and its PVCs running. Edit the selected service under `$SPARK_WORK/source`.
-2. Choose one component and a fresh tag, then build, distribute, update and verify it. The following commands use a registry. For preloaded images, replace the push with the import steps below before running `update`.
+2. Build and distribute that component with a fresh tag using the guide under [Build and distribute the application images](#build-and-distribute-the-application-images). Keep its `COMPONENT` and `NEW_TAG` variables in the same Bash session.
+3. Update the selected image and verify gateway requests.
 
    ```bash
-   COMPONENT=gateway # Or router.
-   NEW_TAG=dev-$(date -u +%Y%m%d%H%M%S)
-   spark build-images --component "$COMPONENT" --tag "$NEW_TAG"
-   spark push-images --component "$COMPONENT" --tag "$NEW_TAG"
    spark update --component "$COMPONENT" --tag "$NEW_TAG"
    spark verify-gateway
    ```
 
-3. Save the printed result path, for example `$SPARK_WORK/evidence/update-YYYYMMDDTHHMMSSZ.json`. Use it if rollback is needed.
-
-For preloaded images:
-
-1. Export the selected fresh image and copy the archive to the configured node directory.
-2. Before `update`, run `spark import-images --archive /local/path/arm64-images.tar --component "$COMPONENT" --tag "$NEW_TAG" --allow-containerd-import`.
-3. Continue with `spark update` and `spark verify-gateway` from the commands above. A gateway/router import targets the configured control node.
+4. Save the printed result path, for example `$SPARK_WORK/evidence/update-YYYYMMDDTHHMMSSZ.json`. Use it if rollback is needed.
 
 The update uses the prepared stack chart with `--reuse-values` and changes the selected image tag. It records old/new tags and compares pod identities to verify that other workloads stay unchanged. GLM keeps running with its existing weights.
 
@@ -271,14 +222,12 @@ Use this workflow to connect a new local work directory to a running stack and G
          "router": "registry.example.com/team/existing-router-image"
        }
      },
-     "apiKeyFile": "/approved/local/path/api-key",
-     "retainedModels": ["Qwen/Qwen3-0.6B"]
+     "apiKeyFile": "/approved/local/path/api-key"
    }
    ```
 
    - Set the actual context, namespace, cluster ID, nodes, CA ConfigMap and registry/import settings.
    - Use the current resource names. Obtain deployment-specific values and credential paths outside GitHub.
-   - Include only existing routes in `retainedModels`. Add `test-model` if that route already exists and must be preserved.
 
 4. Prepare the source, attach to the existing deployment and verify gateway requests.
 
@@ -346,5 +295,3 @@ Keep the runtime source and generated evidence for troubleshooting. Both model P
    spark render
    git diff --check
    ```
-
-Set `testFixture: true` in a private test configuration to exercise the pinned sample and retained-route checks in an automated integration environment. Treat those results as routing-test evidence and validate model behavior with the GLM request checks above.

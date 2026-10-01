@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Chat and validate direct or authenticated gateway responses without logging keys."""
+"""Chat with GLM and validate direct or authenticated gateway responses without logging keys."""
 import argparse
 import http.client
 import json
@@ -40,14 +40,6 @@ class Client:
         payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}],
                    'max_tokens': 512, 'temperature': 0, 'seed': 7, 'stream': stream,
                    'reasoning_effort': 'low', 'chat_template_kwargs': {'clear_thinking': True}}
-        if model == 'test-model':
-            payload.pop('reasoning_effort')
-            payload.pop('chat_template_kwargs')
-            payload['max_tokens'] = 16
-        elif 'Qwen' in model:
-            payload.pop('reasoning_effort')
-            payload['chat_template_kwargs'] = {'enable_thinking': False}
-            payload['max_tokens'] = 64
         if stream:
             payload['stream_options'] = {'include_usage': True}
         started = time.monotonic()
@@ -100,7 +92,7 @@ class Client:
                     print(record['content'])
             if not record['content'].strip():
                 raise RuntimeError('No final answer.')
-            if model != 'test-model' and record['content'].strip() == 'xxxx':
+            if record['content'].strip() == 'xxxx':
                 raise RuntimeError('Received a fixture response for a real model.')
             record['seconds'] = time.monotonic() - started
             return record
@@ -130,7 +122,6 @@ def main():
     parser.add_argument('--api-key-file')
     parser.add_argument('--model', default='GLM-5.3-UD-IQ2_M')
     parser.add_argument('--mode', choices=['chat', 'verify', 'auth'], default='chat')
-    parser.add_argument('--retained-model', action='append', default=[])
     parser.add_argument('--stream', action='store_true')
     parser.add_argument('--output', type=pathlib.Path)
     parser.add_argument('prompt', nargs='?', default='What is 17 multiplied by 19? Give one short sentence.')
@@ -154,13 +145,6 @@ def main():
             report['requests'].append(client.completion(args.model, 'Explain what a GPU does in three short sentences.', stream=True))
             if client.key:
                 report['auth'] = client.auth(args.model)
-            for model in args.retained_model:
-                result = client.completion(model, 'What is 2 plus 3? Reply with only the number.')
-                report['requests'].append(result)
-                if model == 'test-model':
-                    assert result['content'].strip() == 'xxxx'
-                else:
-                    assert re.search(r'\b5\b', result['content'])
         report['result'] = 'PASS'
     finally:
         if args.output:
