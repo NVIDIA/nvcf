@@ -99,7 +99,20 @@ func (r *stubRouter) serveHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	_ = json.NewEncoder(w).Encode(map[string][]string{"model_ids": modelIDs})
+	_ = json.NewEncoder(w).Encode(routableListing(modelIDs))
+}
+
+// routableListing is a router listing where every model has one routable
+// server, the way the router reports a model that chat requests can reach.
+func routableListing(modelIDs []string) provider.ModelListing {
+	listing := provider.ModelListing{ModelIDs: modelIDs, Models: make([]provider.RegisteredModel, 0, len(modelIDs))}
+	for _, id := range modelIDs {
+		listing.Models = append(listing.Models, provider.RegisteredModel{
+			ModelID:  id,
+			Clusters: []provider.ClusterRegistration{{ClusterID: "cluster-a", RegisteredServers: 1, HealthyServers: 1}},
+		})
+	}
+	return listing
 }
 
 func (r *stubRouter) setModels(modelIDs ...string) {
@@ -264,6 +277,37 @@ func TestRetrieveModel_ModelID_ReturnsModelOrNotFound(t *testing.T) {
 			require.JSONEq(t, tc.wantBody, rec.Body.String())
 		})
 	}
+}
+
+// TestListModels_ListingFieldsDisagree_FollowsHealthyServers covers the
+// router filling model_ids and models in two separate reads: a registration
+// that changed between them appears in one field but not the other. The
+// gateway follows models[], the field GET /v1/registry derives health from.
+func TestListModels_ListingFieldsDisagree_FollowsHealthyServers(t *testing.T) {
+	t.Parallel()
+	router := newStubRouter(t)
+	router.body = `{
+		"model_ids": ["stale/became-unroutable"],
+		"models": [
+			{"model_id": "stale/became-unroutable", "clusters": [
+				{"cluster_id": "cluster-a", "registered_servers": 1, "healthy_servers": 0}
+			]},
+			{"model_id": "fresh/became-routable", "clusters": [
+				{"cluster_id": "cluster-a", "registered_servers": 1, "healthy_servers": 0},
+				{"cluster_id": "cluster-b", "registered_servers": 1, "healthy_servers": 1}
+			]}
+		]
+	}`
+	gateway := newModelsTestGateway(t, router.server.URL, time.Minute)
+
+	rec := gateway.get(t, "/v1/models")
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.JSONEq(t, `{"object":"list","data":[
+		{"id":"fresh/became-routable","object":"model","created":1759741923,"owned_by":"inference-endpoints"}
+	]}`, rec.Body.String())
+	rec = gateway.get(t, "/v1/models/stale/became-unroutable")
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }
 
 func TestListModels_RefreshAddsModel_KeepsFirstSeenCreated(t *testing.T) {

@@ -38,8 +38,10 @@ The gateway currently serves:
 - `GET /v1/registry`
 
 `GET /v1/models` lists the models the LLM Request Router can route, in OpenAI
-list format and sorted by `id`. It covers only registrations without a routing
-key. `created` is when this gateway process first saw the model, so it resets
+list format and sorted by `id`. A model is listed exactly when
+`GET /v1/registry` shows it `Healthy`; both read the same field of one router
+listing. It covers only registrations without a routing key. `created` is when
+this gateway process first saw the model, so it resets
 on restart. `GET /v1/models/{id}` accepts ids that contain slashes and returns
 404 for an unlisted model. Both return 502 when the router listing call fails
 and the cached listing has expired.

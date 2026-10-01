@@ -66,7 +66,7 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time                        { return time.Now() }
 func (systemClock) NowNano() int64                        { return time.Now().UnixNano() }
-func (systemClock) Tick(d time.Duration) <-chan time.Time { return time.Tick(d) }
+func (systemClock) Tick(d time.Duration) <-chan time.Time { return time.NewTicker(d).C }
 
 // listingKey is the only key in modelCatalog.listings: the router returns one
 // listing for all callers.
@@ -107,6 +107,22 @@ func newModelCatalog(lister provider.ModelLister, ttl time.Duration, clock catal
 	return catalog
 }
 
+// routableModelIDs lists the models with a routable server, read from the
+// same field GET /v1/registry derives health from. The router fills model_ids
+// and models in two separate reads, so using model_ids here could disagree
+// with the registry for one cache period.
+func routableModelIDs(listing *provider.ModelListing) []string {
+	ids := make([]string, 0, len(listing.Models))
+	for _, model := range listing.Models {
+		if slices.ContainsFunc(model.Clusters, func(cluster provider.ClusterRegistration) bool {
+			return cluster.HealthyServers > 0
+		}) {
+			ids = append(ids, model.ModelID)
+		}
+	}
+	return ids
+}
+
 // models returns the routable models sorted by id.
 func (c *modelCatalog) models(ctx context.Context) ([]openAIModel, error) {
 	listing, err := c.current(ctx)
@@ -114,10 +130,11 @@ func (c *modelCatalog) models(ctx context.Context) ([]openAIModel, error) {
 		return nil, err
 	}
 
+	ids := routableModelIDs(listing.ModelListing)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	result := make([]openAIModel, 0, len(listing.ModelIDs))
-	for _, id := range listing.ModelIDs {
+	result := make([]openAIModel, 0, len(ids))
+	for _, id := range ids {
 		result = append(result, openAIModel{
 			ID:      id,
 			Object:  models.ObjectModel,
@@ -156,7 +173,7 @@ func (c *modelCatalog) load(ctx context.Context) (*catalogListing, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	refreshedAt := c.clock.Now()
-	for _, id := range listing.ModelIDs {
+	for _, id := range routableModelIDs(listing) {
 		if _, ok := c.firstSeen[id]; !ok {
 			c.firstSeen[id] = refreshedAt.Unix()
 		}
