@@ -106,13 +106,15 @@ type ModelVolumeController struct {
 	CacheWarmup time.Duration
 	// RefreshDisabled turns set refresh off; RefreshCooldown is the least
 	// time between a generation's creation and the next refresh of the
-	// same set (zero: 30 minutes). docs/proposals/helm-chart-cache-refresh.md.
+	// same set (zero: 6 hours). docs/proposals/helm-chart-cache-refresh.md.
 	RefreshDisabled bool
 	RefreshCooldown time.Duration
 	// deltaScan is the warm-rank scan (seam for tests): new files not in
 	// the seed index, their bytes, a fingerprint, and whether an index was
 	// found at all.
-	deltaScan func(src string) (files int, bytes int64, fingerprint string, indexed bool, err error)
+	// Files written after `before` (the pod's Ready transition) are what
+	// serving compiled, not what the next start pays for; they are left out.
+	deltaScan func(src string, before time.Time) (files int, bytes int64, fingerprint string, indexed bool, err error)
 	// CacheSettle is how long the cache tree must stay unchanged (bytes
 	// and file count) before it is captured. Readiness is not "compiled":
 	// a tensor-parallel worker reports Ready before its torch.compile
@@ -1306,7 +1308,14 @@ func (c *ModelVolumeController) scanWarmRank(ctx context.Context, pod *corev1.Po
 		if scan == nil {
 			scan = scanSeedDelta
 		}
-		newFiles, newBytes, fp, indexed, err := scan(filepath.Join(c.HostFSRoot, src))
+		// Only what the engine compiled before it reported Ready costs the
+		// next start; kernels compiled while serving (new request shapes)
+		// change on every rank with every traffic mix and would refresh
+		// the set forever (GB300, 2026-10-01: 1 to 38 files per rank in
+		// the first minutes of traffic). A short grace covers writes that
+		// land as readiness flips.
+		before := readyAt(pod).Add(readyGrace)
+		newFiles, newBytes, fp, indexed, err := scan(filepath.Join(c.HostFSRoot, src), before)
 		if err != nil {
 			log.WithError(err).Warn("cache volume: warm rank delta scan failed")
 			return
@@ -1335,11 +1344,25 @@ func (c *ModelVolumeController) scanWarmRank(ctx context.Context, pod *corev1.Po
 	}()
 }
 
+// readyGrace is added to the Ready transition when deciding which new
+// files belong to startup.
+const readyGrace = 5 * time.Second
+
+// readyAt is the pod's Ready transition time, zero when unknown.
+func readyAt(pod *corev1.Pod) time.Time {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+			return c.LastTransitionTime.Time
+		}
+	}
+	return time.Time{}
+}
+
 // scanSeedDelta lists the files under root that the seed index does not
-// name, ignoring bookkeeping the engine rewrites on every start: lock
-// files, logs and tmp directories (GB300, 2026-10-01: 15 such files per
-// warm start, nothing else). indexed is false when there is no index.
-func scanSeedDelta(root string) (int, int64, string, bool, error) {
+// name and that were written before `before` (zero: any time), ignoring
+// bookkeeping the engine rewrites on every start: lock files, logs and
+// tmp directories. indexed is false when there is no index.
+func scanSeedDelta(root string, before time.Time) (int, int64, string, bool, error) {
 	raw, err := os.ReadFile(filepath.Join(root, webhook.SeedIndexFile))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1363,9 +1386,14 @@ func scanSeedDelta(root string) (int, int64, string, bool, error) {
 		if rerr != nil || seeded[rel] || deltaIgnored(rel) {
 			return nil
 		}
-		if info, ierr := d.Info(); ierr == nil {
-			bytes += info.Size()
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
 		}
+		if !before.IsZero() && info.ModTime().After(before) {
+			return nil // compiled while serving
+		}
+		bytes += info.Size()
 		added = append(added, rel)
 		return nil
 	})
@@ -1423,7 +1451,7 @@ func (c *ModelVolumeController) tryRefresh(ctx context.Context, uri string, log 
 		}
 		cooldown := c.RefreshCooldown
 		if cooldown == 0 {
-			cooldown = 30 * time.Minute
+			cooldown = 6 * time.Hour
 		}
 		if since := time.Since(st.PrimaryCreated); since < cooldown {
 			log.WithFields(logrus.Fields{"generation": st.Generation, "since": since.Round(time.Second).String(), "cooldown": cooldown.String()}).Info("cache volume: refresh proposed inside the cooldown; waiting")

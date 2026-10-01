@@ -187,7 +187,7 @@ func main() {
 	flag.BoolVar(&config.ModelVolume.RefreshDisabled, "cache-set-refresh-disabled", false,
 		"Turn off cache set refresh: warm ranks that gained files no longer propose a new generation of their set")
 	flag.DurationVar(&config.ModelVolume.RefreshCooldown, "cache-set-refresh-cooldown", 0,
-		"Least time between generations of one cache set (default 30m)")
+		"Least time between generations of one cache set (default 6h)")
 
 	flag.StringVar(&config.Webhook.L2WaitImage, "webhook-l2-wait-image", "",
 		"Image ref for the nvsnap-l2-wait init container injected onto restore pods (nvsnap#147)")

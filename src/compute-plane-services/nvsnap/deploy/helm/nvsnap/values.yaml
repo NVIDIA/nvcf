@@ -147,11 +147,15 @@ agent:
   # (docs/proposals/helm-chart-cache-refresh.md). A warm rank whose
   # cachedir gained files the seeded set lacks proposes a refresh; one
   # agent collects a new generation of the set from the warm ranks and
-  # later pods seed from it. refresh: false turns this off.
-  # refreshCooldown is the least time between generations of one set.
+  # later pods seed from it. Only files the engine wrote before it reported
+  # Ready count: those cost the next start; what serving compiles for new
+  # request shapes does not. refresh: false turns this off. refreshCooldown
+  # is the least time between generations of one set; a superseded
+  # generation with no reader bound is retired about an hour after it is
+  # replaced.
   cacheVolume:
     refresh: true
-    refreshCooldown: 30m
+    refreshCooldown: 6h
 
   election:
     enabled: false

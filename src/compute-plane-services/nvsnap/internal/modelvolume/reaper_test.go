@@ -248,3 +248,37 @@ func TestReaper_SupersededGenerationRetiresWhileServingOneIsRead(t *testing.T) {
 		}
 	}
 }
+
+// A superseded generation retires an hour after its last use once no
+// reader is bound, long before retention; the serving generation stays.
+func TestReaper_SupersededGenerationRetiresAfterGrace(t *testing.T) {
+	ctx := context.Background()
+	key := "abc123def4567890"
+	complete := map[string]string{CacheLabel: key, CompleteLabel: "true"}
+	old := pvFixture("set-g1", complete, "nvsnap-system", "nvsnap-cache-"+key, corev1.VolumeReleased, false, 3*time.Hour)
+	old.Annotations = map[string]string{LastUsedAnnotation: time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)}
+	newer := pvFixture("set-g2", complete, "nvsnap-system", "nvsnap-cache-"+key+"-g2", corev1.VolumeReleased, false, 90*time.Minute)
+	newer.Annotations = map[string]string{LastUsedAnnotation: time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339), GenerationAnnotation: "2"}
+	kc := fake.NewSimpleClientset(old, newer)
+	r := &Reaper{Kube: kc, Retention: 7 * 24 * time.Hour}
+	res, err := r.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RetiredPrimaries != 1 {
+		t.Errorf("retired %d, want 1 (the superseded generation past its grace): %+v", res.RetiredPrimaries, res)
+	}
+	if _, err := kc.CoreV1().PersistentVolumes().Get(ctx, "set-g1", metav1.GetOptions{}); err == nil {
+		t.Error("superseded generation 1 retires after the grace")
+	}
+	if _, err := kc.CoreV1().PersistentVolumes().Get(ctx, "set-g2", metav1.GetOptions{}); err != nil {
+		t.Error("the serving generation stays under retention")
+	}
+	// Inside the grace it stays.
+	fresh := pvFixture("set-g1", complete, "nvsnap-system", "nvsnap-cache-"+key, corev1.VolumeReleased, false, 3*time.Hour)
+	fresh.Annotations = map[string]string{LastUsedAnnotation: time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)}
+	kc2 := fake.NewSimpleClientset(fresh, newer.DeepCopy())
+	if res, _ := (&Reaper{Kube: kc2, Retention: 7 * 24 * time.Hour}).Sweep(ctx); res.RetiredPrimaries != 0 {
+		t.Errorf("inside the grace nothing retires: %+v", res)
+	}
+}

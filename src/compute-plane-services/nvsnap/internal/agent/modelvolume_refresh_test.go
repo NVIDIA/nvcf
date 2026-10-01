@@ -126,8 +126,8 @@ func podAnn(t *testing.T, kc *fake.Clientset, pod *corev1.Pod) map[string]string
 func TestModelVolumeController_WarmDeltaRefreshesSet(t *testing.T) {
 	ctx := context.Background()
 	kc, cache, c := refreshController(t)
-	completeSet(t, c, time.Hour)
-	c.deltaScan = func(src string) (int, int64, string, bool, error) {
+	completeSet(t, c, 7*time.Hour)
+	c.deltaScan = func(src string, _ time.Time) (int, int64, string, bool, error) {
 		if strings.Contains(src, "warm-node-a-0") {
 			return 7, 3 << 20, "fp-mamba", true, nil
 		}
@@ -172,7 +172,7 @@ func TestModelVolumeController_RefreshRespectsCooldown(t *testing.T) {
 	kc, cache, c := refreshController(t)
 	completeSet(t, c, time.Minute)
 	c.RefreshCooldown = 30 * time.Minute
-	c.deltaScan = func(string) (int, int64, string, bool, error) { return 1, 1, "fp", true, nil }
+	c.deltaScan = func(string, time.Time) (int, int64, string, bool, error) { return 1, 1, "fp", true, nil }
 	r0 := warmFixture(t, c, "node-a", 0, 1)
 	c.Handle(ctx, r0)
 	waitUntil(t, "delta stamped", func() bool { return podAnn(t, kc, r0)[modelvolume.CacheRankDeltaAnnotation] == "true" })
@@ -190,14 +190,14 @@ func TestModelVolumeController_RefreshRespectsCooldown(t *testing.T) {
 func TestModelVolumeController_RefreshLoopGuard(t *testing.T) {
 	ctx := context.Background()
 	kc, cache, c := refreshController(t)
-	pv := completeSet(t, c, time.Hour)
+	pv := completeSet(t, c, 7*time.Hour)
 	fp := refreshFingerprint(map[int]string{0: "fp-same"})
 	pv.Annotations[modelvolume.DeltaFingerprintAnnotation] = fp
 	pv.Annotations[modelvolume.GenerationAnnotation] = "2"
 	if _, err := kc.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	c.deltaScan = func(string) (int, int64, string, bool, error) { return 2, 2, "fp-same", true, nil }
+	c.deltaScan = func(string, time.Time) (int, int64, string, bool, error) { return 2, 2, "fp-same", true, nil }
 	r0 := warmFixtureGen(t, c, "node-a", 0, 1, "2")
 	c.Handle(ctx, r0)
 	waitUntil(t, "set marked stable", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123"); return st.RefreshStable })
@@ -205,7 +205,7 @@ func TestModelVolumeController_RefreshLoopGuard(t *testing.T) {
 		t.Errorf("no generation 3 for a repeated delta, got %d", st.Generation)
 	}
 	// A later delta on a stable set changes nothing.
-	c.deltaScan = func(string) (int, int64, string, bool, error) { return 2, 2, "fp-other", true, nil }
+	c.deltaScan = func(string, time.Time) (int, int64, string, bool, error) { return 2, 2, "fp-other", true, nil }
 	if err := kc.CoreV1().Pods("sr-warm").Delete(ctx, r0.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestModelVolumeController_RefreshNeedsIndexAndSwitch(t *testing.T) {
 	ctx := context.Background()
 	kc, _, c := refreshController(t)
 	completeSet(t, c, time.Hour)
-	c.deltaScan = func(string) (int, int64, string, bool, error) { return 0, 0, "", false, nil }
+	c.deltaScan = func(string, time.Time) (int, int64, string, bool, error) { return 0, 0, "", false, nil }
 	r0 := warmFixture(t, c, "node-a", 0, 1)
 	c.Handle(ctx, r0)
 	time.Sleep(50 * time.Millisecond)
@@ -232,7 +232,7 @@ func TestModelVolumeController_RefreshNeedsIndexAndSwitch(t *testing.T) {
 		t.Errorf("no index, no stamps: %v", a)
 	}
 	c.RefreshDisabled = true
-	c.deltaScan = func(string) (int, int64, string, bool, error) { return 5, 5, "fp", true, nil }
+	c.deltaScan = func(string, time.Time) (int, int64, string, bool, error) { return 5, 5, "fp", true, nil }
 	r1 := warmFixture(t, c, "node-a", 1, 2)
 	c.Handle(ctx, r1)
 	time.Sleep(50 * time.Millisecond)
@@ -254,7 +254,7 @@ func TestScanSeedDelta(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, _, indexed, err := scanSeedDelta(root); err != nil || indexed {
+	if _, _, _, indexed, err := scanSeedDelta(root, time.Time{}); err != nil || indexed {
 		t.Fatalf("no index: indexed=%v err=%v", indexed, err)
 	}
 	mk("torchinductor/a.bin", 10)
@@ -266,16 +266,43 @@ func TestScanSeedDelta(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, webhook.SeedIndexFile), []byte("torchinductor/a.bin\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	files, bytes, fp, indexed, err := scanSeedDelta(root)
+	files, bytes, fp, indexed, err := scanSeedDelta(root, time.Time{})
 	if err != nil || !indexed {
 		t.Fatalf("scan: indexed=%v err=%v", indexed, err)
 	}
 	if files != 2 || bytes != 705 || fp == "" {
 		t.Errorf("delta = the kernel and its ninja log only: files=%d bytes=%d fp=%q", files, bytes, fp)
 	}
-	again, _, fp2, _, _ := scanSeedDelta(root)
+	again, _, fp2, _, _ := scanSeedDelta(root, time.Time{})
 	if again != files || fp2 != fp {
 		t.Errorf("the fingerprint is stable for the same delta")
+	}
+	// A cutoff at the Ready transition leaves out what serving compiled.
+	late := time.Now()
+	if err := os.Chtimes(filepath.Join(root, ".cache/flashinfer/jit/cached_ops/mamba/kernel.so"), late, late); err != nil {
+		t.Fatal(err)
+	}
+	early := late.Add(-2 * time.Minute)
+	if err := os.Chtimes(filepath.Join(root, ".cache/flashinfer/jit/cached_ops/mamba/.ninja_log"), early, early); err != nil {
+		t.Fatal(err)
+	}
+	ready := late.Add(-time.Minute)
+	n, b, _, _, _ := scanSeedDelta(root, ready)
+	if n != 1 || b != 5 {
+		t.Errorf("only files written before Ready count: files=%d bytes=%d", n, b)
+	}
+}
+
+// readyAt reads the Ready transition; without one the cutoff is zero and
+// every new file counts.
+func TestReadyAt(t *testing.T) {
+	ts := metav1.NewTime(time.Date(2026, 10, 1, 14, 45, 30, 0, time.UTC))
+	pod := &corev1.Pod{Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: ts}}}}
+	if !readyAt(pod).Equal(ts.Time) {
+		t.Errorf("readyAt = %s", readyAt(pod))
+	}
+	if !readyAt(&corev1.Pod{}).IsZero() {
+		t.Error("no Ready condition: zero")
 	}
 }
 
@@ -286,12 +313,12 @@ func TestScanSeedDelta(t *testing.T) {
 func TestModelVolumeController_RefreshOnlyFromServingGeneration(t *testing.T) {
 	ctx := context.Background()
 	kc, cache, c := refreshController(t)
-	pv := completeSet(t, c, time.Hour)
+	pv := completeSet(t, c, 7*time.Hour)
 	pv.Annotations[modelvolume.GenerationAnnotation] = "2"
 	if _, err := kc.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	c.deltaScan = func(string) (int, int64, string, bool, error) { return 3, 3, "fp-old", true, nil }
+	c.deltaScan = func(string, time.Time) (int, int64, string, bool, error) { return 3, 3, "fp-old", true, nil }
 	old := warmFixtureGen(t, c, "node-a", 0, 1, "1")
 	c.Handle(ctx, old)
 	waitUntil(t, "old rank delta stamped", func() bool { return podAnn(t, kc, old)[modelvolume.CacheRankDeltaAnnotation] == "true" })
@@ -302,7 +329,7 @@ func TestModelVolumeController_RefreshOnlyFromServingGeneration(t *testing.T) {
 	if err := kc.CoreV1().Pods("sr-warm").Delete(ctx, old.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	c.deltaScan = func(string) (int, int64, string, bool, error) { return 2, 2, "fp-new", true, nil }
+	c.deltaScan = func(string, time.Time) (int, int64, string, bool, error) { return 2, 2, "fp-new", true, nil }
 	cur := warmFixtureGen(t, c, "node-a", 0, 1, "2")
 	c.Handle(ctx, cur)
 	waitUntil(t, "generation 3 complete", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123"); return st.Generation == 3 })

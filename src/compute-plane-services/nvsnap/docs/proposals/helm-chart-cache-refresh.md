@@ -69,7 +69,7 @@ stamped on the pod as `nvsnap.io/cache-rank-delta` and
 
 Bounded. A refresh needs: the set complete, at least one rank with a
 delta, every rank of the group live, and no refresh of this set within
-`agent.cacheVolume.refreshCooldown` (default 30 min). A loop guard
+`agent.cacheVolume.refreshCooldown` (default 6 h). A loop guard
 compares the delta fingerprint (sorted relative paths of the delta) with
 the one recorded on the generation it came from; the same fingerprint
 twice means the engine rewrites those files every start, the set is
@@ -86,7 +86,7 @@ the configuration changes.
 | collector | unchanged streaming; marks the new primary with `generation`, `refreshed-from`, `delta-fingerprint` and the time |
 | webhook complete branch | mints the read-only view from the generation Lookup returned (no change to the pod shape) |
 | reaper | today keys "has a live reader" by identity (reaper.go, `live[identityKey(pv)]`), so a reader bound to generation 2 would keep generation 1 alive forever; liveness must be tracked per primary PV through its own read-only views, then superseded generations retire under the normal retention and never get a new view |
-| values | `agent.cacheVolume.refreshCooldown: 30m`, `agent.cacheVolume.refresh: true` |
+| values | `agent.cacheVolume.refreshCooldown: 6h`, `agent.cacheVolume.refresh: true` |
 
 Nothing changes for the model volume, the cold capture, or a cluster
 without warm deltas. A set that never gains files never refreshes.
@@ -132,6 +132,16 @@ election and collected generation 2 from the eight warm ranks in 59 s
 A pod is stamped with the generation it was seeded from and only ranks
 seeded from the serving generation take part in a refresh; otherwise the
 first warm deployment keeps proposing after its own refresh.
+
+Bounding the churn. Only files the engine wrote before it reported Ready
+count as a delta: those are what the next start pays for. What serving
+compiles for new request shapes differs on every rank with every
+traffic mix and would otherwise refresh the set, 7.5 GB and a new
+volume, at every cooldown for as long as traffic runs. The cooldown
+default is 6 hours, and a superseded generation with no reader bound is
+retired an hour after its last use rather than after the 7-day
+retention. Expected steady state on this model: one refresh after the
+startup path changes, then none.
 
 ## Failure behaviour
 

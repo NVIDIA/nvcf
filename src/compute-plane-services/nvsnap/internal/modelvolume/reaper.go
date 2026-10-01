@@ -46,8 +46,15 @@ type Reaper struct {
 	// Retention is how long a complete primary is kept after its last
 	// use. Zero means never retire.
 	Retention time.Duration
-	now       func() time.Time
+	// SupersededGrace is how long a complete generation with a newer
+	// complete sibling is kept once no reader is bound to it. Zero means
+	// one hour. Retention still governs the serving generation.
+	SupersededGrace time.Duration
+	now             func() time.Time
 }
+
+// DefaultSupersededGrace is SupersededGrace when unset.
+const DefaultSupersededGrace = time.Hour
 
 // Result counts what one sweep removed.
 type Result struct {
@@ -124,15 +131,34 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 			live[viewSourceKey(pv)] = true
 		}
 	}
+	// The newest complete generation per identity; older ones are
+	// superseded and go after SupersededGrace once nothing reads them.
+	newest := map[string]int{}
+	for i := range pvs.Items {
+		pv := &pvs.Items[i]
+		if isPrimaryModelPV(pv) && pv.Labels[CompleteLabel] == "true" && Generation(pv) > newest[identityKey(pv)] {
+			newest[identityKey(pv)] = Generation(pv)
+		}
+	}
+	grace := r.SupersededGrace
+	if grace == 0 {
+		grace = DefaultSupersededGrace
+	}
 	for i := range pvs.Items {
 		pv := &pvs.Items[i]
 		fields := logrus.Fields{"pv": pv.Name, "model": pv.Labels[IdentityLabel], "cache": pv.Labels[CacheLabel], "phase": pv.Status.Phase}
 		switch {
-		case isPrimaryModelPV(pv) && pv.Labels[CompleteLabel] == "true" && pv.Status.Phase == corev1.VolumeReleased && r.Retention > 0:
+		case isPrimaryModelPV(pv) && pv.Labels[CompleteLabel] == "true" && pv.Status.Phase == corev1.VolumeReleased && (r.Retention > 0 || Generation(pv) < newest[identityKey(pv)]):
 			last := lastUsed(pv)
-			if r.now().Sub(last) < r.Retention || live[pv.Name] || live[identityKey(pv)] || attached[pv.Name] {
+			superseded := Generation(pv) < newest[identityKey(pv)]
+			keep := r.now().Sub(last) < r.Retention || r.Retention == 0
+			if superseded {
+				keep = r.now().Sub(last) < grace
+			}
+			if keep || live[pv.Name] || live[identityKey(pv)] || attached[pv.Name] {
 				continue
 			}
+			fields["superseded"] = superseded
 			// Read-only views of this primary first: they are Retain PV
 			// objects over the same storage and would be left dangling.
 			for j := range pvs.Items {

@@ -232,7 +232,7 @@ type ModelVolumeConfig struct {
 	// readers on block storage. Default /var/lib/containerd/nvsnap-models.
 	HostRoot string
 	// RefreshDisabled turns cache set refresh off; RefreshCooldown is the
-	// least time between generations of one set (zero: 30 minutes).
+	// least time between generations of one set (zero: 6 hours).
 	// docs/proposals/helm-chart-cache-refresh.md.
 	RefreshDisabled bool
 	RefreshCooldown time.Duration
