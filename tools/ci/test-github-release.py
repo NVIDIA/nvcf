@@ -2749,6 +2749,37 @@ class DecoupledVersionSourceTest(unittest.TestCase):
     def chart_service(self, version_source=False):
         return self.metadata(version_source)["services"][1]
 
+    def test_version_source_selects_the_publish_path(self):
+        """The one line version_source flips, asserted directly.
+
+        The drain loop only runs with real follower metadata, so this choice is
+        easy to leave unexercised: a mutation routing app_version_source through
+        publish_follower_release survived the whole suite until this existed.
+        """
+        choose = self.github_release.deferred_publisher
+
+        coupled = self.metadata(version_source=True)["services"][1]
+        self.assertEqual(choose(coupled), self.github_release.publish_follower_release)
+
+        decoupled = self.metadata(version_source=False)["services"][1]
+        self.assertIn("app_version_source", decoupled)
+        self.assertNotIn("version_source", decoupled)
+        self.assertEqual(choose(decoupled), self.github_release.publish_app_version_refresh)
+
+    def test_the_shipped_metadata_selects_the_expected_path(self):
+        """Guards the configuration itself, not just the code that reads it."""
+        root = Path(__file__).resolve().parents[2]
+        metadata = json.loads((root / "tools/ci/github-release-subprojects.json").read_text())
+        chart = self.github_release.find_service(metadata, "nvca-operator")
+        # The chart must always declare which operator it installs.
+        self.assertEqual(chart.get("app_version_source"), "nvca")
+        expected = (
+            self.github_release.publish_follower_release
+            if chart.get("version_source")
+            else self.github_release.publish_app_version_refresh
+        )
+        self.assertEqual(self.github_release.deferred_publisher(chart), expected)
+
     def test_clearing_version_source_drops_the_derived_ownership(self):
         """owns_paths is not declared separately, so it cannot be left behind."""
         with tempfile.TemporaryDirectory() as tmp:

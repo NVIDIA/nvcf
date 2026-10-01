@@ -1620,6 +1620,18 @@ def leader_release_version(root, metadata, leader_id, end="HEAD"):
     return version if re.fullmatch(STABLE_SEMVER_PATTERN, version) else ""
 
 
+def deferred_publisher(service):
+    """Which publish path a deferred service takes.
+
+    Named rather than inlined in the drain loop so the choice itself is
+    testable: it is the single line that `version_source` flips, and a loop body
+    that only runs with real follower metadata is easy to leave unexercised.
+    """
+    if service.get("version_source"):
+        return publish_follower_release
+    return publish_app_version_refresh
+
+
 def publish_app_version_refresh(root, service, metadata, dry_run, draft):
     """Release a chart whose leader moved, so a package exists that installs it.
 
@@ -2251,10 +2263,7 @@ def auto_release(args):
     for service in followers:
         print(f"::group::github-release {service['id']} (follower)")
         try:
-            if service.get("version_source"):
-                publish_follower_release(root, service, metadata, dry_run=dry_run, draft=draft)
-            else:
-                publish_app_version_refresh(root, service, metadata, dry_run=dry_run, draft=draft)
+            deferred_publisher(service)(root, service, metadata, dry_run=dry_run, draft=draft)
         finally:
             print("::endgroup::")
 
