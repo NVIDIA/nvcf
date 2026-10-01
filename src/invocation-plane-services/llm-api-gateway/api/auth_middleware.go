@@ -162,9 +162,9 @@ func rateLimitSubjectKey(rateLimitKey string, projectID string, routingKey strin
 // lost: the call site records the original error on the span before calling
 // this, so it stays in traces for debugging.
 func nvcfAuthHTTPError(err error) error {
+	// No case for codes.OK: an authenticator error always rejects the request,
+	// even one whose status claims success.
 	switch status.Code(err) {
-	case codes.OK:
-		return nil
 	case codes.InvalidArgument:
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request")
 	case codes.Unauthenticated:

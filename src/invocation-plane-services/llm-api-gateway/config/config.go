@@ -54,7 +54,17 @@ type Config struct {
 	// CallerKeysFile authenticates callers against static API keys instead of
 	// NVCF auth. Empty disables it.
 	CallerKeysFile string
+	// AllowAnonymous lets the gateway start with no authenticator and admit
+	// callers without a key.
+	AllowAnonymous bool
 }
+
+var (
+	errNoCallerAuth = errors.New(
+		"no caller authentication configured: set NVCF_GRPC_ADDR or CALLER_KEYS_FILE, or ALLOW_ANONYMOUS=true")
+	errAnonymousWithCallerAuth = errors.New(
+		"ALLOW_ANONYMOUS cannot be combined with NVCF_GRPC_ADDR or CALLER_KEYS_FILE")
+)
 
 type ServerConfig struct {
 	Addr              string
@@ -275,6 +285,9 @@ func LoadFromEnv() (*Config, error) {
 		cfg.BareModelNamesEnabled = v
 	}
 
+	if v, ok := errs.boolean("ALLOW_ANONYMOUS"); ok {
+		cfg.AllowAnonymous = v
+	}
 	if path := os.Getenv("CALLER_KEYS_FILE"); path != "" {
 		cfg.CallerKeysFile = path
 		if cfg.NVCF.GRPCAddr != "" {
@@ -289,6 +302,19 @@ func LoadFromEnv() (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// CheckCallerAuth applies the gateway's fail-closed startup rule. LoadFromEnv
+// does not, because the rate-limit sync worker shares Config and serves no callers.
+func (c *Config) CheckCallerAuth() error {
+	hasAuthenticator := c.NVCF.GRPCAddr != "" || c.CallerKeysFile != ""
+	switch {
+	case hasAuthenticator && c.AllowAnonymous:
+		return errAnonymousWithCallerAuth
+	case !hasAuthenticator && !c.AllowAnonymous:
+		return errNoCallerAuth
+	}
+	return nil
 }
 
 // loadTracingAccessToken reads the Lightstep access token for the OTLP

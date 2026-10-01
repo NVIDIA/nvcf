@@ -25,6 +25,11 @@ export STARGATE_URL="${STARGATE_URL:-http://127.0.0.1:8000}"
 export NVCF_REGION="${NVCF_REGION:-local}"
 export NVCF_DEFAULT_FUNCTION_ID="${NVCF_DEFAULT_FUNCTION_ID:-default}"
 export NVCF_DEFAULT_MODEL="${NVCF_DEFAULT_MODEL:-bootstrap-echo}"
+# The gateway refuses to start without caller authentication; local runs
+# without NVCF auth or caller keys opt out.
+if [[ -z "${NVCF_GRPC_ADDR:-}" && -z "${CALLER_KEYS_FILE:-}" ]]; then
+  export ALLOW_ANONYMOUS="${ALLOW_ANONYMOUS:-true}"
+fi
 
 exec watchexec \
   --debounce 200ms \

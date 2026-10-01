@@ -83,6 +83,10 @@ llmApiGateway:
     # prefix and no NVCF auth. For deployments without the NVCF control plane.
     # Do not enable where untrusted callers can reach the gateway.
     bareModelNamesEnabled: false
+    # Start without caller authentication and admit callers without a key.
+    # The gateway refuses to start with neither nvcfGrpcAddr nor callerKeys
+    # unless this is true, and refuses to start when it is combined with them.
+    allowAnonymous: false
     localFunctionId: ""
     defaultModel: ""
     defaultRpm: 120

@@ -18,6 +18,7 @@ limitations under the License.
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,43 @@ func TestLoadFromEnvRejectsCallerKeysWithNVCFAuth(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CALLER_KEYS_FILE and NVCF_GRPC_ADDR are mutually exclusive") {
 		t.Fatalf("LoadFromEnv() error = %v, want it to name both settings", err)
+	}
+}
+
+func TestCheckCallerAuth_AuthSettings_EnforcesFailClosedRule(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		wantErr error
+	}{
+		{"no authenticator", nil, errNoCallerAuth},
+		{"no authenticator, anonymous off", map[string]string{"ALLOW_ANONYMOUS": "false"}, errNoCallerAuth},
+		{"nvcf auth", map[string]string{"NVCF_GRPC_ADDR": "api.nvcf.svc.cluster.local:9090"}, nil},
+		{"caller keys", map[string]string{"CALLER_KEYS_FILE": "/etc/caller-keys.yaml"}, nil},
+		{"anonymous", map[string]string{"ALLOW_ANONYMOUS": "true"}, nil},
+		{"anonymous with nvcf auth", map[string]string{
+			"ALLOW_ANONYMOUS": "true",
+			"NVCF_GRPC_ADDR":  "api.nvcf.svc.cluster.local:9090",
+		}, errAnonymousWithCallerAuth},
+		{"anonymous with caller keys", map[string]string{
+			"ALLOW_ANONYMOUS":  "true",
+			"CALLER_KEYS_FILE": "/etc/caller-keys.yaml",
+		}, errAnonymousWithCallerAuth},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+
+			if err := cfg.CheckCallerAuth(); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("CheckCallerAuth() error = %v, want %v", err, tc.wantErr)
+			}
+		})
 	}
 }
 
