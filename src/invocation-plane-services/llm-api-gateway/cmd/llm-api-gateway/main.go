@@ -47,6 +47,12 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to load configuration")
 	}
 	telemetry.SetServiceName(cfg.Telemetry.ServiceName)
+	if err := cfg.CheckCallerAuth(); err != nil {
+		zlog.Fatal().Err(err).Msg("refusing to start without caller authentication")
+	}
+	if cfg.AllowAnonymous {
+		zlog.Warn().Msg("ALLOW_ANONYMOUS is set: callers are not authenticated")
+	}
 
 	observability, err := telemetry.Init(context.Background(), telemetry.RuntimeConfig{
 		MetricsPort:        cfg.Telemetry.MetricsPort,

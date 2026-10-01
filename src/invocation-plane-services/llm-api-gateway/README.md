@@ -135,8 +135,8 @@ mise run run
 those files exist.
 
 `mise run run` does not start Stargate. By default the gateway targets
-`http://127.0.0.1:8000`. NVCF gRPC auth is optional for local bootstrapping; if
-`NVCF_GRPC_ADDR` is not set, the auth middleware is disabled.
+`http://127.0.0.1:8000`. When neither `NVCF_GRPC_ADDR` nor `CALLER_KEYS_FILE`
+is set, it sets `ALLOW_ANONYMOUS=true`, so callers are not authenticated.
 
 If `RATE_LIMIT_SYNC_TRANSPORT` is set to `pubsub` or `nats`, run the sync
 consumer as a separate process:
@@ -173,7 +173,8 @@ Useful overrides:
   may stall on a client that stopped reading (default `60s`, `0s` disables).
   It applies only while a write is in progress, so long streams, long
   generations, and upstream pauses are not cut off.
-- `NVCF_GRPC_ADDR` to enable NVCF gRPC auth
+- `NVCF_GRPC_ADDR` to enable NVCF gRPC auth. The gateway refuses to start
+  without `NVCF_GRPC_ADDR` or `CALLER_KEYS_FILE` unless `ALLOW_ANONYMOUS=true`.
 - `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
   fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for
   OAuth2 client-credentials auth.
@@ -197,6 +198,10 @@ Useful overrides:
   30 s, so added and removed keys apply without a restart; a file that fails
   to load or validate keeps the previous keys and logs an error. It cannot be
   combined with `NVCF_GRPC_ADDR`.
+- `ALLOW_ANONYMOUS=true` to start without caller authentication and admit
+  callers without a key (Helm: `config.allowAnonymous`). The gateway logs a
+  warning at startup. It cannot be combined with `NVCF_GRPC_ADDR` or
+  `CALLER_KEYS_FILE`.
 - `OLRIC_ENABLED=false` to skip starting the embedded Olric node
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering
@@ -261,6 +266,7 @@ Run it with the embedded Olric rate limiter enabled:
 docker run --rm -p 8080:8080 \
   -e OLRIC_ENABLED=true \
   -e STARGATE_URL=http://host.docker.internal:8000 \
+  -e ALLOW_ANONYMOUS=true \
   llm-api-gateway:dev
 ```
 

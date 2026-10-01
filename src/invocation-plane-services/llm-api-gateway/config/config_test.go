@@ -116,6 +116,51 @@ func TestLoadFromEnvRejectsCallerKeysWithNVCFAuth(t *testing.T) {
 	}
 }
 
+func TestCheckCallerAuth(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{"no authenticator", nil, "set NVCF_GRPC_ADDR or CALLER_KEYS_FILE, or ALLOW_ANONYMOUS=true"},
+		{"no authenticator, anonymous off", map[string]string{"ALLOW_ANONYMOUS": "false"},
+			"set NVCF_GRPC_ADDR or CALLER_KEYS_FILE, or ALLOW_ANONYMOUS=true"},
+		{"nvcf auth", map[string]string{"NVCF_GRPC_ADDR": "api.nvcf.svc.cluster.local:9090"}, ""},
+		{"caller keys", map[string]string{"CALLER_KEYS_FILE": "/etc/caller-keys.yaml"}, ""},
+		{"anonymous", map[string]string{"ALLOW_ANONYMOUS": "true"}, ""},
+		{"anonymous with nvcf auth", map[string]string{
+			"ALLOW_ANONYMOUS": "true",
+			"NVCF_GRPC_ADDR":  "api.nvcf.svc.cluster.local:9090",
+		}, "ALLOW_ANONYMOUS cannot be combined with NVCF_GRPC_ADDR or CALLER_KEYS_FILE"},
+		{"anonymous with caller keys", map[string]string{
+			"ALLOW_ANONYMOUS":  "true",
+			"CALLER_KEYS_FILE": "/etc/caller-keys.yaml",
+		}, "ALLOW_ANONYMOUS cannot be combined with NVCF_GRPC_ADDR or CALLER_KEYS_FILE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+
+			err = cfg.CheckCallerAuth()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("CheckCallerAuth() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("CheckCallerAuth() error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvReadsMetricsPort(t *testing.T) {
 	t.Setenv("METRICS_PORT", "0")
 

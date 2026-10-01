@@ -36,6 +36,7 @@ data:
   RATE_LIMIT_ENABLED: {{ $cfg.rateLimitEnabled | toString | quote }}
   RATE_LIMIT_FAIL_OPEN: {{ $cfg.rateLimitFailOpen | toString | quote }}
   BARE_MODEL_NAMES_ENABLED: {{ $cfg.bareModelNamesEnabled | toString | quote }}
+  ALLOW_ANONYMOUS: {{ $cfg.allowAnonymous | toString | quote }}
   {{- if .Values.llmApiGateway.callerKeys.enabled }}
   CALLER_KEYS_FILE: "/etc/llm-api-gateway/caller-keys/caller-keys.yaml"
   {{- end }}

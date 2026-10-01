@@ -28,6 +28,8 @@ helm template llm-api-gateway "$chart_dir" \
 
 test "$(read_config "$default_manifest" NVCF_GRPC_INSECURE)" = false ||
   fail "generic chart must default to verified NVCF gRPC transport"
+test "$(read_config "$default_manifest" ALLOW_ANONYMOUS)" = false ||
+  fail "generic chart must leave allow anonymous off by default"
 test "$(yq ea -r 'select(.kind == "Deployment") | [.spec.template.spec.containers[0].ports[] | select(.name == "metrics")] | length' "$default_manifest")" = 0 ||
   fail "generic chart must leave the metrics endpoint disabled by default"
 test "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$default_manifest")" = 0 ||
@@ -37,12 +39,15 @@ helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
   --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
   --set llmApiGateway.config.nvcfGrpcInsecure=true \
+  --set llmApiGateway.config.allowAnonymous=true \
   --set llmApiGateway.metrics.enabled=true \
   --set llmApiGateway.metrics.serviceMonitor.enabled=true \
   >"$override_manifest"
 
 test "$(read_config "$override_manifest" NVCF_GRPC_INSECURE)" = true ||
   fail "explicit plaintext transport override did not reach the ConfigMap"
+test "$(read_config "$override_manifest" ALLOW_ANONYMOUS)" = true ||
+  fail "allow anonymous override did not reach the ConfigMap"
 test "$(yq ea -r 'select(.kind == "Deployment") | [.spec.template.spec.containers[0].ports[] | select(.name == "metrics")] | length' "$override_manifest")" = 1 ||
   fail "explicit metrics override did not expose the metrics container port"
 test "$(yq ea -r '[select(.kind == "ServiceMonitor" and .metadata.name == "llm-api-gateway-metrics")] | length' "$override_manifest")" = 1 ||
