@@ -86,7 +86,7 @@ the configuration changes.
 | collector | unchanged streaming; marks the new primary with `generation`, `refreshed-from`, `delta-fingerprint` and the time |
 | webhook complete branch | mints the read-only view from the generation Lookup returned (no change to the pod shape) |
 | reaper | today keys "has a live reader" by identity (reaper.go, `live[identityKey(pv)]`), so a reader bound to generation 2 would keep generation 1 alive forever; liveness must be tracked per primary PV through its own read-only views, then superseded generations retire under the normal retention and never get a new view |
-| values | `agent.cacheVolume.refreshCooldown: 6h`, `agent.cacheVolume.refresh: true` |
+| values | `agent.cacheVolume.refresh: false` (opt-in), `agent.cacheVolume.refreshCooldown: 6h` |
 
 Nothing changes for the model volume, the cold capture, or a cluster
 without warm deltas. A set that never gains files never refreshes.
@@ -142,6 +142,13 @@ default is 6 hours, and a superseded generation with no reader bound is
 retired an hour after its last use rather than after the 7-day
 retention. Expected steady state on this model: one refresh after the
 startup path changes, then none.
+
+Default off. The timestamp fix alone lets a set carry ninja-built
+kernels, which is what the Mamba case needed; on this model the refresh
+then has nothing to do. The mechanism ships behind
+`agent.cacheVolume.refresh: false` and is turned on per cluster when a
+measured case needs it, after it has run clean on a non-production
+cluster. Nothing new is on by default until it has earned it.
 
 ## Failure behaviour
 

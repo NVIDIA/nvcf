@@ -118,7 +118,8 @@ spec:
             - --model-volume-wait-deadline={{ .Values.agent.modelVolume.waitDeadline | default "1h" }}
             - --model-volume-reap-interval={{ .Values.agent.modelVolume.reapInterval | default "10m" }}
             - --model-volume-retention={{ .Values.agent.modelVolume.retention | default "168h" }}
-            {{- if and .Values.agent.cacheVolume (eq (toString .Values.agent.cacheVolume.refresh) "false") }}
+            {{- if not (and .Values.agent.cacheVolume (eq (toString .Values.agent.cacheVolume.refresh) "true")) }}
+            # Set refresh is opt-in (values: agent.cacheVolume.refresh).
             - --cache-set-refresh-disabled
             {{- end }}
             {{- if and .Values.agent.cacheVolume .Values.agent.cacheVolume.refreshCooldown }}

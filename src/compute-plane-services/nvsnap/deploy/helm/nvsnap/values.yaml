@@ -143,18 +143,18 @@ agent:
     # reaper frees its storage. Set to 0 to keep volumes forever.
     retention: 168h
 
-  # Compile cache sets learn what warm starts compile
-  # (docs/proposals/helm-chart-cache-refresh.md). A warm rank whose
-  # cachedir gained files the seeded set lacks proposes a refresh; one
-  # agent collects a new generation of the set from the warm ranks and
-  # later pods seed from it. Only files the engine wrote before it reported
-  # Ready count: those cost the next start; what serving compiles for new
-  # request shapes does not. refresh: false turns this off. refreshCooldown
-  # is the least time between generations of one set; a superseded
-  # generation with no reader bound is retired about an hour after it is
-  # replaced.
+  # Compile cache set refresh (docs/proposals/helm-chart-cache-refresh.md),
+  # off by default. When on, a warm rank whose cachedir gained files before
+  # it reported Ready (what the next start pays for) proposes a refresh;
+  # one agent collects a new generation of the set from the warm ranks and
+  # later pods seed from it. Serving-time compiles never count.
+  # refreshCooldown is the least time between generations of one set; a
+  # superseded generation with no reader bound is retired about an hour
+  # after it is replaced. Turn on per cluster when a measured case needs
+  # it; the mechanism has run on GB300 but is not yet proven across
+  # engines.
   cacheVolume:
-    refresh: true
+    refresh: false
     refreshCooldown: 6h
 
   election:
