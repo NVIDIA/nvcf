@@ -70,6 +70,70 @@ func TestUpsertFilteredStatsV3KeepsLatestEvent(t *testing.T) {
 	assert.Equal(t, createdAt.UTC(), storedCreatedAt.UTC().Truncate(time.Millisecond))
 }
 
+func TestUpsertEventV3PreservesCreatedAt(t *testing.T) {
+	session := getTestSession(t)
+	if session == nil {
+		t.Skip("Cassandra not available for testing")
+	}
+
+	handler := &CassandraHandler{session: session}
+	ctx := logging.AttachLoggerToContext(context.Background(), otelzap.New(zap.NewNop()))
+	first := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	second := first.Add(time.Minute)
+	const namespace, eventContext, name = "single-event-upsert", "ctx-1", "pod.ready"
+	t.Cleanup(func() {
+		_ = session.Query(`DELETE FROM events_v3 WHERE namespace = ? AND context = ? AND event_name = ?`, namespace, eventContext, name).Exec()
+	})
+
+	require.NoError(t, handler.UpsertEventV3(ctx, namespace, eventContext, name, "first", []byte(`{"value":1}`), first))
+	var initialUpdatedAt time.Time
+	require.NoError(t, session.Query(`SELECT updated_at FROM events_v3 WHERE namespace = ? AND context = ? AND event_name = ?`,
+		namespace, eventContext, name).Scan(&initialUpdatedAt))
+	// The single-event method now shares the bulk writer's ingestion-time metadata.
+	assert.WithinDuration(t, time.Now(), initialUpdatedAt, time.Minute)
+	assert.True(t, initialUpdatedAt.After(first))
+
+	require.NoError(t, handler.UpsertEventV3(ctx, namespace, eventContext, name, "second", []byte(`{"value":2}`), second))
+
+	var source string
+	var details []byte
+	var timestamp, createdAt, updatedAt time.Time
+	require.NoError(t, session.Query(`SELECT source, details, timestamp, created_at, updated_at FROM events_v3 WHERE namespace = ? AND context = ? AND event_name = ?`,
+		namespace, eventContext, name).Scan(&source, &details, &timestamp, &createdAt, &updatedAt))
+	assert.Equal(t, "second", source)
+	assert.JSONEq(t, `{"value":2}`, string(details))
+	assert.Equal(t, second.UTC(), timestamp.UTC().Truncate(time.Millisecond))
+	assert.Equal(t, first.UTC(), createdAt.UTC().Truncate(time.Millisecond))
+	assert.True(t, !updatedAt.Before(initialUpdatedAt))
+}
+
+func TestUpsertStatsV3KeepsLatestEvent(t *testing.T) {
+	session := getTestSession(t)
+	if session == nil {
+		t.Skip("Cassandra not available for testing")
+	}
+	ctx := logging.AttachLoggerToContext(context.Background(), otelzap.New(zap.NewNop()))
+	handler := &CassandraHandler{session: session}
+	const namespace, eventContext = "single-stats-upsert", "ctx-1"
+	t.Cleanup(func() {
+		_ = session.Query(`DELETE FROM stats_v3 WHERE namespace = ? AND context = ?`, namespace, eventContext).Exec()
+	})
+	first := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	latest := first.Add(2 * time.Minute)
+	require.NoError(t, handler.UpsertStatsV3(ctx, namespace, eventContext, "pending", first))
+	require.NoError(t, handler.UpsertStatsV3(ctx, namespace, eventContext, "ready", latest))
+	require.NoError(t, handler.UpsertStatsV3(ctx, namespace, eventContext, "stale", first.Add(time.Minute)))
+	require.NoError(t, handler.UpsertStatsV3(ctx, namespace, eventContext, "equal", latest))
+
+	var name string
+	var timestamp, createdAt time.Time
+	require.NoError(t, session.Query(`SELECT event_name, timestamp, created_at FROM stats_v3 WHERE namespace = ? AND context = ?`,
+		namespace, eventContext).Scan(&name, &timestamp, &createdAt))
+	assert.Equal(t, "ready", name)
+	assert.Equal(t, latest.UTC(), timestamp.UTC().Truncate(time.Millisecond))
+	assert.Equal(t, first.UTC(), createdAt.UTC().Truncate(time.Millisecond))
+}
+
 func TestBulkUpsertEventsV3(t *testing.T) {
 	session := getTestSession(t)
 	if session == nil {

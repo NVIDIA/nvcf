@@ -708,7 +708,7 @@ func (s *Server) processCloudEvents(traceCtx context.Context, cloudEvents []*clo
 }
 
 // completeCloudEvent preserves filtered-view writes, which do not have a bulk interface yet,
-// without putting event and primary-stats persistence back on the per-event LWT path.
+// without putting event and primary-stats persistence back on the per-event write path.
 func (s *Server) completeCloudEvent(traceCtx context.Context, event *EventV3, result *EventProcessingResult) {
 	if s.isFilteredStatsEnabled(event.EventName) {
 		if err := s.conns.DbHandlerV2.UpsertFilteredStatsV3(traceCtx, event.Namespace, event.Context, event.EventName, event.Timestamp); err != nil {

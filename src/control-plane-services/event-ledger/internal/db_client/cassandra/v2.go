@@ -93,19 +93,31 @@ func (c *CassandraHandler) eventsInsertV2(traceCtx context.Context, dste types.D
 	}
 	logger.DebugContext(traceCtx, "query", zap.String("query_statement", query))
 
-	var applied bool
+	var inserted bool
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
-		previous := make(map[string]interface{})
-		casApplied, err := c.session.Query(query, args...).WithContext(traceCtx).MapScanCAS(previous)
-		applied = casApplied
-		if err != nil {
-			logger.ErrorContext(traceCtx, "failed to write deployment message to cassandra", zap.Error(err))
-			return err
-		}
-		logger.DebugContext(traceCtx, "successfully inserted deployment event", zap.String("event", dste.Event))
-		return nil
+		lookup, lookupArgs := buildDeploymentEventsExistenceSelect(dste)
+		return insertEventIfAbsent(
+			func() error {
+				var existing string
+				return c.session.Query(lookup, lookupArgs...).WithContext(traceCtx).Scan(&existing)
+			},
+			func() error {
+				return c.session.Query(query, args...).WithContext(traceCtx).Exec()
+			},
+			&inserted,
+		)
 	}, "eventsInsertV2")
-	return applied, err
+	if err != nil {
+		logger.ErrorContext(traceCtx, "failed to insert deployment event", zap.Error(err))
+	} else if inserted {
+		logger.DebugContext(traceCtx, "successfully inserted deployment event", zap.String("event", dste.Event))
+	}
+	return inserted, err
+}
+
+func buildDeploymentEventsExistenceSelect(dste types.DeploymentStageTransitionEvent) (string, []interface{}) {
+	return `SELECT event FROM events_v2 WHERE function_version_id = ? AND deployment_id = ? AND instance_id = ? AND event = ?`,
+		[]interface{}{gocql.UUID(dste.FunctionVersionId), gocql.UUID(dste.DeploymentId), dste.InstanceId, dste.Event}
 }
 
 func buildDeploymentEventsInsert(dste types.DeploymentStageTransitionEvent) (string, []interface{}, error) {
@@ -123,7 +135,7 @@ func buildDeploymentEventsInsert(dste types.DeploymentStageTransitionEvent) (str
 		time.Now().UnixMilli(),
 		false,
 	}
-	queryBuilder := sq.Insert("events_v2").Columns(columns...).Values(values...).Suffix("IF NOT EXISTS")
+	queryBuilder := sq.Insert("events_v2").Columns(columns...).Values(values...)
 
 	query, args, err := queryBuilder.ToSql()
 	if err != nil {
@@ -1060,104 +1072,21 @@ func (c *CassandraHandler) TryBecomeLeader(ctx context.Context, instanceID strin
 
 // UpsertEventV3 inserts or updates an event in the events_v3 table
 // For v3 endpoint specifically - overwrites duplicates based on (namespace, context, event_name)
+// The bulk writer sets updated_at to ingestion time on both inserts and updates.
 func (c *CassandraHandler) UpsertEventV3(traceCtx context.Context, namespace, eventContext, eventName, source string, details json.RawMessage, timestamp time.Time) error {
-	logger := logging.GetLogger(traceCtx)
-
-	err := c.executeWithSessionRecreation(traceCtx, func() error {
-		// Use LWT (Lightweight Transaction) to atomically insert if not exists
-		insertQuery := `INSERT INTO events_v3 (namespace, context, event_name, source, details, timestamp, created_at, updated_at) 
-						VALUES (?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`
-
-		var applied bool
-		// Variables to scan existing row if IF NOT EXISTS fails
-		// When CAS fails, Cassandra returns all columns in this order:
-		// PK: namespace, context
-		// Clustering: event_name
-		// Other (alphabetical): created_at, details, source, timestamp, updated_at
-		var existingNamespace, existingContext, existingEventName, existingSource string
-		var existingDetails []byte
-		var existingCreatedAt, existingTimestamp, existingUpdatedAt time.Time
-
-		// Try to insert as new record
-		casApplied, err := c.session.Query(insertQuery,
-			namespace,
-			eventContext,
-			eventName,
-			source,
-			details,
-			timestamp,
-			timestamp, // created_at
-			timestamp, // updated_at
-		).WithContext(traceCtx).ScanCAS(
-			&existingNamespace,
-			&existingContext,
-			&existingEventName,
-			&existingCreatedAt,
-			&existingDetails,
-			&existingSource,
-			&existingTimestamp,
-			&existingUpdatedAt,
-		)
-		applied = casApplied
-
-		if err != nil {
-			logger.ErrorContext(traceCtx, "Failed to insert event into events_v3 table",
-				zap.Error(err),
-				zap.String("namespace", namespace),
-				zap.String("context", eventContext),
-				zap.String("event_name", eventName),
-				zap.String("source", source))
-			return err
-		}
-
-		if applied {
-			// Successfully inserted new record
-			logger.InfoContext(traceCtx, "Inserted new event into events_v3",
-				zap.String("namespace", namespace),
-				zap.String("context", eventContext),
-				zap.String("event_name", eventName),
-				zap.String("source", source))
-		} else {
-			// Record exists - update it preserving created_at
-			updateQuery := `INSERT INTO events_v3 (namespace, context, event_name, source, details, timestamp, created_at, updated_at) 
-							VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-
-			if err := c.session.Query(updateQuery,
-				namespace,
-				eventContext,
-				eventName,
-				source,
-				details,
-				timestamp,         // event timestamp
-				existingCreatedAt, // preserve original created_at
-				time.Now(),        // updated_at = current time
-			).WithContext(traceCtx).Exec(); err != nil {
-				logger.ErrorContext(traceCtx, "Failed to update event in events_v3 table",
-					zap.Error(err),
-					zap.String("namespace", namespace),
-					zap.String("context", eventContext),
-					zap.String("event_name", eventName),
-					zap.String("source", source))
-				return err
-			}
-
-			logger.DebugContext(traceCtx, "Updated existing event in events_v3",
-				zap.String("namespace", namespace),
-				zap.String("context", eventContext),
-				zap.String("event_name", eventName),
-				zap.String("source", source))
-		}
-
-		return nil
-	}, "upsertEventV3")
-
-	return err
+	return c.BulkUpsertEventsV3(traceCtx, []data_access.EventV3UpsertRecord{{
+		Namespace: namespace,
+		Context:   eventContext,
+		EventName: eventName,
+		Source:    source,
+		Details:   details,
+		Timestamp: timestamp,
+	}})
 }
 
 // BulkUpsertEventsV3 inserts or updates multiple events in the events_v3 table.
 // Events are grouped by partition key (namespace, context). Each group is written
-// with one SELECT + one unlogged BATCH, reducing Cassandra round-trips from 2N
-// (per-event LWT) to 2 per distinct partition.
+// with one SELECT + one unlogged BATCH per distinct partition.
 // Partition groups are processed in parallel, capped at 20 concurrent goroutines.
 func (c *CassandraHandler) BulkUpsertEventsV3(traceCtx context.Context, events []data_access.EventV3UpsertRecord) error {
 	if len(events) == 0 {
@@ -1313,7 +1242,6 @@ func (c *CassandraHandler) upsertPartitionStatsV3(traceCtx context.Context, name
 			// older than the row already stored so out-of-order delivery cannot
 			// overwrite a newer event. This read-then-write guard is best-effort:
 			// concurrent writers to the same (namespace, context) can still race.
-			// Full atomicity (conditional LWT) is tracked as a follow-up.
 			if ts, exists := existingTimestamp[ev.Context]; exists && ev.Timestamp.Before(ts) {
 				skipped++
 				// Context carries the identifying fields (cluster_id, instance_id,
@@ -1367,70 +1295,38 @@ func (c *CassandraHandler) UpsertFilteredStatsV3(traceCtx context.Context, names
 	return c.upsertStatsRow(traceCtx, filteredStatsV3Table, namespace, eventContext, eventName, timestamp)
 }
 
-// upsertStatsRow is the shared latest-wins LWT upsert for stats_v3-shaped tables.
+// upsertStatsRow is the shared latest-wins upsert for stats_v3-shaped tables.
 // table must be a trusted, code-controlled identifier (not user input).
 func (c *CassandraHandler) upsertStatsRow(traceCtx context.Context, table, namespace, eventContext, eventName string, timestamp time.Time) error {
 	logger := logging.GetLogger(traceCtx)
 
 	err := c.executeWithSessionRecreation(traceCtx, func() error {
+		selectQuery := fmt.Sprintf(`SELECT created_at, timestamp FROM %s WHERE namespace = ? AND context = ?`, table)
+		var createdAt, storedTimestamp time.Time
+		err := c.session.Query(selectQuery, namespace, eventContext).WithContext(traceCtx).Scan(&createdAt, &storedTimestamp)
+		if err != nil && !errors.Is(err, gocql.ErrNotFound) {
+			return fmt.Errorf("failed to read stats in %s: %w", table, err)
+		}
+		if err == nil && !timestamp.Truncate(time.Millisecond).After(storedTimestamp) {
+			logger.DebugContext(traceCtx, "Skipped stale stats update", zap.String("table", table), zap.String("namespace", namespace), zap.String("context", eventContext))
+			return nil
+		}
+		updatedAt := time.Now()
+		if errors.Is(err, gocql.ErrNotFound) {
+			createdAt = timestamp
+			updatedAt = timestamp
+		}
 		insertQuery := fmt.Sprintf(`INSERT INTO %s (namespace, context, event_name, timestamp, created_at, updated_at)
-						VALUES (?, ?, ?, ?, ?, ?) IF NOT EXISTS`, table)
-
-		previous := make(map[string]any)
-		applied, err := c.session.Query(insertQuery,
-			namespace,
-			eventContext,
-			eventName,
-			timestamp,
-			timestamp, // created_at
-			timestamp, // updated_at
-		).WithContext(traceCtx).MapScanCAS(previous)
+						VALUES (?, ?, ?, ?, ?, ?)`, table)
+		err = c.session.Query(insertQuery, namespace, eventContext, eventName, timestamp, createdAt, updatedAt).WithContext(traceCtx).Exec()
 		if err != nil {
-			logger.ErrorContext(traceCtx, "Failed to insert stats",
+			logger.ErrorContext(traceCtx, "Failed to upsert stats",
 				zap.Error(err),
 				zap.String("table", table),
 				zap.String("namespace", namespace),
 				zap.String("context", eventContext),
 				zap.String("event_name", eventName))
-			return fmt.Errorf("failed to insert stats into %s: %w", table, err)
-		}
-
-		if applied {
-			return nil
-		}
-
-		updateQuery := fmt.Sprintf(`UPDATE %s
-						SET event_name = ?, timestamp = ?, updated_at = ?
-						WHERE namespace = ? AND context = ?
-						IF timestamp < ?`, table)
-
-		previous = make(map[string]any)
-		applied, err = c.session.Query(updateQuery,
-			eventName,
-			timestamp,
-			time.Now(),
-			namespace,
-			eventContext,
-			timestamp,
-		).WithContext(traceCtx).MapScanCAS(previous)
-		if err != nil {
-			logger.ErrorContext(traceCtx, "Failed to conditionally update stats",
-				zap.Error(err),
-				zap.String("table", table),
-				zap.String("namespace", namespace),
-				zap.String("context", eventContext),
-				zap.String("event_name", eventName))
-			return fmt.Errorf("failed to conditionally update stats in %s: %w", table, err)
-		}
-
-		if !applied {
-			logger.DebugContext(traceCtx, "Skipped stale stats update",
-				zap.String("table", table),
-				zap.String("namespace", namespace),
-				zap.String("context", eventContext),
-				zap.String("event_name", eventName),
-				zap.Time("timestamp", timestamp))
-			return nil
+			return fmt.Errorf("failed to upsert stats in %s: %w", table, err)
 		}
 
 		logger.DebugContext(traceCtx, "Updated stats",
