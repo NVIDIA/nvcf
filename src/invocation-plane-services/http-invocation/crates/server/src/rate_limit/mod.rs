@@ -62,6 +62,7 @@ pub enum LimitResult {
 struct RateLimitCacheKey {
     client_auth_subject: String,
     nca_id: String,
+    owner_nca_id: String,
     function_id: Uuid,
     function_version_id: Uuid,
 }
@@ -130,6 +131,7 @@ impl RateLimitService {
             || self.rate_limit_cache.contains_key(&RateLimitCacheKey {
                 client_auth_subject: client_auth_subject.clone(),
                 nca_id: nca_id.clone(),
+                owner_nca_id: owner_nca_id.clone(),
                 function_id,
                 function_version_id,
             })
@@ -151,6 +153,7 @@ impl RateLimitService {
                     RateLimitCacheKey {
                         client_auth_subject,
                         nca_id,
+                        owner_nca_id,
                         function_id,
                         function_version_id,
                     },
@@ -184,6 +187,7 @@ impl RateLimitService {
                         RateLimitCacheKey {
                             client_auth_subject,
                             nca_id,
+                            owner_nca_id,
                             function_id,
                             function_version_id,
                         },
