@@ -165,12 +165,18 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		patches = append(patches, m.downloadStepPatches(pod, main, land, res.Identity, false)...)
 	}
 	if st.Complete && m.ModelVolume.Cfg.ReaderMode() != modelvolume.ReaderHostPath {
-		if limit := m.prewarmLimit(); st.PrimaryBytes > limit {
+		switch limit := m.prewarmLimit(); {
+		case st.PrimaryBytes > limit:
 			// Larger than the node can keep in page cache: the sweep would
 			// evict its own pages and only cost time (1.56 TB on 902 GiB,
 			// GB300 2026-10-01). The engine reads the volume directly.
 			log.WithFields(logrus.Fields{"bytes": st.PrimaryBytes, "prewarm_max_bytes": limit}).Info("model volume: too large for a page-cache sweep; no prewarm")
-		} else {
+		case parallelLoader(main) != "":
+			// The engine already reads in parallel (fastsafetensors pulled
+			// 1.56 TB at 5.7 GB/s aggregate on GB300 with no sweep); the
+			// sweep only helps the default single-thread loader.
+			log.WithField("loader", parallelLoader(main)).Info("model volume: engine uses a parallel weight loader; no prewarm")
+		default:
 			patches = m.modelPrewarmPatches(pod, main, land, patches)
 		}
 	}
@@ -181,6 +187,39 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // modelPrewarmName is the init container that sweeps a complete model
 // volume into the node's page cache before the engine starts.
 const modelPrewarmName = "nvsnap-model-prewarm"
+
+// parallelLoader names the parallel weight loader the engine's arguments
+// select, or "" for the default single-thread safetensors path. Checked on
+// args and command alike, since charts put the engine line in either.
+func parallelLoader(main *corev1.Container) string {
+	words := append(append([]string{}, main.Command...), main.Args...)
+	for i, w := range words {
+		for _, part := range strings.Fields(w) {
+			if part == "--load-format" && i+1 < len(words) {
+				if l := strings.TrimSpace(words[i+1]); isParallelLoader(l) {
+					return l
+				}
+			}
+			if v, ok := strings.CutPrefix(part, "--load-format="); ok && isParallelLoader(v) {
+				return v
+			}
+		}
+	}
+	for _, e := range main.Env {
+		if e.Name == "VLLM_LOAD_FORMAT" && isParallelLoader(e.Value) {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+func isParallelLoader(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "fastsafetensors", "runai_streamer", "runai_streamer_sharded", "tensorizer":
+		return true
+	}
+	return false
+}
 
 // modelPrewarmPatches gives a reader of a complete model volume the
 // page-cache sweep (reader_steps.go). The engine's safetensors loader walks

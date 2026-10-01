@@ -904,3 +904,44 @@ func TestModelVolume_HFHomeOnLanding_ModulesCacheMovedOffVolume(t *testing.T) {
 		t.Errorf("no HF_HOME on the landing: nothing to move, got %q", v.env["HF_MODULES_CACHE"])
 	}
 }
+
+// The sweep is for the default single-thread loader: an engine that reads
+// in parallel (fastsafetensors, the Run:ai streamer) gets none, whatever
+// the volume size.
+func TestModelVolume_NoPrewarmForParallelLoader(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"vllm", "serve", "m", "--load-format", "fastsafetensors"}, "fastsafetensors"},
+		{[]string{"vllm serve m --load-format=runai_streamer --tp 8"}, "runai_streamer"},
+		{[]string{"vllm", "serve", "m", "--load-format", "safetensors"}, ""},
+		{[]string{"vllm", "serve", "m"}, ""},
+	} {
+		if got := parallelLoader(&corev1.Container{Args: tc.args}); got != tc.want {
+			t.Errorf("parallelLoader(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("100Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
+		},
+	}
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset(pv))
+	pod := ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	pod.Spec.Containers[0].Args = append(pod.Spec.Containers[0].Args, "--load-format", "fastsafetensors")
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range viewMV(pod, patches).newInits {
+		if c.Name == modelPrewarmName {
+			t.Fatal("a parallel loader gets no sweep")
+		}
+	}
+}
