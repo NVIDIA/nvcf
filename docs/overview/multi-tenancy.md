@@ -2,6 +2,10 @@
 
 This page describes the supported multi-tenant invocation models and the isolation guarantees available at each layer in self-managed NVCF deployments.
 
+<Note>
+This page is directional: it describes how NVCF is designing for multi-tenancy. Full multi-tenant isolation as described here will be supported when Self-Managed NVCF supports multiple accounts.
+</Note>
+
 <Warning>
 NVCF does **not** provide hardware-level GPU isolation. Multiple workloads from different tenants may share the same physical GPU unless explicit node-level isolation is configured. See [Isolation Options by Layer](#isolation-options-by-layer) below for available controls.
 </Warning>
