@@ -287,11 +287,28 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 	step.Container = corev1.Container{
 		Image:        main.Image,
 		Command:      []string{"/bin/sh", "-c"},
-		Args:         []string{writerScript(hfDownloadCommand(id), path.Join(land.Path, modelvolume.MarkerFile))},
-		Env:          append([]corev1.EnvVar{{Name: "HF_HOME", Value: land.Path}}, tokenEnv(main)...),
-		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: land.Path}},
+		Args:         []string{writerScript(hfDownloadCommand(id), path.Join(downloadMount, modelvolume.MarkerFile))},
+		Env:          downloadEnv(main),
+		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: downloadMount}},
 	}
 	return step, true
+}
+
+// downloadMount is where the injected Hugging Face download, Job or init,
+// mounts the landing volume. It is deliberately not the engine's own path:
+// the default landing is /root/.cache/huggingface, and the download runs
+// with the engine's user posture, so a non-root engine cannot even
+// traverse /root (dev1, 2026-10-01: PermissionError on
+// /root/.cache/huggingface/token for a public model). The volume holds the
+// same bytes whatever path it is mounted at; the engine keeps its own.
+const downloadMount = "/nvsnap-model"
+
+// downloadEnv points the Hugging Face tooling at the mounted landing for
+// both its cache and its home, so nothing it reads or writes lies under a
+// directory the download user may not own, and copies the token and hub
+// settings the engine was given.
+func downloadEnv(main *corev1.Container) []corev1.EnvVar {
+	return append([]corev1.EnvVar{{Name: "HF_HOME", Value: downloadMount}, {Name: "HOME", Value: downloadMount}}, tokenEnv(main)...)
 }
 
 func landVolumeName(land modelid.Landing) string {
@@ -443,6 +460,9 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 	if id.Scheme == "hf" {
 		download = hfDownloadCommand(id)
 	}
+	// The injected init sees the landing at downloadMount (see there); the
+	// marker is the same file in the volume whatever path it is read at.
+	marker = path.Join(downloadMount, modelvolume.MarkerFile)
 	script := readerScript(download, marker, deadline)
 	if writer {
 		if download == "" {
@@ -455,7 +475,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 		Image:   main.Image,
 		Command: []string{"/bin/sh", "-c"},
 		Args:    []string{script},
-		Env:     append([]corev1.EnvVar{{Name: "HF_HOME", Value: land.Path}}, tokenEnv(main)...),
+		Env:     downloadEnv(main),
 	}
 	// The init mostly waits; the fallback download is the one case that
 	// needs real resources, and policy needs limits either way.
@@ -466,14 +486,14 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 		p := corev1.MountPropagationHostToContainer
 		prop = &p
 	}
+	landVol := modelVolumeName
 	for _, vm := range main.VolumeMounts {
 		if vm.Name == land.VolumeName || vm.Name == modelVolumeName {
-			init.VolumeMounts = append(init.VolumeMounts, corev1.VolumeMount{Name: vm.Name, MountPath: vm.MountPath, MountPropagation: prop})
+			landVol = vm.Name
+			break
 		}
 	}
-	if len(init.VolumeMounts) == 0 {
-		init.VolumeMounts = []corev1.VolumeMount{{Name: modelVolumeName, MountPath: land.Path, MountPropagation: prop}}
-	}
+	init.VolumeMounts = []corev1.VolumeMount{{Name: landVol, MountPath: downloadMount, MountPropagation: prop}}
 	patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: init})
 	if id.Scheme == "hf" {
 		if main.Env == nil {

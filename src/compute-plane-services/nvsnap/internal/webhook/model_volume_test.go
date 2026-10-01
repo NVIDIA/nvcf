@@ -530,8 +530,18 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	}
 	jc := job.Spec.Template.Spec.Containers[0]
 	s := jc.Args[0]
-	if jc.Image != pod.Spec.Containers[0].Image || !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "touch /root/.cache/huggingface/.nvsnap-complete") || jc.VolumeMounts[0].MountPath != "/root/.cache/huggingface" {
-		t.Errorf("job must run hf download on the engine image into HF_HOME: image=%s mounts=%v\n%s", jc.Image, jc.VolumeMounts, s)
+	if jc.Image != pod.Spec.Containers[0].Image || !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "touch /nvsnap-model/.nvsnap-complete") || jc.VolumeMounts[0].MountPath != downloadMount {
+		t.Errorf("job must run hf download on the engine image into the landing mounted at %s: image=%s mounts=%v\n%s", downloadMount, jc.Image, jc.VolumeMounts, s)
+	}
+	// The download never touches the engine's /root: HF_HOME and HOME both
+	// point at the mounted landing (dev1 2026-10-01: a non-root engine
+	// posture made hf fail on /root/.cache/huggingface/token).
+	jenv := map[string]string{}
+	for _, e := range jc.Env {
+		jenv[e.Name] = e.Value
+	}
+	if jenv["HF_HOME"] != downloadMount || jenv["HOME"] != downloadMount {
+		t.Errorf("job HF_HOME and HOME must be the landing mount, got %v", jenv)
 	}
 	var sawToken bool
 	for _, e := range jc.Env {
@@ -541,6 +551,13 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	}
 	if !sawToken {
 		t.Error("registry credentials must be forwarded to the download Job")
+	}
+	ienv := map[string]string{}
+	for _, e := range v.newInits[0].Env {
+		ienv[e.Name] = e.Value
+	}
+	if ienv["HF_HOME"] != downloadMount || ienv["HOME"] != downloadMount || v.newInits[0].VolumeMounts[0].MountPath != downloadMount || !strings.Contains(v.newInits[0].Args[0], "/nvsnap-model/.nvsnap-complete") {
+		t.Errorf("the injected init mounts the landing at %s and waits for the marker there: env=%v mounts=%v", downloadMount, ienv, v.newInits[0].VolumeMounts)
 	}
 	if len(v.newInits) != 1 || v.newInits[0].Name != "nvsnap-model-download" || !strings.Contains(v.newInits[0].Args[0], "while [ ! -f") {
 		t.Errorf("the pod gets a wait init, got %v", v.newInits)
