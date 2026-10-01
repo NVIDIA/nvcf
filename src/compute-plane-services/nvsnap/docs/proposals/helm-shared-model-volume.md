@@ -498,8 +498,8 @@ whose emptyDir already holds that kernel, start in 62 to 70 s against
 73 to 95 s without the plan, which is the plan's real value. Admission
 to Ready 184 to 210 s. The gap is structural: a set is collected once
 and never learns what a warm start compiles later. Follow-up: set
-refresh, an append-only re-collection when a warm worker's cache gains
-files the set lacks.
+refresh, a re-collection into a new generation when a warm worker's
+cache gains files the set lacks, in `helm-chart-cache-refresh.md`.
 
 NVMesh shared read-only attach can take up to 30 s under 8 to 16
 concurrent clients on this cluster (IO-enable timeouts, kubelet retries);
