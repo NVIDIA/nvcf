@@ -1051,6 +1051,14 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
+	if err := r.dryRunValidateSSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...); err != nil {
+		if isTerminal(err) {
+			err = unwrapTerminalError(err)
+			log.Error(err, "Failed to validate workload objects via server-side dry-run with terminal error. MiniService must be updated with new values to progress update")
+		}
+		return reconcile.Result{}, err
+	}
+
 	if err := r.applySSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...); err != nil {
 		if isTerminal(err) {
 			err = unwrapTerminalError(err)
@@ -1606,6 +1614,24 @@ func (r *Reconciler) applySSAWorkload(ctx context.Context,
 	return r.applySSA(ctx, ms, objectMutatorSet{}, genericMutator, c, objs...)
 }
 
+// dryRunValidateSSAWorkload validates workload objects using server-side apply dry-run.
+// Like applySSAWorkload, it may use an impersonating client for RBAC enforcement.
+func (r *Reconciler) dryRunValidateSSAWorkload(ctx context.Context,
+	ms *v1alpha1.MiniService,
+	genericMutator objectMutator,
+	objs ...client.Object,
+) (err error) {
+	var c client.Client
+	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmRBACEnforcement) {
+		if c, err = r.newImpersonatingClient(ms.Spec.Namespace); err != nil {
+			return fmt.Errorf("create impersonating client for workload objects: %w", err)
+		}
+	} else {
+		c = r.Client
+	}
+	return r.dryRunValidateSSA(ctx, ms, objectMutatorSet{}, genericMutator, c, objs...)
+}
+
 // applySSA uses server-side apply to create or update objects.
 // Unlike create(), which skips existing objects, applySSA applies desired state
 // to both new and existing objects, making it suitable for helm values updates.
@@ -1669,6 +1695,102 @@ func (r *Reconciler) applySSA(ctx context.Context,
 			return err
 		}
 		log.V(1).Info("Applied object via Server-Side Apply", "gvk", gvk, "name", obj.GetName())
+	}
+
+	return nil
+}
+
+// dryRunValidateSSA uses server-side apply with DryRunAll to validate desired state
+// of objects without persisting them.
+func (r *Reconciler) dryRunValidateSSA(ctx context.Context,
+	ms *v1alpha1.MiniService,
+	objectMutators objectMutatorSet,
+	genericMutator objectMutator,
+	c client.Client,
+	objs ...client.Object,
+) error {
+	log := logf.FromContext(ctx)
+
+	sort.SliceStable(objs, func(i, j int) bool {
+		return weighObject(objs[i]) < weighObject(objs[j])
+	})
+
+	caniCache := map[schema.GroupVersionKind]error{}
+	checkPermissions := r.newPermissionsChecker(caniCache, requiredRBACVerbsWrite)
+
+	rm := c.RESTMapper()
+	var errs []error
+	hasTerminal := false
+
+	for _, obj := range objs {
+		obj = obj.DeepCopyObject().(client.Object)
+		gvk, err := r.getObjectGVK(ctx, obj)
+		if err != nil {
+			hasTerminal = true
+			errs = append(errs, err)
+			continue
+		}
+
+		if isNamespaced, err := apiutil.IsGVKNamespaced(gvk, rm); isNamespaced {
+			obj.SetNamespace(ms.Spec.Namespace)
+		} else if err != nil {
+			log.Error(err, "Failed to check if object is namespaced")
+			hasTerminal = true
+			errs = append(errs, err)
+			continue
+		}
+
+		if err := checkPermissions(ctx, c, gvk, obj.GetNamespace()); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		mutators, ok := objectMutators[gvk]
+		if !ok && genericMutator != nil {
+			mutators = []objectMutator{genericMutator}
+		}
+		
+		var mutateErr error
+		for _, mutator := range mutators {
+			if err := mutator.mutate(ctx, obj); err != nil {
+				hasTerminal = true
+				mutateErr = err
+				break
+			}
+		}
+		if mutateErr != nil {
+			errs = append(errs, mutateErr)
+			continue
+		}
+
+		if gvk == storageRequestGVK {
+			if err := controllerutil.SetControllerReference(ms, obj, c.Scheme()); err != nil {
+				hasTerminal = true
+				errs = append(errs, err)
+				continue
+			}
+		}
+
+		obj.SetManagedFields(nil)
+		obj.SetResourceVersion("")
+		obj.GetObjectKind().SetGroupVersionKind(gvk)
+
+		if err := c.Patch(ctx, obj, client.Apply, client.FieldOwner(managedByValue), client.ForceOwnership, client.DryRunAll); err != nil {
+			if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
+				hasTerminal = true
+			}
+			errs = append(errs, err)
+		} else {
+			log.V(1).Info("Dry-run validated object via Server-Side Apply", "gvk", gvk, "name", obj.GetName())
+		}
+	}
+
+	if len(errs) > 0 {
+		err := errors.Join(errs...)
+		if hasTerminal {
+			return reconcile.TerminalError(err)
+		}
+		return err
 	}
 
 	return nil
