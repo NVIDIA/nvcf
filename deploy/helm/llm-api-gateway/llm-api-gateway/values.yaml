@@ -118,6 +118,19 @@ llmApiGateway:
   vault:
     audience: ""
 
+  # Authenticate callers with static API keys instead of NVCF auth, for
+  # deployments without the NVCF control plane. Mutually exclusive with NVCF
+  # auth: set config.nvcfGrpcAddr to "" or the gateway refuses to start.
+  callerKeys:
+    enabled: false
+    # Existing Secret holding the caller key file, which lists hashes only:
+    #   keys:
+    #     - id: demo-ui
+    #       sha256: <64 hex SHA-256 of the key>
+    secretName: ""
+    # Key in the Secret that holds the file.
+    secretKey: caller-keys.yaml
+
   metrics:
     enabled: false
     port: 9464
