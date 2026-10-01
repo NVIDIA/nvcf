@@ -24,11 +24,15 @@ import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.icms.util.OAuth2ClientUtils;
 import com.nvidia.icms.util.OAuth2ClientUtils.ManagedHttpResources;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -113,5 +117,33 @@ class NgcClientIntegrationTest {
 
         ngcServer.verify(getRequestedFor(urlPathEqualTo("/v2/accounts/" + ncaId + "/uisorginfo"))
                 .withHeader("Authorization", equalTo("Bearer " + ACCESS_TOKEN)));
+    }
+
+    @Test
+    void getOrgInfo_translatesTokenAuthFailureAndSkipsTheResourceCall() {
+        var ncaId = UUID.randomUUID().toString();
+        ngcServer.stubFor(post(urlPathEqualTo("/oauth/token"))
+                .willReturn(aResponse()
+                        .withStatus(401)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"error\":\"invalid_client\"}")));
+
+        var client = new NgcClient(
+                WebClient.builder(),
+                httpResources,
+                ngcServer.baseUrl(),
+                CLIENT_ID,
+                CLIENT_SECRET,
+                SCOPE,
+                ngcServer.baseUrl() + "/oauth/token");
+
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var failure = assertThrows(ExecutionException.class,
+                    () -> executor.submit(() -> client.getOrgInfo(ncaId)).get());
+            assertInstanceOf(UnauthorizedException.class, failure.getCause());
+        }
+
+        ngcServer.verify(0,
+                getRequestedFor(urlPathEqualTo("/v2/accounts/" + ncaId + "/uisorginfo")));
     }
 }

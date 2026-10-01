@@ -272,6 +272,13 @@ public final class OAuth2ClientUtils {
                 .subscribeOn(Schedulers.boundedElastic())
                 .switchIfEmpty(Mono.error(() -> new UnauthorizedException(
                         MESG_NO_ACCESS_TOKEN.formatted(clientRegistrationId))))
+                // This filter is registered outside getRetryableFilter, so that filter never sees
+                // token-endpoint failures raised here and cannot translate them. Token-server 5xx
+                // is left alone: it is an upstream outage, not an auth failure, and callers key off
+                // ClientAuthorizationException to retry it.
+                .onErrorMap(ClientAuthorizationException.class, ex -> isTokenServer5xx(ex) ? ex
+                        : new UnauthorizedException(
+                                getClientAuthErrorMessage(clientRegistrationId, ex), ex))
                 .flatMap(authorizedClient -> next.exchange(ClientRequest.from(request)
                         .headers(headers -> headers.setBearerAuth(
                                 authorizedClient.getAccessToken().getTokenValue()))
