@@ -193,16 +193,17 @@ inventory are not carried into the manifest.
 
 The source must be an existing `docs/vA.B.C/` tree with matching
 `fern/products/self-managed/vA.B.C.yml`. The inventory version must equal
-`X.Y.Z`. `--draft` also accepts an `X.Y.Z-rc.N` inventory and adds warnings to
-the generated pages. It preserves the candidate tag and commit in the catalog;
+`X.Y.Z`. `--draft` also accepts an `X.Y.Z-rc.N` inventory and adds a warning
+to the generated manifest. It preserves the candidate tag and commit in the catalog;
 it does not qualify the release or prove stable publication.
 
 The script stages the export, copies the legacy tree, replaces its generated
 manifest and control-plane download blocks, and writes the new navigation and
 catalog snapshot. Historical compute-plane and CLI instructions need a
 separate review because they are outside the selected control-plane inventory.
-Keep the latest stable version first in the product menu. Mark candidate
-documentation as a draft in the menu and landing page.
+Keep the latest stable version first in the product menu. Record candidate
+provenance and publication status in the manifest. Other pages link to the
+manifest for artifact locations.
 
 After editing prose, verify the frozen generated blocks against their original
 inventory without permitting normal synchronization to write frozen trees:

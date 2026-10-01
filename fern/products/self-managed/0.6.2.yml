@@ -15,9 +15,8 @@ navigation:
       - page: "0.6.2 Release Notes"
         path: ../../../docs/self-managed-0.6.2/release-notes/0.6.2.md
         slug: 0-6-2-release-notes
-      - page: "0.6.1 to 0.6.2 Upgrade"
-        path: ../../../docs/self-managed-0.6.2/release-notes/0.6.1-to-0.6.2-upgrade.md
-        slug: 0-6-1-to-0-6-2-upgrade
+      - link: "0.6.1 to 0.6.2 Upgrade"
+        href: /nvcf/overview/0-6-1-to-0-6-2-upgrade
       - link: "0.6.2 to 1.0.1 Upgrade"
         href: /nvcf/overview/0-6-2-to-1-0-1-upgrade
       - page: "0.6.1 Release Notes"

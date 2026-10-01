@@ -185,7 +185,7 @@ func renderLegacyPages(repoRoot string, options legacySnapshotOptions, catalog *
 			}
 			content = updated
 		}
-		if options.draft && !options.check {
+		if options.draft && !options.check && output.Path == "manifest.md" {
 			title, body, _ := strings.Cut(content, "\n")
 			content = title + "\n\n<Warning>\nDraft for " + options.version + ". Inventory source: `" + catalog.Stack.SourceTag + "`.\nStable release publication and live upgrade qualification are pending.\nDo not use this draft as a qualified upgrade procedure.\n</Warning>\n" + body
 		}

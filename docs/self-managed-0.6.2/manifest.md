@@ -16,7 +16,7 @@ as `Publication pending`. Public availability was checked on 2026-10-01.
 A source registry reference alone is not publication evidence.
 
 See the [release notes](./release-notes/0.6.2.md) and
-[patch procedure](./release-notes/0.6.1-to-0.6.2-upgrade.md).
+[patch procedure](/nvcf/overview/0-6-1-to-0-6-2-upgrade).
 
 <Warning>
 Artifact version compatibility

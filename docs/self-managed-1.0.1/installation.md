@@ -1,9 +1,5 @@
 # Deployment
 
-For an existing deployment, follow the [0.6.2 to 1.0.1 upgrade](/nvcf/overview/0-6-2-to-1-0-1-upgrade).
-Installations on 0.6.1 must first complete the [0.6.2 patch](/nvcf/self-managed/0.6.2/0-6-1-to-0-6-2-upgrade).
-The revised path is pending stable 0.6.2 publication and live qualification.
-
 Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
 
 For a local k3d fresh install, start with the [Quickstart](/nvcf/overview/quickstart). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.

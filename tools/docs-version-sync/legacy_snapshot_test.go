@@ -126,6 +126,16 @@ func TestLegacyExportRequiresDraftAndChecksFrozenBlocks(t *testing.T) {
 	if !strings.Contains(string(content), release.Tag) || !strings.Contains(string(content), "qualification are pending") {
 		t.Fatal("candidate provenance and qualification warning missing")
 	}
+	mirroring, err := os.ReadFile(filepath.Join(options.outputPath, "image-mirroring.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(mirroring), "<Warning>") || strings.Contains(string(mirroring), "Publication pending") {
+		t.Fatal("image mirroring repeated the manifest's publication warning")
+	}
+	if strings.Contains(string(mirroring), "ngc registry resource download-version") || !strings.Contains(string(mirroring), "artifact manifest") {
+		t.Fatal("unpublished stack must use the manifest reference instead of a download command")
+	}
 	if err := os.WriteFile(manifest, []byte(strings.ReplaceAll(string(content), "`3.4.5`", "`9.9.9`")), 0o644); err != nil {
 		t.Fatal(err)
 	}

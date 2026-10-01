@@ -1,13 +1,7 @@
 ![NVIDIA Cloud Functions banner](images/nvcf-banner.svg)
 
-<Warning>
-0.6.2 documentation draft. Stable publication and live upgrade qualification
-are pending. This tree is based on the 0.6.1 documentation and the 0.6.2-rc.0
-control-plane inventory; it is not a qualified release.
-</Warning>
-
 Read the [0.6.2 release notes](./release-notes/0.6.2.md) and
-[0.6.1 to 0.6.2 patch procedure](./release-notes/0.6.1-to-0.6.2-upgrade.md)
+[0.6.1 to 0.6.2 patch procedure](/nvcf/overview/0-6-1-to-0-6-2-upgrade)
 before proceeding to the [1.0.1 upgrade](/nvcf/overview/0-6-2-to-1-0-1-upgrade).
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
