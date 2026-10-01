@@ -28,12 +28,15 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/yaml"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
@@ -78,6 +81,37 @@ func BackendNamespaces(nb *nvidiaiov1.NVCFBackend) (systemNS, requestsNS string)
 	return systemNS, requestsNS
 }
 
+// AgentRequestsNamespace returns the requests namespace recorded in the
+// generated agent config, which is where the agent creates ICMSRequests. It
+// differs from the NVCFBackend value when the Helm worker.requestsNamespace
+// override is set, and falls back to that value when the config is unreadable.
+func AgentRequestsNamespace(ctx context.Context, k8sClient kubernetes.Interface, nb *nvidiaiov1.NVCFBackend) string {
+	systemNS, requestsNS := BackendNamespaces(nb)
+	cm, err := k8sClient.CoreV1().ConfigMaps(systemNS).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			core.GetLogger(ctx).WithError(err).Warnf("failed to read %s/%s, using requests namespace %s",
+				systemNS, agentConfigConfigMapName, requestsNS)
+		}
+		return requestsNS
+	}
+
+	var cfg struct {
+		Agent struct {
+			RequestsNamespace string `json:"requestsNamespace"`
+		} `json:"agent"`
+	}
+	if err := yaml.Unmarshal([]byte(cm.Data[agentConfigKey]), &cfg); err != nil {
+		core.GetLogger(ctx).WithError(err).Warnf("failed to parse %s/%s, using requests namespace %s",
+			systemNS, agentConfigConfigMapName, requestsNS)
+		return requestsNS
+	}
+	if cfg.Agent.RequestsNamespace == "" {
+		return requestsNS
+	}
+	return cfg.Agent.RequestsNamespace
+}
+
 // CleanupBackendResources deletes all resources created by an NVCFBackend
 // including namespaces, webhooks, and cluster roles.
 // Note: Operator-managed CRDs are cleaned up via owner references.
@@ -98,9 +132,22 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 
 	systemNS, requestsNS := BackendNamespaces(nb)
 
+	// A worker.requestsNamespace override, now or in an earlier configuration,
+	// puts ICMSRequests outside the NVCFBackend requests namespace.
+	configuredRequestsNamespaces, err := listRequestsNamespaces(ctx, k8sClient)
+	if err != nil {
+		log.WithError(err).Warn("failed to list configured requests namespaces")
+	}
+	requestsNamespaces := sets.New(requestsNS, AgentRequestsNamespace(ctx, k8sClient, nb))
+	for _, ns := range configuredRequestsNamespaces {
+		requestsNamespaces.Insert(ns.Name)
+	}
+
 	// Delete all ICMSRequest CRs (remove finalizers first, then delete)
-	if err := deleteICMSRequests(ctx, dynamicClient, requestsNS); err != nil {
-		log.WithError(err).Warnf("failed to delete ICMS requests in namespace %s", requestsNS)
+	for _, ns := range sets.List(requestsNamespaces) {
+		if err := deleteICMSRequests(ctx, dynamicClient, ns); err != nil {
+			log.WithError(err).Warnf("failed to delete ICMS requests in namespace %s", ns)
+		}
 	}
 
 	// Delete workload namespaces (sr-*) that NVCA created for each request.
@@ -112,7 +159,7 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	}
 
 	// Cleanup the system namespace
-	err := k8sClient.CoreV1().Namespaces().Delete(ctx, systemNS, metav1.DeleteOptions{})
+	err = k8sClient.CoreV1().Namespaces().Delete(ctx, systemNS, metav1.DeleteOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", systemNS, err)
 	}
@@ -121,6 +168,22 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	err = k8sClient.CoreV1().Namespaces().Delete(ctx, requestsNS, metav1.DeleteOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", requestsNS, err)
+	}
+
+	// A configured requests namespace is deleted only when the operator created
+	// it. A pre-existing namespace may hold unrelated workloads.
+	for _, ns := range configuredRequestsNamespaces {
+		if ns.Name == requestsNS || ns.Name == systemNS {
+			continue
+		}
+		if ns.Annotations[nvcaoptypes.CreatedByOperatorAnnotation] != "true" {
+			log.Infof("keeping requests namespace %s because the operator did not create it", ns.Name)
+			continue
+		}
+		err = k8sClient.CoreV1().Namespaces().Delete(ctx, ns.Name, metav1.DeleteOptions{})
+		if err != nil && !k8serrors.IsNotFound(err) {
+			return fmt.Errorf("failed to cleanup namespace %v, err: %v", ns.Name, err)
+		}
 	}
 
 	// Strip binding finalizers before deleting the control namespace. The agent
@@ -706,8 +769,24 @@ func deleteModelCacheBindings(ctx context.Context, dynamicClient dynamic.Interfa
 	return errors.Join(errs...)
 }
 
-// workloadNamespaceLabelSelector selects namespaces created by NVCA for workload instances.
-const workloadNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-type"
+// workloadNamespaceLabelSelector selects namespaces created by NVCA for workload
+// instances. Requests namespaces carry the same label with the pod_spec value
+// and are handled separately, because they may be pre-existing user namespaces.
+const workloadNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-type," +
+	"nvca.nvcf.nvidia.io/workload-instance-type!=pod_spec"
+
+// requestsNamespaceLabelSelector selects requests namespaces prepared by the operator.
+const requestsNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-type=pod_spec"
+
+func listRequestsNamespaces(ctx context.Context, k8sClient kubernetes.Interface) ([]corev1.Namespace, error) {
+	nsList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		LabelSelector: requestsNamespaceLabelSelector,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list requests namespaces: %w", err)
+	}
+	return nsList.Items, nil
+}
 
 // deleteWorkloadNamespaces lists and deletes all NVCA workload namespaces (sr-*).
 func deleteWorkloadNamespaces(ctx context.Context, k8sClient kubernetes.Interface) error {
