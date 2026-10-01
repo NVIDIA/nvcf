@@ -108,6 +108,31 @@ streamed while its engine serves traffic, so a file being written at
 that instant can be captured partially; engines treat a bad cache entry
 as a miss, and the next refresh replaces it.
 
+## First run on GB300, 2026-10-01
+
+Deployed warm against generation 1 with the refresh on: every rank
+reported a delta within four minutes of Ready, one agent won the
+election and collected generation 2 from the eight warm ranks in 59 s
+(7.51 GB against 7.45 GB). Two findings changed the design slightly:
+
+- The deltas were not one kernel. Under live traffic the engine kept
+  compiling: Triton kernels for guided decoding and a batched outer
+  product, torch.compile graphs for new input shapes, CUDA JIT cache
+  entries, between 1 and 38 files per rank in the first minutes. A
+  one-shot cold set can never carry those; the refresh is their only
+  path into the set. A rank's delta also depends on which requests it
+  served, so ranks differ.
+- The Mamba kernel that started this was in generation 1 for some ranks
+  after all, and FlashInfer rebuilt it anyway: the rank stream dropped
+  modification times, every seeded file carried the collection time,
+  and ninja treats that as stale. The stream now keeps mtimes to the
+  nanosecond. The cold collection has the same path for remote ranks,
+  so this also fixes the cold set.
+
+A pod is stamped with the generation it was seeded from and only ranks
+seeded from the serving generation take part in a refresh; otherwise the
+first warm deployment keeps proposing after its own refresh.
+
 ## Failure behaviour
 
 | Failure | Effect | Why it is bounded |
