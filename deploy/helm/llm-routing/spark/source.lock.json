@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/NVIDIA/nvcf.git",
+  "revision": "198e867c3a8ff1dac0a0063f77ed1ea4c1761984",
+  "patch": "patches/stack-fixes.patch",
+  "patchSha256": "afd95b354487bd4f07ccb63807f13d8626362285df691c5050dedfa9741d2306"
+}

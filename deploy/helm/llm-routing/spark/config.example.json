@@ -1,0 +1,39 @@
+{
+  "context": "spark-demo",
+  "namespace": "llm-spark-poc",
+  "releasePrefix": "llm-poc",
+  "clusterId": "spark-poc",
+  "nodes": {
+    "control": "spark-control",
+    "leader": "spark-leader",
+    "worker": "spark-worker"
+  },
+  "storageClass": "local-path",
+  "runtimeClass": "nvidia",
+  "images": {
+    "prefix": "registry.example.com/team/llm-poc",
+    "tag": "dev-1",
+    "pullPolicy": "IfNotPresent",
+    "pullSecrets": []
+  },
+  "runtimeImage": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+  "tls": {
+    "selfSigned": {
+      "enabled": true
+    }
+  },
+  "caConfigMap": "llm-gateway-stack-ca",
+  "apiKeyFile": null,
+  "containerd": {
+    "socketPath": "/run/k3s/containerd/containerd.sock",
+    "archiveNode": "spark-control",
+    "archiveDirectory": "/var/tmp/llm-poc-images",
+    "runAsUser": 1000,
+    "nodeNames": [
+      "spark-control",
+      "spark-leader",
+      "spark-worker"
+    ]
+  },
+  "retainedModels": []
+}

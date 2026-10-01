@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Publishes the sample backend's model test-model through Pylon Operator.
+# run.sh applies this file with -n, so it carries no namespace.
+apiVersion: pylon.nvidia.com/v1alpha1
+kind: InferenceEndpoint
+metadata:
+  name: test-model
+  labels:
+    app.kubernetes.io/part-of: pylon-operator-e2e
+spec:
+  modelName: {{ .Values.modelName | quote }}
+  inferenceAPIFormat:
+    type: chat
+  service:
+    name: openai-compatible-sample
+    port: 8000
+  health:
+    path: /health

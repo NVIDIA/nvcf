@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+enabled: false
+nodeNames: []
+archiveNode: ""
+archiveDirectory: ""
+archiveName: arm64-images.tar
+archiveSha256: ""
+serverImage: python:3.12-alpine
+clientImage: rancher/k3s:v1.36.4-k3s1
+socketPath: /run/k3s/containerd/containerd.sock
+runAsUser: 1000
+platform: linux/arm64

@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- if not .Values.enabled }}
+{{- fail "Set enabled=true to authorize importing images through the node containerd sockets" }}
+{{- end }}
+{{- $digest := required "archiveSha256 is required" .Values.archiveSha256 }}
+{{- if not (regexMatch "^[a-f0-9]{64}$" $digest) }}
+{{- fail "archiveSha256 must be a lowercase SHA-256 digest" }}
+{{- end }}
+{{- $base := printf "%s-%d" .Release.Name .Release.Revision }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $base }}
+spec:
+  selector:
+    image-loader: {{ $base }}
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $base }}-server
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 660
+  template:
+    metadata:
+      labels:
+        image-loader: {{ $base }}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ required "archiveNode is required" .Values.archiveNode | quote }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsUser: {{ .Values.runAsUser }}
+        runAsGroup: {{ .Values.runAsUser }}
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: server
+          image: {{ .Values.serverImage | quote }}
+          command: [python3, -u, -c]
+          args:
+            - |
+              import http.server, os, time
+              pending = set(os.environ['EXPECTED_NODES'].split(','))
+              class Handler(http.server.SimpleHTTPRequestHandler):
+                  def do_GET(self):
+                      if self.path.startswith('/done/'):
+                          pending.discard(self.path.removeprefix('/done/'))
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b'OK')
+                      else:
+                          super().do_GET()
+              os.chdir('/images')
+              server = http.server.HTTPServer(('0.0.0.0', 8080), Handler)
+              server.timeout = 1
+              deadline = time.monotonic() + 600
+              while pending and time.monotonic() < deadline:
+                  server.handle_request()
+              server.server_close()
+              if pending:
+                  raise SystemExit('Import acknowledgement missing for: ' + ','.join(sorted(pending)))
+          env:
+            - {name: EXPECTED_NODES, value: {{ join "," .Values.nodeNames | quote }}}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 100m, memory: 32Mi}
+            limits: {cpu: '1', memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: images, mountPath: /images, readOnly: true}
+      volumes:
+        - name: images
+          hostPath:
+            path: {{ required "archiveDirectory is required" .Values.archiveDirectory | quote }}
+            type: Directory
+{{- range $node := required "nodeNames is required" .Values.nodeNames }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $base }}-{{ $node }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 540
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ $node | quote }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsUser: {{ $.Values.runAsUser }}
+        runAsGroup: 0
+        fsGroup: {{ $.Values.runAsUser }}
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: import
+          image: {{ $.Values.clientImage | quote }}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              attempt=0
+              until wget -q -T 60 -O /cache/images.tar "$ARCHIVE_URL"; do
+                attempt=$((attempt + 1))
+                test "$attempt" -lt 30
+                sleep 3
+              done
+              printf '%s  /cache/images.tar\n' "$ARCHIVE_SHA256" | sha256sum -c -
+              /bin/ctr --address=/run/image-loader/containerd.sock --namespace=k8s.io images import --platform="$PLATFORM" /cache/images.tar
+              wget -q -T 15 -O /dev/null "$ACK_URL"
+          env:
+            - name: ARCHIVE_URL
+              value: {{ printf "http://%s.%s.svc.cluster.local:8080/%s" $base $.Release.Namespace $.Values.archiveName | quote }}
+            - {name: ARCHIVE_SHA256, value: {{ $digest | quote }}}
+            - {name: PLATFORM, value: {{ $.Values.platform | quote }}}
+            - name: ACK_URL
+              value: {{ printf "http://%s.%s.svc.cluster.local:8080/done/%s" $base $.Release.Namespace $node | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: '1', memory: 512Mi}
+          volumeMounts:
+            - {name: cache, mountPath: /cache}
+            - {name: socket, mountPath: /run/image-loader/containerd.sock}
+      volumes:
+        - name: cache
+          emptyDir: {sizeLimit: 1Gi}
+        - name: socket
+          hostPath:
+            path: {{ $.Values.socketPath | quote }}
+            type: Socket
+{{- end }}

@@ -1,7 +1,7 @@
 # Standalone routing POC
 
-This chart composes the existing gateway and request-router charts. Keep runtime behavior changes in the owning service subtree. Test fixtures are not production authorizers or model recipes.
+This is the real Spark/GLM POC entry point. Read `README.md` and `spark/AGENTS.md`. Runtime changes belong in the pinned owning source checkout, represented here by a reviewed patch and lock file.
 
-Run `bash tests/render.sh` from this directory. Run `bash tests/smoke.sh CONTEXT` against an installed CPU POC. Always specify the Kubernetes context.
+Run the Python tests and offline Helm render documented in the README. Always specify the Kubernetes context. Packaging validation must not change a live model deployment.
 
-Build `tests/fixture.go` from `src/invocation-plane-services/llm-api-gateway` with the existing Go module. Do not add dependencies for the fixture. Keep registry credentials and private image locations in external values files.
+Keep mocks under `spark/tests` and out of the default deployment. Keep credentials, private targets, kubeconfigs and evidence in an external work directory. Do not publish private configuration overlays.
