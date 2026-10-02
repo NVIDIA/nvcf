@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright © 2014 Steve Francia <spf@spf13.com>.
 //
 // Use of this source code is governed by an MIT-style

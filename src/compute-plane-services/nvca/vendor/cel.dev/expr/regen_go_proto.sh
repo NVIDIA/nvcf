@@ -1,7 +1,4 @@
 #!/bin/sh
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 bazel build //proto/cel/expr/conformance/...
 files=($(bazel aquery 'kind(proto, //proto/cel/expr/conformance/...)' | grep Outputs | grep "[.]pb[.]go" | sed 's/Outputs: \[//' | sed 's/\]//' | tr "," "\n"))
 for src in ${files[@]};
