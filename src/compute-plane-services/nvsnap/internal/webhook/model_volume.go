@@ -568,13 +568,15 @@ func initMountFor(init *corev1.Container, land modelid.Landing) string {
 }
 
 // writerScript runs the download, then leaves the completion marker at
-// the volume root. The marker carries the tree's byte count when du can
-// measure it (the agent sizes the read-only views from it on storage whose
-// claim size is nominal) and is an empty file otherwise; readers only test
-// that it exists.
+// the volume root. The tree's byte count, when du can measure it, goes
+// into the marker and into the container's termination message: kubelet
+// unmounts a finished Job pod's volumes at once, so the agents read the
+// count from the pod status rather than from the volume, and size the
+// read-only views from it on storage whose claim size is nominal. Readers
+// only test that the marker exists.
 func writerScript(download, marker string) string {
 	dir := path.Dir(marker)
-	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[2]s\nsync\n( du -sb %[3]s 2>/dev/null | cut -f1 > %[1]s ) || touch %[1]s\n", shellQuote(marker), download, shellQuote(dir))
+	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir))
 }
 
 // readerScript waits for the marker; past the deadline it runs the

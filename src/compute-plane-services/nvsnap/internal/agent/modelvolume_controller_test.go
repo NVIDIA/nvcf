@@ -558,26 +558,20 @@ func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T)
 	if err := minter.MintViewFromPVLabels(ctx, "pv-fs", p.Cfg.WriterViewPVName(mvURI, "sr-fn"), p.Cfg.WriterViewClaimName(mvURI), "sr-fn", nil, false); err != nil {
 		t.Fatal(err)
 	}
-	// The Job's pod on this node, its landing mounted through the writer
-	// view, with the byte count the writer left in the marker.
-	hostRoot := t.TempDir()
+	// The Job's finished pod, on any node: the writer left the byte count
+	// in its termination message, which is all the agents read (the pod's
+	// volumes are unmounted the moment it completes).
 	jobPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI) + "-x1", Namespace: "sr-fn", UID: "job-pod-uid",
 			Labels: map[string]string{"batch.kubernetes.io/job-name": modelvolume.JobName(mvURI)}},
-		Spec: corev1.PodSpec{NodeName: "node-a", Volumes: []corev1.Volume{{Name: "model", VolumeSource: corev1.VolumeSource{
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: p.Cfg.WriterViewClaimName(mvURI)}}}}},
+		Spec: corev1.PodSpec{NodeName: "node-z"},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded, ContainerStatuses: []corev1.ContainerStatus{{Name: modelvolume.DownloadContainer,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Message: "65549091410"}}}}},
 	}
 	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, jobPod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	mount := filepath.Join(hostRoot, "var/lib/kubelet/pods/job-pod-uid/volumes/kubernetes.io~csi", p.Cfg.WriterViewPVName(mvURI, "sr-fn"), "mount")
-	if err := os.MkdirAll(mount, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mount, modelvolume.MarkerFile), []byte("65549091410\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", HostFSRoot: hostRoot, KubeletPodsDir: "/var/lib/kubelet/pods", Log: logrus.New()}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
 	c.HandleJob(ctx, downloadJob(1))
 	st, _ := p.Lookup(ctx, mvURI)
 	if !st.Complete || st.PrimaryPV != "pv-fs" {

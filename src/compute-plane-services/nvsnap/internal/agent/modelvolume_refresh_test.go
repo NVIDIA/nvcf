@@ -137,7 +137,22 @@ func TestModelVolumeController_WarmDeltaRefreshesSet(t *testing.T) {
 	r1 := warmFixture(t, c, "node-a", 1, 2)
 	c.Handle(ctx, r0)
 	c.Handle(ctx, r1)
-	waitUntil(t, "generation 2 complete", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123"); return st.Complete && st.Generation == 2 })
+	// The two scans run concurrently and the refresh election only proceeds
+	// once both ranks are marked; in the cluster the informer resync
+	// re-delivers the pods every 30 s until that holds. Re-deliver them
+	// here the same way instead of depending on goroutine ordering.
+	waitUntil(t, "generation 2 complete", func() bool {
+		st, _ := cache.Lookup(ctx, "cache://abc123")
+		if st.Complete && st.Generation == 2 {
+			return true
+		}
+		for _, name := range []string{r0.Name, r1.Name} {
+			if p, err := kc.CoreV1().Pods("sr-warm").Get(ctx, name, metav1.GetOptions{}); err == nil {
+				c.Handle(ctx, p)
+			}
+		}
+		return false
+	})
 	a0, a1 := podAnn(t, kc, r0), podAnn(t, kc, r1)
 	if a0[modelvolume.CacheRankDeltaAnnotation] != "true" || a0[modelvolume.CacheRankDeltaBytesAnnotation] != strconv.Itoa(3<<20) || a0[modelvolume.CacheRankDeltaFingerprintAnnotation] != "fp-mamba" || a0[modelvolume.CacheRankReadyAnnotation] != "true" {
 		t.Errorf("rank 0 carries the delta and is ready: %v", a0)

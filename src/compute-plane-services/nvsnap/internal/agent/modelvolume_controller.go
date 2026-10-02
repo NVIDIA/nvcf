@@ -358,46 +358,42 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 	log.Info("model volume: download complete; readers read the primary through their views")
 }
 
-// recordJobBytes stamps the tree size a download Job measured into its
-// marker onto the primary PV, from the agent on the Job pod's node (the
-// marker is read through the pod's volume path). Other agents, and a Job
-// whose pod is already gone, leave it to the primary's capacity.
+// recordJobBytes stamps the tree size a download Job measured onto the
+// primary PV. The writer prints the count into its termination message
+// (kubelet unmounts a finished pod's volumes at once, so the volume itself
+// cannot be read afterwards), which any agent reads from the pod status.
+// A Job whose pod is already gone leaves the views at the primary's
+// capacity.
 func (c *ModelVolumeController) recordJobBytes(ctx context.Context, job *batchv1.Job, uri string, log logrus.FieldLogger) {
 	pods, err := c.Kube.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "batch.kubernetes.io/job-name=" + job.Name})
 	if err != nil || len(pods.Items) == 0 {
 		return
 	}
+	var bytes int64
 	for i := range pods.Items {
-		pod := &pods.Items[i]
-		if pod.Spec.NodeName != c.NodeName || len(pod.Spec.Volumes) == 0 {
-			continue
+		for _, cs := range pods.Items[i].Status.ContainerStatuses {
+			if cs.Name != modelvolume.DownloadContainer || cs.State.Terminated == nil || cs.State.Terminated.ExitCode != 0 {
+				continue
+			}
+			if n := modelvolume.MarkerBytes([]byte(cs.State.Terminated.Message)); n > 0 {
+				bytes = n
+			}
 		}
-		src, err := c.podVolumeHostPath(ctx, pod, pod.Spec.Volumes[0].Name)
-		if err != nil {
-			log.WithError(err).Info("model volume: cannot locate the Job's landing volume; views keep the primary's capacity")
-			return
-		}
-		data, err := os.ReadFile(filepath.Join(c.HostFSRoot, src, modelvolume.MarkerFile))
-		if err != nil {
-			log.WithError(err).Info("model volume: cannot read the completion marker; views keep the primary's capacity")
-			return
-		}
-		bytes := modelvolume.MarkerBytes(data)
-		if bytes == 0 {
-			return
-		}
-		pv, err := c.Provisioner.PrimaryPVName(ctx, uri)
-		if err != nil || pv == "" {
-			log.WithError(err).Warn("model volume: primary volume unknown; bytes not recorded")
-			return
-		}
-		if err := c.Provisioner.RecordBytes(ctx, pv, bytes); err != nil {
-			log.WithError(err).Warn("model volume: record bytes failed")
-			return
-		}
-		log.WithFields(logrus.Fields{"bytes": bytes, "pv": pv}).Info("model volume: tree size recorded on the primary")
+	}
+	if bytes == 0 {
+		log.Info("model volume: the download left no byte count; views keep the primary's capacity")
 		return
 	}
+	pv, err := c.Provisioner.PrimaryPVName(ctx, uri)
+	if err != nil || pv == "" {
+		log.WithError(err).Warn("model volume: primary volume unknown; bytes not recorded")
+		return
+	}
+	if err := c.Provisioner.RecordBytes(ctx, pv, bytes); err != nil {
+		log.WithError(err).Warn("model volume: record bytes failed")
+		return
+	}
+	log.WithFields(logrus.Fields{"bytes": bytes, "pv": pv}).Info("model volume: tree size recorded on the primary")
 }
 
 // promoteStaging turns a staging pod on this node into the completed

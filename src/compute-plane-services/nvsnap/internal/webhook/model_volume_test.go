@@ -219,7 +219,7 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 	}
 	jc := job.Spec.Template.Spec.InitContainers[0]
 	script := jc.Args[0]
-	if jc.Image != "nvcr.io/org/ultra:vllm" || !strings.Contains(script, "ngc registry model download-version") || !strings.Contains(script, "touch /config/models/.nvsnap-complete") {
+	if jc.Image != "nvcr.io/org/ultra:vllm" || !strings.Contains(script, "ngc registry model download-version") || !strings.Contains(script, "> /config/models/.nvsnap-complete") {
 		t.Errorf("job must run the chart's own download then touch the marker:\n%s", script)
 	}
 	landing := job.Spec.Template.Spec.Volumes[0]
@@ -628,7 +628,7 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	}
 	jc := job.Spec.Template.Spec.Containers[0]
 	s := jc.Args[0]
-	if jc.Image != pod.Spec.Containers[0].Image || !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "touch /nvsnap-model/.nvsnap-complete") || jc.VolumeMounts[0].MountPath != downloadMount {
+	if jc.Image != pod.Spec.Containers[0].Image || !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "> /nvsnap-model/.nvsnap-complete") || jc.VolumeMounts[0].MountPath != downloadMount {
 		t.Errorf("job must run hf download on the engine image into the landing mounted at %s: image=%s mounts=%v\n%s", downloadMount, jc.Image, jc.VolumeMounts, s)
 	}
 	// The download never touches the engine's /root: HF_HOME and HOME both
