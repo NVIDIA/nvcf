@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"go.uber.org/zap"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvct"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
@@ -176,6 +176,7 @@ func TestSendResultMetadata(t *testing.T) {
 		ctx,
 		mockClient.Client,
 		mockClient.NvctTokenProvider,
+		false,
 	)
 	defer func() {
 		if err := mockStreamingClient.Close(); err != nil {

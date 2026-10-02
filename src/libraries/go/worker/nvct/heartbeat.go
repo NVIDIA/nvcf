@@ -93,7 +93,7 @@ func (c *Client) sendHeartbeat(ctx context.Context, request *pb.HeartbeatRequest
 	executionStatus := pb.ExecutionStatus_RUNNING.String()
 
 	err := backoff.Retry(func() error {
-		resp, err := c.Client.SendHeartbeat(ctx, request, auth.GrpcTokenFromSource(c.NvctTokenProvider))
+		resp, err := c.Client.SendHeartbeat(ctx, request, auth.GrpcTokenFromSource(c.NvctTokenProvider, c.delegatedToken))
 		zap.L().Debug(
 			"Got heartbeat response",
 			zap.String("task id", resp.GetTaskId()),
