@@ -28,3 +28,9 @@ own documentation set and version menu.
   : Configure gateway routing, registries, and invocation options.
 - [Using Cloud Functions](./api.md)
   : Create and invoke functions using the NVCF API and CLI.
+
+## Branch-ref proof A
+
+Development-only fixture for the docs editions migration.
+
+![Branch-ref proof A](./images/edition-proof.svg)

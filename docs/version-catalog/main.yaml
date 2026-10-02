@@ -1,3 +1,7 @@
+docs_edition:
+  version: 1.0.0
+  status: development
+  change: initial
 version: 1
 target: main
 registries:
@@ -344,7 +348,6 @@ version_overrides:
     type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
-publication_pending: []
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
