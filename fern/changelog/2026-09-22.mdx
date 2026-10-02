@@ -1,0 +1,31 @@
+---
+title: Release 1.0.1
+tags: [self-managed, compute-plane, observability]
+---
+
+## Release 1.0.1
+
+Self-Managed 1.0.1 is a patch release. The three stacks are released independently:
+
+| Stack | Artifact version |
+| --- | --- |
+| Self-Managed | `1.0.1` |
+| Compute Plane | `1.0.0` |
+| Observability | `1.0.0` |
+
+Self-Managed 1.0.1 corrects worker discovery when backend routing is enabled and
+records the installed stack version for future upgrades. Changes since the
+legacy 0.6.1 release include LLM functions, function autoscaling, managed TLS,
+advanced scheduling, model caching, and a separately installed Observability
+stack.
+
+See the [full 1.0.1 release notes](../../docs/overview/release-notes/1.0.1.md),
+[compatibility matrix](../../docs/overview/compatibility-matrix.md), and
+[artifact manifest](../../docs/overview/manifest.md).
+
+<Warning>
+Upgrading from 0.6.1 requires ordered control-plane migrations and re-registering
+every GPU cluster without deleting its registration. Follow the
+[0.6.1 to 1.0.1 upgrade guide](../../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md)
+before starting.
+</Warning>

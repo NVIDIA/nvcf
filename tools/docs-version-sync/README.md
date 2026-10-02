@@ -30,12 +30,12 @@ is a separate process and can happen later after QA.
 
 ## Documentation source trees
 
-Documentation uses one edition selector and five tabs. Each stable edition
+Documentation uses one edition selector and six tabs. Each stable edition
 reads these source trees from its protected release branch:
 
 | Tree | Tab | Versioned |
 | --- | --- | --- |
-| `docs/overview/` | Overview (matrix, quickstart, manifest, image mirroring) | Yes |
+| `docs/overview/` | Overview guides, Manifest, and Release Notes (matrix and stack notes) | Yes |
 | `docs/self-managed/` | Self-Managed Stack (control plane) | Yes |
 | `docs/compute-plane/` | Compute Plane Stack | Yes |
 | `docs/observability/` | Observability Stack | Yes |
@@ -316,7 +316,7 @@ new artifact release does not invalidate historical documentation.
 
 ### Edition navigation and links
 
-`fern/navigation.yml` contains five tabs and explicit page slugs. Preparation
+`fern/navigation.yml` contains six tabs and explicit page slugs. Preparation
 converts current absolute product links to relative source-file links so Fern
 keeps them inside the selected edition. Existing exact redirect aliases and
 anchors are preserved. Explicit historical-version links retain their archive

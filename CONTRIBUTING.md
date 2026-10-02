@@ -166,7 +166,8 @@ For more information, see the [Developer Certificate of Origin](https://develope
 ## Documentation Contributions
 
 Documentation lives under `docs/`. Fern publishes one docs edition menu with
-Overview, Self-Managed, Compute Plane, Observability, and Release Notes tabs.
+Overview, Self-Managed, Compute Plane, Observability, Manifest, and Release Notes
+tabs.
 Each edition records the exact three-stack combination; artifact releases keep
 their own versions.
 
@@ -177,7 +178,7 @@ their own versions.
 | `docs/<stack>-<version>/`, `docs/v*/` | Frozen historical archives. Change only for an explicitly approved historical fix. |
 | `docs/dev/` | Contributor guides; published only when navigation or a navigated symlink includes them. |
 | `fern/docs.yml`, `fern/editions.yml` | Canonical selector and exact protected release-branch commits. |
-| `fern/navigation.yml` | Current five-tab navigation with explicit page slugs. |
+| `fern/navigation.yml` | Current six-tab navigation with explicit page slugs. |
 | `fern/changelog/` | Native release notes with dated MDX entries. |
 | `fern/products/` | Retained historical navigation. |
 

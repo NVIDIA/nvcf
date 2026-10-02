@@ -10,12 +10,14 @@ external workspace index.
 
 ## Layout
 
-The published site has one docs edition menu and five tabs: Overview,
-Self-Managed, Compute Plane, Observability, and Release Notes. An edition
-records one qualified combination; stack artifact versions remain independent.
+The published site has one docs edition menu and six tabs: Overview,
+Self-Managed, Compute Plane, Observability, Manifest, and Release Notes.
+An edition records one qualified combination; stack artifact versions remain
+independent.
 
 - `docs/overview/`: shared customer guides, compatibility matrix, manifest,
-  images, and samples. These belong to the selected edition.
+  images, and samples. These belong to the selected edition. The manifest has
+  its own tab; the compatibility matrix and stack notes use Release Notes.
 - `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/`: current
   stack sources, published under Development from `main`.
 - `docs/dev/`: contributor guides. Only pages reached through navigation or
@@ -27,7 +29,7 @@ records one qualified combination; stack artifact versions remain independent.
   metadata. `docs/edition-manifest.json` is generated from it.
 - `fern/docs.yml`: canonical edition selector, site settings, and redirects.
 - `fern/editions.yml`: exact release-branch commits used by the canonical site.
-- `fern/navigation.yml`: five-tab navigation for current and prepared editions.
+- `fern/navigation.yml`: six-tab navigation for current and prepared editions.
 - `fern/changelog/`: native, dated release-note entries.
 - `fern/products/`: retained navigation for frozen historical routes.
 

@@ -2,7 +2,7 @@
 
 A docs edition versions one documented combination of Self-Managed, Compute
 Plane, and Observability. Stack artifacts keep their own release versions.
-The site has one edition selector and five tabs. Development reads current
+The site has one edition selector and six tabs. Development reads current
 sources; stable editions read protected `docs/releases/X.Y.Z` branches.
 
 ## Choose the version and combination
@@ -106,7 +106,7 @@ DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
 
 Generate a hosted preview of the canonical configuration as well as the
 Development-first preview. Local Fern previews cannot prove remote-ref
-composition. Verify edition switching, all five tabs, version summaries,
+composition. Verify edition switching, all six tabs, version summaries,
 changelog links, archives, anchors, downloads, and mobile/light/dark rendering.
 Use an isolated staging instance for indexed search. Record source commits,
 resolved refs, preview URLs, CI results, and the last validated production
