@@ -5,8 +5,8 @@
 - Repo: `NVIDIA/nvcf` (chart lives at `deploy/helm/notary`)
 - Workspace(s): `self-hosted-nvcf`
 - Tier: `chart`
-- Team: `@NVIDIA/nvcf-dev`
-- Default owner: `@NVIDIA/nvcf-dev`.
+- Team: `@dsx-ai-factory/nvcf-dev`
+- Default owner: `@dsx-ai-factory/nvcf-dev`.
 - Manifest description: Helm chart for notary service (helm-nvcf-notary-service)
 
 ## Use `nvcf-agentic-dev` As The Routing Layer

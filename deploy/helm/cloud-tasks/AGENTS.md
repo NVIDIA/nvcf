@@ -5,8 +5,8 @@
 - Repo: `nvct-api-colocated-deploy`
 - Workspace(s): `self-hosted-nvcf`
 - Tier: `chart`
-- Team: `@NVIDIA/nvcf-dev`
-- Default owner: `@NVIDIA/nvcf-dev`.
+- Team: `@dsx-ai-factory/nvcf-dev`
+- Default owner: `@dsx-ai-factory/nvcf-dev`.
 - Manifest description: Helm chart for NVCT API / nvct-service (helm-nvcf-nvct-api)
 
 ## Use `nvcf-agentic-dev` As The Routing Layer
