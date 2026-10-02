@@ -151,3 +151,56 @@ The protected release branch is still ddb2e65. A new, specific approval is
 needed before replacing that unpublished branch with the tested candidate;
 the earlier one-time approval covered the prior correction only. Indexed
 staging search remains a separate merge gate.
+
+## Combined navigation follow-up
+
+This supersedes the presentation candidate above. P4 source
+`4e703a5fbcfb30f7eed631c4c2efcef51086ca54` implements the latest requirements:
+
+- Six tabs, including a dedicated Manifest tab.
+- Compatibility Matrix in the Release Notes sidebar.
+- A native Release 1.0.1 entry dated September 22, matching the published
+  Self-Managed release, with actual stack versions and upgrade guidance.
+- Removal of the temporary Release preview entry and the redundant Release
+  Notes Overview page from current navigation.
+- Redirects for the moved manifest, matrix, overview, and preview-entry URLs.
+
+The [combined preview](https://nvidia-preview-nvcf-2214-p4-manifest.docs.buildwithfern.com/nvcf/release-notes)
+passed [run 37071049542](https://github.com/NVIDIA/nvcf/actions/runs/37071049542).
+It builds candidate `d8a8a93973bcf3f01fd16d0ae2201961574a935c` alongside
+Development. [Exact candidate CI](https://github.com/NVIDIA/nvcf/actions/runs/37071023704)
+and Markdown lint pass. Local generated-content checks, both strict Fern
+layouts, and targeted Markdown lint pass.
+
+Browser validation passes for stable and Development: six tabs, removed pages
+absent from Overview, the new changelog entry and dated permalink, manifest
+links, matrix placement, upgrade links, and mobile layout without overflow.
+All four links in the 1.0.1 entry resolve to the selected edition. Fifteen
+moved or removed default, Development, and explicit 1.0.0 URLs redirect to
+the expected destinations. Explicit 1.0.0 URLs retain that version prefix.
+No browser page errors occurred.
+
+All 71 mapped note, manifest, and matrix URLs return content. All 32 historical
+routes retain identical content. Seven former shared Release Notes Overview
+aliases intentionally resolve to the Releases index; remaining headings match.
+Current source content, qualification, artifact inventories, and generated
+manifest/matrix data are unchanged from the approved ddb2e65 candidate.
+Contributor guidance now documents the six-tab layout.
+
+CodeRabbit raised three findings on 4e703a5fb:
+
+- [Use absolute changelog links](https://github.com/NVIDIA/nvcf/pull/2235#discussion_r4170257646):
+  not applied. Hosted validation proves the relative source links resolve to
+  each selected edition. Absolute paths would escape Development to the
+  default edition, as demonstrated in the earlier P3 rehearsal.
+- [Move Manifest back to Overview](https://github.com/NVIDIA/nvcf/pull/2235#discussion_r4170257666):
+  superseded by the maintainer's explicit requirement for a Manifest tab.
+- [Move Compatibility Matrix back to Overview](https://github.com/NVIDIA/nvcf/pull/2235#discussion_r4170257673):
+  superseded by the explicit requirement for the Release Notes sidebar.
+
+The epic requirements and PR description record these decisions. Completed
+P4 CI passes; root Bazel is still running. The protected release branch and
+registry pin remain ddb2e65 with the active ruleset unchanged. A specific
+approval request covers replacement with the combined d8a8a9397 candidate;
+the older 15ae2a1 request is superseded. Indexed staging search remains a merge
+gate. No production publication or merge occurred.
