@@ -549,6 +549,15 @@ the third run made no new collection.
 What is left is storage and engine time: the weight read sits on the
 NVMesh per-node ceiling (about 2.4 GB/s, slower than the cold run's
 local disk), graph capture is work the engine redoes every start, and
-the CuTeDSL warmup becomes a cache hit now that `CUTE_DSL_CACHE_DIR`
-is in the cachedir env template (next capture; the entry is a template
-change, so it needs a salt bump, not an agent build).
+the CuTeDSL warmup cannot be cached from outside the engine: vLLM
+compiles the units through `cute.compile()`, which in nvidia-cutlass-dsl
+4.6.0 and upstream main forces `no_cache=True`, so `CUTE_DSL_CACHE_DIR`
+is never written (measured: the directory did not exist after a start
+with the variable set). Persisting those 25 units is a vLLM change.
+
+A disk-write inventory of the fourth run (every file written between
+engine start and the CuTeDSL compile, all mounts) found nothing outside
+the cache root except Python bytecode in site-packages: Triton,
+FlashInfer, torchinductor, the CUDA compute cache, HuggingFace modules,
+the vLLM startup plan and a `humming-kernels` JIT cache all land under
+HOME. For this engine there is nothing further on disk to capture.
