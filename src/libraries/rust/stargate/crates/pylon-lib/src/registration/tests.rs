@@ -158,7 +158,7 @@ impl StargateControlPlane for TestTlsControlPlaneService {
             })));
         }
         tokio::spawn(async move {
-            if let Ok(Some(registration)) = stream.message().await {
+            while let Ok(Some(registration)) = stream.message().await {
                 let _ = registrations.send(registration);
             }
         });
@@ -386,6 +386,7 @@ fn test_registration_config() -> InferenceServerRegistrationConfig {
             ..Default::default()
         },
         min_update_interval: Duration::from_secs(2),
+        stats_update_coalesce: Duration::from_millis(10),
         reverse_tunnel: false,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,
@@ -908,6 +909,48 @@ async fn custom_grpc_ca_completes_watch_and_registration_with_separate_authority
             .expect("test dial URL should use HTTPS")
     );
     assert_eq!(registration_authority, TEST_ROUTER_AUTHORITY);
+
+    client.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn stats_changes_publish_before_the_heartbeat_and_coalesce() {
+    let ca = TestCertificateAuthority::new("registration-change-ca");
+    let mut server = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let mut config = test_registration_config();
+    config.seeds = vec![server.dial_url.clone()];
+    config.grpc_tls_ca_cert_pem = Some(ca.pem());
+    config.min_update_interval = Duration::from_secs(60);
+    config.stats_update_coalesce = Duration::from_millis(50);
+    let runtime_state = config.forwarding.runtime_state.clone();
+    let mut client = InferenceServerRegistrationClient::default();
+
+    client.start(config).expect("registration should start");
+    server.first_registration().await;
+    for queued_input_size in 1..=5 {
+        runtime_state.set_model_stats(
+            "model-a",
+            CurrentModelStats {
+                last_mean_input_tps: 10.0,
+                queued_input_size,
+                ..CurrentModelStats::default()
+            },
+        );
+    }
+
+    let update = server.first_registration().await;
+    let stats = update.models["model-a"]
+        .stats
+        .as_ref()
+        .expect("model stats should be advertised");
+    assert_eq!(stats.queued_input_size, 5);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), server.registrations.recv())
+            .await
+            .is_err(),
+        "a burst of changes should produce one coalesced update"
+    );
 
     client.shutdown().await;
     server.shutdown().await;

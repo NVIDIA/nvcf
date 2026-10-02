@@ -140,6 +140,9 @@ struct Args {
     /// Minimum interval between registration/stat updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
+    /// Minimum interval between stat updates triggered by request state changes
+    #[arg(long, default_value_t = 10, value_name = "MS")]
+    stats_update_coalesce_ms: u64,
     /// Static auth token for registration and reverse tunnel handshake
     #[arg(long, env = "STARGATE_AUTH_TOKEN", value_name = "TOKEN")]
     auth_token: Option<String>,

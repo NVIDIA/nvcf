@@ -144,6 +144,16 @@ pub(super) async fn run_router_registration_stream(
 
         let mut tick_interval = tokio::time::interval(config.min_update_interval);
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Routers act on these stats, so publish request state changes as
+        // they happen. Coalescing bounds the update rate under load; the
+        // interval above remains the liveness heartbeat.
+        let mut registration_changes = config
+            .forwarding
+            .runtime_state
+            .subscribe_registration_changes();
+        registration_changes.mark_unchanged();
+        let mut changes_open = true;
+        let mut coalesced_send_at: Option<Instant> = None;
 
         let stopped = loop {
             let reverse_connected = tokio::select! {
@@ -166,6 +176,25 @@ pub(super) async fn run_router_registration_stream(
                         continue;
                     }
                     connected
+                }
+                changed = registration_changes.changed(),
+                    if changes_open && coalesced_send_at.is_none() =>
+                {
+                    if changed.is_err() {
+                        changes_open = false;
+                        continue;
+                    }
+                    let send_at = last_send + config.stats_update_coalesce;
+                    if Instant::now() < send_at {
+                        coalesced_send_at = Some(send_at);
+                        continue;
+                    }
+                    reverse_state_rx.borrow().is_connected()
+                }
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    coalesced_send_at.unwrap_or_else(Instant::now),
+                )), if coalesced_send_at.is_some() => {
+                    reverse_state_rx.borrow().is_connected()
                 }
                 maybe_ack = ack_stream.message() => {
                     let ack = match maybe_ack {
@@ -204,6 +233,9 @@ pub(super) async fn run_router_registration_stream(
                     continue;
                 }
             };
+            // Everything changed so far is included in this snapshot.
+            registration_changes.borrow_and_update();
+            coalesced_send_at = None;
             let registration_update = current_registration(reverse_connected);
             let advertised = advertised_model_statuses(&registration_update);
             if !send_registration_update(&update_tx, registration_update, &stop).await {
