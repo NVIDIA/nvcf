@@ -29,6 +29,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -360,6 +362,17 @@ func getClientConnFromProxy(ctx context.Context, work *pb.WorkerInvokeFunctionRe
 					zap.L().Warn("tcp connection attempt failed", zap.Error(err))
 				}
 			case *pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_Http3Config:
+				// Opt-in experiment: carry the tunnel over TCP instead of QUIC,
+				// deriving the endpoint from the HTTP/3 config the proxy already
+				// sent. Failure falls through to QUIC below, so enabling this
+				// cannot take a worker offline.
+				if tcpTunnelEnabled {
+					clientConn, err = tcpTunnelConnect(ctx, work.RequestId, config.Http3Config)
+					if err == nil {
+						break
+					}
+					zap.L().Warn("tcp tunnel attempt failed, falling back to quic", zap.Error(err))
+				}
 				clientConn, err = quicConnect(ctx, work.RequestId, config.Http3Config, h3)
 				if err != nil {
 					zap.L().Warn("quic connection attempt failed", zap.Error(err))
@@ -388,6 +401,151 @@ func traceError(span trace.Span, err error) error {
 		span.SetStatus(codes.Error, "")
 	}
 	return err
+}
+
+// Opt-in experiment: carry the worker tunnel over TCP rather than QUIC.
+//
+// Proxy CPU is proportional to bytes moved, and today every byte is encrypted
+// and decrypted twice: once on the worker to edge proxy leg, and again on the
+// edge proxy to grpc-proxy leg. Moving the worker leg to TCP removes QUIC from
+// both.
+//
+// Enabled per pod so it can be applied to a single function and reverted by
+// removing the variable. Everything else is derived from the HTTP/3 connection
+// config the proxy already sends, so no control plane change is required.
+var (
+	tcpTunnelEnabled = os.Getenv("NVCF_WORKER_TCP_TUNNEL") == "1" ||
+		os.Getenv("NVCF_WORKER_TCP_TUNNEL") == "true"
+	// Overrides for testing. Empty means derive from the HTTP/3 proxy URI.
+	tcpTunnelHostOverride = os.Getenv("NVCF_WORKER_TCP_TUNNEL_HOST")
+	tcpTunnelPort         = envOrDefault("NVCF_WORKER_TCP_TUNNEL_PORT", "10086")
+)
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// tcpTunnelDialHost turns the pod-targeted HTTP/3 host into the regional TCP
+// entry point, by dropping the pod label and selecting the TCP service name:
+//
+//	<pod>.<region>.proxy.<domain>  ->  <region>.tcp-proxy.<domain>
+//
+// The pod label is dropped because it does not resolve on the TCP side. Pod
+// targeting travels in the CONNECT authority instead, which the edge proxy
+// rewrites. That is deliberate: it avoids needing a wildcard DNS record and a
+// wildcard certificate, since the regional name already resolves and is already
+// covered by the TCP load balancer's certificate.
+func tcpTunnelDialHost(h3Host string) (string, error) {
+	if tcpTunnelHostOverride != "" {
+		return tcpTunnelHostOverride, nil
+	}
+	labels := strings.Split(h3Host, ".")
+	if len(labels) < 4 || labels[2] != "proxy" {
+		return "", fmt.Errorf("cannot derive tcp tunnel host from %q", h3Host)
+	}
+	rest := append([]string{labels[1], "tcp-proxy"}, labels[3:]...)
+	return strings.Join(rest, "."), nil
+}
+
+// tcpTunnelConnect establishes the stateful tunnel over TCP.
+//
+// Two nested steps, and the nesting is the point:
+//
+//  1. TLS to the regional TCP entry point, then an authority-form CONNECT
+//     naming the target pod. The edge proxy matches this and turns the hop into
+//     an opaque byte pipe to that pod. Because it does not parse what flows
+//     inside, HTTP/1.1's rule that a response may not begin before the request
+//     body completes does not apply, which is what makes a long-lived
+//     bidirectional tunnel possible over TCP at all.
+//  2. The ordinary POST /v1/proxy inside the pipe. grpc-proxy sees a plain
+//     HTTP/1.1 request on a real TCP connection, so http.Hijacker works and the
+//     server side needs no change.
+func tcpTunnelConnect(ctx context.Context, requestId string, connectionConfig *pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_HTTP3ConnectionConfig) (net.Conn, error) {
+	tracer := otel.GetTracerProvider().Tracer("nvcf-worker-lib")
+	ctx, span := tracer.Start(ctx, "CONNECT /v1/proxy",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("proxy-type", "tcp-tunnel"),
+			semconv.HTTPURL(connectionConfig.ProxyURI),
+		))
+	defer span.End()
+
+	proxyURL, err := url.Parse(connectionConfig.ProxyURI)
+	if err != nil {
+		return nil, traceError(span, err)
+	}
+	podHost := proxyURL.Hostname()
+	dialHost, err := tcpTunnelDialHost(podHost)
+	if err != nil {
+		return nil, traceError(span, err)
+	}
+	connectAuthority := net.JoinHostPort(podHost, tcpTunnelPort)
+
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: 3 * time.Second},
+		Config:    &tls.Config{ServerName: dialHost, InsecureSkipVerify: quicInsecure},
+	}
+	c, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(dialHost, "443"))
+	if err != nil {
+		return nil, traceError(span, fmt.Errorf("dialing tcp tunnel %q failed: %w", dialHost, err))
+	}
+
+	// Authority-form CONNECT. A request-target carrying a path is not matched
+	// as a CONNECT by the edge proxy, which is why the HTTP/3 path uses POST.
+	if _, err = fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", connectAuthority, connectAuthority); err != nil {
+		_ = c.Close()
+		return nil, traceError(span, err)
+	}
+	br := bufio.NewReader(c)
+	tunnelResp, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		_ = c.Close()
+		return nil, traceError(span, err)
+	}
+	if tunnelResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(tunnelResp.Body, 512))
+		_ = c.Close()
+		return nil, traceError(span, fmt.Errorf("tcp tunnel CONNECT to %s returned %d: %s",
+			connectAuthority, tunnelResp.StatusCode, string(body)))
+	}
+
+	// Inside the pipe, speak exactly what the HTTP/1 server on grpc-proxy
+	// expects. Path form here, because its mux routes on path.
+	inner, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+connectAuthority+"/v1/proxy", http.NoBody)
+	if err != nil {
+		_ = c.Close()
+		return nil, traceError(span, err)
+	}
+	inner.ContentLength = -1
+	inner.Header.Set("Authorization", "Bearer "+connectionConfig.ProxyAuthorizationToken)
+	inner.Header.Set("X-Request-ID", requestId)
+	otelhttptrace.Inject(ctx, inner)
+	if err = inner.Write(c); err != nil {
+		_ = c.Close()
+		return nil, traceError(span, err)
+	}
+
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		_ = c.Close()
+		return nil, traceError(span, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		_ = resp.Body.Close()
+		_ = c.Close()
+		err := fmt.Errorf("unexpected status %d from tunnelled proxy request: %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			err = errors.Join(err, ErrAuth)
+		}
+		return nil, traceError(span, err)
+	}
+
+	// Deliberately not closing the body: the stream is used directly from here.
+	return buffconn.NewBufConn(c, br), nil
 }
 
 func quicConnect(ctx context.Context, requestId string, connectionConfig *pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_HTTP3ConnectionConfig, h3 *h3ConnectionCache) (net.Conn, error) {
