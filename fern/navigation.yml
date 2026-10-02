@@ -123,19 +123,19 @@ navigation:
     skip-slug: true
     contents:
     - page: gRPC Load Testing
-      path: ../docs/overview/grpc-load-testing.md
+      path: ../docs/dev/grpc-load-testing.md
       slug: g-rpc-load-testing
     - page: gRPC Load Test SLI Guide
-      path: ../docs/overview/grpc-load-test-sli-guide.md
+      path: ../docs/dev/grpc-load-test-sli-guide.md
       slug: g-rpc-load-test-sli-guide
     - page: HTTP Load Testing
-      path: ../docs/overview/http-load-testing.md
+      path: ../docs/dev/http-load-testing.md
       slug: http-load-testing
     - page: HTTP Load Test SLI Guide
-      path: ../docs/overview/http-load-test-sli-guide.md
+      path: ../docs/dev/http-load-test-sli-guide.md
       slug: http-load-test-sli-guide
     - page: HTTP Soak Testing
-      path: ../docs/overview/http-soak-testing.md
+      path: ../docs/dev/http-soak-testing.md
       slug: http-soak-testing
   - section: Development
     skip-slug: true
@@ -147,7 +147,7 @@ navigation:
       skip-slug: true
       contents:
       - page: Local Development
-        path: ../docs/overview/local-development.md
+        path: ../docs/dev/local-development.md
         slug: local-development
       - page: Single-cluster (CLI)
         path: ../docs/overview/local-development/single-cluster-cli.md
@@ -301,7 +301,7 @@ navigation:
       path: ../docs/compute-plane/cluster-management/nsight-profiling.md
       slug: nsight-profiling
     - page: Fake GPU Operator
-      path: ../docs/compute-plane/fake-gpu-operator.md
+      path: ../docs/dev/fake-gpu-operator.md
       slug: fake-gpu-operator
   - section: Configuration
     skip-slug: true

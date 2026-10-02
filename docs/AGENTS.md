@@ -41,6 +41,8 @@ routes use the matching file under `fern/products/`.
 Confirm each `path:` exists. Treat `href:` as an external destination.
 Use explicit page slugs, and keep section `skip-slug` behavior intact.
 When adding, moving, or removing a current page, update `fern/navigation.yml`.
+Point edition navigation directly at shared source files, not symlink aliases.
+Fern can render a symlinked page while failing to resolve links to that page.
 
 Use relative source-file links between current pages, including cross-tab
 links, so the selected edition is retained. Use absolute product/version
