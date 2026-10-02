@@ -1,10 +1,8 @@
 # Deployment
 
-{/* docs-version-sync:BEGIN edition-control-plane */}
+{/*docs-version-sync:BEGIN edition-control-plane*/}
 
-
-
-{/* docs-version-sync:END edition-control-plane */}
+{/*docs-version-sync:END edition-control-plane*/}
 
 Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
 

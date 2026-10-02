@@ -40,7 +40,7 @@ navigation:
 	writeFile(t, page, original)
 	archive := filepath.Join(root, "docs", "v0.6.1", "index.md")
 	writeFile(t, archive, original)
-	if err := stageEditionLinks(root); err != nil {
+	if err := stageEditionLinks(root, "navigation.yml"); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(page)
@@ -53,7 +53,7 @@ navigation:
 	if string(frozen) != original {
 		t.Fatal("frozen source changed")
 	}
-	if err := stageEditionLinks(root); err != nil {
+	if err := stageEditionLinks(root, "navigation.yml"); err != nil {
 		t.Fatal(err)
 	}
 	retry, _ := os.ReadFile(page)
@@ -61,7 +61,7 @@ navigation:
 		t.Fatal("conversion is not idempotent")
 	}
 	writeFile(t, page, "[Missing](/nvcf/overview/missing)\n")
-	if err := stageEditionLinks(root); err == nil || !strings.Contains(err.Error(), "no edition page") {
+	if err := stageEditionLinks(root, "navigation.yml"); err == nil || !strings.Contains(err.Error(), "no edition page") {
 		t.Fatalf("missing target accepted: %v", err)
 	}
 }
