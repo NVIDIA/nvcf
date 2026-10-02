@@ -116,6 +116,10 @@ type cacheEnvEntry struct{ Name, Value string }
 //     estimation pass. Off by default upstream; a stale plan is ignored
 //     by fingerprint and free-memory checks, so it is safe to force on.
 //     Anything the engine can write to disk should land in the cache.
+//   - CUTE_DSL_CACHE_DIR: CuTeDSL (nvidia_cutlass_dsl) writes its JIT
+//     bytecode cache at compile time to this directory when set,
+//     otherwise to $TMPDIR/$USER/cutlass_python_cache, which no engine
+//     puts under the cache root (cache_helpers.get_default_generated_ir_path).
 func defaultCacheEnvTemplate() []cacheEnvEntry {
 	return []cacheEnvEntry{
 		{"HOME", "{cache}"},
@@ -124,6 +128,7 @@ func defaultCacheEnvTemplate() []cacheEnvEntry {
 		{"VLLM_CACHE_ROOT", "{cache}/.cache/vllm"},
 		{"VLLM_ENABLE_STARTUP_PLAN", "1"},
 		{"CUDA_CACHE_PATH", "{cache}/.nv/ComputeCache"},
+		{"CUTE_DSL_CACHE_DIR", "{cache}/cutlass_dsl"},
 		{"NIM_CACHE_PATH", "{model}"},
 		{"HF_HOME", "{model}"},
 	}

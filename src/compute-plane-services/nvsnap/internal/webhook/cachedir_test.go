@@ -114,6 +114,7 @@ func TestCacheDirEnvVars(t *testing.T) {
 		"VLLM_CACHE_ROOT":          "/opt/nvsnap/cache/.cache/vllm",
 		"VLLM_ENABLE_STARTUP_PLAN": "1",
 		"CUDA_CACHE_PATH":          "/opt/nvsnap/cache/.nv/ComputeCache",
+		"CUTE_DSL_CACHE_DIR":       "/opt/nvsnap/cache/cutlass_dsl",
 		"HF_HOME":                  "/opt/nvsnap/model",
 	}
 	got := map[string]string{}

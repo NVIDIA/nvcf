@@ -180,6 +180,7 @@ agent:
     VLLM_CACHE_ROOT={cache}/.cache/vllm
     VLLM_ENABLE_STARTUP_PLAN=1
     CUDA_CACHE_PATH={cache}/.nv/ComputeCache
+    CUTE_DSL_CACHE_DIR={cache}/cutlass_dsl
     NIM_CACHE_PATH={model}
     HF_HOME={model}
 
