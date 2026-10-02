@@ -12,7 +12,6 @@ info:
     - **Error shape**: Gateway-generated errors return `{"message": "..."}` rather than OpenAI's nested `{"error": {...}}`.
     - **Multi-turn stickiness**: Chat completions and responses accept `prompt_cache_key` and return `x-multi-turn-session-id` for session affinity.
     - **Rate-limit signaling**: Responses include standard rate-limiting headers such as `X-RateLimit-Limit-Requests` and `X-RateLimit-Remaining-Requests`.
-    - **Path aliases**: In addition to `/v1/...`, endpoints are also reachable via `/openai/v1/...` and `/api/openai/v1/...`.
   version: 0.14.0
 servers:
   - url: http://localhost:8080
