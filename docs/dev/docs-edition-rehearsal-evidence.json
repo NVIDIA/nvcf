@@ -180,5 +180,27 @@
       ],
       "errors": []
     }
+  },
+  "restore": {
+    "run": "https://github.com/NVIDIA/nvcf/actions/runs/36955967578",
+    "browser": {
+      "rows": [
+        {
+          "route": "overview/overview",
+          "status": 200,
+          "header": "Cloud Functions\n1.0.0 candidate\nSearch\nNVIDIA/nvcf\n230\n83\nOverview\nSelf-Managed\nCompute Plane\nObservability\nRelease Notes",
+          "hasEditionSummary": true,
+          "hasDevelopmentMarker": false
+        },
+        {
+          "route": "dev/overview/overview",
+          "status": 200,
+          "header": "Cloud Functions\nDevelopment\nSearch\nNVIDIA/nvcf\n230\n83\nOverview\nSelf-Managed\nCompute Plane\nObservability\nRelease Notes",
+          "hasEditionSummary": false,
+          "hasDevelopmentMarker": true
+        }
+      ],
+      "errors": []
+    }
   }
 }

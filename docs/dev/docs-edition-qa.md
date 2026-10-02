@@ -98,6 +98,12 @@ Overview, each current stack, and the oldest 0.5 install guide. Candidate
 summaries and the development marker were absent. All sampled pages returned
 HTTP 200, with no browser page errors. The production site was not involved.
 
+[Run 36955967578](https://github.com/NVIDIA/nvcf/actions/runs/36955967578)
+restored the edition candidate on the same preview URL. The final smoke check
+confirmed all five tabs, the default `1.0.0` summary without development content,
+and the separate Development page with its test marker. No browser page errors
+were recorded. This completes the preview rollback-and-restore drill.
+
 Existing repository branch rules protect `main` and `release-*` patterns.
 They do not cover `docs/releases/**`. P4 must add protection that freezes
 published docs branches against ordinary updates, force pushes, and deletion,
@@ -116,7 +122,6 @@ then verify it before registration. The current rules were inspected read-only.
 - Validate indexed search on an existing staging instance.
 - Review current-content differences and final anchors, downloads, samples, and
   API references at the activation commit.
-- Restore and smoke-check the edition candidate after the preview rollback.
 
 The launch target remains October 2. Cleanup of old source copies follows a
 successful cutover and proof that archive routes and rollback no longer depend
