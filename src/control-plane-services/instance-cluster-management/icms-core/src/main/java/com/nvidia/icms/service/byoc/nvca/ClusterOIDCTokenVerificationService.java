@@ -8,9 +8,11 @@ import com.nvidia.icms.configuration.security.AuthManagerResolver;
 import com.nvidia.icms.configuration.security.JwtSizeLimitFilter;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.stereotype.Service;
@@ -34,7 +36,7 @@ import org.springframework.stereotype.Service;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class NvcaTokenVerificationService {
+public class ClusterOIDCTokenVerificationService {
 
     private final AuthManagerResolver authManagerResolver;
     private final ClusterOidcIdentityService clusterOidcIdentityService;
@@ -46,6 +48,25 @@ public class NvcaTokenVerificationService {
      * @return verification outcome (see {@link Outcome})
      */
     public Outcome verify(String token) {
+        return verifyWithDecoder(token, authManagerResolver::buildJwtDecoderFromJwks);
+    }
+
+    /**
+     * Verify a raw JWT with a caller-chosen subject validator (worker tokens use
+     * {@link AuthManagerResolver#workerSubjectValidator()}); signature, timestamp and
+     * audience checks are identical to {@link #verify(String)}.
+     */
+    public Outcome verify(String token, OAuth2TokenValidator<Jwt> subjectValidator) {
+        return verifyWithDecoder(token,
+                jwks -> authManagerResolver.buildJwtDecoderFromJwks(jwks, subjectValidator));
+    }
+
+    @FunctionalInterface
+    private interface DecoderFactory {
+        JwtDecoder build(String jwks) throws ParseException;
+    }
+
+    private Outcome verifyWithDecoder(String token, DecoderFactory decoderFactory) {
         if (token == null || token.isBlank()) {
             return Outcome.reject(RejectReason.MISSING_TOKEN, "token is required");
         }
@@ -74,7 +95,7 @@ public class NvcaTokenVerificationService {
         }
 
         try {
-            JwtDecoder decoder = authManagerResolver.buildJwtDecoderFromJwks(cluster.get().getJwks());
+            JwtDecoder decoder = decoderFactory.build(cluster.get().getJwks());
             Jwt jwt = decoder.decode(token);
             return Outcome.active(jwt, clusterIdFromAud);
         } catch (Exception e) {
@@ -100,11 +121,11 @@ public class NvcaTokenVerificationService {
             this.errorMessage = errorMessage;
         }
 
-        static Outcome active(Jwt jwt, String clusterId) {
+        public static Outcome active(Jwt jwt, String clusterId) {
             return new Outcome(jwt, clusterId, null, null);
         }
 
-        static Outcome reject(RejectReason reason, String message) {
+        public static Outcome reject(RejectReason reason, String message) {
             return new Outcome(null, null, reason, message);
         }
 
