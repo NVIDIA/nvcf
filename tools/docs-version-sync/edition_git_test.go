@@ -42,6 +42,9 @@ func editionGitFixture(t *testing.T) (string, *Catalog, string) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(root, "docs", "page.md"), "# Edition fixture\n")
+	if err := os.Symlink("page.md", filepath.Join(root, "docs", "shared.md")); err != nil {
+		t.Fatal(err)
+	}
 	writeFile(t, filepath.Join(root, "fern", "docs.yml"), "versions:\n  - display-name: '1.0.0'\n    path: navigation.yml\n")
 	writeFile(t, filepath.Join(root, "fern", "navigation.yml"), "navigation:\n  - page: Fixture\n    path: ../docs/page.md\n")
 	runner := filepath.Join(root, "tools", "ci", "run-fern")
@@ -76,6 +79,9 @@ func TestEditionPrepareIsIsolatedAndIdempotent(t *testing.T) {
 	}
 	if editionGit(t, out, "remote", "get-url", "origin") != root {
 		t.Fatal("original remote was not retained")
+	}
+	if target, err := os.Readlink(filepath.Join(out, "docs", "shared.md")); err != nil || target != "page.md" {
+		t.Fatalf("shared guide symlink was not preserved: %q, %v", target, err)
 	}
 	if err := prepareEdition(root, out, plan); err != nil {
 		t.Fatalf("retry failed: %v", err)

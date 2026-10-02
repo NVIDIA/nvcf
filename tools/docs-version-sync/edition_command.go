@@ -282,6 +282,10 @@ func writeBranchConfiguration(root string, plan editionPreparation) error {
 }
 
 func editionTreeDigest(root string) (string, error) {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
 	hash := sha256.New()
 	for _, tree := range []string{"docs", "fern"} {
 		err := filepath.WalkDir(filepath.Join(root, tree), func(path string, entry fs.DirEntry, walkErr error) error {
@@ -296,7 +300,19 @@ func editionTreeDigest(root string) (string, error) {
 				return err
 			}
 			if entry.Type()&os.ModeSymlink != 0 {
-				return fmt.Errorf("edition content cannot contain symlink %s", relative)
+				target, err := filepath.EvalSymlinks(path)
+				if err != nil {
+					return fmt.Errorf("edition symlink %s: %w", relative, err)
+				}
+				resolved, err := filepath.Rel(root, target)
+				if err != nil || (!strings.HasPrefix(resolved, "docs"+string(filepath.Separator)) && !strings.HasPrefix(resolved, "fern"+string(filepath.Separator))) {
+					return fmt.Errorf("edition symlink %s must resolve within docs/ or fern/", relative)
+				}
+				link, err := os.Readlink(path)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(hash, "symlink\x00%s\x00", link)
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
