@@ -511,7 +511,7 @@ nats:
   {{- /* nats-box shares the release's instance label; select server Pods only. */}}
   {{- $natsServers := dict "app.kubernetes.io/component" "nats" -}}
   {{- $natsAffinity := include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
-  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
+  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) }}
   podTemplate:
     merge:
       spec:
