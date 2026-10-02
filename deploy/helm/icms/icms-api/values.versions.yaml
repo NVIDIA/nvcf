@@ -15,10 +15,10 @@
 
 # Supplemental Helm values override, layered on top of values.yaml.
 #
-# Pins image tags that Renovate auto-bumps. The chart's main values.yaml leaves
-# these tags empty so consumers publishing into their own registry supply the
-# tag themselves; this file carries the tag NVIDIA builds against, so an install
-# that layers it does not have to restate the version.
+# Pins image versions and digests that Renovate auto-bumps. The chart's main
+# values.yaml leaves these fields empty so consumers publishing into their own
+# registry supply them themselves; this file carries the version NVIDIA builds
+# against, so an install that layers it does not have to restate the version.
 #
 # Internal install: pass via an additional --values flag, for example:
 #   helm install icms-api icms-api -f icms-api/values.yaml \
@@ -27,5 +27,7 @@ sis:
   lls:
     hmacRotation:
       image:
+        # Multi-architecture OCI index digest for tag 0.16.3.
         # renovate: datasource=docker depName=nvcr.io/0651155215864979/ncp-dev/nvcf-openbao-migrations
         tag: "0.16.3"
+        digest: "sha256:6bb41be51d62c74b42f4d12af6581d343f6bc7205d02787a1958d994b91a998c"
