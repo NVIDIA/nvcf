@@ -34,6 +34,9 @@ global:
     # ncp-local alias Service forwards it to the control-plane load balancer.
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
     llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
+    # Compute workers cannot resolve the invocation pod's control-plane DNS
+    # name. Use the alias Service that routes through the control-plane gateway.
+    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
 
 # Local BDD does not install the optional observability stack.
 observability:

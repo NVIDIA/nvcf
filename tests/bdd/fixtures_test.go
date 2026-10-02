@@ -493,10 +493,16 @@ func TestSelfManagedLocalBDDFixturesDeferRequestRouterDefaults(t *testing.T) {
 			if len(fixture.Addons.LLM.PKI) != 0 {
 				t.Fatalf("%s repeats the stack's managed PKI defaults: %#v", fixturePath, fixture.Addons.LLM.PKI)
 			}
-			for _, key := range []string{"essServiceURL", "invocationServiceURL"} {
-				if _, exists := fixture.Global.WorkerEndpoints[key]; exists {
-					t.Fatalf("%s repeats the stack default for global.workerEndpoints.%s", fixturePath, key)
+			if _, exists := fixture.Global.WorkerEndpoints["essServiceURL"]; exists {
+				t.Fatalf("%s repeats the stack default for global.workerEndpoints.essServiceURL", fixturePath)
+			}
+			invocationURL, hasInvocationURL := fixture.Global.WorkerEndpoints["invocationServiceURL"]
+			if strings.HasSuffix(fixturePath, "-multi.yaml") {
+				if invocationURL != "http://invocation.nvcf.svc.cluster.local:8080" {
+					t.Fatalf("%s must route worker callbacks through the compute-cluster invocation alias, got %v", fixturePath, invocationURL)
 				}
+			} else if hasInvocationURL {
+				t.Fatalf("%s overrides the single-cluster invocation callback default", fixturePath)
 			}
 		})
 	}
