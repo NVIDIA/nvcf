@@ -119,5 +119,66 @@
       }
     ],
     "errors": []
+  },
+  "rollback": {
+    "run": "https://github.com/NVIDIA/nvcf/actions/runs/36955692574",
+    "source_commit": "64363f438e6374ab964d53b285c6716437d197e7",
+    "fern_version": "5.38.0",
+    "scope": "isolated preview only",
+    "browser": {
+      "rows": [
+        {
+          "route": "overview/overview",
+          "status": 200,
+          "heading": [
+            "NVIDIA Cloud Functions"
+          ],
+          "header": "Cloud Functions\n\nOverview\n\nSearch\nNVIDIA/nvcf\n230\n83",
+          "developmentMarker": false,
+          "editionSummary": false
+        },
+        {
+          "route": "self-managed/1.0.1/installation-overview",
+          "status": 200,
+          "heading": [
+            "Deployment"
+          ],
+          "header": "Cloud Functions\n\nSelf-Managed Stack\n\n1.0.1\nSearch\nNVIDIA/nvcf\n230\n83",
+          "developmentMarker": false,
+          "editionSummary": false
+        },
+        {
+          "route": "compute-plane/1.0.0/gpu-cluster-setup",
+          "status": 200,
+          "heading": [
+            "GPU Cluster Setup"
+          ],
+          "header": "Cloud Functions\n\nCompute Plane Stack\n\n1.0.0\nSearch\nNVIDIA/nvcf\n230\n83",
+          "developmentMarker": false,
+          "editionSummary": false
+        },
+        {
+          "route": "observability/1.0.0/observability",
+          "status": 200,
+          "heading": [
+            "Observability Configuration"
+          ],
+          "header": "Cloud Functions\n\nObservability Stack\n\n1.0.0\nSearch\nNVIDIA/nvcf\n230\n83",
+          "developmentMarker": false,
+          "editionSummary": false
+        },
+        {
+          "route": "self-managed/v0.5/helmfile-installation",
+          "status": 200,
+          "heading": [
+            "Helmfile Installation"
+          ],
+          "header": "Cloud Functions\n\nSelf-Managed Stack\n\n0.5.0 (legacy)\nSearch\nNVIDIA/nvcf\n230\n83",
+          "developmentMarker": false,
+          "editionSummary": false
+        }
+      ],
+      "errors": []
+    }
   }
 }

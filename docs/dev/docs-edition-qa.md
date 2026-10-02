@@ -88,6 +88,21 @@ version prefix for the selected default edition; its selector and content still
 identify `1.0.0`. Non-default preservation is covered by the focused ref proof.
 No browser page errors were recorded in this rehearsal.
 
+## Preview rollback
+
+[Run 36955692574](https://github.com/NVIDIA/nvcf/actions/runs/36955692574)
+restored docs and Fern configuration from the exact pre-migration source
+`64363f438e6374ab964d53b285c6716437d197e7`, including Fern `5.38.0`, on the
+isolated preview. Browser checks verified the old product/version menus,
+Overview, each current stack, and the oldest 0.5 install guide. Candidate
+summaries and the development marker were absent. All sampled pages returned
+HTTP 200, with no browser page errors. The production site was not involved.
+
+Existing repository branch rules protect `main` and `release-*` patterns.
+They do not cover `docs/releases/**`. P4 must add protection that freezes
+published docs branches against ordinary updates, force pushes, and deletion,
+then verify it before registration. The current rules were inspected read-only.
+
 ## Remaining activation gates
 
 - Authorize the four-line historical link correction required by
@@ -101,7 +116,7 @@ No browser page errors were recorded in this rehearsal.
 - Validate indexed search on an existing staging instance.
 - Review current-content differences and final anchors, downloads, samples, and
   API references at the activation commit.
-- Complete and record the preview rollback and restore drill before cutover.
+- Restore and smoke-check the edition candidate after the preview rollback.
 
 The launch target remains October 2. Cleanup of old source copies follows a
 successful cutover and proof that archive routes and rollback no longer depend
