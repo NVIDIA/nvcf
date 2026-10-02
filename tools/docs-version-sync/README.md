@@ -260,3 +260,78 @@ go vet -C tools/docs-version-sync ./...
 The operation is complete when the offline sync check, current-release check,
 and full documentation check pass, and the generated diff contains only the
 expected catalog and documentation updates.
+
+## Docs edition preparation
+
+The edition commands are additive. The existing per-stack docs remain the
+published default until the edition registry is activated in `fern/docs.yml`.
+`docs_edition` metadata is optional in the catalog; catalogs without it retain
+their existing validation and rendering behavior.
+
+A docs edition records one exact combination of all three stack releases. Its
+SemVer version is independent of stack artifact versions. Declare `initial`
+for the first edition, then `patch`, `minor`, or `major` against the registered
+previous edition. A stack major requires an edition major; a stack feature
+release requires at least an edition minor. A docs-only patch can retain all
+three stack versions.
+
+First synchronize the three explicit stack inventories with the existing
+`--update-catalog` options and review that source commit. The source must
+contain `fern/navigation.yml`. Then prepare a candidate outside the checkout:
+
+```bash
+go run -C tools/docs-version-sync . edition prepare \
+  --source <full-reviewed-commit> --version 1.0.0 --change initial \
+  --self-managed 1.0.1 --compute-plane 1.0.0 --observability 1.0.0 \
+  --out /tmp/nvcf-docs-edition-1.0.0
+```
+
+Preparation verifies that the explicit stack versions match the reviewed
+catalog, checks compatibility declarations and source tags, and writes a
+candidate catalog, `docs/edition-manifest.json`, and a branch-local default
+navigation. It stages the reviewed source in a separate Git clone. It does
+not copy a version directory into the source checkout. Repeating an identical
+preparation succeeds; different inputs or modified prepared content are
+rejected without overwriting files.
+
+The candidate is `development` by default. Qualification is a human decision
+about the complete combination. After review, prepare with `--qualification`
+pointing to the public issue or PR that records that approval. Providing a URL
+is a declaration of approval, not automatic evidence that QA passed. The
+reviewer must verify it. Artifact publication alone never qualifies an edition.
+
+For a later edition, also supply `--previous-version` and the appropriate
+`--change`. Preparation checks stack transitions against that registered
+predecessor. A qualified catalog cannot be refreshed through the development
+latest-release updater.
+
+The `Prepare Docs Edition` workflow performs the same preparation and attaches
+sources and a diff for review. It has read-only repository permissions and does
+not create a published branch or activate a registry.
+
+After reviewing the prepared content and qualification, create and commit a
+`docs/releases/X.Y.Z` branch from the prepared clone. Retain its branch-local
+`path` default; never replace it with the canonical site's Latest `ref`.
+Protect that exact branch against updates, force pushes, and deletion before
+registration. Publication administrators must verify the branch rules; commit
+checks detect drift but do not replace branch protection.
+
+Register its exact branch commit from the canonical checkout:
+
+```bash
+go run -C tools/docs-version-sync . edition register \
+  --version 1.0.0 --commit <full-docs-release-branch-commit>
+./tools/ci/check-doc-editions
+```
+
+Registration updates `fern/editions.yml` only. Activation of the matching Fern
+version entry remains a reviewed navigation change. Identical registration is
+idempotent; a published edition cannot be rebound to a different commit.
+
+The edition check resolves remote branch heads, checks each qualified catalog
+and its stack sources, validates its own default navigation, and checks its
+generated content and Fern configuration in an isolated checkout. Missing or
+moved refs, stale manifests, and unregistered Fern refs fail. `--local-refs` is
+available for isolated local rehearsals; publishing always checks the remote.
+Existing editions are validated against their recorded stack versions, so a
+new artifact release does not invalidate historical documentation.

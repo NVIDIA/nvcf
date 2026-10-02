@@ -35,6 +35,7 @@ on:
       - 'tools/ci/run-fern'
       - 'tools/ci/check-docs'
       - 'tools/ci/check-doc-version-sync'
+      - 'tools/ci/check-doc-editions'
       - 'tools/ci/preview-docs'
       - 'tools/docs-version-sync/**'
       - 'tools/scripts/test/test-run-fern'
