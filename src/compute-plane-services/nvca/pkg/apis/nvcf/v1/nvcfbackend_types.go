@@ -211,9 +211,12 @@ const (
 
 // +k8s:openapi-gen=true
 type MiniServiceConfig struct {
-	HelmReValServiceURL                string             `json:"helmReValServiceURL"`
-	HelmReValServiceHostHeaderOverride string             `json:"helmReValServiceHostHeaderOverride,omitempty"`
-	CacheDirSize                       *resource.Quantity `json:"cacheDirSize"`
+	HelmReValServiceURL                string `json:"helmReValServiceURL"`
+	HelmReValServiceHostHeaderOverride string `json:"helmReValServiceHostHeaderOverride,omitempty"`
+	// CacheDirSize is deprecated and ignored. Rendered Helm Charts are persisted in a Secret
+	// per MiniService instance instead of a local emptyDir cache on the agent. The field is
+	// retained and defaulted so existing NVCFBackend objects continue to validate.
+	CacheDirSize *resource.Quantity `json:"cacheDirSize"`
 }
 
 const (

@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
@@ -195,9 +194,6 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 			}
 			c, _ := newFakeClient(testScheme, objs...)
 
-			cc := chartcache.New(t.TempDir())
-			require.NoError(t, cc.Start(ctx))
-
 			r := &Reconciler{
 				ControllerOptions: ControllerOptions{
 					FeatureFlagFetcher: &featureflagmock.Fetcher{
@@ -206,9 +202,8 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 						},
 					},
 				},
-				Client:     c,
-				chartCache: cc,
-				now:        func() time.Time { return fixedTime },
+				Client: c,
+				now:    func() time.Time { return fixedTime },
 			}
 
 			err := r.prepareUpdateIfNeeded(ctx, ms)
@@ -485,8 +480,6 @@ func TestRevisionUpgradeCycle(t *testing.T) {
 	}
 
 	c, _ := newFakeClient(testScheme, ms, ns)
-	cc := chartcache.New(t.TempDir())
-	require.NoError(t, cc.Start(ctx))
 
 	r := &Reconciler{
 		ControllerOptions: ControllerOptions{
@@ -496,9 +489,8 @@ func TestRevisionUpgradeCycle(t *testing.T) {
 				},
 			},
 		},
-		Client:     c,
-		chartCache: cc,
-		now:        func() time.Time { return fixedTime },
+		Client: c,
+		now:    func() time.Time { return fixedTime },
 	}
 
 	// Step 1: save revision 0 after initial install.

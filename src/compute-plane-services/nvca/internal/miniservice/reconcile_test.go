@@ -27,6 +27,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,7 +72,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	k8smock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil/mock"
@@ -279,7 +279,6 @@ func TestReconcile_Function(t *testing.T) {
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
 		eventRecorder:         record.NewFakeRecorder(256),
-		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
 		newPermissionsChecker: newFakePermissionsChecker,
@@ -336,9 +335,6 @@ func TestReconcile_Function(t *testing.T) {
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
 	require.NoError(t, err)
 	r.cfg.Workload.Tolerations = []corev1.Toleration{configuredToleration}
-
-	err = r.chartCache.Start(ctx)
-	require.NoError(t, err)
 
 	helmObjs := []client.Object{
 		&appsv1.Deployment{
@@ -897,6 +893,10 @@ rules:
 	gotSecrets := &corev1.SecretList{}
 	err = r.Client.List(ctx, gotSecrets, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
+	// The rendered chart Secret is asserted separately.
+	gotSecrets.Items = slices.DeleteFunc(gotSecrets.Items, func(s corev1.Secret) bool {
+		return s.Name == RenderedSecretName
+	})
 	require.Len(t, gotSecrets.Items, 4)
 	sort.Slice(gotSecrets.Items, func(i, j int) bool {
 		return gotSecrets.Items[i].Name < gotSecrets.Items[j].Name
@@ -1337,7 +1337,6 @@ func TestReconcile_Function_SaveRevisionHistoryFails(t *testing.T) {
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
 		eventRecorder:         record.NewFakeRecorder(256),
-		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
 		newPermissionsChecker: newFakePermissionsChecker,
@@ -1349,8 +1348,6 @@ func TestReconcile_Function_SaveRevisionHistoryFails(t *testing.T) {
 
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	require.NoError(t, k8sutil.SetConfigDefaultResources(&r.cfg))
-
-	require.NoError(t, r.chartCache.Start(ctx))
 
 	helmObjs := []client.Object{
 		&appsv1.Deployment{
@@ -1920,7 +1917,6 @@ func testReconcileNVLinkOptimizedHelper(
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
 		eventRecorder:         record.NewFakeRecorder(256),
-		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
 		newPermissionsChecker: newFakePermissionsChecker,
@@ -1934,9 +1930,6 @@ func testReconcileNVLinkOptimizedHelper(
 
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
-	require.NoError(t, err)
-
-	err = r.chartCache.Start(ctx)
 	require.NoError(t, err)
 
 	objBytes, err := json.MarshalIndent(helmObjs, "", "  ")
@@ -2312,7 +2305,6 @@ func TestReconcile_Task(t *testing.T) {
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
 		eventRecorder:         record.NewFakeRecorder(256),
-		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
 		newPermissionsChecker: newFakePermissionsChecker,
@@ -2362,9 +2354,6 @@ func TestReconcile_Task(t *testing.T) {
 		DropLabels: []string{"metric_subset_enabled", "custom_label"},
 	}
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
-	require.NoError(t, err)
-
-	err = r.chartCache.Start(ctx)
 	require.NoError(t, err)
 
 	helmObjs := []client.Object{
@@ -2838,6 +2827,10 @@ rules:
 	gotSecrets := &corev1.SecretList{}
 	err = r.Client.List(ctx, gotSecrets, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
+	// The rendered chart Secret is asserted separately.
+	gotSecrets.Items = slices.DeleteFunc(gotSecrets.Items, func(s corev1.Secret) bool {
+		return s.Name == RenderedSecretName
+	})
 	require.Len(t, gotSecrets.Items, 4)
 	sort.Slice(gotSecrets.Items, func(i, j int) bool {
 		return gotSecrets.Items[i].Name < gotSecrets.Items[j].Name
@@ -3110,7 +3103,6 @@ func TestReconcile_TaskStatus(t *testing.T) {
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
 		eventRecorder:         fakeRecorder,
-		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
 		newPermissionsChecker: newFakePermissionsChecker,
@@ -3124,9 +3116,6 @@ func TestReconcile_TaskStatus(t *testing.T) {
 
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
-	require.NoError(t, err)
-
-	err = r.chartCache.Start(ctx)
 	require.NoError(t, err)
 
 	tgps := int64((2 * time.Hour).Seconds())
@@ -4153,11 +4142,9 @@ func TestDoUpdateWorkload(t *testing.T) {
 			},
 			Client:                c,
 			Decoder:               serializer.NewCodecFactory(testScheme).UniversalDeserializer(),
-			chartCache:            chartcache.New(t.TempDir()),
 			newPermissionsChecker: newFakePermissionsChecker,
 			now:                   time.Now,
 		}
-		require.NoError(t, r.chartCache.Start(ctx))
 		return r
 	}
 
@@ -4167,7 +4154,7 @@ func TestDoUpdateWorkload(t *testing.T) {
 		r := newReconciler(t, c)
 		ms := newMiniService()
 		icmsReq := newICMSRequest()
-		require.NoError(t, r.saveRenderedData(ctx, ms, newRenderedObjectsData(t)))
+		r.saveRenderedData(ctx, ms, newRenderedObjectsData(t))
 
 		return r, ms, icmsReq
 	}
@@ -5027,89 +5014,6 @@ func TestEnsureInstanceNamespace_TerminatingRequeues(t *testing.T) {
 // namespace, so two MiniServices with different namespaces produce different
 // cache keys. This prevents rendered output from namespace A being incorrectly
 // returned for namespace B when deployments happen close together.
-func TestGetCacheKey_NamespaceIncluded(t *testing.T) {
-	var servicePort int32 = 8080
-
-	// Create two MiniServices with DIFFERENT namespaces but SAME chart configuration
-	msNamespaceA := &v1alpha1.MiniService{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "miniservice-a",
-		},
-		Spec: v1alpha1.MiniServiceSpec{
-			Namespace:       "sr-9dee7e5a-843d-44ae-bcec-1b4b23dea297", // Namespace A
-			ICMSRequestName: "request-a",
-			HelmChartConfig: common.HelmConfig{
-				URL:         "oci://helm.ngc.nvidia.com/org/team/srtx-benchmarks:0.0.8",
-				ServicePort: &servicePort,
-				ServiceName: "nvcf-service",
-				Values:      []byte(`{"global":{"replicaCount":3}}`),
-			},
-		},
-	}
-
-	msNamespaceB := &v1alpha1.MiniService{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "miniservice-b",
-		},
-		Spec: v1alpha1.MiniServiceSpec{
-			Namespace:       "sr-bb09f1cb-3277-4ce1-b9a1-a904a88bc900", // Namespace B (DIFFERENT!)
-			ICMSRequestName: "request-b",
-			HelmChartConfig: common.HelmConfig{
-				URL:         "oci://helm.ngc.nvidia.com/org/team/srtx-benchmarks:0.0.8", // Same chart
-				ServicePort: &servicePort,                                               // Same port
-				ServiceName: "nvcf-service",                                             // Same service
-				Values:      []byte(`{"global":{"replicaCount":3}}`),                    // Same values
-			},
-		},
-	}
-
-	// Get cache keys for both MiniServices
-	cacheKeyA := getCacheKey(msNamespaceA)
-	cacheKeyB := getCacheKey(msNamespaceB)
-
-	t.Run("different namespaces produce different cache keys", func(t *testing.T) {
-		// Verify the namespaces are actually different (test setup validation)
-		require.NotEqual(t, msNamespaceA.Spec.Namespace, msNamespaceB.Spec.Namespace,
-			"Test setup error: namespaces should be different")
-
-		// FIXED: Different namespaces now produce different cache keys
-		assert.NotEqual(t, cacheKeyA, cacheKeyB,
-			"MiniServices with different namespaces (%s vs %s) should produce different cache keys. "+
-				"This ensures rendered output with .Release.Namespace from namespace A is not "+
-				"incorrectly returned for namespace B.",
-			msNamespaceA.Spec.Namespace, msNamespaceB.Spec.Namespace)
-
-		// Verify namespace is included in the cache input
-		assert.Equal(t, msNamespaceA.Spec.Namespace, cacheKeyA.Namespace,
-			"Cache key should include the namespace")
-		assert.Equal(t, msNamespaceB.Spec.Namespace, cacheKeyB.Namespace,
-			"Cache key should include the namespace")
-	})
-
-	t.Run("same namespace and config produces same cache key", func(t *testing.T) {
-		// Two MiniServices with the same namespace and config should share cache
-		msSameNamespace := &v1alpha1.MiniService{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "miniservice-c",
-			},
-			Spec: v1alpha1.MiniServiceSpec{
-				Namespace:       msNamespaceA.Spec.Namespace, // Same namespace as A
-				ICMSRequestName: "request-c",
-				HelmChartConfig: common.HelmConfig{
-					URL:         "oci://helm.ngc.nvidia.com/org/team/srtx-benchmarks:0.0.8",
-					ServicePort: &servicePort,
-					ServiceName: "nvcf-service",
-					Values:      []byte(`{"global":{"replicaCount":3}}`),
-				},
-			},
-		}
-
-		cacheKeySameNS := getCacheKey(msSameNamespace)
-		assert.Equal(t, cacheKeyA, cacheKeySameNS,
-			"MiniServices with the same namespace and config should produce the same cache key")
-	})
-}
-
 func TestUtilsPodGXCacheSkipAnnotation(t *testing.T) {
 	tests := []struct {
 		name               string

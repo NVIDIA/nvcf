@@ -235,7 +235,6 @@ func testController(t *testing.T, tc controllerTestCase) {
 			"1.2.3",
 			metrics.WithRegisterer(prometheus.NewRegistry()),
 		),
-		cacheDir: t.TempDir(),
 	}
 
 	cfg := nvcaconfig.Config{

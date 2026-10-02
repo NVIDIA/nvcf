@@ -54,7 +54,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
@@ -125,9 +124,6 @@ type ControllerOptions struct {
 	// NsightProfilingAllowlist tracks which functions should have NVIDIA Nsight GPU
 	// profiling enabled. Shared with BackendK8sCache.
 	NsightProfilingAllowlist *profiling.Allowlist
-
-	// Internal use.
-	cacheDir string
 }
 
 // Only Get is needed here.
@@ -137,8 +133,6 @@ type registrationInstanceTypeCache interface {
 
 const (
 	controllerName = "miniservice-controller"
-
-	defaultCacheDir = "/var/run/nvca/reval-rendered-helmcharts"
 )
 
 func BuildController(ctx context.Context,
@@ -150,10 +144,6 @@ func BuildController(ctx context.Context,
 	enabledAttrs featureflag.Attributes,
 	opts ControllerOptions,
 ) error {
-	if opts.cacheDir == "" {
-		opts.cacheDir = defaultCacheDir
-	}
-
 	gvkc := newGVKCache(mgr.GetScheme())
 	gvkc.PrePopulate(&corev1.Pod{}, podGVK)
 	gvkc.PrePopulate(&appsv1.Deployment{}, deploymentGVK)
@@ -188,7 +178,6 @@ func BuildController(ctx context.Context,
 		Decoder:           newFlexibleDecoder(mgr.GetScheme(), extraGVKs...),
 		NFClient:          nflient,
 		eventRecorder:     mgr.GetEventRecorderFor(controllerName),
-		chartCache:        chartcache.New(opts.cacheDir),
 		regITCache:        regITCache,
 		enabledAttrs:      enabledAttrs,
 		gvkCache:          gvkc,
@@ -243,10 +232,6 @@ func BuildController(ctx context.Context,
 			return fmt.Errorf("new karta defined object status checker: %w", err)
 		}
 		r.statusCheckers[kartaGVKToSchemaGVK(*karta.Spec.StructureDefinition.RootComponent.Kind)] = checker
-	}
-
-	if err := mgr.Add(r.chartCache); err != nil {
-		return fmt.Errorf("add local chart cache: %v", err)
 	}
 
 	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {

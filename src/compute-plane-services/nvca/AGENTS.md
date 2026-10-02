@@ -330,7 +330,7 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 5. **Local vs CI** - local tests may pass but CI may have additional checks
 6. **Queue message idempotency** - handlers may receive duplicate messages
 7. **Storage controller timing** - PVC operations are async, handle races carefully
-8. **MiniService chartcache key must include namespace** - The `chartcache.ChartCacheInput` struct (in `internal/miniservice/chartcache/`) is used to generate cache keys for rendered Helm charts. Any field that affects the Helm template output (e.g., `.Release.Namespace`) MUST be included in this struct. If namespace is missing from the cache key, cached output from namespace A can be incorrectly returned for namespace B. When adding new fields to `HelmReValRenderInput` that affect rendering, also add them to `ChartCacheInput` and update `getCacheKey()` in `reconcile.go`.
+8. **MiniService rendered charts are persisted in a Secret** - After a successful ReVal render, the controller stores the output in the `nvcf-miniservice-rendered` Secret in the instance namespace (`internal/miniservice/rendered_secret.go`), like a Helm release record. Status checks, updates, and cleanup read from that Secret (and an in-memory copy) and never re-render while the inputs are unchanged. The Secret is validated by a render-input hash and a render-output hash (`status.renderedDetails.hash`). Any new `HelmReValRenderInput` field that affects template output MUST be added to `renderInput` so a stored render is not reused for different inputs.
 
 ## Code Generation Triggers
 
