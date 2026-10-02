@@ -1,0 +1,296 @@
+diff --git a/deploy/helm/llm-gateway-stack/scripts/check-render.sh b/deploy/helm/llm-gateway-stack/scripts/check-render.sh
+index 7606cbd983d30794d12200b660bc52a14a01804f..4e6d6dc062da7733855d1ae2f8624b23dbcbab4f 100755
+--- a/deploy/helm/llm-gateway-stack/scripts/check-render.sh
++++ b/deploy/helm/llm-gateway-stack/scripts/check-render.sh
+@@ -82,7 +82,7 @@ count() {  # count <manifest> <kind> <name>
+ }
+ 
+ deployment() {  # deployment <manifest> <name> <expression>
+-  yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$2\") | $3" "$1"
++  yq -o=json -I=0 "select(.kind == \"Deployment\" and .metadata.name == \"$2\")" "$1" | jq -r "$3"
+ }
+ 
+ secret_value() {  # secret_value <manifest> <secret> <key>: decoded value
+@@ -106,7 +106,7 @@ has_env() {  # has_env <manifest> <deployment> <name>
+ }
+ 
+ gateway_config() {  # gateway_config <manifest> <key>: ConfigMap value, or the empty string
+-  yq -r "select(.kind == \"ConfigMap\" and .metadata.name == \"${gateway}\") | .data.$2 // \"\"" "$1"
++  yq -o=json -I=0 "select(.kind == \"ConfigMap\" and .metadata.name == \"${gateway}\")" "$1" | jq -r ".data.$2 // \"\""
+ }
+ 
+ gateway_config_has() {  # gateway_config_has <manifest> <key>
+@@ -118,11 +118,11 @@ volume_secret() {  # volume_secret <manifest> <deployment> <volume>: Secret name
+ }
+ 
+ vault_annotations() {  # vault_annotations <manifest> <deployment>
+-  deployment "$1" "$2" '(.spec.template.metadata.annotations // {}) | keys | map(select(test("^vault\.hashicorp\.com/"))) | length'
++  deployment "$1" "$2" '(.spec.template.metadata.annotations // {}) | keys | map(select(test("^vault[.]hashicorp[.]com/"))) | length'
+ }
+ 
+ san_annotation() {  # san_annotation <manifest> <secret>
+-  yq -r "select(.kind == \"Secret\" and .metadata.name == \"$2\") | .metadata.annotations[\"llm-gateway-stack.nvidia.com/subject-alt-names\"] // \"\"" "$1"
++  yq -o=json -I=0 "select(.kind == \"Secret\" and .metadata.name == \"$2\")" "$1" | jq -r '.metadata.annotations["llm-gateway-stack.nvidia.com/subject-alt-names"] // ""'
+ }
+ 
+ assert_pem() {  # assert_pem <label> <expected block type> <value>
+diff --git a/deploy/helm/pylon-operator/README.md b/deploy/helm/pylon-operator/README.md
+index 20be7584f6e5b4471ecdecf075d515aacc9d6fe4..098a983992f3b7f7cab8929abe32cc7b9855c1a6 100644
+--- a/deploy/helm/pylon-operator/README.md
++++ b/deploy/helm/pylon-operator/README.md
+@@ -24,6 +24,19 @@ The chart installs:
+ To run this chart with the LLM gateway stack on a local k3d cluster, see the
+ [Inference Endpoints quickstart](../../../docs/dev/inference-endpoints-quickstart.md).
+ 
++## Endpoint canary timing
++
++Pylon checks inference during bringup, recovery, and normal operation. Slow models or a backend with one inference slot can need more time because a canary waits behind an active request. Set `spec.canary` on that `InferenceEndpoint` to override its timeout and check interval:
++
++```yaml
++spec:
++  canary:
++    timeoutSeconds: 180
++    intervalSeconds: 60
++```
++
++Omitted fields use Pylon's defaults and leave other endpoints unchanged. The timeout must be between 1 and 300 seconds. The interval must be between 1 and 3600 seconds. These settings retain inference checks and the existing generation limit.
++
+ ## Prerequisites
+ 
+ - Kubernetes cluster and Helm 3.x
+diff --git a/deploy/helm/pylon-operator/pylon-operator/templates/crds/pylon.nvidia.com_inferenceendpoints.yaml b/deploy/helm/pylon-operator/pylon-operator/templates/crds/pylon.nvidia.com_inferenceendpoints.yaml
+index c37fcf4d8d7fc547d2ee097fae0952a6281da993..9ca6c052b7b8eb676321bd96d0dfb00c20ad80e0 100644
+--- a/deploy/helm/pylon-operator/pylon-operator/templates/crds/pylon.nvidia.com_inferenceendpoints.yaml
++++ b/deploy/helm/pylon-operator/pylon-operator/templates/crds/pylon.nvidia.com_inferenceendpoints.yaml
+@@ -70,6 +70,27 @@ spec:
+           spec:
+             description: InferenceEndpointSpec is the desired state of an InferenceEndpoint.
+             properties:
++              canary:
++                description: Canary optionally overrides inference check timing for
++                  this endpoint.
++                properties:
++                  intervalSeconds:
++                    description: |-
++                      IntervalSeconds is the period between active inference checks.
++                      When omitted, Pylon uses its default interval. Checks cannot be disabled.
++                    format: int32
++                    maximum: 3600
++                    minimum: 1
++                    type: integer
++                  timeoutSeconds:
++                    description: |-
++                      TimeoutSeconds bounds a canary request, including backend queue time.
++                      When omitted, Pylon uses its default timeout.
++                    format: int32
++                    maximum: 300
++                    minimum: 1
++                    type: integer
++                type: object
+               gpu:
+                 description: GPU optionally overrides the GPU type derived from node
+                   labels.
+diff --git a/src/compute-plane-services/pylon-operator/api/v1alpha1/inferenceendpoint_types.go b/src/compute-plane-services/pylon-operator/api/v1alpha1/inferenceendpoint_types.go
+index 98430b9a9b869502b8838e0245845c7b1b2130e2..309328307e5e38e531908198aea4ff219bebb941 100644
+--- a/src/compute-plane-services/pylon-operator/api/v1alpha1/inferenceendpoint_types.go
++++ b/src/compute-plane-services/pylon-operator/api/v1alpha1/inferenceendpoint_types.go
+@@ -62,6 +62,23 @@ type HealthCheck struct {
+ 	Path string `json:"path"`
+ }
+ 
++// CanarySpec overrides the timing of Pylon's inference health checks.
++type CanarySpec struct {
++	// TimeoutSeconds bounds a canary request, including backend queue time.
++	// When omitted, Pylon uses its default timeout.
++	// +kubebuilder:validation:Minimum=1
++	// +kubebuilder:validation:Maximum=300
++	// +optional
++	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
++
++	// IntervalSeconds is the period between active inference checks.
++	// When omitted, Pylon uses its default interval. Checks cannot be disabled.
++	// +kubebuilder:validation:Minimum=1
++	// +kubebuilder:validation:Maximum=3600
++	// +optional
++	IntervalSeconds *int32 `json:"intervalSeconds,omitempty"`
++}
++
+ // GPUSpec carries an explicit GPU type for status.gpu.
+ type GPUSpec struct {
+ 	// Product is the GPU product name reported in status.gpu, for example
+@@ -90,6 +107,10 @@ type InferenceEndpointSpec struct {
+ 	// +required
+ 	Health HealthCheck `json:"health"`
+ 
++	// Canary optionally overrides inference check timing for this endpoint.
++	// +optional
++	Canary *CanarySpec `json:"canary,omitempty"`
++
+ 	// MaxEngineConcurrency is a concurrency hint for Pylon's queue estimate.
+ 	// +kubebuilder:validation:Minimum=1
+ 	// +optional
+diff --git a/src/compute-plane-services/pylon-operator/api/v1alpha1/zz_generated.deepcopy.go b/src/compute-plane-services/pylon-operator/api/v1alpha1/zz_generated.deepcopy.go
+index d9355ba928be5451c3cf765aab4e19dc7894b499..aff49c6266b81e9f561357936d7fed27508656f1 100644
+--- a/src/compute-plane-services/pylon-operator/api/v1alpha1/zz_generated.deepcopy.go
++++ b/src/compute-plane-services/pylon-operator/api/v1alpha1/zz_generated.deepcopy.go
+@@ -26,6 +26,31 @@ import (
+ 	runtime "k8s.io/apimachinery/pkg/runtime"
+ )
+ 
++// DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
++func (in *CanarySpec) DeepCopyInto(out *CanarySpec) {
++	*out = *in
++	if in.TimeoutSeconds != nil {
++		in, out := &in.TimeoutSeconds, &out.TimeoutSeconds
++		*out = new(int32)
++		**out = **in
++	}
++	if in.IntervalSeconds != nil {
++		in, out := &in.IntervalSeconds, &out.IntervalSeconds
++		*out = new(int32)
++		**out = **in
++	}
++}
++
++// DeepCopy is an autogenerated deepcopy function, copying the receiver, creating a new CanarySpec.
++func (in *CanarySpec) DeepCopy() *CanarySpec {
++	if in == nil {
++		return nil
++	}
++	out := new(CanarySpec)
++	in.DeepCopyInto(out)
++	return out
++}
++
+ // DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
+ func (in *GPUSpec) DeepCopyInto(out *GPUSpec) {
+ 	*out = *in
+@@ -156,6 +181,11 @@ func (in *InferenceEndpointSpec) DeepCopyInto(out *InferenceEndpointSpec) {
+ 	out.InferenceAPIFormat = in.InferenceAPIFormat
+ 	out.Service = in.Service
+ 	out.Health = in.Health
++	if in.Canary != nil {
++		in, out := &in.Canary, &out.Canary
++		*out = new(CanarySpec)
++		(*in).DeepCopyInto(*out)
++	}
+ 	if in.MaxEngineConcurrency != nil {
+ 		in, out := &in.MaxEngineConcurrency, &out.MaxEngineConcurrency
+ 		*out = new(int32)
+diff --git a/src/compute-plane-services/pylon-operator/config/crd/bases/pylon.nvidia.com_inferenceendpoints.yaml b/src/compute-plane-services/pylon-operator/config/crd/bases/pylon.nvidia.com_inferenceendpoints.yaml
+index 183a73f9c56d7af3fb5003a44c4bf3e85fe57a44..a1b8ef02834abb852a7cd532cea23e95ccf7d68c 100644
+--- a/src/compute-plane-services/pylon-operator/config/crd/bases/pylon.nvidia.com_inferenceendpoints.yaml
++++ b/src/compute-plane-services/pylon-operator/config/crd/bases/pylon.nvidia.com_inferenceendpoints.yaml
+@@ -62,6 +62,27 @@ spec:
+           spec:
+             description: InferenceEndpointSpec is the desired state of an InferenceEndpoint.
+             properties:
++              canary:
++                description: Canary optionally overrides inference check timing for
++                  this endpoint.
++                properties:
++                  intervalSeconds:
++                    description: |-
++                      IntervalSeconds is the period between active inference checks.
++                      When omitted, Pylon uses its default interval. Checks cannot be disabled.
++                    format: int32
++                    maximum: 3600
++                    minimum: 1
++                    type: integer
++                  timeoutSeconds:
++                    description: |-
++                      TimeoutSeconds bounds a canary request, including backend queue time.
++                      When omitted, Pylon uses its default timeout.
++                    format: int32
++                    maximum: 300
++                    minimum: 1
++                    type: integer
++                type: object
+               gpu:
+                 description: GPU optionally overrides the GPU type derived from node
+                   labels.
+diff --git a/src/compute-plane-services/pylon-operator/internal/integration/integration_test.go b/src/compute-plane-services/pylon-operator/internal/integration/integration_test.go
+index 13bc19735d62c51b80c01c53dc7d5fae52871031..1660e8c80ed33ba381aac6c3207f04a736fc4689 100644
+--- a/src/compute-plane-services/pylon-operator/internal/integration/integration_test.go
++++ b/src/compute-plane-services/pylon-operator/internal/integration/integration_test.go
+@@ -149,6 +149,7 @@ func TestCRDValidation(t *testing.T) {
+ 	valid := newEndpoint(ns, "valid")
+ 	valid.Spec.MaxEngineConcurrency = ptr.To[int32](8)
+ 	valid.Spec.GPU = &pylonv1alpha1.GPUSpec{Product: "NVIDIA-GB10"}
++	valid.Spec.Canary = &pylonv1alpha1.CanarySpec{TimeoutSeconds: ptr.To[int32](180), IntervalSeconds: ptr.To[int32](60)}
+ 	require.NoError(t, k8sClient.Create(ctx, valid))
+ 
+ 	tests := []struct {
+@@ -164,6 +165,18 @@ func TestCRDValidation(t *testing.T) {
+ 		{name: "relative health path", mutate: func(e *pylonv1alpha1.InferenceEndpoint) { e.Spec.Health.Path = "health" }, field: "spec.health.path"},
+ 		{name: "empty health path", mutate: func(e *pylonv1alpha1.InferenceEndpoint) { e.Spec.Health.Path = "" }, field: "spec.health.path"},
+ 		{name: "zero concurrency", mutate: func(e *pylonv1alpha1.InferenceEndpoint) { e.Spec.MaxEngineConcurrency = ptr.To[int32](0) }, field: "spec.maxEngineConcurrency"},
++		{name: "zero canary timeout", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
++			e.Spec.Canary = &pylonv1alpha1.CanarySpec{TimeoutSeconds: ptr.To[int32](0)}
++		}, field: "spec.canary.timeoutSeconds"},
++		{name: "excessive canary timeout", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
++			e.Spec.Canary = &pylonv1alpha1.CanarySpec{TimeoutSeconds: ptr.To[int32](301)}
++		}, field: "spec.canary.timeoutSeconds"},
++		{name: "disabled active canary", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
++			e.Spec.Canary = &pylonv1alpha1.CanarySpec{IntervalSeconds: ptr.To[int32](0)}
++		}, field: "spec.canary.intervalSeconds"},
++		{name: "excessive canary interval", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
++			e.Spec.Canary = &pylonv1alpha1.CanarySpec{IntervalSeconds: ptr.To[int32](3601)}
++		}, field: "spec.canary.intervalSeconds"},
+ 	}
+ 	for i, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+diff --git a/src/compute-plane-services/pylon-operator/internal/transport/render.go b/src/compute-plane-services/pylon-operator/internal/transport/render.go
+index 8a58c9f5211e4c1e950341376d2414f14d45ac9a..adab6881178fc8b12407ac0ca0905ea57266b5e8 100644
+--- a/src/compute-plane-services/pylon-operator/internal/transport/render.go
++++ b/src/compute-plane-services/pylon-operator/internal/transport/render.go
+@@ -170,6 +170,14 @@ func Args(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) []string {
+ 	if ep.Spec.MaxEngineConcurrency != nil {
+ 		args = append(args, fmt.Sprintf("--max-engine-concurrency=%d", *ep.Spec.MaxEngineConcurrency))
+ 	}
++	if ep.Spec.Canary != nil {
++		if timeout := ep.Spec.Canary.TimeoutSeconds; timeout != nil {
++			args = append(args, fmt.Sprintf("--bringup-canary-timeout-ms=%d", int64(*timeout)*1000))
++		}
++		if interval := ep.Spec.Canary.IntervalSeconds; interval != nil {
++			args = append(args, fmt.Sprintf("--active-canary-interval-ms=%d", int64(*interval)*1000))
++		}
++	}
+ 	args = append(args, "--initial-input-tps="+strconv.FormatFloat(cfg.InitialInputTPS, 'f', -1, 64))
+ 	if cfg.DevInsecureTransport {
+ 		args = append(args, "--quic-insecure")
+diff --git a/src/compute-plane-services/pylon-operator/internal/transport/render_test.go b/src/compute-plane-services/pylon-operator/internal/transport/render_test.go
+index 09716fad33e98586feb309a7f6ff12e9801f807a..46164f60442128dd527763e96e465c62e5bd299e 100644
+--- a/src/compute-plane-services/pylon-operator/internal/transport/render_test.go
++++ b/src/compute-plane-services/pylon-operator/internal/transport/render_test.go
+@@ -64,6 +64,30 @@ func endpoint() *pylonv1alpha1.InferenceEndpoint {
+ 	return endpointNamed(testNamespace, testName, testUID)
+ }
+ 
++func TestCanaryTimingIsScopedToEndpoint(t *testing.T) {
++	cfg := testConfig()
++	original := endpoint()
++	base := Deployment(original, cfg, 1)
++	custom := original.DeepCopy()
++	custom.Spec.Canary = &pylonv1alpha1.CanarySpec{
++		TimeoutSeconds:  ptr.To(int32(180)),
++		IntervalSeconds: ptr.To(int32(60)),
++	}
++	args := Args(custom, cfg)
++	assert.Contains(t, args, "--bringup-canary-timeout-ms=180000")
++	assert.Contains(t, args, "--active-canary-interval-ms=60000")
++	assert.NotEqual(t, base.Spec.Template.Annotations[SpecHashAnnotation], Deployment(custom, cfg, 1).Spec.Template.Annotations[SpecHashAnnotation])
++	assert.Equal(t, base.Spec.Template, Deployment(original, cfg, 1).Spec.Template)
++	custom.Spec.Canary = &pylonv1alpha1.CanarySpec{}
++	assert.Equal(t, base.Spec.Template, Deployment(custom, cfg, 1).Spec.Template)
++	custom.Spec.Canary.TimeoutSeconds = ptr.To(int32(30))
++	assert.Contains(t, Args(custom, cfg), "--bringup-canary-timeout-ms=30000")
++	assert.NotContains(t, strings.Join(Args(custom, cfg), " "), "--active-canary-interval-ms")
++	custom.Spec.Canary = &pylonv1alpha1.CanarySpec{IntervalSeconds: ptr.To(int32(90))}
++	assert.Contains(t, Args(custom, cfg), "--active-canary-interval-ms=90000")
++	assert.NotContains(t, strings.Join(Args(custom, cfg), " "), "--bringup-canary-timeout-ms")
++}
++
+ func endpointNamed(namespace, name string, uid types.UID) *pylonv1alpha1.InferenceEndpoint {
+ 	return &pylonv1alpha1.InferenceEndpoint{
+ 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: uid, Generation: 1},
