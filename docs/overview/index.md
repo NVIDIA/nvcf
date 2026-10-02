@@ -2,7 +2,7 @@
 
 {/*docs-version-sync:BEGIN edition-overview*/}
 
-Docs edition `1.0.0`. Development candidate.
+Docs edition `1.0.1`. Development candidate.
 
 | Stack | Artifact version |
 | --- | --- |

@@ -2,7 +2,7 @@
 
 {/*docs-version-sync:BEGIN edition-control-plane*/}
 
-Docs edition `1.0.0` | Self-managed (control plane) `1.0.1` | Development candidate.
+Docs edition `1.0.1` | Self-managed (control plane) `1.0.1` | Development candidate.
 
 {/*docs-version-sync:END edition-control-plane*/}
 
