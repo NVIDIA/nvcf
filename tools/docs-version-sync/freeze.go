@@ -25,6 +25,9 @@ func freezeStackDocumentation(repoRoot, catalogPath, stack, version string) (str
 	if err != nil {
 		return "", err
 	}
+	if catalog.DocsEdition != nil {
+		return "", fmt.Errorf("docs edition catalogs use branch releases; per-stack folder snapshots are disabled")
+	}
 	metadata, err := catalog.ReleaseSet.Stacks.byName(stack)
 	if err != nil {
 		return "", err

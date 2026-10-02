@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use kube::runtime::WatchStreamExt;
 use kube::runtime::watcher::{self, Event};
 use kube::{Api, Client, ResourceExt};
 use tokio::sync::watch;
@@ -40,10 +41,13 @@ pub async fn run_endpoint_slice_watcher(
         "{}={}",
         ENDPOINT_SLICE_SERVICE_NAME_LABEL, build_config.service_name
     );
-    let mut events = Box::pin(watcher::watcher(
-        Api::<EndpointSlice>::namespaced(client, &namespace),
-        watcher::Config::default().labels(&selector),
-    ));
+    let mut events = Box::pin(
+        watcher::watcher(
+            Api::<EndpointSlice>::namespaced(client, &namespace),
+            watcher::Config::default().labels(&selector),
+        )
+        .default_backoff(),
+    );
     let mut state = WatcherState::new(build_config);
 
     loop {
@@ -195,6 +199,63 @@ mod tests {
                 ..Endpoint::default()
             }],
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn persistent_api_errors_back_off_before_retrying() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use std::time::Duration;
+        use tokio::sync::Notify;
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let first = Arc::new(Notify::new());
+        let second = Arc::new(Notify::new());
+        let service = tower::service_fn({
+            let requests = requests.clone();
+            let first = first.clone();
+            let second = second.clone();
+            move |_request: http::Request<kube::client::Body>| {
+                match requests.fetch_add(1, Ordering::SeqCst) {
+                    0 => first.notify_one(),
+                    1 => second.notify_one(),
+                    _ => {}
+                }
+                async {
+                    Ok::<_, std::io::Error>(http::Response::builder().status(403)
+                        .header("content-type", "application/json")
+                        .body(kube::client::Body::from(bytes::Bytes::from_static(
+                            br#"{"status":"Failure","message":"denied","reason":"Forbidden","code":403}"#,
+                        ))).unwrap())
+                }
+            }
+        });
+        let client = Client::new(service, "test");
+        let (tx, _rx) = watch::channel(TargetSnapshot::default());
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(run_endpoint_slice_watcher(
+            client,
+            "test".into(),
+            TargetBuildConfig {
+                service_name: "stargate".into(),
+                grpc_port_name: "grpc".into(),
+                quic_port_name: "quic".into(),
+            },
+            tx,
+            stop.clone(),
+        ));
+        first.notified().await;
+        let immediate_retry =
+            tokio::time::timeout(Duration::from_millis(100), second.notified()).await;
+        stop.cancel();
+        task.await.unwrap().unwrap();
+        assert!(
+            immediate_retry.is_err(),
+            "persistent authorization errors must not immediately repoll the API"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -54,6 +54,8 @@ navigation:
     contents:
       - page: Control Plane Operations
         path: ../../../docs/self-managed/control-plane-operations.md
+      - page: OpenBao Patch Upgrade
+        path: ../../../docs/self-managed/runbooks/openbao-patch-upgrade.md
       - page: Troubleshooting
         path: ../../../docs/self-managed/troubleshooting.md
       - page: Key Rotation
