@@ -298,7 +298,7 @@ func SyncDocs(repoRoot string, catalog *Catalog, check bool) error {
 	if len(drifted) > 0 {
 		return fmt.Errorf("%w: %s", ErrCheckFailed, strings.Join(drifted, ", "))
 	}
-	return nil
+	return syncEditionManifest(repoRoot, catalog, check)
 }
 
 func ReplaceMarkedBlock(content, marker, rendered string) (string, bool, error) {

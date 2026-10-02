@@ -18,6 +18,8 @@
 name: Fern Docs CI
 
 on:
+  push:
+    branches: ['docs/releases/**', 'docs/candidates/**']
   pull_request:
     paths:
       - 'docs/**'
@@ -25,6 +27,7 @@ on:
       - 'tools/ci/run-fern'
       - 'tools/ci/check-docs'
       - 'tools/ci/check-doc-version-sync'
+      - 'tools/ci/check-doc-editions'
       - 'tools/ci/preview-docs'
       - 'tools/docs-version-sync/**'
       - 'tools/scripts/test/test-run-fern'
@@ -70,6 +73,9 @@ jobs:
         run: |
           bash tools/scripts/test/test-run-fern
           bash tools/scripts/test/test-preview-docs
+
+      - name: Test docs version and edition tooling
+        run: go test -C tools/docs-version-sync ./...
 
   preview:
     name: Hosted Docs Preview
