@@ -108,5 +108,6 @@ jobs:
           cp fern/edition-preview.yml fern/docs.yml
           go run -C tools/docs-version-sync . edition links --repo "$GITHUB_WORKSPACE"
           echo 'Diagnostic preview: four known legacy links remain strict-check blockers.' >> "$GITHUB_STEP_SUMMARY"
+          ./tools/ci/run-fern check --warnings
           ./tools/ci/run-fern generate --docs --preview --id "$DOCS_PREVIEW_ID" --force | tee "$RUNNER_TEMP/docs-preview.log"
           grep 'Published docs to' "$RUNNER_TEMP/docs-preview.log" >> "$GITHUB_STEP_SUMMARY"
