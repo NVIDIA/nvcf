@@ -119,6 +119,9 @@ test-otel-collector-compatibility:
 test-image-pull-secret-defaults:
 	@bash ./tests/image_pull_secret_defaults_test.sh
 
+test-sibling-image-repositories:
+	@bash ./tests/sibling_image_repositories_test.sh
+
 test-pod-disruption-budget:
 	@bash ./tests/pod_disruption_budget_test.sh
 
