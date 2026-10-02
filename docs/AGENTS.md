@@ -10,57 +10,52 @@ external workspace index.
 
 ## Layout
 
-The published site is one Fern site with four products. Each stack product
-has its own version menu. Overview is unversioned.
+The published site has one docs edition menu and five tabs: Overview,
+Self-Managed, Compute Plane, Observability, and Release Notes. An edition
+records one qualified combination; stack artifact versions remain independent.
 
-The docs edition migration is opt-in until cutover. `fern/edition-preview.yml`
-uses one version menu with Overview, Self-Managed, Compute Plane, Observability,
-and Release Notes tabs from `fern/navigation.yml`. `fern/docs.yml` remains the
-canonical production configuration during this phase. Preserve both builds.
+- `docs/overview/`: shared customer guides, compatibility matrix, manifest,
+  images, and samples. These belong to the selected edition.
+- `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/`: current
+  stack sources, published under Development from `main`.
+- `docs/dev/`: contributor guides. Only pages reached through navigation or
+  a navigated symlink are published.
+- `docs/ngc-managed/`: legacy platform guides reached through Overview.
+- `docs/<stack>-<version>/` and `docs/v*/`: frozen archives. Do not edit these
+  trees without explicit authorization for a historical docs fix.
+- `docs/version-catalog/main.yaml`: current artifact and development edition
+  metadata. `docs/edition-manifest.json` is generated from it.
+- `fern/docs.yml`: canonical edition selector, site settings, and redirects.
+- `fern/editions.yml`: exact release-branch commits used by the canonical site.
+- `fern/navigation.yml`: five-tab navigation for current and prepared editions.
+- `fern/changelog/`: native, dated release-note entries.
+- `fern/products/`: retained navigation for frozen historical routes.
 
-- `docs/overview/`: unversioned shared documentation: compatibility matrix, quickstart, manifest, image mirroring, multi-tenancy, function usage (API, CLI, function and task creation, invocation, LLM gateway), load testing, release-notes index, local development, and shared assets under `images/` and `samples/`.
-- `docs/self-managed/`: top-of-tree Self-Managed Stack (control plane) documentation published as `dev`.
-- `docs/compute-plane/`: top-of-tree Compute Plane Stack documentation published as `dev`.
-- `docs/observability/`: top-of-tree Observability Stack documentation published as `dev`.
-- `docs/<stack>-<version>/`: frozen per-stack documentation for an exact release, for example `docs/observability-1.3.2/`. Do not edit these trees unless the user explicitly asks for a historical docs fix. `docs/self-managed-1.0.1/` is the full pre-split tree carried forward from the 1.0.0 retag and contains compute-plane and observability pages as well.
-- `docs/v*/`: frozen legacy full-tree documentation from before the per-stack split. Same rule: do not edit.
-- `docs/ngc-managed/`: legacy NGC-managed (BYOC) platform documentation, published under Overview.
-- `docs/dev/`: developer and local workflow documentation.
-- `docs/version-catalog/main.yaml`: source of truth for generated artifact versions in top-of-tree docs.
-- `fern/docs.yml`: product and version registry.
-- `fern/products/overview.yml`: Overview navigation.
-- `fern/products/<stack>/dev.yml`: top-of-tree navigation for one stack.
-- `fern/products/<stack>/<version>.yml`: frozen navigation for one stack version. Legacy full-tree versions live under `fern/products/self-managed/`.
+## Navigation and links
 
-A page belongs to exactly one product. Links inside a product stay relative.
-Links to a page in another product use an absolute site path such as
-`/nvcf/self-managed/installation-overview` or `/nvcf/overview/quickstart`,
-because Fern resolves relative links inside the rendering product.
+For current pages, start with `fern/navigation.yml`. Stable editions build
+from their own `docs/releases/X.Y.Z` branch; inspect that branch's navigation
+and source when answering a version-specific question. Historical product
+routes use the matching file under `fern/products/`.
 
-## Navigation
+Confirm each `path:` exists. Treat `href:` as an external destination.
+Use explicit page slugs, and keep section `skip-slug` behavior intact.
+When adding, moving, or removing a current page, update `fern/navigation.yml`.
 
-Prefer the Fern navigation files and the filesystem over static route tables.
-
-1. For top-of-tree docs, start with `fern/products/overview.yml` or `fern/products/<stack>/dev.yml`.
-2. For pinned release docs, use the matching version file under `fern/products/<stack>/`.
-3. Confirm the mapped `path:` exists before answering.
-4. If a nav item uses `href:`, treat it as an external page. Do not invent a local file.
-5. If Fern nav does not answer the question, search with `rg`:
+Use relative source-file links between current pages, including cross-tab
+links, so the selected edition is retained. Use absolute product/version
+URLs only when intentionally linking to a frozen historical version. Preserve
+anchors and downloads. Do not rewrite frozen sources to current destinations.
 
 ```bash
 rg -n "<term>" docs/overview docs/self-managed docs/compute-plane docs/observability docs/dev
 ```
 
-Useful file listing commands:
-
-```bash
-rg --files docs/overview docs/self-managed docs/compute-plane docs/observability docs/dev
-rg --files docs/*-[0-9]* docs/v*
-```
-
 ## Editing
 
-Use the product tree that owns the page for top-of-tree customer docs and `docs/dev/` for developer workflows. Each stack product's default route points to that stack's latest frozen version once one exists, otherwise to `dev`.
+Edit the owning current source tree for customer changes and `docs/dev/` for
+contributor guides. Changes on `main` update Development. Released docs branches
+are immutable; corrections require a new patch edition.
 
 ### Artifact manifest
 
@@ -121,12 +116,11 @@ exact public locations in `publications` and mark unavailable versions in
 `version` so charts, images, and resources with the same name remain distinct.
 Version overrides also require `name` and `type`.
 
-Stacks qualify and freeze documentation independently. When a stack's release
-train is qualified, run `tools/scripts/cut-docs-version.sh` for that stack and
-train. It copies only that stack's tree, adds the version to that product's
-menu in `fern/docs.yml`, and snapshots the catalog. The compatibility matrix in
-`docs/overview/compatibility-matrix.md` is generated and stays current across
-all stacks; it is not frozen.
+Release a docs edition only after the complete three-stack combination is
+qualified. Use `edition prepare` with exact stack versions and a reviewed
+source commit, then protect and register `docs/releases/X.Y.Z`. Do not cut
+per-stack documentation folders or docs release tags. See
+[the edition release and rollback workflow](dev/docs-editions.md).
 
 Generated blocks are marked with comments such as:
 
@@ -162,11 +156,10 @@ The file must exist directly under `fern/`. The helper stages `docs/` and
 CI and local helpers use the pin in `fern/fern.config.json`; CI uses the
 Node version in `fern/.node-version`.
 
-The edition preview also requires Go. It converts current cross-tab links to
-relative file links in the temporary workspace. Keep explicit page slugs in
-`fern/navigation.yml`. Source links retain the product-site form until cutover;
-prepared edition branches contain the converted links. Never run `edition links`
-against frozen documentation trees.
+The edition preview also requires Go. It validates and normalizes current
+cross-tab links in a temporary workspace. Keep explicit page slugs in
+`fern/navigation.yml`. Never run `edition links` against frozen documentation
+trees. `fern/edition-preview.yml` makes Development the default for PR previews.
 
 Check the staged candidate without publishing a preview:
 

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func editionTestCatalog() *Catalog {
@@ -165,6 +167,83 @@ func TestEditionManifestDrift(t *testing.T) {
 	}
 	if err := syncEditionManifest(root, catalog, true); err == nil {
 		t.Fatal("stale manifest accepted")
+	}
+}
+
+func TestEditionGeneratedStackLinksPreserveSelection(t *testing.T) {
+	for _, renderer := range []string{"manifest-artifact-registry-paths", "compatibility-matrix"} {
+		t.Run(renderer, func(t *testing.T) {
+			catalog := loadMainCatalog(t)
+			catalog.DocsEdition = &DocsEdition{Version: "1.0.0", Status: ReleaseSetDevelopment, Change: "initial"}
+			got, err := Render(renderer, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"../self-managed/installation.md", "../compute-plane/cluster-management/index.md", "../observability/observability.md"} {
+				if !strings.Contains(got, "]("+path+")") {
+					t.Errorf("edition output is missing relative stack link %s", path)
+				}
+			}
+			if strings.Contains(got, "](/nvcf/") {
+				t.Error("edition output links to the default edition")
+			}
+			catalog.DocsEdition = nil
+			got, err = Render(renderer, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, slug := range []string{"self-managed", "compute-plane", "observability"} {
+				if !strings.Contains(got, "](/nvcf/"+slug+"/)") {
+					t.Errorf("legacy output changed its %s product link", slug)
+				}
+			}
+		})
+	}
+}
+
+func TestEditionBranchRedirectsUseLocalDefault(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "fern", "docs.yml")
+	writeFile(t, path, `versions:
+  - display-name: Development
+    slug: dev
+    path: navigation.yml
+redirects:
+  - source: /nvcf/dev/manifest
+    destination: /nvcf/dev/overview/manifest
+  - source: /nvcf/self-managed/dev/:slug*
+    destination: /nvcf/dev/self-managed/:slug*
+  - source: /nvcf/v0.5/:slug*
+    destination: /nvcf/self-managed/v0.5/:slug*
+  - source: /external
+    destination: https://example.com/nvcf/dev/overview
+`)
+	if err := writeBranchConfiguration(root, editionPreparation{Version: "1.0.1", Navigation: "navigation.yml"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Redirects []struct{ Source, Destination string } `yaml:"redirects"`
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"/nvcf/dev/manifest":            "/nvcf/overview/manifest",
+		"/nvcf/self-managed/dev/:slug*": "/nvcf/self-managed/:slug*",
+		"/nvcf/v0.5/:slug*":             "/nvcf/self-managed/v0.5/:slug*",
+		"/external":                     "https://example.com/nvcf/dev/overview",
+	}
+	if len(config.Redirects) != len(want) {
+		t.Fatalf("redirect count = %d, want %d", len(config.Redirects), len(want))
+	}
+	for _, redirect := range config.Redirects {
+		if redirect.Destination != want[redirect.Source] {
+			t.Errorf("%s destination = %s, want %s", redirect.Source, redirect.Destination, want[redirect.Source])
+		}
 	}
 }
 

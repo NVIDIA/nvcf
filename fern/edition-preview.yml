@@ -33,7 +33,7 @@ redirects:
 - source: /nvcf/latest/index.html
   destination: /nvcf/overview
 - source: /nvcf/dev/index.html
-  destination: /nvcf/overview
+  destination: /nvcf/dev/overview
 - source: /nvcf/v0.6.0-rc/:slug*
   destination: /nvcf/self-managed/v0.6.0/:slug*
 - source: /nvcf/v0.6.0/:slug*
@@ -57,425 +57,425 @@ redirects:
 - source: /nvcf/overview
   destination: /nvcf/overview/overview
 - source: /nvcf/dev/overview
-  destination: /nvcf/overview/overview
+  destination: /nvcf/dev/overview/overview
 - source: /nvcf/compatibility-matrix
   destination: /nvcf/overview/compatibility-matrix
 - source: /nvcf/dev/compatibility-matrix
-  destination: /nvcf/overview/compatibility-matrix
+  destination: /nvcf/dev/overview/compatibility-matrix
 - source: /nvcf/quickstart
   destination: /nvcf/overview/quickstart
 - source: /nvcf/dev/quickstart
-  destination: /nvcf/overview/quickstart
+  destination: /nvcf/dev/overview/quickstart
 - source: /nvcf/release-notes-overview
   destination: /nvcf/overview/release-notes-overview
 - source: /nvcf/dev/release-notes-overview
-  destination: /nvcf/overview/release-notes-overview
+  destination: /nvcf/dev/overview/release-notes-overview
 - source: /nvcf/infrastructure-sizing
   destination: /nvcf/overview/infrastructure-sizing
 - source: /nvcf/dev/infrastructure-sizing
-  destination: /nvcf/overview/infrastructure-sizing
+  destination: /nvcf/dev/overview/infrastructure-sizing
 - source: /nvcf/manifest
   destination: /nvcf/overview/manifest
 - source: /nvcf/dev/manifest
-  destination: /nvcf/overview/manifest
+  destination: /nvcf/dev/overview/manifest
 - source: /nvcf/image-mirroring
   destination: /nvcf/overview/image-mirroring
 - source: /nvcf/dev/image-mirroring
-  destination: /nvcf/overview/image-mirroring
+  destination: /nvcf/dev/overview/image-mirroring
 - source: /nvcf/architecture-overview
   destination: /nvcf/overview/architecture-overview
 - source: /nvcf/dev/architecture-overview
-  destination: /nvcf/overview/architecture-overview
+  destination: /nvcf/dev/overview/architecture-overview
 - source: /nvcf/local-development
   destination: /nvcf/overview/local-development
 - source: /nvcf/dev/local-development
-  destination: /nvcf/overview/local-development
+  destination: /nvcf/dev/overview/local-development
 - source: /nvcf/single-cluster-cli
   destination: /nvcf/overview/single-cluster-cli
 - source: /nvcf/dev/single-cluster-cli
-  destination: /nvcf/overview/single-cluster-cli
+  destination: /nvcf/dev/overview/single-cluster-cli
 - source: /nvcf/single-cluster-helmfile
   destination: /nvcf/overview/single-cluster-helmfile
 - source: /nvcf/dev/single-cluster-helmfile
-  destination: /nvcf/overview/single-cluster-helmfile
+  destination: /nvcf/dev/overview/single-cluster-helmfile
 - source: /nvcf/multi-cluster-cli
   destination: /nvcf/overview/multi-cluster-cli
 - source: /nvcf/dev/multi-cluster-cli
-  destination: /nvcf/overview/multi-cluster-cli
+  destination: /nvcf/dev/overview/multi-cluster-cli
 - source: /nvcf/multi-cluster-helmfile
   destination: /nvcf/overview/multi-cluster-helmfile
 - source: /nvcf/dev/multi-cluster-helmfile
-  destination: /nvcf/overview/multi-cluster-helmfile
+  destination: /nvcf/dev/overview/multi-cluster-helmfile
 - source: /nvcf/ngc-managed-clusters
   destination: /nvcf/overview/ngc-managed-clusters
 - source: /nvcf/dev/ngc-managed-clusters
-  destination: /nvcf/overview/ngc-managed-clusters
+  destination: /nvcf/dev/overview/ngc-managed-clusters
 - source: /nvcf/helm-managed-clusters
   destination: /nvcf/overview/helm-managed-clusters
 - source: /nvcf/dev/helm-managed-clusters
-  destination: /nvcf/overview/helm-managed-clusters
+  destination: /nvcf/dev/overview/helm-managed-clusters
 - source: /nvcf/git-ops-cluster-registration
   destination: /nvcf/overview/git-ops-cluster-registration
 - source: /nvcf/dev/git-ops-cluster-registration
-  destination: /nvcf/overview/git-ops-cluster-registration
+  destination: /nvcf/dev/overview/git-ops-cluster-registration
 - source: /nvcf/configuration
   destination: /nvcf/overview/configuration
 - source: /nvcf/dev/configuration
-  destination: /nvcf/overview/configuration
+  destination: /nvcf/dev/overview/configuration
 - source: /nvcf/monitoring
   destination: /nvcf/overview/monitoring
 - source: /nvcf/dev/monitoring
-  destination: /nvcf/overview/monitoring
+  destination: /nvcf/dev/overview/monitoring
 - source: /nvcf/reference
   destination: /nvcf/overview/reference
 - source: /nvcf/dev/reference
-  destination: /nvcf/overview/reference
+  destination: /nvcf/dev/overview/reference
 - source: /nvcf/function-lifecycle
   destination: /nvcf/overview/function-lifecycle
 - source: /nvcf/dev/function-lifecycle
-  destination: /nvcf/overview/function-lifecycle
+  destination: /nvcf/dev/overview/function-lifecycle
 - source: /nvcf/service-keys
   destination: /nvcf/overview/service-keys
 - source: /nvcf/dev/service-keys
-  destination: /nvcf/overview/service-keys
+  destination: /nvcf/dev/overview/service-keys
 - source: /nvcf/managed-observability
   destination: /nvcf/overview/managed-observability
 - source: /nvcf/dev/managed-observability
-  destination: /nvcf/overview/managed-observability
+  destination: /nvcf/dev/overview/managed-observability
 - source: /nvcf/installation-overview
   destination: /nvcf/self-managed/installation-overview
 - source: /nvcf/dev/installation-overview
-  destination: /nvcf/self-managed/installation-overview
+  destination: /nvcf/dev/self-managed/installation-overview
 - source: /nvcf/helmfile-installation
   destination: /nvcf/self-managed/helmfile-installation
 - source: /nvcf/dev/helmfile-installation
-  destination: /nvcf/self-managed/helmfile-installation
+  destination: /nvcf/dev/self-managed/helmfile-installation
 - source: /nvcf/csp-end-to-end-example
   destination: /nvcf/self-managed/csp-end-to-end-example
 - source: /nvcf/dev/csp-end-to-end-example
-  destination: /nvcf/self-managed/csp-end-to-end-example
+  destination: /nvcf/dev/self-managed/csp-end-to-end-example
 - source: /nvcf/nvcf-ui
   destination: /nvcf/self-managed/nvcf-ui
 - source: /nvcf/dev/nvcf-ui
-  destination: /nvcf/self-managed/nvcf-ui
+  destination: /nvcf/dev/self-managed/nvcf-ui
 - source: /nvcf/optional-enhancements
   destination: /nvcf/self-managed/gateway-routing
 - source: /nvcf/dev/optional-enhancements
-  destination: /nvcf/self-managed/gateway-routing
+  destination: /nvcf/dev/self-managed/gateway-routing
 - source: /nvcf/self-managed/optional-enhancements
   destination: /nvcf/self-managed/gateway-routing
 - source: /nvcf/pod-disruption-budgets
   destination: /nvcf/self-managed/pod-disruption-budgets
 - source: /nvcf/dev/pod-disruption-budgets
-  destination: /nvcf/self-managed/pod-disruption-budgets
+  destination: /nvcf/dev/self-managed/pod-disruption-budgets
 - source: /nvcf/g-rpc-invocation-enablement
   destination: /nvcf/self-managed/g-rpc-invocation-enablement
 - source: /nvcf/dev/g-rpc-invocation-enablement
-  destination: /nvcf/self-managed/g-rpc-invocation-enablement
+  destination: /nvcf/dev/self-managed/g-rpc-invocation-enablement
 - source: /nvcf/llm-function-enablement
   destination: /nvcf/self-managed/llm-function-enablement
 - source: /nvcf/dev/llm-function-enablement
-  destination: /nvcf/self-managed/llm-function-enablement
+  destination: /nvcf/dev/self-managed/llm-function-enablement
 - source: /nvcf/llm-request-router-load-balancing
   destination: /nvcf/self-managed/llm-request-router-load-balancing
 - source: /nvcf/dev/llm-request-router-load-balancing
-  destination: /nvcf/self-managed/llm-request-router-load-balancing
+  destination: /nvcf/dev/self-managed/llm-request-router-load-balancing
 - source: /nvcf/gateway-routing
   destination: /nvcf/self-managed/gateway-routing
 - source: /nvcf/dev/gateway-routing
-  destination: /nvcf/self-managed/gateway-routing
+  destination: /nvcf/dev/self-managed/gateway-routing
 - source: /nvcf/third-party-registries
   destination: /nvcf/self-managed/third-party-registries
 - source: /nvcf/dev/third-party-registries
-  destination: /nvcf/self-managed/third-party-registries
+  destination: /nvcf/dev/self-managed/third-party-registries
 - source: /nvcf/registry-allowlist
   destination: /nvcf/self-managed/registry-allowlist
 - source: /nvcf/dev/registry-allowlist
-  destination: /nvcf/self-managed/registry-allowlist
+  destination: /nvcf/dev/self-managed/registry-allowlist
 - source: /nvcf/lls-installation
   destination: /nvcf/self-managed/lls-installation
 - source: /nvcf/dev/lls-installation
-  destination: /nvcf/self-managed/lls-installation
+  destination: /nvcf/dev/self-managed/lls-installation
 - source: /nvcf/api
   destination: /nvcf/overview/api
 - source: /nvcf/dev/api
-  destination: /nvcf/overview/api
+  destination: /nvcf/dev/overview/api
 - source: /nvcf/self-managed/api
   destination: /nvcf/overview/api
 - source: /nvcf/function-creation
   destination: /nvcf/overview/function-creation
 - source: /nvcf/dev/function-creation
-  destination: /nvcf/overview/function-creation
+  destination: /nvcf/dev/overview/function-creation
 - source: /nvcf/self-managed/function-creation
   destination: /nvcf/overview/function-creation
 - source: /nvcf/llm-gateway
   destination: /nvcf/overview/llm-gateway
 - source: /nvcf/dev/llm-gateway
-  destination: /nvcf/overview/llm-gateway
+  destination: /nvcf/dev/overview/llm-gateway
 - source: /nvcf/self-managed/llm-gateway
   destination: /nvcf/overview/llm-gateway
 - source: /nvcf/generic-http-function-invocation
   destination: /nvcf/overview/generic-http-function-invocation
 - source: /nvcf/dev/generic-http-function-invocation
-  destination: /nvcf/overview/generic-http-function-invocation
+  destination: /nvcf/dev/overview/generic-http-function-invocation
 - source: /nvcf/self-managed/generic-http-function-invocation
   destination: /nvcf/overview/generic-http-function-invocation
 - source: /nvcf/g-rpc-function-invocation
   destination: /nvcf/overview/g-rpc-function-invocation
 - source: /nvcf/dev/g-rpc-function-invocation
-  destination: /nvcf/overview/g-rpc-function-invocation
+  destination: /nvcf/dev/overview/g-rpc-function-invocation
 - source: /nvcf/self-managed/g-rpc-function-invocation
   destination: /nvcf/overview/g-rpc-function-invocation
 - source: /nvcf/container-functions
   destination: /nvcf/overview/container-functions
 - source: /nvcf/dev/container-functions
-  destination: /nvcf/overview/container-functions
+  destination: /nvcf/dev/overview/container-functions
 - source: /nvcf/self-managed/container-functions
   destination: /nvcf/overview/container-functions
 - source: /nvcf/helm-functions
   destination: /nvcf/overview/helm-functions
 - source: /nvcf/dev/helm-functions
-  destination: /nvcf/overview/helm-functions
+  destination: /nvcf/dev/overview/helm-functions
 - source: /nvcf/self-managed/helm-functions
   destination: /nvcf/overview/helm-functions
 - source: /nvcf/streaming-functions
   destination: /nvcf/overview/streaming-functions
 - source: /nvcf/dev/streaming-functions
-  destination: /nvcf/overview/streaming-functions
+  destination: /nvcf/dev/overview/streaming-functions
 - source: /nvcf/self-managed/streaming-functions
   destination: /nvcf/overview/streaming-functions
 - source: /nvcf/configure-autoscaling
   destination: /nvcf/overview/configure-autoscaling
 - source: /nvcf/dev/configure-autoscaling
-  destination: /nvcf/overview/configure-autoscaling
+  destination: /nvcf/dev/overview/configure-autoscaling
 - source: /nvcf/self-managed/configure-autoscaling
   destination: /nvcf/overview/configure-autoscaling
 - source: /nvcf/cli
   destination: /nvcf/overview/cli
 - source: /nvcf/dev/cli
-  destination: /nvcf/overview/cli
+  destination: /nvcf/dev/overview/cli
 - source: /nvcf/self-managed/cli
   destination: /nvcf/overview/cli
 - source: /nvcf/task-creation
   destination: /nvcf/overview/task-creation
 - source: /nvcf/dev/task-creation
-  destination: /nvcf/overview/task-creation
+  destination: /nvcf/dev/overview/task-creation
 - source: /nvcf/self-managed/task-creation
   destination: /nvcf/overview/task-creation
 - source: /nvcf/container-based-task-creation
   destination: /nvcf/overview/container-based-task-creation
 - source: /nvcf/dev/container-based-task-creation
-  destination: /nvcf/overview/container-based-task-creation
+  destination: /nvcf/dev/overview/container-based-task-creation
 - source: /nvcf/self-managed/container-based-task-creation
   destination: /nvcf/overview/container-based-task-creation
 - source: /nvcf/helm-based-task-creation
   destination: /nvcf/overview/helm-based-task-creation
 - source: /nvcf/dev/helm-based-task-creation
-  destination: /nvcf/overview/helm-based-task-creation
+  destination: /nvcf/dev/overview/helm-based-task-creation
 - source: /nvcf/self-managed/helm-based-task-creation
   destination: /nvcf/overview/helm-based-task-creation
 - source: /nvcf/function-autoscaling-overview
   destination: /nvcf/self-managed/function-autoscaling-overview
 - source: /nvcf/dev/function-autoscaling-overview
-  destination: /nvcf/self-managed/function-autoscaling-overview
+  destination: /nvcf/dev/self-managed/function-autoscaling-overview
 - source: /nvcf/architecture
   destination: /nvcf/self-managed/architecture
 - source: /nvcf/dev/architecture
-  destination: /nvcf/self-managed/architecture
+  destination: /nvcf/dev/self-managed/architecture
 - source: /nvcf/operations
   destination: /nvcf/self-managed/operations
 - source: /nvcf/dev/operations
-  destination: /nvcf/self-managed/operations
+  destination: /nvcf/dev/self-managed/operations
 - source: /nvcf/autoscaler-observability
   destination: /nvcf/observability/autoscaler
 - source: /nvcf/dev/autoscaler-observability
-  destination: /nvcf/observability/autoscaler
+  destination: /nvcf/dev/observability/autoscaler
 - source: /nvcf/self-managed/autoscaler-observability
   destination: /nvcf/observability/autoscaler
 - source: /nvcf/control-plane-operations
   destination: /nvcf/self-managed/control-plane-operations
 - source: /nvcf/dev/control-plane-operations
-  destination: /nvcf/self-managed/control-plane-operations
+  destination: /nvcf/dev/self-managed/control-plane-operations
 - source: /nvcf/troubleshooting
   destination: /nvcf/self-managed/troubleshooting
 - source: /nvcf/dev/troubleshooting
-  destination: /nvcf/self-managed/troubleshooting
+  destination: /nvcf/dev/self-managed/troubleshooting
 - source: /nvcf/runbooks
   destination: /nvcf/self-managed/control-plane-operations
 - source: /nvcf/dev/runbooks
-  destination: /nvcf/self-managed/control-plane-operations
+  destination: /nvcf/dev/self-managed/control-plane-operations
 - source: /nvcf/self-managed/runbooks
   destination: /nvcf/self-managed/control-plane-operations
 - source: /nvcf/key-rotation
   destination: /nvcf/self-managed/key-rotation
 - source: /nvcf/dev/key-rotation
-  destination: /nvcf/self-managed/key-rotation
+  destination: /nvcf/dev/self-managed/key-rotation
 - source: /nvcf/transport-tls-rotation
   destination: /nvcf/self-managed/transport-tls-rotation
 - source: /nvcf/dev/transport-tls-rotation
-  destination: /nvcf/self-managed/transport-tls-rotation
+  destination: /nvcf/dev/self-managed/transport-tls-rotation
 - source: /nvcf/caches-overview
   destination: /nvcf/compute-plane/caches-overview
 - source: /nvcf/dev/caches-overview
-  destination: /nvcf/compute-plane/caches-overview
+  destination: /nvcf/dev/compute-plane/caches-overview
 - source: /nvcf/self-managed/caches-overview
   destination: /nvcf/compute-plane/caches-overview
 - source: /nvcf/quota-management
   destination: /nvcf/self-managed/quota-management
 - source: /nvcf/dev/quota-management
-  destination: /nvcf/self-managed/quota-management
+  destination: /nvcf/dev/self-managed/quota-management
 - source: /nvcf/g-rpc-load-testing
   destination: /nvcf/overview/g-rpc-load-testing
 - source: /nvcf/dev/g-rpc-load-testing
-  destination: /nvcf/overview/g-rpc-load-testing
+  destination: /nvcf/dev/overview/g-rpc-load-testing
 - source: /nvcf/self-managed/g-rpc-load-testing
   destination: /nvcf/overview/g-rpc-load-testing
 - source: /nvcf/g-rpc-load-test-sli-guide
   destination: /nvcf/overview/g-rpc-load-test-sli-guide
 - source: /nvcf/dev/g-rpc-load-test-sli-guide
-  destination: /nvcf/overview/g-rpc-load-test-sli-guide
+  destination: /nvcf/dev/overview/g-rpc-load-test-sli-guide
 - source: /nvcf/self-managed/g-rpc-load-test-sli-guide
   destination: /nvcf/overview/g-rpc-load-test-sli-guide
 - source: /nvcf/http-load-testing
   destination: /nvcf/overview/http-load-testing
 - source: /nvcf/dev/http-load-testing
-  destination: /nvcf/overview/http-load-testing
+  destination: /nvcf/dev/overview/http-load-testing
 - source: /nvcf/self-managed/http-load-testing
   destination: /nvcf/overview/http-load-testing
 - source: /nvcf/http-load-test-sli-guide
   destination: /nvcf/overview/http-load-test-sli-guide
 - source: /nvcf/dev/http-load-test-sli-guide
-  destination: /nvcf/overview/http-load-test-sli-guide
+  destination: /nvcf/dev/overview/http-load-test-sli-guide
 - source: /nvcf/self-managed/http-load-test-sli-guide
   destination: /nvcf/overview/http-load-test-sli-guide
 - source: /nvcf/http-soak-testing
   destination: /nvcf/overview/http-soak-testing
 - source: /nvcf/dev/http-soak-testing
-  destination: /nvcf/overview/http-soak-testing
+  destination: /nvcf/dev/overview/http-soak-testing
 - source: /nvcf/self-managed/http-soak-testing
   destination: /nvcf/overview/http-soak-testing
 - source: /nvcf/gpu-cluster-setup
   destination: /nvcf/compute-plane/gpu-cluster-setup
 - source: /nvcf/dev/gpu-cluster-setup
-  destination: /nvcf/compute-plane/gpu-cluster-setup
+  destination: /nvcf/dev/compute-plane/gpu-cluster-setup
 - source: /nvcf/self-managed-clusters
   destination: /nvcf/compute-plane/self-managed-clusters
 - source: /nvcf/dev/self-managed-clusters
-  destination: /nvcf/compute-plane/self-managed-clusters
+  destination: /nvcf/dev/compute-plane/self-managed-clusters
 - source: /nvcf/nsight-profiling
   destination: /nvcf/compute-plane/nsight-profiling
 - source: /nvcf/dev/nsight-profiling
-  destination: /nvcf/compute-plane/nsight-profiling
+  destination: /nvcf/dev/compute-plane/nsight-profiling
 - source: /nvcf/fake-gpu-operator
   destination: /nvcf/compute-plane/fake-gpu-operator
 - source: /nvcf/dev/fake-gpu-operator
-  destination: /nvcf/compute-plane/fake-gpu-operator
+  destination: /nvcf/dev/compute-plane/fake-gpu-operator
 - source: /nvcf/cluster-configuration
   destination: /nvcf/compute-plane/cluster-configuration
 - source: /nvcf/dev/cluster-configuration
-  destination: /nvcf/compute-plane/cluster-configuration
+  destination: /nvcf/dev/compute-plane/cluster-configuration
 - source: /nvcf/multi-tenancy
   destination: /nvcf/overview/multi-tenancy
 - source: /nvcf/dev/multi-tenancy
-  destination: /nvcf/overview/multi-tenancy
+  destination: /nvcf/dev/overview/multi-tenancy
 - source: /nvcf/compute-plane/multi-tenancy
   destination: /nvcf/overview/multi-tenancy
 - source: /nvcf/kai-scheduler
   destination: /nvcf/compute-plane/kai-scheduler
 - source: /nvcf/dev/kai-scheduler
-  destination: /nvcf/compute-plane/kai-scheduler
+  destination: /nvcf/dev/compute-plane/kai-scheduler
 - source: /nvcf/gang-scheduling
   destination: /nvcf/compute-plane/gang-scheduling
 - source: /nvcf/dev/gang-scheduling
-  destination: /nvcf/compute-plane/gang-scheduling
+  destination: /nvcf/dev/compute-plane/gang-scheduling
 - source: /nvcf/topology-aware-scheduling
   destination: /nvcf/compute-plane/topology-aware-scheduling
 - source: /nvcf/dev/topology-aware-scheduling
-  destination: /nvcf/compute-plane/topology-aware-scheduling
+  destination: /nvcf/dev/compute-plane/topology-aware-scheduling
 - source: /nvcf/helm-model-caching
   destination: /nvcf/compute-plane/helm-model-caching
 - source: /nvcf/dev/helm-model-caching
-  destination: /nvcf/compute-plane/helm-model-caching
+  destination: /nvcf/dev/compute-plane/helm-model-caching
 - source: /nvcf/container-cache
   destination: /nvcf/compute-plane/container-cache
 - source: /nvcf/dev/container-cache
-  destination: /nvcf/compute-plane/container-cache
+  destination: /nvcf/dev/compute-plane/container-cache
 - source: /nvcf/gx-cache
   destination: /nvcf/compute-plane/gx-cache
 - source: /nvcf/dev/gx-cache
-  destination: /nvcf/compute-plane/gx-cache
+  destination: /nvcf/dev/compute-plane/gx-cache
 - source: /nvcf/simulation-caches
   destination: /nvcf/compute-plane/simulation-caches
 - source: /nvcf/dev/simulation-caches
-  destination: /nvcf/compute-plane/simulation-caches
+  destination: /nvcf/dev/compute-plane/simulation-caches
 - source: /nvcf/cluster-monitoring
   destination: /nvcf/compute-plane/cluster-monitoring
 - source: /nvcf/dev/cluster-monitoring
-  destination: /nvcf/compute-plane/cluster-monitoring
+  destination: /nvcf/dev/compute-plane/cluster-monitoring
 - source: /nvcf/cluster-reference
   destination: /nvcf/compute-plane/cluster-reference
 - source: /nvcf/dev/cluster-reference
-  destination: /nvcf/compute-plane/cluster-reference
+  destination: /nvcf/dev/compute-plane/cluster-reference
 - source: /nvcf/observability
   destination: /nvcf/observability/observability
 - source: /nvcf/dev/observability
-  destination: /nvcf/observability/observability
+  destination: /nvcf/dev/observability/observability
 - source: /nvcf/example-dashboards
   destination: /nvcf/observability/example-dashboards
 - source: /nvcf/dev/example-dashboards
-  destination: /nvcf/observability/example-dashboards
+  destination: /nvcf/dev/observability/example-dashboards
 - source: /nvcf/metrics-overview
   destination: /nvcf/observability/metrics-overview
 - source: /nvcf/dev/metrics-overview
-  destination: /nvcf/observability/metrics-overview
+  destination: /nvcf/dev/observability/metrics-overview
 - source: /nvcf/cassandra
   destination: /nvcf/observability/cassandra
 - source: /nvcf/dev/cassandra
-  destination: /nvcf/observability/cassandra
+  destination: /nvcf/dev/observability/cassandra
 - source: /nvcf/ess
   destination: /nvcf/observability/ess
 - source: /nvcf/dev/ess
-  destination: /nvcf/observability/ess
+  destination: /nvcf/dev/observability/ess
 - source: /nvcf/init-container
   destination: /nvcf/observability/init-container
 - source: /nvcf/dev/init-container
-  destination: /nvcf/observability/init-container
+  destination: /nvcf/dev/observability/init-container
 - source: /nvcf/invocation-service
   destination: /nvcf/observability/invocation-service
 - source: /nvcf/dev/invocation-service
-  destination: /nvcf/observability/invocation-service
+  destination: /nvcf/dev/observability/invocation-service
 - source: /nvcf/llm-api-gateway
   destination: /nvcf/observability/llm-api-gateway
 - source: /nvcf/dev/llm-api-gateway
-  destination: /nvcf/observability/llm-api-gateway
+  destination: /nvcf/dev/observability/llm-api-gateway
 - source: /nvcf/llm-function-invocation-metrics-report
   destination: /nvcf/observability/llm-function-invocation-metrics-report
 - source: /nvcf/dev/llm-function-invocation-metrics-report
-  destination: /nvcf/observability/llm-function-invocation-metrics-report
+  destination: /nvcf/dev/observability/llm-function-invocation-metrics-report
 - source: /nvcf/llm-request-router
   destination: /nvcf/observability/llm-request-router
 - source: /nvcf/dev/llm-request-router
-  destination: /nvcf/observability/llm-request-router
+  destination: /nvcf/dev/observability/llm-request-router
 - source: /nvcf/nvcf-api
   destination: /nvcf/observability/nvcf-api
 - source: /nvcf/dev/nvcf-api
-  destination: /nvcf/observability/nvcf-api
+  destination: /nvcf/dev/observability/nvcf-api
 - source: /nvcf/sis-spot
   destination: /nvcf/observability/sis-spot
 - source: /nvcf/dev/sis-spot
-  destination: /nvcf/observability/sis-spot
+  destination: /nvcf/dev/observability/sis-spot
 - source: /nvcf/state-metrics
   destination: /nvcf/observability/state-metrics
 - source: /nvcf/dev/state-metrics
-  destination: /nvcf/observability/state-metrics
+  destination: /nvcf/dev/observability/state-metrics
 - source: /nvcf/utils-container
   destination: /nvcf/observability/utils-container
 - source: /nvcf/dev/utils-container
-  destination: /nvcf/observability/utils-container
+  destination: /nvcf/dev/observability/utils-container
 - source: /nvcf/vault-open-bao
   destination: /nvcf/observability/vault-open-bao
 - source: /nvcf/dev/vault-open-bao
-  destination: /nvcf/observability/vault-open-bao
+  destination: /nvcf/dev/observability/vault-open-bao
 - source: /nvcf/self-managed/1.0.0/api
   destination: /nvcf/overview/api
 - source: /nvcf/self-managed/1.0.0/function-creation
