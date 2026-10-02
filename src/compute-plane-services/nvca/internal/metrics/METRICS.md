@@ -4,7 +4,7 @@ This document describes all Prometheus metrics exposed by NVCA (NVIDIA Cloud Fun
 
 ## Metrics Overview
 
-NVCA exposes metrics to monitor queue operations, instance capacity, container health, event processing, and Kubernetes API interactions.
+NVCA exposes metrics to monitor queue operations, queue transport health, instance capacity, container health, event processing, and Kubernetes API interactions.
 
 All metrics include the following default labels:
 
@@ -105,6 +105,108 @@ rate(nvca_queue_dequeue_batch_size_bucket{le="10"}[5m]) - rate(nvca_queue_dequeu
 
 # Average batch size excluding empty pulls
 rate(nvca_queue_message_dequeued_total[5m]) / (rate(nvca_queue_dequeue_batch_size_count[5m]) - rate(nvca_queue_dequeue_batch_size_bucket{le="0"}[5m]))
+```
+
+---
+
+### `nvca_queue_poll_failures_total`
+
+**Type:** Counter
+
+**Description:** Total failed queue polls. A poll failure means the agent asked the queue for work and did not get an answer, so a sustained nonzero rate means the backend is not consuming work even if it looks healthy otherwise. Counts the failure itself, unlike `nvca_queue_message_dequeued_total`, which only counts successful pulls and so cannot distinguish a broken queue from an idle one.
+
+**Labels:**
+
+- `queue_type` - Type of queue: `createQueue`, `clusterCreateQueue`, `taskClusterCreateQueue`, or `termQueue`
+- `gpu_name` - GPU name (e.g., `A100`, `L40`, `H100`) or `none` for non-GPU-specific queues
+- `reason` - Bounded classification of the failure:
+  - `connection_closed` - the NATS connection is closed for good; only a restart recovers it
+  - `no_servers` - no broker reachable
+  - `auth` - authorization violation or expired credentials, e.g. a token the broker rejects
+  - `stream_not_found` - the JetStream stream is missing
+  - `consumer_not_found` - the consumer is missing or went stale
+  - `timeout` - the poll timed out
+  - `other` - anything unclassified
+
+`connection_closed`, `no_servers` and `auth` are broker-level and affect every queue at once. `stream_not_found` and `consumer_not_found` are stream-level and can affect one queue while the rest are fine, so the split is worth alerting on separately.
+
+**Usage:**
+
+```promql
+# Is any backend failing to consume work?
+sum by (nvca_cluster_name) (rate(nvca_queue_poll_failures_total[5m])) > 0
+
+# Broker-level vs stream-level failures
+sum by (reason) (rate(nvca_queue_poll_failures_total[5m]))
+
+# Creation queues specifically, which is what stalls deployments. All three
+# creation queue types must be matched: self-hosted clusters synthesise only
+# clusterCreateQueue, so filtering on createQueue alone reports zero failures
+# for them no matter how badly the queue is broken.
+rate(nvca_queue_poll_failures_total{queue_type=~"createQueue|clusterCreateQueue|taskClusterCreateQueue"}[5m])
+```
+
+---
+
+## NATS Connection Metrics
+
+These cover the transport underneath the queue metrics above. They matter
+because NVCA's liveness probe deliberately does not restart the pod when polls
+fail: during a broker outage that would restart every agent in the fleet at
+once and throw away in-progress reconnects. The agent instead reports not-ready
+and keeps retrying, so these metrics, not a `CrashLoopBackOff`, are how a queue
+outage becomes visible.
+
+### `nvca_nats_connection_state`
+
+**Type:** Gauge
+
+**Description:** Current state of the agent's NATS connection.
+
+| Value | State |
+| --- | --- |
+| 0 | Disconnected, retrying |
+| 1 | Connected |
+| 2 | Reconnecting |
+| 3 | Closed |
+
+**Labels:** default labels only.
+
+State `3` is the alerting condition. The client is configured with unlimited
+reconnects, so it should never give up on its own; reaching closed means it did,
+and the NATS client never reopens a closed connection, so the agent cannot
+recover without a restart. Every other state is self-correcting and only worth
+alerting on if it persists.
+
+**Usage:**
+
+```promql
+# Unrecoverable: page on this
+nvca_nats_connection_state == 3
+
+# Not connected for a sustained period
+min_over_time(nvca_nats_connection_state[10m]) != 1 and max_over_time(nvca_nats_connection_state[10m]) != 1
+
+# How much of the fleet is affected
+count(nvca_nats_connection_state != 1) / count(nvca_nats_connection_state)
+```
+
+### `nvca_nats_reconnects_total`
+
+**Type:** Counter
+
+**Description:** Total successful NATS reconnects. Distinguishes one long outage, where the gauge sits off `1` and this barely moves, from flapping, where the gauge looks mostly healthy but this climbs steadily. Flapping is easy to miss on the gauge alone because each individual drop is short.
+
+**Labels:** default labels only.
+
+**Usage:**
+
+```promql
+# Flapping detection
+rate(nvca_nats_reconnects_total[15m]) > 0
+
+# Which clusters are flapping most
+topk(5, sum by (nvca_cluster_name) (rate(nvca_nats_reconnects_total[1h])))
 ```
 
 ---
