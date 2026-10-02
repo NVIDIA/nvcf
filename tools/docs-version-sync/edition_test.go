@@ -94,6 +94,27 @@ func TestEditionQualificationAndCombination(t *testing.T) {
 	}
 }
 
+func TestEditionRejectsPrereleasePeerWithOpenCompatibility(t *testing.T) {
+	for _, name := range []string{releaseSetStackComputePlane, releaseSetStackObservability} {
+		t.Run(name, func(t *testing.T) {
+			catalog := editionTestCatalog()
+			stack, err := catalog.ReleaseSet.Stacks.byName(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stack.Version += "-rc.1"
+			stack.SourceTag += "-rc.1"
+			catalog.Compatibility[0].CompatibleWith[name] = "1.0.0+"
+
+			err = ValidateCatalog(catalog)
+			want := "requires an exact stable " + name + " stack version"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("want %q, got %v", want, err)
+			}
+		})
+	}
+}
+
 func TestEditionTransition(t *testing.T) {
 	previous := editionTestCatalog()
 	previous.DocsEdition.Version = "2.0.0"

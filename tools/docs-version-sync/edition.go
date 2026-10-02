@@ -71,6 +71,9 @@ func validateDocsEdition(catalog *Catalog) error {
 		if !validStableStackVersion(stack.Version) {
 			return fmt.Errorf("docs edition %s requires an exact stable %s stack version", edition.Version, name)
 		}
+	}
+	for _, name := range releaseSetStackNames {
+		stack, _ := catalog.ReleaseSet.Stacks.byName(name)
 		found := false
 		for _, entry := range catalog.Compatibility {
 			if entry.Stack != name || entry.Version != stack.Version {
