@@ -84,4 +84,33 @@ class NvBootCoreReactiveIntegrationTest {
                 .expectHeader().valueEquals("Access-Control-Allow-Credentials", "true")
                 .expectHeader().valueEquals("Access-Control-Max-Age", "86400");
     }
+
+    @Test
+    void infoEndpointReturnsBuildInfo() {
+        webTestClient.get().uri("/info")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.service").isEqualTo("test-app")
+                .jsonPath("$.version").isEqualTo("1.0.0");
+    }
+
+    @Test
+    void infoEndpointRejectsOptions() {
+        webTestClient.options().uri("/info")
+                .exchange()
+                .expectStatus().isEqualTo(405)
+                .expectHeader().valueEquals("Allow", "GET");
+    }
+
+    @Test
+    void corsPreflightOnInfoSucceeds() {
+        var origin = "https://example.com";
+        webTestClient.options().uri("/info")
+                .header("Origin", origin)
+                .header("Access-Control-Request-Method", "GET")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals("Access-Control-Allow-Origin", origin);
+    }
 }

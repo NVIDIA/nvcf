@@ -91,4 +91,30 @@ class NvBootCoreIntegrationTest {
                 .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
                 .andExpect(header().string("Access-Control-Max-Age", "86400"));
     }
+
+    @Test
+    void infoEndpointReturnsBuildInfo() throws Exception {
+        mockMvc.perform(get("/info"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.service").value("test-app"))
+                .andExpect(jsonPath("$.version").value("1.0.0"));
+    }
+
+    @Test
+    void infoEndpointRejectsOptions() throws Exception {
+        mockMvc.perform(options("/info"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().string("Allow", "GET"));
+    }
+
+    @Test
+    void corsPreflightOnInfoSucceeds() throws Exception {
+        var origin = "https://example.com";
+        mockMvc.perform(options("/info")
+                        .header("Origin", origin)
+                        .header("Access-Control-Request-Method", "GET"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", origin))
+                .andExpect(header().string("Access-Control-Allow-Methods", "GET"));
+    }
 }
