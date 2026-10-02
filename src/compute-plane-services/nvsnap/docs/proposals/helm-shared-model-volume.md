@@ -518,3 +518,35 @@ that is the storage layer, not this design, and it costs a few pods up to
 about a minute. The engine's own multimodal segfaults (PyNvVideoCodec on
 arm64) are unrelated to any of this and were present with and without
 nvsnap.
+
+## Results, GB300 cluster 2026-10-01 (kimi-k3, 1.56 TB, two pods, TP 8)
+
+The stock kimi-k3 chart downloads the model with its own script, so this
+is the engine-script path from the scenario table: no NVCA model entry,
+capture after Ready. The chart loads weights with fastsafetensors, so
+the model prewarm is skipped by the parallel-loader rule; the sweep over
+1.56 TB on a 902 GiB node had cost 11 to 12 min before that rule.
+
+| Step | Cold | Warm (third deployment) |
+|---|---|---|
+| Admission to engine start | 72 s | 143 s (scheduling and image pull, no nvsnap init over 2 s) |
+| Model | script download 46 min, 270 to 1380 MB/s per pod | 0 downloads, read-only view of the 1600Gi volume |
+| Weights into GPU | 275 s from local emptyDir | 381 s from the NVMesh view (190 GiB per pod, per-node read ceiling) |
+| Profiling | about 5 min | plan applied, 0 s |
+| CuTeDSL warmup | 20 s | 20 s (cache dir not in the template yet) |
+| CUDA graph capture | 130 s | 131 s (not cacheable) |
+| Init engine after weights | about 9 min | 225 s |
+| Admission to Ready | 64 min | 14 min 21 s |
+
+The model volume was captured from the follower pod of the cold run in
+11 min. The cache set (821 files per rank, startup plans, FlashInfer and
+Triton caches, 2Gi) was collected after the second run; a first attempt
+sized the claim from a stale 1Gi follower stamp and failed on space,
+which is why collection now measures the ranks fresh. With refresh off
+the third run made no new collection.
+
+What is left is storage and engine time: the weight read sits on the
+NVMesh per-node ceiling (about 2.4 GB/s, slower than the cold run's
+local disk), graph capture is work the engine redoes every start, and
+the CuTeDSL warmup becomes a cache hit once `CUTE_DSL_CACHE_DIR` joins
+the cachedir env template.
