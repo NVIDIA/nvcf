@@ -22,6 +22,48 @@ check:
   rules:
     broken-links: error
 redirects:
+- source: /nvcf/overview/release-notes-overview
+  destination: /nvcf/release-notes/release-notes-overview
+- source: /nvcf/overview/1-0-1-release-notes
+  destination: /nvcf/release-notes/1-0-1-release-notes
+- source: /nvcf/overview/0-6-1-to-1-0-1-upgrade
+  destination: /nvcf/release-notes/0-6-1-to-1-0-1-upgrade
+- source: /nvcf/overview/legacy-0-6-1-release-notes
+  destination: /nvcf/release-notes/legacy-0-6-1-release-notes
+- source: /nvcf/overview/legacy-0-6-0-to-0-6-1-upgrade
+  destination: /nvcf/release-notes/legacy-0-6-0-to-0-6-1-upgrade
+- source: /nvcf/overview/legacy-0-6-0-release-notes
+  destination: /nvcf/release-notes/legacy-0-6-0-release-notes
+- source: /nvcf/overview/legacy-0-5-0-to-0-6-0-upgrade
+  destination: /nvcf/release-notes/legacy-0-5-0-to-0-6-0-upgrade
+- source: /nvcf/dev/overview/release-notes-overview
+  destination: /nvcf/dev/release-notes/release-notes-overview
+- source: /nvcf/dev/overview/1-0-1-release-notes
+  destination: /nvcf/dev/release-notes/1-0-1-release-notes
+- source: /nvcf/dev/overview/0-6-1-to-1-0-1-upgrade
+  destination: /nvcf/dev/release-notes/0-6-1-to-1-0-1-upgrade
+- source: /nvcf/dev/overview/legacy-0-6-1-release-notes
+  destination: /nvcf/dev/release-notes/legacy-0-6-1-release-notes
+- source: /nvcf/dev/overview/legacy-0-6-0-to-0-6-1-upgrade
+  destination: /nvcf/dev/release-notes/legacy-0-6-0-to-0-6-1-upgrade
+- source: /nvcf/dev/overview/legacy-0-6-0-release-notes
+  destination: /nvcf/dev/release-notes/legacy-0-6-0-release-notes
+- source: /nvcf/dev/overview/legacy-0-5-0-to-0-6-0-upgrade
+  destination: /nvcf/dev/release-notes/legacy-0-5-0-to-0-6-0-upgrade
+- source: /nvcf/1.0.0/overview/release-notes-overview
+  destination: /nvcf/1.0.0/release-notes/release-notes-overview
+- source: /nvcf/1.0.0/overview/1-0-1-release-notes
+  destination: /nvcf/1.0.0/release-notes/1-0-1-release-notes
+- source: /nvcf/1.0.0/overview/0-6-1-to-1-0-1-upgrade
+  destination: /nvcf/1.0.0/release-notes/0-6-1-to-1-0-1-upgrade
+- source: /nvcf/1.0.0/overview/legacy-0-6-1-release-notes
+  destination: /nvcf/1.0.0/release-notes/legacy-0-6-1-release-notes
+- source: /nvcf/1.0.0/overview/legacy-0-6-0-to-0-6-1-upgrade
+  destination: /nvcf/1.0.0/release-notes/legacy-0-6-0-to-0-6-1-upgrade
+- source: /nvcf/1.0.0/overview/legacy-0-6-0-release-notes
+  destination: /nvcf/1.0.0/release-notes/legacy-0-6-0-release-notes
+- source: /nvcf/1.0.0/overview/legacy-0-5-0-to-0-6-0-upgrade
+  destination: /nvcf/1.0.0/release-notes/legacy-0-5-0-to-0-6-0-upgrade
 - source: /nvcf/observability/dev/:slug*
   destination: /nvcf/dev/observability/:slug*
 - source: /nvcf/compute-plane/dev/:slug*
@@ -67,9 +109,9 @@ redirects:
 - source: /nvcf/dev/quickstart
   destination: /nvcf/dev/overview/quickstart
 - source: /nvcf/release-notes-overview
-  destination: /nvcf/overview/release-notes-overview
+  destination: /nvcf/release-notes/release-notes-overview
 - source: /nvcf/dev/release-notes-overview
-  destination: /nvcf/dev/overview/release-notes-overview
+  destination: /nvcf/dev/release-notes/release-notes-overview
 - source: /nvcf/infrastructure-sizing
   destination: /nvcf/overview/infrastructure-sizing
 - source: /nvcf/dev/infrastructure-sizing
@@ -617,15 +659,15 @@ redirects:
 - source: /nvcf/self-managed/1.0.0/runbooks
   destination: /nvcf/self-managed/control-plane-operations
 - source: /nvcf/self-managed/1.0.0/release-notes-overview
-  destination: /nvcf/overview/release-notes-overview
+  destination: /nvcf/release-notes/release-notes-overview
 - source: /nvcf/self-managed/1.0.0/0-20-6-release-notes
-  destination: /nvcf/overview/1-0-1-release-notes
+  destination: /nvcf/release-notes/1-0-1-release-notes
 - source: /nvcf/self-managed/1.0.0/0-6-1-to-0-20-6-upgrade
-  destination: /nvcf/overview/0-6-1-to-1-0-1-upgrade
+  destination: /nvcf/release-notes/0-6-1-to-1-0-1-upgrade
 - source: /nvcf/overview/1-0-0-release-notes
-  destination: /nvcf/overview/1-0-1-release-notes
+  destination: /nvcf/release-notes/1-0-1-release-notes
 - source: /nvcf/overview/1-0-release-notes
-  destination: /nvcf/overview/1-0-1-release-notes
+  destination: /nvcf/release-notes/1-0-1-release-notes
 - source: /nvcf/self-managed/1.0.1/api
   destination: /nvcf/overview/api
 - source: /nvcf/self-managed/1.0.1/function-creation
@@ -767,17 +809,17 @@ redirects:
 - source: /nvcf/self-managed/1.0.1/runbooks
   destination: /nvcf/self-managed/control-plane-operations
 - source: /nvcf/self-managed/1.0.1/release-notes-overview
-  destination: /nvcf/overview/release-notes-overview
+  destination: /nvcf/release-notes/release-notes-overview
 - source: /nvcf/self-managed/1.0.1/0-20-6-release-notes
-  destination: /nvcf/overview/1-0-1-release-notes
+  destination: /nvcf/release-notes/1-0-1-release-notes
 - source: /nvcf/self-managed/1.0.1/0-6-1-to-0-20-6-upgrade
-  destination: /nvcf/overview/0-6-1-to-1-0-1-upgrade
+  destination: /nvcf/release-notes/0-6-1-to-1-0-1-upgrade
 - source: /nvcf/self-managed/1.0.0/:slug*
   destination: /nvcf/self-managed/1.0.1/:slug*
 - source: /nvcf/overview/0-6-1-to-1-0-upgrade
-  destination: /nvcf/overview/0-6-1-to-1-0-1-upgrade
+  destination: /nvcf/release-notes/0-6-1-to-1-0-1-upgrade
 - source: /nvcf/overview/0-6-1-to-1-0-0-upgrade
-  destination: /nvcf/overview/0-6-1-to-1-0-1-upgrade
+  destination: /nvcf/release-notes/0-6-1-to-1-0-1-upgrade
 versions:
 - display-name: Development
   slug: dev
