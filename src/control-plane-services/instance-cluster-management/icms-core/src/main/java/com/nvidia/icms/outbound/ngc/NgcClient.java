@@ -17,8 +17,8 @@
 package com.nvidia.icms.outbound.ngc;
 
 import com.nvidia.icms.outbound.ngc.model.GetOrganizationResponse;
-import com.nvidia.icms.util.OAuth2ClientUtils;
-import com.nvidia.icms.util.OAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.NvcfOAuth2ClientUtils;
+import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,9 +50,10 @@ public class NgcClient {
         var webClient = webClientBuilder
                 .baseUrl(baseUrl)
                 .clientConnector(httpResources.connector())
-                .filter(OAuth2ClientUtils.getOauth2ExchangeFilter(
-                        CLIENT_REGISTRATION_ID, tokenUri, clientId, clientSecret, scope))
-                .filter(OAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
+                .filter(NvcfOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
+                .filter(NvcfOAuth2ClientUtils.getOAuth2ExchangeFilter(
+                        webClientBuilder, CLIENT_REGISTRATION_ID, tokenUri,
+                        clientId, clientSecret, scope))
                 .build();
 
         var adapter = WebClientAdapter.create(webClient);

@@ -26,8 +26,8 @@ import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
 import com.nvidia.icms.util.GsonCompatMapper;
-import com.nvidia.icms.util.OAuth2ClientUtils;
-import com.nvidia.icms.util.OAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.NvcfOAuth2ClientUtils;
+import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.format.EventFormat;
@@ -106,8 +106,9 @@ public class FunctionDeploymentStagesClient {
         var webClient = webClientBuilder
                 .baseUrl(fndsBaseUrl)
                 .clientConnector(httpResources.connector())
-                .filter(authFilter(staticClientFndsProperties, tokenUri, clientId, clientSecret, scope))
-                .filter(OAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
+                .filter(NvcfOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
+                .filter(authFilter(webClientBuilder, staticClientFndsProperties,
+                        tokenUri, clientId, clientSecret, scope))
                 .build();
 
         var adapter = WebClientAdapter.create(webClient);
@@ -122,6 +123,7 @@ public class FunctionDeploymentStagesClient {
     // the pattern used by nvcf-api and nvct-api for their self-hosted outbound
     // clients.
     private static ExchangeFilterFunction authFilter(
+            WebClient.Builder webClientBuilder,
             Optional<StaticClientFndsProperties> staticClientFndsProperties,
             String tokenUri,
             String clientId,
@@ -129,8 +131,9 @@ public class FunctionDeploymentStagesClient {
             String scope) {
         return staticClientFndsProperties
                 .map(p -> (ExchangeFilterFunction) new FixedBearerExchangeFilterFunction(p::getToken))
-                .orElseGet(() -> OAuth2ClientUtils.getOauth2ExchangeFilter(
-                        CLIENT_REGISTRATION_ID, tokenUri, clientId, clientSecret, scope));
+                .orElseGet(() -> NvcfOAuth2ClientUtils.getOAuth2ExchangeFilter(
+                        webClientBuilder, CLIENT_REGISTRATION_ID, tokenUri,
+                        clientId, clientSecret, scope));
     }
 
     public Integer sendFunctionDeploymentStage(@NotNull FndsMessageV2Model message) {

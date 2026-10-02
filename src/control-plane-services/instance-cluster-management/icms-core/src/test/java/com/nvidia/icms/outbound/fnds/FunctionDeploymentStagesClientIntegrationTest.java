@@ -35,8 +35,8 @@ import com.nvidia.icms.outbound.fnds.model.FndsMessageDetailModel;
 import com.nvidia.icms.outbound.fnds.model.FndsMessageV2Model;
 import com.nvidia.icms.outbound.fnds.model.FndsStages;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
-import com.nvidia.icms.util.OAuth2ClientUtils;
-import com.nvidia.icms.util.OAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.NvcfOAuth2ClientUtils;
+import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import java.time.Instant;
@@ -67,7 +67,7 @@ class FunctionDeploymentStagesClientIntegrationTest {
     void startServer() {
         fndsServer = new WireMockServer(wireMockConfig().dynamicPort());
         fndsServer.start();
-        httpResources = OAuth2ClientUtils.getClientHttpConnectorManaged("fnds-it");
+        httpResources = NvcfOAuth2ClientUtils.getClientHttpConnectorManaged("fnds-it");
     }
 
     @AfterEach

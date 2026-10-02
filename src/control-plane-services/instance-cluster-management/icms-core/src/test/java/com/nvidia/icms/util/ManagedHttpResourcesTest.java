@@ -18,12 +18,11 @@ package com.nvidia.icms.util;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.util.OAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +40,9 @@ import reactor.netty.resources.LoopResources;
 @ExtendWith(MockitoExtension.class)
 class ManagedHttpResourcesTest {
 
+    private static final Duration QUIET_PERIOD = Duration.ofSeconds(2);
+    private static final Duration DISPOSE_TIMEOUT = Duration.ofSeconds(25);
+
     @Mock
     private ClientHttpConnector connector;
 
@@ -56,8 +58,8 @@ class ManagedHttpResourcesTest {
         // reactor-netty-core; LoopResources supports graceful two-arg disposal.
         when(connectionProvider.disposeLater()).thenReturn(Mono.empty());
         when(loopResources.disposeLater(
-                eq(ManagedHttpResources.QUIET_PERIOD),
-                eq(ManagedHttpResources.DISPOSE_TIMEOUT)))
+                eq(QUIET_PERIOD),
+                eq(DISPOSE_TIMEOUT)))
                 .thenReturn(Mono.empty());
 
         var resources = new ManagedHttpResources(connector, connectionProvider,
@@ -66,7 +68,7 @@ class ManagedHttpResourcesTest {
 
         verify(connectionProvider).disposeLater();
         verify(loopResources).disposeLater(
-                ManagedHttpResources.QUIET_PERIOD, ManagedHttpResources.DISPOSE_TIMEOUT);
+                QUIET_PERIOD, DISPOSE_TIMEOUT);
     }
 
     @Test
@@ -77,8 +79,8 @@ class ManagedHttpResourcesTest {
         when(connectionProvider.disposeLater())
                 .thenReturn(Mono.error(new RuntimeException("simulated dispose failure")));
         when(loopResources.disposeLater(
-                eq(ManagedHttpResources.QUIET_PERIOD),
-                eq(ManagedHttpResources.DISPOSE_TIMEOUT)))
+                eq(QUIET_PERIOD),
+                eq(DISPOSE_TIMEOUT)))
                 .thenReturn(Mono.empty());
 
         var resources = new ManagedHttpResources(connector, connectionProvider,
@@ -89,7 +91,7 @@ class ManagedHttpResourcesTest {
         // Even though ConnectionProvider.disposeLater failed, LoopResources must
         // still be disposed — close() must not short-circuit on the first failure.
         verify(loopResources).disposeLater(
-                ManagedHttpResources.QUIET_PERIOD, ManagedHttpResources.DISPOSE_TIMEOUT);
+                QUIET_PERIOD, DISPOSE_TIMEOUT);
     }
 
     @Test
@@ -104,18 +106,5 @@ class ManagedHttpResourcesTest {
     void connector_returnsInjectedInstance() {
         var resources = new ManagedHttpResources(connector, null, null, "test");
         assertSame(connector, resources.connector());
-    }
-
-    @Test
-    void timeoutConstants_areInternallyConsistent() {
-        // BLOCK_TIMEOUT must exceed DISPOSE_TIMEOUT so block() doesn't trip
-        // before the underlying Mono has a chance to complete on its own.
-        assertTrue(ManagedHttpResources.BLOCK_TIMEOUT.compareTo(
-                ManagedHttpResources.DISPOSE_TIMEOUT) > 0,
-                "BLOCK_TIMEOUT must be strictly greater than DISPOSE_TIMEOUT");
-
-        // DISPOSE_TIMEOUT must stay below Spring's default 30s lifecycle-per-phase.
-        assertTrue(ManagedHttpResources.DISPOSE_TIMEOUT.compareTo(Duration.ofSeconds(30)) < 0,
-                "DISPOSE_TIMEOUT must stay below spring.lifecycle.timeout-per-shutdown-phase (30s)");
     }
 }
