@@ -5,83 +5,49 @@ instances:
   - url: nvidia-nvcf.docs.buildwithfern.com/nvcf
     custom-domain: docs.nvidia.com/nvcf
     multi-source: true
-
 title: NVIDIA Cloud Functions
-
 metadata:
   canonical-host: "docs.nvidia.com/nvcf"
-
 global-theme: nvidia
-
 css:
   - custom.css
-
 logo:
   href: /nvcf/overview
   right-text: Cloud Functions
-
 navbar-links:
-- type: github
-  value: https://github.com/NVIDIA/nvcf
-
-# Each stack is a product with its own version menu. Overview is unversioned
-# and holds the compatibility matrix and shared guides. Legacy full-tree
-# versions predate the per-stack split and are attached to Self-Managed Stack.
-products:
-  - display-name: Overview
-    subtitle: Compatibility matrix and shared guides
-    slug: overview
-    path: products/overview.yml
-
-  - display-name: Self-Managed Stack
-    subtitle: Control plane installation and operations
-    slug: self-managed
+  - type: github
+    value: https://github.com/NVIDIA/nvcf
+versions:
+  - display-name: 1.0.0
+    path: navigation.yml
+    slug: 1.0.0
+  - display-name: Self-Managed Stack 1.0.1 archive
+    hidden: true
     path: products/self-managed/1.0.1.yml
-    versions:
-      - display-name: "1.0.1"
-        path: products/self-managed/1.0.1.yml
-        slug: "1.0.1"
-      - display-name: dev
-        path: products/self-managed/dev.yml
-        slug: dev
-      - display-name: "0.6.1 (legacy)"
-        path: products/self-managed/v0.6.1.yml
-        slug: "v0.6.1"
-      - display-name: "0.6.0 (legacy)"
-        path: products/self-managed/v0.6.0.yml
-        slug: "v0.6.0"
-      - display-name: "0.5.0 (legacy)"
-        path: products/self-managed/v0.5.yml
-        slug: "v0.5"
-
-  - display-name: Compute Plane Stack
-    subtitle: GPU cluster setup and scheduling
-    slug: compute-plane
+    slug: self-managed/1.0.1
+  - display-name: Self-Managed Stack 0.6.1 (legacy) archive
+    hidden: true
+    path: products/self-managed/v0.6.1.yml
+    slug: self-managed/v0.6.1
+  - display-name: Self-Managed Stack 0.6.0 (legacy) archive
+    hidden: true
+    path: products/self-managed/v0.6.0.yml
+    slug: self-managed/v0.6.0
+  - display-name: Self-Managed Stack 0.5.0 (legacy) archive
+    hidden: true
+    path: products/self-managed/v0.5.yml
+    slug: self-managed/v0.5
+  - display-name: Compute Plane Stack 1.0.0 archive
+    hidden: true
     path: products/compute-plane/1.0.0.yml
-    versions:
-      - display-name: "1.0.0"
-        path: products/compute-plane/1.0.0.yml
-        slug: "1.0.0"
-      - display-name: dev
-        path: products/compute-plane/dev.yml
-        slug: dev
-
-  - display-name: Observability Stack
-    subtitle: Metrics, dashboards, and alerting
-    slug: observability
+    slug: compute-plane/1.0.0
+  - display-name: Observability Stack 1.0.0 archive
+    hidden: true
     path: products/observability/1.0.0.yml
-    versions:
-      - display-name: "1.0.0"
-        path: products/observability/1.0.0.yml
-        slug: "1.0.0"
-      - display-name: dev
-        path: products/observability/dev.yml
-        slug: dev
-
+    slug: observability/1.0.0
 check:
   rules:
     broken-links: error
-
 redirects:
   - source: "/nvcf/index.html"
     destination: "/nvcf/overview"
