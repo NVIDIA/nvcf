@@ -309,6 +309,9 @@ func ReplaceMarkedBlock(content, marker, rendered string) (string, bool, error) 
 		return "", false, err
 	}
 	replacement := "\n\n" + strings.TrimRight(rendered, "\n") + "\n\n"
+	if strings.TrimSpace(rendered) == "" {
+		replacement = "\n\n"
+	}
 	if syntax.Legacy {
 		current := markerSyntaxes(marker)[0]
 		updated := content[:beginIndex] + current.Begin + replacement + current.End + content[endIndex+len(syntax.End):]
