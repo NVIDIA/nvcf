@@ -1,0 +1,12 @@
+{
+  "source": "6c56941a39497acff9cd8d92cdbb71e6b4cd9d71",
+  "version": "1.0.1",
+  "previous_version": "1.0.0",
+  "change": "patch",
+  "self_managed": "1.0.1",
+  "compute_plane": "1.0.0",
+  "observability": "1.0.0",
+  "navigation": "navigation.yml",
+  "qualification": "",
+  "digest": "3299b1579274383b9fb7ba4a892ff81e7079f57943a34e2bb154dabf8bd2ec5b"
+}
