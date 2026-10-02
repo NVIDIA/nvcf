@@ -29,7 +29,7 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 
 - The [control plane](/nvcf/self-managed/helmfile-installation) is installed and all core services are running.
 
-- The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html) is installed on the GPU cluster. The GPU Operator manages the NVIDIA drivers, device plugin, and GPU feature discovery required for workload scheduling. For development or testing environments without physical GPUs, see [fake-gpu-operator](../fake-gpu-operator).
+- The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html) is installed on the GPU cluster. The GPU Operator manages the NVIDIA drivers, device plugin, and GPU feature discovery required for workload scheduling. For development or testing environments without physical GPUs, see [fake-gpu-operator](../../dev/fake-gpu-operator.md).
 
 - (Optional) Install [KAI Scheduler](./kai-scheduler.md) for GPU bin-packing
   and queues. KAI is also the scheduling foundation for

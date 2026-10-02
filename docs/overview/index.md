@@ -1,11 +1,15 @@
 # NVIDIA Cloud Functions
 
+{/*docs-version-sync:BEGIN edition-overview*/}
+
+{/*docs-version-sync:END edition-overview*/}
+
 ![NVIDIA Cloud Functions banner](images/nvcf-banner.svg)
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
 
 NVCF ships as three independently versioned Helm stacks. Each stack has its
-own documentation set and version menu.
+own documentation set.
 
 - [Self-Managed Stack](/nvcf/self-managed/)
   : Control plane installation, configuration, function APIs, and operations.

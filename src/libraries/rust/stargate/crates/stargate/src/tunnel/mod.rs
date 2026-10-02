@@ -34,6 +34,7 @@ mod webtransport;
 pub use body::StreamingBody;
 pub(crate) use connection::RegistrationConnections;
 pub use direct::QuicHttpProxy;
+pub(crate) use direct::parse_quic_addr;
 pub use registration_tunnel::{EnsureConnectedResult, RegistrationTunnel};
 
 #[derive(Clone, Debug)]

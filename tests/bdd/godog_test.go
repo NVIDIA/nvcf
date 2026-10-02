@@ -607,7 +607,8 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"function create --name bdd-helm-function",
 		"--helm-chart https://charts.example.test/inference-test.tgz",
 		"--helm-chart-service entrypoint",
-		"--inference-url /echo --inference-port 8000") {
+		"--inference-url /echo --inference-port 8000",
+		"--health-uri /health --health-port 8000 --health-timeout PT30S") {
 		t.Fatal("Helm sample function was not created through the chart-rendering path")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
@@ -644,6 +645,66 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 5)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
+	}
+}
+
+func TestSingleClusterHAFeatureFileWiresToSteps(t *testing.T) {
+	const installCommand = "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-ha"
+	const placementCommand = "/bin/bash -c 'kubectl --context k3d-ncp-local get pods --namespace nvcf" +
+		" -l app.kubernetes.io/instance=api,app.kubernetes.io/name=helm-nvcf-api,!app.kubernetes.io/component -o json" +
+		" | bash tests/bdd/scripts/assert-ha-placement.sh 2'"
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	runner := newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		"kubectl get deployment/nvcf-api --namespace nvcf --context k3d-ncp-local -o yaml": {
+			ExitCode: 0,
+			Stdout: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: nvcf-api\nspec:\n  replicas: 2\n" +
+				"  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxUnavailable: 0\n      maxSurge: 1\n",
+		},
+		"kubectl get poddisruptionbudget/nvcf-api --namespace nvcf --context k3d-ncp-local -o yaml": {
+			ExitCode: 0,
+			Stdout:   "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: nvcf-api\nspec:\n  minAvailable: 1\n",
+		},
+		placementCommand: {ExitCode: 0, Stdout: "ha-placement=ok replicas=2 nodes=2\n"},
+	})
+	suite := newWiringSuite(t, runner)
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "single-cluster-ha.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "single-cluster-ha-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	for _, command := range []string{installCommand, placementCommand} {
+		if !commandRanExactly(runs, command) {
+			t.Fatalf("HA feature command was never invoked: %s", command)
+		}
+	}
+	envFile := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-ha.yaml")
+	body, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("read HA environment: %v", err)
+	}
+	if !strings.Contains(string(body), "mode: preferred") {
+		t.Fatalf("HA environment does not enable highAvailability.mode preferred:\n%s", body)
 	}
 }
 
@@ -1399,7 +1460,8 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"function create --name bdd-multi-helm-function",
 		"--helm-chart https://charts.example.test/inference-test.tgz",
 		"--helm-chart-service entrypoint",
-		"--inference-url /echo --inference-port 8000") {
+		"--inference-url /echo --inference-port 8000",
+		"--health-uri /health --health-port 8000 --health-timeout PT30S") {
 		t.Fatal("multi-cluster Helm sample function was not created through the chart-rendering path")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
@@ -2533,6 +2595,16 @@ func TestSingleClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-helmfile.feature")
+}
+
+// TestSingleClusterHA is the live entry point for the high-availability
+// Helmfile feature on the single-cluster ncp-local topology. Skipped under
+// -short.
+func TestSingleClusterHA(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "single-cluster-ha.feature")
 }
 
 // TestSingleClusterHelmfileLLMPKI is the live entry point for the

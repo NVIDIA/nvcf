@@ -30,8 +30,16 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(fmt.Sprintf("| [%s](/nvcf/%s/) | `%s` | `%s` |\n",
-			documentationStackDisplayName(stack), slug, metadata.Version, metadata.SourceTag))
+		link := "/nvcf/" + slug + "/"
+		if catalog.DocsEdition != nil {
+			link = map[string]string{
+				releaseSetStackControlPlane:  "../self-managed/installation.md",
+				releaseSetStackComputePlane:  "../compute-plane/cluster-management/index.md",
+				releaseSetStackObservability: "../observability/observability.md",
+			}[stack]
+		}
+		b.WriteString(fmt.Sprintf("| [%s](%s) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), link, metadata.Version, metadata.SourceTag))
 	}
 	b.WriteString("\n## Compatible stack versions\n\n")
 	b.WriteString("| Stack | Release | Works with |\n| --- | --- | --- |\n")

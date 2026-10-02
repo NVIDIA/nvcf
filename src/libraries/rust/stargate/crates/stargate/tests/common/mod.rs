@@ -630,6 +630,16 @@ fn tunnel_test_case_reports_direction_and_protocol() {
     assert_eq!(reverse.protocol_label(), "webtransport");
 }
 
+/// Queue-mismatch thresholds small enough that tests can trigger a rejection
+/// with a few queued tokens; production defaults tolerate far more drift.
+pub fn strict_queue_mismatch_retry() -> pylon_lib::PylonQueueMismatchRetryConfig {
+    pylon_lib::PylonQueueMismatchRetryConfig {
+        min_delta_ms: 25,
+        tolerance_factor: 1.25,
+        ..Default::default()
+    }
+}
+
 pub fn localhost_reverse_tunnel_config(listen_addr: SocketAddr) -> ReverseTunnelConfig {
     ReverseTunnelConfig::bind(
         listen_addr,
@@ -1288,6 +1298,7 @@ pub async fn start_and_register_backend_with_bringup(
             format!("http://{backend_addr}"),
         );
         config.forwarding.runtime_state = runtime_state.clone();
+        config.forwarding.queue_mismatch_retry = strict_queue_mismatch_retry();
         let tunnel = start_quic_http_tunnel(config)
             .await
             .expect("tunnel failed to start");
@@ -1379,6 +1390,7 @@ fn test_registration_config(
         inference_server_url,
         forwarding: pylon_lib::TunnelForwardingConfig {
             runtime_state,
+            queue_mismatch_retry: strict_queue_mismatch_retry(),
             ..Default::default()
         },
         min_update_interval: Duration::from_millis(100),

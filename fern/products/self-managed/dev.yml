@@ -21,6 +21,8 @@ navigation:
         path: ../../../docs/self-managed/pod-disruption-budgets.md
       - page: gRPC Invocation Enablement
         path: ../../../docs/self-managed/grpc-invocation-enablement.md
+      - page: High Availability
+        path: ../../../docs/self-managed/high-availability.md
       - page: LLM Function Enablement
         path: ../../../docs/self-managed/llm-function-enablement.md
       - page: LLM Request Router Load Balancing
@@ -52,6 +54,8 @@ navigation:
     contents:
       - page: Control Plane Operations
         path: ../../../docs/self-managed/control-plane-operations.md
+      - page: OpenBao Patch Upgrade
+        path: ../../../docs/self-managed/runbooks/openbao-patch-upgrade.md
       - page: Troubleshooting
         path: ../../../docs/self-managed/troubleshooting.md
       - page: Key Rotation
