@@ -524,12 +524,13 @@ nvsnap.
 The stock kimi-k3 chart downloads the model with its own script, so this
 is the engine-script path from the scenario table: no NVCA model entry,
 capture after Ready. The chart loads weights with fastsafetensors, so
-the model prewarm is skipped by the parallel-loader rule; the sweep over
-1.56 TB on a 902 GiB node had cost 11 to 12 min before that rule.
+the model prewarm is skipped by the parallel-loader rule; on the second
+deployment, before that rule, the sweep over 1.56 TB on a 902 GiB node
+had cost 11 to 12 min. The cold run's nvsnap inits took about 1 s.
 
 | Step | Cold | Warm (third deployment) |
 |---|---|---|
-| Admission to engine start | 72 s | 143 s (scheduling and image pull, no nvsnap init over 2 s) |
+| Admission to engine start | 72 s | 143 s (72 s namespace setup, 48 s NVMesh attach waiting for IO permission, 3 s nvsnap inits) |
 | Model | script download 46 min, 270 to 1380 MB/s per pod | 0 downloads, read-only view of the 1600Gi volume |
 | Weights into GPU | 275 s from local emptyDir | 381 s from the NVMesh view (190 GiB per pod, per-node read ceiling) |
 | Profiling | about 5 min | plan applied, 0 s |
