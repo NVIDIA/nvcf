@@ -49,7 +49,6 @@ deploy
 docs
 fern
 infra
-migrations
 # tests/bdd is the standalone `nvcf-bdd` Go module. It is not in go.work.bazel,
 # so its deps (cucumber/godog and friends) are not registered in the root
 # MODULE.bazel. It is run directly with `go test`, not Bazel. Ignore it so
