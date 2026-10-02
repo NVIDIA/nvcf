@@ -114,3 +114,40 @@ The empty index is observed; its server-side cause is not confirmed.
 Production publication and a final production smoke test follow maintainer
 review and merge. P5 follows successful cutover. No production deployment or
 P4 merge was performed during this validation.
+
+## Release Notes review follow-up
+
+The maintainer requested customer-facing "Release" terminology and moving the
+notes out of Overview. P4 source `21246ab38f196c9ed2c5f4722a94441b491f1480`
+implements this presentation change:
+
+- Native changelog titles and introduction use "Release".
+- The Release Notes tab contains the native changelog, detailed stack notes,
+  and upgrade guides. Overview retains the compatibility matrix and manifest.
+- Redirects preserve the moved note URLs for default, Development, and explicit
+  1.0.0 routes. Changelog and dated-entry paths stay unchanged.
+- All 52 existing mapped note URLs return the expected headings. All 24
+  historical note routes have identical content. Current note source files
+  are unchanged; rendered links follow their new navigation destinations.
+- Browser checks cover both stable and Development sidebars, selected-version
+  retention, old URLs, dated changelog links, and mobile overflow.
+
+The [final preview](https://nvidia-preview-nvcf-2214-p4-release-notes-final.docs.buildwithfern.com/nvcf/release-notes)
+passed the browser checks above in both stable and Development after
+[run 37068764310](https://github.com/NVIDIA/nvcf/actions/runs/37068764310)
+completed successfully. All 52 note URLs passed on this final preview; two
+transient timeouts passed on retry. CodeRabbit completed both follow-up
+reviews through 21246ab38 with no actionable findings.
+
+The replacement candidate is `15ae2a18275c2f3ed9c6b1a6ec617d36f0f39b85` on
+`docs/candidates/2214-p4-release-notes-final`. The same three stack versions and
+qualification remain in place. Relative to the protected ddb2e65 content, only
+Fern navigation/changelog/redirect files and the preparation receipt change.
+No documentation source or artifact inventory changes.
+[Fern CI](https://github.com/NVIDIA/nvcf/actions/runs/37068679119) and Markdown
+lint pass for the exact candidate commit.
+
+The protected release branch is still ddb2e65. A new, specific approval is
+needed before replacing that unpublished branch with the tested candidate;
+the earlier one-time approval covered the prior correction only. Indexed
+staging search remains a separate merge gate.
