@@ -5,12 +5,12 @@ gRPC service. gRPC functions use the gRPC proxy instead of the HTTP invocation
 route.
 
 In self-hosted deployments, the gRPC route is exposed on the Gateway TCP
-listener. See [Gateway Routing](../self-managed/gateway-routing.md) for listener and DNS
+listener. See [Gateway Routing](/nvcf/self-managed/gateway-routing) for listener and DNS
 configuration.
 
 Self-hosted split or multi-cluster deployments require additional enablement
 before workers can reach the grpc-proxy callback endpoint. See
-[gRPC Invocation Enablement](../self-managed/grpc-invocation-enablement.md).
+[gRPC Invocation Enablement](/nvcf/self-managed/g-rpc-invocation-enablement).
 
 ## Invocation Path
 
@@ -160,5 +160,5 @@ gRPC responses. This error does not indicate a control-plane problem. The
 client should discard the stale request ID and reconnect without it to start a
 new session.
 
-See [Troubleshooting](../self-managed/troubleshooting.md#grpc-session-resumption-fails)
+See [Troubleshooting](/nvcf/self-managed/troubleshooting#grpc-session-resumption-fails)
 for diagnosis steps.

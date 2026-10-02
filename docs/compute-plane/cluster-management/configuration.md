@@ -19,7 +19,7 @@ See below for descriptions of all available configuration options.
 | Priority Class                            | Set appropriate kubernetes priority class name for cluster agent and the operator pod. Additional details: [Priority Class](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#priorityclass)                                                                                                                                                                                                                                                                                                                                               |
 | Model Cache Volume Mount Options          | Configure the model cache volume mount options based on the CSI Driver capabilities on the cluster. Refer to the CSI Driver documentation. Defaults to `Enabled` and `ro,norecovery,nouuid` on an upgrade. Requires cluster reconfiguration after upgrade to prevent disruption.Additional details: [Mount options](https://man7.org/linux/man-pages/man8/mount.8.html)                                                                                                                                                                                                   |
 | Network CIDR Range                        | Quoted & comma separated list of CIDR range for outbound network access for the infrastructure components & workloads on the cluster.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Worker Degradation Period                 | Stabilization time (in minutes) before cluster agent fails to consider a worker as healthy and initiates a purge. This also affects terminal worker failure timing for Helm functions that enable `StatusByWorkerReadiness`. See [Helm Functions](../../overview/helm-functions.md#use-worker-readiness-for-function-health).                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Worker Degradation Period                 | Stabilization time (in minutes) before cluster agent fails to consider a worker as healthy and initiates a purge. This also affects terminal worker failure timing for Helm functions that enable `StatusByWorkerReadiness`. See [Helm Functions](/nvcf/overview/helm-functions#use-worker-readiness-for-function-health).                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## Cluster Features
 
@@ -301,7 +301,7 @@ The NVCA operator requires outbound network connectivity to pull images, charts,
 2. **Container Registry and NVCF Control Plane Access**
 
    - NVCA requires access to your container registry to pull images and Helm charts.
-   - NVCA requires network access to NVCF control plane services (SIS, NATS, ESS) running in your cluster. The specific endpoints depend on your gateway configuration. See [gateway-routing](../../self-managed/gateway-routing.md) for details.
+   - NVCA requires network access to NVCF control plane services (SIS, NATS, ESS) running in your cluster. The specific endpoints depend on your gateway configuration. See [gateway-routing](/nvcf/self-managed/gateway-routing) for details.
 
 3. **Monitoring and Logging**
 
@@ -859,7 +859,7 @@ agentConfig:
 `--quic-insecure` to the `pylon` sidecar. Use it only for local or
 isolated test clusters that run the LLM request router tunnel without TLS. For
 the full LLM addon setup, see
-[LLM Function Enablement](../../self-managed/llm-function-enablement.md).
+[LLM Function Enablement](/nvcf/self-managed/llm-function-enablement).
 
 BYOO collector debug and log chunking example:
 

@@ -17,9 +17,9 @@ to a maintained train before moving further.
 
 | Stack | Latest release | Source tag |
 | --- | --- | --- |
-| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.1` | `deploy/stacks/self-managed/v1.0.1` |
-| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` |
-| [Observability](../observability/observability.md) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
+| [Self-managed (control plane)](/nvcf/self-managed/) | `1.0.1` | `deploy/stacks/self-managed/v1.0.1` |
+| [Compute plane](/nvcf/compute-plane/) | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` |
+| [Observability](/nvcf/observability/) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 ## Compatible stack versions
 

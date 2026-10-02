@@ -168,37 +168,6 @@ func TestEditionManifestDrift(t *testing.T) {
 	}
 }
 
-func TestEditionGeneratedStackLinksPreserveSelection(t *testing.T) {
-	for _, renderer := range []string{"manifest-artifact-registry-paths", "compatibility-matrix"} {
-		t.Run(renderer, func(t *testing.T) {
-			catalog := loadMainCatalog(t)
-			catalog.DocsEdition = &DocsEdition{Version: "1.0.0", Status: ReleaseSetDevelopment, Change: "initial"}
-			got, err := Render(renderer, catalog)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, path := range []string{"../self-managed/installation.md", "../compute-plane/cluster-management/index.md", "../observability/observability.md"} {
-				if !strings.Contains(got, "]("+path+")") {
-					t.Errorf("edition output is missing relative stack link %s", path)
-				}
-			}
-			if strings.Contains(got, "](/nvcf/") {
-				t.Error("edition output links to the default edition")
-			}
-			catalog.DocsEdition = nil
-			got, err = Render(renderer, catalog)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, slug := range []string{"self-managed", "compute-plane", "observability"} {
-				if !strings.Contains(got, "](/nvcf/"+slug+"/)") {
-					t.Errorf("legacy output changed its %s product link", slug)
-				}
-			}
-		})
-	}
-}
-
 func TestEditionCommandRejectsImplicitInputs(t *testing.T) {
 	for _, args := range [][]string{
 		{"prepare", "--repo", t.TempDir()},

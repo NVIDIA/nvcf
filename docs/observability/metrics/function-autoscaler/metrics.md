@@ -67,6 +67,6 @@ Useful target prefixes:
 
 ## See also
 
-- [Function Autoscaler Operations](../../../self-managed/autoscaling/operations.md) for common symptoms tied to these metrics and log lines.
-- [Architecture](../../../self-managed/autoscaling/architecture.md) for the components that emit each signal.
-- [Configure Autoscaling](../../../overview/configure-autoscaling.md) for setting per-function scaling bounds and policy via the NVCF API.
+- [Function Autoscaler Operations](/nvcf/self-managed/operations) for common symptoms tied to these metrics and log lines.
+- [Architecture](/nvcf/self-managed/architecture) for the components that emit each signal.
+- [Configure Autoscaling](/nvcf/overview/configure-autoscaling) for setting per-function scaling bounds and policy via the NVCF API.

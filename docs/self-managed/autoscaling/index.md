@@ -29,7 +29,7 @@ profile. The `control` and `all` profiles install the Function Autoscaler. The
 
 State Metrics must be enabled for `control` and `all`. With the default
 component modes, the control-plane stack also installs the shared collector and
-VictoriaMetrics. See [Observability Configuration](../../observability/observability.md) for
+VictoriaMetrics. See [Observability Configuration](/nvcf/observability/observability) for
 profile and backend settings.
 
 ## Architecture Overview
@@ -49,7 +49,7 @@ sequence and bucket model.
 ## See Also
 
 - [Architecture](./architecture.md) for components, data flow, and the Cassandra LWT lock behavior that elects the discovery leader.
-- [Configure Autoscaling](../../overview/configure-autoscaling.md) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
+- [Configure Autoscaling](/nvcf/overview/configure-autoscaling) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
 - [Function Autoscaler Operations](./operations.md) for health endpoints and operational guidance.
-- [Autoscaler Metrics](../../observability/metrics/function-autoscaler/metrics.md) for the metrics, traces, and logs emitted by the service.
-- [Observability Configuration](../../observability/observability.md) for profiles and metrics backend configuration.
+- [Autoscaler Metrics](/nvcf/observability/autoscaler) for the metrics, traces, and logs emitted by the service.
+- [Observability Configuration](/nvcf/observability/observability) for profiles and metrics backend configuration.

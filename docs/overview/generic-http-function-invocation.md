@@ -250,7 +250,7 @@ can still use the platform error response format. For platform API behavior, see
 
 <Warning>
 Emit logs from your inference container so invocation failures can be diagnosed.
-See [Observability](../observability/observability.md) and [Troubleshooting](../self-managed/troubleshooting.md)
+See [Observability](/nvcf/observability/observability) and [Troubleshooting](/nvcf/self-managed/troubleshooting)
 for logging and debugging guidance.
 
 </Warning>

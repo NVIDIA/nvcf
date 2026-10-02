@@ -2,7 +2,7 @@
 
 The self-managed stack deploys the Function Autoscaler for the `control` and
 `all` observability profiles. State Metrics must remain enabled for both. See
-[Observability Configuration](../../observability/observability.md) for profile and metrics
+[Observability Configuration](/nvcf/observability/observability) for profile and metrics
 backend settings.
 
 ## Verify the deployment
@@ -61,7 +61,7 @@ failures change readiness instead.
 
 ## See also
 
-- [Autoscaler Metrics](../../observability/metrics/function-autoscaler/metrics.md) for the metrics and traces referenced in the symptoms above.
-- [Configure Autoscaling](../../overview/configure-autoscaling.md) for setting per-function scaling bounds and policy via the NVCF API.
+- [Autoscaler Metrics](/nvcf/observability/autoscaler) for the metrics and traces referenced in the symptoms above.
+- [Configure Autoscaling](/nvcf/overview/configure-autoscaling) for setting per-function scaling bounds and policy via the NVCF API.
 - [Architecture](./architecture.md) for the component layout these symptoms map to.
-- [Observability Configuration](../../observability/observability.md) for shared stack settings.
+- [Observability Configuration](/nvcf/observability/observability) for shared stack settings.

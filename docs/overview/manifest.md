@@ -12,7 +12,7 @@ Artifact version compatibility
 
 Newer artifact versions might be available. Each NVCF stack release is
 QA-qualified with the artifact versions shown on this page for that stack.
-Use the [compatibility matrix](compatibility-matrix.md) to choose
+Use the [compatibility matrix](/nvcf/overview/compatibility-matrix) to choose
 self-managed, compute-plane, and observability releases that are qualified to
 run together. NVIDIA cannot guarantee compatibility when you substitute other
 artifact versions.
@@ -147,9 +147,9 @@ The following tables list the complete artifact inventory.
 
 | Stack | Version | Source tag |
 | --- | --- | --- |
-| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.1` | `deploy/stacks/self-managed/v1.0.1` |
-| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` |
-| [Observability](../observability/observability.md) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
+| [Self-managed (control plane)](/nvcf/self-managed/) | `1.0.1` | `deploy/stacks/self-managed/v1.0.1` |
+| [Compute plane](/nvcf/compute-plane/) | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` |
+| [Observability](/nvcf/observability/) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 ### Control plane Helm charts
 

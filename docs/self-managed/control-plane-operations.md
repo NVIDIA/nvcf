@@ -297,4 +297,4 @@ rollback.
 
 ## Observability
 
-For observability configuration and reference architecture, see [self-hosted-observability](../observability/observability.md).
+For observability configuration and reference architecture, see [self-hosted-observability](/nvcf/observability/observability).

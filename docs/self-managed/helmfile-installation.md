@@ -3,12 +3,12 @@
 This section covers manual Helmfile installation of the NVCF control plane and
 GPU cluster components for self-hosted NVCF deployments.
 
-For a fresh install, start with the [Quickstart](../overview/quickstart.md). Use this Helmfile guide when you need explicit release control, partial recovery, upgrades, or direct access to Helmfile values.
+For a fresh install, start with the [Quickstart](/nvcf/overview/quickstart). Use this Helmfile guide when you need explicit release control, partial recovery, upgrades, or direct access to Helmfile values.
 
 <Info>
 This guide assumes you have already downloaded and extracted the
 `nvcf-self-managed-stack` Helmfile bundle (see
-[download-nvcf-self-managed-stack](../overview/image-mirroring.md)). Control-plane
+[download-nvcf-self-managed-stack](/nvcf/overview/image-mirroring)). Control-plane
 commands run from inside that directory unless otherwise noted. The directory
 contains the control-plane Helmfile definitions, environment templates, and
 sample configurations referenced throughout.
@@ -82,8 +82,8 @@ Helmfile `1.3.0+` re-introduced sequential execution via the `--sequential-helmf
 
 - A kubernetes cluster (CSP agnostic or on-prem).
 - Gateway API ingress prepared as described in [Gateway quickstart](./gateway-routing.md#gateway-quickstart) if you are exposing NVCF through Gateway API
-- Artifacts must be available in a registry that your Kubernetes cluster can access. This can be the `nvcf-onprem` registry for NVCF control plane service artifacts, but function containers and helm charts must be configured to a user-managed registry. See [self-hosted-artifact-manifest](../overview/manifest.md) and [self-hosted-image-mirroring](../overview/image-mirroring.md).
-- The `nvcf-self-managed-stack` repository must be downloaded to your local machine (see [download-nvcf-self-managed-stack](../overview/image-mirroring.md)).
+- Artifacts must be available in a registry that your Kubernetes cluster can access. This can be the `nvcf-onprem` registry for NVCF control plane service artifacts, but function containers and helm charts must be configured to a user-managed registry. See [self-hosted-artifact-manifest](/nvcf/overview/manifest) and [self-hosted-image-mirroring](/nvcf/overview/image-mirroring).
+- The `nvcf-self-managed-stack` repository must be downloaded to your local machine (see [download-nvcf-self-managed-stack](/nvcf/overview/image-mirroring)).
 
 <Accordion title="Install helm-diff plugin">
 
@@ -371,7 +371,7 @@ VictoriaMetrics, State Metrics, and the Function Autoscaler. Set the
 VictoriaMetrics storage class for the target cluster.
 
 To use a customer-managed backend or change component ownership, see
-[Observability Configuration](../observability/observability.md). For autoscaler health and
+[Observability Configuration](/nvcf/observability/observability). For autoscaler health and
 backend checks, see
 [Function Autoscaler Operations](./autoscaling/operations.md).
 
@@ -498,9 +498,9 @@ image:
 ```
 
 <Warning>
-If you have mirrored NVCF artifacts to your own registry (e.g., ECR), update both `helm.sources` and `image` to point to your mirror. See [self-hosted-image-mirroring](../overview/image-mirroring.md) for details on mirroring artifacts.
+If you have mirrored NVCF artifacts to your own registry (e.g., ECR), update both `helm.sources` and `image` to point to your mirror. See [self-hosted-image-mirroring](/nvcf/overview/image-mirroring) for details on mirroring artifacts.
 
-When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both core stack resources listed in the [self-hosted-artifact-manifest](../overview/manifest.md). If you deploy shared observability as a standalone stack, mirror the observability stack resource as well.
+When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both core stack resources listed in the [self-hosted-artifact-manifest](/nvcf/overview/manifest). If you deploy shared observability as a standalone stack, mirror the observability stack resource as well.
 
 </Warning>
 
@@ -1425,7 +1425,7 @@ each cluster.
 ## Next Steps
 
 After the control plane and GPU clusters are installed, proceed to
-[Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md) for NVCA
+[Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters) for NVCA
 operations and troubleshooting.
 
 ## Uninstalling

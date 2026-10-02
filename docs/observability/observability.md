@@ -2,8 +2,6 @@
 
 {/*docs-version-sync:BEGIN edition-observability*/}
 
-Docs edition `1.0.1` | Observability `1.0.0` | Development candidate.
-
 {/*docs-version-sync:END edition-observability*/}
 
 This page provides guidance on configuring observability for self-hosted NVCF control-plane, including metrics, logging, and tracing.
@@ -143,7 +141,7 @@ Profiles set defaults. Individual components can use `install`, `existing`, or
 
 The bundled VictoriaMetrics instance runs in `monitoring` by default. Configure
 its persistent volume in the Helmfile environment if the defaults are not
-suitable. See [Helmfile Installation](../self-managed/helmfile-installation.md#observability-configuration).
+suitable. See [Helmfile Installation](/nvcf/self-managed/helmfile-installation#observability-configuration).
 
 Use `metricsBackend.mode: existing` to connect a customer-managed backend:
 
@@ -164,7 +162,7 @@ for PromQL queries. Configure collector remote-write authentication separately.
 
 The shared collector discovers targets only in its Kubernetes cluster. In a
 split deployment, configure compute-plane collection separately. See [Cluster
-Monitoring](../compute-plane/cluster-management/monitoring.md).
+Monitoring](/nvcf/compute-plane/cluster-monitoring).
 
 ### Logging
 
@@ -402,7 +400,7 @@ For troubleshooting common observability issues:
    ```
 
 For shared stack or Function Autoscaler issues, see
-[Function Autoscaler Operations](../self-managed/autoscaling/operations.md).
+[Function Autoscaler Operations](/nvcf/self-managed/operations).
 
 **Logs not being collected:**
 
@@ -461,9 +459,9 @@ For shared stack or Function Autoscaler issues, see
 
 ## Related Documentation
 
-- [Function Autoscaling](../self-managed/autoscaling/index.md)
+- [Function Autoscaling](/nvcf/self-managed/function-autoscaling-overview)
 - [Function Autoscaler Observability](./metrics/function-autoscaler/metrics.md)
-- [Cluster Monitoring](../compute-plane/cluster-management/monitoring.md)
+- [Cluster Monitoring](/nvcf/compute-plane/cluster-monitoring)
 - [OpenTelemetry documentation](https://opentelemetry.io/docs/)
 - [Prometheus documentation](https://prometheus.io/docs/)
 

@@ -175,31 +175,24 @@ func renderManifestArtifactRegistryPaths(catalog *Catalog) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	summary, err := renderReleaseSetSummary(catalog)
-	if err != nil {
-		return "", err
-	}
-	return summary + renderManifestTables(entries), nil
+	return renderReleaseSetSummary(catalog.ReleaseSet) + renderManifestTables(entries), nil
 }
 
-func renderReleaseSetSummary(catalog *Catalog) (string, error) {
-	if catalog.ReleaseSet == (ReleaseSetMetadata{}) {
-		return "", nil
+func renderReleaseSetSummary(releaseSet ReleaseSetMetadata) string {
+	if releaseSet == (ReleaseSetMetadata{}) {
+		return ""
 	}
 	var b strings.Builder
 	b.WriteString("### Stack releases\n\n")
 	b.WriteString("| Stack | Version | Source tag |\n| --- | --- | --- |\n")
 	for _, stack := range releaseSetStackNames {
-		metadata, _ := catalog.ReleaseSet.Stacks.byName(stack)
-		link, err := overviewStackLink(stack, catalog.DocsEdition != nil)
-		if err != nil {
-			return "", err
-		}
-		b.WriteString(fmt.Sprintf("| [%s](%s) | `%s` | `%s` |\n",
-			documentationStackDisplayName(stack), link, metadata.Version, metadata.SourceTag))
+		metadata, _ := releaseSet.Stacks.byName(stack)
+		slug, _ := documentationProductSlug(stack)
+		b.WriteString(fmt.Sprintf("| [%s](/nvcf/%s/) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), slug, metadata.Version, metadata.SourceTag))
 	}
 	b.WriteString("\n")
-	return b.String(), nil
+	return b.String()
 }
 
 func renderManifestTables(entries []resolvedManifestEntry) string {

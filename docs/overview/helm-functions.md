@@ -81,13 +81,13 @@ A sample helm chart for a multi-node deployment can be found [in the multi-node 
 
 <Note>
 The compute cluster must have the `NVLinkOptimized` attribute. See
-[NVLink-optimized clusters](../compute-plane/cluster-management/configuration.md#nvlink-optimized-clusters).
+[NVLink-optimized clusters](/nvcf/compute-plane/cluster-configuration#nvlink-optimized-clusters).
 </Note>
 
 NVCF can place the Pods from one multi-node Helm function in a single NVLink
-GPU clique. Use [Gang Scheduling](../compute-plane/cluster-management/gang-scheduling.md) when every Pod
+GPU clique. Use [Gang Scheduling](/nvcf/compute-plane/gang-scheduling) when every Pod
 must be placed atomically. Use
-[Topology-Aware Scheduling](../compute-plane/cluster-management/topology-aware-scheduling.md)
+[Topology-Aware Scheduling](/nvcf/compute-plane/topology-aware-scheduling)
 to place that gang in one GPU clique. The guides include examples for direct
 KAI StatefulSets and workloads managed through Grove and Dynamo.
 NVCA will create a
@@ -109,8 +109,8 @@ NVLink partition placement through these legacy affinity rules is best-effort
 without KAI Scheduler or Grove topology-aware scheduling. The rules do not
 provide atomic gang placement. Concurrent Pods can initially land in different
 cliques, and distinct logical groups can land in the same clique. Use
-[Gang Scheduling](../compute-plane/cluster-management/gang-scheduling.md) with
-[Topology-Aware Scheduling](../compute-plane/cluster-management/topology-aware-scheduling.md)
+[Gang Scheduling](/nvcf/compute-plane/gang-scheduling) with
+[Topology-Aware Scheduling](/nvcf/compute-plane/topology-aware-scheduling)
 when the workload requires all Pods to fit and start in a specific topology
 domain.
 </Warning>
@@ -301,7 +301,7 @@ The following timeouts govern when a still-unhealthy object fails the instance.
 The clock for each timeout starts when the described condition is first
 observed, measured from the Pod launch time unless noted. Values are NVCA
 defaults. Only Worker Degradation Period is operator-configurable, through the
-`Worker Degradation Period` setting in [NVCA Configuration](../compute-plane/cluster-management/configuration.md).
+`Worker Degradation Period` setting in [NVCA Configuration](/nvcf/compute-plane/cluster-configuration).
 
 | Timeout | Default | Cause (when the clock starts) | Effect (when exceeded) |
 | --- | --- | --- | --- |
@@ -389,7 +389,7 @@ indicating readiness. With this flag enabled:
   debugging, and Kubernetes can replace it.
 - If the health endpoint begins to not report ready after the instance has entered the `RUNNING` state,
   the instance is marked degraded until it reports ready again or 30 minutes have passed
-  (Worker Degradation Period, see [NVCA Configuration](../compute-plane/cluster-management/configuration.md)),
+  (Worker Degradation Period, see [NVCA Configuration](/nvcf/compute-plane/cluster-configuration)),
   after which the instance is killed and re-created by NVCF. (Note: initial startup behavior
   with a 2 hour timeout remains the same as default instance health behavior)
 
