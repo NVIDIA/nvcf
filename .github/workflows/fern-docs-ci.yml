@@ -66,9 +66,6 @@ jobs:
         with:
           go-version-file: tools/go-toolchain/go.mod
 
-      - name: Validate documentation
-        run: ./tools/ci/check-docs
-
       - name: Test docs CI helpers
         run: |
           bash tools/scripts/test/test-run-fern
@@ -76,6 +73,15 @@ jobs:
 
       - name: Test docs version and edition tooling
         run: go test -C tools/docs-version-sync ./...
+
+      - name: Validate documentation
+        run: ./tools/ci/check-docs
+
+      - name: Validate the staged edition layout
+        if: ${{ !cancelled() && hashFiles('fern/edition-preview.yml') != '' }}
+        env:
+          DOCS_PREVIEW_CONFIG: fern/edition-preview.yml
+        run: ./tools/ci/preview-docs --check
 
   preview:
     name: Hosted Docs Preview

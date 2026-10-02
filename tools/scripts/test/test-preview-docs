@@ -19,6 +19,10 @@ if [ -n "${EXPECT_CANDIDATE:-}" ]; then
   [ "$(git remote get-url origin)" = 'https://github.com/example/docs.git' ]
   [ "$(git rev-parse HEAD)" = "$EXPECT_SHA" ]
 fi
+if [ "${EXPECT_CHECK:-0}" = 1 ]; then
+  [ "$#" -eq 1 ] && [ "$1" = check ]
+  exit "${TEST_FERN_EXIT:-0}"
+fi
 if [ "${OMIT_URL:-0}" != 1 ]; then
   echo 'Published docs to https://nvidia-preview-nvcf-test.docs.buildwithfern.com/nvcf (preview)'
 fi
@@ -53,6 +57,11 @@ EXPECT_CANDIDATE=1 DOCS_PREVIEW_CONFIG=fern/candidate.yml DOCS_PREVIEW_SKIP_COMM
   tools/ci/preview-docs > "$workdir/candidate.txt" 2>&1
 [ "$(cat fern/docs.yml)" = legacy ]
 [ "$(cat docs/page.md)" = 'uncommitted candidate content' ]
+EXPECT_CHECK=1 EXPECT_CANDIDATE=1 DOCS_PREVIEW_ID='' DOCS_PREVIEW_CONFIG=fern/candidate.yml \
+  tools/ci/preview-docs --check > "$workdir/check.txt" 2>&1
+status=0
+EXPECT_CHECK=1 TEST_FERN_EXIT=17 tools/ci/preview-docs --check > "$workdir/check-failure.txt" 2>&1 || status=$?
+[ "$status" -eq 17 ] || { echo "Candidate check failure was hidden: $status"; exit 1; }
 if DOCS_PREVIEW_CONFIG=fern/../outside.yml tools/ci/preview-docs > "$workdir/invalid.txt" 2>&1; then
   echo 'expected an invalid candidate path to fail'; exit 1
 fi

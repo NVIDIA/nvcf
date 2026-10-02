@@ -3,6 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
+check_only=0
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -ne 1 ] || [ "$1" != --check ]; then
+    echo 'Usage: preview-docs [--check]' >&2
+    exit 2
+  fi
+  check_only=1
+fi
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
@@ -48,6 +57,11 @@ if [ -n "${DOCS_PREVIEW_CONFIG:-}" ]; then
     go run -C "$repo_root/tools/docs-version-sync" . edition links --repo "$preview_workspace/source"
   fi
   cd "$preview_workspace/source"
+fi
+
+if [ "$check_only" -eq 1 ]; then
+  "$repo_root/tools/ci/run-fern" check
+  exit 0
 fi
 
 project_name="${CI_PROJECT_NAME:-}"

@@ -168,6 +168,12 @@ relative file links in the temporary workspace. Keep explicit page slugs in
 prepared edition branches contain the converted links. Never run `edition links`
 against frozen documentation trees.
 
+Check the staged candidate without publishing a preview:
+
+```bash
+DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
+```
+
 Native release notes live in `fern/changelog/YYYY-MM-DD.mdx`. Use `##` headings
 for entries and frontmatter tags for filtering. Record stack artifact versions
 separately from the docs edition. A preview entry must not claim qualification.
