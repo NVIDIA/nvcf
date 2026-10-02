@@ -158,16 +158,24 @@ jobs:
         with:
           node-version-file: source/fern/.node-version
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/tools/go-toolchain/go.mod
+
       - name: Generate preview URL
         id: generate-docs
         env:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
-          HEAD_REF: ${{ steps.metadata.outputs.head_ref }}
+          DOCS_PREVIEW_ID: ${{ steps.metadata.outputs.head_ref }}
+          DOCS_PREVIEW_SKIP_COMMENT: '1'
         working-directory: ./source
         run: |
           set -o pipefail
-          ./tools/ci/run-fern generate --docs --preview --id "$HEAD_REF" --strict-broken-links 2>&1 | tee /tmp/fern-output.log
-          URL=$(grep -oP 'Published docs to \K.*(?= \()' /tmp/fern-output.log || true)
+          if [ -f fern/edition-preview.yml ]; then
+            export DOCS_PREVIEW_CONFIG=fern/edition-preview.yml
+          fi
+          ./tools/ci/preview-docs 2>&1 | tee /tmp/fern-output.log
+          URL=$(sed -n 's/^Preview URL: //p' /tmp/fern-output.log | tail -1)
           if [ -z "$URL" ]; then
             echo "::error::Failed to generate preview URL. See fern output above."
             exit 1

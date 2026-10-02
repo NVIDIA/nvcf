@@ -1060,6 +1060,10 @@ func (catalog *Catalog) pruneUnusedRegistries() {
 
 func defaultOutputs() []OutputFile {
 	return []OutputFile{
+		{Path: "docs/overview/index.md", Blocks: []OutputBlock{{Marker: "edition-overview", Renderer: "edition-overview"}}},
+		{Path: "docs/self-managed/installation.md", Blocks: []OutputBlock{{Marker: "edition-control-plane", Renderer: "edition-control-plane"}}},
+		{Path: "docs/compute-plane/cluster-management/index.md", Blocks: []OutputBlock{{Marker: "edition-compute-plane", Renderer: "edition-compute-plane"}}},
+		{Path: "docs/observability/observability.md", Blocks: []OutputBlock{{Marker: "edition-observability", Renderer: "edition-observability"}}},
 		{
 			Path: "docs/overview/compatibility-matrix.md",
 			Blocks: []OutputBlock{{

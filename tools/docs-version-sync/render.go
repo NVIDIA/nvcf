@@ -44,6 +44,8 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 		return renderImageMirroringCLISnippet(catalog)
 	case "compatibility-matrix":
 		return renderCompatibilityMatrix(catalog)
+	case "edition-overview", "edition-control-plane", "edition-compute-plane", "edition-observability":
+		return renderEditionSummary(catalog, strings.TrimPrefix(renderer, "edition-"))
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}

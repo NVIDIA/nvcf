@@ -159,8 +159,8 @@ func validateBranchNavigation(root, commit string, data []byte) error {
 		return fmt.Errorf("release branch must select edition navigation, not products")
 	}
 	versions, ok := config["versions"].([]any)
-	if !ok || len(versions) != 1 {
-		return fmt.Errorf("release branch must have exactly one local default version")
+	if !ok || len(versions) == 0 {
+		return fmt.Errorf("release branch must have a local default version")
 	}
 	version, ok := versions[0].(map[string]any)
 	if !ok {
@@ -175,6 +175,16 @@ func validateBranchNavigation(root, commit string, data []byte) error {
 	}
 	if _, err := gitOutput(root, "show", commit+":fern/"+filepath.ToSlash(filepath.Clean(nav))); err != nil {
 		return fmt.Errorf("release navigation %s is unavailable: %w", nav, err)
+	}
+	for _, item := range versions[1:] {
+		archive, ok := item.(map[string]any)
+		if !ok || archive["hidden"] != true || archive["ref"] != nil {
+			return fmt.Errorf("release branch may only add hidden path-based archives after its default")
+		}
+		path, _ := archive["path"].(string)
+		if !safeFernPath(path) {
+			return fmt.Errorf("archive navigation must stay under fern/")
+		}
 	}
 	return nil
 }

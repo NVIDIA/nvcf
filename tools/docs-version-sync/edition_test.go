@@ -189,3 +189,33 @@ func TestEditionQualifiedCatalogCannotBeRefreshed(t *testing.T) {
 		t.Fatalf("qualified edition refresh was allowed: %v", err)
 	}
 }
+
+func TestEditionSummaryUsesSelectedCombination(t *testing.T) {
+	catalog := editionTestCatalog()
+	summary, err := Render("edition-overview", catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Docs edition `1.0.0`", "Development candidate", "Each stack keeps its own artifact version"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary lacks %q: %s", want, summary)
+		}
+	}
+	catalog.DocsEdition.Status = ReleaseSetQualified
+	catalog.DocsEdition.Qualification = "https://github.com/NVIDIA/nvcf/pull/123"
+	for _, name := range releaseSetStackNames {
+		summary, err := Render("edition-"+name, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stack, _ := catalog.ReleaseSet.Stacks.byName(name)
+		if !strings.Contains(summary, "Qualified combination") || !strings.Contains(summary, "`"+stack.Version+"`") {
+			t.Fatalf("incorrect qualified stack summary: %s", summary)
+		}
+	}
+	catalog.DocsEdition = nil
+	summary, err = Render("edition-overview", catalog)
+	if err != nil || summary != "" {
+		t.Fatalf("legacy output changed: %q, %v", summary, err)
+	}
+}
