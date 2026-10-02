@@ -16,8 +16,8 @@
  */
 package com.nvidia.icms.configuration;
 
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils;
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils.ManagedHttpResources;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -26,7 +26,7 @@ import org.springframework.context.annotation.Configuration;
  * shared across {@link org.springframework.cloud.context.config.annotation.RefreshScope @RefreshScope}
  * outbound HTTP clients.
  *
- * <p>The pool configuration is fixed in {@link NvcfOAuth2ClientUtils} and never
+ * <p>The pool configuration is fixed in {@link IcmsOAuth2ClientUtils} and never
  * changes at runtime, so the pool itself does not need to participate in
  * {@code @RefreshScope}. Keeping pools as singletons avoids per-refresh warmup cost.
  *
@@ -39,16 +39,16 @@ public class OutboundHttpResourcesConfig {
 
     @Bean(destroyMethod = "close")
     ManagedHttpResources ngcHttpResources() {
-        return NvcfOAuth2ClientUtils.getClientHttpConnectorManaged("ngc");
+        return IcmsOAuth2ClientUtils.getClientHttpConnectorManaged("ngc");
     }
 
     @Bean(destroyMethod = "close")
     ManagedHttpResources fndsHttpResources() {
-        return NvcfOAuth2ClientUtils.getClientHttpConnectorManaged("fnds");
+        return IcmsOAuth2ClientUtils.getClientHttpConnectorManaged("fnds");
     }
 
     @Bean(destroyMethod = "close")
     ManagedHttpResources apiKeysHttpResources() {
-        return NvcfOAuth2ClientUtils.getClientHttpConnectorManaged("api-keys");
+        return IcmsOAuth2ClientUtils.getClientHttpConnectorManaged("api-keys");
     }
 }

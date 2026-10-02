@@ -26,8 +26,8 @@ import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
 import com.nvidia.icms.util.GsonCompatMapper;
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils;
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils.ManagedHttpResources;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.format.EventFormat;
@@ -106,7 +106,7 @@ public class FunctionDeploymentStagesClient {
         var webClient = webClientBuilder
                 .baseUrl(fndsBaseUrl)
                 .clientConnector(httpResources.connector())
-                .filter(NvcfOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
+                .filter(IcmsOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
                 .filter(authFilter(webClientBuilder, staticClientFndsProperties,
                         tokenUri, clientId, clientSecret, scope))
                 .build();
@@ -131,7 +131,7 @@ public class FunctionDeploymentStagesClient {
             String scope) {
         return staticClientFndsProperties
                 .map(p -> (ExchangeFilterFunction) new FixedBearerExchangeFilterFunction(p::getToken))
-                .orElseGet(() -> NvcfOAuth2ClientUtils.getOAuth2ExchangeFilter(
+                .orElseGet(() -> IcmsOAuth2ClientUtils.getOAuth2ExchangeFilter(
                         webClientBuilder, CLIENT_REGISTRATION_ID, tokenUri,
                         clientId, clientSecret, scope));
     }

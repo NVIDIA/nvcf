@@ -21,8 +21,8 @@ import com.nvidia.icms.outbound.exception.ApiKeysException;
 import com.nvidia.icms.outbound.apikeys.model.ApiKeyValidationRequest;
 import com.nvidia.icms.outbound.apikeys.model.ApiKeyValidationResponse;
 import com.nvidia.icms.outbound.apikeys.model.ApiKeyValidationResult;
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils;
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils.ManagedHttpResources;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -72,11 +72,11 @@ public class ApiKeysRequestHandler {
         var webClient = webClientBuilder
                 .baseUrl(apiKeysBaseUrl)
                 .clientConnector(httpResources.connector())
-                .filter(NvcfOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
-                .filter(NvcfOAuth2ClientUtils.getOAuth2ExchangeFilter(
+                .filter(IcmsOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
+                .filter(IcmsOAuth2ClientUtils.getOAuth2ExchangeFilter(
                         webClientBuilder, CLIENT_REGISTRATION_ID, tokenUri,
                         clientId, clientSecret, scope))
-                .filter(NvcfOAuth2ClientUtils.getResponseFilterProcessor(CLIENT_REGISTRATION_ID))
+                .filter(IcmsOAuth2ClientUtils.getResponseFilterProcessor(CLIENT_REGISTRATION_ID))
                 .build();
 
         var adapter = WebClientAdapter.create(webClient);

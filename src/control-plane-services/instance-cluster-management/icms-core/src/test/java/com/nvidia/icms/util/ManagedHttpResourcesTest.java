@@ -22,7 +22,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils.ManagedHttpResources;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

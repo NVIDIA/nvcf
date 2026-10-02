@@ -29,8 +29,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.nvidia.boot.exceptions.UnauthorizedException;
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils;
-import com.nvidia.icms.util.NvcfOAuth2ClientUtils.ManagedHttpResources;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils;
+import com.nvidia.icms.util.IcmsOAuth2ClientUtils.ManagedHttpResources;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -63,7 +63,7 @@ class NgcClientIntegrationTest {
     void startServer() {
         ngcServer = new WireMockServer(wireMockConfig().dynamicPort());
         ngcServer.start();
-        httpResources = NvcfOAuth2ClientUtils.getClientHttpConnectorManaged("ngc-it");
+        httpResources = IcmsOAuth2ClientUtils.getClientHttpConnectorManaged("ngc-it");
     }
 
     @AfterEach
