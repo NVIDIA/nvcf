@@ -32,7 +32,15 @@ on:
     paths:
       - 'docs/**'
       - 'fern/**'
+      - 'tools/ci/run-fern'
+      - 'tools/ci/check-docs'
+      - 'tools/ci/check-doc-version-sync'
+      - 'tools/ci/preview-docs'
+      - 'tools/docs-version-sync/**'
+      - 'tools/scripts/test/test-run-fern'
+      - 'tools/scripts/test/test-preview-docs'
       - '.github/workflows/fern-docs-preview-build.yml'
+      - '.github/workflows/fern-docs-preview-comment.yml'
 
 permissions:
   contents: read
@@ -50,6 +58,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Save PR metadata
         env:
@@ -60,7 +70,7 @@ jobs:
           mkdir -p preview-metadata
           echo "$PR_NUMBER" > preview-metadata/pr_number
           echo "$HEAD_REF" > preview-metadata/head_ref
-          git diff --name-only "origin/${BASE_REF}...HEAD" -- '*.md' > preview-metadata/changed_md_files 2>/dev/null || true
+          git diff --name-only "origin/${BASE_REF}...HEAD" -- '*.md' '*.mdx' 'fern/**' 'docs/version-catalog/**' > preview-metadata/changed_md_files 2>/dev/null || true
 
       - name: Upload fern sources and metadata
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

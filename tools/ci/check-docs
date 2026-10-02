@@ -1,22 +1,17 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
 
-(set -o pipefail) >/dev/null 2>&1 && set -o pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
 
-fern_version="$(node -e "console.log(require('./fern/fern.config.json').version)")"
-npm install -g "fern-api@${fern_version}"
-
-bad="$(
-  find docs fern -type f \( -name '*.md' -o -name '*.mdx' \) -exec grep -nE '<img\b[^>]*[^/]>|<img>' {} \; || true
-)"
-if [ -n "${bad}" ]; then
-  echo "Non-self-closing <img> tags found (MDX requires <img ... />):"
-  echo "${bad}"
+bad="$(find docs fern -type f \( -name '*.md' -o -name '*.mdx' \) -exec grep -nE '<img\b[^>]*[^/]>|<img>' {} \; || true)"
+if [ -n "$bad" ]; then
+  echo "Non-self-closing <img> tags found (MDX requires <img ... />):" >&2
+  echo "$bad" >&2
   exit 1
 fi
 
-if [ -f tools/ci/check-doc-version-sync ]; then
-  ./tools/ci/check-doc-version-sync
-fi
-
-fern check
+./tools/ci/check-doc-version-sync
+./tools/ci/run-fern check

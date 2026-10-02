@@ -1,7 +1,10 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
 
-(set -o pipefail) >/dev/null 2>&1 && set -o pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
 
 require_cmd() {
   if command -v "$1" >/dev/null 2>&1; then
@@ -20,8 +23,29 @@ require_cmd() {
 require_cmd curl
 require_cmd jq
 
-fern_version="$(node -e "console.log(require('./fern/fern.config.json').version)")"
-npm install -g "fern-api@${fern_version}"
+# Candidate configuration is applied only inside a disposable clone. Git history
+# and the real origin remain available for Fern's branch-ref resolver.
+preview_workspace=""
+preview_log="$(mktemp)"
+cleanup() {
+  rm -f "$preview_log"
+  if [ -n "$preview_workspace" ]; then
+    rm -rf "$preview_workspace"
+  fi
+}
+trap cleanup EXIT
+if [ -n "${DOCS_PREVIEW_CONFIG:-}" ]; then
+  if ! [[ "$DOCS_PREVIEW_CONFIG" =~ ^fern/[A-Za-z0-9._-]+\.ya?ml$ ]] || [ ! -f "$DOCS_PREVIEW_CONFIG" ]; then
+    echo "DOCS_PREVIEW_CONFIG must name an existing YAML file directly under fern/." >&2
+    exit 1
+  fi
+  preview_workspace="$(mktemp -d)"
+  git clone --quiet --shared --no-checkout "$repo_root" "$preview_workspace/source"
+  git -C "$preview_workspace/source" remote set-url origin "$(git remote get-url origin)"
+  cp -R docs fern "$preview_workspace/source/"
+  cp "$DOCS_PREVIEW_CONFIG" "$preview_workspace/source/fern/docs.yml"
+  cd "$preview_workspace/source"
+fi
 
 project_name="${CI_PROJECT_NAME:-}"
 mr_iid="${CI_MERGE_REQUEST_IID:-}"
@@ -36,9 +60,8 @@ if [ -z "${preview_id}" ]; then
   preview_id="${project_name}-mr-${mr_iid}"
 fi
 
-set -o pipefail
-fern generate --docs --preview --id "${preview_id}" --force 2>&1 | tee /tmp/fern-output.log || true
-preview_url="$(grep -oE -m1 '(https://[^[:space:]]+-preview-[^[:space:]]+) ' /tmp/fern-output.log | tr -d ' ')"
+"$repo_root/tools/ci/run-fern" generate --docs --preview --id "${preview_id}" --force --strict-broken-links 2>&1 | tee "$preview_log"
+preview_url="$(grep -oE -m1 '(https://[^[:space:]]+-preview-[^[:space:]]+)' "$preview_log" | sed 's/[[:space:]()]$//' || true)"
 echo "Preview URL: ${preview_url}"
 
 if [ -z "${preview_url}" ]; then

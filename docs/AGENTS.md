@@ -141,9 +141,21 @@ docker run --rm -it \
   -v "$(pwd):/workspace" \
   -w /workspace \
   -p 3000:3000 \
-  node:20-alpine \
-  sh -c "npm install -g fern-api && fern docs dev"
+  node:24-alpine \
+  sh -c "apk add --no-cache bash git && tools/ci/run-fern docs dev"
 ```
+
+Preview an alternate site configuration without changing the working tree:
+
+```bash
+DOCS_PREVIEW_ID=nvcf-candidate DOCS_PREVIEW_SKIP_COMMENT=1 \
+  DOCS_PREVIEW_CONFIG=fern/candidate.yml tools/ci/preview-docs
+```
+
+The file must exist directly under `fern/`. The helper stages `docs/` and
+`fern/` in a temporary clone with the original Git remote for branch refs.
+CI and local helpers use the pin in `fern/fern.config.json`; CI uses the
+Node version in `fern/.node-version`.
 
 ## Validation
 
