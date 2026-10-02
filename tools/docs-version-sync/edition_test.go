@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func editionTestCatalog() *Catalog {
@@ -196,6 +198,52 @@ func TestEditionGeneratedStackLinksPreserveSelection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEditionBranchRedirectsUseLocalDefault(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "fern", "docs.yml")
+	writeFile(t, path, `versions:
+  - display-name: Development
+    slug: dev
+    path: navigation.yml
+redirects:
+  - source: /nvcf/dev/manifest
+    destination: /nvcf/dev/overview/manifest
+  - source: /nvcf/self-managed/dev/:slug*
+    destination: /nvcf/dev/self-managed/:slug*
+  - source: /nvcf/v0.5/:slug*
+    destination: /nvcf/self-managed/v0.5/:slug*
+  - source: /external
+    destination: https://example.com/nvcf/dev/overview
+`)
+	if err := writeBranchConfiguration(root, editionPreparation{Version: "1.0.1", Navigation: "navigation.yml"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Redirects []struct{ Source, Destination string } `yaml:"redirects"`
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"/nvcf/dev/manifest":            "/nvcf/overview/manifest",
+		"/nvcf/self-managed/dev/:slug*": "/nvcf/self-managed/:slug*",
+		"/nvcf/v0.5/:slug*":             "/nvcf/self-managed/v0.5/:slug*",
+		"/external":                     "https://example.com/nvcf/dev/overview",
+	}
+	if len(config.Redirects) != len(want) {
+		t.Fatalf("redirect count = %d, want %d", len(config.Redirects), len(want))
+	}
+	for _, redirect := range config.Redirects {
+		if redirect.Destination != want[redirect.Source] {
+			t.Errorf("%s destination = %s, want %s", redirect.Source, redirect.Destination, want[redirect.Source])
+		}
 	}
 }
 
