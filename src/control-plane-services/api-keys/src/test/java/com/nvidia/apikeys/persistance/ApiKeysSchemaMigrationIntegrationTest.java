@@ -29,7 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
-class OwnerStatusMigrationIntegrationTest {
+class ApiKeysSchemaMigrationIntegrationTest {
 
     @Test
     void migrationAddsOwnerIndexesAndPreservesLegacyKeysWhenReapplied() throws IOException {
@@ -120,7 +120,7 @@ class OwnerStatusMigrationIntegrationTest {
     }
 
     private static void applyMigration(Session session, String filename) throws IOException {
-        try (var resource = OwnerStatusMigrationIntegrationTest.class
+        try (var resource = ApiKeysSchemaMigrationIntegrationTest.class
                 .getResourceAsStream("/api_keys_api/" + filename)) {
             assertThat(resource).as("Deployment migration %s", filename).isNotNull();
             String cql = new String(resource.readAllBytes(), StandardCharsets.UTF_8);
