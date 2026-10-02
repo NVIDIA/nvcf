@@ -2595,6 +2595,16 @@ var gatewayRouteResources = []string{"httproutes", "grpcroutes", "tcproutes", "u
 // any served version lists every object, so this only makes the choice stable.
 var gatewayAPIVersionPreference = []string{"v1", "v1beta1", "v1alpha2"}
 
+// servesRoutes reports whether the cluster serves any Gateway API route kind.
+func (s gatewayAPISurface) servesRoutes() bool {
+	for _, resource := range gatewayRouteResources {
+		if s.servedVersion(resource) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s gatewayAPISurface) servedVersion(resource string) string {
 	for _, v := range gatewayAPIVersionPreference {
 		if s.hasPair(gatewayAPIGroup+"/"+v, resource) {
@@ -2618,6 +2628,9 @@ type gatewayOwnership struct {
 	// Gateways the NVCF routes attach to that a configured list leaves out.
 	invalid  []string
 	unlisted []string
+	// routesMissing means a configured list is in use and no NVCF route
+	// exists at all, though the cluster serves the route kinds.
+	routesMissing bool
 
 	surface         gatewayAPISurface
 	routes          dynamic.Interface
@@ -2647,6 +2660,9 @@ func resolveGatewayOwnershipIn(
 						own.unlisted = append(own.unlisted, e)
 					}
 				}
+				// The routes release may be missing. Discovery says so after
+				// install, and a configured list must not hide it.
+				own.routesMissing = len(discovered) == 0 && surface.servesRoutes()
 			}
 		}
 		return own
@@ -2664,8 +2680,9 @@ func resolveGatewayOwnershipIn(
 	return own
 }
 
-// reportInvalid warns once per run about ignored gateway-name entries, and
-// about NVCF Gateways a configured list leaves out.
+// reportInvalid warns once per run about ignored gateway-name entries, about
+// NVCF Gateways a configured list leaves out, and, after install, about a
+// configured list with no NVCF route at all.
 func (o *gatewayOwnership) reportInvalid(log *logrus.Entry, state *ValidationState) {
 	if len(o.invalid) > 0 {
 		msg := fmt.Sprintf("ignoring %s entries without a namespace: %s; name each Gateway as namespace/name",
@@ -2681,6 +2698,14 @@ func (o *gatewayOwnership) reportInvalid(log *logrus.Entry, state *ValidationSta
 		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
 		o.unlisted = nil
 	}
+	if o.routesMissing && state.PostInstall {
+		msg := fmt.Sprintf("no NVCF routes found although the control plane is installed, so nothing reaches "+
+			"the Gateways %s names (%s); check that the gateway routes release is installed",
+			nvcfGatewayNamesEnv, o.gateways)
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Gateway routes: "+msg)
+	}
+	o.routesMissing = false
 }
 
 // gatewayClasses lists the NVCF Gateways' classes on first use. Only a
@@ -3585,6 +3610,16 @@ func spreadsAcrossNodes(sts *appsv1.StatefulSet) bool {
 func (s *tier2Scan) assessRollout(ns string, sts *appsv1.StatefulSet, want int32) (oneDownRolling, decided bool) {
 	if sts.Spec.UpdateStrategy.Type == appsv1.OnDeleteStatefulSetStrategyType ||
 		sts.Status.UpdateRevision == "" || sts.Status.CurrentRevision == sts.Status.UpdateRevision {
+		return false, false
+	}
+	if partition := rollingUpdatePartition(sts); partition > 0 &&
+		int(sts.Status.UpdatedReplicas) >= int(want)-partition && sts.Status.ReadyReplicas >= want {
+		// A rollout staged with a partition has updated every pod it will
+		// until the partition is lowered, and CurrentRevision does not move
+		// until then. With every pod Ready nothing is in progress, so this is
+		// no rollout to wait for.
+		printInfo(s.log, fmt.Sprintf("  %s/%s: rollout held at partition %d (%d of %d pods updated)",
+			ns, sts.Name, partition, sts.Status.UpdatedReplicas, want))
 		return false, false
 	}
 	s.warn(fmt.Sprintf("%s/%s: rolling update in progress (ready: %d/%d)",

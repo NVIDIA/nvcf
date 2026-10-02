@@ -1992,6 +1992,38 @@ func TestResolveNVCFGateways_ConfiguredReplacesDiscovery(t *testing.T) {
 	assert.Len(t, state.Warnings, 1, "reported once per run")
 }
 
+// A configured list replaces discovery, but must not hide a missing routes
+// release: after install, no NVCF route at all is warned about, once per run.
+// Before install there are no routes yet, and with routes there is nothing
+// to say.
+func TestResolveNVCFGateways_ConfiguredWithoutRoutesWarnsAfterInstall(t *testing.T) {
+	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw")
+	surface, surfaceErr := discoverGatewayAPIResources(routeDiscoveryClient())
+	withRoutes := routeClient(route("HTTPRoute", "nvcf", "api", "nvcf-gateway-routes-1.18.2",
+		parentRef("name", "shared-gw", "namespace", "gw")))
+	for name, tc := range map[string]struct {
+		routes      *dynamicfake.FakeDynamicClient
+		postInstall bool
+		warned      bool
+	}{
+		"installed, no routes":      {routeClient(), true, true},
+		"before install, no routes": {routeClient(), false, false},
+		"installed, routes":         {withRoutes, true, false},
+	} {
+		own := resolveGatewayOwnershipIn(context.Background(), surface, surfaceErr, tc.routes)
+		state := &ValidationState{Log: testLog(), PostInstall: tc.postInstall}
+		own.reportInvalid(state.Log, state)
+		own.reportInvalid(state.Log, state)
+		if !tc.warned {
+			assert.Empty(t, state.Warnings, name)
+			continue
+		}
+		require.Len(t, state.Warnings, 1, name)
+		assert.Contains(t, state.Warnings[0], "no NVCF routes found although the control plane is installed", name)
+		assert.Contains(t, state.Warnings[0], "gw/shared-gw", name)
+	}
+}
+
 func discoveredStack() *dynamicfake.FakeDynamicClient {
 	return routeClient(
 		route("HTTPRoute", "nvcf", "api", "nvcf-gateway-routes-1.18.2", parentRef("name", "shared-gw")),
@@ -2989,6 +3021,35 @@ func TestCheckTier2StatefulSets_TolerateRolloutStillChecksPlacement(t *testing.T
 	state := runTier2(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", nil))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.False(t, *state.Tier2StatefulSetsOK)
+}
+
+// A rollout staged with a partition stops once it has updated the pods at and
+// above the partition, and CurrentRevision does not move until the partition
+// is lowered. With every pod Ready that is no rollout in progress: warning
+// "rolling update in progress" on every run kept --wait polling forever.
+func TestCheckTier2StatefulSets_RolloutHeldAtPartitionIsSettled(t *testing.T) {
+	held := func(updated int32) []runtime.Object {
+		objs := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
+		sts := objs[0].(*appsv1.StatefulSet)
+		partition := int32(2)
+		sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
+			Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
+		}
+		sts.Status.UpdateRevision = "nats-r2"
+		sts.Status.UpdatedReplicas = updated
+		return objs
+	}
+	state := runTier2(held(1))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "rolling update in progress")
+
+	// Short of the partition, the rollout is still in progress.
+	state = runTier2(held(0))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "rolling update in progress")
 }
 
 // belowPartition holds pods below ordinal 3 on their old revision, so the
