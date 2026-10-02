@@ -1,5 +1,9 @@
 # Observability Configuration
 
+{/*docs-version-sync:BEGIN edition-observability*/}
+
+{/*docs-version-sync:END edition-observability*/}
+
 This page provides guidance on configuring observability for self-hosted NVCF control-plane, including metrics, logging, and tracing.
 
 ## Find the answer to your question

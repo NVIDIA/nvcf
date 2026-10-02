@@ -10,12 +10,12 @@
 # context, so the stage below compiles it from the same commit that produces
 # the image. Nothing is vendored and nothing is injected, so `docker build .`
 # here produces the same image as the release pipeline.
-ARG BAO_VERSION=2.6.2
+ARG BAO_VERSION=2.6.3
 ARG GO_VERSION=1.27.0
 ARG GO_IMAGE=golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc
-ARG BAO_SOURCE_COMMIT=dd9c19c37a878cf4a81b18efb8d6f0599c7da923
-ARG BAO_SOURCE_SHA256=a7784550a9db16f24e99d65a18c9b12a433707c79ef4c1f34262d3f48171c7a9
-ARG BAO_RUNTIME_IMAGE=openbao/openbao:2.6.2@sha256:11fd73a2102cda9c55d5d881a8c3210303146a7ec1e8ac76f526e175c6d24641
+ARG BAO_SOURCE_COMMIT=63a65e6b907589dbb952c371a70260a065bf8bd7
+ARG BAO_SOURCE_SHA256=471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69
+ARG BAO_RUNTIME_IMAGE=openbao/openbao:2.6.3@sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889
 
 FROM ${GO_IMAGE} AS bao-build
 ARG BAO_VERSION
@@ -49,7 +49,7 @@ RUN GOOS=linux GOARCH="${TARGETARCH}" CGO_ENABLED=0 \
 FROM ${BAO_RUNTIME_IMAGE}
 ARG TARGETARCH
 
-# OpenBao 2.6.2 runs as the non-root openbao user by default. Escalate only
+# OpenBao 2.6.3 runs as the non-root openbao user by default. Escalate only
 # while installing the image's runtime packages, then restore that identity.
 USER root
 # Upgrade packages inherited from the upstream image before installing the

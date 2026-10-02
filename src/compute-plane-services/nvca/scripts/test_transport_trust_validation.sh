@@ -116,7 +116,6 @@ assert_valid() {
 }
 
 for chart_dir in \
-  "${repo_root}/deployments/nvca-operator" \
   "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"; do
   chart_label="$(basename "$(dirname "${chart_dir}")")/$(basename "${chart_dir}")"
   assert_invalid "${chart_dir}" "${chart_label} direct bundle input" "${test_dir}/invalid-direct.yaml"

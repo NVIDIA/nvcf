@@ -32,6 +32,9 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "edition" {
+		return runEdition(args[1:])
+	}
 	flags := flag.NewFlagSet("docs-version-sync", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 

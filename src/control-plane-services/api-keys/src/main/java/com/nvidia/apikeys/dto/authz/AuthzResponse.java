@@ -45,6 +45,8 @@ public class AuthzResponse {
         boolean allowed;
         @JsonProperty("ncaId")
         String ncaId;
+        @JsonProperty("ownerNcaId")
+        String ownerNcaId;
         @JsonProperty("ownerId")
         String ownerId;
         @JsonProperty("policy")

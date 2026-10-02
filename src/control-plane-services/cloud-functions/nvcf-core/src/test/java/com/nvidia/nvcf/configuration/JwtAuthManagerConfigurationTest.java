@@ -114,7 +114,7 @@ class JwtAuthManagerConfigurationTest {
     void apiKeysBypassTheJwtResolver() {
         var apiKey = "nvapi-secret";
         when(apiKeysService.resolveNCAIdFromApiKey(apiKey)).thenReturn(new ApiKeyValidationResult(
-                true, "nca-id", "owner-id",
+                true, "nca-id", "nca-id", "owner-id",
                 new ApiKeyValidationResult.Policy(List.of(), List.of("read"), "nvcf")));
         var resolver = resolver(properties());
         var request = new MockHttpServletRequest();

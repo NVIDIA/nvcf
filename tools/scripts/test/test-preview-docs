@@ -1,64 +1,68 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 workdir="$(mktemp -d)"
-trap 'rm -rf "${workdir}"' EXIT
-
-mkdir -p "${workdir}/bin" "${workdir}/fern"
-cp "${repo_root}/tools/ci/preview-docs" "${workdir}/preview-docs"
-
-cat > "${workdir}/fern/fern.config.json" <<'EOF'
-{"version":"5.38.0"}
-EOF
-
-cat > "${workdir}/bin/node" <<'EOF'
-#!/usr/bin/env sh
-echo "5.38.0"
-EOF
-
-cat > "${workdir}/bin/npm" <<'EOF'
-#!/usr/bin/env sh
-exit 0
-EOF
-
-cat > "${workdir}/bin/jq" <<'EOF'
-#!/usr/bin/env sh
-exit 0
-EOF
-
-cat > "${workdir}/bin/fern" <<'EOF'
-#!/usr/bin/env sh
-echo "Published docs to https://nvidia-preview-nvcf-mr-320.docs.buildwithfern.com/nvcf "
-exit 0
-EOF
-
-cat > "${workdir}/bin/curl" <<'EOF'
-#!/usr/bin/env sh
+trap 'rm -rf "$workdir"' EXIT
+mkdir -p "$workdir/bin" "$workdir/source/tools/ci" "$workdir/source/fern" "$workdir/source/docs"
+cp "$repo_root/tools/ci/preview-docs" "$workdir/source/tools/ci/preview-docs"
+printf 'legacy\n' > "$workdir/source/fern/docs.yml"
+printf 'candidate\n' > "$workdir/source/fern/candidate.yml"
+printf 'source content\n' > "$workdir/source/docs/page.md"
+cat > "$workdir/source/tools/ci/run-fern" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -n "${EXPECT_CANDIDATE:-}" ]; then
+  [ "$(cat fern/docs.yml)" = candidate ]
+  [ "$(cat docs/page.md)" = 'uncommitted candidate content' ]
+  [ "$(git remote get-url origin)" = 'https://github.com/example/docs.git' ]
+  [ "$(git rev-parse HEAD)" = "$EXPECT_SHA" ]
+fi
+if [ "${EXPECT_CHECK:-0}" = 1 ]; then
+  [ "$#" -eq 1 ] && [ "$1" = check ]
+  exit "${TEST_FERN_EXIT:-0}"
+fi
+if [ "${OMIT_URL:-0}" != 1 ]; then
+  echo 'Published docs to https://nvidia-preview-nvcf-test.docs.buildwithfern.com/nvcf (preview)'
+fi
+exit "${TEST_FERN_EXIT:-0}"
+SH
+cat > "$workdir/bin/curl" <<'SH'
+#!/usr/bin/env bash
 exit 22
-EOF
-
-chmod +x "${workdir}/bin/"*
-
-if ! (
-  cd "${workdir}"
-  PATH="${workdir}/bin:${PATH}" \
-    CI_PROJECT_NAME=nvcf \
-    CI_MERGE_REQUEST_IID=320 \
-    CI_MERGE_REQUEST_PROJECT_ID=268903 \
-    CI_API_V4_URL=https://github.com/NVIDIA/api/v4 \
-    FERN_BOT=fake-token \
-    ./preview-docs > output.txt 2>&1
-); then
-  echo "expected preview-docs to tolerate MR comment curl failures"
-  cat "${workdir}/output.txt"
-  exit 1
+SH
+chmod +x "$workdir/source/tools/ci/"* "$workdir/bin/curl"
+cd "$workdir/source"
+git init --quiet
+git -c user.name=Test -c user.email=test@example.com add .
+git -c user.name=Test -c user.email=test@example.com commit --quiet -m fixture
+git remote add origin https://github.com/example/docs.git
+export PATH="$workdir/bin:$PATH"
+export DOCS_PREVIEW_ID=nvcf-test
+CI_MERGE_REQUEST_IID=320 CI_MERGE_REQUEST_PROJECT_ID=123 \
+  CI_API_V4_URL=https://example.com/api/v4 FERN_BOT=fake-token \
+  tools/ci/preview-docs > "$workdir/comment.txt" 2>&1
+grep -q 'Skipping MR comment: GitLab API request failed.' "$workdir/comment.txt"
+status=0
+TEST_FERN_EXIT=42 tools/ci/preview-docs > "$workdir/failure.txt" 2>&1 || status=$?
+[ "$status" -eq 42 ] || { echo "Preview build failure was hidden: $status"; exit 1; }
+if OMIT_URL=1 tools/ci/preview-docs > "$workdir/missing.txt" 2>&1; then
+  echo 'expected missing preview URL to fail'; exit 1
 fi
-
-if ! grep -q "Skipping MR comment: GitLab API request failed." "${workdir}/output.txt"; then
-  echo "expected preview-docs to explain skipped MR comment"
-  cat "${workdir}/output.txt"
-  exit 1
+printf 'uncommitted candidate content\n' > docs/page.md
+EXPECT_SHA="$(git rev-parse HEAD)"
+export EXPECT_SHA
+EXPECT_CANDIDATE=1 DOCS_PREVIEW_CONFIG=fern/candidate.yml DOCS_PREVIEW_SKIP_COMMENT=1 \
+  tools/ci/preview-docs > "$workdir/candidate.txt" 2>&1
+[ "$(cat fern/docs.yml)" = legacy ]
+[ "$(cat docs/page.md)" = 'uncommitted candidate content' ]
+EXPECT_CHECK=1 EXPECT_CANDIDATE=1 DOCS_PREVIEW_ID='' DOCS_PREVIEW_CONFIG=fern/candidate.yml \
+  tools/ci/preview-docs --check > "$workdir/check.txt" 2>&1
+status=0
+EXPECT_CHECK=1 TEST_FERN_EXIT=17 tools/ci/preview-docs --check > "$workdir/check-failure.txt" 2>&1 || status=$?
+[ "$status" -eq 17 ] || { echo "Candidate check failure was hidden: $status"; exit 1; }
+if DOCS_PREVIEW_CONFIG=fern/../outside.yml tools/ci/preview-docs > "$workdir/invalid.txt" 2>&1; then
+  echo 'expected an invalid candidate path to fail'; exit 1
 fi
-
-echo "test-preview-docs: PASS"
+echo 'test-preview-docs: PASS'

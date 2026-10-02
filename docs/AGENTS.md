@@ -13,6 +13,11 @@ external workspace index.
 The published site is one Fern site with four products. Each stack product
 has its own version menu. Overview is unversioned.
 
+The docs edition migration is opt-in until cutover. `fern/edition-preview.yml`
+uses one version menu with Overview, Self-Managed, Compute Plane, Observability,
+and Release Notes tabs from `fern/navigation.yml`. `fern/docs.yml` remains the
+canonical production configuration during this phase. Preserve both builds.
+
 - `docs/overview/`: unversioned shared documentation: compatibility matrix, quickstart, manifest, image mirroring, multi-tenancy, function usage (API, CLI, function and task creation, invocation, LLM gateway), load testing, release-notes index, local development, and shared assets under `images/` and `samples/`.
 - `docs/self-managed/`: top-of-tree Self-Managed Stack (control plane) documentation published as `dev`.
 - `docs/compute-plane/`: top-of-tree Compute Plane Stack documentation published as `dev`.
@@ -141,9 +146,43 @@ docker run --rm -it \
   -v "$(pwd):/workspace" \
   -w /workspace \
   -p 3000:3000 \
-  node:20-alpine \
-  sh -c "npm install -g fern-api && fern docs dev"
+  node:24-alpine \
+  sh -c "apk add --no-cache bash git && tools/ci/run-fern docs dev"
 ```
+
+Preview an alternate site configuration without changing the working tree:
+
+```bash
+DOCS_PREVIEW_ID=nvcf-candidate DOCS_PREVIEW_SKIP_COMMENT=1 \
+  DOCS_PREVIEW_CONFIG=fern/candidate.yml tools/ci/preview-docs
+```
+
+The file must exist directly under `fern/`. The helper stages `docs/` and
+`fern/` in a temporary clone with the original Git remote for branch refs.
+CI and local helpers use the pin in `fern/fern.config.json`; CI uses the
+Node version in `fern/.node-version`.
+
+The edition preview also requires Go. It converts current cross-tab links to
+relative file links in the temporary workspace. Keep explicit page slugs in
+`fern/navigation.yml`. Source links retain the product-site form until cutover;
+prepared edition branches contain the converted links. Never run `edition links`
+against frozen documentation trees.
+
+Check the staged candidate without publishing a preview:
+
+```bash
+DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
+```
+
+Native release notes live in `fern/changelog/YYYY-MM-DD.mdx`. Use `##` headings
+for entries and frontmatter tags for filtering. Record stack artifact versions
+separately from the docs edition. A preview entry must not claim qualification.
+
+See `tools/docs-version-sync/README.md` for edition preparation and registration.
+Release branches use their own path-based default navigation, with hidden legacy
+versions retained for historical links. Only the canonical registry owns the
+published edition history. Hosted previews are required to test remote refs;
+local Fern development previews show working-tree versions only.
 
 ## Validation
 
