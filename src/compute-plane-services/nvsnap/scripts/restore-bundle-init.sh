@@ -18,7 +18,7 @@
 # The intercept payload (libnvsnap_intercept.so, patched uvloop/libuv/
 # libzmq, sitecustomize) is no longer staged: criu-v2 dumps and restores
 # in-namespace, so no userspace interception is injected into workloads.
-# lib/nvsnap_intercept/ stays in-tree for future multi-GPU work.
+# the interception stack was removed entirely.
 
 set -euo pipefail
 

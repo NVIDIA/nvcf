@@ -44,7 +44,7 @@ workload:
 A node-level **agent** (DaemonSet) performs capture/restore using
 `/proc` + cgroup inspection — runtime-agnostic, not tied to any container
 runtime API. A **server** provides a REST API, web UI, and checkpoint
-catalog. An optional **admission webhook** auto-injects restore plumbing
+catalog. An optional **admission webhook** injects restore plumbing
 into workload pods.
 
 Deeper design docs:
@@ -172,8 +172,7 @@ optional webhook). Full guide, options, and troubleshooting:
                          │   └─ peer-cascade HTTP server         │
                          │                                       │
                          │  GPU Pod (unmodified image)           │
-                         │   ├─ NIM / vLLM / SGLang / TRT-LLM    │
-                         │   └─ libnvsnap_intercept.so (PRELOAD) │
+                         │   └─ NIM / vLLM / SGLang / TRT-LLM    │
                          └───────────────────────────────────────┘
                                         │
               L1 same-node ─► L2 shared PVC ─► L3 object store
@@ -190,9 +189,6 @@ tiers are present. See
 - **go-criu RPC, not CLI CRIU** — engines like vLLM run 900+ threads; CLI
   CRIU's per-thread ptrace detach takes minutes and often hangs, while RPC
   is seconds regardless of thread count.
-- **`libnvsnap_intercept.so` (LD_PRELOAD)** — `io_uring` (via uvloop/libuv)
-  and `libzmq` epoll don't survive CRIU restore cleanly. Rather than fork
-  every engine, the library reinitializes them on a restore marker.
 - **Forked CRIU** — 26 patches for Kubernetes container support, io_uring,
   and the CUDA plugin. See [docs/THIRD-PARTY-FORKS.md](docs/THIRD-PARTY-FORKS.md).
 
@@ -257,7 +253,6 @@ The full endpoint list (including agent-side cascade endpoints) is in
 ```text
 cmd/                    binary entry points (agent, server, restore-entrypoint, gpu-restore, CLI)
 internal/               agent, server, webhook, CRIU, checkpointstore (Go)
-lib/nvsnap_intercept/   LD_PRELOAD interception library (C)
 deploy/helm/nvsnap/     Helm chart
 deploy/k8s/             manifests + sample workloads
 docker/                 Dockerfiles

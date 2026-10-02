@@ -81,20 +81,6 @@ RUN printf '#include <stdlib.h>\nint main(){return 0;}\n' > /tmp/true.c && \
 
 
 # =============================================================================
-# Stage 2a: Build libnvsnap_intercept.so (io_uring & libuv quiescence)
-# =============================================================================
-FROM ubuntu:22.04 AS intercept-builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY lib/nvsnap_intercept/ .
-
-RUN make clean && make && \
-    ls -la libnvsnap_intercept.so
-
 # =============================================================================
 # Stage 2b: Build Go binaries
 # =============================================================================
@@ -146,8 +132,6 @@ COPY --from=criu-builder /criu-bundle/ /criu-bundle/
 COPY --from=go-builder /bin/nvsnap-agent /criu-bundle/nvsnap-agent
 COPY --from=go-builder /bin/restore-entrypoint /criu-bundle/restore-entrypoint
 
-# Copy libnvsnap_intercept.so for io_uring/libuv quiescence
-COPY --from=intercept-builder /app/libnvsnap_intercept.so /criu-bundle/lib/libnvsnap_intercept.so
 
 # Copy cuda-checkpoint (placed in build context root by build-agent-image.sh)
 COPY cuda-checkpoint /criu-bundle/cuda-checkpoint.real

@@ -18,10 +18,11 @@ The criu-v2 engine builds from public inputs only:
   in the base image's `cuda-cli-builder` stage, on the public CUDA driver
   checkpoint API (`cuCheckpointProcess*`, driver 570+ at runtime). Works for
   x86-64 and arm64 - no committed binaries.
-- The Go agent and `nvsnap_cr.so`: this repository.
+- The Go agent: this repository.
 
-The legacy LD_PRELOAD injection stack (patched uvloop/libuv/libzmq) is not used
-by criu-v2 and is not required to build.
+The legacy LD_PRELOAD injection stack (patched uvloop/libuv/libzmq plus the
+interception library) was removed once criu-v2 replaced it. The implementation
+is preserved at the tag `archive/nvsnap-injection-stack`.
 
 ## Build
 

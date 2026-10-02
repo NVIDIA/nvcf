@@ -234,7 +234,7 @@ RESTORED_PID=$(echo "$RESTORE_RESP" | sed -nE 's/.*"restoredPid":([0-9]+).*/\1/p
 step_end "Restore" OK
 log "  restoredPid=$RESTORED_PID"
 
-# Give the workload a moment to settle (libnvsnap_intercept reinit + wakeRestoredThreads).
+# Give the workload a moment to settle (wakeRestoredThreads).
 sleep 5
 
 # Step 6: post-restore inference via nsenter into the restored process's netns.

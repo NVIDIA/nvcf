@@ -8,7 +8,6 @@
 #
 # <component> is one of:
 #   base server blobstore l2-wait        # self-contained / CRIU
-#   uvloop libzmq libuv pyzmq            # dependency builders (clone forks)
 #   agent init                           # layer on the base + dep images
 #
 # Tags come from scripts/versions.sh (the single source of truth). The
@@ -107,47 +106,6 @@ case "$COMPONENT" in
     push_img "$base_img"
     ;;
 
-  # ── dependency builders (context = the cloned fork) ─────────────────
-  uvloop)
-    img="$REG/uvloop-builder:$NVSNAP_UVLOOP_VERSION"
-    if [ "${NO_SKIP:-0}" != "1" ] && exists "$img"; then echo "[build-image] $img exists; skipping."; exit 0; fi
-    guard_ref NVSNAP_UVLOOP_REF "$NVSNAP_UVLOOP_REF"
-    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    clone_fork "$tmp/src" "$NVSNAP_UVLOOP_REPO" "$NVSNAP_UVLOOP_REF"
-    bud -f "$ROOT/docker/uvloop/Dockerfile" -t "$img" "$tmp/src"
-    push_img "$img"
-    ;;
-  libzmq)
-    img="$REG/libzmq-builder:$NVSNAP_LIBZMQ_VERSION"
-    if [ "${NO_SKIP:-0}" != "1" ] && exists "$img"; then echo "[build-image] $img exists; skipping."; exit 0; fi
-    guard_ref NVSNAP_LIBZMQ_REF "$NVSNAP_LIBZMQ_REF"
-    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    clone_fork "$tmp/src" "$NVSNAP_LIBZMQ_REPO" "$NVSNAP_LIBZMQ_REF"
-    bud -f "$ROOT/docker/libzmq/Dockerfile" -t "$img" "$tmp/src"
-    push_img "$img"
-    ;;
-  libuv)
-    img="$REG/libuv-builder:$NVSNAP_LIBUV_VERSION"
-    if [ "${NO_SKIP:-0}" != "1" ] && exists "$img"; then echo "[build-image] $img exists; skipping."; exit 0; fi
-    guard_ref NVSNAP_LIBUV_REF "$NVSNAP_LIBUV_REF"
-    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    clone_fork "$tmp/src" "$NVSNAP_LIBUV_REPO" "$NVSNAP_LIBUV_REF"
-    bud -f "$ROOT/docker/libuv/Dockerfile" -t "$img" "$tmp/src"
-    push_img "$img"
-    ;;
-  pyzmq)
-    # pyzmq builds against the libzmq source: context holds both
-    # libzmq-src/ and pyzmq-src/ (see docker/pyzmq/Dockerfile).
-    img="$REG/pyzmq-builder:$NVSNAP_PYZMQ_VERSION"
-    if [ "${NO_SKIP:-0}" != "1" ] && exists "$img"; then echo "[build-image] $img exists; skipping."; exit 0; fi
-    guard_ref NVSNAP_PYZMQ_REF "$NVSNAP_PYZMQ_REF"
-    guard_ref NVSNAP_LIBZMQ_REF "$NVSNAP_LIBZMQ_REF"
-    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    clone_fork "$tmp/pyzmq-src" "$NVSNAP_PYZMQ_REPO" "$NVSNAP_PYZMQ_REF"
-    clone_fork "$tmp/libzmq-src" "$NVSNAP_LIBZMQ_REPO" "$NVSNAP_LIBZMQ_REF"
-    bud -f "$ROOT/docker/pyzmq/Dockerfile" -t "$img" "$tmp"
-    push_img "$img"
-    ;;
 
   # ── agent: app layer over base + dep images (context = repo root) ───
   agent)
@@ -159,22 +117,8 @@ case "$COMPONENT" in
     trap 'rm -f "$ROOT/cuda-checkpoint-wrapper.sh"' EXIT
     bud -f docker/agent/Dockerfile.app \
         --build-arg BASE_IMAGE="$REG/nvsnap-agent-base:$NVSNAP_BASE_VERSION" \
-        --build-arg UVLOOP_IMAGE="$REG/uvloop-builder:$NVSNAP_UVLOOP_VERSION" \
-        --build-arg LIBUV_IMAGE="$REG/libuv-builder:$NVSNAP_LIBUV_VERSION" \
-        --build-arg LIBZMQ_IMAGE="$REG/libzmq-builder:$NVSNAP_LIBZMQ_VERSION" \
         -t "$img" .
     push_img "$img"
-    ;;
-
-  # ── init: assembles dep + agent images (context = repo root) ────────
-  init)
-    build "$REG/nvsnap-init:$NVSNAP_INIT_VERSION" \
-        -f docker/init/Dockerfile \
-        --build-arg UVLOOP_IMAGE="$REG/uvloop-builder:$NVSNAP_UVLOOP_VERSION" \
-        --build-arg LIBUV_IMAGE="$REG/libuv-builder:$NVSNAP_LIBUV_VERSION" \
-        --build-arg LIBZMQ_IMAGE="$REG/libzmq-builder:$NVSNAP_LIBZMQ_VERSION" \
-        --build-arg PYZMQ_IMAGE="$REG/pyzmq-builder:$NVSNAP_PYZMQ_VERSION" \
-        --build-arg AGENT_IMAGE="$REG/nvsnap-agent:$NVSNAP_APP_VERSION"
     ;;
 
   *)
