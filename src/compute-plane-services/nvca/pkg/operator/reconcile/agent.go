@@ -189,7 +189,8 @@ type Agent struct {
 	numDispatchers                 int
 	getTickerEventsFunc            func(ctx context.Context) <-chan *core.Event
 	getBackendK8sKubeClientsChFunc func(ctx context.Context) <-chan *core.KubeClients
-	newKubeClientsFunc             func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+	// newKubeClientsFunc builds the backend kube clients in Start; tests replace it with fakes.
+	newKubeClientsFunc func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
 
 	backendk8scache *BackendK8sCache
 

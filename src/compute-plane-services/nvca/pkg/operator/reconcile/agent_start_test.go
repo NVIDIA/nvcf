@@ -19,6 +19,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -31,9 +32,11 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/workqueue"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/cleanup"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/kubeclients"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
@@ -48,6 +51,7 @@ type startTestAgent struct {
 	clients *kubeclients.KubeClients
 }
 
+// newStartTestAgent returns an agent with ephemeral ports, fake kube clients, and its own metrics name.
 func newStartTestAgent(t *testing.T, mutate func(*AgentOptions)) *startTestAgent {
 	t.Helper()
 
@@ -127,6 +131,7 @@ func addStartTestPod(t *testing.T, clients *kubeclients.KubeClients, ownerRefs [
 	require.NoError(t, err)
 }
 
+// TestAgent_Start_ServesRoutes checks that Start registers the service, admin, and shutdown routes.
 func TestAgent_Start_ServesRoutes(t *testing.T) {
 	ag := newStartTestAgent(t, nil)
 	ctx, _ := startTestContext(t)
@@ -147,6 +152,7 @@ func TestAgent_Start_ServesRoutes(t *testing.T) {
 	assert.NotEmpty(t, ag.resourceEventWorkerQueues)
 }
 
+// TestAgent_Start_ClusterManagementClient checks the cluster management client Start picks for each cluster source.
 func TestAgent_Start_ClusterManagementClient(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -180,28 +186,74 @@ func TestAgent_Start_ClusterManagementClient(t *testing.T) {
 	}
 }
 
+// TestAgent_Start_DiscoversDeploymentName checks that /shutdown removes RBAC finalizers using the discovered name.
 func TestAgent_Start_DiscoversDeploymentName(t *testing.T) {
+	const deploymentName = "nvca-operator-release"
+	bg := context.Background()
+
 	ag := newStartTestAgent(t, func(o *AgentOptions) {
 		o.DeploymentName = ""
 		o.PodName = startTestPodName
 		o.PodNamespace = NVCAOperatorNamespace
 	})
-	addStartTestPod(t, ag.clients, []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "nvca-operator-5d9f7c"}})
-	_, err := ag.clients.K8s.AppsV1().ReplicaSets(NVCAOperatorNamespace).Create(context.Background(), &appsv1.ReplicaSet{
+	addStartTestPod(t, ag.clients, []metav1.OwnerReference{{Kind: "ReplicaSet", Name: deploymentName + "-5d9f7c"}})
+	_, err := ag.clients.K8s.AppsV1().ReplicaSets(NVCAOperatorNamespace).Create(bg, &appsv1.ReplicaSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            "nvca-operator-5d9f7c",
+			Name:            deploymentName + "-5d9f7c",
 			Namespace:       NVCAOperatorNamespace,
-			OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "nvca-operator"}},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: deploymentName}},
 		},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
-	ctx, _ := startTestContext(t)
 
+	// A sentinel that is already being deleted makes /shutdown run cleanup on its first poll.
+	now := metav1.Now()
+	_, err = ag.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(bg, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              cleanup.ShutdownSentinelConfigMapName,
+			Namespace:         NVCAOperatorNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{cleanup.SentinelFinalizer},
+		},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	rbacMeta := metav1.ObjectMeta{Name: deploymentName, Finalizers: []string{cleanup.SentinelFinalizer}}
+	_, err = ag.clients.K8s.RbacV1().ClusterRoles().Create(bg,
+		&rbacv1.ClusterRole{ObjectMeta: rbacMeta}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = ag.clients.K8s.RbacV1().ClusterRoleBindings().Create(bg,
+		&rbacv1.ClusterRoleBinding{ObjectMeta: rbacMeta}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	saMeta := rbacMeta
+	saMeta.Namespace = NVCAOperatorNamespace
+	_, err = ag.clients.K8s.CoreV1().ServiceAccounts(NVCAOperatorNamespace).Create(bg,
+		&corev1.ServiceAccount{ObjectMeta: saMeta}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	ctx, _ := startTestContext(t)
 	require.NoError(t, ag.Start(ctx))
-	assert.Equal(t, http.StatusMethodNotAllowed,
-		startTestRequest(t, http.MethodPost, ag.ShutdownAddr, "/shutdown"))
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Get("http://" + ag.ShutdownAddr + "/shutdown")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var shutdown cleanup.ShutdownResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&shutdown))
+	require.True(t, shutdown.Cleanup, "shutdown did not run cleanup: %s", shutdown.Message)
+
+	cr, err := ag.clients.K8s.RbacV1().ClusterRoles().Get(bg, deploymentName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, cr.Finalizers, cleanup.SentinelFinalizer, "ClusterRole finalizer")
+	crb, err := ag.clients.K8s.RbacV1().ClusterRoleBindings().Get(bg, deploymentName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, crb.Finalizers, cleanup.SentinelFinalizer, "ClusterRoleBinding finalizer")
+	sa, err := ag.clients.K8s.CoreV1().ServiceAccounts(NVCAOperatorNamespace).Get(bg,
+		deploymentName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, sa.Finalizers, cleanup.SentinelFinalizer, "ServiceAccount finalizer")
 }
 
+// TestAgent_Start_Errors checks that each early return in Start surfaces its error.
 func TestAgent_Start_Errors(t *testing.T) {
 	errKubeClients := errors.New("kubeconfig unavailable")
 
@@ -295,6 +347,7 @@ func TestAgent_Start_Errors(t *testing.T) {
 	}
 }
 
+// TestAgent_Start_ContextCancelStopsServersAndWorkers checks that cancelling ctx stops the servers and worker queues.
 func TestAgent_Start_ContextCancelStopsServersAndWorkers(t *testing.T) {
 	ag := newStartTestAgent(t, nil)
 	ctx, cancel := startTestContext(t)
