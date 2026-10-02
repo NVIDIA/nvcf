@@ -1,4 +1,4 @@
-# Diagnostic preview only: four known legacy broken links remain merge blockers.
+# Diagnostic preview only: known legacy broken links remain merge blockers.
 instances:
 - url: nvidia-nvcf.docs.buildwithfern.com/nvcf
   custom-domain: docs.nvidia.com/nvcf
@@ -776,6 +776,9 @@ redirects:
 - source: /nvcf/overview/0-6-1-to-1-0-0-upgrade
   destination: /nvcf/overview/0-6-1-to-1-0-1-upgrade
 versions:
+- display-name: 1.0.0 candidate
+  slug: 1.0.0
+  ref: docs/candidates/2214-first-edition
 - display-name: Development
   slug: dev
   path: navigation.yml

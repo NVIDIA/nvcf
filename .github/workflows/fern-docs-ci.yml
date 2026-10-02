@@ -98,7 +98,7 @@ jobs:
         env:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
           PREVIEW: ${{ inputs.preview }}
-          DOCS_PREVIEW_ID: nvcf-${{ github.run_id }}
+          DOCS_PREVIEW_ID: nvcf-docs-editions-2214-rehearsal
           DOCS_PREVIEW_SKIP_COMMENT: '1'
         run: |
           set -euo pipefail
