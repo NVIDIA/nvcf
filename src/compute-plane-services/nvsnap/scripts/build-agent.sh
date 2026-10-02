@@ -239,9 +239,11 @@ build_app() {
 
     # Verify base image CRIU binary
     echo "Verifying base image CRIU binary..."
+    # docker create prints its error on stdout as well, so a failed create
+    # must not be taken for a container id (a missing base once made the
+    # build exit silently here, 2026-10-02).
     local verify_id
-    verify_id=$(docker create "${BASE_IMAGE}" 2>/dev/null)
-    if [ -z "$verify_id" ]; then
+    if ! verify_id=$(docker create "${BASE_IMAGE}" 2>/dev/null) || [ -z "$verify_id" ]; then
         echo "ERROR: Base image ${BASE_IMAGE} not found locally or in registry"
         echo "Run './scripts/build-agent.sh base' first, or './scripts/build-agent.sh full-cycle'"
         exit 1
