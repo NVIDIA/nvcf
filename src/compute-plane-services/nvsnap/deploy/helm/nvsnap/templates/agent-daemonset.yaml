@@ -295,8 +295,11 @@ spec:
               mountPath: /etc/nvsnap/cachedir-env
               readOnly: true
             {{- end }}
+            # Mounted at its host path so the agent's runtime probe sees the
+            # right name: /run/containerd/containerd.sock is containerd,
+            # /run/crio/crio.sock is CRI-O (hostPaths.containerdSock).
             - name: containerd-sock
-              mountPath: /run/containerd/containerd.sock
+              mountPath: {{ .Values.agent.hostPaths.containerdSock }}
             - name: host-proc
               mountPath: /host/proc
               readOnly: true

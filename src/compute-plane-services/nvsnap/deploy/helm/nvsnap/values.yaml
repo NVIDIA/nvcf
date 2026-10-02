@@ -183,9 +183,12 @@ agent:
     NIM_CACHE_PATH={model}
     HF_HOME={model}
 
-  # Runtime variant. "containerd" or "crio". The CRI-O variant mounts the
-  # CRI-O socket and uses a different pidns path; everything else is the
-  # same.
+  # Container runtime. The agent probes the socket it is given and the
+  # well-known paths, so a CRI-O cluster needs only the hostPaths below
+  # pointed at CRI-O (containerdSock: /run/crio/crio.sock,
+  # containerdStorage: /var/lib/containers/storage, and the nvsnap-*
+  # directories under a path that exists on the node). `runtime` is
+  # informational.
   runtime: containerd
 
   image:
