@@ -1054,7 +1054,13 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 	if err := r.dryRunValidateSSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...); err != nil {
 		if isTerminal(err) {
 			err = unwrapTerminalError(err)
-			log.Error(err, "Failed to validate workload objects via server-side dry-run with terminal error. MiniService must be updated with new values to progress update")
+			err = fmt.Errorf("validate workload objects via server-side dry-run (MiniService must be updated with new values to progress update): %w", err)
+			meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+				Type:    v1alpha1.MiniServiceConditionInstallSuccessful,
+				Status:  metav1.ConditionFalse,
+				Reason:  v1alpha1.MiniServiceStatusReasonWorkloadDryRunRejected,
+				Message: fmt.Sprintf("Workload update to revision %d rejected by server-side dry-run: %v", ms.Status.Revision, err),
+			})
 		}
 		return reconcile.Result{}, err
 	}
@@ -1062,8 +1068,13 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 	if err := r.applySSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...); err != nil {
 		if isTerminal(err) {
 			err = unwrapTerminalError(err)
-			log.Error(err, "Failed to apply workload objects with terminal error. MiniService must be updated with new values to progress update; "+
-				"successfully applied objects prior to this error may need to be cleaned up manually")
+			err = fmt.Errorf("apply workload objects (MiniService must be updated with new values to progress update; successfully applied objects prior to this error may need to be cleaned up manually): %w", err)
+			meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+				Type:    v1alpha1.MiniServiceConditionInstallSuccessful,
+				Status:  metav1.ConditionFalse,
+				Reason:  v1alpha1.MiniServiceStatusReasonUnexpectedInstallError,
+				Message: fmt.Sprintf("Workload update to revision %d rejected during server-side apply: %v", ms.Status.Revision, err),
+			})
 		}
 		return reconcile.Result{}, err
 	}
@@ -1661,8 +1672,7 @@ func (r *Reconciler) applySSA(ctx context.Context,
 		if isNamespaced, err := apiutil.IsGVKNamespaced(gvk, rm); isNamespaced {
 			obj.SetNamespace(ms.Spec.Namespace)
 		} else if err != nil {
-			log.Error(err, "Failed to check if object is namespaced")
-			return reconcile.TerminalError(err)
+			return reconcile.TerminalError(fmt.Errorf("check if object is namespaced: %w", err))
 		}
 
 		if err := checkPermissions(ctx, c, gvk, obj.GetNamespace()); err != nil {
@@ -1675,7 +1685,7 @@ func (r *Reconciler) applySSA(ctx context.Context,
 		}
 		for _, mutator := range mutators {
 			if err := mutator.mutate(ctx, obj); err != nil {
-				return reconcile.TerminalError(err)
+				return reconcile.TerminalError(fmt.Errorf("mutate object: %w", err))
 			}
 		}
 		if gvk == storageRequestGVK {
@@ -1734,9 +1744,8 @@ func (r *Reconciler) dryRunValidateSSA(ctx context.Context,
 		if isNamespaced, err := apiutil.IsGVKNamespaced(gvk, rm); isNamespaced {
 			obj.SetNamespace(ms.Spec.Namespace)
 		} else if err != nil {
-			log.Error(err, "Failed to check if object is namespaced")
 			hasTerminal = true
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("check if object is namespaced: %w", err))
 			continue
 		}
 
@@ -1754,7 +1763,7 @@ func (r *Reconciler) dryRunValidateSSA(ctx context.Context,
 		for _, mutator := range mutators {
 			if err := mutator.mutate(ctx, obj); err != nil {
 				hasTerminal = true
-				mutateErr = err
+				mutateErr = fmt.Errorf("mutate object: %w", err)
 				break
 			}
 		}
