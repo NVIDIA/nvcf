@@ -593,6 +593,101 @@ The NVIDIA Cluster Agent supports various feature flags that can be enabled or d
 | SelfHosted          | Enables local vault-based authentication for self-hosted deployments. Required when `ngcConfig.clusterSource` is `self-managed`.                                                                                                                                                                  |
 | HelmAllowCPUNodes   | Allow CPU-only pods (e.g. etcd, redis, envoy) from Helm-based functions to be scheduled on non-GPU nodes; GPU pods keep required instance-type affinity. Reduces cost and improves GPU utilization. Mutually exclusive with HelmResourceConstraints. See [helm-allow-cpu-nodes](./configuration.md).             |
 
+### Helm Workload Resource Limits
+
+CPU and memory limit validation for Helm functions and Helm tasks is enabled by
+default in Compute Plane Stack `v0.2.0` and later.
+
+#### Required Chart Changes
+
+Before upgrading across either stack boundary, add CPU and memory limits to
+every regular container and init container rendered by each Helm function or
+Helm task chart. For example:
+
+```yaml
+resources:
+  limits:
+    cpu: "1"
+    memory: 1Gi
+```
+
+If a rendered container omits either limit, the NVCA validating webhook rejects
+the workload. The error includes text similar to:
+
+```text
+admission webhook "validate-helm-charts.nvca.nvcf.nvidia.io" denied the request: container <name> has no resource limits
+```
+
+The feature gates control the checks independently:
+
+- `EnforceHelmFunctionResourceLimits` validates Helm function charts.
+- `EnforceHelmTaskResourceLimits` validates Helm task charts.
+
+#### Temporary Compatibility Override
+
+Adding limits is the durable fix. If legacy charts cannot be updated before an
+upgrade, add a negative override to the target compute-plane environment file:
+
+```yaml
+global:
+  nvcaOperator:
+    selfManaged:
+      featureGateValues:
+        - "-EnforceHelmFunctionResourceLimits"
+        - "-EnforceHelmTaskResourceLimits"
+```
+
+The leading `-` is required. Include only the negative override for each check
+that you need to disable. The stack preserves negative overrides while adding
+its other default feature gates.
+
+Disabling `HelmResourceConstraints` does not disable these CPU and memory
+checks. Use the two enforcement gates shown above.
+
+<Warning>
+Use negative overrides only as a temporary compatibility measure. Workloads
+without CPU and memory limits can cause resource contention and pod eviction.
+Add limits to the charts, remove the negative overrides, and apply the
+compute-plane configuration again.
+</Warning>
+
+#### Apply and Verify the Override
+
+From the repository root, render and apply the target Compute Plane Stack. Use
+the same cluster name, environment, kubeconfig, and Kubernetes context as the
+existing installation:
+
+```bash
+make -C deploy/stacks/nvcf-compute-plane template \
+  CLUSTER_NAME=<cluster-name> \
+  HELMFILE_ENV=<environment-name> \
+  KUBECONFIG_FILE=<absolute-path-to-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<kubernetes-context>
+
+make -C deploy/stacks/nvcf-compute-plane apply \
+  CLUSTER_NAME=<cluster-name> \
+  HELMFILE_ENV=<environment-name> \
+  KUBECONFIG_FILE=<absolute-path-to-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<kubernetes-context>
+```
+
+Wait for the NVCA Operator rollout and inspect the desired and applied feature
+gates:
+
+```bash
+kubectl --kubeconfig <absolute-path-to-kubeconfig> \
+  --context <kubernetes-context> \
+  -n nvca-operator rollout status deployment/nvca-operator --timeout=10m
+
+kubectl --kubeconfig <absolute-path-to-kubeconfig> \
+  --context <kubernetes-context> \
+  -n nvca-operator get nvcfbackend <cluster-name> \
+  -o jsonpath='{.spec.featureGate.values}{"\n"}{.status.featureGate.values}{"\n"}'
+```
+
+Both lines must contain the expected positive gates when enforcement is active,
+or the expected negative gates when the compatibility override is active.
+
 ### Setting Feature Flags at Install Time
 
 Feature flags can be set during the initial NVCA Operator installation through Helm values.
