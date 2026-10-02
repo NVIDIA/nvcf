@@ -4,7 +4,9 @@ Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Oper
 
 ## Overview
 
-The stack uses the source revision in [source.lock.json](spark/source.lock.json). Runtime and chart fixes live in that source revision. `prepare` fetches that source into your external work directory for all application images and stack/operator charts. Edit gateway/router code in that checkout when [iterating the deployment](#update-only-gateway-or-router).
+The `spark.py` installer coordinates the combined gateway/router chart, the Pylon Operator chart and the GLM backend chart. The backend chart builds llama.cpp, downloads and verifies the GGUF model files, runs GLM across the two GPUs, and creates an `InferenceEndpoint` for Pylon to register.
+
+[source.lock.json](spark/source.lock.json) pins the application source and gateway/router/operator charts, including the endpoint canary timing settings. `prepare` fetches that revision into your external work directory. Edit gateway/router code in that checkout when [iterating the deployment](#update-only-gateway-or-router).
 
 ## Prerequisites
 
@@ -12,7 +14,7 @@ The stack uses the source revision in [source.lock.json](spark/source.lock.json)
 - Kubernetes and storage: an existing ARM64 Kubernetes cluster containing these nodes, with pod networking, `cluster.local` DNS, NetworkPolicy enforcement and node-compatible `ReadWriteOnce` persistent storage. Reserve 400 GiB on the leader and 160 GiB on the worker.
 - GPU enablement: model nodes with a working NVIDIA driver, NVIDIA Container Toolkit configured for the container runtime, and a device plugin advertising `nvidia.com/gpu`. Use an installed `RuntimeClass` matching `runtimeClass` in the config (`nvidia` in the example).
 - Access: an authorized kubeconfig with an explicit context, cluster read access, and permission to create the namespace and install the Helm resources, including persistent volume claims (PVCs), the Pylon custom resource definition (CRD) and role-based access control (RBAC) resources.
-- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, and kubectl. Provide access to GitHub, model downloads and container images, with credentials for the chosen registry.
+- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, and kubectl. Provide access to GitHub, model downloads and container images. The [image build guide](spark/BUILDING.md) covers build tools and distribution credentials.
 
 ## Installation
 
@@ -87,7 +89,7 @@ spark verify-gateway
 8. `register`: Add `InferenceEndpoint/glm53-iq2` with the scoped canary settings. Require Ready, TransportReady and Registered.
 9. `verify-gateway`: Repeat GLM requests through verified HTTPS and Pylon. Check missing/invalid keys, model discovery and healthy GLM registration.
 
-Helm manages persistent resources, and every API operation uses the configured context. Once the runner records a loaded model, preparation phases are gated. Use [the recovery workflow](#recovery-and-limits) for restart testing.
+Helm manages persistent resources, and every API operation uses the configured context. Once the runner records a loaded model, it blocks backend preflight, build, qualification, download and load phases to preserve that model. Use [the recovery workflow](#recovery-and-limits) for restart testing.
 
 Failed Jobs and PVCs remain available for inspection. Resolve the cause before retrying. After an unsuccessful `qualify` phase, run `spark qualify --retry`. The runner saves the previous Job and pod status and available logs under `$SPARK_WORK/evidence`, then uses Helm to start qualification and chain Jobs with new attempt names. Failed Jobs from earlier Helm revisions may remain for inspection. It refuses to retry while an existing qualification or chain Job is active. Only successful pods belonging to the new Jobs can satisfy the acceptance gates.
 
@@ -100,11 +102,11 @@ Pinned runtime:
 
 ## Authentication and TLS
 
-The operator chart generates a cluster token. The runner handles it privately and passes its SHA256 to the router chart. It creates the caller key at `$SPARK_WORK/api-key` with mode 0600. To reuse an authorized key, set `apiKeyFile` in the external config. Keep the raw key because the gateway stores its hash.
+The gateway uses static API keys for inference. Model and registry reads are public. Chat, responses and embeddings require a valid caller key. The selected backend determines which inference APIs it supports.
+
+The operator chart generates a separate cluster token for Pylon to authenticate with the router. The runner handles it privately and passes its SHA256 to the router chart. It creates the caller key at `$SPARK_WORK/api-key` with mode 0600. To reuse an authorized key, set `apiKeyFile` in the external config. Keep the raw key because the gateway stores its hash.
 
 The stack generates a certificate authority (CA) and listener/tunnel certificates. The runner saves the client CA at `$SPARK_WORK/ca.crt`. Client HTTPS and Pylon QUIC verify their CAs. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster. Keep that traffic on the trusted cluster network.
-
-Under the default request policy, model and registry reads are public. Chat, responses and embeddings require the caller key. The selected backend determines which inference APIs it supports.
 
 To use existing certificates:
 
@@ -116,23 +118,23 @@ To use existing certificates:
 
 ### Inspect the deployment
 
-1. Use the workstation with your authorized kubeconfig. Install k9s for interactive inspection. If API access requires SSH forwarding, obtain an isolated kubeconfig and approved forwarding path from the cluster owner.
-2. Read context and namespace from the config, then inspect the cluster and releases.
+Read the context and namespace from your configuration, then inspect the deployment:
 
-   ```bash
-   SPARK_CONTEXT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["context"])' "$SPARK_WORK/config.json")
-   SPARK_NAMESPACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["namespace"])' "$SPARK_WORK/config.json")
-   kubectl --context "$SPARK_CONTEXT" get nodes -o wide
-   kubectl --context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" get pods,inferenceendpoints
-   helm --kube-context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" list
-   k9s --context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" --readonly
-   ```
+```bash
+SPARK_CONTEXT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["context"])' "$SPARK_WORK/config.json")
+SPARK_NAMESPACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["namespace"])' "$SPARK_WORK/config.json")
+kubectl --context "$SPARK_CONTEXT" get nodes -o wide
+kubectl --context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" get deployments
+kubectl --context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" get pods -o wide
+kubectl --context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" get services,inferenceendpoints
+kubectl --context "$SPARK_CONTEXT" -n "$SPARK_NAMESPACE" describe inferenceendpoint glm53-iq2
+```
 
-Each noninteractive remote command must supply its kubeconfig and context explicitly. Shell exports apply only to that shell session. Keep Kubernetes API forwarding separate from the gateway request port-forward below.
+The pod list shows which node runs each component. Check that deployments have their expected ready replicas and that the model endpoint is Ready, TransportReady and Registered.
 
 `glm53-iq2` is the model InferenceEndpoint, and `pylon-glm53-iq2` is its operator-created transport Deployment. GLM leader/worker Deployments and PVCs use your configured release prefix.
 
-### Custom chat, streaming and portable verification
+### Send a chat or streaming request
 
 1. Open the gateway port-forward and keep this workstation terminal running.
 
@@ -141,31 +143,24 @@ Each noninteractive remote command must supply its kubeconfig and context explic
      port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
    ```
 
-2. In another terminal, set the same path variables and run chat, streaming, verification and authentication checks. Substitute the approved key path if you configured `apiKeyFile`.
+2. In another terminal, set the same path variables and send a chat or streaming request. Substitute the approved key path if you configured `apiKeyFile`.
 
    ```bash
    python3 "$SPARK_RECIPE/client.py" --ca-file "$SPARK_WORK/ca.crt" \
      --api-key-file "$SPARK_WORK/api-key" 'What is 17 multiplied by 19? Give one short sentence.'
    python3 "$SPARK_RECIPE/client.py" --ca-file "$SPARK_WORK/ca.crt" \
      --api-key-file "$SPARK_WORK/api-key" --stream 'Explain what a GPU does in two sentences.'
-   python3 "$SPARK_RECIPE/client.py" --ca-file "$SPARK_WORK/ca.crt" \
-     --api-key-file "$SPARK_WORK/api-key" --mode verify
-   python3 "$SPARK_RECIPE/client.py" --ca-file "$SPARK_WORK/ca.crt" \
-     --api-key-file "$SPARK_WORK/api-key" --mode auth
    ```
 
-Verification options:
+### Run the automated gateway checks
 
-- `verify` checks regular and streamed GLM requests, negative authentication cases and gateway discovery.
-- `--cluster-id <cluster-id>` also checks that the registry attributes GLM to the configured cluster. The runner supplies this value automatically.
-- `--output /path/report.json` saves timing and content evidence with keys excluded.
+Stop any manual gateway port-forward on local port 18443, then run:
 
-For direct backend comparison:
+```bash
+spark verify-gateway
+```
 
-- Run `spark verify-direct` to let the runner open and close its own port-forward.
-- Alternatively, forward leader Service `<releasePrefix>-glm:8000` to local 18000 and run `client.py --url http://127.0.0.1:18000 --mode verify`.
-
-Direct HTTP exercises the backend separately from gateway authentication and routing. Omit caller keys on this plaintext endpoint. Bind port-forwards to loopback and give each active manual or runner check its own local port.
+The runner manages its own port-forward and checks GLM answers, streaming, missing/invalid API keys, public model discovery and registration under the configured cluster ID. It saves the report at `$SPARK_WORK/evidence/gateway.json`.
 
 ## Maintenance
 
@@ -269,7 +264,7 @@ If the pin becomes unavailable, or you choose to adopt newer or merged code:
 
 Helm interrupts the owned RPC worker. The check records a failed request or unavailable direct path, restores the worker in a `finally` block, then runs direct and gateway checks.
 
-Observed on the tested two-node setup: about 25 minutes for a cold load and 10 minutes for recovery with cached weights. Measure these times in your environment.
+Observed on the tested two-GPU setup: about 26 minutes for a cold load and 11 minutes for the recovery check with cached weights. Measure these times in your environment.
 
 Runtime guards and capacity:
 

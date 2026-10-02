@@ -69,7 +69,7 @@ Router and Pylon use Cargo profile `integration` for functional validation. Qual
 ## Import an archive
 
 1. Copy the archive through your authorized transfer path to `containerd.archiveDirectory` on `containerd.archiveNode`. The configured `containerd.runAsUser` must be able to read the directory and archive. The example `/var/tmp/llm-poc-images` is a directory on that node.
-2. Set `containerd.nodeNames` to every ARM64 node where Pylon can schedule. For runtimes other than K3s, configure the actual containerd socket and a compatible `ctr` client in the image-loader chart. Keep the archive below 1 GiB or enlarge the chart's importer storage limit.
+2. Set `containerd.nodeNames` to every ARM64 node where Pylon can schedule. For runtimes other than K3s, configure the actual containerd socket and a compatible `ctr` client in the image-loader chart. Keep the archive below 1 GiB. Larger archives require changes to both the runner size check and the chart importer storage limit.
 3. Import the archive and inspect the retained import Jobs. For all four images:
 
    ```bash
