@@ -30,9 +30,9 @@ permissions:
   contents: read
 
 concurrency:
-  # One bump at a time. Several releases landing together refresh the same
-  # pull request rather than racing on the same file.
-  group: stack-pin-bump
+  # Per tag, not repo-wide: a shared group silently dropped queued runs
+  # when releases landed close together (NVIDIA/nvcf#1762).
+  group: stack-pin-bump-${{ github.event.inputs.tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
@@ -172,7 +172,37 @@ jobs:
               -m "${subject}" \
               -m "Opened by the stack pin bump workflow on release of ${TAG}."
           fi
-          git push --force-with-lease origin "${branch}"
+          # The branch is now shared across truly concurrent runs, so another
+          # release can push first. Fetch and rebase onto it, then retry.
+          # Time-budgeted, not attempt-counted: real bursts have hit 23
+          # releases at once (NVIDIA/nvcf#1762), past any small fixed count.
+          # `remaining` bounds every step below, sleep included, so the loop
+          # cannot overrun the budget even if one step is slow.
+          deadline=$(($(date +%s) + 300))
+          attempt=0
+          remaining() {
+            local left=$((deadline - $(date +%s)))
+            [ "${left}" -gt 0 ] && echo "${left}"
+          }
+          give_up() {
+            echo "push kept losing the race against another release past the 5 minute retry budget (attempt ${attempt})" >&2
+            exit 1
+          }
+
+          left="$(remaining)" || give_up
+          until timeout "${left}" git push --force-with-lease origin "${branch}"; do
+            attempt=$((attempt + 1))
+            echo "push raced with another release on the shared branch, retrying (attempt ${attempt})" >&2
+            left="$(remaining)" || give_up
+            sleep_for=$(((RANDOM % 5) + 1))
+            [ "${sleep_for}" -gt "${left}" ] && sleep_for="${left}"
+            sleep "${sleep_for}"
+            left="$(remaining)" || give_up
+            timeout "${left}" git fetch origin "${branch}"
+            left="$(remaining)" || give_up
+            timeout "${left}" git rebase "origin/${branch}"
+            left="$(remaining)" || give_up
+          done
 
           # The pull request squashes to one commit, so its title has to carry
           # the largest step among every pin accumulated on the branch.
