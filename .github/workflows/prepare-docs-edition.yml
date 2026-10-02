@@ -72,6 +72,7 @@ jobs:
             --previous-version "$PREVIOUS" --self-managed "$SELF_MANAGED" \
             --compute-plane "$COMPUTE_PLANE" --observability "$OBSERVABILITY" \
             --qualification "$QUALIFICATION" --out "$RUNNER_TEMP/edition"
+          git -C "$RUNNER_TEMP/edition" add --intent-to-add -- docs fern
           git -C "$RUNNER_TEMP/edition" diff -- docs fern > "$RUNNER_TEMP/edition.patch"
           echo 'Prepared sources are attached for review. Branch creation, protection, and registry activation follow qualification review.' >> "$GITHUB_STEP_SUMMARY"
       - name: Validate prepared documentation
