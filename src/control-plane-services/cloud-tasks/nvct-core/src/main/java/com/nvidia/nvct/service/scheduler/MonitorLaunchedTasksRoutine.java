@@ -20,6 +20,7 @@ import static com.nvidia.nvct.persistence.task.entity.TaskStatus.ERRORED;
 import static com.nvidia.nvct.persistence.task.entity.TaskStatus.LAUNCHED;
 import static com.nvidia.nvct.service.event.EventService.STATUS_CHANGE_EVENT_MESSAGE_WITH_ERROR;
 import static com.nvidia.nvct.service.scheduler.CommonRoutineService.getHealthDto;
+import static com.nvidia.nvct.service.scheduler.CommonRoutineService.getNoInstanceProvisionedErrorMessage;
 import static com.nvidia.nvct.util.NvctConstants.BATCH_SIZE;
 import static com.nvidia.nvct.util.NvctConstants.SPAN_TAG_NCA_ID;
 import static com.nvidia.nvct.util.NvctConstants.SPAN_TAG_TASK_ID;
@@ -75,8 +76,8 @@ public class MonitorLaunchedTasksRoutine {
     private static final String MESG_UNEXPECTED_EXCEPTION =
             "Unexpected exception: {}";
 
-    private static final String MISSING_ICMS_INSTANCES =
-            "No corresponding ICMS instances found";
+    private static final String MESG_NO_ICMS_INSTANCES_FOR_TASK =
+            "Task id '{}': No corresponding ICMS instances found after grace period";
     private static final String NO_HEALTH_INFORMATION_AVAILABLE =
             "No health information available";
 
@@ -212,20 +213,23 @@ public class MonitorLaunchedTasksRoutine {
         return isNotBlank(errorMessage) ? errorMessage : NO_HEALTH_INFORMATION_AVAILABLE;
     }
 
-    // Transitions the Task to ERRORED status when there are no corresponding ICMS Request Id(s).
-    // This should not happen. We saw this when ICMS was not hooked up to NVCT. So, keeping this
-    // for completeness.
+    // Transitions the Task to ERRORED status when ICMS still has no corresponding instance for
+    // this Task after the grace period. This most commonly indicates the cluster ran out of
+    // capacity before ICMS could place the instance, so the caller-facing message reflects that
+    // rather than the internal ICMS request-id lookup that observed it.
     private void transitionToErroredWhenNoIcmsRequestsFound(TaskEntity task) {
         var gpuSpec = task.getGpuSpec();
         var taskId = task.getTaskId();
         var ncaId = task.getNcaId();
-        var healthDto = getHealthDto(gpuSpec, MISSING_ICMS_INSTANCES);
-        log.info(MESG_TASK_HEALTH, taskId, MISSING_ICMS_INSTANCES);
+        var errorMessage = getNoInstanceProvisionedErrorMessage(gpuSpec);
+        var healthDto = getHealthDto(gpuSpec, errorMessage);
+        log.info(MESG_NO_ICMS_INSTANCES_FOR_TASK, taskId);
+        log.info(MESG_TASK_HEALTH, taskId, errorMessage);
 
         taskService.updateTask(taskId, TaskStatus.ERRORED, healthDto);
         taskErrorMetricsService.recordTaskError(ncaId);
         var mesg = STATUS_CHANGE_EVENT_MESSAGE_WITH_ERROR
-                        .formatted(LAUNCHED, ERRORED, MISSING_ICMS_INSTANCES);
+                        .formatted(LAUNCHED, ERRORED, errorMessage);
         log.info(MESG_TASK_INFO, taskId, mesg);
         eventService.insertEvent(ncaId, taskId, mesg);
     }
