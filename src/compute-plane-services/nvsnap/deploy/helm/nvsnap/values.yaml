@@ -61,7 +61,9 @@ postInstallSmoke:
   image:
     # alpine/k8s ships kubectl + curl + jq in a small image and has
     # stable tags (Bitnami deprecated bare bitnami/kubectl:<minor>).
-    repository: alpine/k8s
+    # Fully qualified: CRI-O enforces short-name resolution and rejects
+    # a bare alpine/k8s as ambiguous.
+    repository: docker.io/alpine/k8s
     tag: "1.31.13"
     pullPolicy: IfNotPresent
 
