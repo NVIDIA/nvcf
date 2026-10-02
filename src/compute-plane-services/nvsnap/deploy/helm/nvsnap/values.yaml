@@ -55,9 +55,12 @@ postInstallSmoke:
   # Timeout for the whole Job (each probe has its own short timeout).
   # The agent DaemonSet rolls one node at a time, so both must scale with
   # the GPU node count: 18 nodes took over five minutes (2026-09-30).
-  activeDeadlineSeconds: 900
+  # A DaemonSet roll is serial (maxUnavailable 1, about 30 s per node), so
+  # the deadline and the rollout wait must fit the largest cluster the
+  # chart is installed on: 31 GPU nodes took 15 min (2026-10-02).
+  activeDeadlineSeconds: 2400
   # kubectl rollout status timeout for the agent DaemonSet.
-  agentRolloutTimeout: 12m
+  agentRolloutTimeout: 35m
   image:
     # alpine/k8s ships kubectl + curl + jq in a small image and has
     # stable tags (Bitnami deprecated bare bitnami/kubectl:<minor>).
