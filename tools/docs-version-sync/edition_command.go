@@ -58,7 +58,7 @@ func runEdition(args []string) error {
 	}
 	allowed := map[string]string{
 		"prepare": "repo version source previous-version change self-managed compute-plane observability navigation qualification out",
-		"check":   "repo local-refs", "register": "repo version commit local-refs", "manifest": "repo", "links": "repo",
+		"check":   "repo local-refs", "register": "repo version commit local-refs", "manifest": "repo", "links": "repo navigation",
 	}
 	fields, ok := allowed[command]
 	if !ok {
@@ -87,7 +87,7 @@ func runEdition(args []string) error {
 	}
 	switch command {
 	case "links":
-		return stageEditionLinks(root)
+		return stageEditionLinks(root, *nav)
 	case "prepare":
 		plan := editionPreparation{Source: *source, Version: *version, PreviousVersion: *previous, Change: *change, SelfManaged: *selfManaged, ComputePlane: *compute, Observability: *obs, Navigation: *nav, Qualification: *qualification}
 		return prepareEdition(root, *out, plan)
@@ -170,7 +170,7 @@ func prepareEdition(root, out string, plan editionPreparation) error {
 	if err := writeBranchConfiguration(staged, plan); err != nil {
 		return err
 	}
-	if err := stageEditionLinks(staged); err != nil {
+	if err := stageEditionLinks(staged, plan.Navigation); err != nil {
 		return err
 	}
 	plan.Digest, err = editionTreeDigest(staged)

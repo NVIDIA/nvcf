@@ -20,8 +20,11 @@ var editionLinkRE = regexp.MustCompile(`(\]\(|\bhref=["'])(/nvcf/[^"'()\s]+)`)
 
 // stageEditionLinks converts only current-page links in authored edition content.
 // Frozen archives and explicitly versioned destinations retain their identity.
-func stageEditionLinks(root string) error {
-	data, err := os.ReadFile(filepath.Join(root, "fern", "navigation.yml"))
+func stageEditionLinks(root, navigationPath string) error {
+	if !safeFernPath(navigationPath) {
+		return fmt.Errorf("edition navigation must stay under fern/")
+	}
+	data, err := os.ReadFile(filepath.Join(root, "fern", navigationPath))
 	if err != nil {
 		return err
 	}
@@ -48,7 +51,7 @@ func stageEditionLinks(root string) error {
 				if !ok || slug == "" {
 					return fmt.Errorf("edition page %s requires an explicit slug", source)
 				}
-				path, err := filepath.EvalSymlinks(filepath.Join(root, "fern", source))
+				path, err := filepath.EvalSymlinks(filepath.Join(root, "fern", filepath.Dir(navigationPath), source))
 				if err != nil {
 					return err
 				}

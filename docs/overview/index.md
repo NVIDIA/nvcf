@@ -1,10 +1,8 @@
 # NVIDIA Cloud Functions
 
-{/* docs-version-sync:BEGIN edition-overview */}
+{/*docs-version-sync:BEGIN edition-overview*/}
 
-
-
-{/* docs-version-sync:END edition-overview */}
+{/*docs-version-sync:END edition-overview*/}
 
 ![NVIDIA Cloud Functions banner](images/nvcf-banner.svg)
 
