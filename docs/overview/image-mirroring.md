@@ -3,7 +3,7 @@
 All required self-hosted NVCF artifacts (see [self-hosted-artifact-manifest](./manifest.md)) must be available to be pulled by pods in your Kubernetes cluster. The deployment bundles are `nvcf-self-managed-stack` for the control plane, `nvcf-compute-plane-stack` for the compute plane, and `nvcf-observability-stack` for standalone shared observability. This page provides examples on how to pull artifacts from NGC and push them to your desired registry.
 
 <Note>
-**Mirroring images is not the same as configuring image pull secrets.** This page covers how to copy NVCF artifacts into your registry. If your registry is private, Kubernetes also needs credentials to pull those images at runtime. For instructions on configuring image pull secrets for the NVCF control plane pods, see [control-plane-image-pull-secrets](/nvcf/self-managed/helmfile-installation) in the installation guide.
+**Mirroring images is not the same as configuring image pull secrets.** This page covers how to copy NVCF artifacts into your registry. If your registry is private, Kubernetes also needs credentials to pull those images at runtime. For instructions on configuring image pull secrets for the NVCF control plane pods, see [control-plane-image-pull-secrets](../self-managed/helmfile-installation.md) in the installation guide.
 
 </Note>
 
@@ -49,7 +49,7 @@ If you plan to deploy **Low Latency Streaming (LLS)**, you must mirror the follo
 
 - Streaming application images (e.g., `usd-composer`)
 
-See [self-hosted-lls-installation](/nvcf/self-managed/lls-installation) for LLS deployment instructions.
+See [self-hosted-lls-installation](../self-managed/lls-installation.md) for LLS deployment instructions.
 
 ## Pulling Artifacts from NGC
 
@@ -347,7 +347,7 @@ The extracted directory contains:
 
 {/*docs-version-sync:END image-mirroring-cli-snippet*/}
 
-See [self-hosted-cli](/nvcf/overview/cli) for detailed configuration instructions
+See [self-hosted-cli](cli.md) for detailed configuration instructions
 
 <Note>
 If you don't have access to this repository, contact your NVIDIA representative.

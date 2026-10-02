@@ -1,5 +1,9 @@
 version: 1
 target: main
+docs_edition:
+  version: 1.0.0
+  status: development
+  change: initial
 registries:
   public-helm:
     host: https://helm.ngc.nvidia.com

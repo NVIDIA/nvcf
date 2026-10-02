@@ -24,65 +24,47 @@ navbar-links:
 - type: github
   value: https://github.com/NVIDIA/nvcf
 
-# Each stack is a product with its own version menu. Overview is unversioned
-# and holds the compatibility matrix and shared guides. Legacy full-tree
-# versions predate the per-stack split and are attached to Self-Managed Stack.
-products:
-  - display-name: Overview
-    subtitle: Compatibility matrix and shared guides
-    slug: overview
-    path: products/overview.yml
-
-  - display-name: Self-Managed Stack
-    subtitle: Control plane installation and operations
-    slug: self-managed
-    path: products/self-managed/1.0.1.yml
-    versions:
-      - display-name: "1.0.1"
-        path: products/self-managed/1.0.1.yml
-        slug: "1.0.1"
-      - display-name: dev
-        path: products/self-managed/dev.yml
-        slug: dev
-      - display-name: "0.6.1 (legacy)"
-        path: products/self-managed/v0.6.1.yml
-        slug: "v0.6.1"
-      - display-name: "0.6.0 (legacy)"
-        path: products/self-managed/v0.6.0.yml
-        slug: "v0.6.0"
-      - display-name: "0.5.0 (legacy)"
-        path: products/self-managed/v0.5.yml
-        slug: "v0.5"
-
-  - display-name: Compute Plane Stack
-    subtitle: GPU cluster setup and scheduling
-    slug: compute-plane
-    path: products/compute-plane/1.0.0.yml
-    versions:
-      - display-name: "1.0.0"
-        path: products/compute-plane/1.0.0.yml
-        slug: "1.0.0"
-      - display-name: dev
-        path: products/compute-plane/dev.yml
-        slug: dev
-
-  - display-name: Observability Stack
-    subtitle: Metrics, dashboards, and alerting
-    slug: observability
-    path: products/observability/1.0.0.yml
-    versions:
-      - display-name: "1.0.0"
-        path: products/observability/1.0.0.yml
-        slug: "1.0.0"
-      - display-name: dev
-        path: products/observability/dev.yml
-        slug: dev
+# Docs editions share one selector. Released branches are pinned in editions.yml.
+versions:
+- display-name: Development
+  slug: dev
+  path: navigation.yml
+- display-name: Self-Managed Stack 1.0.1 archive
+  slug: self-managed/1.0.1
+  path: products/self-managed/1.0.1.yml
+  hidden: true
+- display-name: Self-Managed Stack 0.6.1 (legacy) archive
+  slug: self-managed/v0.6.1
+  path: products/self-managed/v0.6.1.yml
+  hidden: true
+- display-name: Self-Managed Stack 0.6.0 (legacy) archive
+  slug: self-managed/v0.6.0
+  path: products/self-managed/v0.6.0.yml
+  hidden: true
+- display-name: Self-Managed Stack 0.5.0 (legacy) archive
+  slug: self-managed/v0.5
+  path: products/self-managed/v0.5.yml
+  hidden: true
+- display-name: Compute Plane Stack 1.0.0 archive
+  slug: compute-plane/1.0.0
+  path: products/compute-plane/1.0.0.yml
+  hidden: true
+- display-name: Observability Stack 1.0.0 archive
+  slug: observability/1.0.0
+  path: products/observability/1.0.0.yml
+  hidden: true
 
 check:
   rules:
     broken-links: error
 
 redirects:
+  - source: "/nvcf/observability/dev/:slug*"
+    destination: "/nvcf/dev/observability/:slug*"
+  - source: "/nvcf/compute-plane/dev/:slug*"
+    destination: "/nvcf/dev/compute-plane/:slug*"
+  - source: "/nvcf/self-managed/dev/:slug*"
+    destination: "/nvcf/dev/self-managed/:slug*"
   - source: "/nvcf/index.html"
     destination: "/nvcf/overview"
   - source: "/nvcf/latest/index.html"
@@ -836,3 +818,7 @@ redirects:
     destination: "/nvcf/overview/0-6-1-to-1-0-1-upgrade"
   - source: "/nvcf/overview/0-6-1-to-1-0-0-upgrade"
     destination: "/nvcf/overview/0-6-1-to-1-0-1-upgrade"
+
+theme:
+  tabs:
+    placement: header

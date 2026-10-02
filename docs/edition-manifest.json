@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "docs_edition": {
+    "version": "1.0.0",
+    "status": "development",
+    "change": "initial"
+  },
+  "stacks": {
+    "compute-plane": {
+      "version": "1.0.0",
+      "source_tag": "deploy/stacks/nvcf-compute-plane/v1.0.0",
+      "source_commit": "63ac4456d3422508f2ff4b219c7dff8fba1c21c0",
+      "inventory_asset": "nvcf-compute-plane-stack-inventory.json",
+      "inventory_url": "https://github.com/NVIDIA/nvcf/releases/download/deploy/stacks/nvcf-compute-plane/v1.0.0/nvcf-compute-plane-stack-inventory.json"
+    },
+    "control-plane": {
+      "version": "1.0.1",
+      "source_tag": "deploy/stacks/self-managed/v1.0.1",
+      "source_commit": "67c010f24304b5c06d0493fa1b976a69b6ee8dea",
+      "inventory_asset": "nvcf-self-managed-stack-inventory.json",
+      "inventory_url": "https://github.com/NVIDIA/nvcf/releases/download/deploy/stacks/self-managed/v1.0.1/nvcf-self-managed-stack-inventory.json"
+    },
+    "observability": {
+      "version": "1.0.0",
+      "source_tag": "deploy/stacks/observability/v1.0.0",
+      "source_commit": "b77e96a3f8c18e9318b93e697e33e596c4ede7d7",
+      "inventory_asset": "nvcf-observability-stack-inventory.json",
+      "inventory_url": "https://github.com/NVIDIA/nvcf/releases/download/deploy/stacks/observability/v1.0.0/nvcf-observability-stack-inventory.json"
+    }
+  }
+}

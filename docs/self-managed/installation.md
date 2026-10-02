@@ -2,18 +2,20 @@
 
 {/*docs-version-sync:BEGIN edition-control-plane*/}
 
+Docs edition `1.0.0` | Self-managed (control plane) `1.0.1` | Development candidate.
+
 {/*docs-version-sync:END edition-control-plane*/}
 
 Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
 
-For a local k3d fresh install, start with the [Quickstart](/nvcf/overview/quickstart). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
+For a local k3d fresh install, start with the [Quickstart](../overview/quickstart.md). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
 
-For a full list of required artifacts, see [self-hosted-artifact-manifest](/nvcf/overview/manifest).
+For a full list of required artifacts, see [self-hosted-artifact-manifest](../overview/manifest.md).
 
 ![Self-hosted component overview](../overview/images/nvcf-high-level-stack.svg)
 
 <Tip>
-Want to try NVCF locally first? See [Local Development](/nvcf/overview/local-development) to create a k3d cluster, then use the [Quickstart](/nvcf/overview/quickstart) local k3d flow.
+Want to try NVCF locally first? See [Local Development](../dev/local-development.md) to create a k3d cluster, then use the [Quickstart](../overview/quickstart.md) local k3d flow.
 
 </Tip>
 
@@ -21,7 +23,7 @@ Want to try NVCF locally first? See [Local Development](/nvcf/overview/local-dev
 
 | Path | Use when | Starting point |
 | --- | --- | --- |
-| Local one-click CLI installation | You want the fastest local k3d install and cluster registration path. | [Quickstart](/nvcf/overview/quickstart) |
+| Local one-click CLI installation | You want the fastest local k3d install and cluster registration path. | [Quickstart](../overview/quickstart.md) |
 | Helmfile installation | You need manual release control, partial recovery, upgrades, or detailed Helmfile operations. | [Helmfile Installation](./helmfile-installation.md) |
 
 The control plane and GPU cluster can be the same Kubernetes cluster or separate clusters when you use Helmfile or the explicit CLI install primitives. The quickstart supports only a single local k3d cluster. For a complete Amazon EKS example of both topologies, see the [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
@@ -29,7 +31,7 @@ The control plane and GPU cluster can be the same Kubernetes cluster or separate
 For remote installs, prepare the Gateway API ingress path and CLI endpoint
 configuration before registering GPU clusters or running post-install CLI
 checks. See [Helmfile Installation](./helmfile-installation.md),
-[Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters), and
+[Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md), and
 [Gateway Routing](./gateway-routing.md).
 
 ## Overview
@@ -41,18 +43,18 @@ Every installation path follows the same high-level sequence:
 
 2. Make NVCF artifacts available to your Kubernetes clusters. Pull them
    directly from NGC when the clusters have NGC access, or follow the
-   [image mirroring instructions](/nvcf/overview/image-mirroring) to copy them to a
+   [image mirroring instructions](../overview/image-mirroring.md) to copy them to a
    registry that the clusters can access.
 
 3. Create or select Kubernetes cluster targets. You need a cluster for the control plane and a GPU cluster for function workloads. These can be the same cluster or separate clusters.
 
-4. Install the self-hosted control plane. Use the [Quickstart](/nvcf/overview/quickstart) for a local k3d install or [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations.
+4. Install the self-hosted control plane. Use the [Quickstart](../overview/quickstart.md) for a local k3d install or [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations.
 
-5. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters).
+5. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md).
 
 6. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
 
-7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing, NVCF UI when your stack package includes that addon. See [Simulation Caches](/nvcf/compute-plane/simulation-caches), [LLS Installation](./lls-installation.md), [Gateway Routing](./gateway-routing.md), and [NVCF UI](./nvcf-ui.md).
+7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing, NVCF UI when your stack package includes that addon. See [Simulation Caches](../compute-plane/caches.md), [LLS Installation](./lls-installation.md), [Gateway Routing](./gateway-routing.md), and [NVCF UI](./nvcf-ui.md).
 
 ## Kubernetes Cluster Requirements
 
@@ -79,7 +81,7 @@ See [NVIDIA GPU Operator documentation](https://docs.nvidia.com/datacenter/cloud
 Fake GPU Operator for development and testing:
 
 For environments without actual GPU hardware, install the fake GPU operator to simulate
-GPU resources. See [fake-gpu-operator](/nvcf/compute-plane/fake-gpu-operator) for full instructions.
+GPU resources. See [fake-gpu-operator](../dev/fake-gpu-operator.md) for full instructions.
 </Note>
 
 #### SMB CSI Driver
@@ -88,7 +90,7 @@ The [SMB CSI driver](https://github.com/kubernetes-csi/csi-driver-smb)
 (`smb.csi.k8s.io`) must be installed on every GPU cluster. NVCA uses the
 driver for shared model cache storage that function worker pods mount. Install
 and verify the driver before registering the GPU cluster. See the
-[Self-Managed Clusters prerequisites](/nvcf/compute-plane/self-managed-clusters#prerequisites)
+[Self-Managed Clusters prerequisites](../compute-plane/cluster-management/self-managed.md#prerequisites)
 for the installation command.
 
 #### Network Policies
@@ -110,7 +112,7 @@ Some cloud providers have minimum PVC size requirements. For example, AWS EBS gp
 
 ### Cluster Sizing and Storage
 
-See [infrastructure-sizing](/nvcf/overview/infrastructure-sizing) for node pool specifications, storage
+See [infrastructure-sizing](../overview/infrastructure-sizing.md) for node pool specifications, storage
 recommendations, and three recommended sizing tiers (Development, Minimal HA,
 and Production).
 
