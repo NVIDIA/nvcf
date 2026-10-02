@@ -149,6 +149,7 @@ func TestCRDValidation(t *testing.T) {
 	valid := newEndpoint(ns, "valid")
 	valid.Spec.MaxEngineConcurrency = ptr.To[int32](8)
 	valid.Spec.GPU = &pylonv1alpha1.GPUSpec{Product: "NVIDIA-GB10"}
+	valid.Spec.Canary = &pylonv1alpha1.CanarySpec{TimeoutSeconds: ptr.To[int32](180), IntervalSeconds: ptr.To[int32](60)}
 	require.NoError(t, k8sClient.Create(ctx, valid))
 
 	tests := []struct {
@@ -164,6 +165,18 @@ func TestCRDValidation(t *testing.T) {
 		{name: "relative health path", mutate: func(e *pylonv1alpha1.InferenceEndpoint) { e.Spec.Health.Path = "health" }, field: "spec.health.path"},
 		{name: "empty health path", mutate: func(e *pylonv1alpha1.InferenceEndpoint) { e.Spec.Health.Path = "" }, field: "spec.health.path"},
 		{name: "zero concurrency", mutate: func(e *pylonv1alpha1.InferenceEndpoint) { e.Spec.MaxEngineConcurrency = ptr.To[int32](0) }, field: "spec.maxEngineConcurrency"},
+		{name: "zero canary timeout", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
+			e.Spec.Canary = &pylonv1alpha1.CanarySpec{TimeoutSeconds: ptr.To[int32](0)}
+		}, field: "spec.canary.timeoutSeconds"},
+		{name: "excessive canary timeout", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
+			e.Spec.Canary = &pylonv1alpha1.CanarySpec{TimeoutSeconds: ptr.To[int32](301)}
+		}, field: "spec.canary.timeoutSeconds"},
+		{name: "disabled active canary", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
+			e.Spec.Canary = &pylonv1alpha1.CanarySpec{IntervalSeconds: ptr.To[int32](0)}
+		}, field: "spec.canary.intervalSeconds"},
+		{name: "excessive canary interval", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
+			e.Spec.Canary = &pylonv1alpha1.CanarySpec{IntervalSeconds: ptr.To[int32](3601)}
+		}, field: "spec.canary.intervalSeconds"},
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

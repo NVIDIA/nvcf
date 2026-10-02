@@ -24,6 +24,19 @@ The chart installs:
 To run this chart with the LLM gateway stack on a local k3d cluster, see the
 [Inference Endpoints quickstart](../../../docs/dev/inference-endpoints-quickstart.md).
 
+## Endpoint canary timing
+
+Pylon checks inference during bringup, recovery, and normal operation. Slow models or a backend with one inference slot can need more time because a canary waits behind an active request. Set `spec.canary` on that `InferenceEndpoint` to override its timeout and check interval:
+
+```yaml
+spec:
+  canary:
+    timeoutSeconds: 180
+    intervalSeconds: 60
+```
+
+Omitted fields use Pylon's defaults and leave other endpoints unchanged. The timeout must be between 1 and 300 seconds. The interval must be between 1 and 3600 seconds. These settings retain inference checks and the existing generation limit.
+
 ## Prerequisites
 
 - Kubernetes cluster and Helm 3.x
