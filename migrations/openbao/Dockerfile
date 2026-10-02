@@ -50,6 +50,25 @@ RUN apk add --no-cache curl tar && \
         -ldflags="-s -w -buildid= -X main.version=${JWKER_BUILD_VERSION} -X main.commit=${JWKER_COMMIT} -X main.date=${JWKER_BUILD_DATE}" \
         -o /out/jwker ./cmd/jwker
 
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS helm-builder
+
+ARG TARGETARCH
+
+RUN apk add --no-cache bash curl make tar
+COPY scripts/build-helm.sh scripts/verify-helm.sh scripts/verify-openbao.sh /usr/local/bin/
+RUN TARGETARCH="${TARGETARCH}" OUTPUT_DIR=/out /usr/local/bin/build-helm.sh
+
+FROM alpine:${ALPINE_VERSION} AS helm-runtime-verifier
+
+ARG TARGETARCH
+
+COPY --from=helm-builder /out/helm-linux-${TARGETARCH} /out/helm
+RUN test "$(/out/helm version --template '{{.Version}}')" = 'v3.22.0+nvcf' && \
+    /out/helm create /tmp/helm-smoke && \
+    /out/helm lint /tmp/helm-smoke && \
+    /out/helm template security-smoke /tmp/helm-smoke > /tmp/rendered.yaml && \
+    grep -q 'kind: Deployment' /tmp/rendered.yaml
+
 FROM --platform=$BUILDPLATFORM ${KUBECTL_GO_IMAGE} AS kubectl-builder
 
 ARG TARGETARCH
@@ -104,10 +123,12 @@ ARG TARGETARCH
 # image receives fixes published after the upstream OpenBao release.
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache openssl uuidgen helm curl bash jq
+    apk add --no-cache openssl uuidgen curl bash jq
 
 COPY --from=bao-builder --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=jwker-builder /out/jwker /usr/local/bin/jwker
+COPY --from=helm-runtime-verifier --chmod=0555 /out/helm /usr/bin/helm
+COPY --from=helm-builder /out/helm-LICENSE /usr/share/licenses/helm/LICENSE
 COPY --from=kubectl-runtime-verifier /out/kubectl /usr/local/bin/kubectl
 
 WORKDIR /app

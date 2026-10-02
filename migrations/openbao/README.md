@@ -52,6 +52,15 @@ The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime bas
 
 The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0. It rebuilds Kubernetes v1.36.4 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.6 toolchain and vendored dependencies. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform.
 
+Helm is built from checksum-pinned v3.22.0 source with gRPC v1.83.2 instead of
+installing Alpine's older Helm package. The build checks the Go toolchain,
+architecture, and security floors for x/crypto, x/net, and ORAS. It also
+rejects vulnerable gRPC, containerd, or spdystream versions if those unlinked
+dependencies return. Each architecture runs Helm version, chart creation,
+linting, and rendering checks before its binary enters the final image. The
+binary reports `v3.22.0+nvcf` and a modified source tree for the dependency
+override. Its license is included under `/usr/share/licenses/helm/`.
+
 ```bash
 docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
