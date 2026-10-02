@@ -941,3 +941,64 @@ func TestModelVolumeController_SetSizedFromFreshMeasurement(t *testing.T) {
 		t.Errorf("set sized from fresh measurements (700 MiB + 550 MiB + 10%% -> 2Gi), not from the 1.2 MB stamp: got %s", size.String())
 	}
 }
+
+// On a shared filesystem a primary that is bound but not complete is
+// already readable. The agent mints the download Job's writer view and the
+// pending readers' read-only views as soon as the primary binds, without
+// waiting for completion; the readers' wait init watches for the marker.
+func TestModelVolumeController_SharedFilesystemMintsViewsOnceBound(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("4Ti")}}
+	sysNS := p.Cfg.SystemNamespace()
+	if _, err := p.EnsureWriterClaim(ctx, mvURI, sysNS); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ := checkpointstore.LookupVolumeHandleTransform("")
+	minter := &checkpointstore.SharedVolumePromoter{KubeClient: kc, StorageClass: "fs", Transform: tx, Log: logrus.New()}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
+	writer := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI) + "-w1", Namespace: "sr-fn",
+		Labels:      map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "writer"},
+		Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI}}, Spec: corev1.PodSpec{NodeName: "node-b"}}
+	reader := readerPod("other-ns", "node-c")
+	if _, err := kc.CoreV1().Pods("other-ns").Create(ctx, reader, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// Primary not bound yet: nothing to view.
+	c.Handle(ctx, writer)
+	c.Handle(ctx, reader)
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, p.Cfg.WriterViewClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Fatal("no writer view before the primary binds")
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Fatal("no read-only view before the primary binds")
+	}
+	// The filesystem provisions and the claim binds.
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-fs"}, Spec: corev1.PersistentVolumeSpec{
+		Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Ti")},
+		PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+		PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/export"}}}}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{})
+	pvc.Spec.VolumeName, pvc.Status.Phase = "pv-fs", corev1.ClaimBound
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, writer)
+	wv, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, p.Cfg.WriterViewClaimName(mvURI), metav1.GetOptions{})
+	if err != nil || wv.Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Fatalf("the writer view is minted once the primary binds: %v %+v", err, wv)
+	}
+	c.Handle(ctx, reader)
+	ro, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{})
+	if err != nil || ro.Spec.AccessModes[0] != corev1.ReadOnlyMany {
+		t.Fatalf("the pending reader gets its read-only view before completion: %v %+v", err, ro)
+	}
+	got, _ := kc.CoreV1().Pods("other-ns").Get(ctx, reader.Name, metav1.GetOptions{})
+	if got.Labels[modelvolume.PendingLabel] != "false" {
+		t.Errorf("the reader is un-pended: %v", got.Labels)
+	}
+	c.Handle(ctx, writer) // idempotent
+}

@@ -166,17 +166,23 @@ func (m *Mutator) ensureDownload(ctx context.Context, pod *corev1.Pod, uri strin
 	if err != nil {
 		return "", err
 	}
-	// A filesystem claim binds in the time of one provisioning round trip
-	// (OCI FSS: about a second). Admission has a 5 s budget; past the
-	// wait the pod is admitted unchanged and the next admission finds the
-	// bound claim.
-	pv, err := m.ModelVolume.WaitBound(ctx, sysNS, claim, primaryBindWait)
-	if err != nil {
-		return "", fmt.Errorf("primary claim %s/%s not bound: %w", sysNS, claim, err)
-	}
+	// The Job writes through the writer view in the pod's namespace. The
+	// view can only be minted once the primary is bound, and binding is
+	// not gated on here: a re-used filesystem binds in about a second, a
+	// brand-new one can take the better part of a minute (OCI FSS,
+	// 2026-10-02), and admission has a 5 s budget. The Job is created
+	// either way, referencing the view by name; while the view does not
+	// exist the Job's pod pends on volume binding and the agents mint the
+	// view as soon as the primary is bound (writer role on the Job's pod).
 	view := cfg.WriterViewClaimName(uri)
-	if err := m.ViewMinter.MintViewFromPVLabels(ctx, pv, cfg.WriterViewPVName(uri, pod.Namespace), view, pod.Namespace, cfg.ReadOnlyLabels(uri), false); err != nil {
-		return "", fmt.Errorf("mint writer view: %w", err)
+	pv, err := m.ModelVolume.WaitBound(ctx, sysNS, claim, primaryBindWait)
+	if err == nil {
+		if err := m.ViewMinter.MintViewFromPVLabels(ctx, pv, cfg.WriterViewPVName(uri, pod.Namespace), view, pod.Namespace, cfg.ReadOnlyLabels(uri), false); err != nil {
+			return "", fmt.Errorf("mint writer view: %w", err)
+		}
+	} else {
+		pv = ""
+		log.WithField("primary", sysNS+"/"+claim).Info("model volume: primary not bound yet; the agents mint the views once it is")
 	}
 	job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, view, step)
 	if err != nil {
@@ -187,7 +193,7 @@ func (m *Mutator) ensureDownload(ctx context.Context, pod *corev1.Pod, uri strin
 }
 
 // primaryBindWait bounds the admission-time wait for a shared-filesystem
-// primary claim to bind.
+// primary claim to bind; past it the agents take over.
 const primaryBindWait = 3 * time.Second
 
 // readerLanding gives the reader its model volume. PVC readers reference

@@ -294,6 +294,16 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 			c.captureCache(ctx, pod)
 		}
 	}
+	if pod.Labels[modelvolume.RoleLabel] == "writer" {
+		// A download Job's pod on storage that is shared while written: its
+		// landing claim is the writer view, minted here once the primary is
+		// bound (the webhook mints it at admission when the primary already
+		// was; a brand-new filesystem can take longer than admission allows).
+		if c.Provisioner.Cfg.SharedWhileWriting() && pod.DeletionTimestamp == nil {
+			c.ensureWriterView(ctx, pod, uri)
+		}
+		return
+	}
 	if pod.Labels[modelvolume.RoleLabel] != "reader" {
 		return
 	}
@@ -1121,7 +1131,14 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 		return
 	}
 	if !st.Complete {
-		return // the wait init keeps waiting; the writer's completion re-triggers via its own event
+		// On storage that is shared while written a bound primary is
+		// already readable: give the reader its view now and let its wait
+		// init watch for the marker. Block storage waits for completion.
+		if c.Provisioner.Cfg.SharedWhileWriting() && st.InFlightPV != "" && c.Minter != nil {
+			st.PrimaryPV = st.InFlightPV
+			c.servePVCReader(ctx, pod, uri, st, log)
+		}
+		return
 	}
 	if c.Provisioner.Cfg.ReaderMode() == modelvolume.ReaderPVC {
 		c.servePVCReader(ctx, pod, uri, st, log)
@@ -1280,6 +1297,38 @@ func deviceMatchesHandle(device, handle string) bool {
 // servePVCReader mints the read-only claim the pending reader already
 // references, once the primary is detached, and un-pends it. Kubelet
 // binds the claim and starts the pod; no hostPath and no agent bind.
+// ensureWriterView mints the read-write view a download Job's pod mounts,
+// in the pod's namespace, once the primary claim is bound. Idempotent and
+// retried on every pod event until the view exists.
+func (c *ModelVolumeController) ensureWriterView(ctx context.Context, pod *corev1.Pod, uri string) {
+	if c.Minter == nil {
+		return
+	}
+	cfg := c.Provisioner.Cfg
+	view := cfg.WriterViewClaimName(uri)
+	if _, err := c.Kube.CoreV1().PersistentVolumeClaims(pod.Namespace).Get(ctx, view, metav1.GetOptions{}); err == nil {
+		return
+	}
+	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName, "view": view})
+	st, err := c.Provisioner.Lookup(ctx, uri)
+	if err != nil {
+		log.WithError(err).Warn("model volume: lookup failed")
+		return
+	}
+	pv := st.InFlightPV
+	if pv == "" {
+		pv = st.PrimaryPV
+	}
+	if pv == "" {
+		return // the primary has not bound yet; the next pod event retries
+	}
+	if err := c.Minter.MintViewFromPVLabels(ctx, pv, cfg.WriterViewPVName(uri, pod.Namespace), view, pod.Namespace, cfg.ReadOnlyLabels(uri), false); err != nil {
+		log.WithError(err).Warn("model volume: mint writer view failed")
+		return
+	}
+	log.WithField("pv", pv).Info("model volume: writer view minted for the download job")
+}
+
 // primaryReadable reports whether a complete primary may be attached
 // read-only now. Block storage refuses the read-only attach while the
 // writer's read-write attachment still exists, so it waits for the detach;

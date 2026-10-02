@@ -1206,3 +1206,47 @@ func TestModelVolume_PlainPodKeepsEveryAnnotation(t *testing.T) {
 		}
 	}
 }
+
+// A brand-new filesystem can take longer to bind than admission allows.
+// The pod is still decorated: the Job is created against the writer view
+// by name, the reader references its read-only view and is marked pending,
+// and the agents mint both views once the primary binds. Nothing waits in
+// the webhook and nothing is admitted unchanged.
+func TestModelVolume_SharedFilesystem_PrimaryNotBoundYet(t *testing.T) {
+	kc := fake.NewSimpleClientset() // no binding reactor: claims stay Pending
+	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, "", election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatalf("an unbound primary must not fail admission: %v", err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	cfg := m.ModelVolume.Cfg
+	ctx := context.Background()
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, cfg.ClaimName(uri), metav1.GetOptions{}); err != nil {
+		t.Fatalf("the primary claim is created at admission: %v", err)
+	}
+	job, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("the Job is created even before the primary binds: %v", err)
+	}
+	if land := job.Spec.Template.Spec.Volumes[0]; land.PersistentVolumeClaim == nil || land.PersistentVolumeClaim.ClaimName != cfg.WriterViewClaimName(uri) {
+		t.Errorf("the Job references the writer view by name: %+v", land)
+	}
+	if job.Spec.Template.Labels[modelvolume.RoleLabel] != "writer" {
+		t.Errorf("the Job's pod carries the writer role so the agents mint its view: %v", job.Spec.Template.Labels)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, cfg.WriterViewClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("no writer view yet: there is no volume to view")
+	}
+	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
+		t.Errorf("the reader is stamped pending until its view exists: %v", v.labels)
+	}
+	if vol := v.volumes["ngc-models"]; vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) {
+		t.Errorf("the reader references its read-only view by name: %+v", vol)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, cfg.ReadOnlyClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("no read-only view yet: the agent mints it once the primary binds")
+	}
+}

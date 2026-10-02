@@ -740,7 +740,10 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 		landing = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
 		annotations[StagingAnnotation] = step.VolumeName
 	}
-	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, p.Cfg.Label(): Key(uri)}
+	// The Job's pod carries the identity and the writer role so the agents
+	// see it: on storage that is shared while written its landing claim is
+	// the writer view, minted once the primary binds.
+	labels := map[string]string{"app.kubernetes.io/managed-by": managedBy, p.Cfg.Label(): Key(uri), RoleLabel: "writer"}
 	c := step.Container
 	c.Name = DownloadContainer
 	// The container keeps every mount the chart's init had (registry keys

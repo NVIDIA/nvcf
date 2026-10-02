@@ -584,6 +584,17 @@ FlashInfer, torchinductor, the CUDA compute cache, HuggingFace modules,
 the vLLM startup plan and a `humming-kernels` JIT cache all land under
 HOME. For this engine there is nothing further on disk to capture.
 
+First run on the SBOM-managed class, 2026-10-02: the first claim on a
+new filesystem class provisions a new FSS filesystem, which took longer
+than the webhook's 3 s bind wait; the admission then fell open and the
+pod downloaded for itself with no identity and no views. Binding no
+longer gates admission on any storage: the Job is created against the
+writer view by name, the reader is stamped pending against its read-only
+view, and the agents mint both views as soon as the primary is bound,
+with the Job's pod pending on volume binding until then (the same way
+block-mode readers pend until completion). The webhook still mints the
+views itself when the primary is already bound.
+
 Scale-up, 2026-10-02: a second instance of the same version on two
 nodes that had never run the engine. Admission to Ready 15 min 20 s;
 engine start to Ready 11 min 20 s (weights 370 s from the NVMesh view,
