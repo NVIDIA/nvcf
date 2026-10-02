@@ -116,7 +116,7 @@ func TestShadowSpanIsolation(t *testing.T) {
 			),
 		},
 	}
-	director.dispatchShadowIfNeeded(resolved, modelMapping)
+	director.dispatchShadowIfNeeded(resolved, modelMapping, shadowSamplingEndpointNone)
 
 	// Wait for shadow to complete.
 	assert.Eventually(t, func() bool {
@@ -207,7 +207,7 @@ func TestDetachedShadowKeepsParentSpanContext(t *testing.T) {
 			shadows: testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 	}
-	director.dispatchShadowIfNeeded(resolved, modelMapping)
+	director.dispatchShadowIfNeeded(resolved, modelMapping, shadowSamplingEndpointNone)
 
 	assert.Eventually(t, func() bool {
 		tp.ForceFlush(context.Background())
@@ -280,7 +280,7 @@ func TestShadowSpanRecordsTimeoutError(t *testing.T) {
 			shadows: testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 	}
-	director.dispatchShadowIfNeeded(resolved, modelMapping)
+	director.dispatchShadowIfNeeded(resolved, modelMapping, shadowSamplingEndpointNone)
 
 	// Wait for shadow span to appear (after timeout fires).
 	assert.Eventually(t, func() bool {
@@ -358,7 +358,7 @@ func TestShadowSpanRecordsHTTPError(t *testing.T) {
 			shadows: testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 	}
-	director.dispatchShadowIfNeeded(resolved, modelMapping)
+	director.dispatchShadowIfNeeded(resolved, modelMapping, shadowSamplingEndpointNone)
 
 	assert.Eventually(t, func() bool {
 		tp.ForceFlush(context.Background())
@@ -419,7 +419,7 @@ func TestShadowAdmissionAttributes(t *testing.T) {
 		director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 			request:      req,
 			functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-model"}, 100)},
-		}, modelMapping)
+		}, modelMapping, shadowSamplingEndpointNone)
 
 		assert.Eventually(t, func() bool {
 			tp.ForceFlush(context.Background())
@@ -471,7 +471,7 @@ func TestShadowAdmissionAttributes(t *testing.T) {
 		director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 			request:      req,
 			functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-model"}, 100)},
-		}, modelMapping)
+		}, modelMapping, shadowSamplingEndpointNone)
 
 		primarySpan.End()
 		close(done)
@@ -549,17 +549,17 @@ func TestPerTargetSamplingRecordsOnlyAdmittedShadow(t *testing.T) {
 		request: req,
 		functionInfo: FunctionInfo{shadows: []shadowConfig{
 			{
-				modelName:      "shadow-admitted",
-				percentage:     40,
-				samplingMethod: config.ShadowSamplingMethodRandom,
+				modelName:       "shadow-admitted",
+				percentage:      40,
+				samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom),
 			},
 			{
-				modelName:      "shadow-sampled-out",
-				percentage:     39,
-				samplingMethod: config.ShadowSamplingMethodRandom,
+				modelName:       "shadow-sampled-out",
+				percentage:      39,
+				samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom),
 			},
 		}},
-	}, modelMapping)
+	}, modelMapping, shadowSamplingEndpointNone)
 	assert.Equal(t, 1, randomCalls)
 
 	select {
@@ -646,7 +646,7 @@ func TestMultiShadowDispatchRecordsAggregatePrimarySpanAttributes(t *testing.T) 
 	director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 		request:      req,
 		functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-a", "shadow-b"}, 100)},
-	}, modelMapping)
+	}, modelMapping, shadowSamplingEndpointNone)
 
 	primarySpan.End()
 	close(done)
@@ -732,7 +732,7 @@ func TestMultiShadowDispatchRecordsAllDroppedReasonsAndTargets(t *testing.T) {
 	director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 		request:      req,
 		functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-a", "shadow-b"}, 100)},
-	}, modelMapping)
+	}, modelMapping, shadowSamplingEndpointNone)
 
 	primarySpan.End()
 	close(done)
