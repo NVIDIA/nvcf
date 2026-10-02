@@ -39,7 +39,7 @@ on:
         description: Publish an isolated hosted preview from this branch
         type: choice
         default: none
-        options: [none, existing, edition]
+        options: [none, existing, edition, staging]
 
 permissions:
   contents: read
@@ -108,8 +108,25 @@ jobs:
           DOCS_PREVIEW_SKIP_COMMENT: '1'
         run: |
           set -euo pipefail
-          if [ "$PREVIEW" = edition ]; then
-            export DOCS_PREVIEW_CONFIG=fern/edition-preview.yml
+          if [ "$PREVIEW" = staging ]; then
+            node <<'JS'
+          const fs = require('fs');
+          const path = 'fern/docs.yml';
+          let source = fs.readFileSync(path, 'utf8');
+          const production = '  - url: nvidia-nvcf.docs.buildwithfern.com/nvcf\n    custom-domain: docs.nvidia.com/nvcf';
+          if (source.split(production).length !== 2) throw new Error('Unexpected instance configuration');
+          source = source.replace(production, '  - url: nvidia-nvcf-editions-staging.docs.buildwithfern.com/nvcf');
+          source = source.replace('canonical-host: "docs.nvidia.com/nvcf"', 'canonical-host: "nvidia-nvcf-editions-staging.docs.buildwithfern.com/nvcf"');
+          if (source.includes('custom-domain:') || source.includes('url: nvidia-nvcf.docs.buildwithfern.com')) throw new Error('Production instance remained configured');
+          fs.writeFileSync(path, source);
+          JS
+            ./tools/ci/run-fern check
+            ./tools/ci/run-fern generate --docs --instance nvidia-nvcf-editions-staging.docs.buildwithfern.com/nvcf --force --strict-broken-links
+            echo 'Staging URL: https://nvidia-nvcf-editions-staging.docs.buildwithfern.com/nvcf' >> "$GITHUB_STEP_SUMMARY"
+          else
+            if [ "$PREVIEW" = edition ]; then
+              export DOCS_PREVIEW_CONFIG=fern/edition-preview.yml
+            fi
+            ./tools/ci/preview-docs | tee "$RUNNER_TEMP/docs-preview.log"
+            grep '^Preview URL:' "$RUNNER_TEMP/docs-preview.log" >> "$GITHUB_STEP_SUMMARY"
           fi
-          ./tools/ci/preview-docs | tee "$RUNNER_TEMP/docs-preview.log"
-          grep '^Preview URL:' "$RUNNER_TEMP/docs-preview.log" >> "$GITHUB_STEP_SUMMARY"
