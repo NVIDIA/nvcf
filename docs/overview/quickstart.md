@@ -347,7 +347,7 @@ Common local k3d issues:
 
 ## See Also
 
-- [Local Development](../local-development) for local k3d variants and cleanup commands.
+- [Local Development](../dev/local-development.md) for local k3d variants and cleanup commands.
 - [Helmfile Installation](/nvcf/self-managed/helmfile-installation) for remote or manual control-plane installs.
 - [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters) for registering GPU clusters outside the local quickstart.
 - `src/clis/nvcf-cli/examples/` in this repository for sample CLI input files.

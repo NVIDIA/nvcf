@@ -44,6 +44,9 @@ if [ -n "${DOCS_PREVIEW_CONFIG:-}" ]; then
   git -C "$preview_workspace/source" remote set-url origin "$(git remote get-url origin)"
   cp -R docs fern "$preview_workspace/source/"
   cp "$DOCS_PREVIEW_CONFIG" "$preview_workspace/source/fern/docs.yml"
+  if [ "$DOCS_PREVIEW_CONFIG" = fern/edition-preview.yml ]; then
+    go run -C "$repo_root/tools/docs-version-sync" . edition links --repo "$preview_workspace/source"
+  fi
   cd "$preview_workspace/source"
 fi
 

@@ -22,6 +22,12 @@ check:
   rules:
     broken-links: error
 redirects:
+- source: /nvcf/observability/dev/:slug*
+  destination: /nvcf/dev/observability/:slug*
+- source: /nvcf/compute-plane/dev/:slug*
+  destination: /nvcf/dev/compute-plane/:slug*
+- source: /nvcf/self-managed/dev/:slug*
+  destination: /nvcf/dev/self-managed/:slug*
 - source: /nvcf/index.html
   destination: /nvcf/overview
 - source: /nvcf/latest/index.html
@@ -776,6 +782,30 @@ versions:
 - display-name: Development
   slug: dev
   path: navigation.yml
+- display-name: Self-Managed Stack 1.0.1 archive
+  slug: self-managed/1.0.1
+  path: products/self-managed/1.0.1.yml
+  hidden: true
+- display-name: Self-Managed Stack 0.6.1 (legacy) archive
+  slug: self-managed/v0.6.1
+  path: products/self-managed/v0.6.1.yml
+  hidden: true
+- display-name: Self-Managed Stack 0.6.0 (legacy) archive
+  slug: self-managed/v0.6.0
+  path: products/self-managed/v0.6.0.yml
+  hidden: true
+- display-name: Self-Managed Stack 0.5.0 (legacy) archive
+  slug: self-managed/v0.5
+  path: products/self-managed/v0.5.yml
+  hidden: true
+- display-name: Compute Plane Stack 1.0.0 archive
+  slug: compute-plane/1.0.0
+  path: products/compute-plane/1.0.0.yml
+  hidden: true
+- display-name: Observability Stack 1.0.0 archive
+  slug: observability/1.0.0
+  path: products/observability/1.0.0.yml
+  hidden: true
 theme:
   tabs:
     placement: header

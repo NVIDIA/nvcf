@@ -335,3 +335,31 @@ moved refs, stale manifests, and unregistered Fern refs fail. `--local-refs` is
 available for isolated local rehearsals; publishing always checks the remote.
 Existing editions are validated against their recorded stack versions, so a
 new artifact release does not invalidate historical documentation.
+
+### Edition navigation and links
+
+`fern/navigation.yml` contains five tabs and explicit page slugs. Preparation
+converts current absolute product links to relative source-file links so Fern
+keeps them inside the selected edition. Existing exact redirect aliases and
+anchors are preserved. Explicit historical-version links retain their archive
+URLs. Missing current-page targets fail preparation.
+
+The opt-in `fern/edition-preview.yml` uses the same conversion in the preview
+helper's temporary clone. The source product configuration and frozen files are
+not rewritten. For a manually staged clone, run:
+
+```bash
+go run -C tools/docs-version-sync . edition links --repo /path/to/staged-clone
+```
+
+Release branches retain hidden path-based historical versions after their own
+default. Fern reads only that default when composing the branch as a ref in the
+canonical site. The central site retains the archive entries too, so old product
+URLs can resolve to their original source pages without entering the edition
+selector. Full hosted route/content checks are required before activating this
+adapter.
+
+Native release notes live in `fern/changelog/`. Dated MDX files use `##` headings
+for cards and frontmatter tags for filters. Keep links relative and record the
+edition and exact artifact versions in release entries. Qualification remains a
+reviewed declaration; a development entry is not release approval.

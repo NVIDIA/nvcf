@@ -42,6 +42,33 @@ type editionStack struct {
 
 var qualificationPathRE = regexp.MustCompile(`^/NVIDIA/nvcf/(pull|issues)/[1-9][0-9]*$`)
 
+func renderEditionSummary(catalog *Catalog, stackName string) (string, error) {
+	if catalog.DocsEdition == nil {
+		return "", nil
+	}
+	edition := catalog.DocsEdition
+	status := "Development candidate"
+	if edition.Status == ReleaseSetQualified {
+		status = "Qualified combination"
+	}
+	if stackName != "overview" {
+		stack, err := catalog.ReleaseSet.Stacks.byName(stackName)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Docs edition `%s` | %s `%s` | %s.\n", edition.Version, documentationStackDisplayName(stackName), stack.Version, status), nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Docs edition `%s`. %s.\n\n", edition.Version, status)
+	b.WriteString("| Stack | Artifact version |\n| --- | --- |\n")
+	for _, name := range releaseSetStackNames {
+		stack, _ := catalog.ReleaseSet.Stacks.byName(name)
+		fmt.Fprintf(&b, "| %s | `%s` |\n", documentationStackDisplayName(name), stack.Version)
+	}
+	b.WriteString("\nThe docs edition versions this documented combination. Each stack keeps its own artifact version.\n")
+	return b.String(), nil
+}
+
 func validateDocsEdition(catalog *Catalog) error {
 	edition := catalog.DocsEdition
 	if edition == nil {

@@ -1,5 +1,11 @@
 # NVIDIA Cloud Functions
 
+{/* docs-version-sync:BEGIN edition-overview */}
+
+
+
+{/* docs-version-sync:END edition-overview */}
+
 ![NVIDIA Cloud Functions banner](images/nvcf-banner.svg)
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
