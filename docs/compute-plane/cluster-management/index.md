@@ -1,5 +1,11 @@
 # GPU Cluster Setup
 
+{/* docs-version-sync:BEGIN edition-compute-plane */}
+
+
+
+{/* docs-version-sync:END edition-compute-plane */}
+
 The NVIDIA Cluster Agent (NVCA) connects GPU clusters to the NVCF control plane, enabling them to act as deployment targets for Cloud Functions. NVCA is a function deployment orchestrator that registers a cluster's GPU resources, communicates with the control plane, and manages the lifecycle of function deployments on GPU nodes.
 
 For a fresh install, use the [Quickstart](/nvcf/overview/quickstart). The one-click CLI flow can register a GPU cluster as part of the install. Use this section for manual cluster registration, standalone NVCA installation, and day-two cluster configuration.
@@ -32,7 +38,7 @@ After installing NVCA on a cluster:
 
     - If your cloud provider does not support the NVIDIA GPU Operator, [Manual Instance Configuration](./configuration.md) is possible, but not recommended due to lack of maintainability.
     - To get the most out of clusters with multi-node NVLink ([MNNVL](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html#dra-docs-compute-domains)) GPUs like [GB200](https://www.nvidia.com/en-us/data-center/gb200-nvl72/), the [NVIDIA GPU DRA driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html) must be installed. See the [nvlink-optimized-clusters](./configuration.md) for details.
-    - For development or testing environments without physical GPUs, install the [fake-gpu-operator](../fake-gpu-operator) instead.
+    - For development or testing environments without physical GPUs, install the [fake-gpu-operator](../../dev/fake-gpu-operator.md) instead.
 
 - Registering the cluster requires `kubectl` and `helm` installed.
 

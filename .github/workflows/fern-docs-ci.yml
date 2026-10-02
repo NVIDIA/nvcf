@@ -78,7 +78,7 @@ jobs:
         run: go test -C tools/docs-version-sync ./...
 
   preview:
-    name: Hosted Docs Preview
+    name: Diagnostic Archive Preview
     if: github.event_name == 'workflow_dispatch' && inputs.preview != 'none'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -91,6 +91,9 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: fern/.node-version
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
       - name: Generate isolated preview
         env:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
@@ -102,5 +105,8 @@ jobs:
           if [ "$PREVIEW" = edition ]; then
             export DOCS_PREVIEW_CONFIG=fern/edition-preview.yml
           fi
-          ./tools/ci/preview-docs | tee "$RUNNER_TEMP/docs-preview.log"
-          grep '^Preview URL:' "$RUNNER_TEMP/docs-preview.log" >> "$GITHUB_STEP_SUMMARY"
+          cp fern/edition-preview.yml fern/docs.yml
+          go run -C tools/docs-version-sync . edition links --repo "$GITHUB_WORKSPACE"
+          echo 'Diagnostic preview: four known legacy links remain strict-check blockers.' >> "$GITHUB_STEP_SUMMARY"
+          ./tools/ci/run-fern generate --docs --preview --id "$DOCS_PREVIEW_ID" --force | tee "$RUNNER_TEMP/docs-preview.log"
+          grep 'Published docs to' "$RUNNER_TEMP/docs-preview.log" >> "$GITHUB_STEP_SUMMARY"
