@@ -1398,10 +1398,18 @@ func judgeUnattributedServices(
 			"%d pending LoadBalancer Service(s) cannot be attributed", discoveryErr, len(found), len(pending))
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
-		state.Recommendations = append(state.Recommendations,
-			"Grant the cluster-validator ServiceAccount get and list on gateway.networking.k8s.io "+
-				"httproutes, grpcroutes, tcproutes and udproutes, or set clusterValidator.gatewayNames "+
-				"(env "+nvcfGatewayNamesEnv+").")
+		if errors.Is(discoveryErr, errNoNVCFGatewaysPostInstall) {
+			// The routes were read and none is NVCF's, so more permissions
+			// would not change the result.
+			state.Recommendations = append(state.Recommendations,
+				"Check that the gateway routes release is installed, or set clusterValidator.gatewayNames "+
+					"(env "+nvcfGatewayNamesEnv+").")
+		} else {
+			state.Recommendations = append(state.Recommendations,
+				"Grant the cluster-validator ServiceAccount get and list on gateway.networking.k8s.io "+
+					"httproutes, grpcroutes, tcproutes and udproutes, or set clusterValidator.gatewayNames "+
+					"(env "+nvcfGatewayNamesEnv+").")
+		}
 		return
 	}
 

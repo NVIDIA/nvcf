@@ -49,9 +49,10 @@ var (
 // release made the install depend on the validator, so an image the cluster
 // could not pull, or a pod that could not be scheduled, failed the install
 // under helm --wait-for-jobs, and so would a hook. The Job is named for the
-// CronJob's job template, so it runs once per distinct validator spec (an
-// upgrade that changes it runs again), not on every operator restart. Failures
-// are logged and otherwise ignored: the CronJob's own schedule still runs.
+// CronJob's job template, so it runs once per distinct validator spec, not on
+// every operator restart. The chart restarts the operator when that spec
+// changes, so an upgrade that changes it runs again. Failures are logged and
+// otherwise ignored: the CronJob's own schedule still runs.
 func startInitialValidatorRun(ctx context.Context, client kubernetes.Interface, namespace, cronJobName string) {
 	log := core.GetLogger(ctx).WithField("cronjob", namespace+"/"+cronJobName)
 	deadline := time.Now().Add(initialValidatorRunWait)

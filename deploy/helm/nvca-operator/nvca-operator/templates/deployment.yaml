@@ -30,6 +30,16 @@ spec:
     metadata:
       labels:
         {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
+      {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+      {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+      {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
+      annotations:
+        # The operator starts the validator's first run when it starts, once
+        # per Job spec. A change to that spec restarts the operator, so an
+        # upgrade that changes only the validator's values runs it too.
+        checksum/cluster-validator-job: {{ include "nvcaop.clusterValidatorJobSpec" . | sha256sum }}
+      {{- end }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "nvcaop.serviceAccountName" . }}
       automountServiceAccountToken: true

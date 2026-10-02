@@ -2121,6 +2121,7 @@ func TestCheckExternalLoadBalancer_DiscoveryFailureIsNotAPass(t *testing.T) {
 	checkExternalLoadBalancer(context.Background(), client, denied(), state)
 	assert.Nil(t, state.ExternalLBOK)
 	assert.Contains(t, strings.Join(state.Recommendations, "; "), "httproutes")
+	assert.NotContains(t, strings.Join(state.Recommendations, "; "), "gateway routes release")
 
 	// Nothing addressed is unknown too: the pending Service may be another
 	// team's, and NVCF's proxies may live in a namespace that was not listed.
@@ -3484,6 +3485,10 @@ func TestCheckExternalLoadBalancer_PostInstallWithoutNVCFRoutesIsUnknown(t *test
 	state := &ValidationState{Log: testLog(), PostInstall: true}
 	checkExternalLoadBalancer(context.Background(), client, routeClient(), state)
 	assert.Nil(t, state.ExternalLBOK)
+	// The routes were read, so the advice is about the routes release, not RBAC.
+	advice := strings.Join(state.Recommendations, "; ")
+	assert.Contains(t, advice, "gateway routes release is installed")
+	assert.NotContains(t, advice, "httproutes")
 }
 
 // The Gateways are listed only when a merged-gateways proxy needs their

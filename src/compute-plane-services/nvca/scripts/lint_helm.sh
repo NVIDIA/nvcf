@@ -310,9 +310,30 @@ assert_cluster_validator_role() {
   assert_eq "" "$(yq "${validation_job} | .metadata.name" "${rendered}" | grep -v '^---$' | grep -v '^$' || true)" \
     "${chart_label} no validation Job in the release"
 
+  # The startup run happens when the operator starts, so a change to the
+  # validator Job alone must restart the operator for the new spec to run.
+  local job_checksum='select(.kind == "Deployment") | .spec.template.metadata.annotations."checksum/cluster-validator-job" // ""'
+  local checksum
+  checksum="$(yq "${job_checksum}" "${rendered}")"
+  if [[ -z "${checksum}" ]]; then
+    printf 'FAIL %s operator pod has no checksum of the validator Job under the control-plane role\n' \
+      "${chart_label}" >&2
+    return 1
+  fi
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
+    --set clusterValidator.enabled=true --set "clusterValidator.role=Control-Plane" \
+    --set "clusterValidator.gatewayNames={gw/shared-gw}" >"${rendered}"
+  if [[ "$(yq "${job_checksum}" "${rendered}")" == "${checksum}" ]]; then
+    printf 'FAIL %s a validator-only change leaves the operator pod unchanged\n' "${chart_label}" >&2
+    return 1
+  fi
+  printf 'ok %s a validator-only change restarts the operator under the control-plane role\n' "${chart_label}"
+
   helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" \
     --set clusterValidator.enabled=true --set "tolerations[0].key=dedicated" \
     --set "tolerations[0].operator=Exists" >"${rendered}"
+  assert_eq "" "$(yq "${job_checksum}" "${rendered}")" \
+    "${chart_label} no validator Job checksum on the operator pod under the default role"
   assert_eq "" "$(yq "${init_env} | select(.name == \"VALIDATOR_PREFLIGHT\") | .value" "${rendered}")" \
     "${chart_label} init container writes the summary under the default role"
   assert_eq "" "$(yq "${operator_env} | select(.name == \"NVCA_CLUSTER_VALIDATOR_CRONJOB\") | .value" "${rendered}")" \
