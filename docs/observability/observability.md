@@ -2,7 +2,7 @@
 
 {/*docs-version-sync:BEGIN edition-observability*/}
 
-Docs edition `1.0.1` | Observability `1.0.0` | Development candidate.
+Docs edition `1.0.0` | Observability `1.0.0` | Qualified combination.
 
 {/*docs-version-sync:END edition-observability*/}
 
