@@ -101,27 +101,20 @@ class Recipe:
         return self.c['images'].get('repositories', {}).get(component, self.c['images']['prefix'] + '/' + component)
 
     def source_identity(self):
-        return {key: LOCK[key] for key in ('repository', 'revision', 'patchSha256')}
+        require(re.fullmatch(r'[0-9a-f]{40}', LOCK['revision']) is not None, 'Pin a full immutable source revision in source.lock.json.')
+        return {key: LOCK[key] for key in ('repository', 'revision')}
 
     def source_check(self):
+        identity = self.source_identity()
         require(self.source.is_dir(), 'Run prepare first, or pass --source-dir pointing to the prepared pinned checkout.')
-        require(output(['git', 'rev-parse', 'HEAD'], cwd=self.source).strip() == LOCK['revision'], 'Dependency source revision differs from source.lock.json.')
-        patch = HERE/LOCK['patch']
-        require(hashlib.sha256(patch.read_bytes()).hexdigest() == LOCK['patchSha256'], 'Dependency patch checksum mismatch.')
-        run(['git', 'apply', '--reverse', '--check', patch], cwd=self.source, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        require(output(['git', 'rev-parse', 'HEAD'], cwd=self.source).strip() == identity['revision'], 'Dependency source revision differs from source.lock.json.')
 
     def prepare(self):
+        identity = self.source_identity()
         if not self.source.exists():
-            run(['git', 'clone', '--filter=blob:none', '--no-checkout', LOCK['repository'], self.source])
-            run(['git', 'fetch', 'origin', LOCK['revision']], cwd=self.source)
-            run(['git', 'checkout', '--detach', LOCK['revision']], cwd=self.source)
-        require(output(['git', 'rev-parse', 'HEAD'], cwd=self.source).strip() == LOCK['revision'], 'Use the exact dependency revision.')
-        patch = HERE/LOCK['patch']
-        require(hashlib.sha256(patch.read_bytes()).hexdigest() == LOCK['patchSha256'], 'Dependency patch checksum mismatch.')
-        applied = subprocess.run(['git', 'apply', '--reverse', '--check', str(patch)], cwd=self.source, capture_output=True).returncode == 0
-        if not applied:
-            run(['git', 'apply', '--check', patch], cwd=self.source)
-            run(['git', 'apply', patch], cwd=self.source)
+            run(['git', 'clone', '--filter=blob:none', '--no-checkout', identity['repository'], self.source])
+            run(['git', 'fetch', 'origin', identity['revision']], cwd=self.source)
+            run(['git', 'checkout', '--detach', identity['revision']], cwd=self.source)
         self.source_check()
         run(['helm', 'dependency', 'build', '--skip-refresh', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
         print('Prepared source:', self.source)
@@ -413,7 +406,7 @@ class Recipe:
             if name in ('router', 'pylon'):
                 command += ['--target', 'stargate-runtime' if name == 'router' else 'pylon-runtime', '--build-arg', 'CARGO_PROFILE=integration']
             if name == 'operator':
-                command += ['-f', str(HERE/'operator.Dockerfile'), '--build-arg', 'SOURCE_REVISION='+LOCK['revision']+'+spark-poc']
+                command += ['-f', str(HERE/'operator.Dockerfile'), '--build-arg', 'SOURCE_REVISION='+LOCK['revision']]
             run(command+[str(self.source/COMPONENTS[name])])
 
     def components(self):

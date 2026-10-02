@@ -4,7 +4,7 @@ Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Oper
 
 ## Overview
 
-The stack uses the revision in [source.lock.json](spark/source.lock.json) and the bundled [operator/chart patch](spark/patches/stack-fixes.patch). `prepare` fetches that source into your external work directory for all application images and stack/operator charts. Edit gateway/router code in that checkout when [iterating the deployment](#update-only-gateway-or-router).
+The stack uses the source revision in [source.lock.json](spark/source.lock.json). Runtime and chart fixes live in that source revision. `prepare` fetches that source into your external work directory for all application images and stack/operator charts. Edit gateway/router code in that checkout when [iterating the deployment](#update-only-gateway-or-router).
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ Follow these steps for the first installation of the stack and GLM model.
 
 Check the results before continuing:
 
-- `prepare` fetches source commit `b3d98ba71cccee61c592ca748aeafb6cafe24507` from the repository in `source.lock.json`, verifies the patch checksum, applies the patch once and builds local Helm dependencies.
+- `prepare` fetches the immutable source commit from `source.lock.json` and builds local Helm dependencies.
 - Optional `--source-dir /absolute/path` selects an already prepared checkout at that revision. Existing source edits are preserved.
 - `render` creates offline manifests and temporary Transport Layer Security (TLS) keys under the private work directory.
 - `inventory` records node identities, GPU allocations, workloads, `RuntimeClass` and `StorageClass`. It establishes cluster identity for later phases and requires available model GPUs.
@@ -198,7 +198,7 @@ To roll back the image update:
    spark verify-gateway
    ```
 
-Rollback verifies context, namespace, release and that the live tag still matches the recorded new tag. It uses the exact prepared chart to restore the previous image tag. If another update has occurred, use that update's record instead.
+Rollback verifies context, namespace, release, source identity and that the live tag still matches the recorded new tag. It uses the exact prepared chart to restore the previous image tag. If another update has occurred, use that update's record instead.
 
 ### Update an existing installation
 
@@ -240,7 +240,7 @@ Use this workflow to connect a new local work directory to a running stack and G
 
 `attach-existing` uses read-only API calls to verify node identities, Helm ownership, cluster ID, gateway/router repositories and the GLM Service reference. It saves local state and a public CA copy while preserving existing workloads.
 
-This attachment supports request checks and image iteration when the installed source marker matches `source.lock.json`. A stack installed without that marker, or from a different revision, requires a coordinated stack installation before single-component updates. Fresh-install, backend-registration and recovery phases are disabled for attachments.
+This attachment supports request checks and image iteration when the installed source marker matches `source.lock.json`. A stack installed without that marker, or with a different source identity, requires a coordinated stack installation before single-component updates. Fresh-install, backend-registration and recovery phases are disabled for attachments.
 
 ### Updating the pinned stack
 
@@ -250,12 +250,11 @@ After upstream history changes, run `spark prepare` in a fresh external work dir
 
 If the pin becomes unavailable, or you choose to adopt newer or merged code:
 
-1. Select a reachable revision from maintained upstream history. Update `spark/source.lock.json` and the source revision cited in this README.
-2. Review which bundled fixes landed upstream. Regenerate `spark/patches/stack-fixes.patch` for remaining changes and update `patchSha256` in the lock file.
-3. The runner requires and verifies a patch. If every fix is upstream, add and test support for an unpatched source before removing it.
-4. In a fresh external work directory, rerun `spark prepare`, `spark render` and the [local regression checks](#local-validation).
-5. Build and deploy gateway and router together when their API contract changes. Both must use the same pinned source and compatible chart configuration.
-6. Repeat the relevant deployment and integration checks in this README before claiming support for the new revision.
+1. Commit runtime, API and chart fixes in their owning source directories, including generated files and regression tests.
+2. Select a reachable commit containing those fixes and update the repository and full revision in `spark/source.lock.json`.
+3. In a fresh external work directory, rerun `spark prepare`, `spark render` and the [local regression checks](#local-validation).
+4. Build and deploy gateway and router together when their API contract changes. Both must use the same pinned source and compatible chart configuration.
+5. Repeat the relevant deployment and integration checks in this README before claiming support for the new revision.
 
 ## Recovery and limits
 

@@ -1,6 +1,6 @@
 # LLM routing stack
 
-This directory deploys the LLM routing stack and GLM on DGX Spark. Read `README.md` and `spark/AGENTS.md`. Runtime changes belong in the pinned owning source checkout, represented here by a reviewed patch and lock file.
+This directory deploys the LLM routing stack and GLM on DGX Spark. Read `README.md` and `spark/AGENTS.md`. Runtime changes belong in their owning source directories. Pin the commit containing them in `spark/source.lock.json`.
 
 Run the Python tests and offline Helm render documented in the README. Always specify the Kubernetes context. Packaging validation must not change a live model deployment.
 

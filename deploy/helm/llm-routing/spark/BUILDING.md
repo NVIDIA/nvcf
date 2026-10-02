@@ -5,7 +5,7 @@ Build the four `linux/arm64` application images from the prepared source. Use th
 ## Requirements
 
 - Docker with Buildx and ARM64 build capability, plus access to base images and build dependencies.
-- The prepared source at `$SPARK_WORK/source`, including the bundled operator/chart patch. The operator needs the endpoint canary timing fields used by GLM.
+- The prepared source at `$SPARK_WORK/source`, at the exact revision in `source.lock.json`. That revision includes the endpoint canary timing fields used by GLM.
 - A fresh `images.tag` and your own `images.prefix` in the external configuration. Optional `images.repositories` entries override the repository for individual components. The example names are placeholders for images you build.
 - Either write access to your chosen registry and pull access on every node where Pylon can schedule, or an authorized archive-transfer path to the nodes.
 

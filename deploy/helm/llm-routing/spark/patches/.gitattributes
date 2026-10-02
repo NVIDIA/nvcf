@@ -1,2 +1,0 @@
-# Unified diff context markers include significant leading/trailing spaces.
-*.patch -whitespace
