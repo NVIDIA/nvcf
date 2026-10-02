@@ -561,3 +561,12 @@ the cache root except Python bytecode in site-packages: Triton,
 FlashInfer, torchinductor, the CUDA compute cache, HuggingFace modules,
 the vLLM startup plan and a `humming-kernels` JIT cache all land under
 HOME. For this engine there is nothing further on disk to capture.
+
+Scale-up, 2026-10-02: a second instance of the same version on two
+nodes that had never run the engine. Admission to Ready 15 min 20 s;
+engine start to Ready 11 min 20 s (weights 370 s from the NVMesh view,
+plan applied, CuTeDSL 17 s, graph capture 108 s). Of the 240 s before
+the engine started, 137 s was the 15 GB engine image pull on the fresh
+nodes and 66 s the NVMesh attach; the nvsnap inits took 3 s. The set
+collected after the previous run was seeded on both pods (seed
+generation 1), so a scale-up pays only storage and engine time.
