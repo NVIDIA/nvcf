@@ -1170,3 +1170,39 @@ func TestModelVolume_SameFlowOnEveryStorage(t *testing.T) {
 		})
 	}
 }
+
+// A pod with no annotations is decorated by several patchers in one
+// admission (model volume, cache set). Each may bootstrap the annotations
+// map; only the first bootstrap may survive, or the later one replaces the
+// map and drops the identity (a plain Deployment, OCI FSS 2026-10-02: the
+// agent saw no nvsnap.io/model-uri and never captured the cache rank).
+func TestModelVolume_PlainPodKeepsEveryAnnotation(t *testing.T) {
+	for _, mode := range []modelvolume.Mode{modelvolume.ModeBlock, modelvolume.ModeRWX} {
+		kc := fake.NewSimpleClientset()
+		if mode == modelvolume.ModeRWX {
+			bindClaims(kc, "fss.csi.oraclecloud.com")
+		}
+		m, _ := mvMutatorReader(t, mode, "", election.RoleFollower, kc)
+		pod := stockVLLMPod()
+		if pod.Annotations != nil || pod.Labels != nil {
+			t.Fatal("fixture must carry no metadata maps")
+		}
+		patches, err := m.Mutate(context.Background(), pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bootstraps := map[string]int{}
+		for _, p := range patches {
+			if p.Op == "add" && (p.Path == "/metadata/annotations" || p.Path == "/metadata/labels") {
+				bootstraps[p.Path]++
+			}
+		}
+		if bootstraps["/metadata/annotations"] != 1 || bootstraps["/metadata/labels"] != 1 {
+			t.Errorf("%s: each metadata map is bootstrapped once, got %v", mode, bootstraps)
+		}
+		v := viewMV(pod, patches)
+		if v.annotations[modelvolume.IdentityAnnotation] == "" || v.annotations[CacheURIAnnotation] == "" {
+			t.Errorf("%s: both the identity and the cache stamps are present: %v", mode, v.annotations)
+		}
+	}
+}

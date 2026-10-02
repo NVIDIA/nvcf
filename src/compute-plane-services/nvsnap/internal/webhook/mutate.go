@@ -145,6 +145,12 @@ func patchElementName(v any) string {
 //
 // Non-mergeable paths (command, args, securityContext, annotations, …) and
 // non-add ops pass through untouched.
+// isMetadataMap reports whether path is one of the pod metadata maps a
+// metaPatcher bootstraps.
+func isMetadataMap(path string) bool {
+	return path == "/metadata/labels" || path == "/metadata/annotations"
+}
+
 func mergePatchPlan(patches []PatchOp) []PatchOp {
 	bootstrapped := map[string]bool{}    // array path -> already has a bootstrap add
 	seen := map[string]map[string]bool{} // array path -> element names emitted
@@ -160,6 +166,23 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 	out := make([]PatchOp, 0, len(patches))
 	for _, p := range patches {
 		if p.Op != "add" {
+			out = append(out, p)
+			continue
+		}
+		// Metadata maps: a patcher bootstraps /metadata/labels or
+		// /metadata/annotations with an empty map when the pod has none.
+		// Several patchers take part in one admission (model volume, cache
+		// set, election), and a second bootstrap would replace the map and
+		// drop every key the first one set (a Deployment pod with no
+		// annotations lost nvsnap.io/model-uri, OCI FSS 2026-10-02). Keep
+		// the first bootstrap only.
+		if isMetadataMap(p.Path) {
+			if m, ok := p.Value.(map[string]string); ok && len(m) == 0 {
+				if bootstrapped[p.Path] {
+					continue
+				}
+				bootstrapped[p.Path] = true
+			}
 			out = append(out, p)
 			continue
 		}
