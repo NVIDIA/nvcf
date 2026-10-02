@@ -39,7 +39,7 @@ on:
         description: Publish an isolated hosted preview from this branch
         type: choice
         default: none
-        options: [none, existing, edition, staging]
+        options: [none, existing, edition, staging, index-status]
 
 permissions:
   contents: read
@@ -108,7 +108,23 @@ jobs:
           DOCS_PREVIEW_SKIP_COMMENT: '1'
         run: |
           set -euo pipefail
-          if [ "$PREVIEW" = staging ]; then
+          if [ "$PREVIEW" = index-status ]; then
+            node <<'JS'
+          (async () => {
+            const domain = 'nvidia-nvcf-editions-staging.docs.buildwithfern.com';
+            const response = await fetch('https://registry.buildwithfern.com/v2/registry/docs/algolia-preview-whitelist/list', {
+              headers: {Authorization: `Bearer ${process.env.FERN_TOKEN}`},
+              signal: AbortSignal.timeout(30000),
+            });
+            console.log(`Search-index allowlist read: HTTP ${response.status}`);
+            if (response.ok) {
+              const data = await response.json();
+              if (!Array.isArray(data.domains)) throw new Error('Unexpected index status response');
+              console.log(`Staging host explicitly enabled: ${data.domains.includes(domain) || data.domains.includes(`${domain}/nvcf`)}`);
+            }
+          })().catch(error => { console.error(error.message); process.exitCode = 1; });
+          JS
+          elif [ "$PREVIEW" = staging ]; then
             node <<'JS'
           const fs = require('fs');
           const path = 'fern/docs.yml';
