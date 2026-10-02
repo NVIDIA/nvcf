@@ -27,17 +27,26 @@ import (
 	"net/url"
 )
 
+// ClusterHelmValidationPolicy is the validation policy bound to a cluster at
+// registration. Unlike the workload side, allowedExtraKubernetesTypes carries
+// the resource (plural) name because the operator needs it to grant RBAC.
+type ClusterHelmValidationPolicy struct {
+	Name                        string           `json:"name,omitempty"`
+	AllowedExtraKubernetesTypes []KubernetesType `json:"allowedExtraKubernetesTypes,omitempty"`
+}
+
 // RegisterClusterRequest represents the request to register a cluster with ICMS
 type RegisterClusterRequest struct {
-	ClusterName      string   `json:"clusterName"`
-	ClusterGroupName string   `json:"clusterGroupName"`
-	NcaID            string   `json:"ncaId"`
-	CloudProvider    string   `json:"cloudProvider"`
-	Region           string   `json:"region"`
-	NvcaVersion      string   `json:"nvcaVersion"`
-	Capabilities     []string `json:"capabilities,omitempty"`
-	JWKS             *string  `json:"jwks,omitempty"`
-	OIDCIssuer       *string  `json:"oidcIssuer,omitempty"`
+	ClusterName          string                       `json:"clusterName"`
+	ClusterGroupName     string                       `json:"clusterGroupName"`
+	NcaID                string                       `json:"ncaId"`
+	CloudProvider        string                       `json:"cloudProvider"`
+	Region               string                       `json:"region"`
+	NvcaVersion          string                       `json:"nvcaVersion"`
+	Capabilities         []string                     `json:"capabilities,omitempty"`
+	JWKS                 *string                      `json:"jwks,omitempty"`
+	OIDCIssuer           *string                      `json:"oidcIssuer,omitempty"`
+	HelmValidationPolicy *ClusterHelmValidationPolicy `json:"helmValidationPolicy,omitempty"`
 }
 
 // RegisterClusterResponse represents the response from cluster registration
@@ -56,7 +65,7 @@ type UpdateClusterJWKSRequest struct {
 
 const (
 	errFailedToSendRequest = "failed to send request: %w"
-	errICMSAPI              = "ICMS API error %d: %s"
+	errICMSAPI             = "ICMS API error %d: %s"
 )
 
 // RegisterCluster registers a new cluster with ICMS

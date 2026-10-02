@@ -102,6 +102,8 @@ func initClusterRegistrationCmds() {
 
 	clusterRegisterCmd.Flags().String("oidc-issuer-url", "", "OIDC issuer URL (overrides auto-detection; skips SPIRE and K8s discovery)")
 	clusterRegisterCmd.Flags().Bool("ignore-existing", false, "If cluster already exists, return existing IDs instead of failing")
+	clusterRegisterCmd.Flags().String(flagValidationPolicy, "", "Helm validation policy name bound to the cluster (e.g. Default, Unrestricted)")
+	clusterRegisterCmd.Flags().StringArray(flagValidationExtraType, nil, "Allowed extra Kubernetes type as group/version/kind/resource (repeatable)")
 
 	clusterRotateCmd.Flags().String(clusterFlagClusterID, "", "Cluster UUID (required)")
 	clusterRotateCmd.Flags().String("kubeconfig", "", "Path to kubeconfig for target cluster")
@@ -482,16 +484,23 @@ func runClusterRegister(cmd *cobra.Command, args []string) error {
 
 	logging.Info("Registering cluster with ICMS at %s...", icmsURL)
 
+	validationPolicy, err := buildClusterValidationPolicy(cmd)
+	if err != nil {
+		logging.Error("Cluster registration failed while building validation policy (cluster=%s, nca=%s): %v", name, ncaID, err)
+		return err
+	}
+
 	registerReq := &client.RegisterClusterRequest{
-		ClusterName:      name,
-		ClusterGroupName: name,
-		NcaID:            ncaID,
-		CloudProvider:    "ON-PREM",
-		Region:           region,
-		NvcaVersion:      "0.0.0",
-		Capabilities:     []string{"DynamicGPUDiscovery"},
-		JWKS:             &jwks,
-		OIDCIssuer:       &issuer,
+		ClusterName:          name,
+		ClusterGroupName:     name,
+		NcaID:                ncaID,
+		CloudProvider:        "ON-PREM",
+		Region:               region,
+		NvcaVersion:          "0.0.0",
+		Capabilities:         []string{"DynamicGPUDiscovery"},
+		JWKS:                 &jwks,
+		OIDCIssuer:           &issuer,
+		HelmValidationPolicy: validationPolicy,
 	}
 
 	ignoreExisting, _ := cmd.Flags().GetBool("ignore-existing")
@@ -500,6 +509,13 @@ func runClusterRegister(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		// Check if this is an "already exists" error and --ignore-existing was passed
 		if ignoreExisting && strings.Contains(err.Error(), "already exists") {
+			// Validation policy is only applied during initial registration.
+			// The existing-cluster path below refreshes JWKS only, so honoring
+			// the policy flags here would silently drop the requested policy.
+			// Fail loudly instead of pretending it was applied.
+			if policyErr := ignoreExistingPolicyConflict(name, validationPolicy); policyErr != nil {
+				return policyErr
+			}
 			logging.Info("Cluster already registered, looking up existing IDs...")
 			clusterGroupID, clusterID, lookupErr := lookupExistingCluster(ctx, c, icmsURL, ncaID, name)
 			if lookupErr != nil {
@@ -531,6 +547,47 @@ func runClusterRegister(cmd *cobra.Command, args []string) error {
 	printRegistrationOutput(name, clusterGroupID, clusterID, ncaID, region, issuer, identitySource, icmsURL, natsURL)
 
 	return nil
+}
+
+// ignoreExistingPolicyConflict reports an error when validation policy flags are
+// combined with an already-registered cluster on the --ignore-existing path.
+// That path only refreshes JWKS on the existing cluster row and does not update
+// the validation policy, so applying the flags would silently drop the caller's
+// intent. It returns nil when no policy was requested.
+func ignoreExistingPolicyConflict(name string, policy *client.ClusterHelmValidationPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	return fmt.Errorf("cannot apply --%s/--%s to cluster %q: it is already registered and --ignore-existing only refreshes JWKS, so the validation policy cannot be updated here; re-run without --ignore-existing or omit the validation policy flags",
+		flagValidationPolicy, flagValidationExtraType, name)
+}
+
+// buildClusterValidationPolicy assembles the cluster-side validation policy
+// from the --validation-policy and --validation-extra-type flags. It returns
+// nil when neither flag is set so existing registrations are unaffected. The
+// cluster side requires four-part group/version/kind/resource entries.
+func buildClusterValidationPolicy(cmd *cobra.Command) (*client.ClusterHelmValidationPolicy, error) {
+	nameChanged := cmd.Flags().Changed(flagValidationPolicy)
+	typesChanged := cmd.Flags().Changed(flagValidationExtraType)
+	if !nameChanged && !typesChanged {
+		return nil, nil
+	}
+
+	name, _ := cmd.Flags().GetString(flagValidationPolicy)
+	rawTypes, _ := cmd.Flags().GetStringArray(flagValidationExtraType)
+
+	policy := &client.ClusterHelmValidationPolicy{Name: name}
+	for _, raw := range rawTypes {
+		kt, err := parseClusterExtraType(raw)
+		if err != nil {
+			return nil, err
+		}
+		policy.AllowedExtraKubernetesTypes = append(policy.AllowedExtraKubernetesTypes, kt)
+	}
+	if policy.Name == "" {
+		policy.Name = defaultValidationPolicyName
+	}
+	return policy, nil
 }
 
 func registeredClusterIDs(resp *client.RegisterClusterResponse) (clusterGroupID, clusterID string) {

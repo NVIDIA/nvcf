@@ -33,10 +33,13 @@ import (
 // ============================================================================
 
 // KubernetesType represents a Kubernetes API group/version/kind tuple.
+// Resource (the lowercase plural name used in the API path and RBAC rules) is
+// only set on the cluster side; the workload side leaves it empty.
 type KubernetesType struct {
-	Group   string `json:"group,omitempty"`
-	Version string `json:"version,omitempty"`
-	Kind    string `json:"kind,omitempty"`
+	Group    string `json:"group,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Resource string `json:"resource,omitempty"`
 }
 
 // HelmValidationPolicyDto represents Helm validation policy for a task.
