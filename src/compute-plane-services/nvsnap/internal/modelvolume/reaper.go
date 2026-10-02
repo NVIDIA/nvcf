@@ -222,7 +222,7 @@ func (r *Reaper) Sweep(ctx context.Context) (Result, error) {
 			continue
 		}
 		name := pv.Spec.ClaimRef.Name
-		if (!strings.HasPrefix(name, "nvsnap-model-") && !strings.HasPrefix(name, "nvsnap-cache-")) || strings.HasSuffix(name, "-ro") || pv.Status.Phase != corev1.VolumeReleased {
+		if (!strings.HasPrefix(name, "nvsnap-model-") && !strings.HasPrefix(name, "nvsnap-cache-")) || strings.HasSuffix(name, "-ro") || strings.HasSuffix(name, "-rw") || pv.Status.Phase != corev1.VolumeReleased {
 			continue
 		}
 		if r.now().Sub(pv.CreationTimestamp.Time) < abandonAfter || attached[pv.Name] {
@@ -379,12 +379,10 @@ func lastUsed(pv *corev1.PersistentVolume) time.Time {
 	return pv.CreationTimestamp.Time
 }
 
-func isReadOnlyModelPV(pv *corev1.PersistentVolume) bool {
-	if pv.Labels["nvsnap.io/role"] == "reader-shared" {
-		return true
-	}
-	return pv.Spec.CSI != nil && pv.Spec.CSI.ReadOnly
-}
+// isReadOnlyModelPV is true for every per-namespace view, the read-only
+// ones readers mount and the read-write one a download Job wrote through;
+// both live and die with their namespace, never as artifacts.
+func isReadOnlyModelPV(pv *corev1.PersistentVolume) bool { return IsViewPV(pv) }
 
 func isPrimaryModelPV(pv *corev1.PersistentVolume) bool {
 	return !isReadOnlyModelPV(pv)

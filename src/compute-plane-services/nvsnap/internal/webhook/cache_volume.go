@@ -125,11 +125,11 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 	mp := newMetaPatcher(pod)
 	switch {
 	case st.Complete:
-		if m.ReadOnlyMinter == nil {
+		if m.ViewMinter == nil {
 			return patches
 		}
 		claim := m.CacheVolume.Cfg.ReadOnlyClaimName(uri)
-		if err := m.ReadOnlyMinter.MintReadOnlyFromPVLabels(ctx, st.PrimaryPV, m.CacheVolume.Cfg.ReadOnlyPVName(uri, pod.Namespace), claim, pod.Namespace, m.CacheVolume.Cfg.ReadOnlyLabels(uri)); err != nil {
+		if err := m.ViewMinter.MintReadOnlyFromPVLabels(ctx, st.PrimaryPV, m.CacheVolume.Cfg.ReadOnlyPVName(uri, pod.Namespace), claim, pod.Namespace, m.CacheVolume.Cfg.ReadOnlyLabels(uri)); err != nil {
 			log.WithError(err).Warn("cache volume: mint read-only claim failed; pod compiles locally")
 			return patches
 		}

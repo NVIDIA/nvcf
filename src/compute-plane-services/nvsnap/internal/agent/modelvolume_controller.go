@@ -329,13 +329,20 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 	}
 	log := c.log().WithFields(logrus.Fields{"job": job.Namespace + "/" + job.Name, "model": uri})
 	if job.Annotations[modelvolume.StagingAnnotation] != "" {
-		return // Block mode: the staging pod event drives the copy
+		return // block storage: the staging pod event drives the copy
 	}
-	if err := c.Provisioner.MarkComplete(ctx, uri, job.Namespace); err != nil {
+	// The Job wrote through its namespace's read-write view into the
+	// primary in the nvsnap namespace; complete the primary there and
+	// retire the writer view.
+	sysNS := c.Provisioner.Cfg.SystemNamespace()
+	if err := c.Provisioner.MarkComplete(ctx, uri, sysNS); err != nil {
 		log.WithError(err).Warn("model volume: mark complete failed")
 		return
 	}
-	log.Info("model volume: download complete; readers may attach once the volume detaches")
+	if err := c.Provisioner.ReleaseWriterView(ctx, uri, job.Namespace); err != nil {
+		log.WithError(err).Warn("model volume: release writer view failed; the reaper retires it with the namespace")
+	}
+	log.Info("model volume: download complete; readers read the primary through their views")
 }
 
 // promoteStaging turns a staging pod on this node into the completed
@@ -1098,15 +1105,7 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 	}
 	if dev := c.mountedDevice(dst); dev == "" {
 		if c.Minter != nil {
-			// The read-only attach is refused while the download's
-			// read-write attachment still exists; wait for the detach.
-			detached, err := c.Provisioner.Detached(ctx, st.PrimaryPV)
-			if err != nil {
-				log.WithError(err).Warn("model volume: detach check failed")
-				return
-			}
-			if !detached {
-				log.WithField("pv", st.PrimaryPV).Info("model volume: primary still attached; retrying after detach")
+			if ready, err := c.primaryReadable(ctx, st.PrimaryPV, log); err != nil || !ready {
 				return
 			}
 			if err := c.Minter.MintReadOnlyFromPV(ctx, st.PrimaryPV, modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
@@ -1236,17 +1235,30 @@ func deviceMatchesHandle(device, handle string) bool {
 // servePVCReader mints the read-only claim the pending reader already
 // references, once the primary is detached, and un-pends it. Kubelet
 // binds the claim and starts the pod; no hostPath and no agent bind.
+// primaryReadable reports whether a complete primary may be attached
+// read-only now. Block storage refuses the read-only attach while the
+// writer's read-write attachment still exists, so it waits for the detach;
+// a filesystem shared while written has nothing to wait for.
+func (c *ModelVolumeController) primaryReadable(ctx context.Context, pv string, log logrus.FieldLogger) (bool, error) {
+	if c.Provisioner.Cfg.SharedWhileWriting() {
+		return true, nil
+	}
+	detached, err := c.Provisioner.Detached(ctx, pv)
+	if err != nil {
+		log.WithError(err).Warn("model volume: detach check failed")
+		return false, err
+	}
+	if !detached {
+		log.WithField("pv", pv).Info("model volume: primary still attached; retrying after detach")
+	}
+	return detached, nil
+}
+
 func (c *ModelVolumeController) servePVCReader(ctx context.Context, pod *corev1.Pod, uri string, st modelvolume.State, log logrus.FieldLogger) {
 	if c.Minter == nil || st.PrimaryPV == "" {
 		return
 	}
-	detached, err := c.Provisioner.Detached(ctx, st.PrimaryPV)
-	if err != nil {
-		log.WithError(err).Warn("model volume: detach check failed")
-		return
-	}
-	if !detached {
-		log.WithField("pv", st.PrimaryPV).Info("model volume: primary still attached; retrying after detach")
+	if ready, err := c.primaryReadable(ctx, st.PrimaryPV, log); err != nil || !ready {
 		return
 	}
 	if err := c.Minter.MintReadOnlyFromPV(ctx, st.PrimaryPV, modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {

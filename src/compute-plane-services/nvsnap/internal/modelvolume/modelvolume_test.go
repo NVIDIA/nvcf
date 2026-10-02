@@ -95,22 +95,49 @@ func TestProvisioner_LookupAndComplete_Block(t *testing.T) {
 	}
 }
 
+// On a shared filesystem the lifecycle is the block one: the primary claim
+// lives in the nvsnap namespace, Lookup reports its bound volume while the
+// download runs, completion labels the retained PV and releases the claim.
 func TestProvisioner_LookupAndComplete_RWX(t *testing.T) {
 	ctx := context.Background()
 	kc := fake.NewSimpleClientset()
 	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeRWX, StorageClass: "sc", Size: resource.MustParse("1Gi")}}
-	if _, err := p.EnsureWriterClaim(ctx, uri, "fn-a"); err != nil {
+	sysNS := p.Cfg.SystemNamespace()
+	if _, err := p.EnsureWriterClaim(ctx, uri, sysNS); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.MarkComplete(ctx, uri, "fn-a"); err != nil {
+	if st, _ := p.Lookup(ctx, uri); !st.Exists || st.Complete || st.InFlightPV != "" || st.ClaimNamespace != sysNS {
+		t.Errorf("unbound in-flight claim: %+v", st)
+	}
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-fs"}, Spec: corev1.PersistentVolumeSpec{
+		PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+		PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/export"}}}}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	pvc, err := kc.CoreV1().PersistentVolumeClaims("fn-a").Get(ctx, ClaimName(uri), metav1.GetOptions{})
-	if err != nil || pvc.Labels[CompleteLabel] != "true" {
-		t.Errorf("RWX keeps the shared claim and labels it: %v %v", err, pvc.Labels)
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, ClaimName(uri), metav1.GetOptions{})
+	pvc.Spec.VolumeName, pvc.Status.Phase = "pv-fs", corev1.ClaimBound
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
 	}
-	if st, _ := p.Lookup(ctx, uri); !st.Complete {
-		t.Errorf("RWX complete: %+v", st)
+	if st, _ := p.Lookup(ctx, uri); st.Complete || st.InFlightPV != "pv-fs" {
+		t.Errorf("a bound in-flight claim exposes its volume for early views: %+v", st)
+	}
+	if err := p.MarkComplete(ctx, uri, sysNS); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, ClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("the writer claim is released on completion")
+	}
+	got, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pv-fs", metav1.GetOptions{})
+	if got.Labels[CompleteLabel] != "true" || got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Errorf("the primary PV is the artifact: %+v", got.ObjectMeta)
+	}
+	if st, _ := p.Lookup(ctx, uri); !st.Complete || st.PrimaryPV != "pv-fs" {
+		t.Errorf("complete: %+v", st)
+	}
+	if err := p.MarkComplete(ctx, uri, sysNS); err != nil {
+		t.Errorf("idempotent after release: %v", err)
 	}
 }
 

@@ -112,23 +112,36 @@ not.
    scheduling: it runs on any node with the image, and the workload pods
    of a multi-node group or a gang all schedule as plain readers.
 
-   Where the Job writes depends on the mode. Distributed filesystem: into
-   the shared RWX claim, created at admission (the filesystem's quota
-   makes its size nominal). Block storage: into a pod-local emptyDir on
-   the node's disk, the same place the single-GPU cachedir capture
-   downloads to. No claim exists yet, because the model's size is unknown
-   until it has been downloaded, registries do not all expose it, and
-   not every storage system can grow a volume. kubelet removes an emptyDir
-   the moment its pod terminates (verified on dev1 2026-09-28), so the
-   download is the pod's init container and a small hold container keeps
-   the pod Running until the agent has copied the tree out (mechanism 3)
-   and deletes the Job; a six-hour active deadline is the safety net. The
-   pod carries no service-account token.
+   Where the Job writes is the one place the storage mode shows, and the
+   storage profile's mode decides exactly two things: the access mode of
+   the primary claim, and how the download reaches it. A filesystem that
+   is shared while written (OCI FSS, Weka, Lustre; `modelVolume.mode:
+   rwx`): the primary claim is created in the nvsnap namespace at
+   admission (the filesystem's quota makes its size nominal), and the Job
+   writes through a read-write view of it in the pod's namespace, a
+   static PV over the same volume pre-bound to a claim there, the same
+   object a reader's view is minus the read-only flag. Block storage
+   (NVMesh; `block`): into a pod-local emptyDir on the node's disk, the
+   same place the single-GPU cachedir capture downloads to. No claim
+   exists yet, because the model's size is unknown until it has been
+   downloaded, registries do not all expose it, and not every storage
+   system can grow a volume. kubelet removes an emptyDir the moment its
+   pod terminates (verified on dev1 2026-09-28), so the download is the
+   pod's init container and a small hold container keeps the pod Running
+   until the agent has copied the tree out (mechanism 3) and deletes the
+   Job; a six-hour active deadline is the safety net. The pod carries no
+   service-account token. Nothing else in the flow may branch on the
+   mode; the code asks `Config.SharedWhileWriting()` for the one
+   capability that follows from it.
 
 3. Model volume per identity, immutable after download (agent + storage
-   profile). Distributed filesystem: one RWX volume; writer and readers
-   mount it at admission; completion is a marker file the writer's init
-   writes on exit 0. Block storage: when the staging pod's download init
+   profile). The primary lives in the nvsnap namespace on every storage
+   and completion is the same act everywhere: the primary PV is labelled
+   complete and retained and the writer claim is released; the PV is the
+   artifact, read-only views are minted from it per reader namespace. On
+   a shared filesystem the Job's exit 0 completes it (the marker it left
+   at the volume root is what readers wait on) and the Job's read-write
+   view is retired. On block storage: when the staging pod's download init
    exits 0, the agent on its node measures the bytes on disk, creates a ReadWriteOnce
    claim of measured size plus ten percent, rounded up to a whole GiB
    (profile `modelVolume.minSize` is the floor), in the nvsnap namespace,
@@ -161,9 +174,13 @@ not.
    are kept; retention is a separate decision.
 
 4. Readers reach the volume without help from inside the pod (webhook +
-   agent). On a distributed filesystem the RWX claim exists and is bound
-   at admission, so the pod schedules. On NVMesh the storage profile picks
-   one of two reader modes (`modelVolume.readerMode`):
+   agent). Every reader references the read-only view
+   `nvsnap-model-<key>-ro` in its own namespace. On a shared filesystem
+   the view is minted at admission even while the download runs, since
+   the volume can be read while written, so the pod schedules at once
+   and its wait init watches for the marker. On NVMesh the view can only
+   be minted once the primary is complete and detached, and the storage
+   profile picks one of two reader modes (`modelVolume.readerMode`):
    - `pvc` (default). The reader references the read-only claim
      `nvsnap-model-<key>-ro` in its own namespace. Complete already: the
      webhook mints the claim at admission and the pod binds at once. Not
@@ -194,15 +211,18 @@ not.
    engine container and the storage profile's reader count, and never
    fails the pod.
 
-5. Compile caches (webhook env + agent). All caches are redirected to a
-   cache location keyed by image digest plus identity plus role-neutral
-   args. Distributed filesystem: `<volume>/cache/<key>/`, read-write for
-   every pod; the engines' `filelock` and atomic replace make identical
-   compiles converge; `cacheMode: shadow` in the profile keeps a per-pod
-   writable copy seeded from it where the operator does not trust the
-   filesystem's locks (Lustre needs `-o flock`; the agent checks).
+5. Compile caches (webhook env + agent). On every storage each pod
+   compiles into its local `/opt/nvsnap/cache` emptyDir, and the caches
+   of one configuration are shared through a cache set: the same
+   mechanism as the model volume with another kind, a primary collected
+   from the ranks after Ready and read-only views seeded into later pods.
+   An earlier draft put the caches of a shared filesystem under the model
+   volume itself; the reader's view is read-only, so the engine died at
+   import ("Read-only file system: /model/.nvsnap", OCI FSS 2026-10-02),
+   and concurrent writers to one NFS directory with local file locks
+   would not have been safe anyway.
 
-   Block storage: each pod compiles into its local `/opt/nvsnap/cache`
+   The local cachedir: each pod compiles into `/opt/nvsnap/cache`
    emptyDir; the caches of a tensor-parallel group are gathered once, as
    one volume per configuration, and every later pod of that
    configuration mounts it. The identity of the set is `cache://<config
@@ -340,10 +360,12 @@ reconciler, `vllm-workers` chart and runner.
 
 New: identity from init containers and group inheritance; the download
 Job derived from the chart's init or from `hf download`; init wrapping
-for the wait; per-identity model volume (RWX on DFS created at admission;
-on block storage staged in the Job's emptyDir and copied by the agent
-into a claim sized from the download, in the nvsnap namespace); agent
-completion handler (Job success -> marker / sized PV + read-only claims);
+for the wait; per-identity model volume in the nvsnap namespace (on a
+shared filesystem created at admission and written through a read-write
+view; on block storage staged in the Job's emptyDir and copied by the
+agent into a claim sized from the download); agent completion handler
+(Job success or copy -> labelled retained PV, released claim, read-only
+views per namespace);
 model volume reaper; cache volume capture (caches only) on NVMesh;
 `cacheMode`; last-use labels.
 

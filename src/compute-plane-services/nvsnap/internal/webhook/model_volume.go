@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -18,20 +19,20 @@ import (
 )
 
 // Model volume decoration (docs/proposals/helm-shared-model-volume.md).
-// For a pod that will download a model, the webhook replaces the volume
-// the download lands in with the per-identity model volume and turns the
-// download step into a write-once: the elected writer downloads and marks
-// completion, every other pod waits for the marker and skips its own
-// download. No pod is gated; waiting is an init container.
+// For a pod that will download a model, the webhook turns the download
+// into a write-once step: one download Job per identity fills the primary
+// volume, every pod of that identity is a reader that references a
+// per-namespace view of the primary and waits for the completion marker.
+// No pod is gated; waiting is an init container.
 //
-// Roles:
-//   - writer: download step runs, then touches <volume>/.nvsnap-complete.
-//     Its engine mounts the model read-only so the volume stays immutable.
-//   - reader, RWX mode: mounts the same claim; its download step becomes
-//     "wait for the marker, else download" (fallback after the deadline).
-//   - reader, Block mode: keeps its emptyDir at the landing path and waits
-//     for the agent to bind the completed volume in and drop the marker.
-
+// The flow is the same on every storage. The storage profile's Mode
+// decides only how the Job reaches the primary (modelvolume.Config): on
+// block storage it stages into an emptyDir the agent copies out, and the
+// readers' views can only be minted once the primary is complete; on a
+// filesystem that is shared while written the Job writes through a
+// read-write view in its namespace and readers mount their read-only view
+// at admission. Block storage additionally offers a hostPath landing for
+// gang-scheduled charts (profile modelVolume.readerMode).
 const (
 	modelVolumeName      = "nvsnap-model"
 	injectedDownloadInit = "nvsnap-model-download"
@@ -86,10 +87,10 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 	// the agent on its node captures the finished tree once the pod is
 	// Ready. Later pods reference the read-only copy; the script's own
 	// "already present" check passes because the tree is exactly what it
-	// wrote. Block mode with PVC readers only: the volume must be in place
-	// before the engine starts, which a hostPath bind cannot promise.
+	// wrote. PVC readers only: the volume must be in place before the
+	// engine starts, which a hostPath bind cannot promise.
 	captureSource := !derivable && land.Downloader == modelid.DownloaderEngine && land.VolumeName != "" &&
-		m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderPVC
+		m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderPVC
 	if !st.Complete {
 		if captureSource {
 			patches = append(patches, mp.label(modelvolume.CaptureLabel, "true")...)
@@ -101,63 +102,18 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 			log.Info("model volume: no download step can be derived (engine downloads a non-HF model); leaving pod alone")
 			return nil, nil
 		}
-		// The download step is a Job, created once per identity; create is
-		// atomic so concurrent admissions converge without an election. It
-		// runs in the pod's namespace because that is where the chart's
-		// registry credentials are. RWX: it writes into the shared claim.
-		// Block: it writes into a pod-local emptyDir and the agent on that
-		// node copies the result into a claim sized from the bytes that
-		// landed; nothing is guessed at admission.
-		claim := ""
-		if m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX {
-			claim, err = m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
-			if err != nil {
-				return nil, err
-			}
-		}
-		job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, claim, step)
+		inFlight, err := m.ensureDownload(ctx, pod, uri, step, log)
 		if err != nil {
 			return nil, err
 		}
-		log.WithFields(logrus.Fields{"claim": claim, "job": job, "staging": claim == ""}).Info("model volume: download job ensured")
+		st.InFlightPV = inFlight
 	}
 	patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
-	switch {
-	case m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX:
-		claim, err := m.ModelVolume.EnsureWriterClaim(ctx, uri, pod.Namespace)
-		if err != nil {
-			return nil, err
-		}
-		patches = append(patches, m.substituteLandingVolume(pod, main, land, claim)...)
-		log.WithFields(logrus.Fields{"claim": claim, "complete": st.Complete}).Info("model volume: reader on shared filesystem; waits for the marker")
-	case m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath:
-		// Block mode, hostPath landing: schedules at once; the agent binds
-		// the completed read-only volume over it and the marker appears.
-		patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
-		patches = append(patches, mp.annotation(modelvolume.LandingAnnotation, landingMount(land))...)
-		patches = append(patches, m.hostPathLanding(pod, main, land, uri)...)
-		log.WithField("complete", st.Complete).Info("model volume: reader on block storage; agent binds the volume after completion")
-	default:
-		// Block mode, PVC reader: the pod references the read-only claim in
-		// its namespace. Complete already: mint it now so the pod binds at
-		// once. Not yet: the pod stays Pending on volume binding until the
-		// agent mints the claim after the download. No hostPath, no bind.
-		if st.Complete && m.ReadOnlyMinter != nil {
-			if err := m.ReadOnlyMinter.MintReadOnlyFromPV(ctx, st.PrimaryPV, modelvolume.ReadOnlyPVName(uri, pod.Namespace), modelvolume.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
-				return nil, fmt.Errorf("mint read-only claim: %w", err)
-			}
-		}
-		if st.Complete {
-			if err := m.ModelVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
-				log.WithError(err).Warn("model volume: record last use failed")
-			}
-		}
-		if !st.Complete {
-			patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
-		}
-		patches = append(patches, m.substituteLandingVolume(pod, main, land, modelvolume.ReadOnlyClaimName(uri))...)
-		log.WithField("complete", st.Complete).Info("model volume: reader on block storage references the read-only claim")
+	landing, err := m.readerLanding(ctx, pod, main, land, uri, st, log)
+	if err != nil {
+		return nil, err
 	}
+	patches = append(patches, landing...)
 	if !captureSource {
 		// A captured tree needs no wait init and no offline switch: the
 		// chart's own script finds its markers on the read-only volume.
@@ -180,6 +136,97 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		}
 	}
 	patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
+	return patches, nil
+}
+
+// ensureDownload creates the one download Job for uri. The Job runs in the
+// pod's namespace because that is where the chart's registry credentials
+// are. Where it writes is the one place the storage mode shows: on storage
+// that is shared while written the primary claim is created now in the
+// nvsnap namespace and the Job writes through a read-write view in its
+// own namespace; on block storage the Job stages into a pod-local emptyDir
+// and the agent on that node copies the tree into a claim sized from what
+// landed, nothing being guessed at admission. Returns the primary PV when
+// it is already bound, so readers admitted now can view it.
+func (m *Mutator) ensureDownload(ctx context.Context, pod *corev1.Pod, uri string, step modelvolume.DownloadStep, log logrus.FieldLogger) (string, error) {
+	cfg := m.ModelVolume.Cfg
+	if !cfg.SharedWhileWriting() {
+		job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, "", step)
+		if err != nil {
+			return "", err
+		}
+		log.WithFields(logrus.Fields{"job": job, "staging": true}).Info("model volume: download job ensured")
+		return "", nil
+	}
+	if m.ViewMinter == nil {
+		return "", fmt.Errorf("model volume: no view minter for the shared filesystem")
+	}
+	sysNS := cfg.SystemNamespace()
+	claim, err := m.ModelVolume.EnsureWriterClaim(ctx, uri, sysNS)
+	if err != nil {
+		return "", err
+	}
+	// A filesystem claim binds in the time of one provisioning round trip
+	// (OCI FSS: about a second). Admission has a 5 s budget; past the
+	// wait the pod is admitted unchanged and the next admission finds the
+	// bound claim.
+	pv, err := m.ModelVolume.WaitBound(ctx, sysNS, claim, primaryBindWait)
+	if err != nil {
+		return "", fmt.Errorf("primary claim %s/%s not bound: %w", sysNS, claim, err)
+	}
+	view := cfg.WriterViewClaimName(uri)
+	if err := m.ViewMinter.MintViewFromPVLabels(ctx, pv, cfg.WriterViewPVName(uri, pod.Namespace), view, pod.Namespace, cfg.ReadOnlyLabels(uri), false); err != nil {
+		return "", fmt.Errorf("mint writer view: %w", err)
+	}
+	job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, view, step)
+	if err != nil {
+		return "", err
+	}
+	log.WithFields(logrus.Fields{"job": job, "primary": sysNS + "/" + claim, "pv": pv, "view": view}).Info("model volume: download job ensured")
+	return pv, nil
+}
+
+// primaryBindWait bounds the admission-time wait for a shared-filesystem
+// primary claim to bind.
+const primaryBindWait = 3 * time.Second
+
+// readerLanding gives the reader its model volume. PVC readers reference
+// the read-only view of the primary in their namespace: minted now when
+// the primary is complete, or already while the download runs when the
+// storage is shared while written; otherwise the pod is marked pending and
+// stays on volume binding until the agent mints the view after
+// completion. hostPath readers (block storage, gang schedulers) land on a
+// hostPath the agent binds the completed volume into.
+func (m *Mutator) readerLanding(ctx context.Context, pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string, st modelvolume.State, log logrus.FieldLogger) ([]PatchOp, error) {
+	mp := newMetaPatcher(pod)
+	cfg := m.ModelVolume.Cfg
+	if cfg.ReaderMode() == modelvolume.ReaderHostPath {
+		patches := mp.label(modelvolume.PendingLabel, "true")
+		patches = append(patches, mp.annotation(modelvolume.LandingAnnotation, landingMount(land))...)
+		patches = append(patches, m.hostPathLanding(pod, main, land, uri)...)
+		log.WithField("complete", st.Complete).Info("model volume: reader on a hostPath landing; agent binds the volume after completion")
+		return patches, nil
+	}
+	viewable := st.PrimaryPV
+	if viewable == "" && cfg.SharedWhileWriting() {
+		viewable = st.InFlightPV
+	}
+	var patches []PatchOp
+	switch {
+	case viewable != "" && m.ViewMinter != nil:
+		if err := m.ViewMinter.MintReadOnlyFromPV(ctx, viewable, cfg.ReadOnlyPVName(uri, pod.Namespace), cfg.ReadOnlyClaimName(uri), pod.Namespace, modelvolume.Key(uri)); err != nil {
+			return nil, fmt.Errorf("mint read-only view: %w", err)
+		}
+		if st.Complete {
+			if err := m.ModelVolume.TouchLastUsed(ctx, st.PrimaryPV); err != nil {
+				log.WithError(err).Warn("model volume: record last use failed")
+			}
+		}
+	default:
+		patches = append(patches, mp.label(modelvolume.PendingLabel, "true")...)
+	}
+	patches = append(patches, m.substituteLandingVolume(pod, main, land, cfg.ReadOnlyClaimName(uri))...)
+	log.WithFields(logrus.Fields{"complete": st.Complete, "view_of": viewable}).Info("model volume: reader references the read-only view")
 	return patches, nil
 }
 
@@ -548,17 +595,13 @@ func tokenEnv(main *corev1.Container) []corev1.EnvVar {
 	return out
 }
 
-// modelCacheEnvPatches redirects the compile caches. RWX: into the shared
-// volume under a key of image plus identity plus role-neutral args, so
-// every pod of that engine config shares one set. Block: into the pod's
-// local cachedir (captured after Ready by the existing path). The model
-// entries of the template are dropped: the model lives in the landing
-// volume now, not under the cachedir.
+// modelCacheEnvPatches redirects the compile caches into the pod-local
+// cachedir, the same on every storage: the reader's view of the model
+// volume is read-only, so nothing under the landing is writable ("Read-only
+// file system: /model/.nvsnap", OCI FSS 2026-10-02, when a shared
+// filesystem once put them there). The model entries of the template are
+// dropped: the model lives in the landing volume, not under the cachedir.
 func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
-	// Both modes keep the compile caches in the pod-local cachedir. The
-	// reader's view of the model volume is read-only in every mode (the
-	// shared filesystem claim too: "Read-only file system: /model/.nvsnap",
-	// OCI FSS 2026-10-02), so nothing under the landing is writable.
 	if m.CacheDir == "" {
 		return nil
 	}
@@ -582,13 +625,10 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	if hfHomeUnderLanding(main, land) && !hasEnv(main, "HF_MODULES_CACHE") {
 		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: path.Join(root, "hf_modules")}))
 	}
+	// The local cachedir the capture reads, and the per-key cache set
+	// that shares the compile caches between pods of one configuration.
 	patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
-	if m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX {
-		// Block mode shares the compile caches through a per-key cache
-		// volume; on a shared filesystem the set stays per pod for now.
-		patches = m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
-	}
-	return patches
+	return m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
 }
 
 // hfHomeUnderLanding reports whether the container's literal HF_HOME is
@@ -674,8 +714,8 @@ func hfDownloadCommand(id modelid.Identity) string {
 	return fmt.Sprintf("if command -v hf >/dev/null 2>&1; then hf download %[1]s; else huggingface-cli download %[1]s; fi", args)
 }
 
-// hostPathReaders reports whether Block-mode readers land on a hostPath
-// the agent binds into (as opposed to referencing the read-only claim).
+// hostPathReaders reports whether readers land on a hostPath the agent
+// binds into (as opposed to referencing the read-only view).
 func (m *Mutator) hostPathReaders() bool {
-	return m.ModelVolume != nil && m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath
+	return m.ModelVolume != nil && m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath
 }

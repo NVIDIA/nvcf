@@ -90,11 +90,19 @@ type StorageProfile struct {
 	// about 12 min per pod for nothing). Empty means DefaultPrewarmMaxBytes.
 	PrewarmMaxBytes string `json:"prewarmMaxBytes,omitempty"`
 	// ModelVolume configures the write-once model volume for Helm
-	// functions (docs/proposals/helm-shared-model-volume.md). Mode "block"
-	// is the default for shared-volume strategies (NVMesh): the writer's
-	// claim on the L2 class becomes the read-only artifact. Mode "rwx"
-	// needs a ReadWriteMany class of a distributed filesystem. Empty
-	// mode with no default leaves Helm functions untouched.
+	// functions (docs/proposals/helm-shared-model-volume.md). One
+	// lifecycle on every storage: primary in the nvsnap namespace, views
+	// per reader namespace, local compile caches shared through a cache
+	// set. Mode "block" is the default for shared-volume strategies
+	// (NVMesh): the download is staged and copied into a claim sized from
+	// it. Mode "rwx" is for a ReadWriteMany class of a distributed
+	// filesystem that can be read while written (OCI FSS, Weka, Lustre):
+	// the primary exists at admission and the download Job writes through
+	// a read-write view. Both need strategy shared-volume, which mints the
+	// views; NFS classes need file locking to work on the mount (for
+	// example `local_lock=all` on an NFSv3 export without lockd), since the
+	// Hugging Face tooling locks files while downloading. Empty mode with
+	// no default leaves Helm functions untouched.
 	ModelVolume *ModelVolumeProfile `json:"modelVolume,omitempty"`
 }
 

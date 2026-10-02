@@ -193,6 +193,14 @@ func (p *SharedVolumePromoter) Promote(ctx context.Context, in PromoteInput) (Pr
 }
 
 func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string, extraLabels ...map[string]string) error {
+	return p.ensureViewPV(ctx, primary, secName, roxName, ns, true, extraLabels...)
+}
+
+// ensureViewPV creates the static PV that exposes primary in ns: read-only
+// (ReadOnlyMany, csi.readOnly, the read-only mount options) for readers,
+// or read-write (ReadWriteMany, the primary's own mount options) for a
+// download Job on a filesystem that is shared while written.
+func (p *SharedVolumePromoter) ensureViewPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string, readOnly bool, extraLabels ...map[string]string) error {
 	if existing, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secName, metav1.GetOptions{}); err == nil {
 		return p.releaseStaleBinding(ctx, existing, roxName, ns)
 	} else if !apierrors.IsNotFound(err) {
@@ -203,12 +211,16 @@ func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *c
 		return fmt.Errorf("transform volumeHandle: %w", err)
 	}
 	sec := primary.DeepCopy()
+	role, access := "reader-shared", corev1.ReadOnlyMany
+	if !readOnly {
+		role, access = "writer-shared", corev1.ReadWriteMany
+	}
 	sec.ObjectMeta = metav1.ObjectMeta{
 		Name: secName,
 		Labels: map[string]string{
 			"app.kubernetes.io/managed-by": "nvsnap",
 			"nvsnap.io/per-capture":        "true",
-			"nvsnap.io/role":               "reader-shared",
+			"nvsnap.io/role":               role,
 		},
 	}
 	for _, extra := range extraLabels {
@@ -216,15 +228,16 @@ func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *c
 			sec.Labels[k] = v
 		}
 	}
-	sec.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
+	sec.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{access}
 	sec.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 	sec.Spec.CSI = primary.Spec.CSI.DeepCopy()
 	sec.Spec.CSI.VolumeHandle = newHandle
-	sec.Spec.CSI.ReadOnly = true
+	sec.Spec.CSI.ReadOnly = readOnly
 	// Read-only mount options for the shared fan-out. NVMesh xfs needs
 	// "ro,norecovery,nouuid" — without nouuid the 2nd pod mounting the
-	// same filesystem UUID fails ("Filesystem has duplicate UUID").
-	if len(p.MountOptions) > 0 {
+	// same filesystem UUID fails ("Filesystem has duplicate UUID"). A
+	// read-write view keeps the primary's own options.
+	if readOnly && len(p.MountOptions) > 0 {
 		sec.Spec.MountOptions = append([]string(nil), p.MountOptions...)
 	}
 	// Pre-bind to the shared ro PVC so it binds statically (no dynamic
@@ -569,6 +582,16 @@ func (p *SharedVolumePromoter) MintReadOnlyFromPV(ctx context.Context, primaryPV
 // MintReadOnlyFromPVLabels is MintReadOnlyFromPV with caller-chosen
 // identity labels on the minted PV and claim (model or cache volumes).
 func (p *SharedVolumePromoter) MintReadOnlyFromPVLabels(ctx context.Context, primaryPV, roPVName, roClaim, ns string, extra map[string]string) error {
+	return p.MintViewFromPVLabels(ctx, primaryPV, roPVName, roClaim, ns, extra, true)
+}
+
+// MintViewFromPVLabels exposes primaryPV in ns as the claim named claim,
+// bound to a static view PV named pvName. readOnly selects a reader's
+// view (ReadOnlyMany, read-only mount) or a writer's view (ReadWriteMany,
+// read-write), the latter for a download Job on storage that is shared
+// while written. Idempotent.
+func (p *SharedVolumePromoter) MintViewFromPVLabels(ctx context.Context, primaryPV, pvName, claim, ns string, extra map[string]string, readOnly bool) error {
+	roPVName, roClaim := pvName, claim
 	p.applyDefaults()
 	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, primaryPV, metav1.GetOptions{})
 	if err != nil {
@@ -590,16 +613,20 @@ func (p *SharedVolumePromoter) MintReadOnlyFromPVLabels(ctx context.Context, pri
 	for k, v := range extra {
 		labels[k] = v
 	}
-	if err := p.ensureSecondaryPV(ctx, primary, roPVName, roClaim, ns, labels); err != nil {
+	if err := p.ensureViewPV(ctx, primary, roPVName, roClaim, ns, readOnly, labels); err != nil {
 		return err
 	}
 	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roClaim, metav1.GetOptions{}); err == nil {
 		return nil
 	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get ro claim %s/%s: %w", ns, roClaim, err)
+		return fmt.Errorf("get view claim %s/%s: %w", ns, roClaim, err)
 	}
 	sc := p.StorageClass
-	pvcLabels := map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": "reader", labelNamespace: ns, "nvsnap.io/source-pv": primary.Name}
+	claimRole, access := "reader", corev1.ReadOnlyMany
+	if !readOnly {
+		claimRole, access = "writer", corev1.ReadWriteMany
+	}
+	pvcLabels := map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": claimRole, labelNamespace: ns, "nvsnap.io/source-pv": primary.Name}
 	for k, v := range extra {
 		pvcLabels[k] = v
 	}
@@ -609,14 +636,14 @@ func (p *SharedVolumePromoter) MintReadOnlyFromPVLabels(ctx context.Context, pri
 			Labels: pvcLabels,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			AccessModes:      []corev1.PersistentVolumeAccessMode{access},
 			VolumeName:       roPVName,
 			StorageClassName: &sc,
 			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: primary.Spec.Capacity[corev1.ResourceStorage]}},
 		},
 	}
 	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create ro claim %s/%s: %w", ns, roClaim, err)
+		return fmt.Errorf("create view claim %s/%s: %w", ns, roClaim, err)
 	}
 	return nil
 }

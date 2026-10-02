@@ -285,10 +285,11 @@ type Mutator struct {
 	// their landing and the agent binds completed model volumes:
 	// <root>/<identity key>.
 	ModelHostRoot string
-	// ReadOnlyMinter mints the read-only claim for a completed Block-mode
-	// volume in the admitted pod's namespace (PVC reader mode); nil in RWX
-	// mode.
-	ReadOnlyMinter ReadOnlyMinter
+	// ViewMinter exposes a primary volume in the admitted pod's namespace:
+	// the read-only view readers mount, and on storage shared while
+	// written the read-write view the download Job writes through. nil
+	// leaves readers pending for the agent to serve.
+	ViewMinter ViewMinter
 
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a
@@ -1132,9 +1133,11 @@ func (m *Mutator) logger() logrus.FieldLogger {
 	return logrus.NewEntry(logrus.New()).WithField("subsys", "webhook.mutate")
 }
 
-// ReadOnlyMinter exposes a completed model volume as a read-only claim in
-// a namespace (checkpointstore.SharedVolumePromoter implements it).
-type ReadOnlyMinter interface {
+// ViewMinter exposes a primary volume in a namespace as a static view PV
+// pre-bound to a claim there (checkpointstore.SharedVolumePromoter
+// implements it): read-only for readers, read-write for a download Job.
+type ViewMinter interface {
 	MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error
 	MintReadOnlyFromPVLabels(ctx context.Context, primaryPV, roPVName, roClaim, ns string, labels map[string]string) error
+	MintViewFromPVLabels(ctx context.Context, primaryPV, pvName, claim, ns string, labels map[string]string, readOnly bool) error
 }

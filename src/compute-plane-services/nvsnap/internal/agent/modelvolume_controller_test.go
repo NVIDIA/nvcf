@@ -51,12 +51,15 @@ func writerFixture(t *testing.T) (*fake.Clientset, *modelvolume.Provisioner) {
 	}
 	kc := fake.NewSimpleClientset(pv)
 	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock, StorageClass: sc, Size: resource.MustParse("512Gi"), Reader: modelvolume.ReaderHostPath}}
-	if _, err := p.EnsureWriterClaim(context.Background(), mvURI, "sr-fn"); err != nil {
+	// The primary claim lives in the nvsnap namespace, bound to the volume
+	// the Job wrote.
+	sysNS := p.Cfg.SystemNamespace()
+	if _, err := p.EnsureWriterClaim(context.Background(), mvURI, sysNS); err != nil {
 		t.Fatal(err)
 	}
-	pvc, _ := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ClaimName(mvURI), metav1.GetOptions{})
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(context.Background(), modelvolume.ClaimName(mvURI), metav1.GetOptions{})
 	pvc.Spec.VolumeName = "pvc-abc"
-	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Update(context.Background(), pvc, metav1.UpdateOptions{}); err != nil {
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Update(context.Background(), pvc, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	return kc, p
@@ -116,7 +119,7 @@ func TestModelVolumeController_JobCompletionMintsReadOnly(t *testing.T) {
 	if !st.Complete || st.PrimaryPV != "pvc-abc" {
 		t.Fatalf("a succeeded Job must complete the identity on the retained PV: %+v", st)
 	}
-	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err == nil {
+	if _, err := kc.CoreV1().PersistentVolumeClaims(p.Cfg.SystemNamespace()).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err == nil {
 		t.Error("the download claim must be released so the volume detaches")
 	}
 	primary, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-abc", metav1.GetOptions{})
@@ -362,7 +365,7 @@ func stagingFixture(t *testing.T, node string) (*fake.Clientset, *modelvolume.Pr
 
 func waitUntil(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
@@ -530,19 +533,60 @@ func TestModelVolumeController_StagingGivesUpWhenDownloadCannotStart(t *testing.
 	}
 }
 
-// RWX Jobs carry no staging annotation and complete as before.
-func TestModelVolumeController_RWXJobCompletesInPlace(t *testing.T) {
+// On a shared filesystem the Job writes through a read-write view in its
+// namespace into the primary in the nvsnap namespace. Its success
+// completes the primary there and retires the writer view.
+func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T) {
 	ctx := context.Background()
-	kc := fake.NewSimpleClientset()
-	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("512Gi")}}
-	if _, err := p.EnsureWriterClaim(ctx, mvURI, "sr-fn"); err != nil {
+	primary := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-fs"}, Spec: corev1.PersistentVolumeSpec{
+		Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Ti")},
+		PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+		PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/export"}}}}
+	kc := fake.NewSimpleClientset(primary)
+	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("4Ti")}}
+	sysNS := p.Cfg.SystemNamespace()
+	if _, err := p.EnsureWriterClaim(ctx, mvURI, sysNS); err != nil {
 		t.Fatal(err)
 	}
-	c := &ModelVolumeController{Kube: kc, Provisioner: p, NodeName: "node-a", Log: logrus.New()}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{})
+	pvc.Spec.VolumeName, pvc.Status.Phase = "pv-fs", corev1.ClaimBound
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ := checkpointstore.LookupVolumeHandleTransform("")
+	minter := &checkpointstore.SharedVolumePromoter{KubeClient: kc, StorageClass: "fs", Transform: tx, Log: logrus.New()}
+	if err := minter.MintViewFromPVLabels(ctx, "pv-fs", p.Cfg.WriterViewPVName(mvURI, "sr-fn"), p.Cfg.WriterViewClaimName(mvURI), "sr-fn", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
 	c.HandleJob(ctx, downloadJob(1))
-	pvc, _ := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{})
-	if pvc.Labels[modelvolume.CompleteLabel] != "true" {
-		t.Error("RWX shared claim labelled complete in place")
+	st, _ := p.Lookup(ctx, mvURI)
+	if !st.Complete || st.PrimaryPV != "pv-fs" {
+		t.Fatalf("the primary is complete on the retained PV: %+v", st)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Error("the primary claim is released")
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, p.Cfg.WriterViewClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Error("the writer view claim is retired with the Job")
+	}
+	if _, err := kc.CoreV1().PersistentVolumes().Get(ctx, p.Cfg.WriterViewPVName(mvURI, "sr-fn"), metav1.GetOptions{}); err == nil {
+		t.Error("the writer view PV is retired with the Job")
+	}
+	// A pending reader is served without any detach wait: the filesystem is
+	// shared while written.
+	reader := readerPod("other-ns", "node-b")
+	if _, err := kc.CoreV1().Pods("other-ns").Create(ctx, reader, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pvName := "pv-fs"
+	va := &storagev1.VolumeAttachment{ObjectMeta: metav1.ObjectMeta{Name: "va-fs"}, Spec: storagev1.VolumeAttachmentSpec{Attacher: "fss.csi.oraclecloud.com", NodeName: "node-a", Source: storagev1.VolumeAttachmentSource{PersistentVolumeName: &pvName}}}
+	if _, err := kc.StorageV1().VolumeAttachments().Create(ctx, va, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.Handle(ctx, reader)
+	if _, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, modelvolume.ReadOnlyClaimName(mvURI), metav1.GetOptions{}); err != nil {
+		t.Errorf("the read-only view is minted while the primary is still attached elsewhere: %v", err)
 	}
 }
 

@@ -17,23 +17,29 @@ limitations under the License.
 
 // Package modelvolume owns the per-identity model volume of
 // docs/proposals/helm-shared-model-volume.md: one volume per model URI per
-// cluster, written once by the elected writer's download step, immutable
-// afterwards, attached by every other pod.
+// cluster, written once, immutable afterwards, read by every other pod.
 //
-// Two modes, chosen by the storage profile:
+// One lifecycle, whatever the storage. The primary claim lives in the
+// nvsnap namespace; completion labels the retained primary PV and releases
+// the claim; readers in any namespace reference a view, a static PV over
+// the same volume pre-bound to a claim in their namespace; the compile
+// caches of every pod stay in its local cachedir and are shared through a
+// cache set built the same way. The storage profile picks a Mode, and the
+// Mode decides exactly two things:
 //
-//   - ModeRWX (distributed filesystem): one ReadWriteMany claim per
-//     identity per namespace, mounted by writer and readers alike at
-//     admission. Completion is a marker file the writer's download step
-//     leaves at the volume root.
-//   - ModeBlock (NVMesh): the download Job writes into a pod-local
-//     emptyDir, exactly like the single-GPU cachedir capture. When it exits
-//     0 the agent on that node measures the bytes on disk, creates a
-//     ReadWriteOnce claim of that size in the nvsnap namespace, copies the
-//     tree in, labels the retained PV complete and releases the claim. The
-//     PV is the artifact; read-only claims are minted from it per reader
-//     namespace. No size is guessed and no volume expansion is assumed, so
-//     the same flow serves NGC, Hugging Face and any other downloader.
+//   - the access mode of the primary claim: ReadWriteOnce (ModeBlock,
+//     NVMesh) or ReadWriteMany (ModeRWX, a distributed filesystem);
+//   - how the download reaches the primary. Block storage cannot be read
+//     while it is attached read-write and has no size until the bytes
+//     exist, so the Job stages into a pod-local emptyDir and the agent on
+//     that node copies the tree into a claim sized from what landed. A
+//     shared filesystem is readable while written and its size is nominal,
+//     so the claim exists at admission and the Job writes into it through
+//     a read-write view in its own namespace; readers attach their
+//     read-only view at once and wait for the marker.
+//
+// Nothing else may branch on the Mode. Capabilities that follow from it
+// are asked through Config (SharedWhileWriting, ReaderMode).
 package modelvolume
 
 import (
@@ -146,6 +152,13 @@ const (
 	// SourceNamespaceLabel on the primary PV records the namespace the
 	// download Job ran in.
 	SourceNamespaceLabel = "nvsnap.io/model-source-namespace"
+	// ViewRoleLabel marks a per-namespace view PV or claim: ViewRoleReader
+	// for the read-only views readers mount, ViewRoleWriter for the
+	// read-write view a download Job writes through. Primaries carry
+	// neither.
+	ViewRoleLabel  = "nvsnap.io/role"
+	ViewRoleReader = "reader-shared"
+	ViewRoleWriter = "writer-shared"
 	// DownloadContainer is the Job's download step; in Block mode it is an
 	// init container and HoldContainer keeps the pod, and with it the
 	// staged emptyDir, alive until the agent has copied it out.
@@ -279,10 +292,30 @@ func (c Config) VolumeSize(bytes int64) resource.Quantity {
 
 // ReaderMode returns the configured reader mode with its default.
 func (c Config) ReaderMode() ReaderMode {
-	if c.Reader == "" {
+	if c.Reader == "" || c.SharedWhileWriting() {
+		// A view of a shared filesystem binds at once, so the hostPath
+		// landing, which exists to let block readers schedule before the
+		// agent binds the volume in, has nothing to offer there.
 		return ReaderPVC
 	}
 	return c.Reader
+}
+
+// SharedWhileWriting reports whether the volume can be read on other
+// nodes while the download still has it open read-write. True on a
+// distributed filesystem, false on block storage, where the read-only
+// attach is refused until the writer detaches. This is the one place the
+// Mode is consulted for a capability.
+func (c Config) SharedWhileWriting() bool { return c.Mode == ModeRWX }
+
+// WriterViewClaimName is the per-namespace read-write view the download
+// Job writes through when the volume is shared while writing.
+func (c Config) WriterViewClaimName(uri string) string { return c.prefix() + Key(uri) + "-rw" }
+
+// WriterViewPVName is the static PV behind WriterViewClaimName in ns.
+func (c Config) WriterViewPVName(uri, ns string) string {
+	sum := sha256.Sum256([]byte(ns))
+	return c.prefix() + Key(uri) + "-rw-" + hex.EncodeToString(sum[:4])
 }
 
 // Key is the short stable token for a model URI, used in object names
@@ -307,11 +340,15 @@ type State struct {
 	Exists bool
 	// Complete: the download finished; readers may attach.
 	Complete bool
-	// ClaimNamespace is where the writer claim lives (RWX, or in flight).
+	// ClaimNamespace is where the in-flight writer claim lives.
 	ClaimNamespace string
-	// PrimaryPV is the retained volume holding the model (Block mode,
-	// complete); read-only claims are minted from it.
+	// PrimaryPV is the retained volume holding the model once complete;
+	// read-only views are minted from it.
 	PrimaryPV string
+	// InFlightPV is the volume bound to the writer claim while the download
+	// is still running, when the claim is bound; on storage that is
+	// SharedWhileWriting, views may be minted from it before completion.
+	InFlightPV string
 	// Failed: the last attempt to produce the volume gave up recently.
 	// Pods admitted while this holds are left alone and download for
 	// themselves; the record expires so a later deployment retries.
@@ -455,46 +492,44 @@ func (p *Provisioner) WaitBound(ctx context.Context, ns, name string, timeout ti
 	}
 }
 
-// Lookup reports the identity's state. Block mode: a retained PV labelled
-// complete is the artifact (the primary claim is released after the copy
-// so the volume detaches); otherwise an in-flight claim means a copy is
-// running. RWX mode: the shared claim carries the label.
+// Lookup reports the identity's state: the failure record, then the
+// newest complete primary PV (the artifact in every mode), then an
+// in-flight writer claim. The same answer on block storage and on a
+// shared filesystem.
 func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 	st := State{}
-	if p.Cfg.Mode == ModeBlock {
-		if cm, err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Get(ctx, p.Cfg.FailureRecordName(uri), metav1.GetOptions{}); err == nil {
-			if at, perr := time.Parse(time.RFC3339, cm.Data["failedAt"]); perr == nil && time.Since(at) < FailureTTL {
-				st.Failed = true
-			}
-		} else if !apierrors.IsNotFound(err) {
-			return State{}, fmt.Errorf("get failure record for %s: %w", uri, err)
+	if cm, err := p.Kube.CoreV1().ConfigMaps(p.Cfg.SystemNamespace()).Get(ctx, p.Cfg.FailureRecordName(uri), metav1.GetOptions{}); err == nil {
+		if at, perr := time.Parse(time.RFC3339, cm.Data["failedAt"]); perr == nil && time.Since(at) < FailureTTL {
+			st.Failed = true
 		}
-		pvs, err := p.Kube.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: p.Cfg.Label() + "=" + Key(uri) + "," + CompleteLabel + "=true"})
-		if err != nil {
-			return State{}, fmt.Errorf("list volumes for %s: %w", uri, err)
+	} else if !apierrors.IsNotFound(err) {
+		return State{}, fmt.Errorf("get failure record for %s: %w", uri, err)
+	}
+	pvs, err := p.Kube.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: p.Cfg.Label() + "=" + Key(uri) + "," + CompleteLabel + "=true"})
+	if err != nil {
+		return State{}, fmt.Errorf("list volumes for %s: %w", uri, err)
+	}
+	// Several complete primaries are generations of one set; the
+	// newest serves, the rest age out.
+	var best *corev1.PersistentVolume
+	for i := range pvs.Items {
+		pv := &pvs.Items[i]
+		if IsViewPV(pv) || pv.Spec.CSI == nil {
+			continue
 		}
-		// Several complete primaries are generations of one set; the
-		// newest serves, the rest age out.
-		var best *corev1.PersistentVolume
-		for i := range pvs.Items {
-			pv := &pvs.Items[i]
-			if pv.Labels["nvsnap.io/role"] == "reader-shared" || pv.Spec.CSI == nil || pv.Spec.CSI.ReadOnly {
-				continue
-			}
-			if best == nil || Generation(pv) > Generation(best) || (Generation(pv) == Generation(best) && pv.CreationTimestamp.After(best.CreationTimestamp.Time)) {
-				best = pv
-			}
+		if best == nil || Generation(pv) > Generation(best) || (Generation(pv) == Generation(best) && pv.CreationTimestamp.After(best.CreationTimestamp.Time)) {
+			best = pv
 		}
-		if best != nil {
-			st.Exists, st.Complete, st.PrimaryPV = true, true, best.Name
-			if q, ok := best.Spec.Capacity[corev1.ResourceStorage]; ok {
-				st.PrimaryBytes = q.Value()
-			}
-			st.Generation, st.PrimaryCreated = Generation(best), best.CreationTimestamp.Time
-			st.DeltaFingerprint = best.Annotations[DeltaFingerprintAnnotation]
-			st.RefreshStable = best.Annotations[RefreshStableAnnotation] == "true"
-			return st, nil
+	}
+	if best != nil {
+		st.Exists, st.Complete, st.PrimaryPV = true, true, best.Name
+		if q, ok := best.Spec.Capacity[corev1.ResourceStorage]; ok {
+			st.PrimaryBytes = q.Value()
 		}
+		st.Generation, st.PrimaryCreated = Generation(best), best.CreationTimestamp.Time
+		st.DeltaFingerprint = best.Annotations[DeltaFingerprintAnnotation]
+		st.RefreshStable = best.Annotations[RefreshStableAnnotation] == "true"
+		return st, nil
 	}
 	list, err := p.Kube.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: p.Cfg.Label() + "=" + Key(uri)})
 	if err != nil {
@@ -507,20 +542,29 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 		}
 		st.Exists = true
 		st.ClaimNamespace = c.Namespace
-		if c.Labels[CompleteLabel] == "true" {
-			st.Complete = true
-			st.PrimaryPV = c.Spec.VolumeName
-			return st, nil
+		if c.Spec.VolumeName != "" && c.Status.Phase == corev1.ClaimBound {
+			st.InFlightPV = c.Spec.VolumeName
 		}
 	}
 	return st, nil
 }
 
-// MarkComplete records that the download finished. RWX mode labels the
-// shared claim. Block mode labels the retained PV and deletes the writer
-// claim: a claim still bound keeps the volume attached read-write to the
-// Job's node, and NVMesh refuses read-only attaches elsewhere until that
-// attachment is gone (dev1 2026-09-26). Idempotent.
+// IsViewPV reports whether pv is a per-namespace view of a primary (read-only
+// for readers, read-write for a download Job) rather than a primary itself.
+func IsViewPV(pv *corev1.PersistentVolume) bool {
+	switch pv.Labels[ViewRoleLabel] {
+	case ViewRoleReader, ViewRoleWriter:
+		return true
+	}
+	return pv.Spec.CSI != nil && pv.Spec.CSI.ReadOnly
+}
+
+// MarkComplete records that the download finished: the primary PV is
+// labelled complete and retained, and the writer claim is released. The
+// PV is the artifact in every mode; on block storage the release is also
+// what lets read-only attaches elsewhere succeed (a claim still bound
+// keeps the volume attached read-write to the writer's node, dev1
+// 2026-09-26). Idempotent.
 func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 	return p.MarkCompleteClaim(ctx, uri, ns, p.Cfg.ClaimName(uri), nil)
 }
@@ -531,7 +575,7 @@ func (p *Provisioner) MarkComplete(ctx context.Context, uri, ns string) error {
 func (p *Provisioner) MarkCompleteClaim(ctx context.Context, uri, ns, name string, meta map[string]string) error {
 	pvc, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		if apierrors.IsNotFound(err) && p.Cfg.Mode == ModeBlock {
+		if apierrors.IsNotFound(err) {
 			gen, _ := strconv.Atoi(meta[GenerationAnnotation])
 			if st, lerr := p.Lookup(ctx, uri); lerr == nil && st.Complete && (gen <= 1 || st.Generation >= gen) {
 				return nil // released already
@@ -539,55 +583,49 @@ func (p *Provisioner) MarkCompleteClaim(ctx context.Context, uri, ns, name strin
 		}
 		return fmt.Errorf("get claim %s/%s: %w", ns, name, err)
 	}
-	if p.Cfg.Mode == ModeBlock {
-		if pvc.Spec.VolumeName == "" {
-			return fmt.Errorf("claim %s/%s has no bound volume", ns, name)
-		}
-		pv, err := p.Kube.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("get volume %s: %w", pvc.Spec.VolumeName, err)
-		}
-		if pv.Labels[CompleteLabel] != "true" {
-			if pv.Labels == nil {
-				pv.Labels = map[string]string{}
-			}
-			pv.Labels["app.kubernetes.io/managed-by"] = managedBy
-			pv.Labels[p.Cfg.Label()] = Key(uri)
-			pv.Labels[CompleteLabel] = "true"
-			pv.Labels[SourceNamespaceLabel] = ns
-			if pv.Annotations == nil {
-				pv.Annotations = map[string]string{}
-			}
-			pv.Annotations[IdentityAnnotation] = uri
-			pv.Annotations[LastUsedAnnotation] = time.Now().UTC().Format(time.RFC3339)
-			for k, v := range meta {
-				pv.Annotations[k] = v
-			}
-			pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-			if _, err := p.Kube.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
-				return fmt.Errorf("label volume %s complete: %w", pv.Name, err)
-			}
-		}
-		if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("release writer claim %s/%s: %w", ns, name, err)
-		}
-		return nil
+	if pvc.Spec.VolumeName == "" {
+		return fmt.Errorf("claim %s/%s has no bound volume", ns, name)
 	}
-	if pvc.Labels[CompleteLabel] == "true" {
-		return nil
+	pv, err := p.Kube.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get volume %s: %w", pvc.Spec.VolumeName, err)
 	}
-	if pvc.Labels == nil {
-		pvc.Labels = map[string]string{}
-	}
-	pvc.Labels[CompleteLabel] = "true"
-	if _, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
-		if apierrors.IsConflict(err) {
-			again, gerr := p.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
-			if gerr == nil && again.Labels[CompleteLabel] == "true" {
-				return nil
-			}
+	if pv.Labels[CompleteLabel] != "true" {
+		if pv.Labels == nil {
+			pv.Labels = map[string]string{}
 		}
-		return fmt.Errorf("label claim %s/%s complete: %w", ns, name, err)
+		pv.Labels["app.kubernetes.io/managed-by"] = managedBy
+		pv.Labels[p.Cfg.Label()] = Key(uri)
+		pv.Labels[CompleteLabel] = "true"
+		pv.Labels[SourceNamespaceLabel] = ns
+		if pv.Annotations == nil {
+			pv.Annotations = map[string]string{}
+		}
+		pv.Annotations[IdentityAnnotation] = uri
+		pv.Annotations[LastUsedAnnotation] = time.Now().UTC().Format(time.RFC3339)
+		for k, v := range meta {
+			pv.Annotations[k] = v
+		}
+		pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		if _, err := p.Kube.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
+			return fmt.Errorf("label volume %s complete: %w", pv.Name, err)
+		}
+	}
+	if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("release writer claim %s/%s: %w", ns, name, err)
+	}
+	return nil
+}
+
+// ReleaseWriterView removes the read-write view a download Job wrote
+// through in ns once the primary is complete. Best effort: the reaper
+// retires views whose namespace is gone.
+func (p *Provisioner) ReleaseWriterView(ctx context.Context, uri, ns string) error {
+	if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, p.Cfg.WriterViewClaimName(uri), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete writer view claim %s/%s: %w", ns, p.Cfg.WriterViewClaimName(uri), err)
+	}
+	if err := p.Kube.CoreV1().PersistentVolumes().Delete(ctx, p.Cfg.WriterViewPVName(uri, ns), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete writer view PV %s: %w", p.Cfg.WriterViewPVName(uri, ns), err)
 	}
 	return nil
 }
@@ -632,12 +670,13 @@ type DownloadStep struct {
 }
 
 // EnsureDownloadJob creates the one download Job for uri in ns. With a
-// claim (RWX mode) the Job writes straight into it. With an empty claim
-// (Block mode) the Job writes into a pod-local emptyDir on the node's
-// disk and stays Succeeded until the agent on that node has copied the
-// tree into a claim sized from what landed; the Job's staging annotation
-// names the volume. Create is atomic, so N concurrent admissions produce
-// one Job and need no election.
+// claim (the read-write view of a volume that is SharedWhileWriting) the
+// Job writes straight into it. With an empty claim (block storage) the Job
+// writes into a pod-local emptyDir on the node's disk and stays Succeeded
+// until the agent on that node has copied the tree into a claim sized
+// from what landed; the Job's staging annotation names the volume. Create
+// is atomic, so N concurrent admissions produce one Job and need no
+// election.
 func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim string, step DownloadStep) (string, error) {
 	name := JobName(uri)
 	if _, err := p.Kube.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {

@@ -181,11 +181,11 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 			log.WithError(err).Warn("model volume disabled")
 		} else {
 			a.modelVolume, a.modelMinter = mv, minter
-			if mv.Cfg.Mode == modelvolume.ModeBlock {
-				ccfg := mv.Cfg
-				ccfg.Kind = modelvolume.KindCache
-				a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
-			}
+			// The compile-cache set is the model volume mechanism with
+			// another kind: same storage, same views, every mode.
+			ccfg := mv.Cfg
+			ccfg.Kind = modelvolume.KindCache
+			a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
 		}
 	}
 
@@ -355,9 +355,10 @@ func vramGBFromGPUType(gpuType string) string {
 }
 
 // buildModelVolume derives the write-once model volume setup from the
-// storage profile: "block" on shared-volume strategies (NVMesh), whose
-// promoter mints the read-only claims; "rwx" when the profile declares a
-// distributed-filesystem class. Anything else leaves Helm functions alone.
+// storage profile: "block" on shared-volume strategies (NVMesh), "rwx"
+// when the profile declares a distributed-filesystem class. Both need the
+// shared-volume promoter: it mints the per-namespace views of a primary
+// in every mode. Anything else leaves Helm functions alone.
 func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageProfile, promoter checkpointstore.Promoter, l2Class, namespace string, log logrus.FieldLogger) (*modelvolume.Provisioner, *checkpointstore.SharedVolumePromoter, error) {
 	cfg := modelvolume.Config{StorageClass: l2Class, Size: resource.MustParse("512Gi"), Namespace: namespace}
 	var mvp *checkpointstore.ModelVolumeProfile
@@ -394,15 +395,11 @@ func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageP
 			cfg.MinSize = q
 		}
 	}
-	var minter *checkpointstore.SharedVolumePromoter
-	if cfg.Mode == modelvolume.ModeBlock {
-		sp, ok := promoter.(*checkpointstore.SharedVolumePromoter)
-		if !ok {
-			return nil, nil, errors.New("block mode needs the shared-volume promoter to mint read-only claims")
-		}
-		minter = sp
+	minter, ok := promoter.(*checkpointstore.SharedVolumePromoter)
+	if !ok {
+		return nil, nil, errors.New("the model volume needs the shared-volume promoter (profile strategy shared-volume) to mint per-namespace views")
 	}
-	log.WithFields(logrus.Fields{"mode": cfg.Mode, "storage_class": cfg.StorageClass, "namespace": cfg.SystemNamespace(), "rwx_size": cfg.Size.String()}).Info("model volume enabled (one download per model per cluster; block claims sized from the download)")
+	log.WithFields(logrus.Fields{"mode": cfg.Mode, "storage_class": cfg.StorageClass, "namespace": cfg.SystemNamespace(), "shared_while_writing": cfg.SharedWhileWriting(), "rwx_size": cfg.Size.String()}).Info("model volume enabled (one download per model per cluster; block claims sized from the download)")
 	return &modelvolume.Provisioner{Kube: kc, Cfg: cfg}, minter, nil
 }
 
