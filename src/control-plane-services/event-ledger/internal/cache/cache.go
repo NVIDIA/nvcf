@@ -20,6 +20,7 @@ limitations under the License.
 package cache
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -34,6 +35,8 @@ const (
 	// inactivity TTL, so an entry outlives its scheduled flush.
 	inactiveTTLBufferPercent = 10
 )
+
+var errNilInnerHandler = errors.New("cache: inner DBHandlerV2 must not be nil")
 
 // key identifies one cached event stream.
 type key struct {
@@ -99,13 +102,17 @@ type CachingDBHandler struct {
 	entries   map[key]*entry
 }
 
-// NewCachingDBHandler wraps inner with an empty cache.
-func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config) *CachingDBHandler {
+// NewCachingDBHandler wraps inner with an empty cache. It returns an error if
+// inner is nil.
+func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config) (*CachingDBHandler, error) {
+	if inner == nil {
+		return nil, errNilInnerHandler
+	}
 	return &CachingDBHandler{
 		DBHandlerV2: inner,
 		cfg:         cfg.withDefaults(),
 		entries:     make(map[key]*entry),
-	}
+	}, nil
 }
 
 // lookup returns a copy of the entry for k, and whether it exists. It returns

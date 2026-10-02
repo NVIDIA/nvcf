@@ -19,6 +19,7 @@ go_test(
     srcs = ["cache_test.go"],
     embed = [":cache"],
     deps = [
+        "//src/control-plane-services/event-ledger/internal/data_access",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
