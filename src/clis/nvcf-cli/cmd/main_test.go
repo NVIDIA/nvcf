@@ -28,6 +28,7 @@ import (
 	"github.com/spf13/viper"
 
 	"nvcf-cli/internal/selfhosted"
+	"nvcf-cli/internal/state"
 )
 
 // Default-stub every seam that would otherwise reach the developer's cluster or
@@ -49,6 +50,16 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	_ = os.Setenv("HOME", home)
+	// The state manager resolved its path from HOME at package init, before
+	// the swap above, so it still points at the real ~/.nvcf-cli.state.
+	state.ResetDefaultStateManager()
+	// A developer's own toggles would change what every check test runs.
+	for _, k := range []string{
+		"NVCF_CLI_SELFHOSTED_LOCAL_ONLY", "NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION",
+		"NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "NVCF_CLI_SELFHOSTED_FORCE_FAIL",
+	} {
+		_ = os.Unsetenv(k)
+	}
 	resolveLatestValidatorTagForSelfHosted = func(_ context.Context, _ string) (string, bool) {
 		return "", false
 	}

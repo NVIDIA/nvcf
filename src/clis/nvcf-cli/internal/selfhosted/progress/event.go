@@ -184,7 +184,7 @@ type Final struct {
 
 	// Check-mode terminal fields (M+8.11, REQ-19): set by `nvcf self-hosted check`
 	// to surface the verdict + tally. Zero values for other modes (omit on wire).
-	Verdict     string // "ok" | "warnings" | "failed" | "error"
+	Verdict     string // "ok" | "warnings" | "failed" | "error" | "timeout"
 	TotalChecks int
 	PassedCount int
 	FailedCount int
@@ -279,6 +279,9 @@ type CheckCompleted struct {
 	Message  string
 	Detail   string // optional: short version string or extra context
 	HintURL  string // optional: remediation-docs link
+	// Transient marks a warning expected to clear by itself, such as a
+	// rollout in progress; --wait keeps polling while one remains.
+	Transient bool
 }
 
 func (CheckCompleted) kind() eventKind { return "check_completed" }

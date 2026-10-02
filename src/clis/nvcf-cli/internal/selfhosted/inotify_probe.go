@@ -120,6 +120,11 @@ func NewInotifyProber() NodeInotifyProber {
 	}
 }
 
+// inotifyProbeBudget bounds the whole probe, inside the time the check sets
+// aside for the checks that run before the validator. A var so tests can
+// shorten it.
+var inotifyProbeBudget = 100 * time.Second
+
 // probeAllNodes is the testable core: it takes a kubernetes.Interface so
 // callers can inject fake.NewSimpleClientset. It probes nodes in parallel
 // with a small concurrency cap so image-pull latency doesn't blow the
@@ -132,6 +137,13 @@ func NewInotifyProber() NodeInotifyProber {
 // violations on some nodes are never dropped when other nodes are
 // concurrently unreachable.
 func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInotifyLimits, error) {
+	// Nodes are probed probeConcurrency at a time, so on a cluster whose
+	// probe pods stall each wave takes perNodePodTimeout: unbounded, the probe
+	// ran past the time the check sets aside for the checks before the
+	// validator, and cut the validator short. A node not reached in time is
+	// reported as not probed.
+	ctx, cancel := context.WithTimeout(ctx, inotifyProbeBudget)
+	defer cancel()
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing nodes: %w", err)
@@ -168,6 +180,10 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInot
 // the parsed limits or a per-node error.
 func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName string) NodeInotifyLimits {
 	res := NodeInotifyLimits{NodeName: nodeName}
+	if ctx.Err() != nil {
+		res.Err = fmt.Errorf("not probed: the inotify probe's %s budget ran out", inotifyProbeBudget)
+		return res
+	}
 
 	pctx, cancel := context.WithTimeout(ctx, perNodePodTimeout)
 	defer cancel()

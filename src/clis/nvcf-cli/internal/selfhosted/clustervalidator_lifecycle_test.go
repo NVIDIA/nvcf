@@ -222,16 +222,21 @@ func TestRunClusterValidator_PullFailureLeavesNothingBehind(t *testing.T) {
 }
 
 // While the pod may still be running its RBAC must stay, but the Job owns the
-// pull secret and ConfigMap so its deadline and TTL take them too.
+// pull secret and ConfigMap so its deadline and TTL take them too. The
+// validator's own timeout leaves it to its deadline; only the end of the run
+// stops it.
 func TestRunClusterValidator_RunningPodKeepsRBACAndJobOwnsArtifacts(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "key")
+	prev := clusterValidatorTimeout
+	clusterValidatorTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { clusterValidatorTimeout = prev })
 	client := lifecycleClient(running, "")
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
 
-	res := runClusterValidator(ctx, client, "nvcr.io/nvidia/validator:1",
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
 		"", false, clusterValidatorControlPlaneRole, nil, nil)
 	require.Error(t, res.Err)
+	assert.Contains(t, res.Err.Error(), "the validator did not finish within 200ms")
+	assert.Empty(t, jobDeletes(client), "the Job's deadline ends the pod; nothing stops it early")
 	assert.True(t, res.LeftBehind, "the caller prints the command that removes what was kept")
 	left := leftovers(t, client, res.RunID)
 	assert.Len(t, left["ServiceAccount"], 1, "a running pod must keep its RBAC")
@@ -824,21 +829,265 @@ func TestClusterValidatorRunCeiling_CoversTheTimeoutPath(t *testing.T) {
 			Status: corev1.PodStatus{Phase: corev1.PodRunning},
 		}}}, nil
 	})
-	// The deadline grace dominates the margin, so a ceiling that leaves it
-	// out is short of the run.
-	prevTimeout, prevGrace, prevLogs, prevMargin :=
-		clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorRunMargin
-	clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorRunMargin =
-		300*time.Millisecond, 3*time.Second, 500*time.Millisecond, time.Second
+	// The deadline grace dominates every other bound in the ceiling, so a
+	// ceiling that leaves it out is short of the run, and a wait shorter than
+	// the grace ends before it.
+	prevTimeout, prevGrace, prevLogs, prevCleanup, prevMargin := clusterValidatorTimeout,
+		validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorCleanupTimeout, validatorRunMargin
+	clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorCleanupTimeout,
+		validatorRunMargin = 300*time.Millisecond, 3*time.Second, 100*time.Millisecond, 100*time.Millisecond,
+		100*time.Millisecond
 	t.Cleanup(func() {
-		clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorRunMargin =
-			prevTimeout, prevGrace, prevLogs, prevMargin
+		clusterValidatorTimeout, validatorDeadlineGrace, clusterValidatorLogFetchTimeout, validatorCleanupTimeout,
+			validatorRunMargin = prevTimeout, prevGrace, prevLogs, prevCleanup, prevMargin
 	})
 
 	start := time.Now()
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
 		"", false, clusterValidatorComputePlaneRole, nil, nil)
+	elapsed := time.Since(start)
 	require.Error(t, res.Err)
 	assert.True(t, res.LeftBehind, "the pod never ended, so the whole grace was spent")
-	assert.LessOrEqual(t, time.Since(start), ClusterValidatorRunCeiling())
+	assert.GreaterOrEqual(t, elapsed, clusterValidatorTimeout+validatorDeadlineGrace,
+		"the run waited out the deadline grace, not a shorter wait")
+	assert.LessOrEqual(t, elapsed, ClusterValidatorRunCeiling())
+}
+
+// podPhaseReactor answers the Job's pod list with one pod in the phase phase()
+// returns at the time of the call.
+func podPhaseReactor(phase func() corev1.PodPhase) ktesting.ReactionFunc {
+	return func(action ktesting.Action) (bool, runtime.Object, error) {
+		jobName := strings.TrimPrefix(action.(ktesting.ListAction).GetListRestrictions().Labels.String(), "job-name=")
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: jobName + "-pod", Namespace: clusterValidatorNamespace,
+				Labels: map[string]string{"job-name": jobName}},
+			Status: corev1.PodStatus{Phase: phase()},
+		}}}, nil
+	}
+}
+
+// A validator that finishes after the CLI's own timeout, while the CLI waits
+// for the Job's deadline to end its pod, is graded on what it did. That wait
+// is the deadline grace, not the shorter wait for a stopped Job.
+func TestRunClusterValidator_LateFinishIsGraded(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "key")
+	prevTimeout, prevStop, prevGrace := clusterValidatorTimeout, validatorStopTimeout, validatorDeadlineGrace
+	clusterValidatorTimeout, validatorStopTimeout, validatorDeadlineGrace =
+		300*time.Millisecond, 300*time.Millisecond, 5*time.Second
+	t.Cleanup(func() {
+		clusterValidatorTimeout, validatorStopTimeout, validatorDeadlineGrace = prevTimeout, prevStop, prevGrace
+	})
+	var finished atomic.Bool
+	client := lifecycleClient(func(name string) *batchv1.Job {
+		if finished.Load() {
+			return succeeded(name)
+		}
+		return running(name)
+	}, "")
+	client.PrependReactor("list", "pods", podPhaseReactor(func() corev1.PodPhase {
+		if finished.Load() {
+			return corev1.PodSucceeded
+		}
+		return corev1.PodRunning
+	}))
+	timer := time.AfterFunc(1500*time.Millisecond, func() { finished.Store(true) })
+	t.Cleanup(func() { timer.Stop() })
+
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorControlPlaneRole, nil, nil)
+	require.NoError(t, res.Err)
+	assert.True(t, res.Passed)
+	assert.False(t, res.LeftBehind)
+	assert.NotEmpty(t, res.JobName)
+	assert.Empty(t, leftovers(t, client, res.RunID), "the pod ended, so the sweeps ran")
+}
+
+// Failed Job reads end the wait, but not the run: once the pod has ended the
+// Job is read again, and a validator that passed while its Job could not be
+// read passes.
+func TestRunClusterValidator_JobReadOutageIsGradedOnTheJob(t *testing.T) {
+	prev := clusterValidatorPollInterval
+	clusterValidatorPollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { clusterValidatorPollInterval = prev })
+	client := lifecycleClient(succeeded, "")
+	var failedReads atomic.Int32
+	client.PrependReactor("get", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+		if failedReads.Load() < int32(validatorGetErrorLimit) {
+			failedReads.Add(1)
+			return true, nil, apierrors.NewServiceUnavailable("the apiserver is restarting")
+		}
+		return false, nil, nil
+	})
+	client.PrependReactor("list", "pods", podPhaseReactor(func() corev1.PodPhase { return corev1.PodSucceeded }))
+
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorComputePlaneRole, nil, nil)
+	require.NoError(t, res.Err)
+	assert.True(t, res.Passed)
+	assert.EqualValues(t, validatorGetErrorLimit, failedReads.Load(), "the outage ended the wait")
+}
+
+// Only consecutive failed reads end the wait: a good read in between starts
+// the count again.
+func TestWaitForClusterValidatorJob_OnlyConsecutiveReadErrorsEndTheWait(t *testing.T) {
+	prev := clusterValidatorPollInterval
+	clusterValidatorPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { clusterValidatorPollInterval = prev })
+	client := fake.NewSimpleClientset()
+	calls := 0
+	client.PrependReactor("get", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		switch {
+		case calls > 3*validatorGetErrorLimit:
+			return true, succeeded("j"), nil
+		case calls%validatorGetErrorLimit == 0:
+			return true, running("j"), nil
+		}
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	job, err := waitForClusterValidatorJob(ctx, client, "j")
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), job.Status.Succeeded)
+}
+
+// A missing Job, or one this kubeconfig may not read, cannot change, so the
+// first such read ends the wait.
+func TestWaitForClusterValidatorJob_PermanentReadErrorsEndTheWaitAtOnce(t *testing.T) {
+	prev := clusterValidatorPollInterval
+	clusterValidatorPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { clusterValidatorPollInterval = prev })
+	gr := schema.GroupResource{Group: batchv1.GroupName, Resource: "jobs"}
+	for _, readErr := range []error{
+		apierrors.NewNotFound(gr, "j"),
+		apierrors.NewForbidden(gr, "j", errors.New("denied")),
+		apierrors.NewUnauthorized("expired token"),
+	} {
+		client := fake.NewSimpleClientset()
+		calls := 0
+		client.PrependReactor("get", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+			calls++
+			return true, nil, readErr
+		})
+		_, err := waitForClusterValidatorJob(context.Background(), client, "j")
+		require.Error(t, err)
+		assert.Equal(t, 1, calls, "%v is not retried", readErr)
+	}
+}
+
+// A pull error no retry fixes is final at once. One that can clear, a
+// registry outage or a DNS failure, waits out the grace.
+func TestWaitForClusterValidatorJob_PermanentPullErrorsAreFinalAtOnce(t *testing.T) {
+	prevGrace, prevPoll := validatorPullFailureGrace, clusterValidatorPollInterval
+	validatorPullFailureGrace, clusterValidatorPollInterval = time.Hour, 10*time.Millisecond
+	t.Cleanup(func() { validatorPullFailureGrace, clusterValidatorPollInterval = prevGrace, prevPoll })
+	for msg, final := range map[string]bool{
+		`failed to resolve reference "nvcr.io/nvidia/validator:9": nvcr.io/nvidia/validator:9: not found`:       true,
+		`failed to authorize: failed to fetch oauth token: 401 Unauthorized`:                                    true,
+		`pull access denied, repository does not exist or may require authorization`:                            true,
+		`failed to do request: Head "https://nvcr.io/v2/nvidia/validator/manifests/9": 503 Service Unavailable`: false,
+		`dial tcp: lookup nvcr.io on 10.96.0.10:53: i/o timeout`:                                                false,
+	} {
+		client := fake.NewSimpleClientset()
+		client.PrependReactor("get", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, running("j"), nil
+		})
+		client.PrependReactor("list", "pods", podPhaseReactor(func() corev1.PodPhase { return corev1.PodPending }))
+		client.PrependReactor("get", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+			return true, &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: action.(ktesting.GetAction).GetName(), Namespace: clusterValidatorNamespace},
+				Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  clusterValidatorContainer,
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ErrImagePull", Message: msg}},
+				}}},
+			}, nil
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		_, err := waitForClusterValidatorJob(ctx, client, "j")
+		cancel()
+		var pullErr *validatorImagePullError
+		assert.Equal(t, final, errors.As(err, &pullErr), msg)
+	}
+}
+
+// A pod that cannot be listed may still be running: stopping its Job does not
+// revoke its RBAC until the pod is seen to end, and the result says how to
+// remove what was kept.
+func TestRunClusterValidator_UnlistablePodKeepsItsRBAC(t *testing.T) {
+	prev := validatorStopTimeout
+	validatorStopTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { validatorStopTimeout = prev })
+	client := lifecycleClient(running, "ImagePullBackOff")
+	var deleted atomic.Bool
+	client.PrependReactor("delete", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+		deleted.Store(true)
+		return false, nil, nil
+	})
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		if deleted.Load() {
+			return true, nil, errors.New("connection refused")
+		}
+		return false, nil, nil
+	})
+
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorComputePlaneRole, nil, nil)
+	var pullErr *validatorImagePullError
+	require.ErrorAs(t, res.Err, &pullErr)
+	assert.True(t, res.LeftBehind)
+	assert.Len(t, leftovers(t, client, res.RunID)["ClusterRole"], 1, "the RBAC stays until the pod is seen to end")
+}
+
+// A Job create that fails may still have been applied, the response lost. Its
+// Job is stopped, and when its pod does not end the objects are kept and the
+// result says how to remove them. Under --no-cleanup the Job is kept, like
+// everything else the run made.
+func TestRunClusterValidator_FailedCreateThatWasApplied(t *testing.T) {
+	prev := validatorStopTimeout
+	validatorStopTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { validatorStopTimeout = prev })
+	for _, noCleanup := range []bool{false, true} {
+		client := lifecycleClient(running, "")
+		client.PrependReactor("create", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+			job := action.(ktesting.CreateAction).GetObject().(*batchv1.Job)
+			require.NoError(t, client.Tracker().Add(job))
+			return true, nil, apierrors.NewInternalError(errors.New("connection reset by peer"))
+		})
+		client.PrependReactor("list", "pods", podPhaseReactor(func() corev1.PodPhase { return corev1.PodRunning }))
+
+		res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+			"", noCleanup, clusterValidatorComputePlaneRole, nil, nil)
+		require.ErrorContains(t, res.Err, "creating validator Job")
+		require.NotEmpty(t, res.RunID, "noCleanup=%v", noCleanup)
+		if noCleanup {
+			assert.Empty(t, jobDeletes(client), "--no-cleanup keeps the Job")
+			assert.False(t, res.LeftBehind, "the --no-cleanup command covers what was kept")
+			continue
+		}
+		assert.NotEmpty(t, jobDeletes(client), "the applied Job is stopped")
+		assert.True(t, res.LeftBehind, "its pod did not end, so its objects were kept")
+		assert.Len(t, leftovers(t, client, res.RunID)["ClusterRole"], 1)
+	}
+}
+
+// A run whose budget ends while it waits out a Job read outage was cut short:
+// the validator's result was still to come, so the error says the budget
+// ended rather than reading as the validator's failure.
+func TestRunClusterValidator_BudgetEndDuringAReadOutageIsCutShort(t *testing.T) {
+	prev := clusterValidatorPollInterval
+	clusterValidatorPollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { clusterValidatorPollInterval = prev })
+	client := lifecycleClient(running, "")
+	client.PrependReactor("get", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServiceUnavailable("the apiserver is restarting")
+	})
+	client.PrependReactor("list", "pods", podPhaseReactor(func() corev1.PodPhase { return corev1.PodRunning }))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	res := runClusterValidator(ctx, client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorComputePlaneRole, nil, nil)
+	require.ErrorIs(t, res.Err, context.DeadlineExceeded)
+	assert.ErrorContains(t, res.Err, "the apiserver is restarting", "the outage is still named")
 }

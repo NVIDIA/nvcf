@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -69,15 +71,16 @@ func TestProbeStaleNamespaces_TerminatingIsByPhase(t *testing.T) {
 	assert.Contains(t, stale[0].Reason, "Terminating")
 }
 
-func TestProbeStaleNamespaces_EmptyShellNoHelmSecrets(t *testing.T) {
-	// Namespace exists and is Active but holds no Helm release secrets ->
-	// leftover empty shell from a partial helm uninstall. The second namespace
-	// carries a release and is not reported.
+func TestProbeStaleNamespaces_NoReleaseWithInstallDataIsStale(t *testing.T) {
+	// Namespace exists and is Active, holds no Helm release, and still holds a
+	// volume claim -> leftover of a partial helm uninstall. The second
+	// namespace carries a release and is not reported.
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
 		},
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "nvcf"}},
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "sis"},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
@@ -139,7 +142,8 @@ func TestProbeStaleNamespaces_HealthyReleaseConfigMapDriverNotStale(t *testing.T
 }
 
 func TestProbeStaleNamespaces_MixedNamespaces(t *testing.T) {
-	// One absent, one healthy, one terminating, one empty shell.
+	// One absent, one healthy, one terminating, one left with its data, and
+	// one empty, as before a first install.
 	now := metav1.Now()
 	client := fake.NewSimpleClientset(
 		// "sis" - healthy with a Helm release
@@ -158,18 +162,24 @@ func TestProbeStaleNamespaces_MixedNamespaces(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "nvcf", DeletionTimestamp: &now},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
 		},
-		// "api-keys" - empty shell
+		// "api-keys" - no release, its volume claim left behind
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "api-keys"},
+			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "api-keys"}},
+		// "ess" - empty, created ahead of a first install
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "ess"},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
 		},
 		// "cassandra-system" - absent (not present in fake)
 	)
 
-	namespaces := []string{"cassandra-system", "sis", "nvcf", "api-keys"}
+	namespaces := []string{"cassandra-system", "sis", "nvcf", "api-keys", "ess"}
 	stale, err := probeStaleNamespaces(context.Background(), client, namespaces)
 	require.NoError(t, err)
-	require.Len(t, stale, 2, "only nvcf (terminating) and api-keys (empty shell) should be stale")
+	require.Len(t, stale, 2, "only nvcf (terminating) and api-keys (data left behind) should be stale")
 
 	staleNames := make(map[string]string, 2)
 	for _, s := range stale {
@@ -401,16 +411,64 @@ func TestStaleNamespaceCheck_ProbesTheResolvedContext(t *testing.T) {
 // `down` destroys every release but keeps the namespaces and their PVCs, so no
 // owner=helm object exists anywhere. With the default driver that is exactly
 // the stale state to report; a reinstall would silently reattach the old
-// Cassandra and OpenBao volumes.
+// Cassandra and OpenBao volumes. Helm never deletes hook Jobs, so their
+// Completed pods are still there, and they are not a live install.
 func TestProbeStaleNamespaces_AfterDownReportsEveryNamespace(t *testing.T) {
 	t.Setenv("HELM_DRIVER", "")
-	client := fake.NewSimpleClientset(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sis"}},
-	)
-	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf", "sis"})
+	var objects []runtime.Object
+	for _, ns := range []string{"cassandra-system", "vault-system"} {
+		objects = append(objects,
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}},
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data-0", Namespace: ns}},
+			&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "initialize-cluster", Namespace: ns}},
+			&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "initialize-cluster-x1", Namespace: ns,
+					OwnerReferences: []metav1.OwnerReference{{Kind: "Job", Name: "initialize-cluster"}}},
+				Status: corev1.PodStatus{Phase: corev1.PodSucceeded},
+			},
+		)
+	}
+	client := fake.NewSimpleClientset(objects...)
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"cassandra-system", "vault-system"})
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
+}
+
+// Only a Pending or Running pod that is neither terminating nor a Job's is a
+// live workload. A hook Job's pod, even one still running, and a pod being
+// deleted do not keep a namespace holding install data from being reported.
+func TestProbeStaleNamespaces_OnlyALiveWorkloadIsAnInstall(t *testing.T) {
+	now := metav1.Now()
+	pod := func(ns string, phase corev1.PodPhase, mutate func(*corev1.Pod)) *corev1.Pod {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: ns}, Status: corev1.PodStatus{Phase: phase}}
+		if mutate != nil {
+			mutate(p)
+		}
+		return p
+	}
+	cases := map[string]struct {
+		pod   *corev1.Pod
+		stale bool
+	}{
+		"running":     {pod("a", corev1.PodRunning, nil), false},
+		"pending":     {pod("b", corev1.PodPending, nil), false},
+		"succeeded":   {pod("c", corev1.PodSucceeded, nil), true},
+		"terminating": {pod("d", corev1.PodRunning, func(p *corev1.Pod) { p.DeletionTimestamp = &now }), true},
+		"hook job's": {pod("e", corev1.PodRunning, func(p *corev1.Pod) {
+			p.OwnerReferences = []metav1.OwnerReference{{Kind: "Job", Name: "migrations"}}
+		}), true},
+	}
+	for name, tc := range cases {
+		ns := tc.pod.Namespace
+		client := fake.NewSimpleClientset(
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}},
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: ns}},
+			tc.pod,
+		)
+		got, err := probeStaleNamespaces(context.Background(), client, []string{ns})
+		require.NoError(t, err, name)
+		assert.Equal(t, tc.stale, len(got) == 1, name)
+	}
 }
 
 // HELM_DRIVER=sql keeps release state in a database, so the absence of an
@@ -485,48 +543,54 @@ func TestStaleNamespaceCheck_HintsOneCommandPerNamespace(t *testing.T) {
 	assert.Contains(t, r.Message, "get -n ess --show-kind")
 }
 
-// The documented install pre-creates each namespace holding only a registry
-// pull Secret, so before the first install none has a release. That is not a
-// leftover and must not be flagged, while a namespace that still holds data,
-// as `down` leaves them, is.
+// The documented install pre-creates namespaces before the first install, so
+// none has a release yet: labelled and empty, or holding a pull Secret, a TLS
+// Secret, or the CA ConfigMap a mesh or the platform adds. None of that is a
+// leftover. A namespace that still holds volume claims or workload objects, as
+// `down` leaves them, is.
 func TestProbeStaleNamespaces_PreCreatedNamespaceIsNotStale(t *testing.T) {
 	ns := func(name string) *corev1.Namespace {
-		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name},
+		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"nvcf/platform": "true"}},
 			Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}
 	}
-	pull := func(ns string) *corev1.Secret {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nvcr-pull-secret", Namespace: ns},
-			Type: corev1.SecretTypeDockerConfigJson}
+	secret := func(ns, name string, typ corev1.SecretType) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Type: typ}
+	}
+	configMap := func(ns, name string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
 	}
 	client := fake.NewSimpleClientset(
-		ns("nvcf"), pull("nvcf"),
-		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "kube-root-ca.crt", Namespace: "nvcf"}},
-		ns("cassandra-system"), pull("cassandra-system"),
+		ns("api-keys"),
+		ns("ess"), secret("ess", "nvcr-pull-secret", corev1.SecretTypeDockerConfigJson),
+		ns("nvcf"), secret("nvcf", "stargate-quic-tls", corev1.SecretTypeTLS), configMap("nvcf", "kube-root-ca.crt"),
+		ns("sis"), configMap("sis", "istio-ca-root-cert"), configMap("sis", "openshift-service-ca.crt"),
+		ns("cassandra-system"), secret("cassandra-system", "nvcr-pull-secret", corev1.SecretTypeDockerConfigJson),
 		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data-cassandra-0", Namespace: "cassandra-system"}},
-		ns("vault-system"), pull("vault-system"),
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "vault-unseal", Namespace: "vault-system"},
-			Type: corev1.SecretTypeOpaque},
-		ns("sis"), pull("sis"),
-		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "sis-config", Namespace: "sis"}},
+		ns("vault-system"), secret("vault-system", "vault-unseal", corev1.SecretTypeOpaque),
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "openbao-server", Namespace: "vault-system"}},
 	)
 	stale, err := probeStaleNamespaces(context.Background(), client,
-		[]string{"nvcf", "cassandra-system", "vault-system", "sis"})
+		[]string{"api-keys", "ess", "nvcf", "sis", "cassandra-system", "vault-system"})
 	require.NoError(t, err)
 	var names []string
 	for _, s := range stale {
 		names = append(names, s.Name)
 	}
-	assert.ElementsMatch(t, []string{"cassandra-system", "vault-system", "sis"}, names,
-		"only the namespaces that still hold data")
+	assert.ElementsMatch(t, []string{"cassandra-system", "vault-system"}, names,
+		"only the namespaces that still hold volume claims or workload objects")
 }
 
 // An install rendered with `helm template` (Argo CD) records no Helm release
-// but runs pods. That is a live install, not a leftover.
+// but runs pods. That is a live install, not a leftover, though it holds what
+// a leftover would.
 func TestProbeStaleNamespaces_NamespaceRunningPodsIsNotStale(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nats-system"},
 			Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nats-0", Namespace: "nats-system"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "nats", Namespace: "nats-system"}},
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "nats-js-nats-0", Namespace: "nats-system"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nats-0", Namespace: "nats-system"},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nats-auth", Namespace: "nats-system"},
 			Type: corev1.SecretTypeOpaque},
 	)

@@ -19,11 +19,13 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -730,6 +732,7 @@ func TestRunPreflight_BudgetSpentChecksAreNotRunErrors(t *testing.T) {
 	require.NotEmpty(t, res)
 	for _, r := range res {
 		assert.True(t, r.IsBlockingFailure(), r.ID)
+		assert.True(t, r.CutShort, r.ID)
 		assert.Contains(t, r.Message, "not run", r.ID)
 	}
 
@@ -747,4 +750,109 @@ func TestRunPreflight_BudgetSpentChecksAreNotRunErrors(t *testing.T) {
 	}
 	cfg = PreflightConfig{Tools: []BinarySpec{interrupting}}
 	assert.Empty(t, RunPreflightForRole(midRun, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{}))
+}
+
+// A check the budget stopped while it ran is cut short: no finding either way.
+// One that had its result, a pass or its own failure, keeps it even when the
+// budget ran out right after.
+func TestRunPreflight_CutShortOnlyWhenTheBudgetStoppedTheCheck(t *testing.T) {
+	spec := func(name string, version func(ctx context.Context) (*semver.Version, error)) BinarySpec {
+		s := passingToolSpec(name, "1.30.0")
+		s.Version = func(ctx context.Context, _ string) (*semver.Version, error) { return version(ctx) }
+		return s
+	}
+	for name, tc := range map[string]struct {
+		version  func(ctx context.Context) (*semver.Version, error)
+		cutShort bool
+		passed   bool
+	}{
+		"stopped by the budget": {
+			version:  func(ctx context.Context) (*semver.Version, error) { <-ctx.Done(); return nil, ctx.Err() },
+			cutShort: true,
+		},
+		"its own failure": {
+			version: func(ctx context.Context) (*semver.Version, error) {
+				<-ctx.Done()
+				return nil, errors.New("exec format error")
+			},
+		},
+		"passed as the budget ran out": {
+			version: func(ctx context.Context) (*semver.Version, error) {
+				<-ctx.Done()
+				return semver.MustParse("1.30.0"), nil
+			},
+			passed: true,
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		res := RunPreflightForRole(ctx, PreflightConfig{Tools: []BinarySpec{spec("kubectl", tc.version)}},
+			RoleLocalOnly, RoleConfig{}, &captureSink{})
+		cancel()
+		require.Len(t, res, 1, name)
+		assert.Equal(t, tc.cutShort, res[0].CutShort, name)
+		assert.Equal(t, tc.passed, res[0].Passed, name)
+		if tc.cutShort {
+			assert.True(t, strings.HasPrefix(res[0].Message, "cut short: "), name)
+		}
+	}
+}
+
+// A row that says how to remove what a check left in the cluster is reported
+// even when the run is interrupted, as an event too, since nothing else will
+// say it. An interrupted row without one is not a finding and is dropped.
+func TestRunPreflight_InterruptKeepsTheCleanupRow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &captureSink{}
+	rc := RoleConfig{
+		KubeContext:           "ctx-a",
+		ClusterValidatorImage: "nvcr.io/nvidia/validator:1",
+		ClusterValidator: func(context.Context, ClusterValidatorParams) ClusterValidatorResult {
+			cancel()
+			return ClusterValidatorResult{RunID: "run1", Err: context.Canceled, LeftBehind: true}
+		},
+	}
+	res := RunPreflightForRole(ctx, PreflightConfig{}, RoleControlPlane, rc, sink)
+	require.Len(t, res, 1)
+	assert.Equal(t, "cluster-validator", res[0].ID)
+	assert.Equal(t, SeverityWarning, res[0].Severity)
+	assert.Equal(t, "cluster-validator was interrupted", res[0].Message)
+	assert.Contains(t, res[0].Cleanup, clusterValidatorRunLabel+"=run1")
+	assert.Contains(t, res[0].Cleanup, "--context ctx-a")
+	var emitted []progress.CheckCompleted
+	for _, e := range sink.events {
+		if cc, ok := e.(progress.CheckCompleted); ok {
+			emitted = append(emitted, cc)
+		}
+	}
+	require.Len(t, emitted, 1)
+	assert.Contains(t, emitted[0].Detail, res[0].Cleanup)
+
+	dropped, stop := context.WithCancel(context.Background())
+	defer stop()
+	rc.ClusterValidator = func(context.Context, ClusterValidatorParams) ClusterValidatorResult {
+		stop()
+		return ClusterValidatorResult{RunID: "run2", Err: context.Canceled}
+	}
+	assert.Empty(t, RunPreflightForRole(dropped, PreflightConfig{}, RoleControlPlane, rc, &captureSink{}))
+}
+
+// A configured validator whose tag could not be resolved does not run, and
+// each role says so as a failed row: a note on stderr is lost to a consumer
+// of the JSON stream, and nothing was validated.
+func TestRunPreflight_UnresolvedValidatorImageFailsEachRole(t *testing.T) {
+	rc := RoleConfig{ClusterValidatorUnresolvedImage: "nvcr.io/nvidia/nvcf-byoc/cluster-validator"}
+	for _, role := range []Role{RoleControlPlane, RoleComputePlane} {
+		res := RunPreflightForRole(context.Background(), PreflightConfig{}, role, rc, &captureSink{})
+		var row *CheckResult
+		for i := range res {
+			if res[i].ID == "cluster-validator" {
+				row = &res[i]
+			}
+		}
+		require.NotNil(t, row, role)
+		assert.True(t, row.IsBlockingFailure(), role)
+		assert.Contains(t, row.Message, "could not resolve a tag for nvcr.io/nvidia/nvcf-byoc/cluster-validator", role)
+		assert.Contains(t, row.Message, "--skip-cluster-validation", role)
+	}
 }

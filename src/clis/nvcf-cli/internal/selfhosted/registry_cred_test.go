@@ -573,34 +573,55 @@ func TestProbeRegistryCredential_CriticalAnonymousIsNotVerified(t *testing.T) {
 	assert.Contains(t, r.Message, "not verified")
 }
 
-// The launcher reads the stack's HA mode and NVCF Gateways, so the validator
-// is told rather than left to guess. An unset mode is "none", as the stack's
-// own template reads it, and a Gateway entry left empty is not in use.
+// The Gateways forwarded are the ones the stack wires NVCF routes to, with
+// the gates its template applies: none without ingress.gatewayApi.enabled,
+// shared and grpc always, nats only with its route on, and llmGrpc and
+// llmQuic only with the LLM worker route on. An environment file can name a
+// Gateway whose route stays off, and the stack never creates that Gateway.
 func TestLoadStackValues_Gateways(t *testing.T) {
 	dir := t.TempDir()
-	base, env := dir+"/base.yaml", dir+"/prod.yaml"
+	base := dir + "/base.yaml"
 	require.NoError(t, writeFile(base, []byte(`
 ingress:
   gatewayApi:
+    enabled: true
     gateways:
       shared: {name: "", namespace: ""}
       grpc: {name: "", namespace: ""}
       llmGrpc: {name: "", namespace: ""}
 `)))
-	require.NoError(t, writeFile(env, []byte(`
-highAvailability:
-  mode: enforced
-ingress:
-  gatewayApi:
-    gateways:
+	const named = `
       shared: {name: shared-gw, namespace: envoy-gateway-system}
       grpc: {name: grpc-gw, namespace: envoy-gateway-system}
-      nats: {name: shared-gw, namespace: envoy-gateway-system}
-`)))
-	got := LoadStackValues([]string{base, env})
-	assert.Equal(t, []string{"envoy-gateway-system/grpc-gw", "envoy-gateway-system/shared-gw"}, got.Gateways,
-		"sorted, distinct, and without the unused llmGrpc entry")
+      nats: {name: nats-gw, namespace: envoy-gateway-system}
+      llmGrpc: {name: llm-grpc-gateway, namespace: envoy-gateway}
+      llmQuic: {name: llm-quic-gateway, namespace: envoy-gateway}
+`
+	for name, tc := range map[string]struct {
+		env  string
+		want []string
+	}{
+		"routes off": {
+			env:  "ingress:\n  gatewayApi:\n    gateways:" + named,
+			want: []string{"envoy-gateway-system/grpc-gw", "envoy-gateway-system/shared-gw"},
+		},
+		"routes on": {
+			env: "ingress:\n  gatewayApi:\n    routes:\n      nats: {enabled: true}\n      llmWorker: {enabled: true}\n" +
+				"    gateways:" + named,
+			want: []string{
+				"envoy-gateway-system/grpc-gw", "envoy-gateway-system/nats-gw", "envoy-gateway-system/shared-gw",
+				"envoy-gateway/llm-grpc-gateway", "envoy-gateway/llm-quic-gateway",
+			},
+		},
+		"gateway API off": {
+			env:  "ingress:\n  gatewayApi:\n    enabled: false\n    gateways:" + named,
+			want: nil,
+		},
+	} {
+		env := dir + "/" + strings.ReplaceAll(name, " ", "-") + ".yaml"
+		require.NoError(t, writeFile(env, []byte(tc.env)), name)
+		assert.Equal(t, tc.want, LoadStackValues([]string{base, env}).Gateways, name)
+	}
 
-	got = LoadStackValues([]string{base})
-	assert.Empty(t, got.Gateways)
+	assert.Empty(t, LoadStackValues([]string{base}).Gateways, "an entry left empty is one the install does not use")
 }

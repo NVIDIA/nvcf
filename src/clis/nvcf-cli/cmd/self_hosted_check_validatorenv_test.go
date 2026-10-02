@@ -20,6 +20,8 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -271,4 +273,63 @@ func TestParseToleration(t *testing.T) {
 		_, err := parseToleration(in)
 		assert.Error(t, err, in)
 	}
+}
+
+// Stack values reach the validator only when the install's environment file
+// was read from the stack the command points at. helmfile refuses to install
+// without that file, so base.yaml alone does not describe the install, and a
+// stack found above the working directory is not a remote stack the command
+// was given. Another stack's Gateways would have the validator fail ones the
+// install never created.
+func TestCheck_StackGatewaysNeedTheEnvironmentFile(t *testing.T) {
+	t.Setenv("HELMFILE_ENV", "")
+	t.Setenv("NVCF_GATEWAY_NAMES", "")
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	stack := t.TempDir()
+	envDir := filepath.Join(stack, "environments")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "base.yaml"), []byte(`
+ingress:
+  gatewayApi:
+    enabled: true
+    gateways:
+      shared: {name: nvcf-gateway, namespace: envoy-gateway}
+      grpc: {name: nvcf-gateway, namespace: envoy-gateway}
+`), 0o644))
+	prev := newClusterValidatorForSelfHosted
+	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
+	run := func(stackFlag string) map[string]string {
+		resetCheckFlags(t)
+		var got map[string]string
+		newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+			return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+				got = p.Env
+				return selfhosted.ClusterValidatorResult{Passed: true}
+			}
+		}
+		rootCmd.SetErr(&bytes.Buffer{})
+		rootCmd.SetOut(&bytes.Buffer{})
+		args := []string{"self-hosted", "check", "--control-plane", "--json", "--env", "prod",
+			"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"}
+		if stackFlag != "" {
+			args = append(args, "--control-plane-stack", stackFlag)
+		}
+		rootCmd.SetArgs(args)
+		_ = rootCmd.Execute()
+		require.NotNil(t, got, "the validator ran")
+		return got
+	}
+
+	assert.NotContains(t, run(stack), "NVCF_GATEWAY_NAMES", "base.yaml without prod.yaml is not the install")
+
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "prod.yaml"), []byte("global: {domain: example.com}\n"), 0o644))
+	assert.Equal(t, "envoy-gateway/nvcf-gateway", run(stack)["NVCF_GATEWAY_NAMES"])
+
+	// The same stack found above the working directory is not the remote
+	// stack the command was given, nor a local one without environments.
+	t.Chdir(stack)
+	assert.NotContains(t, run("oci://registry.example.com/nvcf/stack:1.0.0"), "NVCF_GATEWAY_NAMES")
+	assert.NotContains(t, run(t.TempDir()), "NVCF_GATEWAY_NAMES")
+	assert.Equal(t, "envoy-gateway/nvcf-gateway", run("")["NVCF_GATEWAY_NAMES"],
+		"with no stack flag the checkout above the working directory is the stack")
 }

@@ -246,6 +246,24 @@ func TestAutoCreatePullSecretFromEnv_KeyPresent(t *testing.T) {
 		"minted secret must contain auth for the validator image's registry")
 }
 
+// The key is minted into a pull Secret for nvcr.io only, as up mints it.
+// Another NVIDIA registry, staging NGC included, never gets it.
+func TestAutoCreatePullSecretFromEnv_OnlyForNvcrIO(t *testing.T) {
+	for _, name := range ngcAPIKeyEnvNames {
+		t.Setenv(name, "")
+	}
+	t.Setenv("NGC_API_KEY", "nvapi-test-123")
+	for _, registry := range []string{"stg.nvcr.io", "registry.nvidia.com:5005", "ghcr.io"} {
+		client := fake.NewSimpleClientset()
+		got, err := autoCreatePullSecretFromEnv(context.Background(), client, registry,
+			clusterValidatorControlPlaneRole, "runid", false)
+		require.NoError(t, err)
+		assert.Empty(t, got, registry)
+		list, _ := client.CoreV1().Secrets("default").List(context.Background(), metav1.ListOptions{})
+		assert.Empty(t, list.Items, "%s must not get the NGC key", registry)
+	}
+}
+
 func TestResolveValidatorPullSecret_FlagOverride(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	got, err := resolveValidatorPullSecret(context.Background(), client, "custom-secret", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false)

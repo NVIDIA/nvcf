@@ -507,14 +507,32 @@ func isNGCRegistry(registry string) bool {
 	return false
 }
 
+// ngcKeyRegistryHost is the one registry NGC_API_KEY is for: the registry up
+// mints its pull secrets for from that key. isNGCRegistry also accepts other
+// NVIDIA hosts (staging NGC, internal registries), and those take their own
+// logins, never the NGC key.
+const ngcKeyRegistryHost = "nvcr.io"
+
+// isNGCKeyRegistry reports whether NGC_API_KEY may be sent to registry.
+func isNGCKeyRegistry(registry string) bool {
+	if !isBareRegistryHost(registry) {
+		return false
+	}
+	host := registry
+	if h, _, err := net.SplitHostPort(registry); err == nil {
+		host = h
+	}
+	return strings.EqualFold(host, ngcKeyRegistryHost)
+}
+
 // credentialsForRegistry resolves (username, password) for any registry. For
-// an NGC registry NGC_API_KEY comes first when it is set, because that is the
-// key up and the validator pull secret mint from: checking a keychain login
-// instead validated a different credential from the one the install uses.
-// NGC_API_KEY is never sent to any other registry. Without it, or for any
-// other registry, ~/.docker/config.json is used.
+// nvcr.io NGC_API_KEY comes first when it is set, because that is the key up
+// and the validator pull secret mint from: checking a keychain login instead
+// validated a different credential from the one the install uses. NGC_API_KEY
+// is never sent to any other registry, NVIDIA's own included. Without it, or
+// for any other registry, ~/.docker/config.json is used.
 func credentialsForRegistry(registry string) (string, string, bool) {
-	if isNGCRegistry(registry) {
+	if isNGCKeyRegistry(registry) {
 		if key := firstNonEmptyEnv(ngcAPIKeyEnvNames...); key != "" {
 			return "$oauthtoken", key, true
 		}
@@ -522,13 +540,10 @@ func credentialsForRegistry(registry string) (string, string, bool) {
 	return credsFromDockerConfig(registry)
 }
 
-// ngcCredentials resolves (username, password) for an NGC-hosted registry, in
-// the same order: NGC_API_KEY, then ~/.docker/config.json.
+// ngcCredentials resolves (username, password) for an NGC-hosted registry's
+// /proxy_auth exchange, by the same rule as credentialsForRegistry.
 func ngcCredentials(registry string) (string, string, bool) {
-	if key := firstNonEmptyEnv(ngcAPIKeyEnvNames...); key != "" {
-		return "$oauthtoken", key, true
-	}
-	return credsFromDockerConfig(registry)
+	return credentialsForRegistry(registry)
 }
 
 func credsFromDockerConfig(registry string) (string, string, bool) {

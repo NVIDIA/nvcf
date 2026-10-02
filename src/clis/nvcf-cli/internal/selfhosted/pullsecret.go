@@ -241,13 +241,13 @@ func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interfac
 	if apiKey == "" {
 		return "", nil
 	}
-	// Only ever hand the NGC key to NGC. Without this an operator who mirrors
-	// the validator image to ghcr.io or a corporate Harbor and still exports
-	// NGC_API_KEY gets it written as that registry's password, and the kubelet
-	// then sends the live key to a third party as HTTP Basic auth, where it
-	// lands in their access logs. The local probe already guards this the same
-	// way; the Secret path did not.
-	if !isNGCRegistry(registry) {
+	// Only ever hand the NGC key to nvcr.io, the registry up mints for. Without
+	// this an operator who mirrors the validator image to ghcr.io or a
+	// corporate Harbor and still exports NGC_API_KEY gets it written as that
+	// registry's password, and the kubelet then sends the live key to a third
+	// party as HTTP Basic auth, where it lands in their access logs. Other
+	// NVIDIA registries (staging NGC, internal ones) take their own logins.
+	if !isNGCKeyRegistry(registry) {
 		return "", nil
 	}
 	cfg, err := buildDockerConfigJSON(registry, "$oauthtoken", apiKey)

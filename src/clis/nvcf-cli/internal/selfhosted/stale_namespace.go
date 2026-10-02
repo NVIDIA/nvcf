@@ -91,9 +91,9 @@ func NewStaleNamespaceProber() StaleNamespaceProber {
 // A namespace is considered stale when either:
 //   - its DeletionTimestamp is set or its phase is Terminating (finalizer
 //     deadlock; it will never complete without operator intervention), or
-//   - it exists but holds no active Helm release (empty shell left by a partial
-//     helm uninstall or a failed teardown that cleaned the release but not the
-//     namespace).
+//   - it holds no active Helm release, runs no workload, and still holds what a
+//     removed install leaves (volume claims, hook Jobs): a partial helm
+//     uninstall or a teardown that removed the release but not its data.
 //
 // Helm 3 marks each release secret with the label owner=helm; absence of any
 // such secret means no live Helm release occupies the namespace.
@@ -138,49 +138,89 @@ func helmReleaseExists(
 	return false, fmt.Errorf("gave up after %d pages scanning for Helm releases", helmReleaseListMaxPages)
 }
 
-// hasPods reports whether namespace ns runs any pod. A read error reports
-// false, so the namespace is still flagged.
-func hasPods(ctx context.Context, client kubernetes.Interface, ns string) bool {
-	pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{Limit: 1})
-	return err == nil && len(pods.Items) > 0
+// hasLiveWorkload reports whether namespace ns runs a workload: a Pending or
+// Running pod that is not terminating and not a Job's. An install rendered
+// with helm template, as Argo CD does, records no Helm release but runs these.
+// Job pods are left out because Helm never deletes its hook Jobs, so a
+// removed install leaves their Completed pods behind. A read error reports
+// false, so the namespace is still judged by what it holds.
+func hasLiveWorkload(ctx context.Context, client kubernetes.Interface, ns string) bool {
+	pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.DeletionTimestamp != nil || ownedByJob(p) {
+			continue
+		}
+		if p.Status.Phase == corev1.PodPending || p.Status.Phase == corev1.PodRunning {
+			return true
+		}
+	}
+	return false
 }
 
-// onlyInstallPreparation reports whether namespace ns holds a registry pull
-// Secret and nothing else an operator or an install would create: only the
-// tokens and CA ConfigMap Kubernetes adds to every namespace, and no PVCs. An
-// empty namespace, or a read error, reports false, so it is still flagged.
-func onlyInstallPreparation(ctx context.Context, client kubernetes.Interface, ns string) bool {
-	pvcs, err := client.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{Limit: 1})
-	if err != nil || len(pvcs.Items) > 0 {
-		return false
-	}
-	secrets, err := client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return false
-	}
-	pullSecrets := 0
-	for i := range secrets.Items {
-		switch secrets.Items[i].Type {
-		case corev1.SecretTypeDockerConfigJson, corev1.SecretTypeDockercfg:
-			pullSecrets++
-		case corev1.SecretTypeServiceAccountToken:
-		default:
-			return false
+func ownedByJob(p *corev1.Pod) bool {
+	for _, ref := range p.OwnerReferences {
+		if ref.Kind == "Job" {
+			return true
 		}
 	}
-	if pullSecrets == 0 {
-		return false
+	return false
+}
+
+// holdsInstallLeftovers reports whether namespace ns holds what a removed
+// install leaves behind: volume claims, which helm never deletes and a
+// reinstall would silently reattach, or workload objects such as the hook
+// Jobs Helm also leaves. A namespace holding only what is created ahead of an
+// install (pull and TLS Secrets, CA ConfigMaps, labels), or nothing at all,
+// is a fresh one. A read error reports true, so the namespace is still flagged.
+func holdsInstallLeftovers(ctx context.Context, client kubernetes.Interface, ns string) bool {
+	one := metav1.ListOptions{Limit: 1}
+	present := []func() (int, error){
+		func() (int, error) {
+			l, err := client.CoreV1().PersistentVolumeClaims(ns).List(ctx, one)
+			if err != nil {
+				return 0, err
+			}
+			return len(l.Items), nil
+		},
+		func() (int, error) {
+			l, err := client.BatchV1().Jobs(ns).List(ctx, one)
+			if err != nil {
+				return 0, err
+			}
+			return len(l.Items), nil
+		},
+		func() (int, error) {
+			l, err := client.AppsV1().StatefulSets(ns).List(ctx, one)
+			if err != nil {
+				return 0, err
+			}
+			return len(l.Items), nil
+		},
+		func() (int, error) {
+			l, err := client.AppsV1().Deployments(ns).List(ctx, one)
+			if err != nil {
+				return 0, err
+			}
+			return len(l.Items), nil
+		},
+		func() (int, error) {
+			l, err := client.AppsV1().DaemonSets(ns).List(ctx, one)
+			if err != nil {
+				return 0, err
+			}
+			return len(l.Items), nil
+		},
 	}
-	cms, err := client.CoreV1().ConfigMaps(ns).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return false
-	}
-	for i := range cms.Items {
-		if cms.Items[i].Name != "kube-root-ca.crt" {
-			return false
+	for _, count := range present {
+		if n, err := count(); err != nil || n > 0 {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // helmReleasesAreInCluster reports whether Helm stores release state as
@@ -240,12 +280,12 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 			continue
 		}
 		// No release is not yet a leftover. The documented install pre-creates
-		// the namespaces holding only a registry pull Secret, so before the
+		// namespaces, labelled and holding pull or TLS Secrets, so before the
 		// first install none has a release; and an install rendered with
 		// `helm template` (Argo CD) never records one but runs pods. What
-		// `down` leaves behind runs nothing and still holds data (PVCs,
-		// Secrets, ConfigMaps).
-		if hasPods(ctx, client, name) || onlyInstallPreparation(ctx, client, name) {
+		// `down` leaves behind runs nothing, and holds volume claims or the
+		// hook Jobs Helm never deletes.
+		if hasLiveWorkload(ctx, client, name) || !holdsInstallLeftovers(ctx, client, name) {
 			continue
 		}
 		noRelease = append(noRelease, name)

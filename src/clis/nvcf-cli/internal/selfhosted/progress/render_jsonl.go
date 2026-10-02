@@ -535,15 +535,16 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 		}
 	case CheckCompleted:
 		return wireCheckCompleted{
-			Event:    "check_completed",
-			TS:       ts,
-			Category: ev.Category,
-			ID:       ev.ID,
-			Passed:   ev.Passed,
-			Severity: ev.Severity,
-			Message:  ev.Message,
-			Detail:   ev.Detail,
-			HintURL:  ev.HintURL,
+			Event:     "check_completed",
+			TS:        ts,
+			Category:  ev.Category,
+			ID:        ev.ID,
+			Passed:    ev.Passed,
+			Severity:  ev.Severity,
+			Message:   ev.Message,
+			Detail:    ev.Detail,
+			Transient: ev.Transient,
+			HintURL:   ev.HintURL,
 		}
 	case CategoryCompleted:
 		return wireCategoryCompleted{
@@ -748,6 +749,8 @@ type wireCheckCompleted struct {
 	Message  string `json:"message,omitempty"`
 	Detail   string `json:"detail,omitempty"`
 	HintURL  string `json:"hintURL,omitempty"`
+	// Transient is set on a warning --wait keeps polling on.
+	Transient bool `json:"transient,omitempty"`
 }
 
 type wireCategoryCompleted struct {

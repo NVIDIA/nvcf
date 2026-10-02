@@ -332,14 +332,28 @@ func LoadStackValues(files []string) StackValues {
 	return values
 }
 
-// stackGateways returns the Gateways named under ingress.gatewayApi.gateways
-// that have both a name and a namespace, as sorted, distinct namespace/name
-// entries. An entry the environment left empty is one it does not use.
+// stackGateways returns the Gateways the stack wires NVCF routes to, as
+// sorted, distinct namespace/name entries, applying the gates its template
+// applies (global.yaml.gotmpl, nvcfGatewayRoutes): none unless
+// ingress.gatewayApi.enabled, shared and grpc always, nats only with its
+// route enabled, and llmGrpc and llmQuic only with the LLM worker route. An
+// environment file can name a Gateway whose route stays off, and the stack
+// never creates or wires that Gateway, so the validator must not look for it.
 func stackGateways(merged map[string]any) []string {
+	if !digBool(merged, "ingress", "gatewayApi", "enabled") {
+		return nil
+	}
+	wired := []string{"shared", "grpc"}
+	if digBool(merged, "ingress", "gatewayApi", "routes", "nats", "enabled") {
+		wired = append(wired, "nats")
+	}
+	if digBool(merged, "ingress", "gatewayApi", "routes", "llmWorker", "enabled") {
+		wired = append(wired, "llmGrpc", "llmQuic")
+	}
 	gateways, _ := digAny(merged, "ingress", "gatewayApi", "gateways").(map[string]any)
 	seen := map[string]bool{}
 	var out []string
-	for key := range gateways {
+	for _, key := range wired {
 		name := digString(gateways, key, "name")
 		ns := digString(gateways, key, "namespace")
 		if name == "" || ns == "" || strings.Contains(name, "/") || strings.Contains(ns, "/") {
@@ -366,6 +380,13 @@ func mergeValues(dst, src map[string]any) {
 		}
 		dst[k] = v
 	}
+}
+
+// digBool reads a YAML boolean, false when absent or of another type, as the
+// stack's dig with a false default reads it.
+func digBool(m map[string]any, keys ...string) bool {
+	b, _ := digAny(m, keys...).(bool)
+	return b
 }
 
 func digString(m map[string]any, keys ...string) string {

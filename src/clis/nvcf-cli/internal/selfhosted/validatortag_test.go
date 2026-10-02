@@ -19,6 +19,7 @@ package selfhosted
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -252,10 +253,45 @@ func TestNGCCredentials_EnvFallback(t *testing.T) {
 	}
 	t.Setenv("NGC_API_KEY", "from-env")
 
-	user, pass, ok := ngcCredentials("stg.nvcr.io")
+	user, pass, ok := ngcCredentials("nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "$oauthtoken", user)
 	assert.Equal(t, "from-env", pass)
+}
+
+// NGC_API_KEY is for nvcr.io, the one registry up mints its pull secrets for.
+// Other NVIDIA registries, staging NGC and internal ones, take their own
+// docker login, and the key is never sent to them.
+func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	for _, n := range ngcAPIKeyEnvNames {
+		t.Setenv(n, "")
+	}
+	t.Setenv("NGC_API_KEY", "ngc-key")
+	login := base64.StdEncoding.EncodeToString([]byte("robot:own-login"))
+	auths := map[string]any{}
+	for _, host := range []string{"nvcr.io", "stg.nvcr.io", "registry.nvidia.com:5005"} {
+		auths[host] = map[string]string{"auth": login}
+	}
+	cfg, err := json.Marshal(map[string]any{"auths": auths})
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".docker"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".docker", "config.json"), cfg, 0o600))
+
+	for host, wantPass := range map[string]string{
+		"nvcr.io":                  "ngc-key",
+		"NVCR.IO:443":              "ngc-key",
+		"stg.nvcr.io":              "own-login",
+		"registry.nvidia.com:5005": "own-login",
+	} {
+		_, pass, ok := credentialsForRegistry(host)
+		require.True(t, ok, host)
+		assert.Equal(t, wantPass, pass, host)
+		_, pass, ok = ngcCredentials(host)
+		require.True(t, ok, host)
+		assert.Equal(t, wantPass, pass, "%s: the /proxy_auth exchange follows the same rule", host)
+	}
 }
 
 // -- parseWWWAuthenticate --

@@ -98,6 +98,13 @@ type CheckResult struct {
 	// Transient marks a warning expected to clear by itself, such as a
 	// rollout in progress. --wait keeps polling while one remains.
 	Transient bool
+	// CutShort marks a check the run's time budget stopped: it never started,
+	// or ran out of time while it ran. Such a result is no finding about the
+	// cluster, so the verdict is a timeout.
+	CutShort bool
+	// Cleanup is the command that removes what the check left in the
+	// cluster. Its row is reported even when the run is interrupted.
+	Cleanup string
 }
 
 // BinarySpec defines a tool that must be on PATH and a version constraint.
@@ -376,6 +383,11 @@ type RoleConfig struct {
 	// ClusterValidatorTolerations are added to the validator Job's
 	// control-plane tolerations.
 	ClusterValidatorTolerations []corev1.Toleration
+
+	// ClusterValidatorUnresolvedImage is a configured validator image without
+	// a tag whose latest tag could not be discovered. The validator does not
+	// run, and the role reports that as a failed check rather than nothing.
+	ClusterValidatorUnresolvedImage string
 }
 
 // categorySpec groups a set of checks under a named category. Categories run
@@ -484,6 +496,8 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 			rc.ClusterValidatorEnv,
 			rc.ClusterValidatorTolerations...,
 		))
+	} else if rc.ClusterValidatorUnresolvedImage != "" {
+		cat.checks = append(cat.checks, unresolvedValidatorCheck(rc.ClusterValidatorUnresolvedImage))
 	}
 	return cat
 }
@@ -527,6 +541,8 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 			rc.ClusterValidatorEnv,
 			rc.ClusterValidatorTolerations...,
 		))
+	} else if rc.ClusterValidatorUnresolvedImage != "" {
+		cat.checks = append(cat.checks, unresolvedValidatorCheck(rc.ClusterValidatorUnresolvedImage))
 	}
 	return cat
 }
@@ -631,6 +647,28 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 	}
 }
 
+// unresolvedValidatorCheck reports a configured validator that cannot run
+// because its image has no tag and the latest one could not be discovered.
+// The kubelet would pull such a reference as :latest, which the validator
+// repository does not publish. It fails like any validator that could not
+// run: nothing was validated.
+func unresolvedValidatorCheck(image string) binaryCheckSpec {
+	const id = "cluster-validator"
+	return binaryCheckSpec{
+		ID:         id,
+		HumanLabel: "resolving the cluster-validator image…",
+		Run: func(context.Context) CheckResult {
+			return CheckResult{
+				ID:       id,
+				Severity: SeverityError,
+				HintURL:  clusterValidatorHintURL,
+				Message: "cluster-validator not run: could not resolve a tag for " + image +
+					"; pin cluster_validator_image to a tag, or pass --skip-cluster-validation",
+			}
+		},
+	}
+}
+
 // clusterValidatorCheck runs the validator Job. A validator that could not run
 // (RBAC denied, image pull failure, timeout) is an error like a validator
 // failure: nothing was checked, and a readiness gate must not pass on that.
@@ -663,18 +701,23 @@ func clusterValidatorCheck(
 			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)
 			switch {
 			case noCleanup:
-				if hint := validatorCleanupHint(kubeContext, result.RunID); hint != "" {
-					r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + hint
-				}
+				r.Cleanup = validatorCleanupHint(kubeContext, result.RunID)
 			case result.LeftBehind:
 				// The pod could still be running, so its RBAC was kept rather
 				// than pulled out from under it. Say how to remove it once it
 				// ends, instead of leaving it for a later check's sweep.
-				if hint := validatorLeftBehindHint(kubeContext, result.RunID); hint != "" {
-					r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + hint
-				}
+				r.Cleanup = validatorLeftBehindHint(kubeContext, result.RunID)
+			}
+			if r.Cleanup != "" {
+				r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + r.Cleanup
 			}
 
+			if errors.Is(result.Err, context.Canceled) {
+				r.Severity = SeverityWarning
+				r.Message = "cluster-validator was interrupted"
+				r.Err = result.Err
+				return r
+			}
 			if result.Err != nil {
 				r.Severity = SeverityError
 				r.Message = "cluster-validator did not complete, so the cluster was not validated: " +
@@ -1157,7 +1200,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 				// let the partial set grade as the verdict, so a validator
 				// that never ran could pass the gate.
 				res = CheckResult{
-					ID: spec.ID, Severity: SeverityError,
+					ID: spec.ID, Severity: SeverityError, CutShort: true,
 					Message: "not run: the check's time budget ran out before it started",
 					Err:     ctx.Err(),
 				}
@@ -1171,20 +1214,26 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 				if errors.Is(ctx.Err(), context.Canceled) {
 					// Cut short by the interrupt, so its result is not a
 					// finding; the cancelled final event says what happened.
+					// A row that says how to remove what the check left in
+					// the cluster is still reported: nothing else will.
+					if res.Cleanup != "" {
+						res.Category = cat.name
+						all = append(all, res)
+						emitCheckCompleted(sink, cat.name, res)
+					}
 					return all
+				}
+				if !res.Passed && errors.Is(ctx.Err(), context.DeadlineExceeded) &&
+					errors.Is(res.Err, context.DeadlineExceeded) {
+					// The budget ran out while it ran: no finding either way.
+					res.CutShort = true
+					res.Severity = SeverityError
+					res.Message = "cut short: the check's time budget ran out before it finished (" + res.Message + ")"
 				}
 			}
 			res.Category = cat.name
 			all = append(all, res)
-			_ = sink.Emit(ctx, progress.CheckCompleted{
-				Category: cat.name,
-				ID:       res.ID,
-				Passed:   res.Passed,
-				Severity: res.Severity,
-				Message:  res.Message,
-				Detail:   res.Detail,
-				HintURL:  res.HintURL,
-			})
+			emitCheckCompleted(sink, cat.name, res)
 			catResults = append(catResults, res)
 		}
 		passed, failed, warned := CountResults(catResults)
@@ -1197,6 +1246,21 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 		})
 	}
 	return all
+}
+
+// emitCheckCompleted reports one check's result. It uses a fresh context: the
+// run's own may have ended, and the row must still reach the stream.
+func emitCheckCompleted(sink progress.EventSink, category string, res CheckResult) {
+	_ = sink.Emit(context.Background(), progress.CheckCompleted{
+		Category:  category,
+		ID:        res.ID,
+		Passed:    res.Passed,
+		Severity:  res.Severity,
+		Message:   res.Message,
+		Detail:    res.Detail,
+		HintURL:   res.HintURL,
+		Transient: res.Transient,
+	})
 }
 
 // noopSink is a progress.EventSink that discards all events. Used by RunPreflight

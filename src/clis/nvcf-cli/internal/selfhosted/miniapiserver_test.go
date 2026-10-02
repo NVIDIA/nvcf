@@ -51,6 +51,8 @@ type miniAPIServer struct {
 	onceJob    sync.Once
 	// runningJob, when set, is the status every Job read returns.
 	runningJob bool
+	// podLogs, when set, gives each Job a running pod whose log is podLogs.
+	podLogs string
 }
 
 func newMiniAPIServer(t *testing.T) (*miniAPIServer, kubernetes.Interface) {
@@ -64,6 +66,10 @@ func newMiniAPIServer(t *testing.T) (*miniAPIServer, kubernetes.Interface) {
 	client, err := kubernetes.NewForConfig(&rest.Config{
 		Host:          srv.URL,
 		ContentConfig: rest.ContentConfig{ContentType: "application/json"},
+		// No client-side throttling: a run's requests then take as long as
+		// the server makes them, and a short run deadline is not spent in
+		// the client's rate limiter.
+		QPS: -1,
 	})
 	require.NoError(t, err)
 	return m, client
@@ -76,8 +82,13 @@ func (m *miniAPIServer) deleted() []string {
 }
 
 func (m *miniAPIServer) serve(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
 	path := strings.TrimSuffix(r.URL.Path, "/")
+	if r.Method == http.MethodGet && strings.HasSuffix(path, "/log") {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, m.podLogs)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
 	collection, name := path, ""
 	if i := strings.LastIndex(path, "/"); i > 0 && isNamedPath(path) {
 		collection, name = path[:i], path[i+1:]
@@ -98,6 +109,17 @@ func (m *miniAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 		m.objects[collection][n] = obj
 		if strings.HasSuffix(collection, "/jobs") {
 			m.onceJob.Do(func() { close(m.jobCreated) })
+			if m.podLogs != "" {
+				pods := podsCollection(collection)
+				if m.objects[pods] == nil {
+					m.objects[pods] = map[string]any{}
+				}
+				m.objects[pods][n+"-pod"] = map[string]any{
+					"apiVersion": "v1", "kind": "Pod",
+					"metadata": map[string]any{"name": n + "-pod", "labels": map[string]any{"job-name": n}},
+					"status":   map[string]any{"phase": "Running"},
+				}
+			}
 		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(obj)
@@ -134,13 +156,19 @@ func (m *miniAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 		delete(m.objects[collection], name)
 		if strings.HasSuffix(collection, "/jobs") {
 			// The Job's pods go with it, as the garbage collector would.
-			delete(m.objects, strings.TrimSuffix(collection, "/jobs")+"/pods")
+			delete(m.objects, podsCollection(collection))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"kind": "Status", "apiVersion": "v1", "status": "Success"})
 	default:
 		// PATCH and PUT: accept and echo nothing interesting.
 		_ = json.NewEncoder(w).Encode(map[string]any{})
 	}
+}
+
+// podsCollection is the pod collection in the namespace of a Job collection.
+func podsCollection(jobs string) string {
+	_, ns, _ := strings.Cut(jobs, "/namespaces/")
+	return "/api/v1/namespaces/" + strings.TrimSuffix(ns, "/jobs") + "/pods"
 }
 
 // listKinds maps a collection's resource to the kind a typed client decodes.
@@ -180,12 +208,20 @@ func notFound(w http.ResponseWriter) {
 // returns the result.
 func runInterrupted(t *testing.T, client kubernetes.Interface, m *miniAPIServer) ClusterValidatorResult {
 	t.Helper()
+	return runInterruptedAs(t, client, m, "registry.example.com/validator:1", clusterValidatorComputePlaneRole, nil)
+}
+
+// runInterruptedAs is runInterrupted with the image, role and registries the
+// run is given.
+func runInterruptedAs(
+	t *testing.T, client kubernetes.Interface, m *miniAPIServer, image, role string, registries []RegistryEntry,
+) ClusterValidatorResult {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan ClusterValidatorResult, 1)
 	go func() {
-		done <- runClusterValidator(ctx, client, "registry.example.com/validator:1",
-			"", false, clusterValidatorComputePlaneRole, nil, nil)
+		done <- runClusterValidator(ctx, client, image, "", false, role, registries, nil)
 	}()
 	select {
 	case <-m.jobCreated:
@@ -202,14 +238,83 @@ func runInterrupted(t *testing.T, client kubernetes.Interface, m *miniAPIServer)
 	return ClusterValidatorResult{}
 }
 
-// On an interrupt the cleanup requests really go out. A cleanup context
-// derived from the cancelled run context sends none, which the fake clientset
-// cannot show because it ignores contexts.
+// On an interrupt the cleanup requests really go out, for the NGC-key pull
+// Secret and the ConfigMap as well as the RBAC. A cleanup context derived from
+// the cancelled run context sends none, which the fake clientset cannot show
+// because it ignores contexts.
 func TestRunClusterValidator_InterruptSendsCleanupOverTheWire(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "key")
 	m, client := newMiniAPIServer(t)
-	res := runInterrupted(t, client, m)
+	res := runInterruptedAs(t, client, m, "nvcr.io/nvidia/validator:1", clusterValidatorControlPlaneRole,
+		[]RegistryEntry{{Registry: "nvcr.io"}})
 	require.Error(t, res.Err)
 
+	got := strings.Join(m.deleted(), " ")
+	for _, want := range []string{
+		"/jobs/", "/clusterrolebindings/", "/clusterroles/", "/serviceaccounts/", "/secrets/", "/configmaps/",
+	} {
+		assert.Contains(t, got, want)
+	}
+}
+
+// The check's budget running out ends the run as an interrupt does: the Job
+// is stopped and everything swept, not left to its deadline with its RBAC
+// kept. The transcript is read first, on a fresh context; a read on the run's
+// expired context never leaves the client.
+func TestRunClusterValidator_BudgetEndStopsTheJobAndKeepsTheTranscript(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "key")
+	m, client := newMiniAPIServer(t)
+	m.podLogs = "Validator role: control-plane\npartial transcript\n"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	start := time.Now()
+	res := runClusterValidator(ctx, client, "nvcr.io/nvidia/validator:1", "", false,
+		clusterValidatorControlPlaneRole, []RegistryEntry{{Registry: "nvcr.io"}}, nil)
+	require.ErrorIs(t, res.Err, context.DeadlineExceeded, "the budget cut it short; the validator did not fail")
+	assert.Less(t, time.Since(start), time.Second+validatorDeadlineGrace, "it did not wait for the Job's deadline")
+	assert.Contains(t, res.Logs, "partial transcript")
+	assert.False(t, res.LeftBehind)
+	assert.Empty(t, res.JobName, "the Job is gone, so no hint may point at it")
+	got := strings.Join(m.deleted(), " ")
+	for _, want := range []string{
+		"/jobs/", "/clusterrolebindings/", "/clusterroles/", "/serviceaccounts/", "/secrets/", "/configmaps/",
+	} {
+		assert.Contains(t, got, want)
+	}
+}
+
+// An interrupt while the run waits, after the validator's own timeout, for the
+// Job's deadline to end the pod is acted on at once: the Job is stopped and
+// everything swept, instead of the wait running out first.
+func TestRunClusterValidator_InterruptDuringTheDeadlineGraceStopsTheJob(t *testing.T) {
+	prevTimeout, prevGrace := clusterValidatorTimeout, validatorDeadlineGrace
+	clusterValidatorTimeout, validatorDeadlineGrace = 300*time.Millisecond, time.Minute
+	t.Cleanup(func() { clusterValidatorTimeout, validatorDeadlineGrace = prevTimeout, prevGrace })
+	m, client := newMiniAPIServer(t)
+	m.podLogs = "Validator role: compute-plane\n"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan ClusterValidatorResult, 1)
+	go func() {
+		done <- runClusterValidator(ctx, client, "registry.example.com/validator:1", "", false,
+			clusterValidatorComputePlaneRole, nil, nil)
+	}()
+	select {
+	case <-m.jobCreated:
+	case res := <-done:
+		t.Fatalf("the run ended before it created its Job: %v", res.Err)
+	}
+	time.Sleep(clusterValidatorTimeout + time.Second)
+	cancel()
+
+	select {
+	case res := <-done:
+		require.ErrorContains(t, res.Err, "the validator did not finish within")
+		assert.False(t, res.LeftBehind)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the interrupt was not acted on during the wait for the Job's deadline")
+	}
 	got := strings.Join(m.deleted(), " ")
 	for _, want := range []string{"/jobs/", "/clusterrolebindings/", "/clusterroles/", "/serviceaccounts/"} {
 		assert.Contains(t, got, want)
@@ -255,7 +360,8 @@ func TestClusterValidatorRunCeiling_CoversHungSweeps(t *testing.T) {
 		"", false, clusterValidatorControlPlaneRole, []RegistryEntry{{Registry: "nvcr.io"}}, nil)
 	elapsed := time.Since(start)
 	require.Error(t, res.Err)
-	require.Contains(t, res.Err.Error(), "waiting for job", "the run reached the Job wait and timed out there")
+	require.Contains(t, res.Err.Error(), "the validator did not finish within",
+		"the run reached the Job wait and timed out there")
 	assert.GreaterOrEqual(t, elapsed, validatorDeferredSweeps*validatorCleanupTimeout,
 		"every sweep ran and hung until its bound")
 	assert.LessOrEqual(t, elapsed, ClusterValidatorRunCeiling())

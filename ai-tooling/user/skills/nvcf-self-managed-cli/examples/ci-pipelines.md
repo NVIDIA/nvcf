@@ -22,7 +22,7 @@ Notes:
 - `--non-interactive --token=$JWT` is required in CI; never use interactive `init`.
 - Always `--json` for machine-parsing.
 - `--json` writes JSONL to stderr, not stdout, so redirect with `2>&1 >/dev/null` before a parser.
-- `check` reports its verdict in one `final` event, with `success: false` when any check failed at error severity. Gate on that event: `check` never emits `phase_failed`, so a condition on it always passes. Requiring the `final` event also fails the step when the command dies before emitting it.
+- `check` reports its verdict in one `final` event, with `success: false` when any check failed at error severity or the run timed out (exit `5`, `verdict: "timeout"`). Gate on that event: `check` never emits `phase_failed`, so a condition on it always passes. Requiring the `final` event also fails the step when the command dies before emitting it.
 - Slurp with `jq -s` before testing a condition. Without it `jq -e` takes its exit status from the last event alone.
 - stderr also carries plain-text notices, so filter to JSON lines. Do not add `--show-logs` here: it appends a non-JSON transcript to the same stream.
 - Final status check gates downstream stages on `verdict == "healthy"`.

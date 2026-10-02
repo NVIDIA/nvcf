@@ -44,13 +44,12 @@ import (
 )
 
 const (
-	clusterValidatorNamespace    = "default"
-	clusterValidatorName         = "nvcf-preflight-validator"
-	clusterValidatorContainer    = "validator"
-	clusterValidatorAppLabel     = "nvcf-cluster-validator"
-	clusterValidatorPollInterval = 2 * time.Second
-	clusterValidatorTTLSeconds   = int32(600)
-	clusterValidatorHintURL      = "https://docs.nvidia.com/nvcf/self-managed-clusters#cluster-validator"
+	clusterValidatorNamespace  = "default"
+	clusterValidatorName       = "nvcf-preflight-validator"
+	clusterValidatorContainer  = "validator"
+	clusterValidatorAppLabel   = "nvcf-cluster-validator"
+	clusterValidatorTTLSeconds = int32(600)
+	clusterValidatorHintURL    = "https://docs.nvidia.com/nvcf/self-managed-clusters#cluster-validator"
 	// orphanValidatorRBACTTL is the minimum age before leftover validator RBAC
 	// is reclaimed. Must exceed the validator timeout so a live run is never hit.
 	orphanValidatorRBACTTL = 30 * time.Minute
@@ -71,6 +70,7 @@ const (
 // Vars (not consts) so tests can shorten without the full production budget.
 var (
 	clusterValidatorTimeout         = 5 * time.Minute
+	clusterValidatorPollInterval    = 2 * time.Second
 	clusterValidatorLogFetchTimeout = 10 * time.Second
 	// validatorCleanupTimeout bounds each deferred sweep. They run after an
 	// interrupt, when CI will not send a second signal, so an unreachable
@@ -83,12 +83,18 @@ var (
 // control-plane role the network-checks ConfigMap.
 const validatorDeferredSweeps = 3
 
+// validatorGradeReads is how many reads, each bounded by
+// clusterValidatorLogFetchTimeout, one run can make once its wait ends: the
+// transcript, then for a validator that finishes late the Job and the
+// transcript again, and the container's exit code.
+const validatorGradeReads = 4
+
 // ClusterValidatorRunCeiling is the longest one validator run can take: its
 // own timeout, then on a timeout the wait for the Job's deadline to end the
-// pod and the log fetch, then the deferred sweeps, which run in turn on fresh
-// contexts, plus a margin for the pod's termination grace period.
+// pod and the reads that grade it, then the deferred sweeps, which run in turn
+// on fresh contexts, plus a margin for the pod's termination grace period.
 func ClusterValidatorRunCeiling() time.Duration {
-	return clusterValidatorTimeout + validatorDeadlineGrace + clusterValidatorLogFetchTimeout +
+	return clusterValidatorTimeout + validatorDeadlineGrace + validatorGradeReads*clusterValidatorLogFetchTimeout +
 		validatorDeferredSweeps*validatorCleanupTimeout + validatorRunMargin
 }
 
@@ -286,9 +292,16 @@ func runClusterValidator(
 	if err != nil {
 		// A create cut off by an interrupt or a dropped connection may still
 		// have been applied, and a Job left behind would run with its RBAC
-		// swept. The name is this run's own, so removing it is safe.
-		podMayBeRunning = !stopValidatorJob(client, jobName)
-		return ClusterValidatorResult{RunID: runID, Err: fmt.Errorf("creating validator Job: %w", err)}
+		// swept. The name is this run's own, so removing it is safe, except
+		// under --no-cleanup, which keeps whatever this run made. When its
+		// pod may still be running, its objects are kept and the result says
+		// how to remove them.
+		if !noCleanup {
+			podMayBeRunning = !stopValidatorJob(client, jobName)
+		}
+		return ClusterValidatorResult{
+			RunID: runID, Err: fmt.Errorf("creating validator Job: %w", err), LeftBehind: podMayBeRunning,
+		}
 	}
 	podMayBeRunning = true
 
@@ -319,15 +332,24 @@ func runClusterValidator(
 	// transcript with "forbidden", and cuts off the validator's own cleanup
 	// of its probe resources.
 	podMayBeRunning = waitErr != nil
+	// The run's own context has ended: the operator interrupted it, or the
+	// check's time budget ran out. Nothing will wait for a later result, so
+	// the Job is stopped now rather than left to its deadline.
+	abandoned := waitErr != nil && ctx.Err() != nil
+	ownTimeout := waitErr != nil && !abandoned && errors.Is(waitErr, context.DeadlineExceeded)
+	if ownTimeout {
+		// The validator's own timeout, not the check's budget: its result is
+		// that it did not finish, which is not the budget cutting it short.
+		waitErr = fmt.Errorf("the validator did not finish within %s", clusterValidatorTimeout)
+	}
 
-	// Fetch logs under a fresh ctx from the parent: vctx is expired on the
-	// timeout path, and dropping the partial transcript hurts most there.
-	logCtx, logCancel := context.WithTimeout(ctx, clusterValidatorLogFetchTimeout)
-	defer logCancel()
-	rawLogs, _ := fetchClusterValidatorLogs(logCtx, client, jobName)
-	cleaned := cleanValidatorOutput(rawLogs)
-	if configNote != "" {
-		cleaned = configNote + "\n" + cleaned
+	// Read the transcript before anything stops the pod, on a fresh context:
+	// the run's own may be over, and a run that timed out is where the
+	// partial transcript matters most. Not after an interrupt, which only
+	// wants the cleanup.
+	var rawLogs string
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		rawLogs = readValidatorLogs(client, jobName)
 	}
 
 	// A pull failure is different: the container never started, so nothing
@@ -340,25 +362,51 @@ func runClusterValidator(
 	// removes its own probe namespace and DaemonSet on SIGTERM, and needs
 	// that RBAC to do it.
 	var pullErr *validatorImagePullError
-	interrupted := errors.Is(ctx.Err(), context.Canceled)
+	isPullErr := errors.As(waitErr, &pullErr)
 	stopped := false
 	switch {
-	case errors.As(waitErr, &pullErr) && noCleanup:
+	case waitErr == nil:
+	case isPullErr && noCleanup:
 		// Kept for debugging, but a pod that cannot pull has nothing to
 		// run: suspend the Job so the pod stops retrying forever.
 		suspendValidatorJob(client, jobName)
-	case (errors.As(waitErr, &pullErr) || interrupted) && !noCleanup:
-		// A pull failure never started the container, and an interrupt means
-		// the operator abandoned the run: stop the Job and reclaim everything
-		// now rather than leave cluster-wide RBAC for a later orphan sweep.
+	case (isPullErr || abandoned) && !noCleanup:
 		podMayBeRunning = !stopValidatorJob(client, jobName)
 		stopped = true
-	case waitErr != nil && !noCleanup:
-		// A plain timeout: the Job's active deadline ends the pod shortly
-		// after this wait gave up. Wait for that, then sweep, as on success.
-		podMayBeRunning = !waitValidatorPodsDone(client, jobName, validatorDeadlineGrace)
+	case !noCleanup:
+		// The validator's own timeout passed, or its Job could not be read
+		// for a while. Its active deadline ends the pod soon after the
+		// timeout, so wait for that, then grade on what the Job actually
+		// did: a validator that finished late, or while its Job could not be
+		// read, still has a result. An interrupt or the end of the check's
+		// budget during the wait stops the Job instead.
+		limit := validatorDeadlineGrace
+		if deadline, ok := vctx.Deadline(); ok {
+			limit += max(time.Until(deadline), 0)
+		}
+		done, ended := waitValidatorPodsDoneOrEnded(ctx, client, jobName, limit)
+		switch {
+		case ended:
+			podMayBeRunning = !stopValidatorJob(client, jobName)
+			stopped = true
+			if !ownTimeout {
+				// The result was still to come when the run ended, so this
+				// is the interrupt or the budget, not the validator.
+				waitErr = fmt.Errorf("waiting for job %s: %w (after %w)", jobName, ctx.Err(), waitErr)
+			}
+		case done:
+			podMayBeRunning = false
+			if job, ok := readFinishedValidatorJob(client, jobName); ok {
+				final, waitErr = job, nil
+				rawLogs = readValidatorLogs(client, jobName)
+			}
+		}
 	}
 
+	cleaned := cleanValidatorOutput(rawLogs)
+	if configNote != "" {
+		cleaned = configNote + "\n" + cleaned
+	}
 	if waitErr != nil {
 		res := ClusterValidatorResult{
 			JobName:    jobName,
@@ -374,9 +422,8 @@ func runClusterValidator(
 		return res
 	}
 
-	// Separate short ctx so a slow log fetch can't burn the exit-code lookup's
-	// budget and silently return -1 on clean completions.
-	exitCtx, exitCancel := context.WithTimeout(ctx, 5*time.Second)
+	// A fresh context: the run's own may have ended while the Job was read.
+	exitCtx, exitCancel := context.WithTimeout(context.Background(), clusterValidatorLogFetchTimeout)
 	defer exitCancel()
 	return ClusterValidatorResult{
 		Passed:   final.Status.Succeeded > 0,
@@ -385,6 +432,37 @@ func runClusterValidator(
 		JobName:  jobName,
 		RunID:    runID,
 	}
+}
+
+// readValidatorLogs fetches the validator's transcript on a fresh, bounded
+// context, so it works after the run's own context has ended.
+func readValidatorLogs(client kubernetes.Interface, jobName string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), clusterValidatorLogFetchTimeout)
+	defer cancel()
+	logs, _ := fetchClusterValidatorLogs(ctx, client, jobName)
+	return logs
+}
+
+// readFinishedValidatorJob reads the Job once its pod has ended and returns
+// it when it has finished, retrying a few transient read errors.
+func readFinishedValidatorJob(client kubernetes.Interface, jobName string) (*batchv1.Job, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), clusterValidatorLogFetchTimeout)
+	defer cancel()
+	for attempt := 0; attempt < validatorGetErrorLimit; attempt++ {
+		job, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(ctx, jobName, metav1.GetOptions{})
+		switch {
+		case err == nil:
+			return job, job.Status.Succeeded > 0 || job.Status.Failed > 0
+		case apierrors.IsNotFound(err), apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
+			return nil, false
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(clusterValidatorPollInterval):
+		}
+	}
+	return nil, false
 }
 
 // extraValidatorEnv returns env as container variables in a stable order,
@@ -469,9 +547,12 @@ var (
 	// pod's termination grace period and the API round trips between waits.
 	validatorRunMargin = 30 * time.Second
 	// validatorPullFailureGrace is how long a pull failure must persist before
-	// it is final. The kubelet retries after 10s and then 20s, so a transient
-	// registry error clears inside it.
-	validatorPullFailureGrace = 30 * time.Second
+	// it is final. The kubelet's image backoff starts at 10s and doubles, and
+	// a failed sync is retried after about 10s more, so its second retry can
+	// start 30 to 50s after the first failure. A minute and a half covers
+	// it, so a registry outage of under a minute does not fail the run. A
+	// pull error that cannot clear (see permanentPullFailure) is final at once.
+	validatorPullFailureGrace = 90 * time.Second
 	// validatorGetErrorLimit is how many consecutive failed Job reads end the
 	// wait. One 5xx or a refused connection during an apiserver restart is
 	// not the Job's result.
@@ -496,17 +577,30 @@ func suspendValidatorJob(client kubernetes.Interface, name string) {
 // waitValidatorPodsDone waits up to limit, on a fresh context, until no pod of
 // the Job is still running, and reports whether that happened.
 func waitValidatorPodsDone(client kubernetes.Interface, jobName string, limit time.Duration) bool {
+	done, _ := waitValidatorPodsDoneOrEnded(context.Background(), client, jobName, limit)
+	return done
+}
+
+// waitValidatorPodsDoneOrEnded waits up to limit until no pod of the Job is
+// still running, or until run ends: an interrupt, or the check's budget. It
+// reports whether the pods were done, and whether run ended first. Pod reads
+// happen on their own context, so they work after run has ended.
+func waitValidatorPodsDoneOrEnded(
+	run context.Context, client kubernetes.Interface, jobName string, limit time.Duration,
+) (done, ended bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	for {
 		pods, err := client.CoreV1().Pods(clusterValidatorNamespace).List(ctx,
 			metav1.ListOptions{LabelSelector: "job-name=" + jobName})
 		if err == nil && allPodsDone(pods.Items) {
-			return true
+			return true, false
 		}
 		select {
+		case <-run.Done():
+			return false, true
 		case <-ctx.Done():
-			return false
+			return false, false
 		case <-time.After(time.Second):
 		}
 	}
@@ -1152,8 +1246,9 @@ func waitForClusterValidatorJob(ctx context.Context, client kubernetes.Interface
 			switch {
 			case reason == "":
 				pullFailingSince = time.Time{}
-			case reason == "InvalidImageName":
-				// A malformed reference never pulls.
+			case reason == "InvalidImageName" || permanentPullFailure(msg):
+				// A malformed reference never pulls, nor does an image the
+				// registry does not have or will not serve to these credentials.
 				return job, &validatorImagePullError{reason: reason, message: msg}
 			case pullFailingSince.IsZero():
 				pullFailingSince = time.Now()
@@ -1167,6 +1262,24 @@ func waitForClusterValidatorJob(ctx context.Context, client kubernetes.Interface
 		case <-ticker.C:
 		}
 	}
+}
+
+// permanentPullFailures are in the kubelet's message for a pull that no retry
+// fixes: the image is not in the registry, or the credentials are refused.
+var permanentPullFailures = []string{
+	"not found", "manifest unknown", "unauthorized", "authentication required", "denied",
+}
+
+// permanentPullFailure reports whether a pull error message says retrying
+// cannot help.
+func permanentPullFailure(message string) bool {
+	message = strings.ToLower(message)
+	for _, m := range permanentPullFailures {
+		if strings.Contains(message, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // Returns ("", "") when no pull failure is observed; callers treat that

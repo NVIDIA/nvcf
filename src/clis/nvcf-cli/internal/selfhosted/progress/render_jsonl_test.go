@@ -20,10 +20,12 @@ package progress
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -460,4 +462,32 @@ func TestRenderJSONL_Uninstall(t *testing.T) {
 
 	got := runEmitWithTotalPhases(t, clock, events, 3)
 	assertGolden(t, "testdata/jsonl_uninstall.golden", got)
+}
+
+// A warning --wait polls on is marked transient on the wire, so a consumer of
+// the stream can tell a rollout in progress from a finding. The field is left
+// out otherwise. A run that timed out ends with success false.
+func TestRenderJSONL_CheckTransientAndTimeout(t *testing.T) {
+	clock := &fakeClock{times: []time.Time{ts("2026-04-29T03:45:01Z")}}
+	got := runEmit(t, clock, []Event{
+		CheckCompleted{Category: "control-plane-cluster", ID: "cluster-validator", Severity: "warning",
+			Message: "rollout in progress", Transient: true},
+		CheckCompleted{Category: "control-plane-cluster", ID: "stale-namespaces", Severity: "warning",
+			Message: "1 stale namespace"},
+		Final{Success: false, Verdict: "timeout", TotalChecks: 2, PassedCount: 0, FailedCount: 0},
+	})
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	var events []map[string]any
+	for _, l := range lines {
+		var m map[string]any
+		require.NoError(t, json.Unmarshal([]byte(l), &m), l)
+		if m["event"] != "schemaVersion" {
+			events = append(events, m)
+		}
+	}
+	require.Len(t, events, 3)
+	assert.Equal(t, true, events[0]["transient"])
+	assert.NotContains(t, events[1], "transient")
+	assert.Equal(t, false, events[2]["success"])
+	assert.Equal(t, "timeout", events[2]["verdict"])
 }

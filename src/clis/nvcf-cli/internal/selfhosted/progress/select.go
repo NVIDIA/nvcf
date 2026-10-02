@@ -173,22 +173,20 @@ func SelectRenderer(stderr io.Writer, opts RenderOpts) (EventSink, RendererKind,
 		size = detectTerminalSize(stderr)
 	}
 	if size != nil && (size.Cols < compactThresholdCols || size.Rows < compactThresholdRows) {
-		return NewTTYRenderer(stderr, ModelOpts{
-			Output:              stderr,
-			Mode:                opts.Mode,
-			TotalPhases:         opts.TotalPhases,
-			Cluster:             opts.Cluster,
-			Target:              opts.Target,
-			Stack:               opts.Stack,
-			ControlPlaneContext: opts.ControlPlaneContext,
-			ComputePlaneContext: opts.ComputePlaneContext,
-			NowFunc:             func() time.Time { return time.Now().UTC() },
-			OnQuit:              opts.OnQuit,
-		}), RendererTTYCompact, nil
+		return newTTYRenderer(stderr, ttyModelOpts(stderr, opts)), RendererTTYCompact, nil
 	}
 
 	// Row 9: default — full bubbletea.
-	return NewTTYRenderer(stderr, ModelOpts{
+	return newTTYRenderer(stderr, ttyModelOpts(stderr, opts)), RendererTTYFull, nil
+}
+
+// newTTYRenderer is a test seam over NewTTYRenderer.
+var newTTYRenderer = NewTTYRenderer
+
+// ttyModelOpts is the bubbletea model configuration both TTY layouts use. It
+// carries OnQuit: in raw mode a quit key is the only Ctrl-C the run sees.
+func ttyModelOpts(stderr io.Writer, opts RenderOpts) ModelOpts {
+	return ModelOpts{
 		Output:              stderr,
 		Mode:                opts.Mode,
 		TotalPhases:         opts.TotalPhases,
@@ -199,7 +197,7 @@ func SelectRenderer(stderr io.Writer, opts RenderOpts) (EventSink, RendererKind,
 		ComputePlaneContext: opts.ComputePlaneContext,
 		NowFunc:             func() time.Time { return time.Now().UTC() },
 		OnQuit:              opts.OnQuit,
-	}), RendererTTYFull, nil
+	}
 }
 
 // isWriterTTY returns true iff w is an *os.File whose file descriptor is

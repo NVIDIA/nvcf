@@ -395,9 +395,8 @@ func TestRunClusterValidator_LogFetchSurvivesValidatorTimeout(t *testing.T) {
 	// Parent ctx stays alive for the entire run; only vctx expires.
 	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil, nil)
 
-	require.Error(t, res.Err, "wait must surface the deadline-exceeded error")
-	assert.Contains(t, res.Err.Error(), "waiting for job",
-		"timeout path must report the wait failure verbatim")
+	require.Error(t, res.Err, "wait must surface the validator's own timeout")
+	assert.Contains(t, res.Err.Error(), "the validator did not finish within 100ms")
 	assert.NotEmpty(t, res.JobName,
 		"JobName must be populated so operators can run the kubectl-logs hint")
 

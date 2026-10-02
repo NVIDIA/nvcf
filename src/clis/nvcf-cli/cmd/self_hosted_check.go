@@ -18,6 +18,7 @@ limitations under the License.
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -183,18 +184,20 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if anyValidatorIsTargeted {
 		clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(c.Context())
 	}
-	clusterValidatorWillRun := anyValidatorIsTargeted && clusterValidatorImage != ""
+	// An image whose tag did not resolve is still sized for: --wait resolves
+	// it again on every poll, and the validator runs once it does.
+	clusterValidatorConfigured := anyValidatorIsTargeted && (clusterValidatorImage != "" || unresolvedImage != "")
 
-	outerTimeout := 2 * time.Minute
-	if clusterValidatorWillRun {
-		// A role's share is a minute for the probes that run first, plus the
+	outerTimeout := checkProbeShare
+	if clusterValidatorConfigured {
+		// A role's share is the time for the probes that run first, plus the
 		// longest a validator can take, which includes the wait after its own
 		// timeout for the Job's deadline to end the pod. Sizing on the
 		// validator's timeout alone ran the budget out while that wait was
 		// still in progress, reporting "not every check ran" in place of the
 		// validator's own failure. ModeSingle runs both validators in turn;
 		// ModeSplit runs them in parallel, so one share covers both.
-		perRole := time.Minute + selfhosted.ClusterValidatorRunCeiling()
+		perRole := checkProbeShare + selfhosted.ClusterValidatorRunCeiling()
 		if mode == kubectx.ModeSingle && controlPlaneIsTargeted(mode) && computePlaneIsTargeted(mode) {
 			outerTimeout = 2 * perRole
 		} else {
@@ -248,8 +251,8 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		case skipClusterValidation:
 			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (--skip-cluster-validation)")
 		case unresolvedImage != "":
-			fmt.Fprintf(c.ErrOrStderr(), "note: cluster-validator skipped (could not resolve a tag for %s; "+
-				"pin cluster_validator_image to a tag)\n", unresolvedImage)
+			// Reported as a failed check row instead: a note on stderr is
+			// lost to a consumer of the JSON stream.
 		case clusterValidatorImage == "":
 			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (cluster_validator_image not set in nvcf-cli config)")
 		}
@@ -268,8 +271,10 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// --cluster-validator-registries extras independently of the image config.
 	if !localOnly {
 		extraRegistries := configuredValidatorRegistries()
+		// The configured image when its tag did not resolve: its registry,
+		// and the repository the credentials must reach, are the same.
 		credEntries = selfhosted.EnumerateRegistries(
-			clusterValidatorImage, resolveStackValuesFiles(), extraRegistries,
+			cmp.Or(clusterValidatorImage, unresolvedImage), resolveStackValuesFiles(), extraRegistries,
 		)
 		if len(credEntries) > 0 {
 			registryChecker = newRegistryCredentialCheckerForSelfHosted()
@@ -284,7 +289,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 
 	// A quit key in the dashboard cancels the run the way a signal does.
-	sink, err := selectCheckRenderer(c.ErrOrStderr(), selfHostedWait != "", stop)
+	sink, err := selectCheckRendererFn(c.ErrOrStderr(), selfHostedWait != "", stop)
 	if err != nil {
 		return err
 	}
@@ -295,8 +300,16 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// An interrupted run still ends the stream with a final event, marked
 	// cancelled as up marks its own, so a --json consumer is not left waiting
 	// for one. Emitted on a fresh ctx: the run's ctx is already cancelled.
-	exitInterrupted := func() error {
+	// A check that kept objects in the cluster, the validator whose pod
+	// would not stop, says how to remove them; repeat it on stderr, since an
+	// interrupt may already have closed the dashboard.
+	exitInterrupted := func(results []selfhosted.CheckResult) error {
 		_ = sink.Emit(context.Background(), progress.Final{Cancelled: true})
+		for _, r := range results {
+			if r.Cleanup != "" {
+				fmt.Fprintf(c.ErrOrStderr(), "note: %s left objects in the cluster; %s\n", r.ID, r.Cleanup)
+			}
+		}
 		return &ExitCodeError{Code: 130, Msg: "interrupted"}
 	}
 
@@ -304,8 +317,14 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 	runOnce := func() []selfhosted.CheckResult {
 		var results []selfhosted.CheckResult
+		if unresolvedImage != "" {
+			// Discovery fails transiently too, and each --wait poll is a new
+			// chance to run the validator.
+			clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(ctx)
+		}
 		if checkPre || checkAll || checkControlPlane || checkComputePlane {
-			results = append(results, runPreflightByRole(ctx, cfg, sink, mode, clusterValidatorImage)...)
+			results = append(results,
+				runPreflightByRole(ctx, cfg, sink, mode, clusterValidatorImage, unresolvedImage)...)
 		}
 		// Inject force-fail seam for tests.
 		if os.Getenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL") != "" {
@@ -320,22 +339,23 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		return results
 	}
 
-	// The outer budget ran out during a run: the checks it did not reach are
-	// already error rows, so the verdict is a timeout rather than whatever
-	// the partial set would grade as.
+	// The outer budget stopped a check: one never started, or ran out of time
+	// while it ran. Its row is no finding, so the verdict is a timeout rather
+	// than whatever the partial set would grade as. A budget that ran out
+	// only after every check had its result changes nothing.
 	exitBudgetSpent := func() error {
-		emitCheckFinal(context.Background(), sink, lastResults)
+		emitCheckTimeout(sink, lastResults)
 		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
-		return &ExitCodeError{Code: 5, Msg: "timed out: the check budget ran out before every check ran"}
+		return &ExitCodeError{Code: 5, Msg: "timed out: the check budget ran out before every check finished"}
 	}
 
 	if selfHostedWait == "" {
 		// Single-shot mode.
 		lastResults = runOnce()
 		if interrupted() {
-			return exitInterrupted()
+			return exitInterrupted(lastResults)
 		}
-		if ctx.Err() != nil {
+		if anyCutShort(lastResults) {
 			return exitBudgetSpent()
 		}
 		emitCheckFinal(ctx, sink, lastResults)
@@ -356,19 +376,24 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	// Every exit 5 reports success:false, so a gate on the final event agrees
+	// with the exit code: a run still waiting on a rollout has not passed.
 	waitTimeout := func() error {
-		emitCheckFinal(context.Background(), sink, lastResults)
+		emitCheckTimeout(sink, lastResults)
 		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
-		return &ExitCodeError{Code: 5, Msg: "wait timeout: checks still failing after " + selfHostedWait}
+		if anyFailed(lastResults) {
+			return &ExitCodeError{Code: 5, Msg: "wait timeout: checks still failing after " + selfHostedWait}
+		}
+		return &ExitCodeError{Code: 5, Msg: "wait timeout: a rollout was still in progress after " + selfHostedWait}
 	}
 	for {
 		lastResults = runOnce()
 		if interrupted() {
-			return exitInterrupted()
+			return exitInterrupted(lastResults)
 		}
-		// An iteration that overran the budget ran on a dead context, and its
-		// results are incomplete: never a pass.
-		if ctx.Err() != nil {
+		// An iteration the budget cut short has incomplete results: never a
+		// pass.
+		if anyCutShort(lastResults) {
 			return exitBudgetSpent()
 		}
 		if !anyFailed(lastResults) && !anyWarningToWaitOn(lastResults) {
@@ -392,11 +417,48 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			// continue polling
 		case <-ctx.Done():
 			if interrupted() {
-				return exitInterrupted()
+				return exitInterrupted(lastResults)
 			}
 			return waitTimeout()
 		}
 	}
+}
+
+// validatorStackValues returns the stack values forwarded to the validator, or
+// none unless the install's environment file was read from the stack the
+// command points at: a local --control-plane-stack, or with no stack flag the
+// checkout found above the working directory. helmfile refuses to install
+// without that file, so base.yaml alone does not describe the install. With a
+// remote stack, what a walk up from the working directory finds is another
+// stack. Another stack's Gateways would have the validator judge Gateways the
+// install never created.
+func validatorStackValues() selfhosted.StackValues {
+	dir := localStackDir(selfHostedControlPlaneStack)
+	if selfHostedControlPlaneStack != "" && dir == "" {
+		return selfhosted.StackValues{}
+	}
+	files := resolveStackValuesFiles()
+	env := resolveStackEnv() + ".yaml"
+	for _, f := range files {
+		if filepath.Base(f) == env && (dir == "" || isUnder(dir, f)) {
+			return selfhosted.LoadStackValues(files)
+		}
+	}
+	return selfhosted.StackValues{}
+}
+
+// isUnder reports whether path is inside dir.
+func isUnder(dir, path string) bool {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // resolveStackValuesFiles returns the stack values files preflight reads, in
@@ -618,6 +680,9 @@ func maybeShowClusterValidatorLogs(w io.Writer, results []selfhosted.CheckResult
 	}
 }
 
+// selectCheckRendererFn is a test seam over selectCheckRenderer.
+var selectCheckRendererFn = selectCheckRenderer
+
 func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventSink, error) {
 	if !wait && !selfHostedJSON && !selfHostedPlain && !selfHostedAccessible && checkWriterIsTTY(w) {
 		return progress.NewCheckOneShotRenderer(w, progress.ModelOpts{
@@ -653,7 +718,10 @@ func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventS
 // mode is the already-resolved kubectx.Mode (hoisted to the caller so image
 // resolution and timeout sizing share the same answer). clusterValidatorImage
 // is the already-resolved validator image (empty when not configured).
-func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, mode kubectx.Mode, clusterValidatorImage string) []selfhosted.CheckResult {
+func runPreflightByRole(
+	ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, mode kubectx.Mode,
+	clusterValidatorImage, unresolvedImage string,
+) []selfhosted.CheckResult {
 	// LocalOnly: skip all cluster probes.
 	if cfg.LocalOnly {
 		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
@@ -696,8 +764,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	// The control-plane validator probes the same registries, with the same
 	// criticality, as the local credential check, extras included.
 	registries := cfg.Registries
-	validatorEnv := clusterValidatorJobEnv(
-		selfhosted.LoadStackValues(resolveStackValuesFiles()))
+	validatorEnv := clusterValidatorJobEnv(validatorStackValues())
 	// Validated before the run starts.
 	validatorTolerations, _ := configuredValidatorTolerations()
 	cpValidatorEnv := validatorEnvForRole(validatorEnv, checkControlPlane)
@@ -739,16 +806,17 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		if runControlPlane {
 			eg.Go(func() error {
 				rc := selfhosted.RoleConfig{
-					KubeContext:                 selfHostedControlPlaneContext,
-					ClusterValidator:            cpClusterValidator,
-					ClusterValidatorImage:       clusterValidatorImage,
-					ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
-					ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
-					ClusterValidatorEnv:         cpValidatorEnv,
-					ClusterValidatorTolerations: validatorTolerations,
-					ClusterValidatorRegistries:  registries,
-					StaleNamespaceProber:        staleNSProber,
-					StackDir:                    localStackDir(selfHostedControlPlaneStack),
+					KubeContext:                     selfHostedControlPlaneContext,
+					ClusterValidator:                cpClusterValidator,
+					ClusterValidatorImage:           clusterValidatorImage,
+					ClusterValidatorPullSecret:      checkClusterValidatorPullSecret,
+					ClusterValidatorNoCleanup:       checkClusterValidatorNoCleanup,
+					ClusterValidatorEnv:             cpValidatorEnv,
+					ClusterValidatorTolerations:     validatorTolerations,
+					ClusterValidatorUnresolvedImage: unresolvedImage,
+					ClusterValidatorRegistries:      registries,
+					StaleNamespaceProber:            staleNSProber,
+					StackDir:                        localStackDir(selfHostedControlPlaneStack),
 				}
 				cpResults = selfhosted.RunPreflightForRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
 				return nil
@@ -757,17 +825,18 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		if runComputePlane {
 			eg.Go(func() error {
 				rc := selfhosted.RoleConfig{
-					KubeContext:                 selfHostedComputePlaneContext,
-					SISURL:                      icmsURL,
-					InotifyProber:               inotifyProber,
-					ClusterValidator:            clusterValidator,
-					ClusterValidatorImage:       clusterValidatorImage,
-					ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
-					ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
-					ClusterValidatorEnv:         gpuValidatorEnv,
-					ClusterValidatorTolerations: validatorTolerations,
-					StaleNamespaceProber:        staleNSProber,
-					StackDir:                    localStackDir(selfHostedComputePlaneStack),
+					KubeContext:                     selfHostedComputePlaneContext,
+					SISURL:                          icmsURL,
+					InotifyProber:                   inotifyProber,
+					ClusterValidator:                clusterValidator,
+					ClusterValidatorImage:           clusterValidatorImage,
+					ClusterValidatorPullSecret:      checkClusterValidatorPullSecret,
+					ClusterValidatorNoCleanup:       checkClusterValidatorNoCleanup,
+					ClusterValidatorEnv:             gpuValidatorEnv,
+					ClusterValidatorTolerations:     validatorTolerations,
+					ClusterValidatorUnresolvedImage: unresolvedImage,
+					StaleNamespaceProber:            staleNSProber,
+					StackDir:                        localStackDir(selfHostedComputePlaneStack),
 				}
 				gpuResults = selfhosted.RunPreflightForRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
 				return nil
@@ -807,33 +876,35 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 
 		if runControlPlane {
 			cpRC := selfhosted.RoleConfig{
-				SISURL:                      icmsURL,
-				ClusterValidator:            cpClusterValidator,
-				ClusterValidatorImage:       clusterValidatorImage,
-				ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
-				ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
-				ClusterValidatorEnv:         cpValidatorEnv,
-				ClusterValidatorTolerations: validatorTolerations,
-				ClusterValidatorRegistries:  registries,
-				StaleNamespaceProber:        staleForControlPlane,
-				StackDir:                    localStackDir(selfHostedControlPlaneStack),
-				ExtraStaleNamespaces:        cpExtraNamespaces,
+				SISURL:                          icmsURL,
+				ClusterValidator:                cpClusterValidator,
+				ClusterValidatorImage:           clusterValidatorImage,
+				ClusterValidatorPullSecret:      checkClusterValidatorPullSecret,
+				ClusterValidatorNoCleanup:       checkClusterValidatorNoCleanup,
+				ClusterValidatorEnv:             cpValidatorEnv,
+				ClusterValidatorTolerations:     validatorTolerations,
+				ClusterValidatorUnresolvedImage: unresolvedImage,
+				ClusterValidatorRegistries:      registries,
+				StaleNamespaceProber:            staleForControlPlane,
+				StackDir:                        localStackDir(selfHostedControlPlaneStack),
+				ExtraStaleNamespaces:            cpExtraNamespaces,
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, cpCfg, selfhosted.RoleControlPlane, cpRC, sink)...)
 		}
 		if runComputePlane {
 			gpuRC := selfhosted.RoleConfig{
-				SISURL:                      icmsURL,
-				InotifyProber:               inotifyProber,
-				ClusterValidator:            clusterValidator,
-				ClusterValidatorImage:       clusterValidatorImage,
-				ClusterValidatorPullSecret:  checkClusterValidatorPullSecret,
-				ClusterValidatorNoCleanup:   checkClusterValidatorNoCleanup,
-				ClusterValidatorEnv:         gpuValidatorEnv,
-				ClusterValidatorTolerations: validatorTolerations,
-				StaleNamespaceProber:        staleForComputePlane,
-				StackDir:                    localStackDir(selfHostedComputePlaneStack),
+				SISURL:                          icmsURL,
+				InotifyProber:                   inotifyProber,
+				ClusterValidator:                clusterValidator,
+				ClusterValidatorImage:           clusterValidatorImage,
+				ClusterValidatorPullSecret:      checkClusterValidatorPullSecret,
+				ClusterValidatorNoCleanup:       checkClusterValidatorNoCleanup,
+				ClusterValidatorEnv:             gpuValidatorEnv,
+				ClusterValidatorTolerations:     validatorTolerations,
+				ClusterValidatorUnresolvedImage: unresolvedImage,
+				StaleNamespaceProber:            staleForComputePlane,
+				StackDir:                        localStackDir(selfHostedComputePlaneStack),
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
@@ -971,6 +1042,29 @@ func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []self
 	})
 }
 
+// emitCheckTimeout emits the final event of a run that ended in a timeout,
+// exit 5. Nothing passed the gate, whatever the rows say, so success is false.
+func emitCheckTimeout(sink progress.EventSink, results []selfhosted.CheckResult) {
+	passed, failed, _ := selfhosted.CountResults(results)
+	_ = sink.Emit(context.Background(), progress.Final{
+		Success:     false,
+		Verdict:     "timeout",
+		TotalChecks: len(results),
+		PassedCount: passed,
+		FailedCount: failed,
+	})
+}
+
+// anyCutShort reports a check the run's budget stopped before it finished.
+func anyCutShort(results []selfhosted.CheckResult) bool {
+	for _, r := range results {
+		if r.CutShort {
+			return true
+		}
+	}
+	return false
+}
+
 func isBlockingFailure(r selfhosted.CheckResult) bool {
 	return r.IsBlockingFailure()
 }
@@ -985,6 +1079,11 @@ var checkPreflightTools = selfHostedPreflightTools
 
 // checkBudget is a test seam over the command's outer time budget.
 var checkBudget = func(d time.Duration) time.Duration { return d }
+
+// checkProbeShare is the budget for the checks that run before a validator,
+// and the whole budget of a run without one. The slowest of them, the node
+// inotify probe, is bounded inside it.
+const checkProbeShare = 2 * time.Minute
 
 // anyWarningToWaitOn reports a warning expected to clear by itself, such as a
 // rollout the validator saw in progress. --wait keeps polling on it; a single
