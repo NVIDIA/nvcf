@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "objectstore",
+    srcs = ["objectstore.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/objectstore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/config",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":objectstore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "objectstore_test",
+    srcs = ["objectstore_test.go"],
+    embed = [":objectstore"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/config",
+    ],
+)

@@ -165,7 +165,7 @@ for load-balancer health checks.
 
 Per-request log lines on `/sign` look like:
 
-```
+```text
 >>> signing using kid 'signing-kid' for client 'caller-client-id' and aud '[...]' with jti '...' at '...'
 ```
 

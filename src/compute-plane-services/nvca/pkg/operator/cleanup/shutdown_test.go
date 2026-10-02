@@ -20,6 +20,7 @@ package cleanup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,12 +38,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	fakenvcaop "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
 )
 
-// newTestDynamicClient creates a fake dynamic client with ICMSRequest list kind registered
+// newTestDynamicClient creates a fake dynamic client with NVCA list kinds registered.
 func newTestDynamicClient() *fakedynamic.FakeDynamicClient {
 	scheme := runtime.NewScheme()
 	icmsGVR := schema.GroupVersionResource{
@@ -52,7 +54,8 @@ func newTestDynamicClient() *fakedynamic.FakeDynamicClient {
 	}
 	return fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			icmsGVR: "ICMSRequestList",
+			icmsGVR:                  "ICMSRequestList",
+			testModelCacheBindingGVR: "ModelCacheBindingList",
 		})
 }
 
@@ -275,6 +278,129 @@ func TestRunShutdownCleanup_RemovesManagedResources(t *testing.T) {
 	crb, err := k8sClient.RbacV1().ClusterRoleBindings().Get(ctx, "test-operator", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.NotContains(t, crb.Finalizers, SentinelFinalizer)
+}
+
+func TestRunShutdownCleanup_StopsBeforeFinalizerRemovalWhenBindingCleanupFails(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		verb       string
+		finalizers []interface{}
+	}{
+		{
+			name:       "binding finalizer update fails",
+			verb:       "update",
+			finalizers: []interface{}{"nvca.nvcf.nvidia.io/model-cache-binding-finalizer"},
+		},
+		{
+			name: "binding delete fails",
+			verb: "delete",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			injected := errors.New("injected binding cleanup failure")
+			sentinel := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+				Name:              ShutdownSentinelConfigMapName,
+				Namespace:         "test-namespace",
+				Finalizers:        []string{SentinelFinalizer},
+				DeletionTimestamp: &metav1.Time{Time: time.Now()},
+			}}
+			clusterRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+				Name: "test-operator", Finalizers: []string{SentinelFinalizer},
+			}}
+			clusterRoleBinding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+				Name: "test-operator", Finalizers: []string{SentinelFinalizer},
+			}}
+			backend := &nvidiaiov1.NVCFBackend{ObjectMeta: metav1.ObjectMeta{
+				Name: "test-backend", Namespace: "test-namespace", Finalizers: []string{NVCAOperatorFinalizer},
+			}}
+			binding := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "nvca.nvcf.nvidia.io/v2beta1",
+				"kind":       "ModelCacheBinding",
+				"metadata": map[string]interface{}{
+					"name":       "model-cache-test",
+					"namespace":  DefaultModelCacheInitNamespace,
+					"finalizers": tt.finalizers,
+				},
+			}}
+
+			k8sClient := fake.NewSimpleClientset(
+				sentinel,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCASystemNamespace}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCARequestsNamespace}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultModelCacheInitNamespace}},
+				clusterRole,
+				clusterRoleBinding,
+			)
+			k8sClient.Fake.PrependReactor(
+				"delete", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+					deleteAction, ok := action.(k8stesting.DeleteAction)
+					if ok && deleteAction.GetName() == ShutdownSentinelConfigMapName {
+						return true, nil, nil
+					}
+					return false, nil, nil
+				},
+			)
+			nvcaClient := fakenvcaop.NewSimpleClientset(backend)
+			nvcaClient.Fake.PrependReactor(
+				"delete", "nvcfbackends", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, nil
+				},
+			)
+			dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+				runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{
+					testICMSRequestGVR:       "ICMSRequestList",
+					testModelCacheBindingGVR: "ModelCacheBindingList",
+				},
+				binding,
+			)
+			dynamicClient.PrependReactor(
+				tt.verb,
+				"modelcachebindings",
+				func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, injected
+				},
+			)
+
+			resp := RunShutdownCleanup(ctx, ShutdownHandlerOptions{
+				K8sClient:              k8sClient,
+				NVCAClient:             nvcaClient,
+				DynamicClient:          dynamicClient,
+				Namespace:              "test-namespace",
+				ClusterRoleName:        clusterRole.Name,
+				ClusterRoleBindingName: clusterRoleBinding.Name,
+				SetGracefulShutdown:    func(bool) {},
+			})
+
+			require.True(t, resp.Cleanup)
+			assert.Equal(t, "failed to cleanup NVCFBackend resources", resp.Message)
+			assert.Contains(t, resp.Error, injected.Error())
+
+			storedBackend, err := nvcaClient.NvcfV1().NVCFBackends(backend.Namespace).
+				Get(ctx, backend.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Contains(t, storedBackend.Finalizers, NVCAOperatorFinalizer)
+			storedSentinel, err := k8sClient.CoreV1().ConfigMaps(sentinel.Namespace).
+				Get(ctx, sentinel.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Contains(t, storedSentinel.Finalizers, SentinelFinalizer)
+			storedRole, err := k8sClient.RbacV1().ClusterRoles().Get(ctx, clusterRole.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Contains(t, storedRole.Finalizers, SentinelFinalizer)
+			storedRoleBinding, err := k8sClient.RbacV1().ClusterRoleBindings().Get(
+				ctx, clusterRoleBinding.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Contains(t, storedRoleBinding.Finalizers, SentinelFinalizer)
+			_, err = dynamicClient.Resource(testModelCacheBindingGVR).
+				Namespace(DefaultModelCacheInitNamespace).
+				Get(ctx, binding.GetName(), metav1.GetOptions{})
+			require.NoError(t, err)
+			_, err = k8sClient.CoreV1().Namespaces().Get(
+				ctx, DefaultModelCacheInitNamespace, metav1.GetOptions{})
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestNewShutdownHandler_DefaultTimeouts(t *testing.T) {
@@ -594,7 +720,8 @@ func TestNewShutdownHandler_WithV1ICMSRequests(t *testing.T) {
 	}
 	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			icmsGVR: "ICMSRequestList",
+			icmsGVR:                  "ICMSRequestList",
+			testModelCacheBindingGVR: "ModelCacheBindingList",
 		}, icmsRequest)
 
 	opts := ShutdownHandlerOptions{
@@ -683,7 +810,10 @@ func TestRunShutdownCleanup_StripsICMSRequestFinalizersAfterDrain(t *testing.T) 
 		},
 	}
 	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
-		map[schema.GroupVersionResource]string{icmsGVR: "ICMSRequestList"}, icmsRequest)
+		map[schema.GroupVersionResource]string{
+			icmsGVR:                  "ICMSRequestList",
+			testModelCacheBindingGVR: "ModelCacheBindingList",
+		}, icmsRequest)
 
 	// A drain timeout shorter than the fixed 5s poll interval in drainWorkloads
 	// forces the "timeout reached, proceeding with forced cleanup" branch on

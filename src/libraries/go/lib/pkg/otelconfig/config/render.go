@@ -30,6 +30,15 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 )
 
+// This renderer deliberately does not add the empty-value filter that the
+// byoo-otel-collector renderer applies. That filter uses an OTTL lambda, which
+// needs the ottl.functions.enableLambda feature gate and collector v0.155.0 or
+// newer. This is a shared library: the config it renders is consumed by sidecar
+// images chosen independently of it, including versions well below v0.155.0,
+// and nothing on that path passes the gate. Emitting the lambda here would fail
+// config parsing and leave those sidecars unable to start, which is worse than
+// the ingest conflicts the filter avoids.
+
 type Telemetry struct {
 	Protocol Protocol `json:"protocol"`
 	Provider Provider `json:"provider"`

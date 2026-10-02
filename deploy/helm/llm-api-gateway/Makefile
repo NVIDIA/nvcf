@@ -31,7 +31,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate test check-request-router-render clean package push-oci
+.PHONY: install uninstall status lint template validate test check-request-router-render check-default-ownership clean package push-oci
 
 install:
 ifndef values
@@ -69,7 +69,7 @@ template:
 validate: template
 	kubeconform -strict -summary -output pretty -kubernetes-version 1.31.5 bin/manifest.yaml
 
-test: check-request-router-render
+test: check-request-router-render check-default-ownership
 
 check-request-router-render:
 	@router_manifest="$$(helm template llm-request-router $(request_router_helm_dir) --namespace $(namespace) --set llmRequestRouter.image.repository=test)"; \
@@ -79,6 +79,9 @@ check-request-router-render:
 	expected_url="http://$$request_router_name.$$request_router_namespace.svc.cluster.local:$$request_router_port"; \
 	actual_url="$$(helm template $(release) $(helm_dir) --namespace $(namespace) --values $(values) --set llmApiGateway.image.repository=test | yq -r 'select(.kind == "ConfigMap" and .metadata.name == "$(release)") | .data.STARGATE_URL')"; \
 	test "$$actual_url" = "$$expected_url"
+
+check-default-ownership:
+	@bash ./scripts/test-default-ownership.sh
 
 clean:
 	rm -rf ./packaged-charts bin

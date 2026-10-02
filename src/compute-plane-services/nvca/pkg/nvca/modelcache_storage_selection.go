@@ -21,6 +21,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
+	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/sirupsen/logrus"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
@@ -75,6 +80,9 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 		var err error
 		resolved, err = nvcastorage.ResolveModelCacheStorageWithClientset(
 			ctx, c.clients.K8s, c.systemNamespace, workflow)
+		if err == nil && resolved.CatalogBuiltin {
+			c.noteBuiltinCatalog(ctx, req, workflow)
+		}
 		switch {
 		case errors.Is(err, nvcastorage.ErrModelCacheStorageClassNotFound):
 			if workflow == nvcastorage.ModelCacheWorkflowHelm {
@@ -86,10 +94,12 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 			if workflow == nvcastorage.ModelCacheWorkflowHelm {
 				mode = nvcastorage.ModelCacheSelectionEphemeral
 			}
-		case resolved.Transition == nvcastorage.ModelCacheTransitionROXReadOnly:
-			mode = nvcastorage.ModelCacheSelectionDurable
-		case resolved.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly &&
-			workflow == nvcastorage.ModelCacheWorkflowRegular:
+		case resolved.Transition == nvcastorage.ModelCacheTransitionROXReadOnly,
+			resolved.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly:
+			// Both shapes are durable for both workflows. Helm routes the
+			// ReadWriteMany shape to the shared-filesystem backend through
+			// HelmCacheBackendFromSelection; the regular workflow serves it from
+			// one shared claim per cache handle.
 			mode = nvcastorage.ModelCacheSelectionDurable
 		default:
 			return fmt.Errorf("unsupported model cache transition %q", resolved.Transition)
@@ -119,4 +129,21 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 	}
 	req.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey] = payload
 	return nil
+}
+
+// noteBuiltinCatalog records that a request was resolved against the catalog
+// compiled into NVCA because the nvcf-storage-capabilities ConfigMap is absent.
+// The selection is the one a converged install would make; the warning and the
+// counter exist so the chart rollout gap is visible.
+func (c *BackendK8sCache) noteBuiltinCatalog(
+	ctx context.Context, req *nvcav2beta1.ICMSRequest, workflow nvcastorage.ModelCacheWorkflow,
+) {
+	logging.NewICMSRequestFieldLogger(req, core.GetLogger(ctx)).WithFields(logrus.Fields{
+		"configMap": c.systemNamespace + "/" + nvcastorage.StorageCapabilityConfigMapName,
+		"workflow":  workflow,
+	}).Warn("storage capability catalog ConfigMap is missing, using the catalog built into NVCA")
+	if m := nvcametrics.FromContext(ctx); m != nil {
+		// The backend label is empty: the selection has not chosen a backend yet.
+		m.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonCatalogMissing, "")
+	}
 }

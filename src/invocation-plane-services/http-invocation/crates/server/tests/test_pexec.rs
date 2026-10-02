@@ -31,11 +31,12 @@ use mocks::{
         Worker, WorkerProperties,
     },
     rate_limit_mock, API_KEY, FUNCTION_ID, FUNCTION_ID_2_RATELIMIT_SYNC,
-    FUNCTION_ID_3_RATELIMIT_ASYNC, INSTANCE_ID, VERSION_ID_1, VERSION_ID_3, VERSION_ID_4,
+    FUNCTION_ID_3_RATELIMIT_ASYNC, INSTANCE_ID, NCA_ID, OWNER_NCA_ID, VERSION_ID_1, VERSION_ID_3,
+    VERSION_ID_4,
 };
 use nvcf_invocation_service::{
     app::app,
-    rate_limit::rate_limit_api::{RateLimitResponse, RateLimitResult},
+    rate_limit::rate_limit_api::{RateLimitRequest, RateLimitResponse, RateLimitResult},
 };
 use problem_details::ProblemDetails;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -615,16 +616,32 @@ async fn test_rate_limited_sync_check() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_rate_limit_request_carries_client_auth_subject() -> anyhow::Result<()> {
+async fn test_rate_limit_request_carries_client_identity() -> anyhow::Result<()> {
+    // Sync and async checks both build the RateLimitRequest; cover each path.
+    for (function_id, version_id) in [
+        (FUNCTION_ID_2_RATELIMIT_SYNC, VERSION_ID_3),
+        (FUNCTION_ID_3_RATELIMIT_ASYNC, VERSION_ID_4),
+    ] {
+        let captured = capture_rate_limit_request(function_id, version_id).await?;
+        assert_eq!(captured.client_auth_subject, "test-subject");
+        assert_eq!(captured.nca_id, NCA_ID);
+        assert_eq!(captured.owner_nca_id, OWNER_NCA_ID);
+    }
+    Ok(())
+}
+
+async fn capture_rate_limit_request(
+    function_id: uuid::Uuid,
+    function_version_id: uuid::Uuid,
+) -> anyhow::Result<RateLimitRequest> {
     let (_localstack, _nats, _mock_nvcf_api, mut config) = fixtures().await;
 
-    let captured_subject = Arc::new(Mutex::new(None::<String>));
+    let captured_request = Arc::new(Mutex::new(None::<RateLimitRequest>));
     let mock_rate_limit = rate_limit_mock::RateLimitMock {
         callback: {
-            let captured_subject = captured_subject.clone();
+            let captured_request = captured_request.clone();
             Box::new(move |req| {
-                *captured_subject.lock().expect("lock poisoned") =
-                    Some(req.client_auth_subject.clone());
+                *captured_request.lock().expect("lock poisoned") = Some(req);
                 Ok(Response::new(RateLimitResponse {
                     result: RateLimitResult::Allow.into(),
                 }))
@@ -642,8 +659,8 @@ async fn test_rate_limit_request_carries_client_auth_subject() -> anyhow::Result
     let _worker = Worker::new(
         config.nats_properties.clone(),
         WorkerProperties {
-            function_id: FUNCTION_ID_2_RATELIMIT_SYNC,
-            function_version_id: VERSION_ID_3,
+            function_id,
+            function_version_id,
             instance_id: INSTANCE_ID.into(),
         },
         Box::new(DefaultWorkHandler {}),
@@ -655,24 +672,24 @@ async fn test_rate_limit_request_carries_client_auth_subject() -> anyhow::Result
     let request = axum::http::Request::builder()
         .method(Method::POST)
         .uri(format!(
-            "/v2/nvcf/pexec/functions/{FUNCTION_ID_2_RATELIMIT_SYNC}/versions/{VERSION_ID_3}"
+            "/v2/nvcf/pexec/functions/{function_id}/versions/{function_version_id}"
         ))
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
         .body(Body::from("a body"))?;
     let response = app.call(request).await?;
     assert_eq!(response.status(), StatusCode::OK);
 
-    // The nvcf api mock returns "test-subject" as client_auth_subject; the
-    // invocation service must forward that into the RateLimitRequest so the
-    // ratelimiter can apply per-user (caller-tier) limits when configured.
-    let captured = captured_subject
-        .lock()
-        .expect("lock poisoned")
-        .clone()
-        .expect("ratelimiter mock should have received a request");
-    assert_eq!(captured, "test-subject");
-
-    Ok(())
+    // The async path checks in a background task, so the request may land after the response.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(req) = captured_request.lock().expect("lock poisoned").take() {
+                return req;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("ratelimiter mock should have received a request"))
 }
 
 #[tokio::test]

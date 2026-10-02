@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+SCHEMA_DONE_MARKER=/opt/cassandra/.schema-init-done
+rm -f "$SCHEMA_DONE_MARKER"
 cd docker-entrypoint-initdb.d || exit 0
 while ! cqlsh -e 'describe cluster' -u cassandra -p cassandra >/dev/null 2>&1; do sleep 6; done
 echo "Cassandra cluster ready: executing cql scripts found in docker-entrypoint-initdb.d"
@@ -21,4 +23,5 @@ for f in $(find . -type f -name "*.cql" -print | sort); do
   cqlsh -f "$f" -u cassandra -p cassandra
   echo "$f executed"
 done
+touch "$SCHEMA_DONE_MARKER"
 echo "Cassandra init scripts executed"

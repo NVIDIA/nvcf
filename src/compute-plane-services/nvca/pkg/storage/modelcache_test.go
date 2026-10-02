@@ -1000,7 +1000,7 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 			}
 			rvBefore := stored.ResourceVersion
 
-			if err := r.reconcileSecondaryPVMountOptions(context.Background(), pv); err != nil {
+			if err := r.reconcileSecondaryPVMountOptions(context.Background(), nil, pv); err != nil {
 				t.Fatalf("reconcileSecondaryPVMountOptions() error = %v", err)
 			}
 
@@ -1297,7 +1297,14 @@ func newModelCacheICMSSpec(cacheHandle string) nvcav2beta1.ICMSRequestSpec {
 // primary/secondary PV), then a per-namespace read-only PVC on the shared class
 // is created and the request becomes Ready. The CSI probe is pre-seeded as ROX
 // so the path does not attempt a live probe under envtest.
-func TestReconcile_ModelCacheSharedFS(t *testing.T) {
+// startModelCacheController boots envtest and the model cache controller with
+// the given agent config, returning a context, the manager client, and the
+// manager error channel. Several model-cache envtests run in one process, so
+// controller name validation is skipped.
+func startModelCacheController(
+	t *testing.T, agentCfg nvcaconfig.Config,
+) (context.Context, client.Client, <-chan error, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -1311,14 +1318,12 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		BaseContext:             func() context.Context { return ctx },
 		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
 		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
-		// Two model-cache envtests run in one process; the controller name
-		// "modelcache" is otherwise globally unique per controller-runtime.
-		Controller: ctrlconfig.Controller{SkipNameValidation: newBool(true)},
+		Controller:              ctrlconfig.Controller{SkipNameValidation: newBool(true)},
 	})
 	require.NoError(t, err)
 
 	defaultTimeConfig := (&k8sutil.TimeConfig{}).Complete()
-	err = BuildController(nvcaconfig.Config{}, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
+	err = BuildController(agentCfg, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
 	require.NoError(t, err)
 
 	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
@@ -1328,22 +1333,23 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 	mgr.GetCache().WaitForCacheSync(cctx)
 	ccancel()
 
-	c := mgr.GetClient()
+	return ctx, mgr.GetClient(), mgrErrCh, cancel
+}
 
+// createSharedFSModelCacheRequest creates the namespaces, ICMSRequest, and a
+// StorageRequest already routed to the shared filesystem backend for
+// cacheHandle, and returns the workload namespace.
+func createSharedFSModelCacheRequest(
+	t *testing.T, ctx context.Context, c client.Client, cacheHandle, workloadNSName string,
+) (*corev1.Namespace, *nvcav2beta1.ICMSRequest, *nvcav1new.StorageRequest) {
+	t.Helper()
 	srNamespace := &corev1.Namespace{}
 	srNamespace.Name = types.DefaultICMSRequestNamespace
 	require.NoError(t, c.Create(ctx, srNamespace))
 	require.NoError(t, c.Create(ctx, NewModelCacheInitNamespace()))
 
-	// The shared class exists (operator- or Samba-provided).
-	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
-		ObjectMeta:  metav1.ObjectMeta{Name: HelmCacheSharedStorageClassName},
-		Provisioner: SMBCSIDriverName,
-	}))
-
-	cacheHandle := "sharedfshandle"
 	workloadNS := &corev1.Namespace{}
-	workloadNS.Name = "sr-sharedfs"
+	workloadNS.Name = workloadNSName
 	require.NoError(t, c.Create(ctx, workloadNS))
 
 	sr := &nvcav2beta1.ICMSRequest{}
@@ -1361,6 +1367,46 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		Backend:     string(HelmCacheBackendSharedFS),
 	}
 	require.NoError(t, c.Create(ctx, st))
+	return workloadNS, sr, st
+}
+
+// TestReconcile_ModelCacheSharedFSWriterHonorsClassOverride pins that the shared
+// filesystem writer claim takes the configured model cache class. The old code
+// hard-coded nvcf-miniservice-sc, so no configuration could reach the writer
+// and this assertion cannot pass against it.
+func TestReconcile_ModelCacheSharedFSWriterHonorsClassOverride(t *testing.T) {
+	const override = "custom-block-sc"
+	ctx, c, _, _ := startModelCacheController(t, nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{ModelCache: nvcaconfig.ModelCacheConfig{StorageClassName: override}},
+	})
+	cacheHandle := "sharedfsoverride"
+	_, _, _ = createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs-override")
+
+	rwPVC := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NotNil(t, rwPVC.Spec.StorageClassName)
+	assert.Equal(t, override, *rwPVC.Spec.StorageClassName,
+		"the shared-FS writer must follow the configured model cache class")
+	assert.NotEqual(t, HelmCacheSharedStorageClassName, *rwPVC.Spec.StorageClassName,
+		"the detection class must never hold cache data")
+}
+
+func TestReconcile_ModelCacheSharedFS(t *testing.T) {
+	ctx, c, mgrErrCh, cancel := startModelCacheController(t, nvcaconfig.Config{})
+
+	// The shared class exists (operator- or Samba-provided).
+	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: HelmCacheSharedStorageClassName},
+		Provisioner: SMBCSIDriverName,
+	}))
+
+	cacheHandle := "sharedfshandle"
+	workloadNS, sr, st := createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs")
+	srNamespace := &corev1.Namespace{}
+	srNamespace.Name = types.DefaultICMSRequestNamespace
 
 	// The writer job is created on the shared backend.
 	initJob := &batchv1.Job{}
@@ -1369,11 +1415,14 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		assert.NoError(ct, err)
 	}, 5*time.Second, 50*time.Millisecond)
 
-	// The writer RW PVC is on the shared class, not an NVMesh class.
+	// The writer RW PVC lands on the model cache class like every other
+	// backend. nvcf-miniservice-sc only selected the path; provisioning on it
+	// would strand the cache on a cluster that has only the model cache class.
 	rwPVC := &corev1.PersistentVolumeClaim{}
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC))
 	if assert.NotNil(t, rwPVC.Spec.StorageClassName) {
-		assert.Equal(t, HelmCacheSharedStorageClassName, *rwPVC.Spec.StorageClassName)
+		assert.Equal(t, DefaultModelCacheStorageClassName, *rwPVC.Spec.StorageClassName,
+			"the shared-FS writer must use the model cache class, not the detection class")
 	}
 
 	// Drive the writer job to "started" so the request moves to InitRunning.
@@ -1406,7 +1455,7 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
 			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
-			StorageClassName:              HelmCacheSharedStorageClassName,
+			StorageClassName:              DefaultModelCacheStorageClassName,
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
 					Driver:       SMBCSIDriverName,
@@ -2119,4 +2168,223 @@ func TestNewSharedFSReaderPVResolvesMountOptions(t *testing.T) {
 		"the NVMesh handle must be rewritten for the reader namespace")
 	assert.True(t, roPV.Spec.CSI.ReadOnly,
 		"the CSI source must be read-only: access modes are not enforced by the kubelet")
+}
+
+// readerSelectionAnnotation marshals a durable selection whose reader mount
+// options come from the catalog, the shape a StorageRequest carries once the
+// agent has resolved its class against the catalog.
+func readerSelectionAnnotation(t *testing.T, provisioner string, transition string, mountOptions []string) string {
+	t.Helper()
+	selection := &PersistedModelCacheStorageSelection{
+		Version:              ModelCacheStorageSelectionVersion,
+		Workflow:             ModelCacheWorkflowRegular,
+		Mode:                 ModelCacheSelectionDurable,
+		StorageClassName:     DefaultModelCacheStorageClassName,
+		StorageClassUID:      "uid-1",
+		StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+		ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+		Provider:             "test-provider",
+		Provisioner:          provisioner,
+		Transition:           transition,
+		RequiredAccessModes:  requiredAccessModesForTransition(transition),
+		RequiredMountOptions: mountOptions,
+	}
+	raw, err := selection.Marshal()
+	require.NoError(t, err)
+	return raw
+}
+
+func storageRequestWithSelection(raw string) *nvcav1new.StorageRequest {
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req", Type: nvcav1new.ModelCacheRequest},
+	}
+	if raw != "" {
+		st.Annotations = map[string]string{ModelCacheStorageSelectionAnnotationKey: raw}
+	}
+	return st
+}
+
+func TestMergeReaderMountOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		required    []string
+		configured  []string
+		want        []string
+		wantDropped []string
+	}{
+		{
+			name:     "required only",
+			required: []string{"ro", "norecovery"},
+			want:     []string{"ro", "norecovery"},
+		},
+		{
+			name:       "configured only when nothing is required",
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+		{
+			name:       "configured extras follow the required set without duplicates",
+			required:   []string{"ro", "nouuid"},
+			configured: []string{"nouuid", "noatime"},
+			want:       []string{"ro", "nouuid", "noatime"},
+		},
+		{
+			name:        "configured options negating a required one are dropped",
+			required:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"rw", "recovery", "uuid", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+			wantDropped: []string{"rw", "recovery", "uuid"},
+		},
+		{
+			name: "empty in, empty out",
+			want: []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, dropped := MergeReaderMountOptions(tt.required, tt.configured)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantDropped, dropped)
+		})
+	}
+}
+
+func TestResolveReaderMountOptions(t *testing.T) {
+	wekaProvisioner := "csi.weka.io"
+	tests := []struct {
+		name       string
+		selection  string
+		cmData     map[string]string
+		configured []string
+		want       []string
+	}{
+		{
+			name:      "durable selection supplies the required options",
+			selection: readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionROXReadOnly, []string{"ro"}),
+			cmData:    nvmeshMountOptionDefaults,
+			want:      []string{"ro"},
+		},
+		{
+			name: "durable selection wins over a ConfigMap entry for the same provisioner",
+			selection: readerSelectionAnnotation(t, NVMeshStorageClassProvisioner, ModelCacheTransitionROXReadOnly,
+				[]string{"ro", "nouuid"}),
+			cmData: nvmeshMountOptionDefaults,
+			want:   []string{"ro", "nouuid"},
+		},
+		{
+			name:       "configured extras are appended after the selection's options",
+			selection:  readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionROXReadOnly, []string{"ro"}),
+			configured: []string{"noatime"},
+			want:       []string{"ro", "noatime"},
+		},
+		{
+			name:       "configured rw cannot negate the selection's ro",
+			selection:  readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionROXReadOnly, []string{"ro"}),
+			configured: []string{"rw", "noatime"},
+			want:       []string{"ro", "noatime"},
+		},
+		{
+			name:       "durable selection without reader options keeps only the configured ones",
+			selection:  readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionRWXReadOnly, nil),
+			cmData:     nvmeshMountOptionDefaults,
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+		{
+			name:   "request without a selection uses the ConfigMap defaults",
+			cmData: nvmeshMountOptionDefaults,
+			want:   []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name: "ephemeral selection uses the ConfigMap defaults",
+			selection: func() string {
+				raw, err := (&PersistedModelCacheStorageSelection{
+					Version:  ModelCacheStorageSelectionVersion,
+					Workflow: ModelCacheWorkflowHelm,
+					Mode:     ModelCacheSelectionEphemeral,
+				}).Marshal()
+				require.NoError(t, err)
+				return raw
+			}(),
+			cmData: nvmeshMountOptionDefaults,
+			want:   []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name:      "invalid selection falls back to the ConfigMap defaults",
+			selection: "{",
+			cmData:    nvmeshMountOptionDefaults,
+			want:      []string{"ro", "norecovery", "nouuid"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The model cache class is NVMesh so the ConfigMap path has defaults to
+			// offer; the selection must be what stops them from applying.
+			objs := newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, tt.cmData)
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
+			r := newMountOptionsReconciler(t, c, tt.configured)
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+
+			got := r.resolveReaderMountOptions(context.Background(), storageRequestWithSelection(tt.selection), pv)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestReconcileSecondaryPVMountOptions_SelectionDriven(t *testing.T) {
+	// The PV was created from the ConfigMap defaults; the request's selection
+	// now records a smaller catalog set, so the PV must follow the selection.
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"},
+		Spec: corev1.PersistentVolumeSpec{
+			MountOptions: []string{"ro", "norecovery", "nouuid"},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: NVMeshStorageClassProvisioner, VolumeHandle: "handle"},
+			},
+		},
+	}
+	objs := append(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults), pv)
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
+	r := newMountOptionsReconciler(t, c, []string{"noatime"})
+	st := storageRequestWithSelection(readerSelectionAnnotation(t, NVMeshStorageClassProvisioner,
+		ModelCacheTransitionROXReadOnly, []string{"ro", "nouuid"}))
+
+	require.NoError(t, r.reconcileSecondaryPVMountOptions(context.Background(), st, pv))
+
+	got := &corev1.PersistentVolume{}
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, got))
+	assert.Equal(t, []string{"ro", "nouuid", "noatime"}, got.Spec.MountOptions)
+}
+
+func TestNewSharedFSReaderPVTakesMountOptionsFromSelection(t *testing.T) {
+	wekaProvisioner := "csi.weka.io"
+	// No ConfigMap entry exists for this provisioner, so without the selection
+	// the reader would get only the configured options.
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(wekaProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, []string{"rw", "noatime"})
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:     corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			MountOptions: []string{"rw"},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: wekaProvisioner, VolumeHandle: "weka/v2/csivol-pvc-8e38c07d"},
+			},
+		},
+	}
+	st := storageRequestWithSelection(readerSelectionAnnotation(t, wekaProvisioner,
+		ModelCacheTransitionROXReadOnly, []string{"ro"}))
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ro", "noatime"}, roPV.Spec.MountOptions,
+		"the catalog's reader options are required and the configured rw must not negate them")
+	assert.True(t, roPV.Spec.CSI.ReadOnly)
 }

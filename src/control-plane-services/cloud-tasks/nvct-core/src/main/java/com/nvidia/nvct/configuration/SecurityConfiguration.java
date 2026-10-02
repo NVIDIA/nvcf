@@ -61,6 +61,7 @@ public class SecurityConfiguration {
                                 // and liveness probes, metrics, prometheus etc. are accessible
                                 // via management port.
                                 .requestMatchers("/actuator/**").permitAll()
+                                .requestMatchers("/info").permitAll()
                                 .anyRequest().authenticated());
         return http.build();
     }

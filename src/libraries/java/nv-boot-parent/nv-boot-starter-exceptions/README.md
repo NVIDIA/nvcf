@@ -1,6 +1,6 @@
 # NV Boot Starter Exceptions
 
-Exception classes with RFC 7807 Problem Details support. Extends Spring's 
+Exception classes with RFC 7807 Problem Details support. Extends Spring's
 `ErrorResponseException` for consistent error handling across NV applications.
 
 ## Adding as a Dependency

@@ -354,6 +354,7 @@ public class TestConstants {
     public static final String SCOPE_INVOKE_FUNCTION = "invoke_function";
     public static final String SCOPE_QUEUE_DETAILS = "queue_details";
     public static final String SCOPE_ACCOUNT_SETUP = "account_setup";
+    public static final String SCOPE_LIST_ACCOUNTS = "list_accounts";
     public static final String SCOPE_LIST_CLUSTER_GROUPS = "list_cluster_groups";
     public static final Duration HEALTH_TIMEOUT = Duration.ofSeconds(10);
     public static final int EXPECTED_STATUS_CODE = 200;

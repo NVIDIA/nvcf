@@ -35,7 +35,7 @@ Standard Python machinery (CPython's `site.py`) imports `sitecustomize` exactly 
 
 ### Layout in `/nvsnap-lib` after init containers complete
 
-```
+```text
 /nvsnap-lib/
 ├── sitecustomize/
 │   └── sitecustomize.py             # ~15 lines, ships in nvsnap-agent image
@@ -112,7 +112,7 @@ If a workload already sets `PYTHONPATH`, the webhook (or manifest) prepends ours
 
 With sitecustomize doing all runtime wiring, the webhook stays trivial:
 
-```
+```text
 on Pod CREATE with annotation nvsnap.io/quiesce-enabled=true:
     add volume:       nvsnap-lib (emptyDir)
     add initContainers: get-uvloop, get-libuv, get-libzmq, get-criu

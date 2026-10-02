@@ -164,6 +164,13 @@ processors:
     attributes:
       - key: service.instance.id
         action: delete
+      # target_info is built from resource attributes only, so it never receives
+      # the datapoint labels metricstransform adds. Without a per-instance
+      # attribute every collector federating the same upstream on a node emits an
+      # identical target_info series and the writes conflict on ingest.
+      - key: instance_id
+        action: insert
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
   attributes/add-metadata:
     actions:
       - action: insert

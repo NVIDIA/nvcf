@@ -159,6 +159,7 @@ func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		dropEmptyLabelsProcessorID,
 		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
@@ -751,7 +752,7 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 		"fail_closed":         samplingFailClosed,
 	}, otelConfig.Processors["probabilistic_sampler/traces"])
 	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
-	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
+	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", dropEmptyLabelsProcessorID, "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/traces", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }
 
@@ -878,6 +879,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		"filter/metrics",
 		"resource",
+		dropEmptyLabelsProcessorID,
 		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		"batch",
@@ -903,6 +905,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		dropEmptyLabelsProcessorID,
 		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
@@ -1049,5 +1052,141 @@ func Test_exporterMetrics_Datadog_ProtocolAgnostic(t *testing.T) {
 			sumsBlock := metricsBlock["sums"].(map[string]interface{})
 			assert.Equal(t, "keep", sumsBlock["initial_cumulative_monotonic_value"])
 		})
+	}
+}
+
+// TestMetricsPipelineDropsEmptyResourceAttrs pins the invariant that motivated
+// the processor: a Prometheus-compatible receiver rejects an entire write
+// request when any series carries a label with an empty value, so every
+// attribute the Prometheus receiver can leave empty must be removed before the
+// metrics reach the exporter.
+func TestMetricsPipelineDropsEmptyResourceAttrs(t *testing.T) {
+	t.Setenv("ESS_SECRETS_PATH", "")
+
+	for _, provider := range []string{string(ProviderThanos), string(ProviderPrometheus)} {
+		t.Run(provider, func(t *testing.T) {
+			telemetries := fmt.Sprintf(
+				`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": %q, "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "m"}}}`,
+				provider,
+			)
+			raw, err := RenderOtelConfigFromBytes([]byte(telemetries), TemplateConfig{
+				BackendType:  K8s,
+				WorkloadType: Container,
+				Namespace:    "sr-fake-namespace",
+			})
+			if err != nil {
+				t.Fatalf("render failed: %v", err)
+			}
+
+			var cfg struct {
+				Processors map[string]struct {
+					MetricStatements []struct {
+						Context    string   `yaml:"context"`
+						Statements []string `yaml:"statements"`
+					} `yaml:"metric_statements"`
+				} `yaml:"processors"`
+				Service struct {
+					Pipelines map[string]struct {
+						Processors []string `yaml:"processors"`
+					} `yaml:"pipelines"`
+				} `yaml:"service"`
+			}
+			if err := yaml.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+
+			proc, ok := cfg.Processors[dropEmptyLabelsProcessorID]
+			if !ok {
+				t.Fatalf("%s is not defined", dropEmptyLabelsProcessorID)
+			}
+			var gotContexts []string
+			for _, block := range proc.MetricStatements {
+				gotContexts = append(gotContexts, block.Context)
+				want := fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
+					block.Context, block.Context)
+				assert.Contains(t, block.Statements, want,
+					"context %q is missing its empty-value filter", block.Context)
+			}
+			assert.Equal(t, dropEmptyLabelsContexts, gotContexts)
+
+			// datapoint is excluded deliberately: the exporter already drops
+			// empty datapoint attribute values, and the statement would run
+			// once per point rather than once per resource.
+			assert.NotContains(t, gotContexts, "datapoint")
+
+			// It must run in the metrics pipeline, after the resource processor
+			// (which deletes service.instance.id) and before batching/export.
+			procs := cfg.Service.Pipelines["metrics"].Processors
+			assert.Contains(t, procs, dropEmptyLabelsProcessorID)
+			assert.Greater(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "resource"),
+				"must run after the resource processor")
+			assert.Less(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "batch"),
+				"must run before batching")
+		})
+	}
+}
+
+func indexOf(haystack []string, needle string) int {
+	for i, v := range haystack {
+		if v == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestResourceProcessorInsertsInstanceID pins the attribute that keeps
+// target_info unique per instance.
+//
+// target_info is built by the exporter from resource attributes only, so it
+// never receives the datapoint labels metricstransform adds. Without a
+// per-instance resource attribute every collector federating the same upstream
+// on a node emits an identical target_info series, and those writes conflict on
+// ingest. Inserting instance_id makes the series distinct while leaving the
+// rest of target_info, including caller-supplied OTLP resource attributes,
+// intact.
+func TestResourceProcessorInsertsInstanceID(t *testing.T) {
+	t.Setenv("ESS_SECRETS_PATH", "")
+
+	for _, backend := range []BackendType{K8s, VM} {
+		for _, workload := range []WorkloadType{Container, Helm} {
+			t.Run(string(backend)+"/"+string(workload), func(t *testing.T) {
+				raw, err := RenderOtelConfigFromBytes(
+					[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "KRATOS_THANOS", "endpoint": "https://m.example.invalid/api/v1/write", "name": "m"}}}`),
+					TemplateConfig{BackendType: backend, WorkloadType: workload, Namespace: "sr-fake-namespace"},
+				)
+				if err != nil {
+					t.Fatalf("render failed: %v", err)
+				}
+
+				var cfg struct {
+					Processors struct {
+						Resource struct {
+							Attributes []struct {
+								Key    string `yaml:"key"`
+								Action string `yaml:"action"`
+								Value  string `yaml:"value"`
+							} `yaml:"attributes"`
+						} `yaml:"resource"`
+					} `yaml:"processors"`
+				}
+				if err := yaml.Unmarshal(raw, &cfg); err != nil {
+					t.Fatalf("unmarshal failed: %v", err)
+				}
+
+				var deletesInstanceID, insertsInstanceID bool
+				for _, attr := range cfg.Processors.Resource.Attributes {
+					if attr.Key == "service.instance.id" && attr.Action == "delete" {
+						deletesInstanceID = true
+					}
+					if attr.Key == "instance_id" && attr.Action == "insert" {
+						insertsInstanceID = true
+						assert.Equal(t, "${env:NVCF_INSTANCE_ID:-unknown}", attr.Value)
+					}
+				}
+				assert.True(t, deletesInstanceID, "resource processor must still delete service.instance.id")
+				assert.True(t, insertsInstanceID, "resource processor must insert instance_id so target_info is unique")
+			})
+		}
 	}
 }

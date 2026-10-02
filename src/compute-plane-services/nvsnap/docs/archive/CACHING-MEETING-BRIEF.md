@@ -39,6 +39,7 @@ called for fan-out** — only as a recovery path when local cache is
 missing on an allowed-affinity node.
 
 Filed as GH issue #114. Fix options:
+
 - Webhook injects an init container that calls EnsureCaptureLocal on
   the target node, instead of pinning via nodeAffinity
 - Push-to-seeds after capture (Phase 4 from TRANSPORT-ARCHITECTURE.md)
@@ -69,6 +70,7 @@ cascade hits 0.32 GB/s for the same reason: 5688 files with a heavy
 small-file tail means per-file HTTP setup dominates over network.
 
 **Implications:**
+
 - vllm-70b rootfs cross-node restore floor is ~7 min per receiver
 - CRIU cascade's 1.2 GB/s number was specific to vllm-small's file mix
   (1× 27 GiB pages-14 dominates), NOT representative for rootfs
@@ -317,7 +319,7 @@ right move.
 
 ### Combined tiering
 
-```
+```text
        L1 hot         L2 warm           L3 cold
    peer hostPath  →  shared PVC    →   object store
    (local NVMe)     (Lustre/etc)      (S3/GCS)
@@ -388,6 +390,7 @@ limits and GCS multi-part read scaling separately — quote those
 docs for definitive numbers rather than my estimates.
 
 Cross-region (e.g., us-central1 → us-east1):
+
 - Bandwidth depends on Cloud Interconnect tier and VPC peering setup
 - Egress cost varies by tier — currently $0.01–$0.08/GiB range per
   GCP pricing docs (verify before quoting precise number)
@@ -402,6 +405,7 @@ the destination cluster.
 ### Pre-warming for active workload migration
 
 For "shift workloads us-west → us-east on GPU availability" use case:
+
 - Async background replication: every capture in us-west replicates
   to us-east within minutes
 - Restore in us-east hits a warm bucket — milliseconds to start,

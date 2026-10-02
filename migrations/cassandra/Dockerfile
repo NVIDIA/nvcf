@@ -21,27 +21,24 @@ RUN apk add --no-cache curl unzip && \
       -ldflags="-s -w -buildid= -X main.Version=${MIGRATE_BUILD_VERSION}" \
       -o /out/migrate ./cmd/migrate
 
-FROM --platform=$BUILDPLATFORM alpine:3.23 AS kubectl-downloader
+FROM --platform=$BUILDPLATFORM alpine:3.23 AS java-library-downloader
 
-ARG TARGETARCH
-ARG KUBECTL_VERSION=v1.36.4
-ARG KUBECTL_LINUX_AMD64_SHA256=8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a
-ARG KUBECTL_LINUX_ARM64_SHA256=0ecf44450ee6063bf19dd166a103ee6df4a9034455c2abce626e6eea657d73fb
-
-# Verify both the official checksum and the reviewed per-architecture digest.
+# Cassandra can lag security-only Jackson releases. Fetch one coherent,
+# checksum-pinned replacement set without adding build tools to the final
+# image. Release builds can route the same paths through a caching repository.
+ARG MAVEN_REPOSITORY_BASE=https://repo.maven.apache.org/maven2
+COPY java-libraries.lock /tmp/java-libraries.lock
 RUN apk add --no-cache curl && \
-    case "${TARGETARCH}" in \
-      amd64) KUBECTL_SHA256="${KUBECTL_LINUX_AMD64_SHA256}" ;; \
-      arm64) KUBECTL_SHA256="${KUBECTL_LINUX_ARM64_SHA256}" ;; \
-      *) echo "Unsupported architecture for kubectl: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac && \
-    KUBECTL_BASE_URL="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}" && \
-    mkdir -p /out && \
-    curl -fsSLo /out/kubectl "${KUBECTL_BASE_URL}/kubectl" && \
-    curl -fsSLo /tmp/kubectl.sha256 "${KUBECTL_BASE_URL}/kubectl.sha256" && \
-    test "$(cat /tmp/kubectl.sha256)" = "${KUBECTL_SHA256}" && \
-    printf '%s  %s\n' "${KUBECTL_SHA256}" /out/kubectl | sha256sum -c - && \
-    chmod 0555 /out/kubectl
+    mkdir -p /tmp/java-libraries && \
+    while read -r checksum url; do \
+      case "${checksum}" in \#*|'') continue ;; esac; \
+      path="${url#https://repo.maven.apache.org/maven2/}"; \
+      test "${path}" != "${url}"; \
+      destination="/tmp/java-libraries/${url##*/}"; \
+      curl -fsSL --retry 7 --retry-all-errors \
+        -o "${destination}" "${MAVEN_REPOSITORY_BASE%/}/${path}"; \
+      printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c -; \
+    done < /tmp/java-libraries.lock
 
 FROM cassandra:5.0.9
 
@@ -51,17 +48,29 @@ USER root
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl gettext-base && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates gettext-base && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f \
+      /opt/cassandra/lib/jackson-annotations-*.jar \
+      /opt/cassandra/lib/jackson-core-*.jar \
+      /opt/cassandra/lib/jackson-databind-*.jar \
+      /opt/cassandra/lib/jackson-datatype-jsr310-*.jar \
+      /opt/cassandra/lib/netty-*-4.1.130.Final*.jar
 
 COPY --from=migrate-builder --chmod=0555 /out/migrate /usr/bin/migrate
-COPY --from=kubectl-downloader --chmod=0555 /out/kubectl /usr/local/bin/kubectl
+COPY --from=java-library-downloader /tmp/java-libraries/*.jar /opt/cassandra/lib/
+
+# The Cassandra base uses gosu from its own entrypoint. This image replaces
+# that entrypoint with /bin/sh and never invokes the inherited helper.
+RUN rm -f /usr/local/bin/gosu
 
 COPY keyspaces /app/keyspaces
 COPY --chmod=775 execute_sqls.sh /app
 
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
+
+USER 999:999
 
 ENTRYPOINT ["/bin/sh"]
 CMD ["/app/execute_sqls.sh"]

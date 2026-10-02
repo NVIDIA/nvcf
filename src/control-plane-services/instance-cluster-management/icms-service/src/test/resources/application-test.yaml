@@ -72,6 +72,7 @@ management:
 icms:
   cloud-failure-detection-enabled: true
   air-gapped-mode-enabled: false
+  cluster-by-id-reads-enabled: true
   queue-per-instance-enabled: false
   instance-update-task-enabled: true
   queue-creation-per-instance-type-enabled: true
@@ -84,9 +85,8 @@ icms:
 
   nats:
     # Should be disabled to verify success of backward compatible integration test
-    nats-enabled: false
+    enabled: false
     create-nats-streams: true
-    create-nats-consumers: true
 
   aws:
     region: us-east-1

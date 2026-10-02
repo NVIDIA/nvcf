@@ -117,6 +117,7 @@ func (h *Handlers) AsOpenAIProxyHandlers() *OpenAIProxyHandlers {
 func (h *Handlers) normalizeChatRequest(
 	c *GatewayContext,
 	request *models.ChatCompletionRequest,
+	rawBody []byte,
 ) (*provider.NormalizedRequest, error) {
 	reqCtx := c.RequestContext()
 	if reqCtx == nil {
@@ -154,7 +155,7 @@ func (h *Handlers) normalizeChatRequest(
 	estimatedInputTokens := estimatedInputTokensForNormalizedRequest(
 		request.Model,
 		request,
-	)
+	) + estimatedTokenCountForUnmodeledChatFields(rawBody)
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(request)
 	checkRequest := ratelimit.ResourceRequest{
@@ -194,6 +195,7 @@ func (h *Handlers) normalizeChatRequest(
 
 	return &provider.NormalizedRequest{
 		ChatRequest:     request,
+		RawBody:         rawBody,
 		InputTokens:     inputTokens,
 		MaxOutputTokens: maxOutputTokens,
 		AdmissionPlan:   admissionPlan,

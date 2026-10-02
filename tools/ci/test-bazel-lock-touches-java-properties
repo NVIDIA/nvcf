@@ -28,6 +28,7 @@ import itertools
 import json
 import pathlib
 import random
+import os
 import subprocess
 import sys
 import tempfile
@@ -154,6 +155,17 @@ def git(repo, *args):
 def main():
     rng = random.Random(20260818)
     failures = []
+    # 800 commits in a throwaway repo is enough for git to decide on
+    # housekeeping. `git commit` then forks `gc --auto`/`maintenance` into the
+    # background and detaches, and that process is still writing under .git
+    # when TemporaryDirectory tears the repo down, which fails the whole run
+    # with "Directory not empty: '.git'". Nothing here needs packing, so turn
+    # the background work off for every git the test and the tool spawn.
+    os.environ.update({
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "gc.auto", "GIT_CONFIG_VALUE_0": "0",
+        "GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "false",
+    })
     with tempfile.TemporaryDirectory() as repo:
         git(repo, "init", "-q", ".")
         git(repo, "config", "user.email", "t@example.com")

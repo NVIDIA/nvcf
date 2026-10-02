@@ -73,10 +73,25 @@ openbao_release="$(HELMFILE_ENV="$environment_name" \
     list --skip-charts --output json)"
 openbao_chart_name="$(jq -r '.[0].chart // ""' <<<"$openbao_release")"
 openbao_chart_version="$(jq -r '.[0].version // ""' <<<"$openbao_release")"
+expected_openbao_chart_version="$(awk '
+  /^[[:space:]]*- name: openbao-server([[:space:]]|$)/ {
+    in_openbao_release = 1
+    next
+  }
+  in_openbao_release && /^[[:space:]]*- name:/ { exit }
+  in_openbao_release && /^[[:space:]]*version:/ {
+    sub(/^[[:space:]]*version:[[:space:]]*/, "")
+    gsub(/[[:space:]]+$/, "")
+    print
+    exit
+  }
+' "$test_stack_dir/helmfile.d/01-dependencies.yaml.gotmpl")"
+test -n "$expected_openbao_chart_version" ||
+  fail "could not derive the default OpenBao version from the stack Helmfile"
 test "$openbao_chart_name" = 'nvcf/helm-nvcf-openbao-server' ||
   fail "expected default OpenBao chart, got ${openbao_chart_name:-missing}"
-test "$openbao_chart_version" = '0.32.1' ||
-  fail "expected default OpenBao version 0.32.1, got ${openbao_chart_version:-missing}"
+test "$openbao_chart_version" = "$expected_openbao_chart_version" ||
+  fail "expected default OpenBao version $expected_openbao_chart_version, got ${openbao_chart_version:-missing}"
 
 cassandra_password="$(yq -r '.cassandra.serviceRolePassword // ""' "$cassandra_values")"
 test -n "$cassandra_password" ||

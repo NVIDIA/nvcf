@@ -311,7 +311,7 @@ public class MockIcmsServer {
         mockIcmsServer.stubFor(get(urlPathMatching("/v1/si/accounts/.*/clusters"))
                                       .withQueryParam("includeAuthorizedClusters",
                                                       new EqualToPattern("true"))
-                                      .withQueryParam("includeGfnInAuthorizedClusters",
+                                      .withQueryParam("includeNonByocInAuthorizedClusters",
                                                       new EqualToPattern("true"))
                                       .willReturn(aResponse().withStatus(200)
                                                           .withHeader(HttpHeaders.CONTENT_TYPE,

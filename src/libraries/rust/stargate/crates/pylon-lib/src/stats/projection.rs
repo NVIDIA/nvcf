@@ -13,39 +13,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tokio::time::Instant as TokioInstant;
-
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
 use crate::request_observer::{RequestObservationEndpoint, RequestObservationState};
-use crate::runtime_state::ModelGeneration;
+use crate::runtime_state::OutputCalibrationFacts;
 use crate::{CurrentModelStats, RequestObservation, RequestObservationEvent};
 
 use super::aggregator::{
     EmbeddingThroughputSample, InputThroughputSample, KvCacheStatsSnapshot, ModelMetricsState,
-    ModelStatsSnapshotInputs, StatsAggregator, apply_input_throughput_sample, current_unix_millis,
-    output_decode_duration, push_sample, tps_for_units,
+    ModelStatsSnapshotInputs, RequestIntervalKey, StatsAggregator, aggregate_model_state,
+    apply_input_throughput_sample, current_unix_millis, output_decode_duration, push_sample,
+    tps_for_units,
 };
-use super::collector::{
-    FinalizeRequestUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsCollectorConfig,
-    StatsUpdateSource,
-};
+use super::collector::StatsCollectorConfig;
 
 impl StatsAggregator {
     pub(super) fn apply_fallback_observation(
         &mut self,
         event: &RequestObservationEvent,
     ) -> Vec<super::aggregator::ModelStatsUpdate> {
-        let observation = &event.observation;
-        let mut changed_models = self.record_fallback_observation(event);
-        let mut counter_updates = Vec::new();
-        if let Some(update) =
-            fallback_update_from_observation(observation, event.generation.clone())
-        {
-            self.apply_update_into(update, &mut counter_updates);
-        }
-        for (generation, _) in counter_updates {
-            push_changed_model(&mut changed_models, generation.model_id().to_string());
-        }
+        let changed_models = self.record_fallback_observation(event);
         self.snapshots(changed_models)
     }
 
@@ -121,6 +107,10 @@ impl StatsAggregator {
             || ModelMetricsState::default().current_stats(inputs),
             |state| state.metrics.current_stats(inputs),
         );
+        stats.max_engine_concurrency = stats.max_engine_concurrency.or(self
+            .config
+            .fallback_max_engine_concurrency
+            .map(std::num::NonZeroU64::get));
         stats.queue_time_estimate_ms_by_priority = queue.queue_time_estimate_ms_by_priority;
         stats
     }
@@ -130,53 +120,91 @@ impl StatsAggregator {
         if event.generation.as_ref() != self.current_generation(&observation.model_id) {
             return Vec::new();
         }
-        let counter_already_observed =
-            observation.output_tokens_explicit && self.has_request_counter(&observation.request_id);
         let mut changed_models = self.record_lifecycle_event(event);
-        let input_sample = (observation.state == RequestObservationState::Complete)
-            .then(|| match observation.endpoint {
-                RequestObservationEndpoint::ChatCompletions
-                | RequestObservationEndpoint::Responses => observation
-                    .time_to_first_output
-                    .map(|duration| (duration, false)),
-                RequestObservationEndpoint::Embeddings => Some((
-                    observation
-                        .time_to_response_headers
-                        .unwrap_or(observation.total_duration),
-                    true,
-                )),
-            })
-            .flatten()
-            .map(
-                |(duration, clamp_duration_to_floor)| InputThroughputSample {
-                    units: observation.input_tokens,
-                    duration,
-                    clamp_duration_to_floor,
-                },
-            );
-        let Some(generation_state) = self.per_model.get_mut(&observation.model_id) else {
+        let config = &self.config;
+        let Some(generation_state) = aggregate_model_state(
+            &mut self.per_model,
+            &mut self.aggregate_model_state_count,
+            &observation.model_id,
+        ) else {
             return changed_models;
         };
-        let pinned_input_tps = generation_state.pinned_input_tps;
         let model_state = &mut generation_state.metrics;
+        let output_token_calibration_enabled =
+            self.runtime_state.output_token_calibration_enabled();
         model_state.chunk_usage_stats_observed |= observation.output_tokens_from_chunk_usage;
         let record_sample = |samples, sum: &mut f64, max: &mut f64, sample| {
             *max = max.max(sample);
-            push_sample(samples, sum, sample, self.config.smoothing_window_size);
+            push_sample(samples, sum, sample, config.smoothing_window_size);
         };
+
+        let mut input_tps_changed = false;
+        if matches!(
+            observation.endpoint,
+            RequestObservationEndpoint::ChatCompletions | RequestObservationEndpoint::Responses
+        ) && let Some(interval) = event.input_interval()
+            && let Some(input_tps) = model_state.request_input_intervals.observe(
+                &observation.request_id,
+                interval,
+                observation.input_tokens,
+                event.input_tokens_explicit(),
+                config,
+            )
+            && model_state.last_mean_input_tps != input_tps
+        {
+            model_state.last_mean_input_tps = input_tps;
+            input_tps_changed = true;
+        }
+        let mut completed_sample_recorded = false;
         if observation.state == RequestObservationState::Complete {
             match observation.endpoint {
                 RequestObservationEndpoint::ChatCompletions
                 | RequestObservationEndpoint::Responses => {
-                    if !counter_already_observed
-                        && let Some(output_tps) = observed_output_tps(&self.config, observation)
-                    {
-                        record_sample(
-                            &mut model_state.chat_output_tps_samples,
-                            &mut model_state.chat_output_tps_sum,
-                            &mut model_state.max_chat_output_tps,
-                            output_tps,
-                        );
+                    if let Some(interval) = event.input_interval() {
+                        let facts = event.output_calibration();
+                        let key =
+                            RequestIntervalKey::new(&observation.request_id, interval.submitted_at);
+                        if (observation.output_tokens_explicit || facts.raw_output_units > 0)
+                            && !model_state.completed_request_keys.contains(&key)
+                        {
+                            model_state.completed_request_keys.push_back(key);
+                            while model_state.completed_request_keys.len()
+                                > config.smoothing_window_size
+                            {
+                                model_state.completed_request_keys.pop_front();
+                            }
+
+                            let output_tokens = output_tokens_for_rate(
+                                output_token_calibration_enabled,
+                                model_state,
+                                observation,
+                                facts,
+                            );
+                            if let Some(output_tps) =
+                                observed_output_tps(config, event, output_tokens)
+                            {
+                                record_sample(
+                                    &mut model_state.chat_output_tps_samples,
+                                    &mut model_state.chat_output_tps_sum,
+                                    &mut model_state.max_chat_output_tps,
+                                    output_tps,
+                                );
+                                completed_sample_recorded = true;
+                            }
+                            if output_token_calibration_enabled
+                                && calibration_sample_is_valid(
+                                    observation,
+                                    facts,
+                                    config.min_output_tokens,
+                                )
+                            {
+                                model_state.output_token_calibration.observe(
+                                    observation.output_tokens,
+                                    facts.raw_output_units,
+                                    config.smoothing_window_size,
+                                );
+                            }
+                        }
                     }
                 }
                 RequestObservationEndpoint::Embeddings => {
@@ -186,8 +214,8 @@ impl StatsAggregator {
                             observation
                                 .total_duration
                                 .saturating_sub(response_headers)
-                                .max(self.config.duration_floor),
-                            self.config.duration_floor,
+                                .max(config.duration_floor),
+                            config.duration_floor,
                         )
                     {
                         record_sample(
@@ -196,13 +224,28 @@ impl StatsAggregator {
                             &mut model_state.max_embedding_item_tps,
                             embedding_item_tps,
                         );
+                        completed_sample_recorded = true;
                     }
                 }
             }
         }
-        if input_sample.is_some_and(|sample| {
-            apply_input_throughput_sample(&self.config, model_state, pinned_input_tps, sample)
-        }) {
+
+        let embedding_input_changed = observation.endpoint
+            == RequestObservationEndpoint::Embeddings
+            && observation.state == RequestObservationState::Complete
+            && !model_state.request_input_intervals.has_observed_rate()
+            && apply_input_throughput_sample(
+                config,
+                model_state,
+                InputThroughputSample {
+                    units: observation.input_tokens,
+                    duration: observation
+                        .time_to_response_headers
+                        .unwrap_or(observation.total_duration),
+                    clamp_duration_to_floor: true,
+                },
+            );
+        if input_tps_changed || embedding_input_changed || completed_sample_recorded {
             push_changed_model(&mut changed_models, observation.model_id.clone());
         }
         changed_models
@@ -210,10 +253,22 @@ impl StatsAggregator {
 
     fn record_lifecycle_event(&mut self, event: &RequestObservationEvent) -> Vec<String> {
         let observation = &event.observation;
+        let facts = event.output_calibration();
+        let output_tokens = self.per_model.get(&observation.model_id).map_or(
+            observation.output_tokens,
+            |generation_state| {
+                output_tokens_for_rate(
+                    self.runtime_state.output_token_calibration_enabled(),
+                    &generation_state.metrics,
+                    observation,
+                    facts,
+                )
+            },
+        );
         let active_chat_output_tps = self
             .config
             .openai_fallback_stats_enabled
-            .then(|| observed_output_tps(&self.config, observation))
+            .then(|| observed_output_tps(&self.config, event, output_tokens))
             .flatten();
         let mut changed_models = event
             .changed_generations
@@ -253,35 +308,6 @@ impl StatsAggregator {
     }
 }
 
-pub(super) fn fallback_update_from_observation(
-    observation: &RequestObservation,
-    generation: Option<ModelGeneration>,
-) -> Option<StatsAggregatorUpdate> {
-    let observed_at = TokioInstant::now();
-    if observation.output_tokens_explicit {
-        return Some(StatsAggregatorUpdate::RequestCounters(
-            RequestCounterUpdate {
-                source: StatsUpdateSource::OpenAiFallback,
-                request_id: observation.request_id.clone(),
-                model_id: observation.model_id.clone(),
-                generation,
-                tokens_processed: None,
-                tokens_generated: Some(observation.output_tokens),
-                finished: observation.is_terminal(),
-                observed_at,
-            },
-        ));
-    }
-    observation.is_terminal().then(|| {
-        StatsAggregatorUpdate::FinalizeRequest(FinalizeRequestUpdate {
-            source: StatsUpdateSource::OpenAiFallback,
-            request_id: observation.request_id.clone(),
-            generation,
-            observed_at,
-        })
-    })
-}
-
 fn push_changed_model(models: &mut Vec<String>, model_id: String) {
     if !models.contains(&model_id) {
         models.push(model_id);
@@ -290,21 +316,60 @@ fn push_changed_model(models: &mut Vec<String>, model_id: String) {
 
 pub(super) fn observed_output_tps(
     config: &StatsCollectorConfig,
-    observation: &RequestObservation,
+    event: &RequestObservationEvent,
+    output_tokens: u64,
 ) -> Option<f64> {
+    let observation = &event.observation;
     if observation.endpoint == RequestObservationEndpoint::Embeddings
-        || observation.output_tokens < config.min_output_tokens
+        || output_tokens < config.min_output_tokens
     {
         return None;
     }
     tps_for_units(
-        observation.output_tokens,
+        output_tokens,
         output_decode_duration(
-            observation.total_duration,
+            event.output_duration(),
             observation.time_to_first_output,
             observation.time_to_first_token,
             config.duration_floor,
         )?,
         config.duration_floor,
     )
+}
+
+fn output_tokens_for_rate(
+    calibration_enabled: bool,
+    model_state: &ModelMetricsState,
+    observation: &RequestObservation,
+    facts: OutputCalibrationFacts,
+) -> u64 {
+    if !calibration_enabled || observation.output_tokens_explicit {
+        return observation.output_tokens;
+    }
+    let exact_baseline = facts
+        .exact_output_tokens_baseline
+        .unwrap_or_default()
+        .min(observation.output_tokens);
+    exact_baseline.saturating_add(
+        model_state
+            .output_token_calibration
+            .scale(observation.output_tokens.saturating_sub(exact_baseline)),
+    )
+}
+
+fn calibration_sample_is_valid(
+    observation: &RequestObservation,
+    facts: OutputCalibrationFacts,
+    min_output_tokens: u64,
+) -> bool {
+    observation.output_tokens_explicit
+        && observation.output_tokens >= min_output_tokens
+        && facts.raw_output_units > 0
+        && !facts.calibration_ineligible
+        && facts
+            .reasoning_tokens
+            .is_none_or(|tokens| tokens <= observation.output_tokens)
+        && !((facts.reasoning_output_observed
+            || facts.reasoning_tokens.is_some_and(|tokens| tokens > 0))
+            && !facts.reasoning_text_observed)
 }

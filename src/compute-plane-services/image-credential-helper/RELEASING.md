@@ -53,6 +53,7 @@ The CI pipeline automatically handles:
 4. Release artifact generation
 
 When a tag is pushed, the pipeline will:
+
 - Build the container image with the version tag
 - Push to the configured container registries
 - Generate release notes

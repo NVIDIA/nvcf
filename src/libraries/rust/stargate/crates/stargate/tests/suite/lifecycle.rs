@@ -1264,10 +1264,7 @@ impl LifecycleBackendOptions<'_> {
             ModelLifecycleConfig {
                 upstream_http_base_url: upstream_http_base_url.clone(),
                 source: ModelSource::Static(model_ids.into_iter().collect::<BTreeSet<_>>()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1.0,
-                    pin: true,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
                 bringup,
                 health_paths: pylon_lib::UpstreamHealthPaths::default(),
                 startup_health_wait: std::time::Duration::ZERO,
