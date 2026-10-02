@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
@@ -41,10 +43,6 @@ func (h *MessagesHandlers) RegisterRoutes(group *echo.Group) {
 
 func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	c := must.As[*GatewayContext](ec)
-	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
-	if err != nil {
-		return err
-	}
 	body, err := captureRequestBody(c.Request())
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -56,6 +54,14 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	if err := json.Unmarshal(body, &request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := validateMessagesFieldNames(body); err != nil {
+		return err
+	}
+	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
+	if err != nil {
+		return err
+	}
+
 	if request.MaxTokens <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "max_tokens must be positive")
 	}
@@ -79,6 +85,10 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 		}
 		if sessionID != "" {
 			if err := setSessionAffinity(reqCtx, sessionAffinitySourceHeader, sessionID); err != nil {
+				return err
+			}
+		} else if sessionID := c.Request().Header.Get("x-claude-code-session-id"); sessionID != "" {
+			if err := setSessionAffinity(reqCtx, "claude_code_header", sessionID); err != nil {
 				return err
 			}
 		} else {
@@ -109,31 +119,56 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	}
 	normalized := &provider.NormalizedRequest{InputTokens: inputTokens, MaxOutputTokens: request.MaxTokens, AdmissionPlan: plan}
 	observer := &messagesUsageObserver{}
+	upstreamAccepted := false
+	generationPossible := false
+	copyComplete := false
 	// Reconciliation must still run after client cancellation. Keep it bounded.
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.UserContext()), 5*time.Second)
 		defer cancel()
-		usage := observer.usage.chatUsage()
-		if usage != nil {
-			h.handlers.observability.recordLLMUsage(ctx, messagesEndpointPath, requestFunctionID(c), usage, request.Stream)
+		status := observer.accountingStatus(copyComplete)
+		if !generationPossible {
+			status = "rejected"
 		}
-		if usage == nil {
+		telemetry.AddWithContext(ctx, h.handlers.observability.messagesUsage, 1, attribute.String("status", status), attribute.String("stream", boolLabel(request.Stream)), telemetry.FunctionIDAttribute(requestFunctionID(c)))
+		usage := observer.usage.chatUsage()
+		if status == "complete" {
+			h.handlers.observability.recordLLMUsage(ctx, messagesEndpointPath, requestFunctionID(c), usage, request.Stream)
+		} else if generationPossible {
+			telemetry.Logger(ctx).Warn().Str("usage_status", status).Msg("Messages usage incomplete; retaining output reservation")
+		}
+		if !generationPossible {
 			h.handlers.releaseReservedTokenConsumption(ctx, normalized)
 		} else if plan != nil {
-			// Anthropic can report valid zero counts; do not replace them with estimates.
-			if _, err := plan.FinalizeTokens(ctx, ratelimit.ResourceRequest{InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens)}); err != nil {
+			actual := resource
+			inputOnly := observer.usage
+			zero := 0
+			inputOnly.OutputTokens = &zero
+			if input := inputOnly.chatUsage(); input != nil {
+				actual.InputTokens = int64(input.PromptTokens)
+			}
+			if usage != nil {
+				actual.InputTokens = int64(usage.PromptTokens)
+				if status == "complete" || int64(usage.CompletionTokens) > actual.OutputTokens {
+					actual.OutputTokens = int64(usage.CompletionTokens)
+				}
+			}
+			if _, err := plan.FinalizeTokens(ctx, actual); err != nil {
 				telemetry.Logger(ctx).Error().Err(err).Msg("failed to finalize Messages token consumption")
 			}
 		}
 	}()
 	span := trace.SpanFromContext(c.UserContext())
-	span.SetAttributes(attribute.String("gateway.endpoint", messagesEndpointPath), attribute.String("gen_ai.request.model", request.Model), attribute.Bool("gen_ai.request.stream", request.Stream))
+	span.SetAttributes(attribute.String("gateway.endpoint", messagesEndpointPath), attribute.String("gen_ai.request.model", request.Model), attribute.Bool("gen_ai.request.stream", request.Stream), attribute.String("nvcf.function.id", requestFunctionID(c)))
 	start := time.Now()
 	defer func() {
 		telemetry.RecordWithContext(c.UserContext(), h.handlers.observability.providerTime, time.Since(start).Seconds(), attribute.String("endpoint", messagesEndpointPath), attribute.String("phase", "total"), attribute.String("stream", boolLabel(request.Stream)), telemetry.FunctionIDAttribute(requestFunctionID(c)))
 	}()
 	headers := messagesForwardedHeaders(c.Request().Header)
-	resp, err := h.handlers.dispatchEstimatedProxyRequest(c, reqCtx, headers, io.NopCloser(bytes.NewReader(outboundBody)), int64(len(outboundBody)), inputTokens, inputTokens+request.MaxTokens)
+	// A transport error before response headers cannot prove that generation
+	// never started. Retain the reservation unless the backend rejects it.
+	generationPossible = true
+	resp, err := h.handlers.dispatchEstimatedProxyRequest(c, reqCtx, headers, io.NopCloser(bytes.NewReader(outboundBody)), int64(len(outboundBody)), inputTokens, inputTokens)
 	if err != nil {
 		return err
 	}
@@ -143,6 +178,8 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	if resp.Body != nil {
 		defer resp.Body.Close()
 	}
+	upstreamAccepted = resp.StatusCode >= 200 && resp.StatusCode < 300
+	generationPossible = upstreamAccepted
 	copyProxyHeaders(c.Response().Header(), resp.Header)
 	setMultiTurnSessionResponseHeader(c)
 	c.Response().WriteHeader(resp.StatusCode)
@@ -151,19 +188,31 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	}
 	observer.stream = strings.HasPrefix(strings.ToLower(resp.Header.Get(echo.HeaderContentType)), "text/event-stream")
 	reader := io.Reader(resp.Body)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.Header.Get("Content-Encoding") == "" {
+	if upstreamAccepted && (resp.Header.Get("Content-Encoding") == "" || strings.EqualFold(resp.Header.Get("Content-Encoding"), "identity")) {
 		reader = io.TeeReader(reader, observer)
+	}
+	observer.encoded = upstreamAccepted && resp.Header.Get("Content-Encoding") != "" && !strings.EqualFold(resp.Header.Get("Content-Encoding"), "identity")
+	var streamSpan trace.Span
+	if observer.stream {
+		_, streamSpan = telemetry.Tracer().Start(c.UserContext(), "llm-api-gateway.stream")
+		streamSpan.SetAttributes(attribute.String("nvcf.function.id", requestFunctionID(c)), attribute.String("gateway.endpoint", messagesEndpointPath))
+		defer streamSpan.End()
 	}
 	var writer io.Writer = c.Response().Writer
 	if observer.stream {
 		writer = messagesFlushWriter{c.Response().Writer}
 	}
 	_, err = io.Copy(writer, reader)
+	copyComplete = err == nil
 	observer.finish()
 	if observer.stream {
 		status := "success"
-		if err != nil || resp.StatusCode >= http.StatusBadRequest {
+		if err != nil || resp.StatusCode >= http.StatusBadRequest || observer.failed || !observer.complete() {
 			status = "error"
+			streamSpan.SetStatus(codes.Error, "Messages stream incomplete or failed")
+			if err != nil {
+				streamSpan.RecordError(err)
+			}
 		}
 		telemetry.RecordWithContext(c.UserContext(), h.handlers.observability.streamDuration, time.Since(start).Seconds(), attribute.String("endpoint", messagesEndpointPath), attribute.String("status", status), telemetry.FunctionIDAttribute(requestFunctionID(c)))
 		if !observer.firstOutput.IsZero() {
@@ -183,8 +232,64 @@ func rewriteMessagesBody(body []byte, model string) ([]byte, error) {
 		return nil, err
 	}
 	payload["model"] = encoded
-	delete(payload, "extra-headers")
+	metadataName := strings.NewReplacer("-", "", "_", "")
+	for key := range payload {
+		if metadataName.Replace(strings.ToLower(key)) == "extraheaders" {
+			delete(payload, key)
+		}
+	}
 	return json.Marshal(payload)
+}
+
+func validateMessagesFieldNames(body []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid JSON")
+	}
+	if fields == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "request must be an object")
+	}
+	for key := range fields {
+		for _, canonical := range []string{"model", "max_tokens", "stream", "messages", "system", "tools"} {
+			if strings.EqualFold(key, canonical) && key != canonical {
+				return echo.NewHTTPError(http.StatusBadRequest, "field must use canonical spelling: "+canonical)
+			}
+		}
+	}
+	return nil
+}
+
+// Only gateway-generated errors use this envelope. Backend bodies are relayed.
+func messagesHTTPErrorHandler(err error, c echo.Context) {
+	if c.Response().Committed {
+		return
+	}
+	status, message := http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError)
+	var he *echo.HTTPError
+	if errors.As(err, &he) {
+		status = he.Code
+		if public, ok := he.Message.(string); ok {
+			message = public
+		}
+	}
+	kind := "api_error"
+	switch status {
+	case 400, 405, 422:
+		kind = "invalid_request_error"
+	case 401:
+		kind = "authentication_error"
+	case 403:
+		kind = "permission_error"
+	case 404:
+		kind = "not_found_error"
+	case 413:
+		kind = "request_too_large"
+	case 429:
+		kind = "rate_limit_error"
+	case 529:
+		kind = "overloaded_error"
+	}
+	_ = c.JSON(status, map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": message}, "request_id": c.Response().Header().Get(HeaderRequestID)})
 }
 
 // NVCF authenticates with Authorization before proxying. Stargate adds its own
@@ -266,20 +371,28 @@ type messagesUsageObserver struct {
 	eventOversized bool
 	usage          messagesUsage
 	firstOutput    time.Time
+	jsonScanner    messagesJSONUsageScanner
+	previousCR     bool
+	failed         bool
+	stopped        bool
+	finalOutput    bool
+	encoded        bool
+	invalid        bool
+	sawOversized   bool
 }
 
 func (o *messagesUsageObserver) Write(p []byte) (int, error) {
 	if !o.stream {
-		if !o.oversized && len(o.buffer)+len(p) <= messagesUsageBufferLimit {
-			o.buffer = append(o.buffer, p...)
-		} else {
-			o.oversized = true
-			o.buffer = nil
-		}
+		o.jsonScanner.Write(p)
 		return len(p), nil
 	}
 	for _, b := range p {
-		if b != '\n' {
+		if o.previousCR && b == '\n' {
+			o.previousCR = false
+			continue
+		}
+		o.previousCR = b == '\r'
+		if b != '\n' && b != '\r' {
 			if !o.oversized {
 				if len(o.buffer) < messagesUsageBufferLimit {
 					o.buffer = append(o.buffer, b)
@@ -287,6 +400,7 @@ func (o *messagesUsageObserver) Write(p []byte) (int, error) {
 					o.buffer = nil
 					o.oversized = true
 					o.eventOversized = true
+					o.sawOversized = true
 				}
 			}
 			continue
@@ -298,6 +412,8 @@ func (o *messagesUsageObserver) Write(p []byte) (int, error) {
 			}
 			o.data = nil
 			o.eventOversized = false
+		} else if !o.oversized && bytes.HasPrefix(line, []byte("event:")) && bytes.Equal(bytes.TrimSpace(line[6:]), []byte("error")) {
+			o.failed = true
 		} else if !o.oversized && bytes.HasPrefix(line, []byte("data:")) && !o.eventOversized {
 			value := bytes.TrimPrefix(line[5:], []byte{' '})
 			if len(o.data)+len(value)+1 <= messagesUsageBufferLimit {
@@ -306,6 +422,7 @@ func (o *messagesUsageObserver) Write(p []byte) (int, error) {
 			} else {
 				o.data = nil
 				o.eventOversized = true
+				o.sawOversized = true
 			}
 		}
 		o.buffer = o.buffer[:0]
@@ -321,7 +438,11 @@ func (o *messagesUsageObserver) observe(data []byte) {
 			Usage messagesUsage `json:"usage"`
 		} `json:"message"`
 	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return
+	}
 	if json.Unmarshal(data, &event) != nil {
+		o.invalid = true
 		return
 	}
 	if !o.stream {
@@ -337,10 +458,49 @@ func (o *messagesUsageObserver) observe(data []byte) {
 		o.usage.merge(event.Message.Usage)
 	case "message_delta":
 		o.usage.merge(event.Usage)
+		o.finalOutput = event.Usage.OutputTokens != nil
+	case "message_stop":
+		o.stopped = true
+	case "error":
+		o.failed = true
 	}
 }
 func (o *messagesUsageObserver) finish() {
-	if !o.stream && !o.oversized {
-		o.observe(o.buffer)
+	if !o.stream {
+		o.usage = o.jsonScanner.usage
+		o.invalid = o.jsonScanner.invalid
+		o.sawOversized = o.jsonScanner.oversized
 	}
+}
+
+func (o *messagesUsageObserver) complete() bool {
+	if o.failed || o.invalid || o.encoded {
+		return false
+	}
+	if o.stream {
+		return o.stopped && o.finalOutput && o.usage.chatUsage() != nil
+	}
+	return o.jsonScanner.done && !o.jsonScanner.oversized && o.usage.chatUsage() != nil
+}
+
+func (o *messagesUsageObserver) accountingStatus(copyComplete bool) string {
+	if o.encoded {
+		return "encoded"
+	}
+	if o.failed {
+		return "error"
+	}
+	if copyComplete && o.complete() {
+		return "complete"
+	}
+	if o.sawOversized {
+		return "oversized"
+	}
+	if o.invalid || (o.usage.InputTokens != nil && o.usage.OutputTokens != nil && o.usage.chatUsage() == nil) {
+		return "invalid"
+	}
+	if !copyComplete || o.usage.InputTokens != nil || o.usage.OutputTokens != nil {
+		return "partial"
+	}
+	return "missing"
 }

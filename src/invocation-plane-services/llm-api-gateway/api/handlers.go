@@ -41,6 +41,7 @@ type Handlers struct {
 }
 
 type observabilityMetrics struct {
+	messagesUsage               otelmetric.Int64Counter
 	llmTokens                   otelmetric.Int64Counter
 	providerTime                otelmetric.Float64Histogram
 	streamFirstToken            otelmetric.Float64Histogram
@@ -50,6 +51,7 @@ type observabilityMetrics struct {
 
 func newObservabilityMetrics() observabilityMetrics {
 	return observabilityMetrics{
+		messagesUsage:               telemetry.MessagesUsage(),
 		llmTokens:                   telemetry.LLMTokens(),
 		providerTime:                telemetry.ProviderTime(),
 		streamFirstToken:            telemetry.StreamFirstToken(),

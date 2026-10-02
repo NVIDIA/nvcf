@@ -1378,3 +1378,18 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	return f(req)
 }
+
+func TestStargateMessagesCredentialsStopBeforeWorker(t *testing.T) {
+	p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.Empty(t, r.Header.Get("Authorization"))
+		require.Empty(t, r.Header.Get("X-API-Key"))
+		require.Empty(t, r.Header.Get("Proxy-Authorization"))
+		require.Equal(t, "fn-messages", r.Header.Get(headerRoutingKey))
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+	})}
+	resp, err := p.Proxy(context.Background(), &requestctx.RequestContext{BearerToken: "caller-secret", RoutingKey: "fn-messages"}, &ProxyRequest{Method: "POST", Path: "/v1/messages", Header: http.Header{"Authorization": {"Bearer injected"}, "X-Api-Key": {"secret"}, "Proxy-Authorization": {"secret"}}, Body: io.NopCloser(strings.NewReader(`{}`))})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+}

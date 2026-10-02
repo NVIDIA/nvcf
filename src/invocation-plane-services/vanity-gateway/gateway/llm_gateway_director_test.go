@@ -21,16 +21,19 @@ import (
 	config "ai-api-gateway-service/gateway_config"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -727,13 +730,14 @@ func TestMessagesRoutingAndNativeToolLoop(t *testing.T) {
 		expected := strings.Replace(body, `"model":"`+publicModel+`"`, `"model":"`+llmFunctionID+`/`+publicModel+`"`, 1)
 		require.JSONEq(t, expected, received.body)
 	}
-	// Messages-only models are included in discovery.
+	// Messages-only models identify their supported endpoint in shared discovery.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Host = openAIHost
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, 200, rec.Code)
 	require.Contains(t, rec.Body.String(), publicModel)
+	require.Contains(t, rec.Body.String(), `"supported_endpoints":["/v1/messages"]`)
 }
 
 func TestMessagesShadowUsesSameNativeProtocol(t *testing.T) {
@@ -755,4 +759,73 @@ func TestMessagesShadowUsesSameNativeProtocol(t *testing.T) {
 	require.Equal(t, "/v1/messages", second.path)
 	require.Contains(t, first.body+second.body, `"model":"shadow-func/native-shadow"`)
 	require.Contains(t, first.body+second.body, `"model":"`+llmFunctionID+`/`+publicModel+`"`)
+}
+
+func TestMessagesLocalErrorsUseNativeEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		kind       string
+	}{
+		{"malformed", `{`, 400, "invalid_request_error"},
+		{"invalid model type", `{"model":1}`, 400, "invalid_request_error"},
+		{"missing model", `{"messages":[{}]}`, 400, "invalid_request_error"},
+		{"unknown model", `{"model":"unknown"}`, 404, "not_found_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mappings := &config.GatewayConfig{}
+			mappings.OpenAI.Host = openAIHost
+			mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+			mux := openAIMux(t, mappings, "http://nvcf.invalid", "http://llm.invalid")
+			rec := httptest.NewRecorder()
+			req := openAIRequest(t, "/v1/messages", tc.body)
+			req.Header.Set("Content-Type", "application/json")
+			mux.ServeHTTP(rec, req)
+			require.Equal(t, tc.status, rec.Code)
+			require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+			var payload struct {
+				Type  string `json:"type"`
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+			require.Equal(t, "error", payload.Type)
+			require.Equal(t, tc.kind, payload.Error.Type)
+			require.NotEmpty(t, payload.Error.Message)
+		})
+	}
+}
+
+func TestMessagesDiscoveryAndTraceProtocol(t *testing.T) {
+	tp, exp := newTestTracerProvider()
+	defer tp.Shutdown(context.Background())
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{}`) }))
+	defer backend.Close()
+	mappings := llmMappings(llmModelEntry())
+	mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
+	rec := httptest.NewRecorder()
+	req := openAIRequest(t, "/v1/messages", `{"model":"`+publicModel+`","messages":[{}],"max_tokens":64}`)
+	req.Header.Set("Content-Type", "application/json")
+	ctx, span := tp.Tracer("test").Start(req.Context(), "messages-test")
+	llm, err := NewLLMGatewayDirector(backend.URL, http.DefaultTransport)
+	require.NoError(t, err)
+	director, err := NewModelDirector(mappings, regexp.MustCompile("^$"), nil, llm, nil)
+	require.NoError(t, err)
+	director.ServeMessages(rec, req.WithContext(ctx))
+	span.End()
+	require.Equal(t, 200, rec.Code)
+	protocol, ok := spanAttr(exp.GetSpans()[0], attribute.Key("endpoint.type"))
+	require.True(t, ok)
+	require.Equal(t, "anthropic", protocol.AsString())
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Host = openAIHost
+	mux.ServeHTTP(rec, req)
+	var models ModelListResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &models))
+	require.Len(t, models.Data, 1)
+	require.Equal(t, []string{"/v1/chat/completions", "/v1/messages"}, models.Data[0].SupportedEndpoints)
 }

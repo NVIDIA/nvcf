@@ -3546,6 +3546,9 @@ async fn exercise_native_messages_contract(protocol: TunnelTransportProtocol, re
             "native-messages-model",
             "req-native-messages",
         )
+        .header("x-priority", "7")
+        .header("x-dynamo-request-priority", "999999")
+        .header("x-dynamo-request-strict-priority", "999999")
         .header("anthropic-version", "2023-06-01")
         .header("anthropic-beta", "tools-test")
         .header("extra-headers", "private")
@@ -3581,6 +3584,10 @@ async fn exercise_native_messages_contract(protocol: TunnelTransportProtocol, re
         assert_eq!(captured_body.as_ref(), body);
         assert_eq!(headers["anthropic-version"], "2023-06-01");
         assert_eq!(headers["anthropic-beta"], "tools-test");
+        // The inbound engine values are stripped; Pylon derives these from
+        // gateway priority after applying the Messages header policy.
+        assert_eq!(headers["x-dynamo-request-priority"], "3593");
+        assert_eq!(headers["x-dynamo-request-strict-priority"], "0");
         for name in [
             "extra-headers",
             "authorization",

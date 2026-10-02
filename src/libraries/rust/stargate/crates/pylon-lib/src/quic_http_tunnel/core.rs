@@ -974,6 +974,16 @@ async fn send_upstream_request(
             upstream_headers.append(name, value.clone());
         }
     }
+    if path_and_query.split('?').next() == Some("/v1/messages") {
+        let private_headers: Vec<_> = upstream_headers
+            .keys()
+            .filter(|name| !is_messages_backend_header(name))
+            .cloned()
+            .collect();
+        for name in private_headers {
+            upstream_headers.remove(name);
+        }
+    }
     if !health_request {
         if let Some(priority) = priority {
             span.record("priority", priority);
@@ -987,16 +997,6 @@ async fn send_upstream_request(
             span.record("dynamo.request_priority", dynamo_priority);
         }
         inject_trace_context(&mut upstream_headers, &span.context());
-    }
-    if path_and_query.split('?').next() == Some("/v1/messages") {
-        let private_headers: Vec<_> = upstream_headers
-            .keys()
-            .filter(|name| !is_messages_backend_header(name))
-            .cloned()
-            .collect();
-        for name in private_headers {
-            upstream_headers.remove(name);
-        }
     }
     let send = async {
         let request_url = join_base_path(&app.upstream_http_base_url, path_and_query)

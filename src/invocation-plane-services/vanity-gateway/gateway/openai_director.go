@@ -125,10 +125,11 @@ type ModelMapping struct {
 }
 
 type ModelInfo struct {
-	Id      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	SupportedEndpoints []string `json:"supported_endpoints,omitempty"`
+	Id                 string   `json:"id"`
+	Object             string   `json:"object"`
+	Created            int64    `json:"created"`
+	OwnedBy            string   `json:"owned_by"`
 }
 
 type ModelListResponse struct {
@@ -333,6 +334,34 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 	} {
 		for id, info := range models {
 			seen[id] = info
+		}
+	}
+	// Annotate aliases that support Messages so shared discovery does not
+	// imply that a Messages-only model accepts OpenAI requests.
+	for id := range messages.modelNameToModelInfo {
+		info := seen[id]
+		for _, endpoint := range []struct {
+			path   string
+			models map[string]ModelInfo
+		}{
+			{"/v1/chat/completions", chatCompletions.modelNameToModelInfo},
+			{"/v1/completions", completions.modelNameToModelInfo},
+			{"/v1/embeddings", embeddings.modelNameToModelInfo},
+			{"/v1/responses", responses.modelNameToModelInfo},
+			{"/v1/messages", messages.modelNameToModelInfo},
+			{"/v1/images/generations", imageGenerations.modelNameToModelInfo},
+			{"/v1/images/edits", imageEdits.modelNameToModelInfo},
+			{"/v1/images/variations", imageVariations.modelNameToModelInfo},
+		} {
+			if _, ok := endpoint.models[id]; ok {
+				info.SupportedEndpoints = append(info.SupportedEndpoints, endpoint.path)
+			}
+		}
+		seen[id] = info
+		for _, models := range []map[string]ModelInfo{chatCompletions.modelNameToModelInfo, completions.modelNameToModelInfo, embeddings.modelNameToModelInfo, responses.modelNameToModelInfo, messages.modelNameToModelInfo, imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo, imageVariations.modelNameToModelInfo} {
+			if _, ok := models[id]; ok {
+				models[id] = info
+			}
 		}
 	}
 	allModels := maps.Values(seen)
@@ -585,7 +614,11 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 
 func (d *ModelDirector) proxyModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) {
 	span := trace.SpanFromContext(request.Context())
-	span.SetAttributes(traceAttrEndpointType.String(traceAttrValueEndpointOpenAI))
+	endpointType := traceAttrValueEndpointOpenAI
+	if request.URL.Path == "/v1/messages" {
+		endpointType = traceAttrValueEndpointAnthropic
+	}
+	span.SetAttributes(traceAttrEndpointType.String(endpointType))
 	setShadowSpanAttribute(span, request)
 
 	resolved, handled := d.resolveModelMappedRequest(writer, request, modelToNVCFUrl)
@@ -624,6 +657,23 @@ func (d *ModelDirector) proxyModelMappedRequest(writer http.ResponseWriter, requ
 func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) (resolvedOpenAIRequest, bool) {
 	body, err := extractOpenAIRequestBody(request)
 	if err != nil {
+		if request.URL.Path == "/v1/messages" {
+			status, message := http.StatusInternalServerError, "failed to read Messages request"
+			var syntaxErr *json.SyntaxError
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, errModelFieldMissing) {
+				status, message = http.StatusBadRequest, "invalid Messages request JSON"
+			}
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				status, message = http.StatusRequestEntityTooLarge, "request body is too large"
+			}
+			if errors.Is(err, errModelFieldMissing) {
+				message = "model field is required"
+			}
+			writeAnthropicError(writer, status, message)
+			return resolvedOpenAIRequest{}, true
+		}
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			// Handle the case where the body is too large
@@ -667,12 +717,29 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 	nvcfUrl, ok := modelToNVCFUrl[body.Model]
 	if !ok {
 		_ = request.Body.Close()
-		http.NotFound(writer, request)
+		if request.URL.Path == "/v1/messages" {
+			writeAnthropicError(writer, http.StatusNotFound, "model not found")
+		} else {
+			http.NotFound(writer, request)
+		}
 		return resolvedOpenAIRequest{}, true
 	}
 	middleware.AddOpenAIRequestMetricAttributes(request.Context(), body.Model, nvcfUrl.functionId)
 
-	if writeFunctionStatusError(writer, nvcfUrl.offlineMessage, nvcfUrl.eol, body.Model) {
+	statusHandled := false
+	if request.URL.Path == "/v1/messages" {
+		if nvcfUrl.offlineMessage != "" {
+			writer.Header().Set("Retry-After", "10800")
+			writeAnthropicError(writer, http.StatusServiceUnavailable, nvcfUrl.offlineMessage)
+			statusHandled = true
+		} else if isModelExpired(nvcfUrl.eol) {
+			writeAnthropicError(writer, http.StatusGone, "model has reached end of life")
+			statusHandled = true
+		}
+	} else {
+		statusHandled = writeFunctionStatusError(writer, nvcfUrl.offlineMessage, nvcfUrl.eol, body.Model)
+	}
+	if statusHandled {
 		_ = request.Body.Close()
 		return resolvedOpenAIRequest{}, true
 	}

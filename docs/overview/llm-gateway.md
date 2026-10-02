@@ -250,21 +250,45 @@ validates content blocks, tools, thinking settings, and beta feature support.
 Upstream status codes, error bodies, and SSE event bytes pass through.
 
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
-`Content-Type`, `Accept`, `User-Agent`, request IDs, and W3C trace headers. It
-requests identity response encoding so usage can be observed without decoding
+`Content-Type`, `Accept`, `User-Agent`, and W3C trace headers. NVCF sets
+`X-Request-Id` from its request context; backend response request IDs pass
+through. It requests identity response encoding so usage can be observed without decoding
 or changing the response. NVCF authentication uses `Authorization: Bearer`.
 Credentials, internal routing headers, and other unlisted headers stop before
-the model API. The gateway also removes the top-level `extra-headers` body
-member. Native Anthropic `metadata` and backend extension fields are preserved.
+the model API. The gateway removes top-level `extra-headers` body members,
+including letter-case and underscore variants. Native Anthropic `metadata` and
+backend extension fields retain their JSON meaning. Request rewriting can
+change key order and JSON escaping; request bytes are not preserved.
+
+Admission fields (`model`, `max_tokens`, `stream`, `messages`, `system`, and
+`tools`) require their canonical lowercase spelling. The gateway rejects
+ambiguous duplicates so the backend and admission logic use the same values.
+Messages use the existing authorization-resolved priority. Pylon strips inbound
+engine priority headers before generating its own Dynamo priority headers.
 
 Token admission estimates system, messages, and tools and reserves
-`max_tokens` for output. JSON usage and streaming `message_start` and
-`message_delta` usage reconcile the reservation. Streaming counts are
-cumulative. Cached input counts are included in input-token accounting.
-Accounting observation caps each JSON response, SSE line, and event data
-buffer at 1 MiB. Oversized or malformed usage is ignored for accounting
-while response bytes continue to the client. When usable usage is absent,
-the gateway releases the output reservation and retains the input estimate.
+`max_tokens` for output. `X-Input-Tokens` and `X-Token-Estimate` both describe
+estimated input, as on other endpoints. JSON usage and streaming
+`message_start` and `message_delta` usage reconcile the reservation. Streaming
+counts are cumulative. Cached input counts are included in input accounting.
+
+The observer skips JSON content without buffering it and reads top-level usage
+even after a large content block. JSON usage, SSE line, and event data buffers
+are bounded at 1 MiB; JSON nesting and key buffers are also bounded. Unsupported
+encoding, oversized usage, malformed usage, and missing usage do not change
+response delivery. Explicit identity encoding and LF, CRLF, and CR SSE line
+endings are supported.
+
+Only complete, valid usage releases unused output tokens. Streaming accounting
+requires final output usage in `message_delta`, `message_stop`, and a clean
+copy. After an accepted request, an interrupted or incomplete response retains
+at least the full output reservation; observed input usage replaces its estimate
+when valid. Reservations expire with the configured rate-limit window. A
+request rejected before generation releases its output reservation. A transport
+failure before response headers also retains output because the gateway cannot
+prove that generation never started. Estimates are not reported as actual
+tokens. Usage outcome counters and warnings expose
+accounting fallbacks, and in-band SSE errors mark the stream as failed.
 
 The existing `MODEL_URI_ALLOWLIST_ENABLED` mode applies to Messages: an
 undeclared path is logged in the default mode and rejected in enforce mode.
@@ -272,7 +296,9 @@ An absent or empty URI list keeps the existing allowlist behavior.
 
 For Vanity Gateway aliases, configure `v2config.anthropic.messages` on the
 existing shared API host, configured by `v2config.openai.host`. The section supports the same model mapping, custom-header
-validation, discovery, and shadow settings as other JSON endpoints:
+validation, discovery, and shadow settings as other JSON endpoints. Shared
+`/v1/models` discovery includes Messages aliases and adds `supported_endpoints`
+to these aliases so clients can distinguish Messages-only models:
 
 ```json
 {
@@ -293,18 +319,38 @@ validation, discovery, and shadow settings as other JSON endpoints:
 }
 ```
 
-For Claude Code, set `ANTHROPIC_BASE_URL` to the LLM invocation origin,
-`ANTHROPIC_AUTH_TOKEN` to the NVCF API key, and select
-`<function-id>/<model-name>` as the model. A Vanity Gateway alias instead uses
-its configured public model name. `/v1/messages/count_tokens` is not added by
-this change. Backend compatibility still needs a real Claude Code tool-loop
-smoke test.
+For Claude Code, configure the invocation origin and pin both foreground and
+background requests to a declared model:
+
+```bash
+export ANTHROPIC_BASE_URL="https://llm.invocation.example.com"
+export ANTHROPIC_AUTH_TOKEN="${NVCF_API_KEY}"
+export ANTHROPIC_MODEL="<function-id>/<model-name>"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_MODEL}"
+```
+
+A Vanity Gateway alias uses its public model name. The gateway consumes the
+native `x-claude-code-session-id` header for stable affinity across turns.
+Clients without that header can set `ANTHROPIC_CUSTOM_HEADERS` to
+`x-multi-turn-session-id: <unique-conversation-id>`. Use a different ID for each
+conversation. See the [Claude Code gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol).
+
+The backend must accept the actual requests produced by the selected Claude
+Code version, including its role layout, tool blocks, thinking settings, and
+beta features. Claude Code 2.1.287 can include a `system` role inside `messages`,
+which stock vLLM 0.20.1 rejects. The gateway preserves these roles. A hand-written native tool loop passing against
+a backend does not prove Claude Code compatibility. Qualify the actual CLI and
+SDK against the deployed backend. `/v1/messages/count_tokens` is not added by
+this change.
 
 This feature requires compatible LLM API Gateway, Stargate router, Pylon
-worker, and Vanity Gateway builds. Upgrade the gateway and worker sides
-together. Source support does not establish availability in a published
-stack release; release owners must publish the images and charts and update
-the self-managed and compute-plane inventories and catalog after qualification.
+worker, and Vanity Gateway builds. Upgrade Pylon workers first, then the router
+and gateway builds, before enabling Messages routes. The new gateway removes
+caller credentials before Stargate, including when an older worker is present;
+older workers do not enforce the new backend metadata allowlist. Source support
+does not establish availability in a published stack release. Release owners
+must publish images and charts and update the self-managed and compute-plane
+inventories and catalog after qualification.
 
 ## Model Routing And Upstream Paths
 
@@ -324,8 +370,11 @@ The LLM Gateway supports sticky routing for multi-turn requests on `/v1/chat/com
 
 Sticky routing is not supported on `/v1/embeddings`.
 
-For Messages, send `x-multi-turn-session-id` on related requests. Without it,
-the gateway derives affinity from the messages payload.
+For Messages, affinity uses `x-multi-turn-session-id`, then the native
+`x-claude-code-session-id`, then a messages payload hash. The payload hash
+changes when a turn is appended and does not ensure multi-turn stickiness.
+Send a stable session header or reuse the returned `x-multi-turn-session-id`
+when later requests need the same affinity.
 
 For OpenAI endpoints, set `prompt_cache_key` in the request body. You
 can also send the `x-multi-turn-session-id` response header value back as the
@@ -335,6 +384,7 @@ The gateway chooses the sticky routing key in this order:
 
 | Endpoint | Precedence |
 | --- | --- |
+| `/v1/messages` | `x-multi-turn-session-id`, `x-claude-code-session-id`, messages hash fallback |
 | `/v1/responses` | `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, input hash fallback |
 | `/v1/chat/completions` | `prompt_cache_key`, `x-multi-turn-session-id`, messages hash fallback |
 
@@ -379,6 +429,7 @@ key, such as health checks, use `function_id="none"`.
 | `llm_api_gateway_http_active_requests` | Up-down counter | `method`, `route`, `function_id` | In-flight inbound HTTP requests. |
 | `llm_api_gateway_upstream_requests_total` | Counter | `upstream`, `result`, `status`, `function_id` | Requests sent to an upstream provider. |
 | `llm_api_gateway_upstream_request_duration_seconds` | Histogram | `upstream`, `result`, `status`, `function_id` | Upstream provider request latency. |
+| `llm_api_gateway_messages_usage_observations_total` | Counter | `status`, `stream`, `function_id` | Messages usage outcomes: complete, partial, missing, oversized, invalid, encoded, error, or rejected. |
 | `llm_api_gateway_llm_tokens_total` | Counter | `endpoint`, `token_type`, `stream`, `function_id` | Token counts reported by upstream providers. |
 | `llm_api_gateway_provider_time_seconds` | Histogram | `endpoint`, `phase`, `stream`, `function_id` | Provider-reported timing phases. |
 | `llm_api_gateway_stream_first_token_seconds` | Histogram | `endpoint`, `function_id` | Time from stream request start to the first token. |

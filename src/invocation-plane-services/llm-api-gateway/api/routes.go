@@ -26,6 +26,14 @@ import (
 )
 
 func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
+	originalErrorHandler := e.HTTPErrorHandler
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		if c.Request().URL.Path == messagesEndpointPath {
+			messagesHTTPErrorHandler(err, c)
+			return
+		}
+		originalErrorHandler(err, c)
+	}
 	e.GET("/healthz", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
