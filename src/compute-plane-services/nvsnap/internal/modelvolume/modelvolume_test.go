@@ -451,3 +451,33 @@ func TestClaimSizedClaim_VoidAfterCompletion(t *testing.T) {
 		t.Fatal("claimGeneration must invert GenerationClaimName")
 	}
 }
+
+// The byte count a writer leaves in the marker is recorded on the primary
+// and served by Lookup in place of the nominal capacity.
+func TestProvisioner_RecordBytes(t *testing.T) {
+	ctx := context.Background()
+	uri := "cache://sized"
+	cfg := Config{Mode: ModeRWX, StorageClass: "sc", Namespace: "nvsnap-system", Kind: KindCache}
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-sized",
+		Labels: map[string]string{cfg.Label(): Key(uri), CompleteLabel: "true"}},
+		Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Ti")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss", VolumeHandle: "h"}}}}
+	kc := fake.NewSimpleClientset(pv)
+	p := &Provisioner{Kube: kc, Cfg: cfg}
+	if st, _ := p.Lookup(ctx, uri); st.PrimaryBytes != 4<<40 {
+		t.Fatalf("without a record the capacity is the size: %+v", st)
+	}
+	if err := p.RecordBytes(ctx, "pv-sized", 65549091410); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := p.Lookup(ctx, uri); st.PrimaryBytes != 65549091410 {
+		t.Errorf("the recorded bytes win over the capacity: %+v", st)
+	}
+	if MarkerBytes([]byte("65549091410\n")) != 65549091410 || MarkerBytes(nil) != 0 || MarkerBytes([]byte("x")) != 0 || MarkerBytes([]byte("-5")) != 0 {
+		t.Error("MarkerBytes parses a count and nothing else")
+	}
+	if err := p.RecordBytes(ctx, "pv-sized", 0); err != nil {
+		t.Error("a zero count is a no-op, not an error")
+	}
+}

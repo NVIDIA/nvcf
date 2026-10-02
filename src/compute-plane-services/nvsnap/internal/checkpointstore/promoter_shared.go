@@ -46,6 +46,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -91,6 +93,31 @@ func LookupVolumeHandleTransform(name string) (VolumeHandleTransform, error) {
 		return nil, fmt.Errorf("unknown volumeHandleTransform %q", name)
 	}
 	return t, nil
+}
+
+// viewCapacity is the capacity a view of primary declares: the byte count
+// recorded on the primary at completion, rounded up to whole GiB, when
+// present.
+func viewCapacity(primary *corev1.PersistentVolume) (resource.Quantity, bool) {
+	n, err := strconv.ParseInt(primary.Annotations["nvsnap.io/volume-bytes"], 10, 64)
+	if err != nil || n <= 0 {
+		return resource.Quantity{}, false
+	}
+	const gib = int64(1) << 30
+	gibs := (n + gib - 1) / gib
+	if gibs < 1 {
+		gibs = 1
+	}
+	return *resource.NewQuantity(gibs*gib, resource.BinarySI), true
+}
+
+// viewRequest is the claim request matching viewCapacity, else the
+// primary's own capacity.
+func viewRequest(primary *corev1.PersistentVolume) resource.Quantity {
+	if q, ok := viewCapacity(primary); ok {
+		return q
+	}
+	return primary.Spec.Capacity[corev1.ResourceStorage]
 }
 
 // SharedVolumePromoter implements Promoter via static RO PVs over a
@@ -230,6 +257,12 @@ func (p *SharedVolumePromoter) ensureViewPV(ctx context.Context, primary *corev1
 	}
 	sec.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{access}
 	sec.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	// A primary on a shared filesystem carries a nominal capacity; the
+	// bytes recorded at completion (modelvolume.BytesAnnotation) are what
+	// the view should declare, so quotas and operators see the real size.
+	if q, ok := viewCapacity(primary); ok {
+		sec.Spec.Capacity = corev1.ResourceList{corev1.ResourceStorage: q}
+	}
 	sec.Spec.CSI = primary.Spec.CSI.DeepCopy()
 	sec.Spec.CSI.VolumeHandle = newHandle
 	sec.Spec.CSI.ReadOnly = readOnly
@@ -639,7 +672,7 @@ func (p *SharedVolumePromoter) MintViewFromPVLabels(ctx context.Context, primary
 			AccessModes:      []corev1.PersistentVolumeAccessMode{access},
 			VolumeName:       roPVName,
 			StorageClassName: &sc,
-			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: primary.Spec.Capacity[corev1.ResourceStorage]}},
+			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: viewRequest(primary)}},
 		},
 	}
 	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {

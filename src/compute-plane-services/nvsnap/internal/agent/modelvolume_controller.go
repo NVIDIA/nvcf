@@ -332,9 +332,12 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 		return // block storage: the staging pod event drives the copy
 	}
 	// The Job wrote through its namespace's read-write view into the
-	// primary in the nvsnap namespace; complete the primary there and
-	// retire the writer view.
+	// primary in the nvsnap namespace. The agent on the Job's node reads
+	// the byte count the writer left in the marker and records it on the
+	// primary, so views carry the real size; then every agent completes
+	// the primary (idempotent) and retires the writer view.
 	sysNS := c.Provisioner.Cfg.SystemNamespace()
+	c.recordJobBytes(ctx, job, uri, log)
 	if err := c.Provisioner.MarkComplete(ctx, uri, sysNS); err != nil {
 		log.WithError(err).Warn("model volume: mark complete failed")
 		return
@@ -343,6 +346,48 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 		log.WithError(err).Warn("model volume: release writer view failed; the reaper retires it with the namespace")
 	}
 	log.Info("model volume: download complete; readers read the primary through their views")
+}
+
+// recordJobBytes stamps the tree size a download Job measured into its
+// marker onto the primary PV, from the agent on the Job pod's node (the
+// marker is read through the pod's volume path). Other agents, and a Job
+// whose pod is already gone, leave it to the primary's capacity.
+func (c *ModelVolumeController) recordJobBytes(ctx context.Context, job *batchv1.Job, uri string, log logrus.FieldLogger) {
+	pods, err := c.Kube.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "batch.kubernetes.io/job-name=" + job.Name})
+	if err != nil || len(pods.Items) == 0 {
+		return
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Spec.NodeName != c.NodeName || len(pod.Spec.Volumes) == 0 {
+			continue
+		}
+		src, err := c.podVolumeHostPath(ctx, pod, pod.Spec.Volumes[0].Name)
+		if err != nil {
+			log.WithError(err).Info("model volume: cannot locate the Job's landing volume; views keep the primary's capacity")
+			return
+		}
+		data, err := os.ReadFile(filepath.Join(c.HostFSRoot, src, modelvolume.MarkerFile))
+		if err != nil {
+			log.WithError(err).Info("model volume: cannot read the completion marker; views keep the primary's capacity")
+			return
+		}
+		bytes := modelvolume.MarkerBytes(data)
+		if bytes == 0 {
+			return
+		}
+		pv, err := c.Provisioner.PrimaryPVName(ctx, uri)
+		if err != nil || pv == "" {
+			log.WithError(err).Warn("model volume: primary volume unknown; bytes not recorded")
+			return
+		}
+		if err := c.Provisioner.RecordBytes(ctx, pv, bytes); err != nil {
+			log.WithError(err).Warn("model volume: record bytes failed")
+			return
+		}
+		log.WithFields(logrus.Fields{"bytes": bytes, "pv": pv}).Info("model volume: tree size recorded on the primary")
+		return
+	}
 }
 
 // promoteStaging turns a staging pod on this node into the completed

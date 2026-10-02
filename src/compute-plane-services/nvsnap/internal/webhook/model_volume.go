@@ -561,8 +561,14 @@ func initMountFor(init *corev1.Container, land modelid.Landing) string {
 	return landingMount(land)
 }
 
+// writerScript runs the download, then leaves the completion marker at
+// the volume root. The marker carries the tree's byte count when du can
+// measure it (the agent sizes the read-only views from it on storage whose
+// claim size is nominal) and is an empty file otherwise; readers only test
+// that it exists.
 func writerScript(download, marker string) string {
-	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[2]s\nsync\ntouch %[1]s\n", shellQuote(marker), download)
+	dir := path.Dir(marker)
+	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[2]s\nsync\n( du -sb %[3]s 2>/dev/null | cut -f1 > %[1]s ) || touch %[1]s\n", shellQuote(marker), download, shellQuote(dir))
 }
 
 // readerScript waits for the marker; past the deadline it runs the

@@ -306,3 +306,32 @@ func TestSharedVolumePromoter_MintViewFromPVLabels_Writer(t *testing.T) {
 		t.Error("minting a view retains the primary")
 	}
 }
+
+// A view declares the bytes recorded on the primary, rounded up to GiB,
+// instead of the primary's nominal capacity.
+func TestSharedVolumePromoter_ViewSizedFromRecordedBytes(t *testing.T) {
+	ctx := context.Background()
+	primary := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-primary", Annotations: map[string]string{"nvsnap.io/volume-bytes": "65549091410"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Ti")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/x"}},
+		},
+	}
+	kc := fake.NewSimpleClientset(primary)
+	tx, _ := LookupVolumeHandleTransform("")
+	p := &SharedVolumePromoter{KubeClient: kc, StorageClass: "fs", Transform: tx}
+	if err := p.MintViewFromPVLabels(ctx, "pv-primary", "view-ro", "claim-ro", "fn", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	want := resource.MustParse("62Gi")
+	pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "view-ro", metav1.GetOptions{})
+	if got := pv.Spec.Capacity[corev1.ResourceStorage]; got.Cmp(want) != 0 {
+		t.Errorf("view capacity = %s, want %s", got.String(), want.String())
+	}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims("fn").Get(ctx, "claim-ro", metav1.GetOptions{})
+	if got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(want) != 0 {
+		t.Errorf("view claim request = %s, want %s", got.String(), want.String())
+	}
+}

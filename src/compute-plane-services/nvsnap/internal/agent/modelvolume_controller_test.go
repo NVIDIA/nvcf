@@ -558,11 +558,33 @@ func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T)
 	if err := minter.MintViewFromPVLabels(ctx, "pv-fs", p.Cfg.WriterViewPVName(mvURI, "sr-fn"), p.Cfg.WriterViewClaimName(mvURI), "sr-fn", nil, false); err != nil {
 		t.Fatal(err)
 	}
-	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
+	// The Job's pod on this node, its landing mounted through the writer
+	// view, with the byte count the writer left in the marker.
+	hostRoot := t.TempDir()
+	jobPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI) + "-x1", Namespace: "sr-fn", UID: "job-pod-uid",
+			Labels: map[string]string{"batch.kubernetes.io/job-name": modelvolume.JobName(mvURI)}},
+		Spec: corev1.PodSpec{NodeName: "node-a", Volumes: []corev1.Volume{{Name: "model", VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: p.Cfg.WriterViewClaimName(mvURI)}}}}},
+	}
+	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, jobPod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	mount := filepath.Join(hostRoot, "var/lib/kubelet/pods/job-pod-uid/volumes/kubernetes.io~csi", p.Cfg.WriterViewPVName(mvURI, "sr-fn"), "mount")
+	if err := os.MkdirAll(mount, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mount, modelvolume.MarkerFile), []byte("65549091410\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", HostFSRoot: hostRoot, KubeletPodsDir: "/var/lib/kubelet/pods", Log: logrus.New()}
 	c.HandleJob(ctx, downloadJob(1))
 	st, _ := p.Lookup(ctx, mvURI)
 	if !st.Complete || st.PrimaryPV != "pv-fs" {
 		t.Fatalf("the primary is complete on the retained PV: %+v", st)
+	}
+	if st.PrimaryBytes != 65549091410 {
+		t.Errorf("the tree size from the marker is recorded on the primary and served by Lookup, got %d", st.PrimaryBytes)
 	}
 	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err == nil {
 		t.Error("the primary claim is released")
@@ -570,8 +592,8 @@ func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T)
 	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, p.Cfg.WriterViewClaimName(mvURI), metav1.GetOptions{}); err == nil {
 		t.Error("the writer view claim is retired with the Job")
 	}
-	if _, err := kc.CoreV1().PersistentVolumes().Get(ctx, p.Cfg.WriterViewPVName(mvURI, "sr-fn"), metav1.GetOptions{}); err == nil {
-		t.Error("the writer view PV is retired with the Job")
+	if _, err := kc.CoreV1().PersistentVolumes().Get(ctx, p.Cfg.WriterViewPVName(mvURI, "sr-fn"), metav1.GetOptions{}); err != nil {
+		t.Error("the writer view PV stays for kubelet to unstage; the reaper retires it once Released")
 	}
 	// A pending reader is served without any detach wait: the filesystem is
 	// shared while written.

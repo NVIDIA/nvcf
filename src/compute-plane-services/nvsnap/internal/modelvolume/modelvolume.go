@@ -146,6 +146,11 @@ const (
 	// from, so liveness and retirement work per generation.
 	SourcePVLabel = "nvsnap.io/source-pv"
 
+	// BytesAnnotation on a primary PV is the byte count of the tree it
+	// holds, measured at completion. Views are sized from it where the
+	// primary's own capacity is nominal (a shared filesystem claim), and
+	// readers' page-cache decisions use it in every mode.
+	BytesAnnotation = "nvsnap.io/volume-bytes"
 	// LastUsedAnnotation on a primary PV is the RFC 3339 time a pod last
 	// admitted against it (or it completed). Retention counts from here.
 	LastUsedAnnotation = "nvsnap.io/last-used"
@@ -526,6 +531,9 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 		if q, ok := best.Spec.Capacity[corev1.ResourceStorage]; ok {
 			st.PrimaryBytes = q.Value()
 		}
+		if b, err := strconv.ParseInt(best.Annotations[BytesAnnotation], 10, 64); err == nil && b > 0 {
+			st.PrimaryBytes = b
+		}
 		st.Generation, st.PrimaryCreated = Generation(best), best.CreationTimestamp.Time
 		st.DeltaFingerprint = best.Annotations[DeltaFingerprintAnnotation]
 		st.RefreshStable = best.Annotations[RefreshStableAnnotation] == "true"
@@ -617,17 +625,53 @@ func (p *Provisioner) MarkCompleteClaim(ctx context.Context, uri, ns, name strin
 	return nil
 }
 
-// ReleaseWriterView removes the read-write view a download Job wrote
-// through in ns once the primary is complete. Best effort: the reaper
-// retires views whose namespace is gone.
+// ReleaseWriterView releases the read-write view a download Job wrote
+// through in ns once the primary is complete. Only the claim goes: kubelet
+// still has the volume staged until the Job's pod is reaped, and it
+// unstages against the PV, so the PV is left to turn Released and the
+// reaper retires it like any other view (a PV deleted under a staged
+// mount leaked the NFS mount on the node, OCI FSS 2026-10-02).
 func (p *Provisioner) ReleaseWriterView(ctx context.Context, uri, ns string) error {
 	if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, p.Cfg.WriterViewClaimName(uri), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete writer view claim %s/%s: %w", ns, p.Cfg.WriterViewClaimName(uri), err)
 	}
-	if err := p.Kube.CoreV1().PersistentVolumes().Delete(ctx, p.Cfg.WriterViewPVName(uri, ns), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete writer view PV %s: %w", p.Cfg.WriterViewPVName(uri, ns), err)
+	return nil
+}
+
+// RecordBytes stamps the measured byte count of the tree on the primary
+// PV. Idempotent; a conflict is retried by the next caller.
+func (p *Provisioner) RecordBytes(ctx context.Context, pvName string, bytes int64) error {
+	if bytes <= 0 {
+		return nil
+	}
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, BytesAnnotation, strconv.FormatInt(bytes, 10))
+	if _, err := p.Kube.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("record bytes on volume %s: %w", pvName, err)
 	}
 	return nil
+}
+
+// PrimaryPVName is the volume behind uri's primary: the writer claim's
+// bound volume while the download runs, the complete PV afterwards.
+func (p *Provisioner) PrimaryPVName(ctx context.Context, uri string) (string, error) {
+	st, err := p.Lookup(ctx, uri)
+	if err != nil {
+		return "", err
+	}
+	if st.PrimaryPV != "" {
+		return st.PrimaryPV, nil
+	}
+	return st.InFlightPV, nil
+}
+
+// MarkerBytes parses the byte count a writer left in the completion
+// marker; 0 when the marker is empty or not a number.
+func MarkerBytes(data []byte) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // Detached reports whether no VolumeAttachment references pv: the moment
