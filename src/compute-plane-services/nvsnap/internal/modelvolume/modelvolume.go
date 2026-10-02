@@ -400,12 +400,35 @@ func (p *Provisioner) ClaimSizedClaimNamed(ctx context.Context, name, uri, ns st
 	_, err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{})
 	switch {
 	case err == nil:
-		return name, true, nil
 	case apierrors.IsAlreadyExists(err):
 		return name, false, nil
 	default:
 		return "", false, fmt.Errorf("create claim %s/%s: %w", ns, name, err)
 	}
+	// The Create is the election, but the previous winner releases its
+	// claim the moment it labels the volume complete. A caller that looked
+	// up the set before that release and reaches Create after it wins an
+	// election for work that is already done. Re-check now that the claim
+	// is ours: a complete volume at or past this generation means the
+	// election is void, so give the claim back and report no winner.
+	st, lerr := p.Lookup(ctx, uri)
+	if lerr == nil && st.Complete && st.Generation >= p.Cfg.claimGeneration(uri, name) {
+		if derr := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			return "", false, fmt.Errorf("release void claim %s/%s: %w", ns, name, derr)
+		}
+		return name, false, nil
+	}
+	return name, true, nil
+}
+
+// claimGeneration is the inverse of GenerationClaimName: the generation a
+// claim name stands for, 1 for the base name.
+func (c Config) claimGeneration(uri, name string) int {
+	base := c.ClaimName(uri)
+	if n, err := strconv.Atoi(strings.TrimPrefix(name, base+"-g")); err == nil && strings.HasPrefix(name, base+"-g") && n > 1 {
+		return n
+	}
+	return 1
 }
 
 // WaitBound polls until the claim in ns has a bound volume and returns

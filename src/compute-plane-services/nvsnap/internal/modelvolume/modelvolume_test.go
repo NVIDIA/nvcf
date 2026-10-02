@@ -5,6 +5,7 @@ package modelvolume
 
 import (
 	"context"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -384,5 +385,42 @@ func TestLookup_ServesNewestGeneration(t *testing.T) {
 	cc := Config{Kind: KindCache}
 	if cc.GenerationClaimName(uri, 1) != cc.ClaimName(uri) || cc.GenerationClaimName(uri, 2) != cc.ClaimName(uri)+"-g2" {
 		t.Error("generation 1 keeps the plain claim name; later ones carry a suffix")
+	}
+}
+
+// A claim whose Create succeeds only because the previous winner just
+// released it, after labelling the volume complete, must not start a
+// second collection of the same set. The Create is re-checked against a
+// complete volume at or past the claim's generation.
+func TestClaimSizedClaim_VoidAfterCompletion(t *testing.T) {
+	ctx := context.Background()
+	uri := "cache://abc"
+	cfg := Config{Mode: ModeBlock, StorageClass: "sc", Namespace: "nvsnap-system", Kind: KindCache}
+	complete := func(name string, gen string) *corev1.PersistentVolume {
+		pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name,
+			Labels: map[string]string{cfg.Label(): Key(uri), CompleteLabel: "true"}, Annotations: map[string]string{}},
+			Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+				PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:v:" + name}}},
+			Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased}}
+		if gen != "" {
+			pv.Annotations[GenerationAnnotation] = gen
+		}
+		return pv
+	}
+	kc := fake.NewSimpleClientset(complete("pv-gen1", ""))
+	p := &Provisioner{Kube: kc, Cfg: cfg}
+	if _, created, err := p.ClaimSizedClaim(ctx, uri, "nvsnap-system", resource.MustParse("2Gi")); err != nil || created {
+		t.Fatalf("a complete set voids the election: created=%v err=%v", created, err)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, cfg.ClaimName(uri), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the void claim must be released, got %v", err)
+	}
+	// A later generation is new work: generation 1 being complete does not
+	// void a claim for generation 2.
+	if _, created, err := p.ClaimSizedClaimNamed(ctx, cfg.GenerationClaimName(uri, 2), uri, "nvsnap-system", resource.MustParse("2Gi")); err != nil || !created {
+		t.Fatalf("generation 2 is not done yet: created=%v err=%v", created, err)
+	}
+	if cfg.claimGeneration(uri, cfg.GenerationClaimName(uri, 3)) != 3 || cfg.claimGeneration(uri, cfg.ClaimName(uri)) != 1 {
+		t.Fatal("claimGeneration must invert GenerationClaimName")
 	}
 }
