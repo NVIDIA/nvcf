@@ -355,6 +355,11 @@ func (p *StargateProvider) Proxy(
 	if request.Header != nil {
 		outbound.Header = request.Header.Clone()
 	}
+	// Send a fixed-length body, not chunked: Stargate can reject before reading
+	// a chunked body and then close the connection, poisoning the pool.
+	if length, err := strconv.ParseInt(outbound.Header.Get("Content-Length"), 10, 64); err == nil && length > 0 {
+		outbound.ContentLength = length
+	}
 	// X-Priority is gateway-owned: a client-supplied value cloned from the
 	// inbound request must never reach Stargate, even when no priority
 	// resolves for this request.
