@@ -78,6 +78,7 @@ public class InstanceV2Repository {
         if (entity.getCreateTimeuuid() == null) {
             entity.setCreateTimeuuid(TimeUtils.getTimeUuidNow());
         }
+        populateCreationBucket(entity);
 
         try {
             if (!instanceV2Repo.isInserted(entity) ||
@@ -189,8 +190,26 @@ public class InstanceV2Repository {
 
     @Observed
     public void restore(@NotNull InstanceV2Entity entity) {
+        populateCreationBucket(entity);
         instanceByDayRepo.update(InstanceConverter.toInstanceByDayEntity(entity));
         instanceV2Repo.update(entity);
+    }
+
+    @Observed
+    public void updateCreationBucket(
+            String instanceId,
+            Instant creationBucket,
+            long writeTimestamp) {
+        try {
+            instanceV2Repo.updateCreationBucket(
+                    instanceId, creationBucket, writeTimestamp);
+        } catch (Exception exception) {
+            log.error("Failed to update creation bucket for instance {}, error: {}",
+                    instanceId, exception.getMessage(), exception);
+            throw new IcmsInternalServerException(
+                    String.format("Failed to update instance creation bucket, error: %s",
+                            exception.getMessage()), exception);
+        }
     }
 
 
@@ -499,10 +518,10 @@ public class InstanceV2Repository {
         }
 
         instanceV2Repo.applyActions(instanceV2Repo::findAll,
-                                        action,
-                                        icmsConfigurationProperties.getDatabaseReadPageSize(),
-                                        pauseBetweenPagesInMs,
-                                        0); //TODO Yury do we need a pause here
+                                         action,
+                                         icmsConfigurationProperties.getDatabaseReadPageSize(),
+                                         pauseBetweenPagesInMs,
+                                         0);
     }
 
 
@@ -652,6 +671,13 @@ public class InstanceV2Repository {
                       entity.getInstanceId());
             throw new IcmsConflictException(String.format("Instance with %s id already exists",
                                                          entity.getInstanceId()));
+        }
+    }
+
+    private void populateCreationBucket(InstanceV2Entity entity) {
+        if (entity.getCreationBucket() == null && entity.getCreateTimeuuid() != null) {
+            entity.setCreationBucket(TimeUtils.getDateFromInstant(
+                    TimeUtils.getInstantFromUuid(entity.getCreateTimeuuid())));
         }
     }
 
