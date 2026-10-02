@@ -152,6 +152,11 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 	case InitCacheJobInProgress:
 		return ModelCachingInProgress, current.Name
 	case InitCacheJobFailed:
+		// Classify before deleting the Job: its pods carry the termination message.
+		reason := modelcachetypes.ReasonInitJobFailed
+		if c.initCacheJobPodsReportNoSpace(ctx, initJob.Name) {
+			reason = modelcachetypes.ReasonCacheVolumeFull
+		}
 		background := metav1.DeletePropagationBackground
 		if err := jobs.Delete(ctx, initJob.Name, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil && !errors.IsNotFound(err) {
 			log.WithError(err).Warnf("failed to delete failed writer job %s", initJob.Name)
@@ -161,7 +166,7 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 		if err := pvcs.Delete(ctx, current.Name, metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
 			log.WithError(err).Warnf("failed to delete unpopulated shared cache claim %s", current.Name)
 		}
-		return fail(modelcachetypes.ReasonInitJobFailed, fmt.Errorf("writer job %s failed", initJob.Name))
+		return fail(reason, fmt.Errorf("writer job %s failed (%s)", initJob.Name, reason))
 	case InitCacheJobCompleted:
 		job, err := jobs.Get(ctx, initJob.Name, metav1.GetOptions{})
 		if err != nil {
