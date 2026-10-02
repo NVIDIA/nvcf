@@ -12,7 +12,6 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
@@ -556,19 +555,14 @@ func tokenEnv(main *corev1.Container) []corev1.EnvVar {
 // entries of the template are dropped: the model lives in the landing
 // volume now, not under the cachedir.
 func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
-	root := ""
-	switch {
-	case m.ModelVolume.Cfg.Mode == modelvolume.ModeRWX:
-		key := modelvolume.Key(uri)
-		if m.Composer != nil {
-			key = checkpointstore.ShortHash(checkpointstore.ComputeHash(m.Composer.Compose(pod, m.MainContainer)))[:16]
-		}
-		root = path.Join(landingMount(land), ".nvsnap", "cache", key)
-	case m.CacheDir != "":
-		root = path.Join(m.CacheDir, "cache")
-	default:
+	// Both modes keep the compile caches in the pod-local cachedir. The
+	// reader's view of the model volume is read-only in every mode (the
+	// shared filesystem claim too: "Read-only file system: /model/.nvsnap",
+	// OCI FSS 2026-10-02), so nothing under the landing is writable.
+	if m.CacheDir == "" {
 		return nil
 	}
+	root := path.Join(m.CacheDir, "cache")
 	patches := make([]PatchOp, 0, 8)
 	if main.Env == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/env", m.MainContainer), Value: []any{}})
@@ -588,10 +582,10 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	if hfHomeUnderLanding(main, land) && !hasEnv(main, "HF_MODULES_CACHE") {
 		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: path.Join(root, "hf_modules")}))
 	}
-	if m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX && m.CacheDir != "" {
-		// Block mode keeps the local cachedir emptyDir the capture reads,
-		// and shares the compile caches through a per-key cache volume.
-		patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
+	patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
+	if m.ModelVolume.Cfg.Mode != modelvolume.ModeRWX {
+		// Block mode shares the compile caches through a per-key cache
+		// volume; on a shared filesystem the set stays per pod for now.
 		patches = m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
 	}
 	return patches

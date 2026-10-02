@@ -509,8 +509,13 @@ func TestModelVolume_ReaderRWX_SharesClaim(t *testing.T) {
 	if v.labels[modelvolume.PendingLabel] != "" {
 		t.Error("RWX readers are not pending; the filesystem delivers the marker")
 	}
-	if !strings.HasPrefix(v.env["TORCHINDUCTOR_CACHE_DIR"], "/config/models/.nvsnap/cache/") || !strings.HasSuffix(v.env["TORCHINDUCTOR_CACHE_DIR"], "/torchinductor") {
-		t.Errorf("RWX mode: compile caches live in the shared volume under a config key, got %q", v.env["TORCHINDUCTOR_CACHE_DIR"])
+	// The shared claim is mounted read-only, so compile caches cannot live
+	// under it; they stay in the pod-local cachedir like block mode.
+	if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" {
+		t.Errorf("RWX mode: compile caches live in the local cachedir, got %q", v.env["TORCHINDUCTOR_CACHE_DIR"])
+	}
+	if _, ok := v.volumes["nvsnap-cachedir"]; !ok {
+		t.Errorf("RWX mode: the local cachedir emptyDir is mounted, volumes %v", v.volumes)
 	}
 }
 
@@ -559,8 +564,19 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	if ienv["HF_HOME"] != downloadMount || ienv["HOME"] != downloadMount || v.newInits[0].VolumeMounts[0].MountPath != downloadMount || !strings.Contains(v.newInits[0].Args[0], "/nvsnap-model/.nvsnap-complete") {
 		t.Errorf("the injected init mounts the landing at %s and waits for the marker there: env=%v mounts=%v", downloadMount, ienv, v.newInits[0].VolumeMounts)
 	}
-	if len(v.newInits) != 1 || v.newInits[0].Name != "nvsnap-model-download" || !strings.Contains(v.newInits[0].Args[0], "while [ ! -f") {
-		t.Errorf("the pod gets a wait init, got %v", v.newInits)
+	// The wait init plus the cachedir init: compile caches stay local in
+	// every mode because the shared claim is read-only for readers.
+	var wait, cachedir bool
+	for _, c := range v.newInits {
+		switch c.Name {
+		case "nvsnap-model-download":
+			wait = strings.Contains(c.Args[0], "while [ ! -f")
+		case "nvsnap-cachedir-init":
+			cachedir = true
+		}
+	}
+	if !wait || !cachedir || len(v.newInits) != 2 {
+		t.Errorf("the pod gets a wait init and the cachedir init, got %v", v.newInits)
 	}
 	if v.env["HF_HUB_OFFLINE"] != "1" {
 		t.Error("engine must start offline and read the volume")
