@@ -18,6 +18,10 @@ tabs:
     display-name: Observability
     icon: chart-line
     slug: observability
+  manifest:
+    display-name: Manifest
+    icon: list
+    slug: manifest
   release-notes:
     display-name: Release Notes
     icon: clock
@@ -34,18 +38,12 @@ navigation:
   - page: Documentation Archive
     path: ../docs/overview/documentation-archive.md
     slug: documentation-archive
-  - page: Compatibility Matrix
-    path: ../docs/overview/compatibility-matrix.md
-    slug: compatibility-matrix
   - section: Before You Deploy
     skip-slug: true
     contents:
     - page: Infrastructure Sizing
       path: ../docs/overview/infrastructure-sizing.md
       slug: infrastructure-sizing
-    - page: Manifest
-      path: ../docs/overview/manifest.md
-      slug: manifest
     - page: Image Mirroring
       path: ../docs/overview/image-mirroring.md
       slug: image-mirroring
@@ -427,17 +425,22 @@ navigation:
     - page: Vault/OpenBao
       path: ../docs/observability/metrics/vault-openbao/metrics.md
       slug: vault-open-bao
+- tab: manifest
+  layout:
+  - page: Artifact Manifest
+    path: ../docs/overview/manifest.md
+    slug: artifacts
 - tab: release-notes
   layout:
   - changelog: ./changelog
     title: Releases
     slug: ""
+  - page: Compatibility Matrix
+    path: ../docs/overview/compatibility-matrix.md
+    slug: compatibility-matrix
   - section: Stack Release Notes
     skip-slug: true
     contents:
-    - page: Release Notes Overview
-      path: ../docs/overview/release-notes/index.md
-      slug: release-notes-overview
     - page: 1.0.1 Release Notes
       path: ../docs/overview/release-notes/1.0.1.md
       slug: 1-0-1-release-notes

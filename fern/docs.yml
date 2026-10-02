@@ -62,8 +62,32 @@ check:
     broken-links: error
 
 redirects:
+  - source: /nvcf/overview/compatibility-matrix
+    destination: /nvcf/release-notes/compatibility-matrix
+  - source: /nvcf/release-notes/release-notes-overview
+    destination: /nvcf/release-notes
+  - source: /nvcf/release-notes/2026/10/1
+    destination: /nvcf/release-notes
+  - source: /nvcf/dev/overview/compatibility-matrix
+    destination: /nvcf/dev/release-notes/compatibility-matrix
+  - source: /nvcf/dev/release-notes/release-notes-overview
+    destination: /nvcf/dev/release-notes
+  - source: /nvcf/dev/release-notes/2026/10/1
+    destination: /nvcf/dev/release-notes
+  - source: /nvcf/1.0.0/overview/compatibility-matrix
+    destination: /nvcf/1.0.0/release-notes/compatibility-matrix
+  - source: /nvcf/1.0.0/release-notes/release-notes-overview
+    destination: /nvcf/1.0.0/release-notes
+  - source: /nvcf/1.0.0/release-notes/2026/10/1
+    destination: /nvcf/1.0.0/release-notes
+  - source: /nvcf/overview/manifest
+    destination: /nvcf/manifest/artifacts
+  - source: /nvcf/dev/overview/manifest
+    destination: /nvcf/dev/manifest/artifacts
+  - source: /nvcf/1.0.0/overview/manifest
+    destination: /nvcf/1.0.0/manifest/artifacts
   - source: /nvcf/overview/release-notes-overview
-    destination: /nvcf/release-notes/release-notes-overview
+    destination: /nvcf/release-notes
   - source: /nvcf/overview/1-0-1-release-notes
     destination: /nvcf/release-notes/1-0-1-release-notes
   - source: /nvcf/overview/0-6-1-to-1-0-1-upgrade
@@ -77,7 +101,7 @@ redirects:
   - source: /nvcf/overview/legacy-0-5-0-to-0-6-0-upgrade
     destination: /nvcf/release-notes/legacy-0-5-0-to-0-6-0-upgrade
   - source: /nvcf/dev/overview/release-notes-overview
-    destination: /nvcf/dev/release-notes/release-notes-overview
+    destination: /nvcf/dev/release-notes
   - source: /nvcf/dev/overview/1-0-1-release-notes
     destination: /nvcf/dev/release-notes/1-0-1-release-notes
   - source: /nvcf/dev/overview/0-6-1-to-1-0-1-upgrade
@@ -91,7 +115,7 @@ redirects:
   - source: /nvcf/dev/overview/legacy-0-5-0-to-0-6-0-upgrade
     destination: /nvcf/dev/release-notes/legacy-0-5-0-to-0-6-0-upgrade
   - source: /nvcf/1.0.0/overview/release-notes-overview
-    destination: /nvcf/1.0.0/release-notes/release-notes-overview
+    destination: /nvcf/1.0.0/release-notes
   - source: /nvcf/1.0.0/overview/1-0-1-release-notes
     destination: /nvcf/1.0.0/release-notes/1-0-1-release-notes
   - source: /nvcf/1.0.0/overview/0-6-1-to-1-0-1-upgrade
@@ -143,25 +167,25 @@ redirects:
   - source: "/nvcf/dev/overview"
     destination: "/nvcf/dev/overview/overview"
   - source: "/nvcf/compatibility-matrix"
-    destination: "/nvcf/overview/compatibility-matrix"
+    destination: "/nvcf/release-notes/compatibility-matrix"
   - source: "/nvcf/dev/compatibility-matrix"
-    destination: "/nvcf/dev/overview/compatibility-matrix"
+    destination: "/nvcf/dev/release-notes/compatibility-matrix"
   - source: "/nvcf/quickstart"
     destination: "/nvcf/overview/quickstart"
   - source: "/nvcf/dev/quickstart"
     destination: "/nvcf/dev/overview/quickstart"
   - source: "/nvcf/release-notes-overview"
-    destination: "/nvcf/release-notes/release-notes-overview"
+    destination: "/nvcf/release-notes"
   - source: "/nvcf/dev/release-notes-overview"
-    destination: "/nvcf/dev/release-notes/release-notes-overview"
+    destination: "/nvcf/dev/release-notes"
   - source: "/nvcf/infrastructure-sizing"
     destination: "/nvcf/overview/infrastructure-sizing"
   - source: "/nvcf/dev/infrastructure-sizing"
     destination: "/nvcf/dev/overview/infrastructure-sizing"
   - source: "/nvcf/manifest"
-    destination: "/nvcf/overview/manifest"
+    destination: "/nvcf/manifest/artifacts"
   - source: "/nvcf/dev/manifest"
-    destination: "/nvcf/dev/overview/manifest"
+    destination: "/nvcf/dev/manifest/artifacts"
   - source: "/nvcf/image-mirroring"
     destination: "/nvcf/overview/image-mirroring"
   - source: "/nvcf/dev/image-mirroring"
@@ -651,7 +675,7 @@ redirects:
   - source: "/nvcf/self-managed/1.0.0/local-development"
     destination: "/nvcf/overview/local-development"
   - source: "/nvcf/self-managed/1.0.0/manifest"
-    destination: "/nvcf/overview/manifest"
+    destination: "/nvcf/manifest/artifacts"
   - source: "/nvcf/self-managed/1.0.0/metrics-overview"
     destination: "/nvcf/observability/1.0.0/metrics-overview"
   - source: "/nvcf/self-managed/1.0.0/monitoring"
@@ -701,7 +725,7 @@ redirects:
   - source: "/nvcf/self-managed/1.0.0/runbooks"
     destination: "/nvcf/self-managed/control-plane-operations"
   - source: "/nvcf/self-managed/1.0.0/release-notes-overview"
-    destination: "/nvcf/release-notes/release-notes-overview"
+    destination: "/nvcf/release-notes"
   - source: "/nvcf/self-managed/1.0.0/0-20-6-release-notes"
     destination: "/nvcf/release-notes/1-0-1-release-notes"
   - source: "/nvcf/self-managed/1.0.0/0-6-1-to-0-20-6-upgrade"
@@ -802,7 +826,7 @@ redirects:
   - source: "/nvcf/self-managed/1.0.1/local-development"
     destination: "/nvcf/overview/local-development"
   - source: "/nvcf/self-managed/1.0.1/manifest"
-    destination: "/nvcf/overview/manifest"
+    destination: "/nvcf/manifest/artifacts"
   - source: "/nvcf/self-managed/1.0.1/metrics-overview"
     destination: "/nvcf/observability/1.0.0/metrics-overview"
   - source: "/nvcf/self-managed/1.0.1/monitoring"
@@ -852,7 +876,7 @@ redirects:
   - source: "/nvcf/self-managed/1.0.1/runbooks"
     destination: "/nvcf/self-managed/control-plane-operations"
   - source: "/nvcf/self-managed/1.0.1/release-notes-overview"
-    destination: "/nvcf/release-notes/release-notes-overview"
+    destination: "/nvcf/release-notes"
   - source: "/nvcf/self-managed/1.0.1/0-20-6-release-notes"
     destination: "/nvcf/release-notes/1-0-1-release-notes"
   - source: "/nvcf/self-managed/1.0.1/0-6-1-to-0-20-6-upgrade"
