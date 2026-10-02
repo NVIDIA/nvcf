@@ -122,4 +122,45 @@ if [[ -e "${workdir}/docs/observability-1.4.0" || -e "${workdir}/fern/products/o
   exit 1
 fi
 
+# Legacy exports copy the historical tree, preserving the current product.
+unset FAKE_FREEZE_FAIL
+mkdir -p "${workdir}/docs/v0.6.1"
+printf '# Historical\n' > "${workdir}/docs/v0.6.1/index.md"
+printf 'navigation:\n  - page: Overview\n    path: ../../../docs/v0.6.1/index.md\n' > "${workdir}/fern/products/self-managed/v0.6.1.yml"
+cat > "${workdir}/fake-legacy" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "${FAKE_FREEZE_ARGS}"
+output=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --legacy-output) output="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+mkdir -p "$output"
+printf 'stack: {version: 0.6.2-rc.0}\n' > "$output/catalog.yaml"
+printf '# Exact inventory\n' > "$output/manifest.md"
+printf '# Exact downloads\n' > "$output/image-mirroring.md"
+EOF
+chmod +x "${workdir}/fake-legacy"
+export DOCS_VERSION_SYNC_CMD="${workdir}/fake-legacy"
+"${workdir}/tools/scripts/cut-docs-version.sh" --stack self-managed --version 0.6.2 \
+  --legacy-source v0.6.1 --inventory candidate.json --draft > "${workdir}/legacy-output.txt"
+cmp "${workdir}/docs/v0.6.1/index.md" "${workdir}/docs/self-managed-0.6.2/index.md"
+grep -q 'docs/self-managed-0.6.2/index.md' "${workdir}/fern/products/self-managed/0.6.2.yml"
+grep -q '0.6.2-rc.0' "${workdir}/docs/version-catalog/self-managed-0.6.2.yaml"
+grep -qx -- '--legacy-draft' "${FAKE_FREEZE_ARGS}"
+grep -q '# Exact inventory' "${workdir}/docs/self-managed-0.6.2/manifest.md"
+grep -q '# Self-managed' "${workdir}/docs/self-managed/overview.md"
+if grep -q '0.6.2' "${workdir}/fern/docs.yml"; then
+  echo "legacy cut must not change the latest version or product menu"
+  exit 1
+fi
+if "${workdir}/tools/scripts/cut-docs-version.sh" --stack self-managed --version 0.6.3 \
+  --legacy-source ../outside --inventory candidate.json > /dev/null 2>&1; then
+  echo "legacy source traversal must be rejected"
+  exit 1
+fi
+
 echo "test-cut-docs-version: PASS"

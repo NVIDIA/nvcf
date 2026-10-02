@@ -171,6 +171,55 @@ unversioned and is never cut.
 Add or adjust `compatibility` entries for the new release before regenerating so
 the matrix reflects the qualified combination.
 
+## Freeze a legacy maintenance release
+
+A legacy maintenance release starts from its historical full documentation
+tree. Do not copy the current product tree or combine its inventory with the
+latest compute-plane and observability releases.
+
+Download the exact self-managed inventory attached to the selected GitHub
+release, and fetch its tag. Verify public artifact versions separately.
+Use a catalog with the required historical manifest descriptions and exact
+publication records. The export discards current version overrides,
+supplemental artifacts, and release-set metadata. Artifacts absent from the
+inventory are not carried into the manifest.
+
+```bash
+./tools/scripts/cut-docs-version.sh \
+  --stack self-managed --version X.Y.Z \
+  --legacy-source vA.B.C --inventory /tmp/release-inventory.json \
+  --catalog /tmp/verified-legacy-catalog.yaml
+```
+
+The source must be an existing `docs/vA.B.C/` tree with matching
+`fern/products/self-managed/vA.B.C.yml`. The inventory version must equal
+`X.Y.Z`. `--draft` also accepts an `X.Y.Z-rc.N` inventory and adds a warning
+to the generated manifest. It preserves the candidate tag and commit in the catalog;
+it does not qualify the release or prove stable publication.
+
+The script stages the export, copies the legacy tree, replaces its generated
+manifest and control-plane download blocks, and writes the new navigation and
+catalog snapshot. Historical compute-plane and CLI instructions need a
+separate review because they are outside the selected control-plane inventory.
+Keep the latest stable version first in the product menu. Record candidate
+provenance and publication status in the manifest. Other pages link to the
+manifest for artifact locations.
+
+After editing prose, verify the frozen generated blocks against their original
+inventory without permitting normal synchronization to write frozen trees:
+
+```bash
+go run -C tools/docs-version-sync . \
+  --legacy-inventory /tmp/release-inventory.json \
+  --legacy-source vA.B.C --stack-version X.Y.Z \
+  --legacy-output docs/self-managed-X.Y.Z \
+  --catalog docs/version-catalog/self-managed-X.Y.Z.yaml --check
+```
+
+Include `--legacy-draft` when checking a candidate snapshot. Before publishing
+stable instructions, reconcile the draft with the stable inventory and public
+locations, complete live upgrade qualification, and remove the draft warnings.
+
 ## Add an artifact to the stack inventory
 
 For the complete dependency workflow, including ownership, optionality, and

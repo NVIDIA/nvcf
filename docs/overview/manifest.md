@@ -19,6 +19,17 @@ artifact versions.
 
 </Warning>
 
+## Upgrade artifact availability
+
+Before upgrading to 1.0.1, check task-worker and shared-storage images
+advertised by the charts as well as images in rendered pod templates.
+Public worker-artifact publication is tracked in
+[issue 2196](https://github.com/NVIDIA/nvcf/issues/2196). Publication of the
+upgrade-receipt helper is tracked in
+[issue 2197](https://github.com/NVIDIA/nvcf/issues/2197). These remain
+release-qualification blockers. Same-version upstream images used in isolated
+QA do not establish availability at the released NGC locations.
+
 ## Prepare Helm charts for Helmfile
 
 The self-managed Helmfile bundles currently expect NVCF charts in an OCI

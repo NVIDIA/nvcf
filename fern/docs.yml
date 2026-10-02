@@ -44,6 +44,9 @@ products:
       - display-name: dev
         path: products/self-managed/dev.yml
         slug: dev
+      - display-name: "0.6.2"
+        path: products/self-managed/0.6.2.yml
+        slug: "0.6.2"
       - display-name: "0.6.1 (legacy)"
         path: products/self-managed/v0.6.1.yml
         slug: "v0.6.1"
@@ -836,3 +839,6 @@ redirects:
     destination: "/nvcf/overview/0-6-1-to-1-0-1-upgrade"
   - source: "/nvcf/overview/0-6-1-to-1-0-0-upgrade"
     destination: "/nvcf/overview/0-6-1-to-1-0-1-upgrade"
+
+  - source: "/nvcf/self-managed/0.6.2/0-6-1-to-0-6-2-upgrade"
+    destination: "/nvcf/overview/0-6-1-to-0-6-2-upgrade"

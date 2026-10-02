@@ -553,8 +553,11 @@ func TestRenderImageMirroringCLIContentMatchesPublicationState(t *testing.T) {
 	if strings.Contains(pendingOutput, "The extracted directory contains") {
 		t.Fatalf("pending CLI content implies extraction already occurred:\n%s", pendingOutput)
 	}
-	if !strings.Contains(pendingOutput, "Package contents and extraction instructions will be available after publication or mirroring") {
-		t.Fatalf("pending CLI content lacks actionable status guidance:\n%s", pendingOutput)
+	if !strings.Contains(pendingOutput, "[artifact manifest](./manifest.md)") {
+		t.Fatalf("pending CLI content lacks the manifest reference:\n%s", pendingOutput)
+	}
+	if strings.Contains(pendingOutput, "Publication pending") || strings.Contains(pendingOutput, "ngc registry resource download-version") {
+		t.Fatalf("CLI content repeats publication status or invents a download:\n%s", pendingOutput)
 	}
 
 	published := testCatalog()
@@ -603,9 +606,8 @@ func TestRenderSupplementalStackDownloadsMatchPublicationState(t *testing.T) {
 					if strings.Contains(got, tt.artifact+":${") {
 						t.Fatalf("pending %s renders a download command:\n%s", tt.artifact, got)
 					}
-					want := "Publication pending: " + tt.artifact + " 0.5.0 is not yet available for download"
-					if !strings.Contains(got, want) {
-						t.Fatalf("pending %s lacks publication status:\n%s", tt.artifact, got)
+					if !strings.Contains(got, "artifact manifest") || strings.Contains(got, "Publication pending") {
+						t.Fatalf("pending %s must refer publication status to the manifest:\n%s", tt.artifact, got)
 					}
 				})
 			}

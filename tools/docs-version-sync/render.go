@@ -108,7 +108,7 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 	b.WriteString("\n")
 	b.WriteString("# Download a specific control-plane stack version\n")
 	if stackPending {
-		b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", stack.Name, stack.Version))
+		b.WriteString(fmt.Sprintf("# See the artifact manifest for the %s %s download location.\n", stack.Name, stack.Version))
 	} else {
 		refWithVersion := strings.Replace(ref, stack.Version, "${STACK_VERSION}", 1)
 		b.WriteString("ngc registry resource download-version \\\n")
@@ -118,7 +118,7 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 	for _, supplemental := range supplementalStacks {
 		b.WriteString(fmt.Sprintf("\n# Download a specific %s stack version\n", supplemental.label))
 		if supplemental.pending {
-			b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", supplemental.artifact.Name, supplemental.artifact.Version))
+			b.WriteString(fmt.Sprintf("# See the artifact manifest for the %s %s download location.\n", supplemental.artifact.Name, supplemental.artifact.Version))
 		} else {
 			refWithVersion := strings.Replace(supplemental.ref, supplemental.artifact.Version, "${"+supplemental.versionEnv+"}", 1)
 			b.WriteString("ngc registry resource download-version \\\n")
@@ -133,7 +133,7 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 func renderImageMirroringStackSnippet(catalog *Catalog) (string, error) {
 	stack := catalog.stackArtifact()
 	if catalog.publicationIsPending(stack) {
-		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", stack.Name, stack.Version), nil
+		return fmt.Sprintf("For `%s` `%s` downloads, see the [artifact manifest](./manifest.md).\n", stack.Name, stack.Version), nil
 	}
 	ref, err := catalog.resourceRef(stack)
 	if err != nil {
@@ -164,7 +164,7 @@ func renderImageMirroringSupplementalStackSnippet(catalog *Catalog, name, versio
 		return "", fmt.Errorf("supplemental artifact %s is required", name)
 	}
 	if catalog.publicationIsPending(artifact) {
-		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", artifact.Name, artifact.Version), nil
+		return fmt.Sprintf("For `%s` `%s` downloads, see the [artifact manifest](./manifest.md).\n", artifact.Name, artifact.Version), nil
 	}
 	ref, err := catalog.resourceRef(artifact)
 	if err != nil {
@@ -192,7 +192,7 @@ func renderImageMirroringCLISnippet(catalog *Catalog) (string, error) {
 		return "", fmt.Errorf("supplemental artifact nvcf-cli is required")
 	}
 	if catalog.publicationIsPending(cli) {
-		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n\nPackage contents and extraction instructions will be available after publication or mirroring.\n", cli.Name, cli.Version), nil
+		return fmt.Sprintf("For `%s` `%s` downloads, see the [artifact manifest](./manifest.md).\n", cli.Name, cli.Version), nil
 	}
 	ref, err := catalog.resourceRef(cli)
 	if err != nil {
