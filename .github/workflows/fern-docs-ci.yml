@@ -106,7 +106,8 @@ jobs:
             cp fern/edition-preview.yml fern/docs.yml
             go run -C tools/docs-version-sync . edition links --repo "$GITHUB_WORKSPACE"
           else
-            # Diagnostic checkout only; production validation remains strict.
+            # Restore the legacy source and its Fern pin in this checkout only.
+            git restore --source 64363f438e6374ab964d53b285c6716437d197e7 -- docs fern
             sed -i 's/broken-links: error/broken-links: warn/' fern/docs.yml
           fi
           echo 'Diagnostic preview: four known legacy links remain strict-check blockers.' >> "$GITHUB_STEP_SUMMARY"

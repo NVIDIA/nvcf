@@ -1,0 +1,123 @@
+{
+  "candidate_ref": "docs/candidates/2214-first-edition",
+  "qualification": "development only",
+  "before_run": "https://github.com/NVIDIA/nvcf/actions/runs/36954489832",
+  "after_run": "https://github.com/NVIDIA/nvcf/actions/runs/36954963898",
+  "isolation": [
+    {
+      "route": "/nvcf/overview/overview",
+      "body_unchanged": true,
+      "has_development_marker": false
+    },
+    {
+      "route": "/nvcf/1.0.0/overview/overview",
+      "body_unchanged": true,
+      "has_development_marker": false
+    },
+    {
+      "route": "/nvcf/1.0.0/self-managed/installation-overview",
+      "body_unchanged": true,
+      "has_development_marker": false
+    },
+    {
+      "route": "/nvcf/1.0.0/compute-plane/gpu-cluster-setup",
+      "body_unchanged": true,
+      "has_development_marker": false
+    },
+    {
+      "route": "/nvcf/1.0.0/observability/observability",
+      "body_unchanged": true,
+      "has_development_marker": false
+    },
+    {
+      "route": "/nvcf/dev/overview/overview",
+      "body_unchanged": false,
+      "has_development_marker": true
+    }
+  ],
+  "ui": {
+    "rows": [
+      {
+        "route": "1.0.0/overview/overview",
+        "status": 200,
+        "heading": [
+          "NVIDIA Cloud Functions"
+        ],
+        "summary": "Skip to navigation\nOn this page\nGetting started\nScroll to top\nNVIDIA Cloud Functions\nCopy page\n|\nView as Markdown\n|\nOpen in Claude\n|\nMore actions\n\nDocs edition 1.0.0. Development candidate.\n\nStack\tArtifact version\nSelf-managed (control plane)\t1.0.1\nCompute plane\t1.0.0\nObservability\t1.0.0\n\nThe docs edition versions this documented combination. Each stack keeps its own artifact version.\n\nThis guide provides information for deploying and operating NVCF in self-managed environments.\n\nNVCF ships as three independently versioned Helm stacks. Each stack has its own documentation set and version menu.\n\nSelf-Managed Stack : Control plane installation, configuration, function APIs, and operations.\nCom",
+        "developmentMarker": false,
+        "selectors": [
+          "1.0.0 candidate1.0.0 candidate"
+        ]
+      },
+      {
+        "route": "1.0.0/self-managed/installation-overview",
+        "status": 200,
+        "heading": [
+          "Deployment"
+        ],
+        "summary": "Skip to navigation\nOn this page\nChoose an installation path\nOverview\nKubernetes Cluster Requirements\nCluster Version\nRequired Operators and Components\nNVIDIA GPU Operator\nSMB CSI Driver\nNetwork Policies\nPersistent Storage\nCluster Sizing and Storage\nScroll to top\nDeployment\nDeployment\nCopy page\n|\nView as Markdown\n|\nOpen in Claude\n|\nMore actions\n\nDocs edition 1.0.0 | Self-managed (control plane) 1.0.1 | Development candidate.\n\nSelf-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway ad",
+        "developmentMarker": false,
+        "selectors": [
+          "1.0.0 candidate1.0.0 candidate"
+        ]
+      },
+      {
+        "route": "1.0.0/compute-plane/gpu-cluster-setup",
+        "status": 200,
+        "heading": [
+          "GPU Cluster Setup"
+        ],
+        "summary": "Skip to navigation\nOn this page\nAuthentication and Keys\nPrerequisites\nSupported Kubernetes Versions\nConsiderations\nScroll to top\nGPU Cluster Setup\nGPU Cluster Setup\nCopy page\n|\nView as Markdown\n|\nOpen in Claude\n|\nMore actions\n\nDocs edition 1.0.0 | Compute plane 1.0.0 | Development candidate.\n\nThe NVIDIA Cluster Agent (NVCA) connects GPU clusters to the NVCF control plane, enabling them to act as deployment targets for Cloud Functions. NVCA is a function deployment orchestrator that registers a cluster\u2019s GPU resources, communicates with the control plane, and manages the lifecycle of function deployments on GPU nodes.\n\nFor a fresh install, use the Quickstart. The one-click CLI flow can regist",
+        "developmentMarker": false,
+        "selectors": [
+          "1.0.0 candidate1.0.0 candidate"
+        ]
+      },
+      {
+        "route": "1.0.0/observability/observability",
+        "status": 200,
+        "heading": [
+          "Observability Configuration"
+        ],
+        "summary": "Skip to navigation\nOn this page\nFind the answer to your question\nOverview\nEarly Access Phase\nControl-Plane Services\nArchitecture\nMetrics Collection\nSelf-managed metrics stack\nLogging\nTracing (Available in GA)\nConfiguration\nMetrics Scraping\nApplication-level NVCF stats\nLog Collection\nTracing Configuration\nDashboards\nTroubleshooting\nSecurity\nRelated Documentation\nVersion Compatibility\nScroll to top\nObservability Configuration\nCopy page\n|\nView as Markdown\n|\nOpen in Claude\n|\nMore actions\n\nDocs edition 1.0.0 | Observability 1.0.0 | Development candidate.\n\nThis page provides guidance on configuring observability for self-hosted NVCF control-plane, including metrics, logging, and tracing.\n\nFind the",
+        "developmentMarker": false,
+        "selectors": [
+          "1.0.0 candidate1.0.0 candidate"
+        ]
+      },
+      {
+        "route": "dev/overview/overview",
+        "status": 200,
+        "heading": [
+          "NVIDIA Cloud Functions"
+        ],
+        "summary": "Skip to navigation\nOn this page\nGetting started\nScroll to top\nNVIDIA Cloud Functions\nCopy page\n|\nView as Markdown\n|\nOpen in Claude\n|\nMore actions\n\nDevelopment preview check: DEVELOPMENT-ISOLATION-2214-SECOND.\n\nThis guide provides information for deploying and operating NVCF in self-managed environments.\n\nNVCF ships as three independently versioned Helm stacks. Each stack has its own documentation set and version menu.\n\nSelf-Managed Stack : Control plane installation, configuration, function APIs, and operations.\nCompute Plane Stack : GPU cluster setup, scheduling, and caches.\nObservability Stack : Metrics, dashboards, and alerting.\nCompatibility Matrix : Stack releases that are qualified to ",
+        "developmentMarker": true,
+        "selectors": [
+          "DevelopmentDevelopment"
+        ]
+      },
+      {
+        "crossTabHref": "/nvcf/compute-plane/gpu-cluster-setup"
+      },
+      {
+        "crossTabDestination": "https://nvidia-preview-nvcf-docs-editions-2214-rehearsal.docs.buildwithfern.com/nvcf/compute-plane/gpu-cluster-setup",
+        "selectedEdition": [
+          "1.0.0 candidate1.0.0 candidate"
+        ],
+        "editionSummary": "Skip to navigation\nOn this page\nAuthentication and Keys\nPrerequisites\nSupported Kubernetes Versions\nConsiderations\nScroll to top\nGPU Cluster Setup\nGPU Cluster Setup\nCopy page\n|\nView as Markdown\n|\nOpen in Claude\n|\nMore actions\n\nDocs edition 1.0.0 | Compute plane 1.0.0 | Development candidate.\n\nThe NV"
+      },
+      {
+        "changelogURL": "https://nvidia-preview-nvcf-docs-editions-2214-rehearsal.docs.buildwithfern.com/nvcf/1.0.0/release-notes",
+        "entryPresent": 1
+      },
+      {
+        "archiveHeading": [
+          "Documentation Archive"
+        ],
+        "archiveHas05": true
+      }
+    ],
+    "errors": []
+  }
+}
