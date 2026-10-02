@@ -1,9 +1,0 @@
-Helm v3.22.0
-https://github.com/helm/helm
-Copyright The Helm Authors.
-Licensed under the Apache License, Version 2.0.
-
-The migration image builds Helm from upstream source with google.golang.org/grpc
-updated to v1.83.2. The binary reports the nvcf version metadata and a modified
-source tree. The image includes Helm's license at
-/usr/share/licenses/helm/LICENSE.
