@@ -6,4 +6,4 @@ default: 1.0.0
 editions:
     - version: 1.0.0
       ref: docs/releases/1.0.0
-      commit: b91c792c10cae55030f4dbd603cc6cf6a3f9ef86
+      commit: ddb2e65ffb822ad035884df166ea0e3679426e22
