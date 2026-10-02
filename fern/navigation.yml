@@ -32,6 +32,9 @@ navigation:
   - page: Quickstart
     path: ../docs/overview/quickstart.md
     slug: quickstart
+  - page: Documentation Archive
+    path: ../docs/overview/documentation-archive.md
+    slug: documentation-archive
   - section: Release Notes
     skip-slug: true
     contents:
