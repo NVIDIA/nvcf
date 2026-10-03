@@ -154,6 +154,7 @@ func resetCheckFlags(t *testing.T) {
 		checkClusterValidatorRegistries = nil
 		checkClusterValidatorProbeImage = ""
 		checkClusterValidatorTolerations = nil
+		checkClusterValidatorExternal = nil
 		checkShowLogs = false
 		selfHostedJSON, selfHostedPlain = false, false
 		selfHostedOutput = "text"
@@ -167,10 +168,11 @@ func resetCheckFlags(t *testing.T) {
 		// Other tests call viper.Reset(), which drops the bindings made at
 		// init, so a flag passed to check would silently not be read.
 		for key, flag := range map[string]string{
-			"cluster_validator_image":       "cluster-validator-image",
-			"cluster_validator_registries":  "cluster-validator-registries",
-			"cluster_validator_probe_image": "cluster-validator-probe-image",
-			"cluster_validator_tolerations": "cluster-validator-tolerations",
+			"cluster_validator_image":               "cluster-validator-image",
+			"cluster_validator_registries":          "cluster-validator-registries",
+			"cluster_validator_probe_image":         "cluster-validator-probe-image",
+			"cluster_validator_tolerations":         "cluster-validator-tolerations",
+			"cluster_validator_external_components": "cluster-validator-external-components",
 		} {
 			_ = viper.BindPFlag(key, selfHostedCheckCmd.Flags().Lookup(flag))
 		}

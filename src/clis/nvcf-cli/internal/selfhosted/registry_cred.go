@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -437,15 +438,43 @@ func LoadStackValues(files []string) StackValues {
 // stack leaves out: each release whose condition (nats.enabled,
 // openbao.enabled, cassandra.enabled) is set and not true. A component the
 // values never mention is not listed; helmfile refuses to evaluate a missing
-// condition, so such values do not describe a control-plane install.
+// condition, so such values do not describe a control-plane install. Sorted.
 func stackExternalComponents(merged map[string]any) []string {
 	var out []string
-	for _, component := range []string{"nats", "openbao", "cassandra"} {
+	for _, component := range validatorExternalComponents {
 		if _, set := merged[component]; set && !releaseCondition(merged, component, "enabled") {
 			out = append(out, component)
 		}
 	}
 	return out
+}
+
+// validatorExternalComponents are the stack dependencies the validator can be
+// told run outside the stack, through NVCF_EXTERNAL_COMPONENTS. Sorted.
+var validatorExternalComponents = []string{"cassandra", "nats", "openbao"}
+
+// ParseExternalComponents normalises comma-separated NVCF_EXTERNAL_COMPONENTS
+// entries into a sorted, distinct list, and rejects a name the validator does
+// not know, which it would otherwise ignore silently.
+func ParseExternalComponents(entries []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, raw := range entries {
+		for _, c := range strings.Split(raw, ",") {
+			c = strings.ToLower(strings.TrimSpace(c))
+			if c == "" || seen[c] {
+				continue
+			}
+			if !slices.Contains(validatorExternalComponents, c) {
+				return nil, fmt.Errorf("unknown component %q: use a subset of %s",
+					c, strings.Join(validatorExternalComponents, ", "))
+			}
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // stackGateways returns the Gateways the stack wires NVCF routes to, as

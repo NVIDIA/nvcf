@@ -56,6 +56,7 @@ var (
 	checkClusterValidatorRegistries  []string
 	checkClusterValidatorTolerations []string
 	checkClusterValidatorProbeImage  string
+	checkClusterValidatorExternal    []string
 	checkShowLogs                    bool
 )
 
@@ -151,6 +152,15 @@ func init() {
 			"Can also be set in nvcf-cli config as cluster_validator_probe_image.")
 	_ = viper.BindPFlag("cluster_validator_probe_image",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-probe-image"))
+	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorExternal,
+		"cluster-validator-external-components", nil,
+		"Stack dependencies that run outside the stack, or not at all, so the validator does not look for "+
+			"them in the cluster: a subset of nats, openbao and cassandra. Repeatable or comma-separated. "+
+			"Defaults to NVCF_EXTERNAL_COMPONENTS, then to the components the stack's environment file "+
+			"disables. Env: NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS. "+
+			"Can also be set in nvcf-cli config as cluster_validator_external_components (list).")
+	_ = viper.BindPFlag("cluster_validator_external_components",
+		selfHostedCheckCmd.Flags().Lookup("cluster-validator-external-components"))
 	selfHostedCheckCmd.Flags().BoolVar(&checkShowLogs, "show-logs", false,
 		"Print the cleaned cluster-validator transcript to stderr after the check events. "+
 			"Useful when piping --json output to a script that also wants the transcript.")
@@ -170,6 +180,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 	extraRegistries, err := configuredValidatorRegistries()
 	if err != nil {
+		return err
+	}
+	if _, err := configuredExternalComponents(); err != nil {
 		return err
 	}
 	// One credential lookup per registry for the whole run, shared by tag
@@ -1080,10 +1093,10 @@ func validatorEnvForRole(env map[string]string, roleFlag bool) map[string]string
 //   - relocated OpenBao and Envoy Gateway namespaces, without which the Tier
 //     rows assess the defaults and miss the real components;
 //   - NVCF_GATEWAY_NAMES, the override for the NVCF Gateway discovery;
-//   - NVCF_EXTERNAL_COMPONENTS, the stack dependencies the stack does not
-//     install, which the validator must not expect in the cluster;
 //   - the overlay probe image, so a mirrored cluster does not pull busybox
-//     from Docker Hub.
+//     from Docker Hub;
+//   - NVCF_EXTERNAL_COMPONENTS, the dependencies that run outside the stack,
+//     so the validator does not fail them for being absent from the cluster.
 func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	env := map[string]string{}
 	if !checkPre || checkAll {
@@ -1107,15 +1120,17 @@ func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	} else if len(stack.Gateways) > 0 {
 		env["NVCF_GATEWAY_NAMES"] = strings.Join(stack.Gateways, ",")
 	}
-	// An explicit setting wins over the components the stack leaves out.
-	if components := cmp.Or(strings.TrimSpace(viper.GetString("cluster_validator_external_components")),
-		configValue("NVCF_EXTERNAL_COMPONENTS")); components != "" {
-		env["NVCF_EXTERNAL_COMPONENTS"] = components
-	} else if len(stack.ExternalComponents) > 0 {
-		env["NVCF_EXTERNAL_COMPONENTS"] = strings.Join(stack.ExternalComponents, ",")
-	}
 	if probe := configuredProbeImage(); probe != "" {
 		env["NVCF_N2N_PROBE_IMAGE"] = probe
+	}
+	// Validated before the run starts. An explicit setting wins over the
+	// components the stack leaves out.
+	external, _ := configuredExternalComponents()
+	if external == nil {
+		external = stack.ExternalComponents
+	}
+	if len(external) > 0 {
+		env["NVCF_EXTERNAL_COMPONENTS"] = strings.Join(external, ",")
 	}
 	return env
 }
@@ -1129,6 +1144,22 @@ func configuredProbeImage() string {
 		return probe
 	}
 	return configValue("NVCF_N2N_PROBE_IMAGE")
+}
+
+// configuredExternalComponents returns the components the operator says run
+// outside the stack: --cluster-validator-external-components (or its env and
+// config key), then NVCF_EXTERNAL_COMPONENTS. nil means neither is set, and
+// the stack values decide.
+func configuredExternalComponents() ([]string, error) {
+	raw := viper.GetStringSlice("cluster_validator_external_components")
+	if len(raw) == 0 {
+		raw = []string{configValue("NVCF_EXTERNAL_COMPONENTS")}
+	}
+	out, err := selfhosted.ParseExternalComponents(raw)
+	if err != nil {
+		return nil, fmt.Errorf("--cluster-validator-external-components: %w", err)
+	}
+	return out, nil
 }
 
 // configValue reads a setting the way the CLI's cluster configuration does

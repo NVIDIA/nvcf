@@ -412,17 +412,26 @@ ingress:
 		"a CLI with a built-in stack installs from it, not from the working directory")
 }
 
-// The stack dependencies the stack leaves out reach the validator as
-// NVCF_EXTERNAL_COMPONENTS; an explicit setting wins over them.
-func TestClusterValidatorJobEnv_ForwardsExternalComponents(t *testing.T) {
+// The validator is told which dependencies run outside the stack: the flag,
+// or its env and config key, first, then NVCF_EXTERNAL_COMPONENTS, then the
+// components the stack's environment file disables. An unknown name fails the
+// command before anything runs.
+func TestClusterValidatorJobEnv_ExternalComponents(t *testing.T) {
 	resetCheckFlags(t)
 	t.Setenv("NVCF_EXTERNAL_COMPONENTS", "")
-	stack := selfhosted.StackValues{ExternalComponents: []string{"nats", "cassandra"}}
-	assert.Equal(t, "nats,cassandra", clusterValidatorJobEnv(stack)["NVCF_EXTERNAL_COMPONENTS"])
+	stack := selfhosted.StackValues{ExternalComponents: []string{"cassandra"}}
 
-	t.Setenv("NVCF_EXTERNAL_COMPONENTS", "openbao")
-	assert.Equal(t, "openbao", clusterValidatorJobEnv(stack)["NVCF_EXTERNAL_COMPONENTS"])
-
-	t.Setenv("NVCF_EXTERNAL_COMPONENTS", "")
+	assert.Equal(t, "cassandra", clusterValidatorJobEnv(stack)["NVCF_EXTERNAL_COMPONENTS"])
 	assert.NotContains(t, clusterValidatorJobEnv(selfhosted.StackValues{}), "NVCF_EXTERNAL_COMPONENTS")
+
+	t.Setenv("NVCF_EXTERNAL_COMPONENTS", "OpenBao, nats")
+	assert.Equal(t, "nats,openbao", clusterValidatorJobEnv(stack)["NVCF_EXTERNAL_COMPONENTS"])
+
+	require.NoError(t, selfHostedCheckCmd.Flags().Set("cluster-validator-external-components", "nats"))
+	assert.Equal(t, "nats", clusterValidatorJobEnv(stack)["NVCF_EXTERNAL_COMPONENTS"])
+
+	require.NoError(t, selfHostedCheckCmd.Flags().Set("cluster-validator-external-components", "redis"))
+	checkPre = true
+	err := runSelfHostedCheck(selfHostedCheckCmd, nil)
+	require.ErrorContains(t, err, `unknown component "redis"`)
 }

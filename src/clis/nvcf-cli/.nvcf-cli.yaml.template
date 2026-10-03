@@ -187,8 +187,8 @@ api_keys_owner_id: svc@nvcf-api.local
 #   - harbor.example.com:443
 #   - ghcr.io:443
 
-# Image for the control-plane validator's node-to-node overlay probe, which
-# needs sh and a busybox-style nc. Defaults to busybox:1.36 from Docker Hub.
+# Image for the node inotify probe and the control-plane validator's
+# node-to-node overlay probe, which needs sh and a busybox-style nc. Defaults to busybox:1.36 from Docker Hub.
 # Set a mirror for air-gapped clusters. The probe pods get no imagePullSecrets,
 # so the image must be pullable anonymously or through node-level registry
 # credentials.
@@ -209,6 +209,19 @@ api_keys_owner_id: svc@nvcf-api.local
 #
 # cluster_validator_tolerations:
 #   - dedicated=infra:NoSchedule
+
+# Stack dependencies that run outside the stack, or not at all, so the
+# validator does not look for them in the cluster: a subset of nats, openbao
+# and cassandra. When unset, NVCF_EXTERNAL_COMPONENTS is used, then the
+# components whose <name>.enabled the stack's environment file sets to
+# anything but true.
+#
+# Config key: cluster_validator_external_components (list)
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS (comma-separated)
+# Command-line flag: --cluster-validator-external-components
+#
+# cluster_validator_external_components:
+#   - cassandra
 
 # ==============================================================================
 # General Settings

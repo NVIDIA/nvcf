@@ -1017,9 +1017,16 @@ func TestLoadStackValues_ExternalComponents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "env.yaml")
 	require.NoError(t, writeFile(path, []byte(
 		"nats: {enabled: false}\nopenbao: {enabled: true}\ncassandra: {enabled: \"true\"}\n")))
-	assert.Equal(t, []string{"nats", "cassandra"}, LoadStackValues([]string{path}).ExternalComponents)
+	assert.Equal(t, []string{"cassandra", "nats"}, LoadStackValues([]string{path}).ExternalComponents)
 	require.NoError(t, writeFile(path, []byte("global: {}\n")))
 	assert.Empty(t, LoadStackValues([]string{path}).ExternalComponents)
+
+	// An environment file layered over base.yaml turns components off.
+	base, env := filepath.Join(t.TempDir(), "base.yaml"), filepath.Join(t.TempDir(), "prod.yaml")
+	require.NoError(t, writeFile(base, []byte("nats: {enabled: true}\nopenbao: {enabled: true}\ncassandra: {enabled: true}\n")))
+	require.NoError(t, writeFile(env, []byte("openbao: {enabled: false}\ncassandra: {enabled: false}\n")))
+	assert.Equal(t, []string{"cassandra", "openbao"}, LoadStackValues([]string{base, env}).ExternalComponents)
+	assert.Empty(t, LoadStackValues([]string{base}).ExternalComponents)
 }
 
 // findSelfManagedStack returns the repository's self-managed stack, found
@@ -1118,4 +1125,15 @@ addons:
 			assert.Equal(t, want, LoadStackValues([]string{base, envFile}).Gateways)
 		})
 	}
+}
+
+func TestParseExternalComponents(t *testing.T) {
+	got, err := ParseExternalComponents([]string{" OpenBao ,nats", "nats", ""})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"nats", "openbao"}, got)
+	got, err = ParseExternalComponents(nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	_, err = ParseExternalComponents([]string{"nats,redis"})
+	require.ErrorContains(t, err, `unknown component "redis"`)
 }
