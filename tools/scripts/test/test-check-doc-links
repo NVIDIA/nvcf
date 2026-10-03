@@ -57,6 +57,7 @@ for omitted in 'docs/unchanged.md' 'docs/deleted.md' 'docs/renamed.md' 'docs/con
   fi
 done
 grep -Fxq 'tools/ci/docs-links.toml' "$CAPTURE"
+grep -Fxq -- '--no-ignore' "$CAPTURE"
 grep -Fxq 'Mock link report' "$report"
 code=0
 LYCHEE_TEST_EXIT=2 ./tools/ci/check-doc-links "$base" "$report" || code=$?
@@ -65,4 +66,7 @@ if ./tools/ci/check-doc-links missing-base "$report" > /dev/null 2>&1; then
   echo 'Missing base must fail' >&2
   exit 1
 fi
+git commit -qm 'test: commit changed docs'
+./tools/ci/check-doc-links 0000000000000000000000000000000000000000 "$report"
+grep -Fxq 'fern/changelog/release.mdx' "$CAPTURE"
 echo 'test-check-doc-links: PASS'

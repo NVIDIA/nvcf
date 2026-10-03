@@ -8,7 +8,12 @@ if [ "$#" -ne 2 ]; then
 fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
-base="$(git rev-parse --verify --end-of-options "${1}^{commit}")"
+base_ref="$1"
+# A newly pushed branch has no previous remote commit.
+if [ "$base_ref" = 0000000000000000000000000000000000000000 ]; then
+  base_ref=HEAD^
+fi
+base="$(git rev-parse --verify --end-of-options "${base_ref}^{commit}")"
 report="$2"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
@@ -26,7 +31,7 @@ if [ "${#files[@]}" -eq 0 ]; then
 fi
 printf 'Checking external links in %s changed Markdown files.\n' "${#files[@]}"
 code=0
-./tools/ci/run-lychee --config tools/ci/docs-links.toml \
+./tools/ci/run-lychee --no-ignore --config tools/ci/docs-links.toml \
   --format markdown --output "$report" -- "${files[@]}" || code=$?
 if [ -f "$report" ]; then
   cat "$report"
