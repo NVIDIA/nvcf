@@ -402,11 +402,11 @@ func TestCheck_ForceFailEnvIsIgnored(t *testing.T) {
 	assert.NotContains(t, run.stderr, "force-fail")
 }
 
-// The outer budget, term by term: each role invocation gets the probe share
+// The outer budget, term by term: each role invocation gets the local and probe shares
 // plus the validator's run ceiling when one is configured; ModeSingle runs two
 // roles in turn, ModeSplit in parallel; --wait adds its duration.
 func TestCheck_BudgetTerms(t *testing.T) {
-	share, ceiling := selfhosted.CheckProbeShare(), selfhosted.ClusterValidatorRunCeiling()
+	share, ceiling := selfhosted.LocalCheckShare()+selfhosted.CheckProbeShare(), selfhosted.ClusterValidatorRunCeiling()
 	image := []string{"--cluster-validator-image", pinnedValidatorImage}
 	split := []string{"--control-plane-context", "cp-ctx", "--compute-plane-context", "gpu-ctx"}
 	with := func(lists ...[]string) []string {
@@ -497,7 +497,7 @@ func TestCheck_WaitDeadlineBeatsTheTicker(t *testing.T) {
 // Every flag set in both topologies: which roles run and where, what each
 // validator is told, which clusters are probed, and the budget.
 func TestCheck_FlagAndTopologyMatrix(t *testing.T) {
-	share, ceiling := selfhosted.CheckProbeShare(), selfhosted.ClusterValidatorRunCeiling()
+	share, ceiling := selfhosted.LocalCheckShare()+selfhosted.CheckProbeShare(), selfhosted.ClusterValidatorRunCeiling()
 	for _, tc := range []struct {
 		args            []string
 		cp, gpu         bool   // the clusters visited

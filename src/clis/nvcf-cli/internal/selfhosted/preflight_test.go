@@ -958,6 +958,49 @@ func TestRunPreflight_ProbeShareBoundsTheChecksBeforeTheValidator(t *testing.T) 
 	assert.True(t, validator.Passed)
 }
 
+// The checks that run on this machine have a share of their own: registry
+// probes that hang cannot spend the time set aside for the cluster checks
+// after them, and a run of local checks alone is still bounded.
+func TestRunPreflight_LocalChecksDoNotSpendTheClusterShare(t *testing.T) {
+	prevLocal, prevShare, prevCleanup := localCheckShare, checkProbeShare, probePodCleanupTimeout
+	localCheckShare = 300 * time.Millisecond
+	checkProbeShare, probePodCleanupTimeout = 400*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { localCheckShare, checkProbeShare, probePodCleanupTimeout = prevLocal, prevShare, prevCleanup })
+
+	hang := func(ctx context.Context, _, _ string, _ bool) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	cfg := PreflightConfig{
+		Registries:      []RegistryEntry{{Registry: "a.example"}, {Registry: "b.example"}},
+		RegistryChecker: hang,
+	}
+	var staleCtxErr error
+	rc := RoleConfig{
+		StaleNamespaceProber: func(ctx context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+			staleCtxErr = ctx.Err()
+			return nil, nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	res := RunPreflightForRole(ctx, cfg, RoleControlPlane, rc, &captureSink{})
+	stale := findResult(res, "stale-namespaces")
+	require.NotNil(t, stale)
+	assert.NoError(t, staleCtxErr, "the cluster check starts with its share intact")
+	assert.False(t, stale.CutShort, stale.Message)
+	assert.True(t, stale.Passed, stale.Message)
+
+	start := time.Now()
+	local := RunPreflightForRole(ctx, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{})
+	assert.Less(t, time.Since(start), localCheckShare+200*time.Millisecond, "a local-only run is bounded")
+	require.NotEmpty(t, local)
+	for _, r := range local {
+		assert.True(t, r.CutShort, r.ID+": "+r.Message)
+	}
+}
+
 // The inotify probe's own bound, and the cleanup of its pods after it, fit in
 // the probe share, so a slow cluster is reported as nodes not probed rather
 // than cut short.

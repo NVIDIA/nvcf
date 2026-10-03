@@ -1270,7 +1270,8 @@ func parseCheckWait(raw string) (time.Duration, error) {
 }
 
 // checkRunBudget is the command's outer time budget. Each role invocation gets
-// the probe share, which it enforces on the checks before its validator, plus
+// the local share, for the checks that run on this machine, and the probe
+// share, which it enforces on the cluster checks before its validator, plus
 // the validator's longest run when one is configured: its own timeout, the
 // wait after it for the Job's deadline to end the pod, the reads that grade
 // it and the sweeps. Sizing on the validator's timeout alone ran the budget
@@ -1278,7 +1279,7 @@ func parseCheckWait(raw string) (time.Duration, error) {
 // own failure. ModeSingle runs the two roles in turn, so each needs a share;
 // ModeSplit runs them in parallel. --wait polls for its duration on top.
 func checkRunBudget(mode kubectx.Mode, localOnly, validatorConfigured bool, wait time.Duration) time.Duration {
-	perRole := selfhosted.CheckProbeShare()
+	perRole := selfhosted.LocalCheckShare() + selfhosted.CheckProbeShare()
 	if validatorConfigured {
 		perRole += selfhosted.ClusterValidatorRunCeiling()
 	}

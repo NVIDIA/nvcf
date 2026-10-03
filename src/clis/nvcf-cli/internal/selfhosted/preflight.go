@@ -1431,22 +1431,39 @@ var checkProbeShare = 2 * time.Minute
 // the validator still gets the time the run's budget sized it for.
 func CheckProbeShare() time.Duration { return checkProbeShare }
 
+// localCheckShare bounds the checks that run on this machine: the local tools
+// and the registry probes. They get their own share so a slow registry cannot
+// spend the time set aside for the cluster checks. A var so tests can shorten
+// it.
+var localCheckShare = 90 * time.Second
+
+// LocalCheckShare is the time each role invocation sets aside for the checks
+// that run on this machine, before its cluster checks.
+func LocalCheckShare() time.Duration { return localCheckShare }
+
 func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc RoleConfig, sink progress.EventSink) []CheckResult {
 	var all []CheckResult
 	interrupted := func() bool {
 		return errors.Is(ctx.Err(), context.Canceled) || (cfg.Interrupted != nil && cfg.Interrupted())
 	}
-	// The probes end early enough for a probe pod's cleanup, which outlives
-	// its probe, to finish inside the share.
-	probeCtx, cancelProbes := context.WithTimeout(ctx, checkProbeShare-probePodCleanupTimeout)
-	defer cancelProbes()
+	localCtx, cancelLocal := context.WithTimeout(ctx, localCheckShare)
+	defer cancelLocal()
+	// The cluster share starts with the first cluster category, so the local
+	// checks before it cannot spend it. The probes end early enough for a
+	// probe pod's cleanup, which outlives its probe, to finish inside it.
+	clusterShare := &lazyTimeout{parent: ctx, d: checkProbeShare - probePodCleanupTimeout}
+	defer clusterShare.stop()
 
 	categories := buildCategories(cfg, role, rc)
 	for _, cat := range categories {
+		shareCtx := localCtx
+		if cat.role != RoleLocalOnly {
+			shareCtx = clusterShare.get()
+		}
 		catStart := time.Now()
 		var catResults []CheckResult
 		for _, spec := range cat.checks {
-			checkCtx := probeCtx
+			checkCtx := shareCtx
 			if spec.ownBudget {
 				checkCtx = ctx
 			}
@@ -1500,6 +1517,27 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 		})
 	}
 	return all
+}
+
+// lazyTimeout is a context whose timeout starts on first use.
+type lazyTimeout struct {
+	parent context.Context
+	d      time.Duration
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (l *lazyTimeout) get() context.Context {
+	if l.ctx == nil {
+		l.ctx, l.cancel = context.WithTimeout(l.parent, l.d)
+	}
+	return l.ctx
+}
+
+func (l *lazyTimeout) stop() {
+	if l.cancel != nil {
+		l.cancel()
+	}
 }
 
 // normaliseResult applies the rules every row shares. A pass is info, whatever
