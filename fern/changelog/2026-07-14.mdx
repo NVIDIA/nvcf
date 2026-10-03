@@ -11,6 +11,8 @@ routing, single-mode Multi-Instance GPU (MIG) support, and control-plane
 observability. It also adds Early Access support for optional NVIDIA Dynamo and
 Grove operator integration.
 
+<a id="highlights"></a>
+
 ### Highlights
 
 | Feature | Status | Summary |
@@ -22,6 +24,8 @@ Grove operator integration.
 | Single-mode MIG | GA | Expose single-strategy MIG profiles as NVCF instance types. |
 | Control-plane observability | GA | Export metrics, logs, and optional traces from control-plane services. |
 
+<a id="nvidia-cloud-tasks-nvct"></a>
+
 ### NVIDIA Cloud Tasks (NVCT)
 
 NVIDIA Cloud Tasks (NVCT) adds an asynchronous workload type for
@@ -31,6 +35,8 @@ completion and release GPU capacity when they finish.
 
 Use NVCT for batch inference, fine-tuning, evaluation, solvers, data
 preparation, and other GPU workloads that do not require an always-on endpoint.
+
+<a id="multi-cluster-gpu-management"></a>
 
 ### Multi-Cluster GPU Management
 
@@ -42,6 +48,8 @@ separate NVCF control plane for each cluster.
 After registration, workloads can deploy to the available clusters through the
 same control-plane API.
 
+<a id="dynamo-operator-integration"></a>
+
 ### Dynamo Operator Integration
 
 NVCF can integrate with optional NVIDIA Dynamo and Grove operators installed on
@@ -49,6 +57,8 @@ each GPU cluster. KAI Scheduler is a separate prerequisite for using these
 components.
 
 This integration is Early Access and optional.
+
+<a id="llm-api-gateway"></a>
 
 ### LLM API Gateway
 
@@ -60,11 +70,15 @@ backend, and applies per-model token rate limits.
 When cache-aware routing is enabled, the gateway can keep multi-turn requests on
 the same backend for better cache locality.
 
+<a id="single-mode-mig"></a>
+
 ### Single-Mode MIG
 
 NVCF can detect GPUs configured with the single MIG strategy and expose each MIG
 profile as an NVCF instance type. Workloads can target an isolated GPU slice
 instead of a full GPU, improving capacity use on supported nodes.
+
+<a id="control-plane-observability"></a>
 
 ### Control-Plane Observability
 
@@ -72,6 +86,8 @@ Control-plane observability is configured through one Helmfile configuration
 block. NVCF can export Prometheus-compatible metrics, control-plane logs, and
 optional OpenTelemetry Protocol (OTLP) traces to an existing observability
 backend, including in air-gapped environments.
+
+<a id="upgrade-notes"></a>
 
 ### Upgrade Notes
 
