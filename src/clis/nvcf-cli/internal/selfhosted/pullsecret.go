@@ -22,7 +22,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -88,7 +87,8 @@ func validatorPullSecretRunName(role, runID string) string {
 	return base + "-" + runID
 }
 
-// Mirrors the chain used by ensureLocalImagePullSecrets in cmd/self_hosted_up.go.
+// The NGC API key's environment variables, in the order
+// ensureLocalImagePullSecrets in cmd/self_hosted_up.go reads them.
 var ngcAPIKeyEnvNames = []string{
 	"NGC_IMAGE_PULL_API_KEY",
 	"NVCF_NGCR_API_KEY",
@@ -114,162 +114,183 @@ var validatorPullSecretSearchNamespaces = []string{
 	"nvcf-backend",
 }
 
+// validatorPullSecretListTimeout bounds one namespace's List in the scan, so
+// a slow namespace cannot starve the rest; validatorPullSecretWriteTimeout
+// bounds the Create of the Secret this run attaches, which gets its own time
+// rather than whatever the scan left.
+var (
+	validatorPullSecretListTimeout  = 5 * time.Second
+	validatorPullSecretWriteTimeout = 10 * time.Second
+)
+
 // resolveValidatorPullSecret picks the imagePullSecret name to attach to the
 // validator Job. Precedence:
 //
 //  1. provided != "" -> use as-is (--cluster-validator-pull-secret flag).
-//  2. Cluster scan -> mirror a matching secret into the validator namespace.
-//  3. NGC env var -> mint a secret in the validator namespace.
-//  4. "" -> kubelet will surface ImagePullBackOff if the image is private.
+//  2. Cluster scan -> adopt an operator's Secret in the validator namespace,
+//     or copy the matching registry's entry of one found elsewhere.
+//  3. This machine's credential for the image's registry, the one the local
+//     credential check probed -> mint a Secret for this run. The NGC key
+//     goes only to nvcr.io.
+//  4. "" -> the image is pulled without a secret.
 //
-// Only hard mirror/create failures propagate; read-side failures fall through
-// to the next layer.
+// note says what the run copied or created, for the operator to see. err is
+// a copy or create that failed; read-side failures fall through to the next
+// layer.
 func resolveValidatorPullSecret(
 	ctx context.Context,
 	client kubernetes.Interface,
 	provided, image, role, runID string,
 	preserve bool,
-) (string, error) {
+) (name, note string, err error) {
 	if provided != "" {
-		return provided, nil
+		return provided, "", nil
 	}
-	registry := parseRegistryFromImage(image)
-	if registry == "" {
-		return "", nil
-	}
-
-	scanCtx, cancel := context.WithTimeout(ctx, validatorPullSecretScanTimeout)
-	defer cancel()
-
-	if name, err := scanAndMirrorPullSecret(scanCtx, client, registry, role, runID, preserve); err != nil {
-		return "", err
-	} else if name != "" {
-		return name, nil
+	registry, repo, _, ok := parseImageRef(image)
+	if !ok {
+		return "", "", nil
 	}
 
-	if name, err := autoCreatePullSecretFromEnv(scanCtx, client, registry, role, runID, preserve); err != nil {
-		return "", err
-	} else if name != "" {
-		return name, nil
+	runName := validatorPullSecretRunName(role, runID)
+	write := func(cfg []byte) error {
+		wctx, cancel := context.WithTimeout(ctx, validatorPullSecretWriteTimeout)
+		defer cancel()
+		return writeDockerConfigSecret(wctx, client, clusterValidatorNamespace, runName, role, runID, cfg, preserve)
 	}
 
-	return "", nil
+	if src, cfg := findClusterPullSecret(ctx, client, registry, repo); src != nil {
+		if src.Namespace == clusterValidatorNamespace {
+			return src.Name, "", nil
+		}
+		// Mirror under the validator's run-scoped name rather than the source
+		// secret's name, which could collide with an unrelated Secret in the
+		// destination namespace.
+		if err := write(cfg); err != nil {
+			return "", "", fmt.Errorf("copy pull secret %s/%s to %s/%s: %w",
+				src.Namespace, src.Name, clusterValidatorNamespace, runName, err)
+		}
+		return runName, fmt.Sprintf("copied the pull credential for %s from %s/%s into %s/%s for this run",
+			registry, src.Namespace, src.Name, clusterValidatorNamespace, runName), nil
+	}
+
+	cred, ok, lookupErr := registryCredentialsFrom(ctx).lookup(ctx, registry)
+	if !ok {
+		if lookupErr != nil {
+			return "", "", fmt.Errorf("no pull secret for %s in the cluster, and reading this machine's "+
+				"credential failed: %w", registry, lookupErr)
+		}
+		return "", "", nil
+	}
+	cfg, err := buildDockerConfigJSON(dockerConfigKey(registry), cred.user, cred.pass)
+	if err != nil {
+		return "", "", fmt.Errorf("encode dockerconfigjson for %s: %w", registry, err)
+	}
+	if err := write(cfg); err != nil {
+		return "", "", fmt.Errorf("create pull secret %s/%s: %w", clusterValidatorNamespace, runName, err)
+	}
+	return runName, fmt.Sprintf("created pull secret %s/%s for %s from %s for this run",
+		clusterValidatorNamespace, runName, registry, cred.source), nil
 }
 
-// Returns "" for Docker Hub shorthand (no host segment), since the scan
-// needs an auths.<host> key to match against.
-func parseRegistryFromImage(image string) string {
-	image = strings.TrimSpace(image)
-	if image == "" {
-		return ""
-	}
-	slash := strings.Index(image, "/")
-	if slash <= 0 {
-		return ""
-	}
-	head := image[:slash]
-	if !strings.ContainsAny(head, ".:") && head != "localhost" {
-		return ""
-	}
-	return head
-}
-
-// Walks validatorPullSecretSearchNamespaces and returns the first
-// docker-registry secret whose dockerconfigjson has an auths entry for
-// registry. Mirrors the body into clusterValidatorNamespace when the match
-// lives elsewhere, so the Job can reference the secret without cross-namespace
-// lookups.
-func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, registry, role, runID string, preserve bool) (string, error) {
+// findClusterPullSecret walks validatorPullSecretSearchNamespaces and returns
+// the first docker-registry Secret with credentials for registry, with a
+// dockerconfigjson holding only that registry's entry. An operator's Secret
+// in the validator namespace is returned to be used as is; one this CLI
+// minted for another run is skipped (see isAnyValidatorSecret).
+func findClusterPullSecret(
+	ctx context.Context, client kubernetes.Interface, registry, repo string,
+) (*corev1.Secret, []byte) {
 	for _, ns := range validatorPullSecretSearchNamespaces {
-		// Filter client-side rather than via FieldSelector: server-side
-		// type= selector on Secrets is only honored from k8s 1.27 onward.
-		secrets, err := client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
+		secrets, err := listDockerConfigSecrets(ctx, client, ns)
 		if err != nil {
 			continue
 		}
-		for _, s := range secrets.Items {
+		for i := range secrets {
+			s := &secrets[i]
 			if s.Type != corev1.SecretTypeDockerConfigJson {
 				continue
 			}
-			cfg, ok := s.Data[corev1.DockerConfigJsonKey]
-			if !ok || !dockerConfigHasRegistry(cfg, registry) {
+			// Adopt only an operator-supplied Secret (no managed labels, so
+			// no sweep touches it). Never one another run minted: adopting
+			// one reuses a possibly stale credential, can outlive this run,
+			// and can be deleted by its own run's sweep mid-pull, which the
+			// kubelet reports as FailedToRetrieveImagePullSecret.
+			if s.Namespace == clusterValidatorNamespace && isAnyValidatorSecret(s) {
 				continue
 			}
-			if s.Namespace == clusterValidatorNamespace {
-				// Adopt only an operator-supplied Secret (no managed labels, so
-				// no sweep touches it). Never one another run minted: those
-				// are per-run now, so adopting one reuses a possibly stale
-				// NGC key (a run with a bad key keeps its Secret while its pod
-				// may still be pulling), can outlive this run, and can be
-				// deleted by its own run's sweep mid-pull, which the kubelet
-				// reports as FailedToRetrieveImagePullSecret. A --no-cleanup
-				// Secret would otherwise be adopted by every later run.
-				if isAnyValidatorSecret(&s) {
-					continue
-				}
-				return s.Name, nil
+			if cfg, ok := filterDockerConfig(s.Data[corev1.DockerConfigJsonKey], registry, repo); ok {
+				return s, cfg
 			}
-			// Mirror under the validator's well-known name rather than the
-			// source secret's name. Using the source name risks colliding
-			// with an unrelated operator/chart secret of the same name in
-			// the destination namespace, and writeDockerConfigSecret's
-			// delete-and-recreate path would otherwise destroy that
-			// secret on type mismatch.
-			if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, runID, cfg, preserve); err != nil {
-				return "", fmt.Errorf("mirror pull secret %s/%s to %s/%s: %w",
-					s.Namespace, s.Name, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), err)
-			}
-			return validatorPullSecretRunName(role, runID), nil
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
-func dockerConfigHasRegistry(cfg []byte, registry string) bool {
+// listDockerConfigSecrets lists namespace's docker-registry Secrets, so the
+// scan does not fetch every other Secret's key material. A server that
+// refuses the type field selector is asked for everything instead, and the
+// caller filters.
+func listDockerConfigSecrets(
+	ctx context.Context, client kubernetes.Interface, namespace string,
+) ([]corev1.Secret, error) {
+	lctx, cancel := context.WithTimeout(ctx, validatorPullSecretListTimeout)
+	defer cancel()
+	list, err := client.CoreV1().Secrets(namespace).List(lctx, metav1.ListOptions{
+		FieldSelector: "type=" + string(corev1.SecretTypeDockerConfigJson),
+	})
+	if apierrors.IsBadRequest(err) {
+		list, err = client.CoreV1().Secrets(namespace).List(lctx, metav1.ListOptions{})
+	}
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+// filterDockerConfig returns a dockerconfigjson holding only cfg's entry for
+// registry, and whether it has one. A copy carries no other registry's
+// credential. Keys match the way the kubelet matches them: scheme and a
+// /v1/ or /v2/ prefix ignored, and a key with a path only for repositories
+// under it.
+func filterDockerConfig(cfg []byte, registry, repo string) ([]byte, bool) {
 	var doc struct {
 		Auths map[string]json.RawMessage `json:"auths"`
 	}
 	if err := json.Unmarshal(cfg, &doc); err != nil {
-		return false
+		return nil, false
 	}
-	_, ok := doc.Auths[registry]
-	return ok
-}
-
-func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interface, registry, role, runID string, preserve bool) (string, error) {
-	apiKey := firstNonEmptyEnv(ngcAPIKeyEnvNames...)
-	if apiKey == "" {
-		return "", nil
-	}
-	// Only ever hand the NGC key to nvcr.io, the registry up mints for. Without
-	// this an operator who mirrors the validator image to ghcr.io or a
-	// corporate Harbor and still exports NGC_API_KEY gets it written as that
-	// registry's password, and the kubelet then sends the live key to a third
-	// party as HTTP Basic auth, where it lands in their access logs. Other
-	// NVIDIA registries (staging NGC, internal ones) take their own logins.
-	if !isNGCKeyRegistry(registry) {
-		return "", nil
-	}
-	cfg, err := buildDockerConfigJSON(registry, "$oauthtoken", apiKey)
-	if err != nil {
-		return "", fmt.Errorf("encode dockerconfigjson for %s: %w", registry, err)
-	}
-	if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretRunName(role, runID), role, runID, cfg, preserve); err != nil {
-		return "", fmt.Errorf("auto-create pull secret %s/%s: %w",
-			clusterValidatorNamespace, validatorPullSecretRunName(role, runID), err)
-	}
-	return validatorPullSecretRunName(role, runID), nil
-}
-
-// Mirrors cmd/self_hosted_up.go's firstNonEmptyEnv; kept local to avoid an
-// internal->cmd import.
-func firstNonEmptyEnv(names ...string) string {
-	for _, name := range names {
-		if v := os.Getenv(name); v != "" {
-			return v
+	key, ok := "", false
+	if _, exact := doc.Auths[dockerConfigKey(registry)]; exact {
+		key, ok = dockerConfigKey(registry), true
+	} else {
+		for k := range doc.Auths {
+			if dockerConfigKeyMatches(k, registry, repo) && (!ok || k < key) {
+				key, ok = k, true
+			}
 		}
 	}
-	return ""
+	if !ok {
+		return nil, false
+	}
+	out, err := json.Marshal(map[string]any{"auths": map[string]json.RawMessage{key: doc.Auths[key]}})
+	return out, err == nil
+}
+
+// dockerConfigKeyMatches reports whether a dockerconfigjson auths key covers
+// an image in repo on registry, as the kubelet reads the key.
+func dockerConfigKeyMatches(key, registry, repo string) bool {
+	rest := strings.TrimPrefix(strings.TrimPrefix(key, "https://"), "http://")
+	host, path, _ := strings.Cut(rest, "/")
+	if !sameDockerHost(host, registry) {
+		return false
+	}
+	path = strings.TrimSuffix(path, "/")
+	if p, ok := strings.CutPrefix(path, "v1"); ok && (p == "" || strings.HasPrefix(p, "/")) {
+		path = strings.TrimPrefix(p, "/")
+	} else if p, ok := strings.CutPrefix(path, "v2"); ok && (p == "" || strings.HasPrefix(p, "/")) {
+		path = strings.TrimPrefix(p, "/")
+	}
+	return path == "" || repo == path || strings.HasPrefix(repo, path+"/")
 }
 
 // Mirrors cmd/self_hosted_up.go's dockerConfigJSON.

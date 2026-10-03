@@ -20,15 +20,20 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 )
 
 // -- probeRegistryCredential --
@@ -51,7 +56,16 @@ func TestProbeRegistryCredential_PublicRegistry(t *testing.T) {
 	// Use the test server's host as the registry.
 	host := strings.TrimPrefix(srv.URL, "https://")
 	err := probeRegistryCredential(context.Background(), host, "", false)
-	assert.NoError(t, err, "public registry (200 on /v2/) must not return an error")
+	var outcome registryProbeOutcome
+	require.ErrorAs(t, err, &outcome)
+	assert.Equal(t, probeAnonymous, outcome.kind, "no credential was sent, so none is reported valid")
+
+	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host}, host, false).
+		Run(context.Background())
+	assert.True(t, r.Passed)
+	assert.Equal(t, SeverityInfo, r.Severity)
+	assert.Contains(t, r.Message, "reachable anonymously; no local credential checked")
+	assert.NotContains(t, r.Message, "credentials valid")
 }
 
 func TestProbeRegistryCredential_AuthSucceeds(t *testing.T) {
@@ -84,7 +98,16 @@ func TestProbeRegistryCredential_AuthSucceeds(t *testing.T) {
 
 	host := strings.TrimPrefix(registrySrv.URL, "https://")
 	err := probeRegistryCredential(context.Background(), host, "", false)
-	assert.NoError(t, err, "successful token exchange must return nil")
+	var outcome registryProbeOutcome
+	require.ErrorAs(t, err, &outcome, "an anonymous token is not a valid credential")
+	assert.Equal(t, probeAnonymous, outcome.kind)
+
+	dockerHome(t, inlineDockerConfig(t, host, "u", "p", ""))
+	err = probeRegistryCredential(context.Background(), host, "", false)
+	assert.NoError(t, err, "a token issued for a credential that was sent is a valid credential")
+	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host}, host, false).
+		Run(context.Background())
+	assert.Contains(t, r.Message, "credentials valid")
 }
 
 func TestProbeRegistryCredential_AuthFails(t *testing.T) {
@@ -125,7 +148,7 @@ func TestProbeRegistryCredential_ECRSkipped(t *testing.T) {
 // -- EnumerateRegistries --
 
 func TestEnumerateRegistries_FromImageRef(t *testing.T) {
-	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", nil, nil)
+	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", StackValues{}, nil)
 	require.NotEmpty(t, entries)
 
 	found := false
@@ -141,7 +164,7 @@ func TestEnumerateRegistries_FromImageRef(t *testing.T) {
 func TestEnumerateRegistries_RepoHintFromImageRef(t *testing.T) {
 	// The RepoHint must be the repo path from the image ref so the token
 	// exchange uses the operator's actual org, not a fake one.
-	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", nil, nil)
+	entries := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.1.0", StackValues{}, nil)
 	for _, e := range entries {
 		if e.Registry == "nvcr.io" {
 			assert.Equal(t, "nvidia/nvcf-byoc/cluster-validator", e.RepoHint,
@@ -155,7 +178,7 @@ func TestEnumerateRegistries_RepoHintFromImageRef(t *testing.T) {
 func TestEnumerateRegistries_IncludesCertManagerWhenStackIsNotMirroring(t *testing.T) {
 	// With no stack values file there is no global.image.registry to mirror
 	// cert-manager to, so its upstream registry is genuinely contacted.
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil, nil)
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", StackValues{}, nil)
 	found := false
 	for _, e := range entries {
 		if e.Registry == "quay.io" {
@@ -167,8 +190,8 @@ func TestEnumerateRegistries_IncludesCertManagerWhenStackIsNotMirroring(t *testi
 }
 
 func TestEnumerateRegistries_ExtrasAppended(t *testing.T) {
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil,
-		[]string{"harbor.company.internal:443", "ghcr.io:443"})
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", StackValues{},
+		parseExtras(t, "harbor.company.internal:443", "ghcr.io:443"))
 
 	registries := make(map[string]bool, len(entries))
 	for _, e := range entries {
@@ -180,8 +203,7 @@ func TestEnumerateRegistries_ExtrasAppended(t *testing.T) {
 
 func TestEnumerateRegistries_NoDuplicates(t *testing.T) {
 	// Pass nvcr.io both as the image registry and as an extra - must not dedup.
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil,
-		[]string{"nvcr.io"})
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", StackValues{}, parseExtras(t, "nvcr.io"))
 
 	count := 0
 	for _, e := range entries {
@@ -202,7 +224,7 @@ global:
     registry: stg.nvcr.io
 `)))
 
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", []string{valuesPath}, nil)
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", LoadStackValues([]string{valuesPath}), nil)
 	found := false
 	for _, e := range entries {
 		if e.Registry == "stg.nvcr.io" {
@@ -254,7 +276,7 @@ func TestIsECRRegistry(t *testing.T) {
 
 func TestRegistryCredentialCheck_PassWhenNoError(t *testing.T) {
 	checker := func(_ context.Context, reg, _ string, _ bool) error { return nil }
-	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true})
+	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false)
 	r := spec.Run(context.Background())
 	assert.True(t, r.Passed)
 	assert.Equal(t, "info", r.Severity)
@@ -265,7 +287,7 @@ func TestRegistryCredentialCheck_CriticalSeverityOnFailure(t *testing.T) {
 	checker := func(_ context.Context, reg, _ string, _ bool) error {
 		return errorf("credentials rejected")
 	}
-	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true})
+	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false)
 	r := spec.Run(context.Background())
 	assert.False(t, r.Passed)
 	assert.Equal(t, "error", r.Severity, "critical registry failure must be error severity")
@@ -275,13 +297,25 @@ func TestRegistryCredentialCheck_WarningSeverityOnNonCriticalFailure(t *testing.
 	checker := func(_ context.Context, reg, _ string, _ bool) error {
 		return errorf("credentials rejected")
 	}
-	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "quay.io", Critical: false})
+	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "quay.io", Critical: false}, "quay.io", false)
 	r := spec.Run(context.Background())
 	assert.False(t, r.Passed)
 	assert.Equal(t, "warning", r.Severity, "non-critical registry failure must be warning severity")
 }
 
 // helpers
+
+// parseExtras parses --cluster-validator-registries entries.
+func parseExtras(t *testing.T, entries ...string) []RegistryEntry {
+	t.Helper()
+	var out []RegistryEntry
+	for _, e := range entries {
+		entry, err := ParseRegistryExtra(e)
+		require.NoError(t, err, e)
+		out = append(out, entry)
+	}
+	return out
+}
 
 func errorf(msg string) error { return fmt.Errorf("%s", msg) }
 
@@ -304,7 +338,7 @@ certManager:
       repository: mirror.company.internal/jetstack/cert-manager-acmesolver
 `)))
 
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", []string{valuesPath}, nil)
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", LoadStackValues([]string{valuesPath}), nil)
 	for _, e := range entries {
 		assert.NotEqual(t, certManagerRegistry, e.Registry,
 			"a stack mirroring images must not trigger a quay.io probe")
@@ -313,7 +347,7 @@ certManager:
 
 // A bare IPv6 literal must stay bracketed or the probe URL is malformed.
 func TestEnumerateRegistries_BracketsIPv6Extras(t *testing.T) {
-	entries := EnumerateRegistries("nvcr.io/some/image:1.0", nil, []string{"[::1]:5000"})
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", StackValues{}, parseExtras(t, "[::1]:5000"))
 
 	found := false
 	for _, e := range entries {
@@ -330,7 +364,7 @@ func TestEnumerateRegistries_BracketsIPv6Extras(t *testing.T) {
 // other source. Forcing it true makes an air-gapped install fail preflight for
 // a registry that is never contacted (ImagePullPolicy is IfNotPresent).
 func TestEnumerateRegistries_NonNGCImageRegistryIsNotCritical(t *testing.T) {
-	entries := EnumerateRegistries("mirror.company.internal/nvcf/cluster-validator:1.0", nil, nil)
+	entries := EnumerateRegistries("mirror.company.internal/nvcf/cluster-validator:1.0", StackValues{}, nil)
 	for _, e := range entries {
 		if e.Registry == "mirror.company.internal" {
 			assert.False(t, e.Critical, "a non-NGC mirror must not be forced critical")
@@ -344,7 +378,7 @@ func TestEnumerateRegistries_NonNGCImageRegistryIsNotCritical(t *testing.T) {
 // and the run would report on quay.io alone, leaving the operator's NGC
 // credentials unchecked in what is the default configuration.
 func TestEnumerateRegistries_FallsBackToNGCWhenNothingNamesARegistry(t *testing.T) {
-	got := EnumerateRegistries("", nil, nil)
+	got := EnumerateRegistries("", StackValues{}, nil)
 
 	var ngc *RegistryEntry
 	for i := range got {
@@ -365,7 +399,7 @@ func TestEnumerateRegistries_NoNGCFallbackForAMirroredStack(t *testing.T) {
 	require.NoError(t, os.WriteFile(values,
 		[]byte("global:\n  image:\n    registry: harbor.example.com\n"), 0o600))
 
-	got := EnumerateRegistries("", []string{values}, nil)
+	got := EnumerateRegistries("", LoadStackValues([]string{values}), nil)
 	for _, e := range got {
 		assert.NotEqual(t, "nvcr.io", e.Registry,
 			"a stack that named its own registry must not be probed against NGC")
@@ -375,7 +409,7 @@ func TestEnumerateRegistries_NoNGCFallbackForAMirroredStack(t *testing.T) {
 // The fallback must not shadow or duplicate an NGC registry a source named,
 // which carries a repo hint and is critical.
 func TestEnumerateRegistries_FallbackDoesNotDuplicateNamedNGC(t *testing.T) {
-	got := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0", nil, nil)
+	got := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0", StackValues{}, nil)
 
 	n := 0
 	for _, e := range got {
@@ -394,7 +428,7 @@ func TestEnumerateRegistries_FallbackDoesNotDuplicateNamedNGC(t *testing.T) {
 // which http.NewRequest rejects. The documented bracketed form must work.
 func TestEnumerateRegistries_DoesNotDoubleBracketIPv6(t *testing.T) {
 	for _, in := range []string{"[fd00::1]", "fd00::1"} {
-		got := EnumerateRegistries("", nil, []string{in})
+		got := EnumerateRegistries("", StackValues{}, parseExtras(t, in))
 		var found string
 		for _, e := range got {
 			if strings.Contains(e.Registry, "fd00") {
@@ -406,7 +440,7 @@ func TestEnumerateRegistries_DoesNotDoubleBracketIPv6(t *testing.T) {
 }
 
 func TestEnumerateRegistries_KeepsBracketedIPv6WithPort(t *testing.T) {
-	got := EnumerateRegistries("", nil, []string{"[fd00::1]:5000"})
+	got := EnumerateRegistries("", StackValues{}, parseExtras(t, "[fd00::1]:5000"))
 	var found string
 	for _, e := range got {
 		if strings.Contains(e.Registry, "fd00") {
@@ -425,7 +459,7 @@ func TestEnumerateRegistries_RejectsHostMovingRegistryStrings(t *testing.T) {
 	require.NoError(t, os.WriteFile(values,
 		[]byte("global:\n  image:\n    registry: nvcr.io@attacker.example.com\n"), 0o600))
 
-	for _, e := range EnumerateRegistries("nvcr.io@evil.test/x/y:1", []string{values}, nil) {
+	for _, e := range EnumerateRegistries("nvcr.io@evil.test/x/y:1", LoadStackValues([]string{values}), nil) {
 		assert.NotContains(t, e.Registry, "@", "a host-moving string must not be probed")
 		assert.NotContains(t, e.Registry, "attacker.example.com")
 		assert.NotContains(t, e.Registry, "evil.test")
@@ -480,7 +514,7 @@ certManager:
     image:
       repository: harbor.corp.example/jetstack/cert-manager-acmesolver
 `)))
-	got := EnumerateRegistries("", []string{values}, nil)
+	got := EnumerateRegistries("", LoadStackValues([]string{values}), nil)
 	require.Len(t, got, 1)
 	assert.Equal(t, "harbor.corp.example", got[0].Registry)
 	assert.Equal(t, "nvcf", got[0].RepoHint)
@@ -492,7 +526,7 @@ func TestEnumerateRegistries_RejectedValueDoesNotSuppressFallback(t *testing.T) 
 	dir := t.TempDir()
 	values := dir + "/base.yaml"
 	require.NoError(t, writeFile(values, []byte("global:\n  image:\n    registry: \"nvcr.io@evil.test\"\n")))
-	got := EnumerateRegistries("", []string{values}, nil)
+	got := EnumerateRegistries("", LoadStackValues([]string{values}), nil)
 	var names []string
 	for _, e := range got {
 		names = append(names, e.Registry)
@@ -509,17 +543,27 @@ func TestEnumerateRegistries_QuayFollowsTheACMESolverImage(t *testing.T) {
 	values := dir + "/base.yaml"
 	names := func() []string {
 		var out []string
-		for _, e := range EnumerateRegistries("", []string{values}, nil) {
+		for _, e := range EnumerateRegistries("", LoadStackValues([]string{values}), nil) {
 			out = append(out, e.Registry)
 		}
 		return out
 	}
-	require.NoError(t, writeFile(values, []byte("global:\n  image:\n    registry: harbor.corp.example\n")))
+	require.NoError(t, writeFile(values, []byte(
+		"global:\n  image:\n    registry: harbor.corp.example\ncertManager:\n  enabled: true\n")))
 	assert.Contains(t, names(), certManagerRegistry, "a mirrored stack still pulls the default ACME solver from quay.io")
 
 	require.NoError(t, writeFile(values, []byte(
-		"global:\n  image:\n    registry: harbor.corp.example\ncertManager:\n  acmesolver:\n    image:\n      repository: harbor.corp.example/jetstack/acmesolver\n")))
+		"global:\n  image:\n    registry: harbor.corp.example\ncertManager:\n  enabled: true\n"+
+			"  acmesolver:\n    image:\n      repository: harbor.corp.example/jetstack/acmesolver\n")))
 	assert.NotContains(t, names(), certManagerRegistry, "a mirrored ACME solver never reaches quay.io")
+
+	// The cert-manager release's condition is a YAML boolean: off, or a
+	// quoted "true", installs no cert-manager and no solver.
+	for _, enabled := range []string{"false", `"true"`} {
+		require.NoError(t, writeFile(values, []byte(
+			"global:\n  image:\n    registry: harbor.corp.example\ncertManager:\n  enabled: "+enabled+"\n")))
+		assert.NotContains(t, names(), certManagerRegistry, "certManager.enabled: %s", enabled)
+	}
 }
 
 // "[fd00::1]" with no port must reach the ConfigMap unbracketed; the validator
@@ -528,7 +572,7 @@ func TestParseRegistryHostPort_StripsIPv6Brackets(t *testing.T) {
 	host, port := parseRegistryHostPort("[fd00::1]")
 	assert.Equal(t, "fd00::1", host)
 	assert.Equal(t, 443, port)
-	got := EnumerateRegistries("", nil, []string{"[fd00::1]"})
+	got := EnumerateRegistries("", StackValues{}, parseExtras(t, "[fd00::1]"))
 	var names []string
 	for _, e := range got {
 		names = append(names, e.Registry)
@@ -540,7 +584,7 @@ func TestParseRegistryHostPort_StripsIPv6Brackets(t *testing.T) {
 // a registry either, or the nvcr.io fallback is suppressed with nothing probed.
 func TestEnumerateRegistries_RejectedImageRegistryDoesNotSuppressFallback(t *testing.T) {
 	var names []string
-	for _, e := range EnumerateRegistries("user@evil.test/nvidia/validator:1", nil, nil) {
+	for _, e := range EnumerateRegistries("user@evil.test/nvidia/validator:1", StackValues{}, nil) {
 		names = append(names, e.Registry)
 	}
 	assert.Contains(t, names, ngcRegistry)
@@ -562,12 +606,12 @@ func TestProbeRegistryCredential_CriticalAnonymousIsNotVerified(t *testing.T) {
 	dockerHome(t, inlineDockerConfig(t, host, "u", "p", ""))
 
 	err := probeRegistryCredential(context.Background(), host, "", true)
-	var notVerified errRegistryCredentialsNotVerified
-	require.ErrorAs(t, err, &notVerified)
+	var outcome registryProbeOutcome
+	require.ErrorAs(t, err, &outcome)
+	assert.Equal(t, probeNotVerified, outcome.kind)
 
-	r := registryCredentialCheck(func(ctx context.Context, reg, repo string, critical bool) error {
-		return probeRegistryCredential(ctx, reg, repo, critical)
-	}, RegistryEntry{Registry: host, Critical: true}).Run(context.Background())
+	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host, Critical: true}, host, false).
+		Run(context.Background())
 	assert.True(t, r.Passed)
 	assert.NotContains(t, r.Message, "credentials valid")
 	assert.Contains(t, r.Message, "not verified")
@@ -624,4 +668,454 @@ ingress:
 	}
 
 	assert.Empty(t, LoadStackValues([]string{base}).Gateways, "an entry left empty is one the install does not use")
+}
+
+// fakeRegistry is a TLS registry whose /v2/ and token endpoint answer as the
+// test says. Its host is the registry name, and every client in the process
+// trusts its certificate for the test.
+type fakeRegistry struct {
+	host       string
+	tokenCalls int
+	authSent   []string
+}
+
+func newFakeRegistry(
+	t *testing.T, v2 func(w http.ResponseWriter, realm string), token func(w http.ResponseWriter),
+) *fakeRegistry {
+	t.Helper()
+	f := &fakeRegistry{}
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			f.tokenCalls++
+			f.authSent = append(f.authSent, r.Header.Get("Authorization"))
+			token(w)
+			return
+		}
+		v2(w, srv.URL+"/token")
+	}))
+	t.Cleanup(srv.Close)
+	prev := http.DefaultTransport
+	http.DefaultTransport = srv.Client().Transport
+	t.Cleanup(func() { http.DefaultTransport = prev })
+	f.host = strings.TrimPrefix(srv.URL, "https://")
+	return f
+}
+
+func bearerChallenge(w http.ResponseWriter, realm string) {
+	w.Header().Set("Www-Authenticate", `Bearer realm="`+realm+`",service="test"`)
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+func tokenStatus(code int) func(http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		w.WriteHeader(code)
+		if code == http.StatusOK {
+			_, _ = w.Write([]byte(`{"token":"t"}`))
+		}
+	}
+}
+
+// Every grading guard of the registry probe, driven through the real probe
+// and the real row: exactly one outcome, a credential the token endpoint
+// refused, fails a critical registry. A credential that cannot be checked,
+// is missing, or meets a registry this probe cannot speak to is a warning or
+// an informational pass.
+func TestRegistryCredentialCheck_Grading(t *testing.T) {
+	prevBackoff := registryRetryBackoff
+	registryRetryBackoff = time.Millisecond
+	t.Cleanup(func() { registryRetryBackoff = prevBackoff })
+
+	type want struct {
+		passed   bool
+		severity string
+		message  string
+	}
+	for name, tc := range map[string]struct {
+		v2       func(w http.ResponseWriter, realm string)
+		token    func(w http.ResponseWriter)
+		withCred bool
+		want     want
+	}{
+		"credential accepted": {
+			v2: bearerChallenge, token: tokenStatus(http.StatusOK), withCred: true,
+			want: want{true, SeverityInfo, "credentials valid"},
+		},
+		"credential rejected with 401": {
+			v2: bearerChallenge, token: tokenStatus(http.StatusUnauthorized), withCred: true,
+			want: want{false, SeverityError, "rejected"},
+		},
+		"credential rejected with 403": {
+			v2: bearerChallenge, token: tokenStatus(http.StatusForbidden), withCred: true,
+			want: want{false, SeverityError, "rejected"},
+		},
+		"no credential, anonymous token refused": {
+			v2: bearerChallenge, token: tokenStatus(http.StatusUnauthorized),
+			want: want{false, SeverityWarning, "no local credentials found"},
+		},
+		"no credential, anonymous token issued": {
+			v2: bearerChallenge, token: tokenStatus(http.StatusOK),
+			want: want{false, SeverityWarning, "no local credentials found"},
+		},
+		"token service failing": {
+			v2: bearerChallenge, token: tokenStatus(http.StatusServiceUnavailable), withCred: true,
+			want: want{false, SeverityWarning, "could not verify credentials from this machine"},
+		},
+		"token service throttling": {
+			v2: bearerChallenge, token: tokenStatus(http.StatusTooManyRequests), withCred: true,
+			want: want{false, SeverityWarning, "could not verify credentials from this machine"},
+		},
+		"registry failing": {
+			v2: func(w http.ResponseWriter, _ string) {
+				w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
+				w.WriteHeader(http.StatusBadGateway)
+			},
+			withCred: true,
+			want:     want{false, SeverityWarning, "could not verify credentials from this machine"},
+		},
+		"proxy page instead of a registry": {
+			v2:       func(w http.ResponseWriter, _ string) { w.WriteHeader(http.StatusForbidden) },
+			withCred: true,
+			want:     want{true, SeverityInfo, "did not identify as an OCI registry"},
+		},
+		"captive portal 200": {
+			v2:       func(w http.ResponseWriter, _ string) { w.WriteHeader(http.StatusOK) },
+			withCred: true,
+			want:     want{true, SeverityInfo, "did not identify as an OCI registry"},
+		},
+		"basic auth": {
+			v2: func(w http.ResponseWriter, _ string) {
+				w.Header().Set("Www-Authenticate", `Basic realm="harbor"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			},
+			withCred: true,
+			want:     want{true, SeverityInfo, "uses Basic auth"},
+		},
+		"negotiate then bearer": {
+			v2: func(w http.ResponseWriter, realm string) {
+				w.Header().Add("Www-Authenticate", "Negotiate")
+				w.Header().Add("Www-Authenticate", `Bearer realm="`+realm+`"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			},
+			token: tokenStatus(http.StatusUnauthorized), withCred: true,
+			want: want{false, SeverityError, "rejected"},
+		},
+		"realm on another host": {
+			v2: func(w http.ResponseWriter, _ string) {
+				bearerChallenge(w, "https://attacker.example/token")
+			},
+			withCred: true,
+			want:     want{true, SeverityInfo, "refusing to send credentials"},
+		},
+		"no realm off nvcr.io": {
+			v2: func(w http.ResponseWriter, _ string) {
+				w.Header().Set("Www-Authenticate", "Bearer")
+				w.WriteHeader(http.StatusUnauthorized)
+			},
+			withCred: true,
+			want:     want{true, SeverityInfo, "named no Bearer token realm"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			token := tc.token
+			if token == nil {
+				token = func(w http.ResponseWriter) { t.Error("the token endpoint must not be called") }
+			}
+			reg := newFakeRegistry(t, tc.v2, token)
+			if tc.withCred {
+				dockerHome(t, inlineDockerConfig(t, reg.host, "u", "p", ""))
+			} else {
+				dockerHome(t, `{}`)
+			}
+			r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: reg.host, Critical: true},
+				reg.host, false).Run(context.Background())
+			assert.Equal(t, tc.want.passed, r.Passed, r.Message)
+			assert.Equal(t, tc.want.severity, r.Severity, r.Message)
+			assert.Contains(t, r.Message, tc.want.message)
+		})
+	}
+
+	t.Run("ECR", func(t *testing.T) {
+		const ecr = "123456789012.dkr.ecr.us-west-2.amazonaws.com"
+		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: ecr, Critical: true}, ecr, false).
+			Run(context.Background())
+		assert.True(t, r.Passed)
+		assert.Equal(t, SeverityInfo, r.Severity)
+		assert.Contains(t, r.Message, "aws ecr get-login-password --region us-west-2 | "+
+			"docker login --username AWS --password-stdin "+ecr)
+	})
+
+	t.Run("unreachable", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		host := ln.Addr().String()
+		require.NoError(t, ln.Close())
+		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host, Critical: true}, host, false).
+			Run(context.Background())
+		assert.False(t, r.Passed)
+		assert.Equal(t, SeverityWarning, r.Severity, "a workstation that cannot reach a registry does not block")
+		assert.Contains(t, r.Message, "could not verify credentials from this machine")
+	})
+
+	t.Run("non-critical rejection", func(t *testing.T) {
+		reg := newFakeRegistry(t, bearerChallenge, tokenStatus(http.StatusUnauthorized))
+		dockerHome(t, inlineDockerConfig(t, reg.host, "u", "p", ""))
+		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: reg.host}, reg.host, false).
+			Run(context.Background())
+		assert.False(t, r.Passed)
+		assert.Equal(t, SeverityWarning, r.Severity)
+	})
+}
+
+// A 5xx or 429 is retried before it is graded, honoring Retry-After.
+func TestProbeRegistryCredential_RetriesTransientFailures(t *testing.T) {
+	prevBackoff := registryRetryBackoff
+	registryRetryBackoff = time.Millisecond
+	t.Cleanup(func() { registryRetryBackoff = prevBackoff })
+	calls := 0
+	reg := newFakeRegistry(t, bearerChallenge, func(w http.ResponseWriter) {
+		calls++
+		if calls < registryRetryAttempts {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		tokenStatus(http.StatusOK)(w)
+	})
+	dockerHome(t, inlineDockerConfig(t, reg.host, "u", "p", ""))
+	assert.NoError(t, probeRegistryCredential(context.Background(), reg.host, "", true))
+	assert.Equal(t, registryRetryAttempts, calls)
+}
+
+// A rejected NGC API key on a run that checks an installed stack is a
+// warning: the cluster pulls with its own pull secret. Before install, and
+// for any other credential, a rejection on a critical registry is an error.
+func TestRegistryCredentialCheck_RejectedNGCKeyAfterInstall(t *testing.T) {
+	rejectedKey := func(context.Context, string, string, bool) error {
+		return registryProbeOutcome{kind: probeRejected, ngcKey: true, detail: "credentials from NGC_API_KEY rejected"}
+	}
+	rejectedLogin := func(context.Context, string, string, bool) error {
+		return registryProbeOutcome{kind: probeRejected, detail: "credentials from docker config rejected"}
+	}
+	entry := RegistryEntry{Registry: "nvcr.io", Critical: true}
+	for _, tc := range []struct {
+		checker     RegistryCredentialChecker
+		postInstall bool
+		want        string
+	}{
+		{rejectedKey, true, SeverityWarning},
+		{rejectedKey, false, SeverityError},
+		{rejectedLogin, true, SeverityError},
+	} {
+		r := registryCredentialCheck(tc.checker, entry, "nvcr.io", tc.postInstall).Run(context.Background())
+		assert.False(t, r.Passed)
+		assert.Equal(t, tc.want, r.Severity, "postInstall=%v", tc.postInstall)
+	}
+}
+
+// The stack's org is the probe's scope, so a key without access to it is
+// caught even when the validator image comes from another org on the same
+// registry: both scopes are probed, each on its own row.
+func TestEnumerateRegistries_ProbesTheStacksOrg(t *testing.T) {
+	stack := StackValues{Found: true, ImageRegistry: "nvcr.io", ImageRepository: "customerorg/team"}
+	got := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0", stack, nil)
+	var scopes []string
+	for _, e := range got {
+		if e.Registry == "nvcr.io" {
+			assert.True(t, e.Critical)
+			scopes = append(scopes, e.RepoHint)
+		}
+	}
+	assert.Equal(t, []string{"nvidia/nvcf-byoc/cluster-validator", "customerorg/team"}, scopes)
+
+	cat := buildRegistryCredentialCategory(PreflightConfig{Registries: got,
+		RegistryChecker: func(context.Context, string, string, bool) error { return nil }})
+	var ids []string
+	for _, c := range cat.checks {
+		ids = append(ids, c.ID)
+	}
+	assert.Contains(t, ids, "registry-cred-nvcr.io")
+	assert.Contains(t, ids, "registry-cred-nvcr.io/customerorg/team")
+
+	mirrored := StackValues{Found: true, ImageRegistry: "harbor.example.com/nvcf", ImageRepository: "org/team"}
+	got = EnumerateRegistries("", mirrored, nil)
+	require.NotEmpty(t, got)
+	assert.Equal(t, "nvcf/org/team", got[0].RepoHint, "the registry's path and the repository form the scope")
+
+	cfg := buildControlPlaneValidatorConfig(EnumerateRegistries("nvcr.io/nvidia/cv:1", stack, nil))
+	assert.Equal(t, 1, strings.Count(cfg, `host: "nvcr.io"`), "one registry is one in-pod endpoint")
+}
+
+// --cluster-validator-registries accepts host[:port][/path]; anything else is
+// an error naming the entry rather than a row that silently never appears.
+func TestParseRegistryExtra(t *testing.T) {
+	for in, want := range map[string]RegistryEntry{
+		"harbor.example.com":            {Registry: "harbor.example.com"},
+		"harbor.example.com:443":        {Registry: "harbor.example.com"},
+		"harbor.example.com:5000/nvcf":  {Registry: "harbor.example.com:5000", RepoHint: "nvcf"},
+		"harbor.example.com/nvcf/team/": {Registry: "harbor.example.com", RepoHint: "nvcf/team"},
+		"[fd00::1]":                     {Registry: "[fd00::1]"},
+		"[fd00::1]:5000":                {Registry: "[fd00::1]:5000"},
+	} {
+		got, err := ParseRegistryExtra(in)
+		require.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, in := range []string{
+		"https://harbor.example.com", "harbor.example.com:44x", "nvcr.io:", "nvcr.io:70000",
+		"harbor.example.com//x", "nvcr.io@attacker.example", "harbor.example.com/a?b",
+	} {
+		_, err := ParseRegistryExtra(in)
+		assert.ErrorContains(t, err, "expected host[:port]", in)
+	}
+}
+
+// The gates read env values the way the stack does: the ingress release's
+// condition is a YAML boolean, and the route gates are template ifs, which
+// take a quoted "true" (and a quoted "false") as on. Each gate is toggled on
+// its own so one cannot stand in for the other.
+func TestLoadStackValues_GatewayGates(t *testing.T) {
+	dir := t.TempDir()
+	const gateways = `
+    gateways:
+      shared: {name: shared-gw, namespace: gw}
+      grpc: {name: grpc-gw, namespace: gw}
+      nats: {name: nats-gw, namespace: gw}
+      llmGrpc: {name: llm-grpc-gw, namespace: gw}
+      llmQuic: {name: llm-quic-gw, namespace: gw}
+`
+	base := []string{"gw/grpc-gw", "gw/shared-gw"}
+	withNats := []string{"gw/grpc-gw", "gw/nats-gw", "gw/shared-gw"}
+	withLLM := []string{"gw/grpc-gw", "gw/llm-grpc-gw", "gw/llm-quic-gw", "gw/shared-gw"}
+	for name, tc := range map[string]struct {
+		values string
+		want   []string
+	}{
+		"nats only":          {"enabled: true\n    routes: {nats: {enabled: true}}", withNats},
+		"llmWorker only":     {"enabled: true\n    routes: {llmWorker: {enabled: true}}", withLLM},
+		"quoted nats true":   {"enabled: true\n    routes: {nats: {enabled: \"true\"}}", withNats},
+		"quoted nats false":  {"enabled: true\n    routes: {nats: {enabled: \"false\"}}", withNats},
+		"nats null":          {"enabled: true\n    routes: {nats: {enabled: null}}", base},
+		"quoted gateway API": {"enabled: \"true\"", nil},
+		"gateway API off":    {"enabled: false\n    routes: {nats: {enabled: true}}", nil},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".yaml")
+		require.NoError(t, writeFile(path, []byte("ingress:\n  gatewayApi:\n    "+tc.values+gateways)), name)
+		assert.Equal(t, tc.want, LoadStackValues([]string{path}).Gateways, name)
+	}
+
+	path := filepath.Join(dir, "slash.yaml")
+	require.NoError(t, writeFile(path, []byte(
+		"ingress:\n  gatewayApi:\n    enabled: true\n    gateways:\n"+
+			"      shared: {name: a/b, namespace: gw}\n      grpc: {name: grpc-gw, namespace: gw/x}\n")))
+	assert.Empty(t, LoadStackValues([]string{path}).Gateways, "a name or namespace with '/' is never forwarded")
+}
+
+// A dependency whose release condition is off is external to the stack, and
+// one the values never mention is not reported.
+func TestLoadStackValues_ExternalComponents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "env.yaml")
+	require.NoError(t, writeFile(path, []byte(
+		"nats: {enabled: false}\nopenbao: {enabled: true}\ncassandra: {enabled: \"true\"}\n")))
+	assert.Equal(t, []string{"nats", "cassandra"}, LoadStackValues([]string{path}).ExternalComponents)
+	require.NoError(t, writeFile(path, []byte("global: {}\n")))
+	assert.Empty(t, LoadStackValues([]string{path}).ExternalComponents)
+}
+
+// findSelfManagedStack returns the repository's self-managed stack, found
+// above the package directory, or skips the test where it is not there, as
+// in a sandboxed build.
+func findSelfManagedStack(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		stack := filepath.Join(dir, "deploy", "stacks", "self-managed")
+		if _, err := os.Stat(filepath.Join(stack, "helmfile.d")); err == nil {
+			return stack
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Skip("the self-managed stack is not available here")
+		}
+		dir = parent
+	}
+}
+
+// The Gateways LoadStackValues forwards are the ones the stack renders into
+// the ingress release's nvcfGatewayRoutes.gateways, for the default routes
+// and with each gated route on, so the CLI's gates cannot drift from the
+// template's. Needs helmfile; skipped without it.
+func TestLoadStackValues_GatewaysMatchTheRenderedStack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("renders the stack with helmfile")
+	}
+	helmfile, err := exec.LookPath("helmfile")
+	if err != nil {
+		t.Skip("helmfile is not installed")
+	}
+	stack := findSelfManagedStack(t)
+	const common = `
+ingress:
+  gatewayApi:
+    controllerNamespace: gateway
+    gateways:
+      shared: {name: shared-gw, namespace: gateway}
+      grpc: {name: grpc-gw, namespace: gateway}
+      nats: {name: nats-gw, namespace: gateway}
+      llmGrpc: {name: llm-grpc-gw, namespace: llm}
+      llmQuic: {name: llm-quic-gw, namespace: llm}
+`
+	const llmWorker = `
+    routes:
+      llmWorker: {enabled: true, backend: {namespace: nvcf}}
+global:
+  workerEndpoints: {llmRequestRouterAddress: "https://router.example.invalid:50071"}
+addons:
+  llm:
+    requestRouter:
+      backendRouter:
+        pylonGrpcDialAddress: "https://router.example.invalid:50071"
+        pylonReverseTunnelDialAddress: "router.example.invalid:50072"
+      grpcTls: {enabled: true, issuerRef: {name: test-issuer}}
+`
+	for name, env := range map[string]string{
+		"default routes":   common,
+		"nats on":          common + "    routes:\n      nats: {enabled: true}\n",
+		"quoted nats true": common + "    routes:\n      nats: {enabled: \"true\"}\n",
+		"llmWorker on":     common + llmWorker,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			envFile := filepath.Join(dir, "env.yaml")
+			require.NoError(t, writeFile(envFile, []byte(env)))
+			out := filepath.Join(dir, "ingress-values.yaml")
+			cmd := exec.Command(helmfile, "--file", "helmfile.d/02-core.yaml.gotmpl", "--environment", "default",
+				"--state-values-file", envFile, "--selector", "name=ingress",
+				"write-values", "--output-file-template", out)
+			cmd.Dir = stack
+			cmd.Env = append(os.Environ(), "HELMFILE_ENV=base", "HELMFILE_CACHE_HOME="+filepath.Join(dir, "cache"))
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, string(output))
+			body, err := os.ReadFile(out)
+			require.NoError(t, err)
+			var rendered struct {
+				NvcfGatewayRoutes struct {
+					Gateways map[string]struct {
+						Name      string `json:"name"`
+						Namespace string `json:"namespace"`
+					} `json:"gateways"`
+				} `json:"nvcfGatewayRoutes"`
+			}
+			require.NoError(t, yaml.Unmarshal(body, &rendered))
+			var want []string
+			for _, gw := range rendered.NvcfGatewayRoutes.Gateways {
+				want = append(want, gw.Namespace+"/"+gw.Name)
+			}
+			sort.Strings(want)
+			require.NotEmpty(t, want, "the ingress release renders the shared and grpc Gateways")
+			base := filepath.Join(stack, "environments", "base.yaml")
+			assert.Equal(t, want, LoadStackValues([]string{base, envFile}).Gateways)
+		})
+	}
 }

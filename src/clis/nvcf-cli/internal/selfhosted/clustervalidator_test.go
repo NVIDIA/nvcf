@@ -603,9 +603,10 @@ func TestBuildControlPlaneValidatorConfig_NoRegistries(t *testing.T) {
 	assert.Contains(t, got, "enforcement:", "enforcement block must be present")
 }
 
-// The endpoints are exactly the enumerated registries, with the same
-// criticality. A mirrored install whose list has no nvcr.io must not be made
-// to dial it: a fixed critical nvcr.io failed every such control plane.
+// The endpoints are exactly the enumerated registries, each non-critical
+// whatever the local check's criticality. A mirrored install whose list has
+// no nvcr.io must not be made to dial it: a fixed critical nvcr.io failed
+// every such control plane.
 func TestBuildControlPlaneValidatorConfig_EndpointsAreNotCritical(t *testing.T) {
 	got := buildControlPlaneValidatorConfig([]RegistryEntry{
 		{Registry: "harbor.company.internal", Critical: false},

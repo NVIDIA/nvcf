@@ -35,8 +35,9 @@ func TestMain(m *testing.M) {
 	}
 	_ = os.Setenv("HOME", home)
 	_ = os.Unsetenv("HELM_DRIVER")
-	// An exported NGC key is preferred over the docker config for nvcr.io,
-	// so it would change what the credential tests resolve.
+	// A docker config or an NGC key exported on the machine running the
+	// tests would otherwise be the credential every registry test sends.
+	_ = os.Unsetenv("DOCKER_CONFIG")
 	for _, name := range ngcAPIKeyEnvNames {
 		_ = os.Unsetenv(name)
 	}

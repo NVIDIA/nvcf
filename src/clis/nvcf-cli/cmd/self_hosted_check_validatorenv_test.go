@@ -363,9 +363,11 @@ ingress:
       shared: {name: nvcf-gateway, namespace: envoy-gateway}
       grpc: {name: nvcf-gateway, namespace: envoy-gateway}
 `), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "local.yaml"), []byte("global: {}\n"), 0o644))
+	t.Setenv("NVCF_CLI_DEFAULT_CONTROL_PLANE_STACK", "")
 	prev := newClusterValidatorForSelfHosted
 	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
-	run := func(stackFlag string) map[string]string {
+	run := func(env, stackFlag string) map[string]string {
 		resetCheckFlags(t)
 		var got map[string]string
 		newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
@@ -376,8 +378,11 @@ ingress:
 		}
 		rootCmd.SetErr(&bytes.Buffer{})
 		rootCmd.SetOut(&bytes.Buffer{})
-		args := []string{"self-hosted", "check", "--control-plane", "--json", "--env", "prod",
+		args := []string{"self-hosted", "check", "--control-plane", "--json",
 			"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"}
+		if env != "" {
+			args = append(args, "--env", env)
+		}
 		if stackFlag != "" {
 			args = append(args, "--control-plane-stack", stackFlag)
 		}
@@ -387,16 +392,37 @@ ingress:
 		return got
 	}
 
-	assert.NotContains(t, run(stack), "NVCF_GATEWAY_NAMES", "base.yaml without prod.yaml is not the install")
+	assert.NotContains(t, run("prod", stack), "NVCF_GATEWAY_NAMES", "base.yaml without prod.yaml is not the install")
+	assert.NotContains(t, run("", stack), "NVCF_GATEWAY_NAMES",
+		"the defaulted --env is not the install's environment, even with a local.yaml in the stack")
 
 	require.NoError(t, os.WriteFile(filepath.Join(envDir, "prod.yaml"), []byte("global: {domain: example.com}\n"), 0o644))
-	assert.Equal(t, "envoy-gateway/nvcf-gateway", run(stack)["NVCF_GATEWAY_NAMES"])
+	assert.Equal(t, "envoy-gateway/nvcf-gateway", run("prod", stack)["NVCF_GATEWAY_NAMES"])
 
 	// The same stack found above the working directory is not the remote
-	// stack the command was given, nor a local one without environments.
+	// stack the command was given, nor a local one without environments,
+	// nor the built-in stack a release CLI installs from.
 	t.Chdir(stack)
-	assert.NotContains(t, run("oci://registry.example.com/nvcf/stack:1.0.0"), "NVCF_GATEWAY_NAMES")
-	assert.NotContains(t, run(t.TempDir()), "NVCF_GATEWAY_NAMES")
-	assert.Equal(t, "envoy-gateway/nvcf-gateway", run("")["NVCF_GATEWAY_NAMES"],
-		"with no stack flag the checkout above the working directory is the stack")
+	assert.NotContains(t, run("prod", "oci://registry.example.com/nvcf/stack:1.0.0"), "NVCF_GATEWAY_NAMES")
+	assert.NotContains(t, run("prod", t.TempDir()), "NVCF_GATEWAY_NAMES")
+	assert.NotContains(t, run("prod", "file://"+stack), "NVCF_GATEWAY_NAMES",
+		"a file:// stack is cloned from its committed HEAD, which the working tree can differ from")
+	t.Setenv("NVCF_CLI_DEFAULT_CONTROL_PLANE_STACK", "oci://registry.example.com/nvcf/stack:1.0.0")
+	assert.NotContains(t, run("prod", ""), "NVCF_GATEWAY_NAMES",
+		"a CLI with a built-in stack installs from it, not from the working directory")
+}
+
+// The stack dependencies the stack leaves out reach the validator as
+// NVCF_EXTERNAL_COMPONENTS; an explicit setting wins over them.
+func TestClusterValidatorJobEnv_ForwardsExternalComponents(t *testing.T) {
+	resetCheckFlags(t)
+	t.Setenv("NVCF_EXTERNAL_COMPONENTS", "")
+	stack := selfhosted.StackValues{ExternalComponents: []string{"nats", "cassandra"}}
+	assert.Equal(t, "nats,cassandra", clusterValidatorJobEnv(stack)["NVCF_EXTERNAL_COMPONENTS"])
+
+	t.Setenv("NVCF_EXTERNAL_COMPONENTS", "openbao")
+	assert.Equal(t, "openbao", clusterValidatorJobEnv(stack)["NVCF_EXTERNAL_COMPONENTS"])
+
+	t.Setenv("NVCF_EXTERNAL_COMPONENTS", "")
+	assert.NotContains(t, clusterValidatorJobEnv(selfhosted.StackValues{}), "NVCF_EXTERNAL_COMPONENTS")
 }

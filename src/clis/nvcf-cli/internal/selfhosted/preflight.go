@@ -260,6 +260,11 @@ type PreflightConfig struct {
 	// check's budget has ended it, a later interrupt leaves it unchanged, and
 	// an interrupted run reports no rows for checks it never finished.
 	Interrupted func() bool
+
+	// RegistryPostInstall marks a run that checks an installed stack. The
+	// cluster then pulls with its own pull secrets, so a rejected NGC API key
+	// from this machine's environment is a warning rather than an error.
+	RegistryPostInstall bool
 }
 
 // DefaultTools returns the kubectl/helmfile/helm specs with version floors
@@ -697,7 +702,8 @@ func clusterValidatorCheck(rc RoleConfig, role string) binaryCheckSpec {
 				},
 			})
 			r.Logs = result.Logs
-			r.Detail = clusterValidatorDetail(kubeContext, result)
+			r.Detail = strings.Join(append(result.Notes, clusterValidatorDetail(kubeContext, result)), "; ")
+			r.Detail = strings.TrimSuffix(r.Detail, "; ")
 			if why := validatorKeptReason(rc.ClusterValidatorNoCleanup, result); why != "" {
 				r.Cleanup = validatorRemovalCommand(kubeContext, result.RunID)
 				r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + why + ": " + r.Cleanup
@@ -1020,68 +1026,78 @@ func clusterValidatorDetail(kubeContext string, result ClusterValidatorResult) s
 
 // buildRegistryCredentialCategory returns the registry-credentials category
 // that probes each configured registry for reachability and valid credentials.
+// A registry listed twice, for two repository scopes, gets one row per scope.
 func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 	cat := categorySpec{
 		name:   "registry-credentials",
 		role:   RoleLocalOnly, // runs regardless of cluster role
 		checks: make([]binaryCheckSpec, 0, len(cfg.Registries)),
 	}
+	seen := map[string]bool{}
 	for _, reg := range cfg.Registries {
-		reg := reg // capture loop var
-		cat.checks = append(cat.checks, registryCredentialCheck(cfg.RegistryChecker, reg))
+		label := reg.Registry
+		if seen[label] {
+			label += "/" + reg.RepoHint
+		}
+		seen[reg.Registry] = true
+		cat.checks = append(cat.checks, registryCredentialCheck(cfg.RegistryChecker, reg, label, cfg.RegistryPostInstall))
 	}
 	return cat
 }
 
 // registryCredentialCheck returns a binaryCheckSpec that probes one registry.
-// Critical registries (nvcr.io) fail at error severity; non-critical ones
-// fail at warning so they don't block the operator on optional registries.
-func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEntry) binaryCheckSpec {
-	id := "registry-cred-" + entry.Registry
+// Only a credential the registry rejected can fail: at error severity for a
+// critical registry, at warning for any other. A rejected NGC API key on a
+// post-install run is a warning too: it is this machine's key, and the
+// cluster pulls with its own pull secret. Everything else the probe can
+// report, from an unreachable registry to a missing local credential, is a
+// warning or an informational pass.
+func registryCredentialCheck(
+	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
+) binaryCheckSpec {
+	id := "registry-cred-" + label
 	severity := SeverityWarning
 	if entry.Critical {
 		severity = SeverityError
 	}
 	return binaryCheckSpec{
 		ID:         id,
-		HumanLabel: fmt.Sprintf("checking credentials for %s...", entry.Registry),
+		HumanLabel: fmt.Sprintf("checking credentials for %s...", label),
 		Run: func(ctx context.Context) CheckResult {
-			r := CheckResult{
-				ID:       id,
-				Severity: severity,
+			r := CheckResult{ID: id, Severity: severity}
+			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical)
+			if err == nil {
+				r.Passed = true
+				r.Severity = SeverityInfo
+				r.Message = label + ": credentials valid"
+				return r
 			}
-			if err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical); err != nil {
-				// A registry this probe cannot speak to (ECR's SigV4, a Basic
-				// challenge) is not evidence of a credential problem, and an
-				// unreadable credential helper is not evidence of a missing
-				// credential. Neither may block the run.
-				var skipped errRegistryProbeSkipped
-				var unverified errRegistryCredentialsUnverified
-				var notVerified errRegistryCredentialsNotVerified
-				switch {
-				case errors.As(err, &notVerified):
-					r.Passed = true
-					r.Severity = SeverityInfo
-					r.Message = entry.Registry + ": " + err.Error()
-					return r
-				case errors.As(err, &skipped):
-					r.Passed = true
-					r.Severity = SeverityInfo
-					r.Message = entry.Registry + ": skipped (" + skipped.reason + ")"
-					return r
-				case errors.As(err, &unverified):
-					r.Severity = SeverityWarning
-					r.Message = entry.Registry + ": " + err.Error()
-					r.Err = err
-					return r
-				}
-				r.Message = entry.Registry + ": " + err.Error()
+			var outcome registryProbeOutcome
+			if !errors.As(err, &outcome) {
+				// The run's context ended mid-probe: nothing was learned.
+				r.Message = label + ": " + err.Error()
 				r.Err = err
 				return r
 			}
-			r.Passed = true
-			r.Severity = SeverityInfo
-			r.Message = entry.Registry + ": credentials valid"
+			r.Message = label + ": " + outcome.detail
+			switch outcome.kind {
+			case probeSkipped:
+				r.Passed = true
+				r.Severity = SeverityInfo
+				r.Message = label + ": skipped (" + outcome.detail + ")"
+			case probeAnonymous, probeNotVerified:
+				r.Passed = true
+				r.Severity = SeverityInfo
+			case probeNoCredential, probeUnverifiable:
+				r.Severity = SeverityWarning
+				r.Err = err
+			case probeRejected:
+				r.Err = err
+				if postInstall && outcome.ngcKey {
+					r.Severity = SeverityWarning
+					r.Message += "; the cluster pulls with its own pull secret, so this affects only this machine"
+				}
+			}
 			return r
 		},
 	}

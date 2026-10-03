@@ -116,19 +116,22 @@ func init() {
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-image"))
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorPullSecret, "cluster-validator-pull-secret", "",
 		"Name of a docker-registry Secret in the 'default' namespace to pull the validator image. "+
-			"When empty, the runner scans NVCF namespaces for a matching secret and copies it into "+
-			"'default' for the run if it lives elsewhere. Failing that, and only when the image is on "+
-			"an NGC registry, it mints one from NGC_API_KEY. Set to force a specific name.")
+			"When empty, the runner scans NVCF namespaces for a Secret with the image registry's "+
+			"credential and copies that one entry into 'default' for the run. Failing that, it creates "+
+			"one from this machine's credential for that registry, the one the registry-credentials "+
+			"row checks: the docker login, or NGC_API_KEY for an image on nvcr.io only. "+
+			"Set to force a specific name.")
 	selfHostedCheckCmd.Flags().BoolVar(&checkClusterValidatorNoCleanup, "no-cleanup", false,
 		"Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging instead of "+
 			"removing them after the run. A kept Job whose pod cannot pull its image is suspended, which "+
 			"deletes the pod. They are reclaimed by a later check after 24 hours; the result prints the "+
 			"kubectl command that removes them now.")
 	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorRegistries, "cluster-validator-registries", nil,
-		"Additional container registries to probe for reachability in the control-plane validator. "+
-			"Format: host:port (e.g. harbor.company.internal:443,ghcr.io:443). "+
-			"Added to the registries the install pulls from, which are probed with the same "+
-			"criticality as the local credential check. Env: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES. "+
+		"Additional container registries to check: their credentials from this machine, and their "+
+			"reachability from a pod of the control-plane validator. Format: host[:port][/path] "+
+			"(e.g. harbor.company.internal:443/nvcf,ghcr.io); a path scopes the credential check. "+
+			"Added to the registries the install pulls from. The in-pod probes are warnings only. "+
+			"A malformed entry fails the command. Env: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES. "+
 			"Can also be set in nvcf-cli config as cluster_validator_registries (list).")
 	_ = viper.BindPFlag("cluster_validator_registries",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-registries"))
@@ -165,6 +168,14 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if _, err := configuredValidatorTolerations(); err != nil {
 		return err
 	}
+	extraRegistries, err := configuredValidatorRegistries()
+	if err != nil {
+		return err
+	}
+	// One credential lookup per registry for the whole run, shared by tag
+	// discovery, the local credential row and the validator's pull secret,
+	// so the row checks the credential the validator Job is given.
+	runCtx := selfhosted.WithRegistryCredentials(c.Context(), selfhosted.NewRegistryCredentials(preferNGCKey()))
 
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
 	skipClusterValidation := checkSkipClusterValidation || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION") != ""
@@ -187,7 +198,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		(computePlaneIsVisited() || controlPlaneIsVisited())
 	clusterValidatorImage, unresolvedImage := "", ""
 	if anyValidatorIsTargeted {
-		clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(c.Context())
+		clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(runCtx)
 	}
 	// An image whose tag did not resolve is still sized for: --wait resolves
 	// it again on every poll, and the validator runs once it does.
@@ -227,7 +238,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// Without this the process exits on the signal and the validator's
 	// cluster-wide ClusterRole, bound to a ServiceAccount in default, stays
 	// behind until a later check's orphan sweep.
-	sigCtx, stop := signal.NotifyContext(c.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	sigCtx, stop := signal.NotifyContext(runCtx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	// After the first signal or quit key, say at once how to remove what the
 	// runs in progress may leave, before anything can end the process. A
@@ -294,14 +305,13 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	)
 	// Run credential checks whenever not local-only. The validator image is
 	// optional: EnumerateRegistries handles an empty image ref and still picks
-	// up global.image.registry from the stack values file and any
+	// up global.image.registry from the stack values and any
 	// --cluster-validator-registries extras independently of the image config.
 	if !localOnly {
-		extraRegistries := configuredValidatorRegistries()
 		// The configured image when its tag did not resolve: its registry,
 		// and the repository the credentials must reach, are the same.
 		credEntries = selfhosted.EnumerateRegistries(
-			cmp.Or(clusterValidatorImage, unresolvedImage), resolveStackValuesFiles(), extraRegistries,
+			cmp.Or(clusterValidatorImage, unresolvedImage), registryStackValues(), extraRegistries,
 		)
 		if len(credEntries) > 0 {
 			registryChecker = newRegistryCredentialCheckerForSelfHosted()
@@ -309,11 +319,12 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 
 	cfg := selfhosted.PreflightConfig{
-		LocalOnly:       localOnly,
-		Tools:           checkPreflightTools(),
-		Registries:      credEntries,
-		RegistryChecker: registryChecker,
-		Interrupted:     interrupted,
+		LocalOnly:           localOnly,
+		Tools:               checkPreflightTools(),
+		Registries:          credEntries,
+		RegistryChecker:     registryChecker,
+		RegistryPostInstall: checkScopeIsPostInstall(),
+		Interrupted:         interrupted,
 	}
 
 	// A quit key in the dashboard cancels the run the way a signal does.
@@ -476,102 +487,147 @@ func printKeptValidatorObjects(w io.Writer, commands []string) {
 	}
 }
 
-// validatorStackValues returns the stack values forwarded to the validator, or
-// none unless the install's environment file was read from the stack the
-// command points at: a local --control-plane-stack, or with no stack flag the
-// checkout found above the working directory. helmfile refuses to install
-// without that file, so base.yaml alone does not describe the install. With a
-// remote stack, what a walk up from the working directory finds is another
-// stack. Another stack's Gateways would have the validator judge Gateways the
-// install never created.
+// validatorStackValues returns the control-plane stack values forwarded to
+// the validator, or none when stackValuesForRun cannot read the values that
+// describe the install. Another stack's Gateways would have the validator
+// judge Gateways the install never created.
 func validatorStackValues() selfhosted.StackValues {
-	dir := localStackDir(selfHostedControlPlaneStack)
-	if selfHostedControlPlaneStack != "" && dir == "" {
+	files, ok := stackValuesForRun(controlPlaneStackTarget())
+	if !ok {
 		return selfhosted.StackValues{}
 	}
-	files := resolveStackValuesFiles()
-	env := resolveStackEnv() + ".yaml"
-	for _, f := range files {
-		if filepath.Base(f) == env && (dir == "" || isUnder(dir, f)) {
-			return selfhosted.LoadStackValues(files)
-		}
-	}
-	return selfhosted.StackValues{}
+	return selfhosted.LoadStackValues(files)
 }
 
-// isUnder reports whether path is inside dir.
-func isUnder(dir, path string) bool {
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		return false
+// registryStackValues returns the stack values the registry credential check
+// reads: the control-plane stack's, or the compute-plane stack's on a run
+// that does not visit the control plane. Empty when they cannot be read.
+func registryStackValues() selfhosted.StackValues {
+	target := controlPlaneStackTarget()
+	if !controlPlaneIsVisited() {
+		target = computePlaneStackTarget()
 	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return false
+	files, ok := stackValuesForRun(target)
+	if !ok {
+		return selfhosted.StackValues{}
 	}
-	rel, err := filepath.Rel(absDir, absPath)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return selfhosted.LoadStackValues(files)
 }
 
-// resolveStackValuesFiles returns the stack values files preflight reads, in
-// the order helmfile layers them: base.yaml first, then the environment file
-// over it. Returns nil when no stack is found.
+// stackTarget is one stack check can read values from.
+type stackTarget struct {
+	// source is the stack flag; builtIn the stack the install commands use
+	// without it.
+	source, builtIn string
+	// name is the stack's directory in a checkout, under deploy/stacks.
+	name string
+}
+
+func controlPlaneStackTarget() stackTarget {
+	return stackTarget{source: selfHostedControlPlaneStack, builtIn: builtInControlPlaneStackOCI(), name: "self-managed"}
+}
+
+func computePlaneStackTarget() stackTarget {
+	return stackTarget{source: selfHostedComputePlaneStack, builtIn: builtInComputePlaneStackOCI(),
+		name: "nvcf-compute-plane"}
+}
+
+// stackValuesForRun returns the values files that describe the install, in
+// the order helmfile layers them (base.yaml, then <env>.yaml), and true only
+// when it can read them from the stack the install used:
 //
-// It prefers --control-plane-stack, the same source every sibling command uses,
-// and only falls back to walking up from the working directory. The
-// environment follows resolveStackEnv.
-func resolveStackValuesFiles() []string {
-	var roots []string
-	// localStackDir strips file:// and drops remote sources, which
-	// filepath.Join would otherwise turn into a path that never exists.
-	if dir := localStackDir(selfHostedControlPlaneStack); dir != "" {
-		roots = append(roots, dir)
+//   - The environment must be named, with --env or HELMFILE_ENV. --env's
+//     default is not evidence of the environment the install used.
+//   - <env>.yaml must be read, since helmfile refuses to install without it,
+//     so base.yaml alone does not describe the install.
+//   - It is read from the stack the install commands resolve: the stack
+//     flag, else the built-in stack. A local directory is read directly, and
+//     an oci:// stack from the extraction an earlier command left in the
+//     cache. A git stack, file:// included, is not read: the install cloned
+//     it, so the working tree here can differ. With neither a flag nor a
+//     built-in stack, the stack checkout above the working directory is read.
+//
+// Otherwise nothing is read, and every stack-derived input is left out.
+func stackValuesForRun(t stackTarget) ([]string, bool) {
+	env, ok := explicitStackEnv()
+	if !ok {
+		return nil, false
 	}
-	if cwd, err := os.Getwd(); err == nil {
-		dir := cwd
-		for i := 0; i < 6; i++ {
-			roots = append(roots, dir)
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
+	var envDirs []string
+	if src := cmp.Or(t.source, t.builtIn); src != "" {
+		dir := cmp.Or(localStackDir(src), selfhosted.ExtractedOCIStack(src))
+		if dir == "" {
+			return nil, false
 		}
+		envDirs = []string{filepath.Join(dir, "environments")}
+	} else {
+		envDirs = checkoutEnvironmentDirs(t.name)
 	}
-
-	env := resolveStackEnv()
-	for _, root := range roots {
-		for _, sub := range [][]string{
-			{"deploy", "stacks", "self-managed", "environments"},
-			{"environments"}, // a stack dir passed directly
-		} {
-			dir := filepath.Join(append([]string{root}, sub...)...)
-			var files []string
-			for _, name := range []string{"base.yaml", env + ".yaml"} {
-				candidate := filepath.Join(dir, name)
-				if _, err := os.Stat(candidate); err == nil {
-					files = append(files, candidate)
-				}
-			}
-			if len(files) > 0 {
-				return files
-			}
+	for _, dir := range envDirs {
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			continue
 		}
+		envFile := filepath.Join(dir, env+".yaml")
+		if !isRegularFile(envFile) {
+			return nil, false
+		}
+		var files []string
+		if base := filepath.Join(dir, "base.yaml"); isRegularFile(base) {
+			files = append(files, base)
+		}
+		return append(files, envFile), true
 	}
-	return nil
+	return nil, false
 }
 
-// resolveStackEnv picks the helmfile environment preflight reads: an explicit
-// --env, then HELMFILE_ENV for an operator who exports it and runs helmfile
-// directly, then --env's default. When the CLI runs helmfile itself it passes
-// --env as HELMFILE_ENV, so an explicit flag must win.
-func resolveStackEnv() string {
+// checkoutEnvironmentDirs lists where a stack's environments directory can
+// sit at or above the working directory: deploy/stacks/<name>/environments
+// in a repository checkout, or environments in the stack directory itself.
+func checkoutEnvironmentDirs(name string) []string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for i, dir := 0, cwd; i < 6; i++ {
+		if filepath.Base(dir) == name {
+			dirs = append(dirs, filepath.Join(dir, "environments"))
+		}
+		dirs = append(dirs, filepath.Join(dir, "deploy", "stacks", name, "environments"))
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return dirs
+}
+
+func isRegularFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// explicitStackEnv returns the helmfile environment the operator named: an
+// explicit --env, then HELMFILE_ENV for an operator who exports it and runs
+// helmfile directly. When the CLI runs helmfile itself it passes --env as
+// HELMFILE_ENV, so an explicit flag must win.
+func explicitStackEnv() (string, bool) {
 	if f := selfHostedCmd.PersistentFlags().Lookup("env"); f != nil && f.Changed {
 		if env := strings.TrimSpace(selfHostedEnv); env != "" {
-			return env
+			return env, true
 		}
 	}
 	if env := strings.TrimSpace(os.Getenv("HELMFILE_ENV")); env != "" {
+		return env, true
+	}
+	return "", false
+}
+
+// resolveStackEnv is the helmfile environment the run assumes: the one the
+// operator named, else --env's default.
+func resolveStackEnv() string {
+	if env, ok := explicitStackEnv(); ok {
 		return env
 	}
 	if env := strings.TrimSpace(selfHostedEnv); env != "" {
@@ -580,16 +636,27 @@ func resolveStackEnv() string {
 	return "local"
 }
 
+// preferNGCKey reports whether the NGC API key goes ahead of the docker login
+// for nvcr.io: only where up mints its pull secrets from the key, before a
+// local install. Anywhere else the docker login is what docker uses.
+func preferNGCKey() bool {
+	return !checkScopeIsPostInstall() && strings.EqualFold(resolveStackEnv(), "local")
+}
+
+// checkScopeIsPostInstall reports whether the run checks an installed stack:
+// any scope but a bare --pre, matching VALIDATOR_POST_INSTALL.
+func checkScopeIsPostInstall() bool {
+	return !checkPre || checkAll || checkControlPlane || checkComputePlane
+}
+
 // localStackDir returns src when it points at a readable local directory.
-// Remote sources (oci://, git@, https://...git) are not fetched here: the
-// stale-namespace check falls back to its static list rather than making
-// preflight depend on a network round trip.
+// Remote sources (oci://, git@, https://...git, file://) are not fetched
+// here: the stale-namespace check falls back to its static list rather than
+// making preflight depend on a network round trip. file:// is a git source:
+// the install clones its committed HEAD, which the working tree can differ
+// from.
 func localStackDir(src string) string {
-	if src == "" {
-		return ""
-	}
-	src = strings.TrimPrefix(src, "file://")
-	if strings.Contains(src, "://") || strings.HasPrefix(src, "git@") {
+	if src == "" || strings.Contains(src, "://") || strings.HasPrefix(src, "git@") {
 		return ""
 	}
 	if fi, err := os.Stat(src); err == nil && fi.IsDir() {
@@ -598,23 +665,27 @@ func localStackDir(src string) string {
 	return ""
 }
 
-// configuredValidatorRegistries returns the extra registries from the flag, env
-// var, or config file, normalized to one entry per registry.
+// configuredValidatorRegistries parses the extra registries from the flag,
+// env var, or config file, one entry per registry. A malformed entry is an
+// error naming it, as a malformed toleration is.
 //
 // viper.GetStringSlice splits a raw env string on whitespace, so the documented
-// comma form "a:443,b:443" arrives as a single element. Left as-is it reaches
-// net.SplitHostPort as "a:443,b:443", which errors with "too many colons" and is
-// then passed through verbatim as a host, producing https://a:443,b:443/v2/.
-func configuredValidatorRegistries() []string {
-	var out []string
+// comma form "a:443,b:443" arrives as a single element and is split here.
+func configuredValidatorRegistries() ([]selfhosted.RegistryEntry, error) {
+	var out []selfhosted.RegistryEntry
 	for _, raw := range viper.GetStringSlice("cluster_validator_registries") {
 		for _, part := range strings.Split(raw, ",") {
-			if part = strings.TrimSpace(part); part != "" {
-				out = append(out, part)
+			if part = strings.TrimSpace(part); part == "" {
+				continue
 			}
+			entry, err := selfhosted.ParseRegistryExtra(part)
+			if err != nil {
+				return nil, fmt.Errorf("--cluster-validator-registries %w", err)
+			}
+			out = append(out, entry)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // configuredValidatorTolerations parses the validator Job's extra tolerations
@@ -829,8 +900,8 @@ func runPreflightByRole(
 
 	staleNSProber := newStaleNamespaceProberForSelfHosted()
 
-	// The control-plane validator probes the same registries, with the same
-	// criticality, as the local credential check, extras included.
+	// The control-plane validator probes the hosts the local credential check
+	// probes, extras included, each as a warning only.
 	registries := cfg.Registries
 	validatorEnv := clusterValidatorJobEnv(validatorStackValues())
 	// Validated before the run starts.
@@ -1009,6 +1080,8 @@ func validatorEnvForRole(env map[string]string, roleFlag bool) map[string]string
 //   - relocated OpenBao and Envoy Gateway namespaces, without which the Tier
 //     rows assess the defaults and miss the real components;
 //   - NVCF_GATEWAY_NAMES, the override for the NVCF Gateway discovery;
+//   - NVCF_EXTERNAL_COMPONENTS, the stack dependencies the stack does not
+//     install, which the validator must not expect in the cluster;
 //   - the overlay probe image, so a mirrored cluster does not pull busybox
 //     from Docker Hub.
 func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
@@ -1033,6 +1106,13 @@ func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 		env["NVCF_GATEWAY_NAMES"] = names
 	} else if len(stack.Gateways) > 0 {
 		env["NVCF_GATEWAY_NAMES"] = strings.Join(stack.Gateways, ",")
+	}
+	// An explicit setting wins over the components the stack leaves out.
+	if components := cmp.Or(strings.TrimSpace(viper.GetString("cluster_validator_external_components")),
+		configValue("NVCF_EXTERNAL_COMPONENTS")); components != "" {
+		env["NVCF_EXTERNAL_COMPONENTS"] = components
+	} else if len(stack.ExternalComponents) > 0 {
+		env["NVCF_EXTERNAL_COMPONENTS"] = strings.Join(stack.ExternalComponents, ",")
 	}
 	if probe := configuredProbeImage(); probe != "" {
 		env["NVCF_N2N_PROBE_IMAGE"] = probe

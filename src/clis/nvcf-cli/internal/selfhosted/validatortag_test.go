@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,9 +49,18 @@ func TestParseImageRef(t *testing.T) {
 		{"digest", "nvcr.io/foo/bar@sha256:abc", "nvcr.io", "foo/bar", "sha256:abc", true},
 		{"no tag", "stg.nvcr.io/foo/bar", "stg.nvcr.io", "foo/bar", "", true},
 		{"localhost with port", "localhost:5000/foo:latest", "localhost:5000", "foo", "latest", true},
-		{"docker hub shorthand", "foo/bar:latest", "", "", "", false},
+		{"docker hub shorthand", "foo/bar:latest", "registry-1.docker.io", "foo/bar", "latest", true},
+		{"docker hub library image", "busybox:1.36", "registry-1.docker.io", "library/busybox", "1.36", true},
+		{"tag and digest", "nvcr.io/nvidia/cv:1.2.0@sha256:abc", "nvcr.io", "nvidia/cv", "sha256:abc", true},
+		{"port and tag and digest", "reg.example.com:5000/a/b:1@sha256:abc", "reg.example.com:5000", "a/b",
+			"sha256:abc", true},
 		{"empty", "", "", "", "", false},
-		{"only host", "stg.nvcr.io", "", "", "", false},
+		{"dotted single name is a Docker Hub name", "stg.nvcr.io", "registry-1.docker.io", "library/stg.nvcr.io", "", true},
+		{"only a registry", "stg.nvcr.io/", "", "", "", false},
+		{"userinfo moves the host", "nvcr.io@attacker.example/nvidia/cv", "", "", "", false},
+		{"fragment moves the host", "attacker.example#.nvcr.io/nvidia/cv", "", "", "", false},
+		{"bad port", "nvcr.io:44x/nvidia/cv", "", "", "", false},
+		{"query in the repository", "nvcr.io/nvidia/cv?x=1", "", "", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -236,27 +246,27 @@ func TestCredsFromDockerConfig(t *testing.T) {
 	body, _ := json.MarshalIndent(cfg, "", "  ")
 	require.NoError(t, os.WriteFile(filepath.Join(dockerDir, "config.json"), body, 0o600))
 
-	user, pass, ok := credsFromDockerConfig("stg.nvcr.io")
+	user, pass, ok := credsFor(t, "stg.nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "$oauthtoken", user)
 	assert.Equal(t, "fake-key", pass)
 
-	_, _, ok = credsFromDockerConfig("does-not-exist.example.com")
+	_, _, ok = credsFor(t, "does-not-exist.example.com")
 	assert.False(t, ok, "unknown registry must miss")
 }
 
 func TestNGCCredentials_EnvFallback(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir) // no docker config in this HOME
-	for _, n := range ngcAPIKeyEnvNames {
-		t.Setenv(n, "")
-	}
 	t.Setenv("NGC_API_KEY", "from-env")
 
-	user, pass, ok := ngcCredentials("nvcr.io")
-	require.True(t, ok)
-	assert.Equal(t, "$oauthtoken", user)
-	assert.Equal(t, "from-env", pass)
+	for _, prefer := range []bool{true, false} {
+		cred, ok, err := NewRegistryCredentials(prefer).lookup(context.Background(), "nvcr.io")
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, "$oauthtoken", cred.user)
+		assert.Equal(t, "from-env", cred.pass)
+	}
 }
 
 // NGC_API_KEY is for nvcr.io, the one registry up mints its pull secrets for.
@@ -265,9 +275,6 @@ func TestNGCCredentials_EnvFallback(t *testing.T) {
 func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	for _, n := range ngcAPIKeyEnvNames {
-		t.Setenv(n, "")
-	}
 	t.Setenv("NGC_API_KEY", "ngc-key")
 	login := base64.StdEncoding.EncodeToString([]byte("robot:own-login"))
 	auths := map[string]any{}
@@ -285,12 +292,9 @@ func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
 		"stg.nvcr.io":              "own-login",
 		"registry.nvidia.com:5005": "own-login",
 	} {
-		_, pass, ok := credentialsForRegistry(host)
+		cred, ok, _ := NewRegistryCredentials(true).lookup(context.Background(), host)
 		require.True(t, ok, host)
-		assert.Equal(t, wantPass, pass, host)
-		_, pass, ok = ngcCredentials(host)
-		require.True(t, ok, host)
-		assert.Equal(t, wantPass, pass, "%s: the /proxy_auth exchange follows the same rule", host)
+		assert.Equal(t, wantPass, cred.pass, host)
 	}
 }
 
@@ -417,7 +421,7 @@ func TestExchangeBearerToken_RejectsAttackerRealm(t *testing.T) {
 
 	const wwwAuth = `Bearer realm="https://attacker.example.com/token",service="harbor.company.internal"`
 	_, err := exchangeBearerToken(context.Background(), client,
-		"harbor.company.internal", "myrepo/image", wwwAuth)
+		"harbor.company.internal", "myrepo/image", wwwAuth, &registryCredential{user: "u", pass: "p"})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not authorized for registry")
@@ -438,7 +442,8 @@ func TestExchangeBearerToken_RejectsEmptyRealmHost(t *testing.T) {
 	client := &http.Client{Transport: rec}
 
 	_, err := exchangeBearerToken(context.Background(), client,
-		"harbor.company.internal", "myrepo/image", `Bearer realm="https://:443/token"`)
+		"harbor.company.internal", "myrepo/image", `Bearer realm="https://:443/token"`,
+		&registryCredential{user: "u", pass: "p"})
 
 	require.Error(t, err)
 	assert.Empty(t, rec.withAuth, "an empty realm host must not receive credentials")
@@ -480,13 +485,21 @@ func TestExchangeBearerToken_DockerHubDelegatedRealm(t *testing.T) {
 
 	const wwwAuth = `Bearer realm="https://auth.docker.io/token",service="registry.docker.io",` +
 		`scope="repository:library/ubuntu:pull"`
+	// The credential comes from the run's lookup, which must not hand the NGC
+	// key to Docker Hub.
+	cred, ok, _ := NewRegistryCredentials(true).lookup(context.Background(), "registry-1.docker.io")
+	var sent *registryCredential
+	if ok {
+		sent = &cred
+	}
 	tok, err := exchangeBearerToken(context.Background(), client,
-		"registry-1.docker.io", "library/ubuntu", wwwAuth)
+		"registry-1.docker.io", "library/ubuntu", wwwAuth, sent)
 
 	require.NoError(t, err, "the documented Docker Hub delegation must be authorized")
 	assert.Equal(t, "dockerhub-token", tok)
 	require.NotEmpty(t, rec.requests, "the token exchange must actually be issued")
 	assert.Equal(t, "auth.docker.io", rec.requests[0].URL.Host)
+	assert.Empty(t, rec.withAuth, "the NGC key must not reach Docker Hub's token service")
 }
 
 func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
@@ -496,9 +509,12 @@ func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
 	// guard fires before any network activity.
 	t.Setenv("NGC_API_KEY", "test-key") // configure a credential so a missing guard would reach the transport
 	client := &http.Client{Transport: &spyTransport{t: t}}
-	_, err := exchangeNGCBearerToken(context.Background(), client, "harbor.company.internal", "myrepo/image")
-	require.Error(t, err, "non-NGC registry must be rejected without issuing a request")
-	assert.Contains(t, err.Error(), "non-NGC registry")
+	for _, reg := range []string{"harbor.company.internal", "stg.nvcr.io", "nvcr.io:443@attacker.example"} {
+		_, err := exchangeNGCBearerToken(context.Background(), client, reg, "myrepo/image",
+			&registryCredential{user: "$oauthtoken", pass: "test-key", ngcKey: true})
+		require.Error(t, err, "%s must be rejected without issuing a request", reg)
+		assert.Contains(t, err.Error(), "not applicable")
+	}
 }
 
 // The registry string is concatenated into "https://" + registry + "/...", so a
@@ -531,7 +547,8 @@ func TestExchangeNGCBearerToken_RejectsHostConfusion(t *testing.T) {
 	rec := &recordingTransport{inner: http.DefaultTransport}
 	client := &http.Client{Transport: rec}
 
-	_, err := exchangeNGCBearerToken(context.Background(), client, "evil.com/x.nvcr.io", "repo/img")
+	_, err := exchangeNGCBearerToken(context.Background(), client, "evil.com/x.nvcr.io", "repo/img",
+		&registryCredential{user: "$oauthtoken", pass: "test-key", ngcKey: true})
 
 	require.Error(t, err)
 	assert.Empty(t, rec.withAuth, "the NGC API key must not be sent to a confused host")
@@ -550,7 +567,8 @@ func TestExchangeBearerToken_AcceptsBracketedIPv6Registry(t *testing.T) {
 		}, nil
 	})}
 	tok, err := exchangeBearerToken(context.Background(), &http.Client{Transport: rec},
-		"[fd00::1]", "repo", `Bearer realm="https://[fd00::1]/token",service="r"`)
+		"[fd00::1]", "repo", `Bearer realm="https://[fd00::1]/token",service="r"`,
+		&registryCredential{user: "u", pass: "p"})
 	require.NoError(t, err)
 	assert.Equal(t, "t", tok)
 }
@@ -564,4 +582,91 @@ func TestRefuseInsecureRedirect(t *testing.T) {
 	secure, err := http.NewRequest(http.MethodGet, "https://reg.example.com/token", nil)
 	require.NoError(t, err)
 	assert.NoError(t, refuseInsecureRedirect(secure, nil))
+}
+
+// nvcr.io issues its own tokens, so an NVIDIA-family realm that is neither the
+// registry's host nor a subdomain of it is refused like any other: the NGC key
+// and an internal login go nowhere but their own registry.
+func TestExchangeBearerToken_NoNVIDIAWideRealmGrant(t *testing.T) {
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	client := &http.Client{Transport: rec}
+	for _, tc := range []struct{ registry, realm string }{
+		{"nvcr.io", "https://authn.nvidia.com/token"},
+		{"stg.nvcr.io", "https://nvcr.io/proxy_auth"},
+		{"nvcr.io", "https://x.ngc.nvidia/token"},
+		{"registry.nvidia.com:5005", "https://nvcr.io/proxy_auth"},
+	} {
+		_, err := exchangeBearerToken(context.Background(), client, tc.registry, "repo",
+			`Bearer realm="`+tc.realm+`"`, &registryCredential{user: "$oauthtoken", pass: "k"})
+		var te *tokenExchangeError
+		require.ErrorAs(t, err, &te, tc.realm)
+		assert.True(t, te.refused, tc.realm)
+	}
+	assert.Empty(t, rec.requests, "no request may leave for a refused realm")
+}
+
+// Every registry client refuses a redirect to plain http, and an https realm
+// that redirects there gets no request on the second hop, with or without
+// the Authorization header.
+func TestRegistryClient_RefusesCleartextRedirect(t *testing.T) {
+	require.NotNil(t, newRegistryHTTPClient(time.Second).CheckRedirect)
+
+	var plainHits []string
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		plainHits = append(plainHits, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer plain.Close()
+	realm := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/token", http.StatusFound)
+	}))
+	defer realm.Close()
+	client := newRegistryHTTPClient(5 * time.Second)
+	client.Transport = realm.Client().Transport
+
+	host := strings.TrimPrefix(realm.URL, "https://")
+	_, err := exchangeBearerToken(context.Background(), client, host, "repo",
+		`Bearer realm="`+realm.URL+`/token"`, &registryCredential{user: "u", pass: "p"})
+	var te *tokenExchangeError
+	require.ErrorAs(t, err, &te)
+	assert.True(t, te.refused, "a refused redirect is a refused realm, not a rejected credential")
+	assert.Empty(t, plainHits, "the cleartext hop must not be requested")
+}
+
+// A realm on plain http is refused before anything is sent.
+func TestExchangeBearerToken_RefusesHTTPRealm(t *testing.T) {
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	_, err := exchangeBearerToken(context.Background(), &http.Client{Transport: rec}, "harbor.example.com", "repo",
+		`Bearer realm="http://harbor.example.com/token"`, &registryCredential{user: "u", pass: "p"})
+	var te *tokenExchangeError
+	require.ErrorAs(t, err, &te)
+	assert.True(t, te.refused)
+	assert.Empty(t, rec.requests)
+}
+
+// isNGCKeyRegistry accepts nvcr.io alone, on any port, and nothing that
+// moves the host.
+func TestIsNGCKeyRegistry(t *testing.T) {
+	for reg, want := range map[string]bool{
+		"nvcr.io": true, "NVCR.io:443": true, "nvcr.io:5000": true,
+		"stg.nvcr.io": false, "nvcr.io:443@attacker.example": false, "attacker.example/nvcr.io": false,
+		"nvcr.io#.attacker.example": false, "nvcr.io.attacker.example": false,
+	} {
+		assert.Equal(t, want, isNGCKeyRegistry(reg), reg)
+	}
+}
+
+// Tag discovery never sends a request for an image whose registry is not a
+// bare host, and so never writes the tag cache from such a reply.
+func TestResolveLatestValidatorTag_NoRequestForAHostMovingRef(t *testing.T) {
+	withTempCacheDir(t)
+	rec := &recordingTransport{}
+	prev := http.DefaultTransport
+	http.DefaultTransport = rec
+	t.Cleanup(func() { http.DefaultTransport = prev })
+	for _, ref := range []string{"nvcr.io@attacker.example/nvidia/cv", "attacker.example#.nvcr.io/nvidia/cv"} {
+		_, ok := ResolveLatestValidatorTag(context.Background(), ref)
+		assert.False(t, ok, ref)
+	}
+	assert.Empty(t, rec.requests)
 }

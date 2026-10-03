@@ -1948,3 +1948,45 @@ func TestRunClusterValidator_EarlyOutageThenLatePass(t *testing.T) {
 	assert.True(t, res.Passed)
 	assert.False(t, res.LeftBehind)
 }
+
+// A pull Secret the run could not create is named when the pull then fails,
+// rather than leaving only the registry's "unauthorized" to blame the key.
+func TestRunClusterValidator_PullFailureNamesTheRefusedPullSecret(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "key")
+	client := lifecycleClient(running, "ImagePullBackOff")
+	client.PrependReactor("create", "secrets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(corev1.Resource("secrets"), "x", errors.New("denied by policy"))
+	})
+
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorControlPlaneRole, nil, nil)
+	require.Error(t, res.Err)
+	assert.Contains(t, res.Err.Error(), "cannot pull image")
+	assert.Contains(t, res.Err.Error(), "the run's pull secret was not created")
+	assert.Contains(t, res.Err.Error(), "denied by policy")
+}
+
+// A credential copied into the validator namespace is reported on the
+// validator's row, with where it came from.
+func TestClusterValidatorCheck_ReportsACopiedPullCredential(t *testing.T) {
+	client := lifecycleClient(succeeded, "")
+	cfg, err := buildDockerConfigJSON("nvcr.io", "$oauthtoken", "k")
+	require.NoError(t, err)
+	_, err = client.CoreV1().Secrets("vault-system").Create(context.Background(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "regcred", Namespace: "vault-system"},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
+		"", false, clusterValidatorComputePlaneRole, nil, nil)
+	require.Len(t, res.Notes, 1)
+	assert.Contains(t, res.Notes[0], "copied the pull credential for nvcr.io from vault-system/regcred into default/")
+
+	r := clusterValidatorCheck(RoleConfig{
+		ClusterValidator:      func(context.Context, ClusterValidatorParams) ClusterValidatorResult { return res },
+		ClusterValidatorImage: "nvcr.io/nvidia/validator:1", KubeContext: "ctx",
+	}, clusterValidatorComputePlaneRole).Run(context.Background())
+	assert.Contains(t, r.Detail, "copied the pull credential for nvcr.io from vault-system/regcred")
+}

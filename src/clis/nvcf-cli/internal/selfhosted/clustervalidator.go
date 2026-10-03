@@ -142,8 +142,8 @@ type ClusterValidatorParams struct {
 	// VALIDATOR_ROLE. See clustervalidator.RoleControlPlane / RoleComputePlane.
 	Role string
 	// Registries are probed for reachability by the control-plane validator:
-	// the same list, with the same criticality, the local credential check
-	// uses. Ignored for the compute-plane role.
+	// the hosts the local credential check probes, each as a warning only.
+	// Ignored for the compute-plane role.
 	Registries []RegistryEntry
 	// Env is passed to the validator container: namespace overrides, the
 	// probe image, and whether the control plane is expected to be installed.
@@ -187,6 +187,9 @@ type ClusterValidatorResult struct {
 	// Suspended reports that a kept Job whose pod could not pull was
 	// suspended, so the pod was deleted and has no logs to read.
 	Suspended bool
+	// Notes say what the run did that the operator should know about, such
+	// as copying a pull credential into the validator namespace.
+	Notes []string
 }
 
 type ClusterValidator func(ctx context.Context, params ClusterValidatorParams) ClusterValidatorResult
@@ -257,12 +260,18 @@ func runValidatorJob(ctx context.Context, client kubernetes.Interface, p Cluster
 	// reach anything this run is about to create.
 	sweepOrphanClusterValidatorRBAC(vctx, client, orphanValidatorRBACTTL)
 
-	// Resolver errors are non-fatal: fall through to the caller's value and
-	// let waitForClusterValidatorJob surface ImagePullBackOff if needed.
-	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image, role, runID, noCleanup); err == nil {
+	// A resolver error does not stop the run: the image may be public. It is
+	// kept, so a pull that then fails names the step that failed rather than
+	// only the registry's "unauthorized".
+	resolved, pullSecretNote, pullSecretErr := resolveValidatorPullSecret(
+		ctx, client, pullSecret, image, role, runID, noCleanup)
+	if pullSecretErr == nil {
 		pullSecret = resolved
 	}
 	mintedSecret := pullSecret != "" && pullSecret == validatorPullSecretRunName(role, runID)
+	if pullSecretNote != "" {
+		defer func() { res.Notes = append(res.Notes, pullSecretNote) }()
+	}
 
 	// sweep runs one deferred sweep on a fresh, bounded context, and only once
 	// no pod of this run can still need what it removes. --no-cleanup keeps
@@ -383,6 +392,9 @@ func runValidatorJob(ctx context.Context, client kubernetes.Interface, p Cluster
 	abandoned := waitErr != nil && ctx.Err() != nil
 	var pullErr *validatorImagePullError
 	isPullErr := errors.As(waitErr, &pullErr)
+	if isPullErr && pullSecretErr != nil {
+		waitErr = fmt.Errorf("%w; the run's pull secret was not created: %w", waitErr, pullSecretErr)
+	}
 	ownTimeout := waitErr != nil && !abandoned && !isPullErr && errors.Is(waitErr, context.DeadlineExceeded)
 	if ownTimeout {
 		// The validator's own timeout, not the check's budget: its result is
@@ -1260,11 +1272,14 @@ func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interfa
 // registries the section is omitted.
 func buildControlPlaneValidatorConfig(registries []RegistryEntry) string {
 	var b strings.Builder
+	listed := map[string]bool{}
 	for _, reg := range registries {
 		host, port := parseRegistryHostPort(reg.Registry)
-		if host == "" {
+		// A registry probed for two repository scopes is one endpoint.
+		if host == "" || listed[reg.Registry] {
 			continue
 		}
+		listed[reg.Registry] = true
 		if b.Len() == 0 {
 			b.WriteString("reachability:\n  endpoints:\n")
 		}
@@ -1281,8 +1296,9 @@ func buildControlPlaneValidatorConfig(registries []RegistryEntry) string {
 
 // parseRegistryHostPort splits a "host:port" string using net.SplitHostPort,
 // which correctly handles IPv6 literals ([::1]:5000) and bare hostnames.
-// Returns port 443 when no port is specified, the port is non-numeric, or
-// the input has a trailing colon with no digit (e.g. "nvcr.io:").
+// Returns port 443 when no port is specified. Returns an empty host for
+// anything that is not a bare host[:port], including a port that is not a
+// number from 1 to 65535 and a trailing colon with no port ("nvcr.io:").
 func parseRegistryHostPort(s string) (host string, port int) {
 	s = strings.TrimSpace(s)
 	// Reject anything that is not a bare host[:port]. Callers interpolate the

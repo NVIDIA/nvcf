@@ -18,6 +18,7 @@ limitations under the License.
 package selfhosted
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -78,11 +79,18 @@ func dockerHome(t *testing.T, config string, helpers ...string) {
 	t.Cleanup(func() { credentialHelperTimeout = prev })
 }
 
+// credsFor reads registry's credential from the docker config.
+func credsFor(t *testing.T, registry string) (string, string, bool) {
+	t.Helper()
+	cred, ok, _ := credsFromDockerConfig(context.Background(), registry)
+	return cred.user, cred.pass, ok
+}
+
 // Docker Desktop leaves only an empty auths entry and keeps the login in
 // credsStore, so a working `docker login` must be read through the helper.
 func TestCredsFromDockerConfig_UsesCredsStore(t *testing.T) {
 	dockerHome(t, `{"auths":{"nvcr.io":{}},"credsStore":"store"}`, "store")
-	u, p, ok := credsFromDockerConfig("nvcr.io")
+	u, p, ok := credsFor(t, "nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "u-store", u)
 	assert.Equal(t, "s-store", p)
@@ -91,7 +99,7 @@ func TestCredsFromDockerConfig_UsesCredsStore(t *testing.T) {
 // A per-registry credHelpers entry wins over the global store.
 func TestCredsFromDockerConfig_CredHelpersBeatCredsStore(t *testing.T) {
 	dockerHome(t, `{"credsStore":"store","credHelpers":{"nvcr.io":"ngc"}}`, "store", "ngc")
-	u, _, ok := credsFromDockerConfig("nvcr.io")
+	u, _, ok := credsFor(t, "nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "u-ngc", u)
 }
@@ -99,7 +107,7 @@ func TestCredsFromDockerConfig_CredHelpersBeatCredsStore(t *testing.T) {
 // Inline credentials are read when no store is configured.
 func TestCredsFromDockerConfig_InlineAuthWithoutAStore(t *testing.T) {
 	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "x", "y", ""))
-	u, p, ok := credsFromDockerConfig("nvcr.io")
+	u, p, ok := credsFor(t, "nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "x", u)
 	assert.Equal(t, "y", p)
@@ -109,7 +117,7 @@ func TestCredsFromDockerConfig_InlineAuthWithoutAStore(t *testing.T) {
 // one left in the file must not win over the store.
 func TestCredsFromDockerConfig_StoreBeatsStaleInlineAuth(t *testing.T) {
 	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "old", "stale", "store"), "store")
-	u, p, ok := credsFromDockerConfig("nvcr.io")
+	u, p, ok := credsFor(t, "nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "u-store", u)
 	assert.Equal(t, "s-store", p)
@@ -120,7 +128,7 @@ func TestCredsFromDockerConfig_StoreBeatsStaleInlineAuth(t *testing.T) {
 func TestCredsFromDockerConfig_DockerHubKey(t *testing.T) {
 	dockerHome(t, inlineDockerConfig(t, "https://index.docker.io/v1/", "hub", "pw", ""))
 	for _, host := range []string{"docker.io", "index.docker.io", "registry-1.docker.io"} {
-		u, _, ok := credsFromDockerConfig(host)
+		u, _, ok := credsFor(t, host)
 		require.True(t, ok, host)
 		assert.Equal(t, "hub", u)
 	}
@@ -136,7 +144,7 @@ func TestCredsFromHelper_TimeoutIsEnforced(t *testing.T) {
 	credentialHelperTimeout = 500 * time.Millisecond
 
 	start := time.Now()
-	_, _, ok := credsFromDockerConfig("nvcr.io")
+	_, _, ok := credsFor(t, "nvcr.io")
 	assert.False(t, ok)
 	assert.Less(t, time.Since(start), 10*time.Second, "the helper call must not outlive its timeout by the child's lifetime")
 }
@@ -149,7 +157,7 @@ func TestCredsFromHelper_OutputIsCapped(t *testing.T) {
 	script := "#!/bin/sh\nprintf '{\"Username\":\"u\",\"Secret\":\"s\"}'\nhead -c 200000 /dev/zero | tr '\\0' ' '\n"
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker-credential-flood"), []byte(script), 0o755))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	_, _, ok := credsFromDockerConfig("nvcr.io")
+	_, _, ok := credsFor(t, "nvcr.io")
 	assert.False(t, ok)
 }
 
@@ -158,7 +166,7 @@ func TestCredsFromHelper_OutputIsCapped(t *testing.T) {
 func TestCredsFromDockerConfig_RefusesUnsafeHelperName(t *testing.T) {
 	// The helper exists on PATH, so only the name check can refuse it.
 	dockerHome(t, `{"credsStore":"bad name"}`, "bad name")
-	_, _, ok := credsFromDockerConfig("nvcr.io")
+	_, _, ok := credsFor(t, "nvcr.io")
 	assert.False(t, ok)
 }
 
@@ -170,24 +178,119 @@ func TestSelectAuthChallenge_JoinedInOneHeader(t *testing.T) {
 		"a quoted word is not a challenge")
 }
 
-// For an NGC registry the check uses NGC_API_KEY when it is set, the key the
-// install mints its pull secrets from, even when a credential store also has a
-// login for it. Without the key, the store is used. Other registries never
-// get the key.
-func TestCredentialsForRegistry_NGCKeyMatchesWhatTheInstallUses(t *testing.T) {
+// Before a local install the NGC key goes first for nvcr.io: up mints its
+// pull secrets from it. Anywhere else the docker login goes first, the one
+// docker and a pull secret minted from it use, and the key is the fallback.
+// Other registries never get the key.
+func TestRegistryCredentials_NGCKeyOrder(t *testing.T) {
 	dockerHome(t, `{"auths":{"nvcr.io":{}},"credsStore":"store"}`, "store")
 	t.Setenv("NGC_API_KEY", "env-key")
-	u, p, ok := credentialsForRegistry("nvcr.io")
-	require.True(t, ok)
-	assert.Equal(t, "$oauthtoken", u)
-	assert.Equal(t, "env-key", p)
+	ctx := context.Background()
 
-	t.Setenv("NGC_API_KEY", "")
-	u, _, ok = credentialsForRegistry("nvcr.io")
+	cred, ok, err := NewRegistryCredentials(true).lookup(ctx, "nvcr.io")
+	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "u-store", u, "without the key the store's login is used")
+	assert.Equal(t, "env-key", cred.pass)
+	assert.True(t, cred.ngcKey)
+	assert.Equal(t, "NGC_API_KEY", cred.source)
 
-	t.Setenv("NGC_API_KEY", "env-key")
-	_, p, _ = credentialsForRegistry("quay.io")
-	assert.NotEqual(t, "env-key", p, "the NGC key is never sent to another registry")
+	cred, ok, _ = NewRegistryCredentials(false).lookup(ctx, "nvcr.io")
+	require.True(t, ok)
+	assert.Equal(t, "u-store", cred.user, "the docker login goes first where up does not mint from the key")
+	assert.False(t, cred.ngcKey)
+
+	dockerHome(t, `{}`)
+	cred, ok, _ = NewRegistryCredentials(false).lookup(ctx, "nvcr.io")
+	require.True(t, ok)
+	assert.Equal(t, "env-key", cred.pass, "without a docker login the key is the fallback")
+
+	for _, reg := range []string{"quay.io", "stg.nvcr.io", "nvcr.io:443@attacker.example", "nvcr.io.attacker.example"} {
+		for _, prefer := range []bool{true, false} {
+			cred, _, _ := NewRegistryCredentials(prefer).lookup(ctx, reg)
+			assert.NotEqual(t, "env-key", cred.pass, "the NGC key is never sent to %s", reg)
+		}
+	}
+}
+
+// docker reads its config from $DOCKER_CONFIG when that is set, as CI
+// runners do.
+func TestCredsFromDockerConfig_HonorsDOCKER_CONFIG(t *testing.T) {
+	dockerHome(t, `{}`)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"),
+		[]byte(inlineDockerConfig(t, "harbor.example.com", "ci", "pw", "")), 0o600))
+	t.Setenv("DOCKER_CONFIG", dir)
+	u, p, ok := credsFor(t, "harbor.example.com")
+	require.True(t, ok)
+	assert.Equal(t, "ci", u)
+	assert.Equal(t, "pw", p)
+}
+
+// docker matches a key with a scheme or a /v1/ path by its hostname.
+func TestCredsFromDockerConfig_NormalizesKeys(t *testing.T) {
+	for _, key := range []string{"https://harbor.example.com", "harbor.example.com/v1/", "http://harbor.example.com/"} {
+		dockerHome(t, inlineDockerConfig(t, key, "u", "p", ""))
+		_, _, ok := credsFor(t, "harbor.example.com")
+		assert.True(t, ok, key)
+	}
+	dockerHome(t, `{"credHelpers":{"https://harbor.example.com":"ngc"}}`, "ngc")
+	u, _, ok := credsFor(t, "harbor.example.com")
+	require.True(t, ok)
+	assert.Equal(t, "u-ngc", u, "a credHelpers key is matched the same way")
+}
+
+// A helper call ends with its caller's context, so tag discovery and the
+// registry probe keep their own bounds and stop on an interrupt.
+func TestCredsFromHelper_EndsWithTheCallersContext(t *testing.T) {
+	dockerHome(t, `{"credsStore":"hang"}`)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker-credential-hang"), []byte("#!/bin/sh\nsleep 30\n"), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, ok, err := credsFromDockerConfig(ctx, "nvcr.io")
+	assert.False(t, ok)
+	assert.Error(t, err, "a helper that did not answer is reported, not read as no credential")
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+// A helper's "not found" answer is no credential, not a failure; any other
+// failure is reported.
+func TestCredsFromHelper_NotFoundIsNoCredential(t *testing.T) {
+	dockerHome(t, `{"credsStore":"empty"}`)
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'credentials not found in native keychain'\nexit 1\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker-credential-empty"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_, ok, err := credsFromDockerConfig(context.Background(), "nvcr.io")
+	assert.False(t, ok)
+	assert.NoError(t, err)
+
+	dockerHome(t, `{"credsStore":"missing-helper"}`)
+	_, ok, err = credsFromDockerConfig(context.Background(), "nvcr.io")
+	assert.False(t, ok)
+	assert.ErrorContains(t, err, "docker-credential-missing-helper")
+}
+
+// One run resolves a registry's credential once, however many checks ask.
+func TestRegistryCredentials_ResolvesOncePerRun(t *testing.T) {
+	dockerHome(t, `{"credsStore":"count"}`)
+	bin := t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	script := "#!/bin/sh\necho x >> '" + calls + "'\nprintf '{\"Username\":\"u\",\"Secret\":\"s\"}'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker-credential-count"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	rc := NewRegistryCredentials(false)
+	ctx := WithRegistryCredentials(context.Background(), rc)
+	for range 3 {
+		_, ok, err := registryCredentialsFrom(ctx).lookup(ctx, "harbor.example.com")
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+	body, err := os.ReadFile(calls)
+	require.NoError(t, err)
+	assert.Equal(t, "x\n", string(body), "the helper runs once")
 }

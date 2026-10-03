@@ -19,6 +19,7 @@ go_library(
     name = "selfhosted",
     srcs = [
         "clustervalidator.go",
+        "dockercreds.go",
         "helm_runtime.go",
         "inotify_probe.go",
         "orchestrator_errors.go",
@@ -100,5 +101,6 @@ go_test(
         "@io_k8s_client_go//kubernetes/typed/core/v1:core",
         "@io_k8s_client_go//rest",
         "@io_k8s_client_go//testing",
+        "@io_k8s_sigs_yaml//:yaml",
     ],
 )

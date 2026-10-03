@@ -14,7 +14,7 @@
 |---|---|---|
 | `--control-plane-stack=...` | Control-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
 | `--compute-plane-stack=...` | Compute-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
-| `--env=local\|prd\|...` | Helmfile environment name | `local` for dev builds, `prd` for releases |
+| `--env=local\|prd\|...` | Helmfile environment name. `check` reads the stack's `environments/<env>.yaml` only for an environment named with `--env` or `HELMFILE_ENV`, so pass the `--env` the install used; see [Settings read from the stack](#settings-read-from-the-stack) | `local` |
 | `--non-interactive` | Disable all stdin prompts | `false` |
 | `--token=$JWT` | Admin JWT, overrides stored session | - |
 | `--no-apply` | `install` only - emit YAML, do not kubectl apply | `false` |
@@ -46,21 +46,67 @@ The validator runs as a Job in the cluster being checked. The CLI creates a
 ServiceAccount, ClusterRole, and ClusterRoleBinding for it and removes them
 after the run, so the kubeconfig context needs permission to manage those.
 
-When `check` reads the stack's environment file, `environments/<env>.yaml`
-from `--control-plane-stack` or a stack checkout above the working directory,
-it tells the validator which Gateways the stack wires NVCF routes to. Without
-that file it does not, and the validator finds them from the routes.
-
 | Flag | Purpose | Default |
 |---|---|---|
 | `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. If no tag can be discovered, the validator does not run and its row fails the check, saying to pin a tag; `--wait` tries again on every poll. Unset everywhere skips the probe with a warning | - |
-| `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry`, and `quay.io` for the cert-manager ACME solver unless the stack sets `certManager.acmesolver.image`. `nvcr.io` is probed only when neither the image nor the stack names a registry. The validator dials from a pod with no proxy, so an unreachable registry is a warning; the local credential check is what fails a registry the install cannot pull from. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | - |
+| `--cluster-validator-registries host[:port][/path],...` | Extra registries to check: their credentials from this machine, and their reachability from a pod of the control-plane validator. A path scopes the credential check, as in `harbor.example.com/nvcf`. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry` and `global.image.repository`, and `quay.io` for the cert-manager ACME solver unless the stack leaves cert-manager out or sets `certManager.acmesolver.image`. `nvcr.io` is probed, as a warning only, when neither the image nor the stack names a registry. The in-pod probes are warnings only, since the pod has no proxy. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | - |
 | `--cluster-validator-probe-image REF` | Image for the node inotify probe and the control-plane validator's node-to-node overlay probe. Needs `sh` and a busybox-style `nc`. Set a mirror for air-gapped clusters. Env: `NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE`; config key `cluster_validator_probe_image` | `busybox:1.36` from Docker Hub |
 | `--cluster-validator-tolerations key[=value][:effect],...` | Tolerations added to the validator Job, beside the control-plane ones it always carries, for clusters whose nodes use other taints. Effect is `NoSchedule`, `PreferNoSchedule` or `NoExecute`. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS`; config key `cluster_validator_tolerations` | - |
-| `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and copies it into `default` for the run. Failing that, and only for an image on `nvcr.io`, it mints one from `NGC_API_KEY`. The key is never sent to another registry, other NVIDIA registries included; those use your docker login | auto-detect |
+| `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI uses a Secret an operator created in `default` for the image's registry. Failing that, it copies the registry's entry, and only that entry, from a Secret in the NVCF namespaces into `default` for the run. Failing that, it creates one for the run from this machine's credential for the registry, the one the `registry-credentials` row checks. The validator row's detail says what was copied or created, and from where | auto-detect |
 | `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. A validator that is configured but cannot run fails the check, so use this to opt out explicitly, for example when the cluster cannot pull the image. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |
 | `--no-cleanup` | Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging. A kept Job whose pod cannot pull its image is suspended, so its pod is deleted rather than retrying forever; inspect it with `kubectl describe job`. A later check reclaims them after 24 hours. The row, the `final` event's `cleanup` list and the last stderr lines print the command that removes them now | `false` |
 | `--show-logs` | Print the validator transcript to stderr after the check events. The transcript is not JSON, and `--json` also writes to stderr, so leave this off when a parser is reading the stream | `false` |
+
+### Registry credentials
+
+`check` probes each registry above from this machine with its local
+credential, the one `docker` would use: `$DOCKER_CONFIG/config.json`, or
+`~/.docker/config.json`, through any `credsStore` or `credHelpers` helper.
+For `nvcr.io` the NGC API key is also read, from the first of
+`NGC_IMAGE_PULL_API_KEY`, `NVCF_NGCR_API_KEY`, `NVCF_NGC_API_KEY` and
+`NGC_API_KEY` that is set. It goes ahead of the docker login only for a
+bare `--pre` run with the `local` environment, since `up` creates its pull
+secrets from it, and it is never sent to another registry.
+
+Only a credential the registry rejects fails the run, and only for an NVIDIA
+registry the image or the stack names. A rejected NGC API key after install is
+a warning, since the cluster pulls with its own pull secret. A registry this
+machine cannot reach, a token service that fails, and a missing local
+credential are warnings. A registry the probe cannot speak to, such as ECR or
+one using Basic auth, is skipped with a command to check it by hand. A
+registry that lets this machine in anonymously is reported as such, not as
+valid credentials.
+
+### Settings read from the stack
+
+The validator gets these settings from the CLI. Each one set with its
+environment variable or config key wins over the stack.
+
+| Setting | Read from the stack | Env and config key |
+|---|---|---|
+| NVCF Gateways | `ingress.gatewayApi.gateways`, gated the way the stack wires routes: none unless `ingress.gatewayApi.enabled` is `true`, `nats` only with `routes.nats.enabled`, `llmGrpc` and `llmQuic` only with `routes.llmWorker.enabled` | `NVCF_GATEWAY_NAMES`, as comma-separated `namespace/name` entries. A bare name is dropped by the validator. Set this way it skips the stack's gates |
+| Envoy Gateway namespace | `ingress.gatewayApi.controllerNamespace` | `NVCF_ENVOY_GATEWAY_NAMESPACE` |
+| External components | `nats`, `openbao` or `cassandra` whose `enabled` is not `true` | `NVCF_EXTERNAL_COMPONENTS` |
+| OpenBao namespace | - | `NVCF_OPENBAO_NAMESPACE` |
+| Overlay probe image | - | `--cluster-validator-probe-image`, or `NVCF_N2N_PROBE_IMAGE` |
+
+The registries above also come from the stack. `check` reads stack values only
+when they describe the install:
+
+- The environment is named with `--env` or `HELMFILE_ENV`. The `--env`
+  default is not used, so pass the `--env` the install used.
+- `environments/<env>.yaml` is read, layered over `base.yaml`. `base.yaml`
+  alone is not used.
+- The file comes from the stack the install used: `--control-plane-stack`
+  (`--compute-plane-stack` for a compute-plane-only run), else the CLI's
+  built-in stack. A local directory is read directly, and an `oci://` stack
+  from the copy an earlier command extracted into the CLI cache. A git stack,
+  `file://` included, is not read, since the install cloned its committed
+  state. A CLI with no built-in stack and no stack flag reads the stack
+  checkout above the working directory.
+
+Otherwise nothing from the stack is forwarded: the validator finds the
+Gateways from the routes, and `nvcr.io` is probed as a warning only.
 
 ## `up`-specific
 

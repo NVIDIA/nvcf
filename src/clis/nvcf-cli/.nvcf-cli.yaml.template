@@ -163,15 +163,21 @@ api_keys_owner_id: svc@nvcf-api.local
 # to avoid depending on discovery. If unset everywhere, the validator probe
 # is skipped with a note on stderr.
 #
-# Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
+# The Job pulls with a matching pull Secret from the cluster, or one created
+# for the run from this machine's credential for the image's registry: the
+# docker login, or NGC_API_KEY for nvcr.io only.
+#
+# Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator (docker login stg.nvcr.io)
 # Prod:    nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # cluster_validator_image: nvcr.io/nvidia/nvcf-byoc/cluster-validator
 
-# Extra container registries the control-plane validator probes for
-# reachability, as host:port. The registries the install pulls from are
-# probed already: the validator image's registry, the stack's
-# global.image.registry, and quay.io for the cert-manager ACME solver. List
-# only registries beyond those.
+# Extra container registries to check, as host[:port][/path]: their
+# credentials from this machine, and their reachability from a pod of the
+# control-plane validator, as warnings only. A path scopes the credential
+# check. The registries the install pulls from are checked already: the
+# validator image's registry, the stack's global.image.registry, and quay.io
+# for the cert-manager ACME solver. List only registries beyond those. A
+# malformed entry fails the command.
 #
 # Config key: cluster_validator_registries (list)
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES (comma-separated)
