@@ -65,10 +65,11 @@ rules:
     resources: ["services", "events"]
     verbs: ["list"]
   - apiGroups: ["storage.k8s.io"]
-    # The default-StorageClass check. Without it the critical row is
-    # permanently unknown.
+    # The StorageClass check: list finds the default class, and get reads the
+    # class clusterValidator.storageClass names. Without them the critical
+    # row is permanently unknown.
     resources: ["storageclasses"]
-    verbs: ["list"]
+    verbs: ["get", "list"]
   - apiGroups: ["apps"]
     # deployments: Tier-1 and the Envoy proxies. statefulsets: the Tier-2
     # quorum and placement check.

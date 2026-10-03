@@ -54,7 +54,7 @@ rules:
     scope: cluster
     apiGroup: storage.k8s.io
     resources: [storageclasses]
-    verbs: [list]
+    verbs: [get, list]
   - roles: [compute-plane]
     scope: cluster
     apiGroup: apps

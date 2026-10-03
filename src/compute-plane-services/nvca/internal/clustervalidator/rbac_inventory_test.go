@@ -254,6 +254,19 @@ func controlPlaneRunActions(t *testing.T) []ktesting.Action {
 	})
 }
 
+// namedStorageClassActions checks the StorageClass the stack names
+// (NVCF_STORAGE_CLASS), which reads that one class rather than listing them.
+func namedStorageClassActions(t *testing.T) []ktesting.Action {
+	t.Helper()
+	t.Setenv(storageClassEnv, "fast")
+	client := fake.NewSimpleClientset(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}})
+	state := &ValidationState{Log: testLog()}
+	checkStorageClass(context.Background(), client, state)
+	require.NotNil(t, state.DefaultStorageClassOK)
+	require.True(t, *state.DefaultStorageClassOK)
+	return client.Actions()
+}
+
 // nodeToNodeActions drives the overlay probe across two nodes, one of them
 // still pulling, so the run reads sandbox events too.
 func nodeToNodeActions(t *testing.T) []ktesting.Action {
@@ -319,6 +332,7 @@ func assertInventoryMatches(t *testing.T, role Role, actions []ktesting.Action) 
 func TestRBACInventory_ControlPlane(t *testing.T) {
 	actions := controlPlaneRunActions(t)
 	actions = append(actions, nodeToNodeActions(t)...)
+	actions = append(actions, namedStorageClassActions(t)...)
 	assertInventoryMatches(t, RoleControlPlane, actions)
 }
 
