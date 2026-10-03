@@ -47,6 +47,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 func testLog() *logrus.Entry {
@@ -1317,6 +1318,61 @@ func TestPrintSummary_NotApplicableIsNeitherPassNorUnknown(t *testing.T) {
 		"nothing was probed, so it cannot be reported as Verified")
 	assert.NotContains(t, out, "Node-to-Node Communication: Status Unknown",
 		"the cluster shape is known; it is not an unobserved check")
+	assert.Contains(t, out, VerdictLinePrefix+VerdictReadyWithWarnings,
+		"a row that did not pass rules out the all-clear banner")
+	assert.NotContains(t, out, "meets all requirements for NVCF workloads")
+}
+
+// The banner follows the rows, not only the warnings: a non-critical row that
+// fails without adding a warning must not sit above "meets all requirements".
+func TestPrintSummary_NonCriticalFailureIsNotAllClear(t *testing.T) {
+	run := func(smbOK bool) (error, string) {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log: logrus.NewEntry(l), ControlPlaneHealthy: true, NodesAllReady: true, WebhooksSupported: true,
+			NetworkPoliciesSupported: true, SMBCSIDriverOK: smbOK, GPUAvailable: true, GPUOperatorInstalled: true,
+			K8sVersion: "v1.30.0", TotalNodes: "1",
+		}
+		return printSummary(state), buf.String()
+	}
+	err, out := run(false)
+	require.NoError(t, err, "a non-critical failure does not block the verdict")
+	assert.Contains(t, out, VerdictLinePrefix+VerdictReadyWithWarnings)
+	assert.NotContains(t, out, "meets all requirements for NVCF workloads")
+
+	err, out = run(true)
+	require.NoError(t, err)
+	assert.Contains(t, out, "meets all requirements for NVCF workloads", "every row passed and nothing warned")
+	assert.NotContains(t, out, VerdictReadyWithWarnings)
+}
+
+// Control-plane rows say what was found: the cause of a StorageClass failure,
+// "not fully observed" for any row without a result, critical or not, and a
+// Tier-2 pass that judged no placement does not claim it.
+func TestPrintSummary_ControlPlaneRowsNameWhatWasChecked(t *testing.T) {
+	ok, failed := true, false
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	state := &ValidationState{
+		Log: logrus.NewEntry(l), Role: RoleControlPlane, ControlPlaneHealthy: true, NodesAllReady: true,
+		WebhooksSupported: true, NetworkPoliciesSupported: true,
+		DefaultStorageClassOK: &failed, StorageClassFailure: "Multiple Defaults",
+		GatewayAPICRDsOK: &ok, GatewayRoutesOK: &ok, ExternalLBOK: &ok, NodeToNodeOK: &ok,
+		Tier2StatefulSetsOK: &ok, Tier2PlacementNotAssessed: 2,
+		K8sVersion: "v1.25.0", TotalNodes: "3",
+	}
+	require.Error(t, printSummary(state))
+	out := buf.String()
+	assert.Contains(t, out, "Default StorageClass: Multiple Defaults")
+	assert.Contains(t, out, "Tier-1 Deployments: Status Unknown (not fully observed; see warnings)")
+	assert.Contains(t, out, "Envoy Gateway: Status Unknown (not fully observed; see warnings)",
+		"a non-critical row without a result is shown, not dropped")
+	assert.Contains(t, out, "Tier-2 StatefulSets: Ready (placement not assessed for 2)")
+	assert.NotContains(t, out, "Quorum and Placement OK")
+	assert.NotContains(t, out, "check did not run")
 }
 
 // The metrics pipeline must not see a not-applicable check as a pass.
@@ -1349,6 +1405,23 @@ func TestRun_PrintsTheRoleMarker(t *testing.T) {
 		_ = Run(ctx, fake.NewSimpleClientset(), nil, "", "", "", false, role)
 		assert.Contains(t, buf.String(), want, "role %q", role)
 	}
+}
+
+// The role line comes before anything that can end the run early, so a
+// launcher can still tell which check set it got when the cluster is not
+// reachable.
+func TestRun_PrintsTheRoleMarkerBeforeAnEarlyReturn(t *testing.T) {
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	ctx := core.WithLogger(context.Background(), logrus.NewEntry(l))
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("get", "version", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("connection refused")
+	})
+	err := Run(ctx, client, nil, "", "", "", false, RoleControlPlane)
+	require.EqualError(t, err, "cluster not reachable", "the run must end at the prerequisites")
+	assert.Contains(t, buf.String(), RoleMarker+"control-plane")
 }
 
 // A critical enforcement check that ends without a result (its server pod

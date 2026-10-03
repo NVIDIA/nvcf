@@ -166,11 +166,11 @@ const (
 	NetpolPolicySideIngress = "ingress"
 )
 
-// CheckKey* are the stable identifiers for the built-in checks. The agent
-// initializes one Prometheus gauge per key at zero so the series appears
-// on the first scrape even before any validator has run. Adding a new
-// check requires adding a constant here AND updating the agent's
-// init-to-zero list.
+// CheckKey* are the stable identifiers for the built-in checks. Where the
+// operator sets NVCA_CLUSTER_VALIDATOR_ENABLED=true, the agent initializes one
+// Prometheus gauge per key at zero, so the series appears on the first scrape
+// before the first summary. Adding a new check requires adding a constant
+// here AND updating the agent's init-to-zero list.
 const (
 	CheckKeyControlPlane           = "control_plane"
 	CheckKeyWorkerNodesAllReady    = "worker_nodes_all_ready"
@@ -182,8 +182,9 @@ const (
 	CheckKeyGPUOperator            = "gpu_operator"
 	CheckKeyConfigurableNetpol     = "configurable_netpol"
 	CheckKeyNetpolEnforcement      = "netpol_enforcement"
-	// Control-plane-specific check keys. Only written to the summary when the
-	// check ran (nil pointer = check was skipped for this role).
+	// Control-plane-specific check keys. Written to the summary only when the
+	// check has a result: a nil pointer (not run for this role, not fully
+	// observed, or not applicable) leaves the key out.
 	CheckKeyDefaultStorageClass = "default_storage_class"
 	CheckKeyGatewayAPICRDs      = "gateway_api_crds"
 	CheckKeyEnvoyGateway        = "envoy_gateway"
@@ -209,7 +210,7 @@ var AllCheckKeys = []string{
 	CheckKeyGPUOperator,
 	CheckKeyConfigurableNetpol,
 	CheckKeyNetpolEnforcement,
-	// Control-plane checks (only present in summary when the role ran them).
+	// Control-plane checks (present in a summary only when they have a result).
 	CheckKeyDefaultStorageClass,
 	CheckKeyGatewayAPICRDs,
 	CheckKeyEnvoyGateway,
@@ -221,10 +222,11 @@ var AllCheckKeys = []string{
 }
 
 // buildSummary projects a ValidationState into the wire format. Checks
-// that were not run are omitted from the Checks map so the agent can
-// distinguish "not run" from "ran and failed". For role-gated checks that
-// means the pointer is nil; for the compute-plane bools it means the role
-// is control-plane and they were never invoked.
+// without a result are omitted from the Checks map so the agent can
+// distinguish "no result" from "ran and failed". For the control-plane checks
+// that means a nil pointer; for the compute-plane bools it means the role is
+// control-plane and they were never invoked; for an always-run check it means
+// its read failed (state.Unobserved).
 func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool, verdict string) *ValidatorSummary {
 	now := time.Now().UTC()
 	s := &ValidatorSummary{
@@ -264,8 +266,9 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 	if state.EnforcementOK != nil {
 		s.Checks[CheckKeyNetpolEnforcement] = *state.EnforcementOK
 	}
-	// Control-plane checks are only written when the check ran (non-nil pointer).
-	// A nil pointer means the check was skipped because the role was compute-plane.
+	// Control-plane checks are only written when they have a result. A nil
+	// pointer means not run for this role, not fully observed, or not
+	// applicable.
 	if state.DefaultStorageClassOK != nil {
 		s.Checks[CheckKeyDefaultStorageClass] = *state.DefaultStorageClassOK
 	}

@@ -93,6 +93,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/intstr",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/discovery/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",

@@ -977,6 +977,7 @@ func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *
 				") when the stack sets global.storageClass")
 		ok := false
 		state.DefaultStorageClassOK = &ok
+		state.StorageClassFailure = "Not Found"
 		return
 	}
 
@@ -1000,6 +1001,7 @@ func checkNamedStorageClass(ctx context.Context, client kubernetes.Interface, st
 				"that exists (kubectl get storageclass)", name))
 		ok := false
 		state.DefaultStorageClassOK = &ok
+		state.StorageClassFailure = name + " Not Found"
 	case err != nil:
 		printWarning(log, readFailure("StorageClass "+name, err))
 		state.Warnings = append(state.Warnings, unknownWarning("Default StorageClass", "StorageClass "+name, err))
@@ -1053,6 +1055,7 @@ func judgeMultipleDefaultClasses(state *ValidationState, defaults []storagev1.St
 	state.Recommendations = append(state.Recommendations, recommendation)
 	ok := false
 	state.DefaultStorageClassOK = &ok
+	state.StorageClassFailure = "Multiple Defaults"
 }
 
 // admittedDefaultClass is the default class the DefaultStorageClass admission
@@ -1087,6 +1090,9 @@ const (
 	// its controller namespace by default, so the Envoy checks need the NVCF
 	// Gateways to tell NVCF's proxies from another team's.
 	nvcfGatewayNamesEnv = "NVCF_GATEWAY_NAMES"
+	// gatewayNamesSetting names both ways to set nvcfGatewayNamesEnv, since
+	// the validator cannot tell which launcher started it.
+	gatewayNamesSetting = "clusterValidator.gatewayNames (env " + nvcfGatewayNamesEnv + ")"
 	// Labels Envoy Gateway stamps on proxy Services and Deployments. A
 	// per-Gateway proxy carries its Gateway's name and namespace; a
 	// merged-gateways proxy serves every Gateway of a class and carries only
@@ -1109,9 +1115,10 @@ const (
 // pass a cluster the stack cannot actually install on.
 var gatewayRouteRequirements = []struct{ groupVersion, resource string }{
 	{gatewayAPIGroup + "/v1", "httproutes"},
-	// TCPRoute ships only in the Gateway API experimental channel, but the
-	// chart renders one by default (routes.grpc.enabled is true), so a
-	// standard-channel install genuinely cannot apply the stack.
+	// The chart renders a TCPRoute by default (routes.grpc.enabled is true),
+	// at v1alpha2, so a cluster that does not serve that version cannot
+	// apply the stack. The v1.2.0 CRDs serve it only in the experimental
+	// channel.
 	{gatewayAPIGroup + "/v1alpha2", "tcproutes"},
 	{gatewayAPIGroup + "/v1beta1", "referencegrants"},
 }
@@ -1123,11 +1130,22 @@ var gatewayRouteRequirements = []struct{ groupVersion, resource string }{
 // check: udproute-llm-worker.yaml renders a UDPRoute only when
 // routes.llmWorker.enabled, and the grpcroute-*.yaml templates render a
 // GRPCRoute only when a grpc route is enabled. All default to false.
+// enabledBy names the stack values an operator sets.
 var gatewayOptionalRouteRequirements = []struct{ groupVersion, resource, enabledBy string }{
 	{gatewayAPIGroup + "/v1", "grpcroutes",
-		"nvcfGatewayRoutes.routes.nvcfApi.grpc.enabled or nvcfGatewayRoutes.routes.nvctApi.grpc.enabled"},
-	{gatewayAPIGroup + "/v1alpha2", "udproutes", "nvcfGatewayRoutes.routes.llmWorker.enabled"},
+		"ingress.gatewayApi.routes.nvcfApi.grpc.enabled or ingress.gatewayApi.routes.nvctApi.grpc.enabled"},
+	{gatewayAPIGroup + "/v1alpha2", "udproutes", "ingress.gatewayApi.routes.llmWorker.enabled"},
 }
+
+// The Gateway API CRDs and Envoy Gateway are prerequisites the user installs
+// before the stack, which installs neither. The remediations name the versions
+// the gateway-routing guide pins.
+const (
+	gatewayRoutingGuide      = "the Gateway Routing and DNS guide (gateway-routing.md)"
+	gatewayAPICRDsInstallCmd = "kubectl apply -f " +
+		"https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml"
+	envoyGatewayChartVersion = "v1.5.4"
+)
 
 // gatewayControllerResources are created by the Envoy Gateway chart rather than
 // by this repo, so which version it picks is not ours to pin. Presence under
@@ -1183,9 +1201,10 @@ func discoverGatewayAPIResources(ctx context.Context, client kubernetes.Interfac
 	return surface, nil
 }
 
-// checkGatewayAPICRDsIn verifies that the Gateway API CRD set is installed and
-// registers all four required resource types. Without these CRDs neither the
-// Gateway controller nor nvcf-cli can create routing objects.
+// checkGatewayAPICRDsIn verifies that the Gateway API CRDs serve gatewayclasses
+// and gateways under any version, and each route type the stack always
+// applies at the version it applies it. Without them neither the Gateway
+// controller nor the stack can create routing objects.
 // It judges an already discovered surface, so Run pays for discovery once.
 func checkGatewayAPICRDsIn(state *ValidationState, surface gatewayAPISurface, err error) {
 	log := state.Log
@@ -1213,14 +1232,12 @@ func checkGatewayAPICRDsIn(state *ValidationState, surface gatewayAPISurface, er
 	}
 	if len(missing) > 0 {
 		printError(log, fmt.Sprintf("Gateway API CRDs missing resources: %s", strings.Join(missing, ", ")))
-		// Name the channel rather than pointing back at the installer: TCPRoute
-		// and UDPRoute exist only in the experimental channel, so an operator
-		// who ran the standard-channel manifest needs to know that is the
-		// difference, not to re-run the install that just failed.
+		// Name the version and channel: an operator who applied the
+		// standard-channel manifest needs to know that is the difference.
 		state.Recommendations = append(state.Recommendations,
-			"Install the Gateway API CRDs from the experimental channel, which is the only one carrying "+
-				"TCPRoute and UDPRoute: kubectl apply -f "+
-				"https://github.com/kubernetes-sigs/gateway-api/releases/download/<version>/experimental-install.yaml")
+			"Install the Gateway API CRDs as "+gatewayRoutingGuide+" describes; the stack does not install "+
+				"them: "+gatewayAPICRDsInstallCmd+". The stack applies TCPRoute and UDPRoute at v1alpha2, "+
+				"which v1.2.0 serves only in this experimental-channel manifest.")
 		ok := false
 		state.GatewayAPICRDsOK = &ok
 		return
@@ -1255,8 +1272,9 @@ func checkEnvoyGatewayFor(
 	if installNS == "" {
 		installNS = envoyGatewayNamespace
 	}
-	recommendation := "Install Envoy Gateway via the NVCF self-managed stack (nvcf-cli up) or " +
-		"helm install eg oci://docker.io/envoyproxy/gateway-helm -n " + installNS + " --create-namespace"
+	recommendation := "Install Envoy Gateway as " + gatewayRoutingGuide + " describes; the stack does not " +
+		"install it: helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version " +
+		envoyGatewayChartVersion + " -n " + installNS + " --create-namespace"
 	if envoyNS != "" {
 		_, err := observe(ctx, func(c context.Context) (*corev1.Namespace, error) {
 			return client.CoreV1().Namespaces().Get(c, envoyNS, metav1.GetOptions{})
@@ -1272,10 +1290,11 @@ func checkEnvoyGatewayFor(
 			}
 			msg := fmt.Sprintf("Envoy Gateway namespace %s not found", envoyNS)
 			printError(log, msg)
-			// Envoy is non-critical, so without a warning the run prints the
-			// green "meets all requirements" banner above this failing row.
+			// The warning carries the cause and the setting to fix, which the
+			// summary row cannot.
 			state.Warnings = append(state.Warnings, "Envoy Gateway: "+msg+
-				"; set clusterValidator.envoyGatewayNamespace to where it is installed")
+				"; set clusterValidator.envoyGatewayNamespace (env "+envoyGatewayNamespaceEnv+
+				") to where it is installed")
 			state.Recommendations = append(state.Recommendations, recommendation)
 			ok := false
 			state.EnvoyGatewayOK = &ok
@@ -1324,9 +1343,6 @@ func checkEnvoyGatewayFor(
 	if ready == 0 {
 		msg := fmt.Sprintf("No Ready Envoy Gateway controller pods in %s (%d found)", found, len(pods))
 		printError(log, msg)
-		// printSummary chooses the banner from len(state.Warnings), so without
-		// this a CrashLooping controller printed the green "meets all
-		// requirements" box above its own failing row.
 		state.Warnings = append(state.Warnings, "Envoy Gateway: "+msg)
 		ok := false
 		state.EnvoyGatewayOK = &ok
@@ -1338,22 +1354,23 @@ func checkEnvoyGatewayFor(
 	state.EnvoyGatewayOK = &ok
 }
 
-// checkGatewayRoutesIn verifies that the route CR types NVCF creates are
-// registered with the apiserver. It judges an already discovered surface only: it does not list
-// route objects, so it cannot tell whether any route actually exists.
+// checkGatewayRoutesIn verifies that the optional route CR types the stack's
+// opt-in routes use are registered with the apiserver. It judges an already
+// discovered surface only: it does not list route objects, so it cannot tell
+// whether any route actually exists.
 //
-// Non-critical: route CR types are installed by nvcf up and are expected to
-// be absent on a fresh cluster before install.
+// Non-critical: only opt-in routes use these types, so a cluster that never
+// enables them does not need them.
 func checkGatewayRoutesIn(state *ValidationState, surface gatewayAPISurface, err error) {
 	log := state.Log
-	printHeader(log, "Gateway Route CR Types")
+	printHeader(log, "Optional Gateway Route CR Types")
 
 	if err != nil {
 		// Leave the pointer nil: a discovery failure is not evidence that the
 		// route CR types are absent.
 		printWarning(log, readFailure("the Gateway API resources", err))
 		state.Warnings = append(state.Warnings,
-			unknownWarning("Gateway Route CR Types", "the Gateway API resources", err))
+			unknownWarning("Optional Gateway Route CR Types", "the Gateway API resources", err))
 		return
 	}
 
@@ -1374,8 +1391,9 @@ func checkGatewayRoutesIn(state *ValidationState, surface gatewayAPISurface, err
 		printWarning(log, fmt.Sprintf("Optional route CR types not registered: %s",
 			strings.Join(missing, ", ")))
 		state.Warnings = append(state.Warnings,
-			"Gateway Route CR Types: optional types absent ("+strings.Join(missing, ", ")+
-				"); install the Gateway API experimental channel before enabling those routes")
+			"Optional Gateway Route CR Types: absent ("+strings.Join(missing, ", ")+
+				"); before enabling those routes, install the Gateway API CRDs that serve them, as "+
+				gatewayRoutingGuide+" describes: "+gatewayAPICRDsInstallCmd)
 		ok := false
 		state.GatewayRoutesOK = &ok
 		return
@@ -1393,8 +1411,11 @@ func checkGatewayRoutesIn(state *ValidationState, surface gatewayAPISurface, err
 // Envoy Gateway puts every Gateway's proxy Service in its own namespace by
 // default, including other teams', so the check first decides which Gateways
 // are NVCF's (gatewayOwnership, shared with Tier-1 so the rows agree) and
-// judges only their Services. When that cannot be decided it falls back to
-// every LoadBalancer Service and says so.
+// judges only their Services. When no NVCF Gateway is known it reads every
+// LoadBalancer Service instead: before install that can pass or fail the
+// row, and otherwise it only names what it saw and leaves the row unknown.
+// When no NVCF Gateway is run by Envoy Gateway, or none is exposed through a
+// LoadBalancer, the row does not apply.
 //
 // Non-critical: the passive form only detects an existing LB service; it does
 // not create a probe service, so absence means either no LB service exists yet
@@ -1560,10 +1581,15 @@ func judgeNVCFGatewayServices(
 	if len(missing) > 0 {
 		problems = append(problems, fmt.Sprintf("no proxy Service found for Gateway(s) %s; "+
 			"check the Gateway exists and Envoy Gateway provisioned it", strings.Join(missing, ", ")))
+		state.Recommendations = append(state.Recommendations, fmt.Sprintf(
+			"For each NVCF Gateway without a proxy Service (%s), check its status conditions "+
+				"(kubectl -n <namespace> describe gateway <name>) and the Envoy Gateway controller logs.",
+			strings.Join(missing, ", ")))
 	}
 	if len(j.pending) > 0 {
 		problems = append(problems, strings.Join(j.pending, ", ")+
 			" have no external address; check the load balancer controller and its address pool")
+		state.Recommendations = append(state.Recommendations, pendingLBRecommendation(j.pending))
 	}
 	if len(undecided) > 0 {
 		msg := fmt.Sprintf("no proxy Service confirmed for %s: %s", strings.Join(undecided, ", "),
@@ -1584,11 +1610,12 @@ func judgeNVCFGatewayServices(
 	}
 
 	if len(j.found) == 0 {
-		// Every NVCF Gateway is exposed some other way, so there is no LB to
-		// verify. Unknown rather than a failure or a pass.
+		// Every NVCF Gateway is exposed some other way, on purpose, so there
+		// is no LB to verify: moot by the cluster's shape, like a single-node
+		// overlay.
 		msg := "no NVCF Gateway is exposed through a LoadBalancer Service"
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+		printInfo(log, "  Not applicable: "+msg)
+		state.ExternalLBNotApplicable = msg
 		return
 	}
 
@@ -1658,7 +1685,7 @@ func lbUndecidedCause(listErr, implErr, classErr error, mergedProxies int, own *
 // unknown whatever the Services show: NVCF's own proxies may not use a
 // LoadBalancer at all, so neither a foreign address nor a foreign pending
 // Service says anything about NVCF's. With a known-empty route set (typically
-// before nvcf-cli up), nothing addressed fails and a pending Service beside an
+// before install), nothing addressed fails and a pending Service beside an
 // addressed one only warns.
 func judgeUnattributedServices(
 	log *logrus.Entry, state *ValidationState, services []corev1.Service, discoveryErr error,
@@ -1691,7 +1718,7 @@ func judgeUnattributedServices(
 					"(env "+nvcfGatewayNamesEnv+").")
 		case apierrors.IsForbidden(discoveryErr):
 			state.Recommendations = append(state.Recommendations,
-				"Grant the cluster-validator ServiceAccount get and list on gateway.networking.k8s.io "+
+				"Grant the cluster-validator ServiceAccount list on gateway.networking.k8s.io "+
 					"httproutes, grpcroutes, tcproutes and udproutes, or set clusterValidator.gatewayNames "+
 					"(env "+nvcfGatewayNamesEnv+").")
 		default:
@@ -1709,16 +1736,18 @@ func judgeUnattributedServices(
 		state.Warnings = append(state.Warnings,
 			"External Load Balancer: "+strings.Join(pending, ", ")+
 				" have no external address. Check the load balancer controller and its address pool.")
+		state.Recommendations = append(state.Recommendations, pendingLBRecommendation(pending))
 		ok := false
 		state.ExternalLBOK = &ok
 		return
 	}
 	if len(found) == 0 {
-		// No LoadBalancer Service exists at all, which is normal before
-		// nvcf-cli up: there is nothing to judge the LB controller by.
+		// No LoadBalancer Service exists at all, which is normal before the
+		// control plane is installed: there is nothing to judge the LB
+		// controller by.
 		printWarning(log, "No Service of type LoadBalancer exists")
 		printInfo(log, "  This may indicate: no LB controller is installed (MetalLB, cloud LB), "+
-			"or no LoadBalancer Service exists yet (normal before nvcf-cli up)")
+			"or no LoadBalancer Service exists yet (normal before the control plane is installed)")
 		state.Warnings = append(state.Warnings,
 			"External Load Balancer: status unknown (no Service of type LoadBalancer exists yet, so whether a "+
 				"load balancer controller assigns addresses was not observed). Verify one is installed.")
@@ -1736,6 +1765,19 @@ func judgeUnattributedServices(
 	printLBSuccess(log, found)
 	ok := true
 	state.ExternalLBOK = &ok
+}
+
+// pendingLBRecommendation says where to look for the address of each
+// LoadBalancer Service still waiting for one.
+func pendingLBRecommendation(pending []string) string {
+	cmds := make([]string, 0, len(pending))
+	for _, ref := range pending {
+		ns, name, _ := strings.Cut(ref, "/")
+		cmds = append(cmds, fmt.Sprintf("kubectl -n %s describe svc %s", ns, name))
+	}
+	return "Find why no external address was assigned (" + strings.Join(cmds, "; ") + "): check that a " +
+		"load balancer controller (cloud LB, MetalLB) runs and has a free address in its pool, and that the " +
+		"EnvoyProxy envoyService settings, such as its annotations and loadBalancerClass, match that controller."
 }
 
 func printLBSuccess(log *logrus.Entry, found []lbResult) {
@@ -3172,9 +3214,10 @@ func buildNodeToNodeCheckerPod(
 			NodeName:              nodeName,
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: &deadline,
-			// NodeName bypasses the scheduler but not the NodeRestriction /
-			// taint admission plugin, so a control-plane node still rejects
-			// this pod without the same tolerations the DaemonSet carries.
+			// NodeName bypasses the scheduler, so NoSchedule taints do not
+			// apply, but the kubelet still rejects a pod that does not
+			// tolerate a NoExecute taint on its node. It carries the
+			// DaemonSet's tolerations for that.
 			Tolerations: nodeToNodeTolerations(),
 			Containers: []corev1.Container{{
 				Name:      "checker",
@@ -3466,8 +3509,9 @@ const (
 var gatewayRouteResources = []string{"httproutes", "grpcroutes", "tcproutes", "udproutes"}
 
 // gatewayAPIVersionPreference picks one served version per route kind. The
-// kinds do not share a version (TCPRoute and UDPRoute are v1alpha2 only), and
-// any served version lists every object, so this only makes the choice stable.
+// kinds need not share a version (the documented CRDs serve TCPRoute and
+// UDPRoute at v1alpha2 only), and any served version lists every object, so
+// this only makes the choice stable.
 var gatewayAPIVersionPreference = []string{"v1", "v1beta1", "v1alpha2"}
 
 // servesRoutes reports whether the cluster serves any Gateway API route kind.
@@ -3588,21 +3632,21 @@ func resolveGatewayOwnershipIn(
 func (o *gatewayOwnership) reportInvalid(log *logrus.Entry, state *ValidationState) {
 	if len(o.invalid) > 0 {
 		msg := fmt.Sprintf("ignoring %s entries without a namespace: %s; name each Gateway as namespace/name",
-			nvcfGatewayNamesEnv, strings.Join(o.invalid, ", "))
+			gatewayNamesSetting, strings.Join(o.invalid, ", "))
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
 		o.invalid = nil
 	}
 	if len(o.unlisted) > 0 {
 		msg := fmt.Sprintf("NVCF routes also attach to %s, which %s leaves out, so the checks do not assess "+
-			"them; list every NVCF Gateway", strings.Join(o.unlisted, ", "), nvcfGatewayNamesEnv)
+			"them; list every NVCF Gateway", strings.Join(o.unlisted, ", "), gatewayNamesSetting)
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
 		o.unlisted = nil
 	}
 	if o.crossCheckErr != nil {
 		msg := fmt.Sprintf("could not read the NVCF routes to confirm the %s list: %v; %s",
-			nvcfGatewayNamesEnv, o.crossCheckErr, readAdvice(o.crossCheckErr))
+			gatewayNamesSetting, o.crossCheckErr, readAdvice(o.crossCheckErr))
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
 		o.crossCheckErr = nil
@@ -3610,7 +3654,7 @@ func (o *gatewayOwnership) reportInvalid(log *logrus.Entry, state *ValidationSta
 	if o.routesMissing && state.PostInstall {
 		msg := fmt.Sprintf("no NVCF routes found although the control plane is installed, so nothing reaches "+
 			"the Gateways %s names (%s); check that the gateway routes release is installed",
-			nvcfGatewayNamesEnv, o.gateways)
+			gatewayNamesSetting, o.gateways)
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Gateway routes: "+msg)
 	}
@@ -4036,10 +4080,8 @@ func checkTier1DeploymentsFor(
 	}
 	scan.assessProxies(ctx, client)
 	proxiesUnobserved := scan.reportProxyAttribution()
-	if scan.checkGatewayCoverage(ctx) {
-		proxiesUnobserved = true
-	}
-	scan.verdict(proxiesUnobserved)
+	coverageUndecided := scan.checkGatewayCoverage(ctx)
+	scan.verdict(proxiesUnobserved, coverageUndecided)
 }
 
 // tier1Scan collects what Tier-1 saw across the scanned namespaces.
@@ -4262,6 +4304,67 @@ func (s *tier1Scan) assess(r workloadReadiness) {
 	s.checkedCount++
 	if r.ready < r.want {
 		s.underReplicated = append(s.underReplicated, r.String())
+	}
+}
+
+// reportFindings prints each kind of Tier-1 failure under its own heading,
+// adds the advice that fits it, and reports whether there was any.
+func (s *tier1Scan) reportFindings() bool {
+	workloads := slices.Clone(s.underReplicated)
+	if len(s.scaledToZero) > 0 {
+		workloads = append(workloads, fmt.Sprintf("scaled to zero replicas: %s", strings.Join(s.scaledToZero, ", ")))
+	}
+	missing := s.controlPlaneMissing()
+	total := len(workloads) + len(s.gatewayGaps)
+	if missing {
+		total++
+	}
+	if total == 0 {
+		return false
+	}
+	printError(s.log, fmt.Sprintf("Tier-1 findings (%d):", total))
+	if missing {
+		var owned []string
+		for _, ns := range s.namespaces {
+			if s.owns(ns) {
+				owned = append(owned, ns)
+			}
+		}
+		printInfo(s.log, "  no NVCF Deployment found in "+strings.Join(owned, ", "))
+		s.state.Recommendations = append(s.state.Recommendations,
+			"Tier-1 found no NVCF Deployments although the control plane is installed. Check that it is "+
+				"installed in this cluster and that the kube context points at it.")
+	}
+	printFindingBlock(s.log, "Workloads not fully Ready", workloads)
+	if len(s.underReplicated) > 0 {
+		s.state.Recommendations = append(s.state.Recommendations,
+			"Check the pods of each workload not fully Ready for crashes, evictions or scheduling failures "+
+				"(kubectl -n <namespace> describe deployment <name>), and bring every replica to Ready.")
+	}
+	if len(s.scaledToZero) > 0 {
+		s.state.Recommendations = append(s.state.Recommendations,
+			"A Deployment scaled to zero serves nothing: restore its replicaCount in the self-managed stack "+
+				"values, or scale it back up (kubectl -n <namespace> scale deployment <name> --replicas=<n>).")
+	}
+	printFindingBlock(s.log, "NVCF Gateway coverage gaps", s.gatewayGaps)
+	if len(s.gatewayGaps) > 0 {
+		s.state.Recommendations = append(s.state.Recommendations,
+			"Each NVCF Gateway must exist and reference a GatewayClass that exists, and Envoy Gateway must "+
+				"have created a proxy for each one it runs. Check the Gateway's status conditions "+
+				"(kubectl -n <namespace> describe gateway <name>), its GatewayClass and the Envoy Gateway "+
+				"controller logs, or correct "+gatewayNamesSetting+" if it lists a Gateway the stack does not use.")
+	}
+	return true
+}
+
+// printFindingBlock prints one kind of finding under its heading.
+func printFindingBlock(log *logrus.Entry, heading string, findings []string) {
+	if len(findings) == 0 {
+		return
+	}
+	printInfo(log, fmt.Sprintf("  %s (%d):", heading, len(findings)))
+	for _, f := range findings {
+		printInfo(log, "    "+f)
 	}
 }
 
@@ -4510,8 +4613,12 @@ func (s *tier1Scan) setOK(ok bool) {
 	s.state.Tier1DeploymentsOK = &ok
 }
 
-const tier1ProxiesUnknown = "Tier-1 Deployments: status unknown (NVCF Envoy proxies could not be identified, " +
-	"so they were not assessed)"
+const (
+	tier1ProxiesUnknown = "Tier-1 Deployments: status unknown (NVCF Envoy proxies could not be identified, " +
+		"so they were not assessed)"
+	tier1CoverageUnknown = "Tier-1 Deployments: status unknown (whether every NVCF Gateway exists and has an " +
+		"Envoy proxy could not be confirmed)"
+)
 
 func (s *tier1Scan) deniedWarning() string {
 	return fmt.Sprintf("Tier-1 Deployments: could not read Deployments in %d control-plane namespace(s): %s",
@@ -4527,7 +4634,7 @@ func (s *tier1Scan) controlPlaneMissing() bool {
 
 // verdict decides the row. An observed failure wins over anything unobserved,
 // and a tolerated rollout is a pass with a warning, not UNKNOWN.
-func (s *tier1Scan) verdict(proxiesUnobserved bool) {
+func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 	if len(s.unread) > 0 {
 		// Reported whatever decides the row, so a namespace that was never
 		// read is not first heard of once the failure beside it is fixed.
@@ -4537,35 +4644,10 @@ func (s *tier1Scan) verdict(proxiesUnobserved bool) {
 		printInfo(s.log, fmt.Sprintf("  Not assessed (in a shared namespace and not installed by the stack): %s",
 			strings.Join(s.notAssessed, ", ")))
 	}
-	failures := s.underReplicated
-	if len(s.scaledToZero) > 0 {
-		failures = append(failures, fmt.Sprintf("scaled to zero replicas: %s", strings.Join(s.scaledToZero, ", ")))
-	}
-	failures = append(failures, s.gatewayGaps...)
-	if s.controlPlaneMissing() {
-		var owned []string
-		for _, ns := range s.namespaces {
-			if s.owns(ns) {
-				owned = append(owned, ns)
-			}
-		}
-		failures = append(failures, "no NVCF Deployment found in "+strings.Join(owned, ", "))
-		s.state.Recommendations = append(s.state.Recommendations,
-			"Tier-1 found no NVCF Deployments although the control plane is installed. Check that it is "+
-				"installed in this cluster and that the kube context points at it.")
-	}
 	switch {
-	case len(failures) > 0:
-		printError(s.log, fmt.Sprintf("Under-replicated Deployments (%d):", len(failures)))
-		for _, name := range failures {
-			printInfo(s.log, "  "+name)
-		}
-		s.state.Recommendations = append(s.state.Recommendations,
-			"Check for crashed, evicted, or unschedulable pods in the listed namespaces. "+
-				"If a service is intentionally single-replica, raise its replicaCount in the "+
-				"self-managed stack values to keep HA headroom.")
+	case s.reportFindings():
 		s.setOK(false)
-	case proxiesUnobserved || len(s.unread) > 0:
+	case proxiesUnobserved || coverageUndecided || len(s.unread) > 0:
 		// Something was never observed, so "all ready" is not a claim we can
 		// make even though everything we could see passed.
 		if len(s.unread) > 0 {
@@ -4574,6 +4656,9 @@ func (s *tier1Scan) verdict(proxiesUnobserved bool) {
 		}
 		if proxiesUnobserved {
 			s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
+		}
+		if coverageUndecided {
+			s.state.Warnings = append(s.state.Warnings, tier1CoverageUnknown)
 		}
 	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown. Rolling one pod at a time is what an upgrade
@@ -4680,12 +4765,14 @@ type tier2Scan struct {
 	seen     map[string]bool
 	denied   map[string]bool
 
-	failures      []string
+	failures []string
+	// advice holds one recommendation per kind of failure found.
+	advice        []string
 	skippedParity []string
 	// notAssessed are another install's StatefulSets in a shared namespace.
 	notAssessed []string
-	// unspread holds assessed StatefulSets with no pod anti-affinity, whose
-	// placement is not judged: highAvailability.mode none renders none.
+	// unspread holds assessed StatefulSets whose placement is not judged:
+	// nothing asks for their pods on distinct nodes.
 	unspread     []string
 	checkedCount int
 	// unread holds each namespace whose StatefulSets could not be read, with
@@ -4706,8 +4793,26 @@ func (s *tier2Scan) warn(msg string) {
 	s.state.Warnings = append(s.state.Warnings, "Tier-2 StatefulSets: "+msg)
 }
 
-func (s *tier2Scan) fail(format string, args ...any) {
+// The kinds of Tier-2 failure, each named by the advice that fits it.
+const (
+	tier2NotReadyAdvice = "Check each StatefulSet not fully Ready and its pods " +
+		"(kubectl -n <namespace> describe statefulset <name>) for crashes, scheduling failures or unbound " +
+		"PersistentVolumeClaims, and bring every spec.replicas pod to Ready."
+	tier2ScaledToZeroAdvice = "A stack quorum component scaled to zero is down: restore its replicas in the " +
+		"self-managed stack values."
+	tier2BelowQuorumAdvice = "Run each StatefulSet spread for high availability at 3 or more replicas, an odd " +
+		"count: fewer cannot keep a quorum through the loss of one member."
+	tier2CoLocatedAdvice = "Move co-located quorum pods onto distinct nodes: add schedulable nodes, or find why " +
+		"their pod anti-affinity was not honored (a preferred rule allows co-location when nodes are short), " +
+		"then delete one co-located pod so it is rescheduled."
+)
+
+// fail records a failure and the advice for its kind.
+func (s *tier2Scan) fail(advice, format string, args ...any) {
 	s.failures = append(s.failures, fmt.Sprintf(format, args...))
+	if !slices.Contains(s.advice, advice) {
+		s.advice = append(s.advice, advice)
+	}
 }
 
 func (s *tier2Scan) scanNamespace(ctx context.Context, client kubernetes.Interface, ns string) {
@@ -4744,13 +4849,14 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 	switch {
 	case known && want == 0:
 		// Scaled to zero is the component down, however it was installed.
-		s.fail("%s/%s: scaled to zero replicas", ns, sts.Name)
+		s.fail(tier2ScaledToZeroAdvice, "%s/%s: scaled to zero replicas", ns, sts.Name)
 		s.checkedCount++
 		return
 	case known && want < minQuorumSize && spread:
 		// Anti-affinity is what an HA mode renders, and an HA mode runs at
 		// least three members: this one has lost its quorum.
-		s.fail("%s/%s: spec.replicas=%d, below the quorum minimum of %d for a StatefulSet spread for "+
+		s.fail(tier2BelowQuorumAdvice, "%s/%s: spec.replicas=%d, below the quorum minimum of %d for a "+
+			"StatefulSet spread for "+
 			"high availability (its pods carry anti-affinity)", ns, sts.Name, want, minQuorumSize)
 		s.checkedCount++
 		return
@@ -4788,7 +4894,7 @@ func (s *tier2Scan) assessMembers(
 	}
 	s.checkedCount++
 	if sts.Status.ReadyReplicas < want && !oneDownRolling {
-		s.fail("%s/%s: readyReplicas=%d (need %d)", ns, sts.Name, sts.Status.ReadyReplicas, want)
+		s.fail(tier2NotReadyAdvice, "%s/%s: readyReplicas=%d (need %d)", ns, sts.Name, sts.Status.ReadyReplicas, want)
 		return rolling
 	}
 	if !oneDownRolling && !spread {
@@ -4824,7 +4930,7 @@ func (s *tier2Scan) assessMembers(
 		reason, undated := stalledRollout(sts, pods.Items, started, time.Now())
 		switch {
 		case reason != "":
-			s.fail("%s/%s: readyReplicas=%d (need %d), rolling update is not progressing: %s",
+			s.fail(tier2NotReadyAdvice, "%s/%s: readyReplicas=%d (need %d), rolling update is not progressing: %s",
 				ns, sts.Name, sts.Status.ReadyReplicas, want, reason)
 			return rolling
 		case undated:
@@ -4870,8 +4976,8 @@ func spreadsAcrossNodes(sts *appsv1.StatefulSet) bool {
 
 // assessRollout handles a RollingUpdate in flight (rolling). StatefulSets roll
 // one pod at a time, so readyReplicas == want-1 is the steady state for the
-// whole of any image bump or PVC resize, and is tolerated while the rollout can
-// finish (oneDownRolling). More than one pod down fails, which decides the
+// whole of any pod template change, such as an image bump, and is tolerated
+// while the rollout can finish (oneDownRolling). More than one pod down fails, which decides the
 // StatefulSet. Under OnDelete the controller never advances CurrentRevision on
 // its own, so a revision mismatch says nothing and readiness is assessed
 // directly.
@@ -4898,7 +5004,8 @@ func (s *tier2Scan) assessRollout(
 	case sts.Status.ReadyReplicas == want-1:
 		return true, true, false
 	default:
-		s.fail("%s/%s: readyReplicas=%d (need %d), more pods down than a rolling update takes down at once",
+		s.fail(tier2NotReadyAdvice,
+			"%s/%s: readyReplicas=%d (need %d), more pods down than a rolling update takes down at once",
 			ns, sts.Name, sts.Status.ReadyReplicas, want)
 		s.checkedCount++
 		return true, false, true
@@ -4917,7 +5024,8 @@ func (s *tier2Scan) assessPlacement(ns string, sts *appsv1.StatefulSet, pods []c
 			continue
 		}
 		if first, dup := nodeOwner[p.Spec.NodeName]; dup {
-			s.fail("%s/%s: pods %s and %s are co-located on node %s", ns, sts.Name, first, p.Name, p.Spec.NodeName)
+			s.fail(tier2CoLocatedAdvice, "%s/%s: pods %s and %s are co-located on node %s",
+				ns, sts.Name, first, p.Name, p.Spec.NodeName)
 		} else {
 			nodeOwner[p.Spec.NodeName] = p.Name
 		}
@@ -4926,6 +5034,9 @@ func (s *tier2Scan) assessPlacement(ns string, sts *appsv1.StatefulSet, pods []c
 
 func (s *tier2Scan) setOK(ok bool) {
 	s.state.Tier2StatefulSetsOK = &ok
+	if ok {
+		s.state.Tier2PlacementNotAssessed = len(s.unspread)
+	}
 }
 
 func (s *tier2Scan) deniedWarning() string {
@@ -4956,8 +5067,8 @@ func (s *tier2Scan) verdict() {
 		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
 	}
 	if len(s.unspread) > 0 {
-		printInfo(s.log, fmt.Sprintf("  Placement not assessed (no pod anti-affinity, as highAvailability.mode "+
-			"none renders): %s", strings.Join(s.unspread, ", ")))
+		printInfo(s.log, fmt.Sprintf("  Placement not assessed (no pod anti-affinity or hostname topology spread "+
+			"rendered): %s", strings.Join(s.unspread, ", ")))
 	}
 	if len(s.notAssessed) > 0 {
 		printInfo(s.log, fmt.Sprintf("  Not assessed (in a shared namespace and not installed by the stack): %s",
@@ -4981,9 +5092,7 @@ func (s *tier2Scan) verdict() {
 		for _, f := range s.failures {
 			printInfo(s.log, "  "+f)
 		}
-		s.state.Recommendations = append(s.state.Recommendations,
-			"Ensure each Tier-2 StatefulSet (NATS, OpenBao, Cassandra) has all spec.replicas pods Ready "+
-				"and spread across distinct nodes.")
+		s.state.Recommendations = append(s.state.Recommendations, s.advice...)
 		s.setOK(false)
 	case len(s.unread) > 0:
 		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d namespace(s) were not readable",
@@ -5022,7 +5131,12 @@ func (s *tier2Scan) verdict() {
 				"%d quorum StatefulSet(s) healthy, %d %s but at their replica target",
 				s.checkedCount, s.rollingCount, MidRolloutMarker))
 		}
-		printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", s.checkedCount))
+		if len(s.unspread) == 0 {
+			printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", s.checkedCount))
+		} else {
+			printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready (%d on distinct nodes, %d placement "+
+				"not assessed)", s.checkedCount, s.checkedCount-len(s.unspread), len(s.unspread)))
+		}
 		s.setOK(true)
 	}
 }

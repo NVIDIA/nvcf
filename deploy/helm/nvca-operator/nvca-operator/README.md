@@ -230,18 +230,18 @@ This release does not wire the catalog into backend selection. Runtime use requi
 
 | Name                                                  | Description                                                                       | Value                                  |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- |
-| `clusterValidator.enabled`                            | Enable the cluster-validator CronJob and init container                            | `false`                                |
+| `clusterValidator.enabled`                            | Enable the cluster-validator: the operator's init container, the CronJob and, under role `control-plane`, the runs the operator starts when the validator spec changes | `false`                                |
 | `clusterValidator.image.repository`                   | Cluster Validator container registry path, without tag                            | `""`                                   |
 | `clusterValidator.image.tag`                          | Cluster Validator container image tag                                             | `v2.0.0`                               |
 | `clusterValidator.image.pullPolicy`                   | K8s ImagePullPolicy for cluster-validator                                         | `IfNotPresent`                         |
-| `clusterValidator.role`                               | Check set: `control-plane`, or `compute-plane` or empty for the GPU checks        | `""`                                   |
+| `clusterValidator.role`                               | Check set the CronJob runs: `control-plane`, or `compute-plane` or empty for the GPU checks. Use `control-plane` only in a single-cluster topology, where the NVCF control plane runs in this cluster; on a compute-only cluster every run is Not-Ready. The init container always runs `compute-plane` | `""`                                   |
 | `clusterValidator.openBaoNamespace`                   | Namespace holding OpenBao when it is not `vault-system`                           | `""`                                   |
 | `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
-| `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; set it for role `control-plane` (`make render-values-from-stack` fills it in). Only named Gateways can fail Tier-1 | `[]` (discovered from NVCF routes)     |
+| `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; set it for role `control-plane` (`make render-values-from-stack` fills it in). Only named Gateways can fail Tier-1, and a Gateway left out is not assessed | `[]` (discovered from NVCF routes)     |
 | `clusterValidator.storageClass`                       | The stack's `global.storageClass`; when set, that class must exist instead of a default class | `""`                                   |
 | `clusterValidator.externalComponents`                 | Quorum components (`nats`, `openbao`, `cassandra`) the stack runs outside the cluster, so Tier-2 does not report them missing after install | `[]`                                   |
 | `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets` | `""` (`networkChecks.enforcement.testImage` if set, else `busybox:1.36`) |
-| `clusterValidator.tolerations`                        | Extra tolerations for the validator Job pods, added to the control-plane ones     | `[]`                                   |
+| `clusterValidator.tolerations`                        | Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's `tolerations` and `nodeSelector` | `[]`                                   |
 | `clusterValidator.schedule`                           | CronJob schedule (cron expression)                                                | `0 */3 * * *`                          |
 | `clusterValidator.configMapName`                      | ConfigMap name for user-defined network checks                                    | `cluster-validator-network-checks`     |
 | `clusterValidator.networkChecks`                      | Network check configuration (creates the ConfigMap automatically when set)        | `{}`                                   |
@@ -255,3 +255,18 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.resources.limits.memory`            | Memory limit for the cluster-validator container                                  | `128Mi`                                |
 | `clusterValidator.resources.requests.cpu`             | CPU request for the cluster-validator container                                   | `100m`                                 |
 | `clusterValidator.resources.requests.memory`          | Memory request for the cluster-validator container                                | `64Mi`                                 |
+
+With `clusterValidator.enabled`, the validator runs in three ways:
+
+- The operator's init container runs the `compute-plane` checks at every
+  operator start. It fails the start only when a critical check ran and
+  failed.
+- The CronJob runs the `clusterValidator.role` checks on
+  `clusterValidator.schedule` and writes the summary that the agent publishes
+  as metrics.
+- Under role `control-plane` the init container writes no summary. The
+  operator instead starts a Job from the CronJob whenever the newest run did
+  not use the current validator spec: at install, and after each upgrade or
+  rollback that changes the Job spec or `networkChecks`. A validator-only
+  change does not restart the operator, and the install does not wait for
+  the run.

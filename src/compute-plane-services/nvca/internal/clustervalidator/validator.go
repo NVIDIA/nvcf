@@ -142,33 +142,45 @@ type ValidationState struct {
 	// critical: true, meaning enforcement failure blocks readiness.
 	EnforcementCritical bool
 
-	// Control-plane-specific check outcomes. Nil means the check was not run
-	// (compute-plane role). Non-nil means the check ran and the bool holds
-	// the pass/fail result.
+	// Control-plane check outcomes, each tri-state. true = observed healthy,
+	// or a tolerated state (a rollout in progress, several default
+	// StorageClasses on Kubernetes >= 1.26) with a warning saying so. false =
+	// observed broken. nil = not run for this role, not fully observed, or not
+	// applicable; state.Warnings says which reads failed, and the
+	// *NotApplicable fields say why a row does not apply.
 	DefaultStorageClassOK *bool
-	GatewayAPICRDsOK      *bool
-	EnvoyGatewayOK        *bool
-	GatewayRoutesOK       *bool
-	ExternalLBOK          *bool
+	// StorageClassFailure names why DefaultStorageClassOK is false, for the
+	// summary row: "Not Found", "Multiple Defaults" or "<name> Not Found".
+	StorageClassFailure string
+	GatewayAPICRDsOK    *bool
+	EnvoyGatewayOK      *bool
+	GatewayRoutesOK     *bool
+	ExternalLBOK        *bool
 	// EnvoyGatewayNotApplicable and ExternalLBNotApplicable hold the reason
 	// those rows do not apply: every NVCF Gateway is run by an implementation
-	// other than Envoy Gateway. Their pointers stay nil, as for the overlay.
+	// other than Envoy Gateway, or, for the LoadBalancer row, none is exposed
+	// through a LoadBalancer Service. Their pointers stay nil, as for the
+	// overlay.
 	EnvoyGatewayNotApplicable string
 	ExternalLBNotApplicable   string
 	// NodeToNodeOK is nil when the overlay was not observed, when the check
 	// does not apply (see NodeToNodeNotApplicable), or under the compute-plane
 	// role. true = overlay verified, false = failed.
 	NodeToNodeOK *bool
-	// Tier1DeploymentsOK is nil when the check did not run (compute-plane role)
-	// or something could not be observed. Finding no NVCF Deployment outside
-	// the shared namespaces is false when PostInstall is set; finding nothing
-	// is true otherwise.
+	// Tier1DeploymentsOK is nil under the compute-plane role or when something
+	// it needed could not be observed. Finding no NVCF Deployment outside the
+	// shared namespaces is false when PostInstall is set; finding nothing is
+	// true otherwise.
 	Tier1DeploymentsOK *bool
-	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role),
-	// when a StatefulSet list call fails, or when, after install, a stack quorum
-	// component that is not declared external was not found. No quorum
-	// StatefulSet found before install sets this to true, not nil.
+	// Tier2StatefulSetsOK is nil under the compute-plane role, when a
+	// StatefulSet list, its pods or its rollout start could not be read, when
+	// no quorum-shaped StatefulSet could be assessed, or when, after install, a
+	// stack quorum component that is not declared external was not found. No
+	// quorum StatefulSet found before install sets this to true, not nil.
 	Tier2StatefulSetsOK *bool
+	// Tier2PlacementNotAssessed counts the passing quorum StatefulSets with no
+	// pod anti-affinity or hostname spread, whose placement was not judged.
+	Tier2PlacementNotAssessed int
 
 	// EndpointResults captures per-endpoint reachability outcomes for the
 	// summary ConfigMap / metrics pipeline. Keyed by the user-supplied
@@ -362,9 +374,9 @@ func Run(
 	}
 
 	if role == RoleControlPlane {
-		// Control-plane cluster: check gateway infrastructure, storage, and
-		// inter-node overlay connectivity. GPU operator and SMB CSI are
-		// compute-plane concerns and are skipped.
+		// Control-plane cluster: check gateway infrastructure, storage,
+		// inter-node overlay connectivity and HA readiness. GPU operator and
+		// SMB CSI are compute-plane concerns and are skipped.
 		checkStorageClass(ctx, client, state)
 		// Discover the Gateway API surface and decide which Gateways are
 		// NVCF's once, so the Envoy, LoadBalancer and Tier-1 rows judge the
@@ -426,6 +438,89 @@ func publishSummary(
 		buildSummary(state, startedAt, summaryErr == nil, verdict))
 }
 
+// notFullyObserved ends the row of a control-plane or enforcement check left
+// without a result. The warnings name what could not be read.
+const notFullyObserved = ": Status Unknown (not fully observed; see warnings)"
+
+// summaryRow is one row of the summary.
+type summaryRow struct {
+	Passed   bool
+	PassMsg  string
+	FailMsg  string
+	Critical bool
+	// Unknown marks a check that was not fully observed. Rendered as its
+	// own row so a critical check cannot silently vanish from the verdict,
+	// which would otherwise make a throttled API call look better than a
+	// clean run.
+	Unknown    bool
+	UnknownMsg string
+	// NotApplicable marks a check this cluster's shape cannot exercise, as
+	// distinct from one we failed to observe. Both are non-passes, but
+	// only Unknown means something is hidden, so only Unknown blocks the
+	// verdict. Reporting a not-applicable check as Passed would claim a
+	// result the run never produced.
+	NotApplicable bool
+	NAMsg         string
+}
+
+// controlPlaneRows renders the control-plane check set's rows. GPU and SMB
+// checks are compute-plane concerns and are excluded here.
+func controlPlaneRows(state *ValidationState) []summaryRow {
+	var rows []summaryRow
+	// addCP renders a nil pointer as an explicit UNKNOWN row, so an API
+	// error during the run cannot quietly drop a row and leave a
+	// cleaner-looking summary than a successful run. Only a critical one
+	// blocks the verdict.
+	addCP := func(ptr *bool, label, passDetail, failDetail string, critical bool) {
+		if ptr != nil {
+			rows = append(rows, summaryRow{
+				Passed:   *ptr,
+				PassMsg:  label + ": " + passDetail,
+				FailMsg:  label + ": " + failDetail,
+				Critical: critical,
+			})
+			return
+		}
+		rows = append(rows, summaryRow{Critical: critical, Unknown: true, UnknownMsg: label + notFullyObserved})
+	}
+
+	// addOrNA renders a check this cluster's shape makes moot as Not
+	// Applicable: non-blocking, but not a pass, since nothing was judged.
+	addOrNA := func(na string, ptr *bool, label, passDetail, failDetail string, critical bool) {
+		if na == "" {
+			addCP(ptr, label, passDetail, failDetail, critical)
+			return
+		}
+		rows = append(rows, summaryRow{NotApplicable: true, NAMsg: label + ": Not Applicable (" + na + ")"})
+	}
+
+	storageFailure := state.StorageClassFailure
+	if storageFailure == "" {
+		storageFailure = "Not Found"
+	}
+	addCP(state.DefaultStorageClassOK, "Default StorageClass", "Present", storageFailure, true)
+	addCP(state.GatewayAPICRDsOK, "Gateway API CRDs", "Installed", "Not Installed", true)
+	// Non-critical: Envoy Gateway is a prerequisite the user installs
+	// before the stack (the gateway-routing guide), so it may be absent on
+	// a cluster checked before install. A missing Envoy is reported, but
+	// must not block a pre-install readiness check.
+	addOrNA(state.EnvoyGatewayNotApplicable, state.EnvoyGatewayOK, "Envoy Gateway",
+		"Installed and Running", "Not Found or Not Running", false)
+	addCP(state.GatewayRoutesOK, "Optional Gateway Route CR Types", "Registered", "Missing", false)
+	addOrNA(state.ExternalLBNotApplicable, state.ExternalLBOK, "External Load Balancer",
+		"Address Assigned", "Not Exposed or Pending", false)
+	// Non-blocking, but not "Verified": no cross-node packet was sent.
+	addOrNA(state.NodeToNodeNotApplicable, state.NodeToNodeOK, "Node-to-Node Communication",
+		"Verified", "Failed", true)
+	addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Not Ready", true)
+	tier2Pass := "Quorum and Placement OK"
+	if n := state.Tier2PlacementNotAssessed; n > 0 {
+		tier2Pass = fmt.Sprintf("Ready (placement not assessed for %d)", n)
+	}
+	addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets", tier2Pass, "Quorum or Placement Failed", true)
+	return rows
+}
+
 // printSummary outputs the final validation results and returns an error if
 // the cluster is not ready.
 func printSummary(state *ValidationState) error {
@@ -436,59 +531,41 @@ func printSummary(state *ValidationState) error {
 
 	log.Info(SummaryStart)
 
-	type check struct {
-		Passed   bool
-		PassMsg  string
-		FailMsg  string
-		Critical bool
-		// Unknown marks a check that did not run. Rendered as its own row so a
-		// critical check cannot silently vanish from the verdict, which would
-		// otherwise make a throttled API call look better than a clean run.
-		Unknown    bool
-		UnknownMsg string
-		// NotApplicable marks a check this cluster's shape cannot exercise, as
-		// distinct from one we failed to observe. Both are non-passes, but
-		// only Unknown means something is hidden, so only Unknown blocks the
-		// verdict. Reporting a not-applicable check as Passed would claim a
-		// result the run never produced.
-		NotApplicable bool
-		NAMsg         string
-	}
-
 	// A failed node list marks the row unobserved rather than NotReady, so a
 	// failed row always has a NotReady count.
 	nodesFailMsg := fmt.Sprintf("Worker Nodes: %d NotReady (non-blocking)", state.NotReadyNodes)
 
 	// unobservedRow renders an always-run check whose read failed as unknown,
 	// and any other as it ran.
-	unobservedRow := func(key, label string, c check) check {
+	unobservedRow := func(key, label string, c summaryRow) summaryRow {
 		if state.Unobserved[key] {
-			return check{Critical: c.Critical, Unknown: true, UnknownMsg: label + ": Status Unknown (not observed)"}
+			return summaryRow{Critical: c.Critical, Unknown: true,
+				UnknownMsg: label + ": Status Unknown (not observed)"}
 		}
 		return c
 	}
 
-	checks := []check{
-		unobservedRow(CheckKeyControlPlane, "Control Plane", check{Passed: state.ControlPlaneHealthy,
+	checks := []summaryRow{
+		unobservedRow(CheckKeyControlPlane, "Control Plane", summaryRow{Passed: state.ControlPlaneHealthy,
 			PassMsg: "Control Plane: Healthy", FailMsg: "Control Plane: Unhealthy", Critical: true}),
-		unobservedRow(CheckKeyWorkerNodesAllReady, "Worker Nodes", check{Passed: state.NodesAllReady,
+		unobservedRow(CheckKeyWorkerNodesAllReady, "Worker Nodes", summaryRow{Passed: state.NodesAllReady,
 			PassMsg: "Worker Nodes: All Ready", FailMsg: nodesFailMsg, Critical: false}),
-		unobservedRow(CheckKeyWebhooks, "Admission Webhooks", check{Passed: state.WebhooksSupported,
+		unobservedRow(CheckKeyWebhooks, "Admission Webhooks", summaryRow{Passed: state.WebhooksSupported,
 			PassMsg: "Admission Webhooks: Mutating & Validating Supported",
 			FailMsg: "Admission Webhooks: Not Supported", Critical: true}),
-		unobservedRow(CheckKeyNetworkPoliciesSupport, "Network Policies", check{
+		unobservedRow(CheckKeyNetworkPoliciesSupport, "Network Policies", summaryRow{
 			Passed: state.NetworkPoliciesSupported, PassMsg: "Network Policies: Supported",
 			FailMsg: "Network Policies: Not Confirmed", Critical: false}),
 	}
 	if state.NetworkChecksErr != "" {
-		checks = append(checks, check{Critical: true, Unknown: true,
+		checks = append(checks, summaryRow{Critical: true, Unknown: true,
 			UnknownMsg: "Network Checks: Status Unknown (the network-checks ConfigMap could not be loaded)"})
 	}
 
 	if state.ReachabilityOK != nil {
 		isCritical := state.ReachabilityCriticalOK != nil &&
 			!*state.ReachabilityCriticalOK
-		checks = append(checks, check{
+		checks = append(checks, summaryRow{
 			Passed:   *state.ReachabilityOK,
 			PassMsg:  "Endpoint Reachability: All Endpoints Reachable",
 			FailMsg:  "Endpoint Reachability: One or more endpoints not reachable",
@@ -497,74 +574,23 @@ func printSummary(state *ValidationState) error {
 	}
 
 	if state.Role == RoleControlPlane {
-		// Control-plane checks: gateway infrastructure and storage. GPU and
-		// SMB checks are compute-plane concerns and are excluded here.
-		//
-		// addCP renders a nil pointer as an explicit UNKNOWN row for critical
-		// checks, so an API error during the run cannot quietly drop a critical
-		// row and leave a cleaner-looking summary than a successful run.
-		addCP := func(ptr *bool, label, passDetail, failDetail string, critical bool) {
-			if ptr != nil {
-				checks = append(checks, check{
-					Passed:   *ptr,
-					PassMsg:  label + ": " + passDetail,
-					FailMsg:  label + ": " + failDetail,
-					Critical: critical,
-				})
-				return
-			}
-			if critical {
-				checks = append(checks, check{
-					Critical:   critical,
-					Unknown:    true,
-					UnknownMsg: label + ": Status Unknown (check did not run)",
-				})
-			}
-		}
-
-		// addOrNA renders a check this cluster's shape makes moot as Not
-		// Applicable: non-blocking, but not a pass, since nothing was judged.
-		addOrNA := func(na string, ptr *bool, label, passDetail, failDetail string, critical bool) {
-			if na == "" {
-				addCP(ptr, label, passDetail, failDetail, critical)
-				return
-			}
-			checks = append(checks, check{NotApplicable: true, NAMsg: label + ": Not Applicable (" + na + ")"})
-		}
-
-		addCP(state.DefaultStorageClassOK, "Default StorageClass", "Present", "Not Found", true)
-		addCP(state.GatewayAPICRDsOK, "Gateway API CRDs", "Installed", "Not Installed", true)
-		// Non-critical: Envoy Gateway is installed by nvcf-cli up, so it is
-		// expected to be absent on a fresh cluster before the first install.
-		// A missing Envoy is informative (tells the operator the stack is not
-		// yet deployed) but must not block a pre-install readiness check.
-		addOrNA(state.EnvoyGatewayNotApplicable, state.EnvoyGatewayOK, "Envoy Gateway",
-			"Installed and Running", "Not Found or Not Running", false)
-		addCP(state.GatewayRoutesOK, "Gateway Route CR Types", "Registered", "Not Registered", false)
-		addOrNA(state.ExternalLBNotApplicable, state.ExternalLBOK, "External Load Balancer",
-			"IP Assigned", "No IP Assigned", false)
-		// Non-blocking, but not "Verified": no cross-node packet was sent.
-		addOrNA(state.NodeToNodeNotApplicable, state.NodeToNodeOK, "Node-to-Node Communication",
-			"Verified", "Failed", true)
-		addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Under-replicated", true)
-		addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets",
-			"Quorum and Placement OK", "Quorum or Placement Failed", true)
+		checks = append(checks, controlPlaneRows(state)...)
 	} else {
 		// Compute-plane checks: GPU resources, GPU operator, SMB CSI driver.
 		// SMB CSI Driver missing is non-blocking: it is required only when
 		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
 		checks = append(checks,
-			unobservedRow(CheckKeySMBCSI, "SMB CSI Driver", check{Passed: state.SMBCSIDriverOK,
+			unobservedRow(CheckKeySMBCSI, "SMB CSI Driver", summaryRow{Passed: state.SMBCSIDriverOK,
 				PassMsg: "SMB CSI Driver: v1.16.0+ Installed",
 				FailMsg: "SMB CSI Driver: Not Installed or Below v1.16.0", Critical: false}),
-			unobservedRow(CheckKeyGPUResources, GPUResourcesLabel, check{Passed: state.GPUAvailable,
+			unobservedRow(CheckKeyGPUResources, GPUResourcesLabel, summaryRow{Passed: state.GPUAvailable,
 				PassMsg: GPUResourcesLabel + ": Available", FailMsg: GPUResourcesLabel + ": Not Available",
 				Critical: true}),
 			// GPU Operator missing is non-blocking: clusters registered with
 			// Manual Instance Configuration expose GPUs via an alternative
 			// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
 			// GPU Operator. GPU Resources above is the load-bearing signal.
-			unobservedRow(CheckKeyGPUOperator, "GPU Operator", check{Passed: state.GPUOperatorInstalled,
+			unobservedRow(CheckKeyGPUOperator, "GPU Operator", summaryRow{Passed: state.GPUOperatorInstalled,
 				PassMsg: "GPU Operator: Installed", FailMsg: "GPU Operator: Not Installed", Critical: false}),
 		)
 	}
@@ -572,7 +598,7 @@ func printSummary(state *ValidationState) error {
 	if state.ConfigurableNetPolOK != nil {
 		isCritical := state.ConfigurableNetPolCriticalOK != nil &&
 			!*state.ConfigurableNetPolCriticalOK
-		checks = append(checks, check{
+		checks = append(checks, summaryRow{
 			Passed:   *state.ConfigurableNetPolOK,
 			PassMsg:  "Configurable Network Policies: All Checks Passed",
 			FailMsg:  "Configurable Network Policies: One or more checks failed",
@@ -581,7 +607,7 @@ func printSummary(state *ValidationState) error {
 	}
 	switch {
 	case state.EnforcementOK != nil:
-		checks = append(checks, check{
+		checks = append(checks, summaryRow{
 			Passed:   *state.EnforcementOK,
 			PassMsg:  "Network Policy Enforcement: Active Validation Passed",
 			FailMsg:  "Network Policy Enforcement: Active Validation Failed",
@@ -591,16 +617,21 @@ func printSummary(state *ValidationState) error {
 		// The check was configured as critical but produced no result: its
 		// setup failed, or an API error cut it short. Dropping the row would
 		// certify a precondition nothing looked at.
-		checks = append(checks, check{
+		checks = append(checks, summaryRow{
 			Critical:   true,
 			Unknown:    true,
-			UnknownMsg: "Network Policy Enforcement: Status Unknown (check did not complete)",
+			UnknownMsg: "Network Policy Enforcement" + notFullyObserved,
 		})
 	}
 
 	var unknownCritical []string
 	failedCritical := 0
+	// degraded is any row that did not pass, critical or not. Only a critical
+	// one decides the verdict, but any of them rules out the "meets all
+	// requirements" banner, whether or not it added a warning.
+	degraded := false
 	for _, c := range checks {
+		degraded = degraded || !c.Passed
 		switch {
 		case c.NotApplicable:
 			// Neither pass nor failure: the cluster shape made the check moot.
@@ -631,14 +662,14 @@ func printSummary(state *ValidationState) error {
 	log.Infof("%s%s%s", colorBlue, separator, colorReset)
 	log.Info("")
 	if isReady {
-		hasWarnings := len(state.Warnings) > 0
-		if hasWarnings {
+		if degraded || len(state.Warnings) > 0 {
 			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorYellow, colorReset)
 			log.Infof("%s\u2551        %s  %s%s  %s        \u2551%s",
 				colorYellow, iconWarn, VerdictLinePrefix, VerdictReadyWithWarnings, iconWarn, colorReset)
 			log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorYellow, colorReset)
 			log.Info("")
-			printWarning(log, "Your cluster meets all critical requirements; see warnings below for non-blocking issues.")
+			printWarning(log, "Your cluster meets all critical requirements; the rows above that did not pass "+
+				"and the warnings below are non-blocking issues.")
 		} else {
 			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorGreen, colorReset)
 			log.Infof("%s\u2551                %s  %s%s  %s                \u2551%s",

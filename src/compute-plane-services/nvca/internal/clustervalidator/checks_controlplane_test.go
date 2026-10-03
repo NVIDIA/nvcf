@@ -759,6 +759,7 @@ func TestCheckTier2StatefulSets_CoLocatedPeersFail(t *testing.T) {
 
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.False(t, *state.Tier2StatefulSetsOK, "two peers on the same node must fail placement")
+	assert.Equal(t, []string{tier2CoLocatedAdvice}, state.Recommendations)
 }
 
 // StatefulSets roll one pod at a time, so a below-target ready count is the
@@ -1213,6 +1214,7 @@ func TestCheckStorageClass_MultipleDefaultsFailBefore126(t *testing.T) {
 	require.NotNil(t, state.DefaultStorageClassOK)
 	assert.False(t, *state.DefaultStorageClassOK,
 		"below 1.26 two defaults reject every PVC")
+	assert.Equal(t, "Multiple Defaults", state.StorageClassFailure, "the row names the cause, not Not Found")
 }
 
 // Only NotFound is evidence Envoy is absent. A 403 or an apiserver 500 means we
@@ -1516,8 +1518,8 @@ func TestCheckGatewayRoutes_OptionalUDPRouteAbsentIsNonCritical(t *testing.T) {
 	assert.False(t, *routeState.GatewayRoutesOK)
 	assert.Contains(t, strings.Join(routeState.Warnings, "; "), "udproutes",
 		"UDPRoute is applied by udproute-llm-worker.yaml and must still be surfaced")
-	assert.Contains(t, strings.Join(routeState.Warnings, "; "), "nvcfGatewayRoutes.routes.llmWorker.enabled",
-		"the warning names the value that needs the type")
+	assert.Contains(t, strings.Join(routeState.Warnings, "; "), "ingress.gatewayApi.routes.llmWorker.enabled",
+		"the warning names the stack value that needs the type")
 }
 
 func TestCheckGatewayRoutes_OptionalUDPRoutePresentPasses(t *testing.T) {
@@ -2150,7 +2152,7 @@ func TestResolveNVCFGateways_ConfiguredReplacesDiscovery(t *testing.T) {
 	assert.Equal(t, []string{"nvcf/other"}, own.unlisted)
 	state := &ValidationState{Log: testLog()}
 	own.reportInvalid(state.Log, state)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "nvcf/other, which "+nvcfGatewayNamesEnv+" leaves out")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "nvcf/other, which "+gatewayNamesSetting+" leaves out")
 	own.reportInvalid(state.Log, state)
 	assert.Len(t, state.Warnings, 1, "reported once per run")
 }
@@ -3149,6 +3151,9 @@ func TestCheckExternalLoadBalancer_PendingBeatsUnattributed(t *testing.T) {
 	warnings := strings.Join(state.Warnings, "; ")
 	assert.Contains(t, warnings, "have no external address")
 	assert.NotContains(t, warnings, "no proxy Service found", "an unattributed Gateway is not reported as missing")
+	assert.Contains(t, strings.Join(state.Recommendations, "; "),
+		"kubectl -n "+envoyGatewayNamespace+" describe svc envoy-api",
+		"a pending Service gets advice naming it")
 }
 
 // The Gateway CRD can be removed between discovery and the List; no Gateways
@@ -3394,19 +3399,31 @@ func TestCheckTier2StatefulSets_HAIsReadFromAntiAffinity(t *testing.T) {
 	state := runTier2(single(1))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.False(t, *state.Tier2StatefulSetsOK, "spread for HA, but below the quorum minimum")
+	assert.Equal(t, []string{tier2BelowQuorumAdvice}, state.Recommendations, "told to scale, not to spread")
 
 	state = runTier2(withoutSpread(single(1)))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK, "one replica is what mode none deploys")
+	assert.Equal(t, 1, state.Tier2PlacementNotAssessed)
 
 	state = runTier2(withoutSpread(single(0)))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.False(t, *state.Tier2StatefulSetsOK, "a single replica that is down is still down")
+	assert.Equal(t, []string{tier2NotReadyAdvice}, state.Recommendations,
+		"a down non-HA replica is not told to spread across nodes")
+
+	state = runTier2(withoutSpread(makeQuorumSTS("cassandra", "cassandra-system", 0, 0, nil)))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.Equal(t, []string{tier2ScaledToZeroAdvice}, state.Recommendations)
 
 	state = runTier2(withoutSpread(makeQuorumSTS("nats", "nats-system", 3, 3,
 		[]string{"node-1", "node-1", "node-1"})))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK, "co-located on a single node is what mode none allows")
+	assert.Equal(t, 1, state.Tier2PlacementNotAssessed, "the pass does not claim distinct nodes")
+
+	state = runTier2(makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"}))
+	assert.Zero(t, state.Tier2PlacementNotAssessed)
 }
 
 // A StatefulSet without anti-affinity has its placement left alone, but its
@@ -3646,6 +3663,9 @@ func TestCheckTier1Deployments_GatewayCoverageByImplementation(t *testing.T) {
 	state = runTier1(t, true, envoyGatewayClient(t), api())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.False(t, *state.Tier1DeploymentsOK, "a named Gateway that does not exist is a finding")
+	recs := strings.Join(state.Recommendations, "; ")
+	assert.Contains(t, recs, "describe gateway", "a coverage gap gets Gateway advice")
+	assert.NotContains(t, recs, "replicaCount", "a coverage gap is not a replica shortfall")
 
 	for _, ns := range []string{"nvcf", "custom-envoy-system"} {
 		state = runTier1(t, true, envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg")),
@@ -3694,6 +3714,8 @@ func TestCheckTier1Deployments_GatewayCoverageUndecidedIsUnknown(t *testing.T) {
 	state := runTier1(t, true, classesDenied, nvcfService())
 	assert.Nil(t, state.Tier1DeploymentsOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not tell which NVCF Gateways Envoy Gateway runs")
+	assert.Contains(t, state.Warnings, tier1CoverageUnknown)
+	assert.NotContains(t, state.Warnings, tier1ProxiesUnknown, "the proxies were identified; coverage was not")
 
 	client := gatewayDiscoveryClient(gatewayAPIGroup+"/v1/gateways", gatewayAPIGroup+"/v1/gatewayclasses")
 	client.PrependReactor("list", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
@@ -4200,7 +4222,7 @@ func TestCheckGatewayAPICRDs_GRPCRouteIsOptional(t *testing.T) {
 	checkGatewayRoutes(context.Background(), client, state)
 	require.NotNil(t, state.GatewayRoutesOK)
 	assert.False(t, *state.GatewayRoutesOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "grpcroutes (needed when nvcfGatewayRoutes.routes.nvcfApi")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "grpcroutes (needed when ingress.gatewayApi.routes.nvcfApi")
 }
 
 // istioStack is an installed cluster whose only NVCF Gateway, gw/nvcf-gw, is

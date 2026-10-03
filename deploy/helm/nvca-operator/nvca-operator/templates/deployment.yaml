@@ -74,9 +74,9 @@ spec:
       # This init container runs under the operator ServiceAccount
       # (serviceAccountName above), which already has configmaps
       # get/create/update in this namespace via role.yaml, so its summary
-      # write succeeds. The separate cluster-validator ServiceAccount and
-      # ClusterRole in rbac.yaml grant the same configmaps verbs for the
-      # CronJob, which runs as that SA.
+      # write succeeds. The CronJob's runs use the separate cluster-validator
+      # ServiceAccount, whose namespaced Role in rbac.yaml grants the same
+      # configmaps verbs, update only on the summary.
       initContainers:
       - name: cluster-validator
         image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.AppVersion $cv.image.tag }}
@@ -97,8 +97,8 @@ spec:
               fieldPath: metadata.namespace
         # Deliberately pinned to the compute-plane check set, and deliberately
         # NOT wired to clusterValidator.role. This chart is only installed on
-        # compute-plane clusters, and a failed validation is fatal here, so
-        # running the control-plane set would gate operator startup on
+        # compute-plane clusters, and a critical check that fails is fatal
+        # here, so running the control-plane set would gate operator startup on
         # control-plane HA: a single OpenBao pod stuck Terminating, or the
         # Gateway API CRDs simply being absent on a compute-only cluster, would
         # leave the operator in Init:CrashLoopBackOff.

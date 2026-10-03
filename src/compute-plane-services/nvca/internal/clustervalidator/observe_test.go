@@ -472,7 +472,7 @@ func TestResolveGatewayOwnership_ConfiguredCrossCheckFailureIsReported(t *testin
 	own.reportInvalid(state.Log, state)
 	require.Len(t, state.Warnings, 1, "reported once per run")
 	assert.Contains(t, state.Warnings[0], "Gateway names: could not read the NVCF routes to confirm the "+
-		nvcfGatewayNamesEnv+" list: listing httproutes: Internal error occurred: etcd timeout")
+		gatewayNamesSetting+" list: listing httproutes: Internal error occurred: etcd timeout")
 }
 
 // The probe's events read retries a transient error until it clears, and one
@@ -752,9 +752,9 @@ func TestCheckEnvoyGateway_UsesTheConfiguredNamespace(t *testing.T) {
 	assert.True(t, *state.EnvoyGatewayOK)
 }
 
-// NVCF Gateways exposed only through NodePort have no LB to verify: unknown,
-// with a warning saying so.
-func TestCheckExternalLoadBalancer_NodePortOnlyIsUnknownWithAWarning(t *testing.T) {
+// NVCF Gateways exposed only through NodePort have no LB to verify: the row is
+// not applicable, which the cluster's shape decides, rather than unknown.
+func TestCheckExternalLoadBalancer_NodePortOnlyIsNotApplicable(t *testing.T) {
 	envoyNS := envoyGatewayNamespaceName()
 	t.Setenv(nvcfGatewayNamesEnv, "nvcf/a-gw")
 	client := routeDiscoveryClient()
@@ -762,8 +762,8 @@ func TestCheckExternalLoadBalancer_NodePortOnlyIsUnknownWithAWarning(t *testing.
 	state := &ValidationState{Log: testLog()}
 	checkExternalLoadBalancer(context.Background(), client, routeClient(), state)
 	assert.Nil(t, state.ExternalLBOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "),
-		"External Load Balancer: status unknown (no NVCF Gateway is exposed through a LoadBalancer Service)")
+	assert.Equal(t, "no NVCF Gateway is exposed through a LoadBalancer Service", state.ExternalLBNotApplicable)
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "External Load Balancer: status unknown")
 }
 
 // GRPCRoute and UDPRoute parents are NVCF Gateways too.

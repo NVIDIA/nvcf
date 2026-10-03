@@ -1204,7 +1204,7 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Enable the cluster-validator CronJob and init container",
+                    "description": "Enable the cluster-validator: the operator's init container, the CronJob and, under role control-plane, the runs the operator starts when the validator spec changes",
                     "default": false
                 },
                 "image": {
@@ -1239,7 +1239,7 @@
                 },
                 "role": {
                     "type": "string",
-                    "description": "Check set: control-plane runs the gateway, storage, overlay and HA checks; compute-plane or empty runs the compute-plane checks. Matched case-insensitively; other values are rejected.",
+                    "description": "Check set the CronJob runs: control-plane runs the gateway, storage, overlay and HA checks; compute-plane or empty runs the compute-plane checks. Use control-plane only in a single-cluster topology, where the NVCF control plane runs in this cluster; on a compute-only cluster every run is Not-Ready. Matched case-insensitively; other values are rejected.",
                     "pattern": "^\\s*([Cc][Oo][Nn][Tt][Rr][Oo][Ll]-[Pp][Ll][Aa][Nn][Ee]|[Cc][Oo][Mm][Pp][Uu][Tt][Ee]-[Pp][Ll][Aa][Nn][Ee])?\\s*$",
                     "default": ""
                 },
@@ -1259,7 +1259,7 @@
                         "type": "string",
                         "pattern": "^[^/\\s]+/[^/\\s]+$"
                     },
-                    "description": "Every NVCF Gateway as namespace/name (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1",
+                    "description": "Every NVCF Gateway as namespace/name (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1, and a Gateway left out is not assessed",
                     "default": []
                 },
                 "externalComponents": {
@@ -1273,7 +1273,7 @@
                         ]
                     },
                     "uniqueItems": true,
-                    "description": "Quorum components the stack runs outside this cluster, so the Tier-2 check does not report them missing after install",
+                    "description": "Stack quorum components (nats, openbao, cassandra) that run outside this cluster, so the Tier-2 check does not report them missing after install",
                     "default": []
                 },
                 "storageClass": {
@@ -1291,7 +1291,7 @@
                     "items": {
                         "type": "object"
                     },
-                    "description": "Extra tolerations for the validator CronJob pods, added to the control-plane ones",
+                    "description": "Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's tolerations and nodeSelector",
                     "default": []
                 },
                 "networkChecks": {

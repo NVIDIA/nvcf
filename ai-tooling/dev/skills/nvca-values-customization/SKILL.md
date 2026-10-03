@@ -80,10 +80,16 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
 ## Gotchas
 
 - Install-time values are layered after generated stack-aware values.
+- Use `clusterValidator.role: control-plane` only in a single-cluster
+  topology, where the NVCF control plane runs in the same cluster. On a
+  compute-only cluster every run is Not-Ready.
 - With `clusterValidator.role: control-plane`, set
   `clusterValidator.gatewayNames` to every stack Gateway as `namespace/name`.
   Unset, the validator finds Gateways from route labels, and those can never
   fail Tier-1. `make render-values-from-stack` fills it in.
+- List stack quorum components that run outside the cluster (`nats`,
+  `openbao`, `cassandra`) in `clusterValidator.externalComponents`, or Tier-2
+  reports them missing after install.
 - Use `yq` carefully for nested keys and quoted strings.
 - `Chart.yaml` name stays in git and must match the subproject's service_name;
   the release refuses to publish when they differ. Only the version is set at

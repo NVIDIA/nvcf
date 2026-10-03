@@ -97,9 +97,10 @@ func main() {
 			clustervalidator.SummaryConfigMapNamespaceEnv)
 	}
 
-	// VALIDATOR_ROLE selects which check set runs: "control-plane" enables
-	// gateway and StorageClass checks and skips GPU/SMB; anything else (including
-	// unset) runs the compute-plane check set (backward-compatible default).
+	// VALIDATOR_ROLE selects which check set runs: "control-plane" runs the
+	// gateway, StorageClass, overlay and HA checks and skips GPU/SMB; anything
+	// else (including unset) runs the compute-plane check set (backward-compatible
+	// default).
 	roleEnv := os.Getenv("VALIDATOR_ROLE")
 	role, roleKnown := parseRole(roleEnv)
 	if roleEnv != "" && !roleKnown {
