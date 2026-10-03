@@ -204,3 +204,63 @@ registry pin remain ddb2e65 with the active ruleset unchanged. A specific
 approval request covers replacement with the combined d8a8a9397 candidate;
 the older 15ae2a1 request is superseded. Indexed staging search remains a merge
 gate. No production publication or merge occurred.
+
+## Consolidated release 1.0.1
+
+The maintainer requested 1.0.1 as the initial consolidated release, complete
+release pages in the native changelog, and an Upgrade Notes sidebar containing
+only upgrade guides. This supersedes the unpublished 1.0.0 candidates and their
+pending branch-replacement approval requests.
+
+P4 head `1acb89c91744fa12fae6322251da494240eaba03` registers
+`docs/releases/1.0.1` at `23d40a34636dbb3bdcd21e8f07e9e33cd6a36a2c`.
+The new branch was created after hosted validation. Effective branch rules
+block updates, deletion, and force pushes; the active ruleset has no bypass
+actors or exclusions. No ruleset modification was needed. The former 1.0.0
+branch remains frozen and is removed from the canonical registry.
+
+The stable catalog, generated manifest, and dropdown use 1.0.1. Its approved
+combination remains Self-Managed 1.0.1, Compute Plane 1.0.0, and Observability
+1.0.0. Development is 1.0.2, a proposed docs-only patch after 1.0.1. Tooling
+examples are aligned with that sequence. Actual 1.0.2 preparation and an
+idempotent retry pass, as do generated-content and branch-local Fern checks.
+No 1.0.2 release branch was created or qualification claimed.
+
+The native Releases timeline contains full 1.0.1, 0.6.1, and 0.6.0 entries.
+Upgrade Notes contains the three existing upgrade guides. The separate
+consolidated 1.0.0 entry and temporary preview entry are absent. The full note
+bodies are preserved after normalizing heading levels, link destinations,
+emphasis formatting, and the 1.0.1 qualified-combination introduction.
+Dates follow the September 22 GitHub 1.0.1 release, the July 31 documentation
+promotion of 0.6.1 (`322da01d9`), and July 14 publication of 0.6.0 notes
+(`e4552079a`).
+
+The first hosted check caught Fern's date prefixes on changelog headings.
+All 30 original section anchors now have explicit aliases. Browser checks
+verify every alias in both stable and Development. The existing fixes link
+and redirected links with fragments keep working.
+
+[Review the final preview](https://nvidia-preview-nvcf-2214-p4-release101-final.docs.buildwithfern.com/nvcf/release-notes).
+The [candidate build](https://github.com/NVIDIA/nvcf/actions/runs/37090536382)
+and [canonical protected-ref build](https://github.com/NVIDIA/nvcf/actions/runs/37090921639)
+pass. The latter uses QA source `1c39bc667` and the actual protected release
+branch with Development 1.0.2. Exact release-candidate
+[Fern CI](https://github.com/NVIDIA/nvcf/actions/runs/37090517717) and Markdown
+lint pass.
+
+Validation covers:
+
+- Strict local canonical and Development checks, Go tooling tests, generated
+  content, Markdown lint, and registry verification against the protected ref.
+- Both edition selectors, full release entries, Upgrade Notes sidebar, matrix
+  and manifest placement, selected-edition links, and all 30 section aliases.
+- Twelve current and former 1.0.0 redirect cases, plus mobile rendering without
+  horizontal overflow. No browser page errors occurred.
+- All 71 affected note, manifest, and matrix routes return content; all 32
+  historical routes retain identical content. Current note URLs intentionally
+  resolve to native entries with their release heading.
+
+Current PR CI is in progress; completed checks pass. The earlier CodeRabbit
+placement findings were resolved against the explicit requirements. Indexed
+staging search remains a separate merge gate. Production publication and P4
+merge remain pending maintainer review.
