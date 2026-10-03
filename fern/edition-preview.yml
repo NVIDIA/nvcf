@@ -22,14 +22,16 @@ check:
   rules:
     broken-links: error
 redirects:
+- source: /nvcf/1.0.2/overview/image-mirroring
+  destination: /nvcf/1.0.2/manifest/image-mirroring
 - source: /nvcf/overview/image-mirroring
   destination: /nvcf/manifest/image-mirroring
 - source: /nvcf/dev/overview/image-mirroring
   destination: /nvcf/dev/manifest/image-mirroring
-- source: /nvcf/1.0.1/overview/image-mirroring
-  destination: /nvcf/1.0.1/manifest/image-mirroring
+- source: /nvcf/1.0.1/manifest/image-mirroring
+  destination: /nvcf/1.0.1/overview/image-mirroring
 - source: /nvcf/1.0.0/overview/image-mirroring
-  destination: /nvcf/1.0.1/manifest/image-mirroring
+  destination: /nvcf/1.0.1/overview/image-mirroring
 - source: /nvcf/release-notes/1-0-1-release-notes
   destination: /nvcf/release-notes/2026/9/22
 - source: /nvcf/release-notes/legacy-0-6-1-release-notes

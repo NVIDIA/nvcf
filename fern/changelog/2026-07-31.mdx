@@ -233,9 +233,10 @@ block for every standby pod:
 export POD=<standby-pod-name>
 
 # Waits for the old pod to terminate, not for the replacement pod to be ready.
-kubectl -n vault-system delete pod "$POD" --wait=true
-kubectl -n vault-system wait "pod/$POD" --for=condition=Ready --timeout=10m
-kubectl -n vault-system exec "$POD" -c openbao -- sh -c \
+kubectl -n vault-system delete pod "$POD" --wait=true &&
+  kubectl -n vault-system wait "pod/$POD" --for=create --timeout=5m &&
+  kubectl -n vault-system wait "pod/$POD" --for=condition=Ready --timeout=10m &&
+  kubectl -n vault-system exec "$POD" -c openbao -- sh -c \
   'BAO_ADDR=http://127.0.0.1:8200 bao status'
 ```
 
@@ -262,9 +263,10 @@ Rotate the active pod last:
 export POD=<active-pod-name>
 
 # Waits for the old pod to terminate, not for the replacement pod to be ready.
-kubectl -n vault-system delete pod "$POD" --wait=true
-kubectl -n vault-system wait "pod/$POD" --for=condition=Ready --timeout=10m
-kubectl -n vault-system exec "$POD" -c openbao -- sh -c \
+kubectl -n vault-system delete pod "$POD" --wait=true &&
+  kubectl -n vault-system wait "pod/$POD" --for=create --timeout=5m &&
+  kubectl -n vault-system wait "pod/$POD" --for=condition=Ready --timeout=10m &&
+  kubectl -n vault-system exec "$POD" -c openbao -- sh -c \
   'BAO_ADDR=http://127.0.0.1:8200 bao status'
 ```
 
@@ -333,5 +335,6 @@ Confirm that the control plane is healthy:
 kubectl get pods -A
 ```
 
-This command should print nothing. Any output is a pod that is not yet
-`Running` or `Completed`.
+This command lists all pods. Check that each pod is `Running` with all
+containers ready, or `Completed`. Investigate any other status or readiness
+count before continuing.
