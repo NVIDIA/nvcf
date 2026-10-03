@@ -52,15 +52,13 @@ const (
 	// Project-specific name so the auto-created / mirrored pull secret
 	// can never collide with the conventional `nvcr-pull-secret` that
 	// operators or the install flow may already manage in 'default'.
-	// Pairs with isManagedByValidatorCLI label guard for defense-in-depth.
 	//
 	// The name is suffixed per role by validatorPullSecretRoleName: ModeSplit
 	// runs both validators concurrently, and the two kubecontexts can resolve
 	// to the same cluster. One shared Secret means the role that finishes first
 	// deletes it while the other Job is still pulling, which the kubelet
 	// reports as FailedToRetrieveImagePullSecret.
-	validatorPullSecretName        = "nvcf-preflight-pull-secret"
-	validatorPullSecretScanTimeout = 10 * time.Second
+	validatorPullSecretName = "nvcf-preflight-pull-secret"
 )
 
 // validatorPullSecretRoleName returns the managed pull-secret name for a role.
@@ -372,15 +370,6 @@ func dockerCfgFromConfigJSON(cfg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("no auths entries")
 	}
 	return json.Marshal(doc.Auths)
-}
-
-// isManagedByValidatorCLI reports whether a Secret carries the labels this CLI
-// stamps on the ones it creates. Necessary but not sufficient for ownership:
-// the labels are three public constants anyone can copy onto a Secret they
-// pre-create, which is why the generated names are run-scoped and the write
-// path is create-only rather than adopt-or-update.
-func isManagedByValidatorCLI(s *corev1.Secret) bool {
-	return hasValidatorManagedLabels(s.Labels)
 }
 
 // isAnyValidatorSecret reports whether a Secret was minted by any version of

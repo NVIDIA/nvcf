@@ -440,7 +440,7 @@ func TestBuildClusterValidatorJob_ForwardsEnvWithoutOverridingCore(t *testing.T)
 	_, hasEmpty := env["NVCF_GATEWAY_NAMES"]
 	assert.False(t, hasEmpty, "empty values are not forwarded")
 	assert.Equal(t, []string{"VALIDATOR_CONFIG_NAMESPACE", "VALIDATOR_CONFIG_NAME", "VALIDATOR_PREFLIGHT",
-		"VALIDATOR_ROLE", "NVCF_OPENBAO_NAMESPACE", "VALIDATOR_POST_INSTALL"}, order)
+		"VALIDATOR_ROLE", "VALIDATOR_TIMEOUT", "NVCF_OPENBAO_NAMESPACE", "VALIDATOR_POST_INSTALL"}, order)
 }
 
 // The extra tolerations reach the Job beside the control-plane ones it always
@@ -1487,15 +1487,41 @@ func TestRunClusterValidator_ActiveDeadlineFollowsTheRunsTimeout(t *testing.T) {
 		return false, nil, nil
 	})
 	var deadline int64
+	var env []corev1.EnvVar
 	client.PrependReactor("create", "jobs", func(a ktesting.Action) (bool, runtime.Object, error) {
-		deadline = *a.(ktesting.CreateAction).GetObject().(*batchv1.Job).Spec.ActiveDeadlineSeconds
+		job := a.(ktesting.CreateAction).GetObject().(*batchv1.Job)
+		deadline = *job.Spec.ActiveDeadlineSeconds
+		env = job.Spec.Template.Spec.Containers[0].Env
 		return false, nil, nil
 	})
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
-		"", false, clusterValidatorComputePlaneRole, nil, nil)
+		"", false, clusterValidatorComputePlaneRole, nil, map[string]string{validatorTimeoutEnv: "1h"})
 	require.NoError(t, res.Err)
 	assert.LessOrEqual(t, deadline, int64(8+60), "the deadline counts from the create, not the start of the run")
 	assert.Greater(t, deadline, int64(60))
+
+	// The validator's own timeout counts from the same point and ends its
+	// checks before this run stops waiting, whatever the caller passed.
+	var timeouts []string
+	for _, e := range env {
+		if e.Name == validatorTimeoutEnv {
+			timeouts = append(timeouts, e.Value)
+		}
+	}
+	require.Len(t, timeouts, 1)
+	got, err := time.ParseDuration(timeouts[0])
+	require.NoError(t, err)
+	assert.Positive(t, got)
+	assert.LessOrEqual(t, got, 4*time.Second,
+		"counted from the time left when the Job was created, not the run's full timeout")
+}
+
+// VALIDATOR_TIMEOUT leaves the summary margin of a full run's wait, and half of
+// a short one.
+func TestValidatorRunTimeout(t *testing.T) {
+	assert.Equal(t, "270s", validatorRunTimeout(5*time.Minute))
+	assert.Equal(t, "20s", validatorRunTimeout(40*time.Second))
+	assert.Equal(t, "1s", validatorRunTimeout(0))
 }
 
 // Each term of the run ceiling, with its multiplier, pinned against a sum
@@ -1676,11 +1702,29 @@ func TestClusterValidatorCheck_CleanupRow(t *testing.T) {
 		res       ClusterValidatorResult
 		why       string
 	}{
-		"no-cleanup pass":           {noCleanup: true, res: ClusterValidatorResult{Created: true, Passed: true}, why: "kept with --no-cleanup"},
-		"no-cleanup interrupted":    {noCleanup: true, res: ClusterValidatorResult{Created: true, Err: context.Canceled}, why: "kept with --no-cleanup"},
-		"no-cleanup, nothing made":  {noCleanup: true, res: ClusterValidatorResult{Err: errors.New("create service account: forbidden")}},
-		"no-cleanup bootstrap fail": {noCleanup: true, res: ClusterValidatorResult{Created: true, Err: errors.New("create cluster role: forbidden")}, why: "kept with --no-cleanup"},
-		"pod may run":               {res: ClusterValidatorResult{Created: true, LeftBehind: true, Err: errors.New("x")}, why: "may still be running"},
+		"no-cleanup pass": {
+			noCleanup: true,
+			res:       ClusterValidatorResult{Created: true, Passed: true},
+			why:       "kept with --no-cleanup",
+		},
+		"no-cleanup interrupted": {
+			noCleanup: true,
+			res:       ClusterValidatorResult{Created: true, Err: context.Canceled},
+			why:       "kept with --no-cleanup",
+		},
+		"no-cleanup, nothing made": {
+			noCleanup: true,
+			res:       ClusterValidatorResult{Err: errors.New("create service account: forbidden")},
+		},
+		"no-cleanup bootstrap fail": {
+			noCleanup: true,
+			res:       ClusterValidatorResult{Created: true, Err: errors.New("create cluster role: forbidden")},
+			why:       "kept with --no-cleanup",
+		},
+		"pod may run": {
+			res: ClusterValidatorResult{Created: true, LeftBehind: true, Err: errors.New("x")},
+			why: "may still be running",
+		},
 		"sweep failed": {res: ClusterValidatorResult{Created: true, Passed: true, SweepErr: errors.New("503 from apiserver")},
 			why: "removing the run's objects failed (503 from apiserver)"},
 		"clean": {res: ClusterValidatorResult{Created: true, Passed: true}},
@@ -1695,7 +1739,8 @@ func TestClusterValidatorCheck_CleanupRow(t *testing.T) {
 			return res
 		}
 		r := clusterValidatorCheck(RoleConfig{ClusterValidator: cv, ClusterValidatorImage: "img:1", KubeContext: "ctx-a",
-			ClusterValidatorNoCleanup: tc.noCleanup, ValidatorCleanup: ledger}, validatorRoleComputePlane).Run(context.Background())
+			ClusterValidatorNoCleanup: tc.noCleanup, ValidatorCleanup: ledger},
+			validatorRoleComputePlane).Run(context.Background())
 		cmd := validatorRemovalCommand("ctx-a", "r1")
 		assert.Equal(t, []string{cmd}, during, "%s: registered before the run creates anything", name)
 		if tc.why == "" {
@@ -1864,7 +1909,8 @@ func TestRunClusterValidator_OwnershipSurvivesAnInterruptAfterTheCreate(t *testi
 	sec, err := fakeClient.CoreV1().Secrets(clusterValidatorNamespace).Get(ctx, left["Secret"][0], metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Len(t, sec.OwnerReferences, 1)
-	cm, err := fakeClient.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx, left["ConfigMap"][0], metav1.GetOptions{})
+	cm, err := fakeClient.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx,
+		left["ConfigMap"][0], metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Len(t, cm.OwnerReferences, 1)
 }

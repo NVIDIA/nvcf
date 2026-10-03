@@ -1077,6 +1077,31 @@ func TestStaleNamespaceCheck_UnreachableClusterIsAnError(t *testing.T) {
 	assert.Equal(t, SeverityWarning, midProbe.Severity)
 }
 
+// A stuck namespace found before the probe share ran out still blocks the
+// run: it is not graded as cut short, which would drop its name and exit 5. A
+// warning found before the cutoff is.
+func TestStaleNamespaceCheck_StuckFindingSurvivesTheBudget(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	cutOff := errors.Join(errors.New("get namespace sis: timeout"), context.DeadlineExceeded)
+	probe := func(reason string) CheckResult {
+		spec := staleNamespaceCheck(func(context.Context, string, []string) ([]StaleNamespace, error) {
+			return []StaleNamespace{{Name: "cassandra-system", Reason: reason}}, cutOff
+		}, "", []string{"cassandra-system", "sis"})
+		return normaliseResult(ctx, spec.Run(ctx))
+	}
+
+	stuck := probe(StaleStuckTerminating)
+	assert.False(t, stuck.CutShort)
+	assert.True(t, stuck.IsBlockingFailure())
+	assert.Contains(t, stuck.Message, "cassandra-system (stuck Terminating")
+	assert.Contains(t, stuck.Message, "Additionally could not probe: get namespace sis: timeout")
+
+	assert.True(t, probe(StaleNoHelmRelease).CutShort, "a warning beside a spent budget is not the whole answer")
+}
+
 // Each term of the validator's run ceiling counts as often as one run can
 // spend it. Bumping a term by one second grows the ceiling by its count.
 func TestClusterValidatorRunCeiling_CountsEveryTerm(t *testing.T) {

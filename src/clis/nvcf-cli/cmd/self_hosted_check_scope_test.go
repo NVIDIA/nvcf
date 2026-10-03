@@ -134,10 +134,12 @@ func TestCheck_InterruptExits130(t *testing.T) {
 // runCheckWithBudget runs check --control-plane --json with the outer budget
 // shortened to budget and a validator stub that holds its role until the
 // context ends, or returns result at once.
-func runCheckWithBudget(t *testing.T, budget time.Duration, validator func(context.Context) selfhosted.ClusterValidatorResult,
-	args ...string) (error, string) {
+func runCheckWithBudget(t *testing.T, budget time.Duration,
+	validator func(context.Context) selfhosted.ClusterValidatorResult, args ...string) (error, string) {
 	t.Helper()
-	return runCheckWith(t, budget, func(ctx context.Context, _ selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+	return runCheckWith(t, budget, func(
+		ctx context.Context, _ selfhosted.ClusterValidatorParams,
+	) selfhosted.ClusterValidatorResult {
 		return validator(ctx)
 	}, &syncBuffer{}, args...)
 }
@@ -338,7 +340,9 @@ func TestCheck_QuitKeyInterruptsAndPrintsTheCleanupCommand(t *testing.T) {
 		quit <- onQuit
 		return prev(w, wait, onQuit)
 	}
-	err, stderr := runCheckWith(t, time.Minute, func(ctx context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+	err, stderr := runCheckWith(t, time.Minute, func(
+		ctx context.Context, p selfhosted.ClusterValidatorParams,
+	) selfhosted.ClusterValidatorResult {
 		p.OnStart("run1")
 		(<-quit)()
 		<-ctx.Done()
@@ -351,13 +355,15 @@ func TestCheck_QuitKeyInterruptsAndPrintsTheCleanupCommand(t *testing.T) {
 	cmd := "kubectl get pods -n default -l nvcf.nvidia.com/validator-run=run1; " +
 		"kubectl delete -n default job -l nvcf.nvidia.com/validator-run=run1 --cascade=foreground --wait; " +
 		"kubectl delete clusterrolebinding,clusterrole -l nvcf.nvidia.com/validator-run=run1; " +
-		"kubectl delete -n default rolebinding,role,serviceaccount,secret,configmap -l nvcf.nvidia.com/validator-run=run1"
+		"kubectl delete -n default rolebinding,role,serviceaccount,secret,configmap " +
+		"-l nvcf.nvidia.com/validator-run=run1"
 	assert.Equal(t, []any{cmd}, finalEvent(t, stderr)["cleanup"])
 	interruptNote := strings.Index(stderr, "note: interrupted; ")
 	require.GreaterOrEqual(t, interruptNote, 0, "the interrupt says at once how to remove the run's objects")
 	assert.Less(t, interruptNote, strings.Index(stderr, `"event":"final"`), "the note comes before the final event")
 	assert.Equal(t, cmd, validatorRow(t, stderr)["cleanup"])
-	kept := strings.Index(stderr, "note: the cluster-validator left objects in the cluster; remove them with:\n  "+cmd+"\n")
+	kept := strings.Index(stderr,
+		"note: the cluster-validator left objects in the cluster; remove them with:\n  "+cmd+"\n")
 	require.Positive(t, kept, "the removal command is repeated once the stream has ended")
 	assert.Greater(t, kept, strings.Index(stderr, `"event":"final"`))
 }
@@ -476,7 +482,9 @@ func TestCheck_InterruptPrintsTheRemovalCommandBeforeTheTeardown(t *testing.T) {
 	note := "note: interrupted; stopping the cluster-validator and removing its objects. A second Ctrl-C " +
 		"exits at once and leaves them; remove them with:\n  " + removalCommand("run1") + "\n"
 	printedFirst := false
-	err, stderr := runCheckWith(t, time.Minute, func(ctx context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+	err, stderr := runCheckWith(t, time.Minute, func(
+		ctx context.Context, p selfhosted.ClusterValidatorParams,
+	) selfhosted.ClusterValidatorResult {
 		p.OnStart("run1")
 		(<-quit)()
 		<-ctx.Done()
@@ -491,6 +499,56 @@ func TestCheck_InterruptPrintsTheRemovalCommandBeforeTheTeardown(t *testing.T) {
 	assert.True(t, printedFirst)
 	assert.Equal(t, 1, strings.Count(stderr, note), "printed once")
 	assert.NotContains(t, stderr, keptNote(removalCommand("run1")), "the teardown removed everything")
+}
+
+// terminalSink stands in for the --wait dashboard, which draws on the
+// alternate screen: what is written to the terminal before it closes is lost.
+type terminalSink struct {
+	progress.EventSink
+	out    *syncBuffer
+	closed atomic.Bool
+}
+
+func (s *terminalSink) OwnsTerminal() bool { return true }
+
+func (s *terminalSink) Close() error {
+	if !s.closed.Swap(true) {
+		_, _ = s.out.Write([]byte("<dashboard closed>\n"))
+	}
+	return s.EventSink.Close()
+}
+
+// On an interrupt, a dashboard that owns the terminal is closed before the
+// removal command is printed. Printed while it was open, the command went
+// with the alternate screen, and a second Ctrl-C left nothing on screen.
+func TestCheck_InterruptNoteIsPrintedAfterTheDashboardCloses(t *testing.T) {
+	prev := selectCheckRendererFn
+	t.Cleanup(func() { selectCheckRendererFn = prev })
+	quit := make(chan func(), 1)
+	out := &syncBuffer{}
+	selectCheckRendererFn = func(w io.Writer, wait bool, onQuit func()) (progress.EventSink, error) {
+		quit <- onQuit
+		sink, err := prev(w, wait, onQuit)
+		return &terminalSink{EventSink: sink, out: out}, err
+	}
+	const note, closed = "note: interrupted; ", "<dashboard closed>"
+	err, stderr := runCheckWith(t, time.Minute, func(
+		ctx context.Context, p selfhosted.ClusterValidatorParams,
+	) selfhosted.ClusterValidatorResult {
+		p.OnStart("run1")
+		(<-quit)()
+		<-ctx.Done()
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), note) },
+			5*time.Second, 10*time.Millisecond)
+		return selfhosted.ClusterValidatorResult{Err: ctx.Err(), RunID: "run1", Created: true}
+	}, out)
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 130, exitErr.Code)
+	require.Contains(t, stderr, closed)
+	assert.Less(t, strings.Index(stderr, closed), strings.Index(stderr, note),
+		"the note is printed on the restored screen")
+	assert.Equal(t, 1, strings.Count(stderr, closed))
 }
 
 // A closed terminal or a dropped SSH session sends SIGHUP. It goes through
@@ -589,7 +647,9 @@ func TestCheck_InterruptAfterTheBudgetEmitsNoSyntheticRows(t *testing.T) {
 		onQuit.Store(q)
 		return prev(w, wait, q)
 	}
-	err, stderr := runCheckWithBudget(t, 300*time.Millisecond, func(ctx context.Context) selfhosted.ClusterValidatorResult {
+	err, stderr := runCheckWithBudget(t, 300*time.Millisecond, func(
+		ctx context.Context,
+	) selfhosted.ClusterValidatorResult {
 		<-ctx.Done()
 		onQuit.Load().(func())()
 		return selfhosted.ClusterValidatorResult{Err: ctx.Err()}
@@ -648,7 +708,9 @@ func TestSelectCheckRenderer_TTYCarriesOnQuit(t *testing.T) {
 	})
 	checkWriterIsTTY = func(io.Writer) bool { return true }
 	var got func()
-	selectProgressRenderer = func(w io.Writer, opts progress.RenderOpts) (progress.EventSink, progress.RendererKind, error) {
+	selectProgressRenderer = func(
+		w io.Writer, opts progress.RenderOpts,
+	) (progress.EventSink, progress.RendererKind, error) {
 		got = opts.OnQuit
 		return progress.NewPlainRenderer(w), progress.RendererTTYFull, nil
 	}

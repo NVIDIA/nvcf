@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
@@ -377,6 +378,17 @@ func TestWriteDockerConfigSecret_IsHiddenFromReleasedScans(t *testing.T) {
 	require.NoError(t, json.Unmarshal(got.Data[corev1.DockerConfigKey], &entries))
 	assert.Equal(t, "$oauthtoken", entries["nvcr.io"].Username, "the kubelet reads the registry's entry")
 	assert.Equal(t, "key", entries["nvcr.io"].Password)
+}
+
+// clusterValidatorRoleLabels are the managed labels plus the role, with no run
+// ID.
+func clusterValidatorRoleLabels(role string) map[string]string {
+	return clusterValidatorRunLabels(role, "", false)
+}
+
+// validatorRoleSelector matches the objects this CLI created for one role.
+func validatorRoleSelector(role string) string {
+	return labels.SelectorFromSet(clusterValidatorRoleLabels(role)).String()
 }
 
 // The managed labels a created secret carries must satisfy the sweep selector

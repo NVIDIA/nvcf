@@ -498,6 +498,17 @@ global:
 	assert.Equal(t, "harbor.corp.example", LoadStackValues([]string{base, env}).ImageRegistry)
 }
 
+// global.storageClass is the class every stack PVC names; an environment file
+// sets it over base.yaml's empty default.
+func TestLoadStackValues_StorageClass(t *testing.T) {
+	dir := t.TempDir()
+	base, env := filepath.Join(dir, "base.yaml"), filepath.Join(dir, "prod.yaml")
+	require.NoError(t, writeFile(base, []byte("global:\n  storageClass: \"\"\n")))
+	require.NoError(t, writeFile(env, []byte("global:\n  storageClass: fast-ssd\n")))
+	assert.Empty(t, LoadStackValues([]string{base}).StorageClass)
+	assert.Equal(t, "fast-ssd", LoadStackValues([]string{base, env}).StorageClass)
+}
+
 // A registry value carrying a path is valid for the stack, which renders
 // registry + "/" + repository. It must still be probed, and it must still
 // suppress the nvcr.io guess, rather than dropping the whole category.
@@ -871,10 +882,12 @@ func TestProbeRegistryCredential_RetriesTransientFailures(t *testing.T) {
 	prevBackoff := registryRetryBackoff
 	registryRetryBackoff = time.Millisecond
 	t.Cleanup(func() { registryRetryBackoff = prevBackoff })
+	// Two 429s in a row, then a token: written out rather than derived from
+	// registryRetryAttempts, so lowering the default fails here.
 	calls := 0
 	reg := newFakeRegistry(t, bearerChallenge, func(w http.ResponseWriter) {
 		calls++
-		if calls < registryRetryAttempts {
+		if calls <= 2 {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -883,7 +896,7 @@ func TestProbeRegistryCredential_RetriesTransientFailures(t *testing.T) {
 	})
 	dockerHome(t, inlineDockerConfig(t, reg.host, "u", "p", ""))
 	assert.NoError(t, probeRegistryCredential(context.Background(), reg.host, "", true))
-	assert.Equal(t, registryRetryAttempts, calls)
+	assert.Equal(t, 3, calls)
 }
 
 // A rejected NGC API key on a run that checks an installed stack is a

@@ -46,7 +46,9 @@ control-plane:
     - {group: admissionregistration.k8s.io, resource: validatingwebhookconfigurations, verbs: [list],
        callers: [checkWebhookSupport]}
     - {group: networking.k8s.io, resource: networkpolicies, verbs: [list], callers: [checkNetworkPolicies]}
+    - {group: networking.k8s.io, resource: networkpolicies, verbs: [create], callers: [n2nProbe.run]}
     - {group: storage.k8s.io, resource: storageclasses, verbs: [list], callers: [checkStorageClass]}
+    - {group: storage.k8s.io, resource: storageclasses, verbs: [get], callers: [checkNamedStorageClass]}
     - {group: apps, resource: daemonsets, verbs: [list], callers: [sweepLegacyOrphanN2NDaemonSets, listEnvoyProxies]}
     - {group: apps, resource: daemonsets, verbs: [create, delete],
        callers: [checkNodeToNode, sweepLegacyOrphanN2NDaemonSets]}

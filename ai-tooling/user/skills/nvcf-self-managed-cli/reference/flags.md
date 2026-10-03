@@ -94,6 +94,7 @@ environment variable or config key wins over the stack.
 | NVCF Gateways | `ingress.gatewayApi.gateways`, gated the way the stack wires routes: none unless `ingress.gatewayApi.enabled` is `true`, `nats` only with `routes.nats.enabled`, `llmGrpc` and `llmQuic` only with `routes.llmWorker.enabled` | `NVCF_GATEWAY_NAMES`, as comma-separated `namespace/name` entries. A bare name is dropped by the validator. Set this way it skips the stack's gates |
 | Envoy Gateway namespace | `ingress.gatewayApi.controllerNamespace` | `NVCF_ENVOY_GATEWAY_NAMESPACE` |
 | External components | `nats`, `openbao` or `cassandra` whose `enabled` is set and is not `true` | `--cluster-validator-external-components`, or `NVCF_EXTERNAL_COMPONENTS` |
+| StorageClass | `global.storageClass`. When set, the validator checks that this class exists instead of requiring a default class | `NVCF_STORAGE_CLASS` |
 | OpenBao namespace | - | `NVCF_OPENBAO_NAMESPACE` |
 | Overlay probe image | - | `--cluster-validator-probe-image`, or `NVCF_N2N_PROBE_IMAGE` |
 

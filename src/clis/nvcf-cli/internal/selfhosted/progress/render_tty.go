@@ -2039,11 +2039,13 @@ func resourceLabelFor(resource string) string {
 // invoked early so callers can't deadlock on tea.Program.Send (which blocks
 // indefinitely against an unstarted program). Start is idempotent. Close is
 // safe to call before Start (no-op) so deferred cleanup on construction-error
-// paths doesn't deadlock either.
+// paths doesn't deadlock either, and safe to call again.
 type TTYRenderer struct {
 	program *tea.Program
 	started atomic.Bool
-	runErr  error
+	// done is closed once Run has returned and runErr is set.
+	done   chan struct{}
+	runErr error
 }
 
 // NewTTYRenderer constructs a TTYRenderer drawing to stderr. The same stderr
@@ -2062,9 +2064,11 @@ func NewTTYRenderer(stderr io.Writer, opts ModelOpts) *TTYRenderer {
 		// dashboard vertically (iter #10 from dev-VM E2E).
 		tea.WithAltScreen(),
 	)
-	return &TTYRenderer{
-		program: prog,
-	}
+	return newTTYRendererFor(prog)
+}
+
+func newTTYRendererFor(prog *tea.Program) *TTYRenderer {
+	return &TTYRenderer{program: prog, done: make(chan struct{})}
 }
 
 // Start launches the bubbletea Run loop in a goroutine. Idempotent — calling
@@ -2077,6 +2081,7 @@ func (r *TTYRenderer) Start() {
 	go func() {
 		_, err := r.program.Run()
 		r.runErr = err
+		close(r.done)
 	}()
 }
 
@@ -2094,13 +2099,18 @@ func (r *TTYRenderer) Emit(_ context.Context, e Event) error {
 
 // Close requests Program shutdown and waits for the Run loop to return.
 // Safe to call before Start (no-op) so deferred Close() on error paths
-// doesn't deadlock. After Wait returns, runErr is safe to read — bubbletea
-// guarantees happens-before from Run completion to Wait return.
+// doesn't deadlock, and safe to call again or concurrently. It waits on done
+// rather than tea.Program.Wait, which returns only once, signals before Run
+// has returned, and never returns when Run fails to start.
 func (r *TTYRenderer) Close() error {
 	if !r.started.Load() {
 		return nil
 	}
 	r.program.Quit()
-	r.program.Wait()
+	<-r.done
 	return r.runErr
 }
+
+// OwnsTerminal reports that the dashboard draws on the alternate screen:
+// anything else written to the terminal before Close returns is lost.
+func (r *TTYRenderer) OwnsTerminal() bool { return true }

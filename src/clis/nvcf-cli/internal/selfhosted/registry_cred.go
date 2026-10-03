@@ -402,6 +402,10 @@ type StackValues struct {
 	// install, because their release condition is off: nats, openbao or
 	// cassandra. The validator reads them as NVCF_EXTERNAL_COMPONENTS.
 	ExternalComponents []string
+	// StorageClass is global.storageClass, the class every stack PVC names.
+	// The validator reads it as NVCF_STORAGE_CLASS and then checks that class
+	// instead of requiring a default one.
+	StorageClass string
 }
 
 // LoadStackValues reads files in order and layers each over the previous,
@@ -418,6 +422,7 @@ func LoadStackValues(files []string) StackValues {
 		EnvoyGatewayNamespace: digString(merged, "ingress", "gatewayApi", "controllerNamespace"),
 		Gateways:              stackGateways(merged),
 		ExternalComponents:    stackExternalComponents(merged),
+		StorageClass:          digString(merged, "global", "storageClass"),
 	}
 }
 

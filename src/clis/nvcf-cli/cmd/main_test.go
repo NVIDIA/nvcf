@@ -79,7 +79,7 @@ func TestMain(m *testing.M) {
 		"NVCF_CLUSTER_VALIDATOR_PROBE_IMAGE", "NVCF_CLUSTER_VALIDATOR_TOLERATIONS",
 		"NVCF_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS", "NVCF_EXTERNAL_COMPONENTS",
 		"NVCF_OPENBAO_NAMESPACE", "NVCF_ENVOY_GATEWAY_NAMESPACE", "NVCF_GATEWAY_NAMES",
-		"NVCF_N2N_PROBE_IMAGE", "HELMFILE_ENV",
+		"NVCF_N2N_PROBE_IMAGE", "NVCF_STORAGE_CLASS", "HELMFILE_ENV",
 		"NGC_IMAGE_PULL_API_KEY", "NVCF_NGCR_API_KEY", "NVCF_NGC_API_KEY", "NGC_API_KEY",
 	} {
 		_ = os.Unsetenv(k)
@@ -107,7 +107,10 @@ func TestMain(m *testing.M) {
 	// wait up to five minutes per role.
 	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
 		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
-			return selfhosted.ClusterValidatorResult{Passed: true, Logs: "Validator role: " + p.Role + "\nCluster is NVCF-Ready\n"}
+			return selfhosted.ClusterValidatorResult{
+				Passed: true,
+				Logs:   "Validator role: " + p.Role + "\nCluster is NVCF-Ready\n",
+			}
 		}
 	}
 	// The SIS reachability check has no seam, but it resolves its URL from

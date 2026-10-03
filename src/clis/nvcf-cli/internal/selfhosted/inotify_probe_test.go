@@ -20,6 +20,8 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,7 +34,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	ktesting "k8s.io/client-go/testing"
 )
 
@@ -251,4 +255,33 @@ func TestProbeAllNodes_ReclaimsAPodWhoseCreateErrored(t *testing.T) {
 	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(context.Background(), metav1.ListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, pods.Items, "the applied pod mounts the host's root and must not be left behind")
+}
+
+// The reclaim after a probe ends within probePodCleanupTimeout of the probe's
+// deadline, the room the probe share leaves for it, however slow the
+// apiserver. Bounded by the longer sweep timeout, it ate into the time sized
+// for the validator.
+func TestProbeRun_ReclaimEndsWithinTheCleanupRoom(t *testing.T) {
+	prevPod, prevSweep := probePodCleanupTimeout, validatorCleanupTimeout
+	probePodCleanupTimeout, validatorCleanupTimeout = 300*time.Millisecond, time.Minute
+	t.Cleanup(func() { probePodCleanupTimeout, validatorCleanupTimeout = prevPod, prevSweep })
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, QPS: -1})
+	require.NoError(t, err)
+	run := &probeRun{id: "r1"}
+
+	start := time.Now()
+	run.reclaim(client, start.Add(time.Hour))
+	assert.Less(t, time.Since(start), 5*time.Second, "a probe that ended early still bounds its reclaim")
+
+	start = time.Now()
+	run.reclaim(client, start.Add(-probePodCleanupTimeout))
+	assert.Less(t, time.Since(start), probePodCleanupTimeout,
+		"the per-node deletes used the room after the deadline, so the reclaim gets none")
 }

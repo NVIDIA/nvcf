@@ -354,10 +354,12 @@ func runValidatorJob(
 	jobName := clusterValidatorRBACName(role, runID)
 	spec := buildClusterValidatorJob(jobName, image, pullSecret, role, runID, configName, noCleanup, p.Env,
 		p.Tolerations...)
+	// Both counted from now, not from the start of the run: the sweep, the
+	// pull-secret scan and the bootstrap have used some of its timeout.
+	left := timeLeft(vctx)
+	setValidatorTimeout(spec, left)
 	if spec.Spec.ActiveDeadlineSeconds != nil {
-		// Counted from now, not from the start of the run: the sweep, the
-		// pull-secret scan and the bootstrap have used some of its timeout.
-		deadline := validatorActiveDeadlineSeconds(timeLeft(vctx))
+		deadline := validatorActiveDeadlineSeconds(left)
 		spec.Spec.ActiveDeadlineSeconds = &deadline
 	}
 	job, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(vctx, spec, metav1.CreateOptions{})
@@ -541,6 +543,34 @@ func timeLeft(ctx context.Context) time.Duration {
 		return max(time.Until(deadline), 0)
 	}
 	return 0
+}
+
+// validatorTimeoutEnv bounds the validator's checks. The launcher owns it, so
+// extraValidatorEnv never overrides it: set below the time this run waits, it
+// has the validator end with its own verdict, naming the checks it could not
+// finish, instead of being cut off without one.
+const validatorTimeoutEnv = "VALIDATOR_TIMEOUT"
+
+// validatorSummaryMargin is the part of the run's wait left to the validator
+// after its own timeout, to print its summary and exit.
+const validatorSummaryMargin = 30 * time.Second
+
+// validatorRunTimeout is VALIDATOR_TIMEOUT, in seconds, for a run with left to
+// wait: validatorSummaryMargin less, or half of left when that is short.
+func validatorRunTimeout(left time.Duration) string {
+	d := max(left-validatorSummaryMargin, left/2)
+	return strconv.FormatInt(max(int64(d/time.Second), 1), 10) + "s"
+}
+
+// setValidatorTimeout sets the Job's VALIDATOR_TIMEOUT for a run with left to
+// wait.
+func setValidatorTimeout(job *batchv1.Job, left time.Duration) {
+	env := job.Spec.Template.Spec.Containers[0].Env
+	for i := range env {
+		if env[i].Name == validatorTimeoutEnv {
+			env[i].Value = validatorRunTimeout(left)
+		}
+	}
 }
 
 // validatorActiveDeadlineSeconds is the Job's active deadline when left of
@@ -1042,8 +1072,8 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 		{APIGroups: []string{"admissionregistration.k8s.io"}, Resources: []string{
 			"mutatingwebhookconfigurations", "validatingwebhookconfigurations",
 		}, Verbs: []string{"list"}},
-		// CNI detection lists NetworkPolicies. Nothing on this path writes
-		// them: the enforcement test is disabled in the CLI's ConfigMap.
+		// CNI detection lists NetworkPolicies. The enforcement test, which
+		// writes them, is disabled in the CLI's ConfigMap.
 		{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"list"}},
 		{NonResourceURLs: []string{"/readyz", "/version"}, Verbs: []string{"get"}},
 	}
@@ -1067,7 +1097,13 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 			"delete"}},
 		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"list", "create", "delete"}},
 		{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"list", "create", "delete"}},
-		{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"storageclasses"}, Verbs: []string{"list"}},
+		// The probe allows its own traffic in its namespace, so a default-deny
+		// policy does not read as an overlay fault. The namespace delete
+		// removes it.
+		{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"create"}},
+		// The default class is found by a list; the class the stack names
+		// (NVCF_STORAGE_CLASS) is read by name.
+		{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"storageclasses"}, Verbs: []string{"get", "list"}},
 		// Tier-1 and Tier-2 readiness, and the Envoy proxies behind the NVCF
 		// Gateways.
 		{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"list"}},
@@ -1089,13 +1125,6 @@ func clusterValidatorLabels() map[string]string {
 		"app.kubernetes.io/managed-by": clusterValidatorManagedBy,
 		"app.kubernetes.io/component":  "preflight",
 	}
-}
-
-// clusterValidatorRoleLabels are the managed labels plus the role, with no run
-// ID. validatorRoleSelector matches on them, so a lookup for one role never
-// returns the other role's objects in a ModeSingle run.
-func clusterValidatorRoleLabels(role string) map[string]string {
-	return clusterValidatorRunLabels(role, "", false)
 }
 
 // clusterValidatorRunLabels are the labels for one run's objects: the managed
@@ -1269,13 +1298,6 @@ func sweepOrphanClusterValidatorRBAC(
 			_ = jobs.Delete(ctx, o.Name, del)
 		}
 	}
-}
-
-// validatorRoleSelector matches objects this CLI created for one validator role.
-// Derived from clusterValidatorRoleLabels so it cannot drift from the labels
-// actually stamped on the objects.
-func validatorRoleSelector(role string) string {
-	return labels.SelectorFromSet(clusterValidatorRoleLabels(role)).String()
 }
 
 // clusterValidatorControlPlaneRole is the role value passed as VALIDATOR_ROLE
@@ -1504,6 +1526,7 @@ func buildClusterValidatorJob(
 				{Name: "VALIDATOR_CONFIG_NAME", Value: configName},
 				{Name: "VALIDATOR_PREFLIGHT", Value: "true"},
 				{Name: "VALIDATOR_ROLE", Value: role},
+				{Name: validatorTimeoutEnv, Value: validatorRunTimeout(clusterValidatorTimeout)},
 			},
 		}},
 	}

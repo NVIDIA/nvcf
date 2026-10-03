@@ -40,22 +40,30 @@ import (
 // probe image.
 func TestClusterValidatorJobEnv(t *testing.T) {
 	resetCheckFlags(t)
-	for _, k := range []string{"NVCF_OPENBAO_NAMESPACE", "NVCF_ENVOY_GATEWAY_NAMESPACE", "NVCF_GATEWAY_NAMES", "NVCF_N2N_PROBE_IMAGE"} {
+	for _, k := range []string{
+		"NVCF_OPENBAO_NAMESPACE", "NVCF_ENVOY_GATEWAY_NAMESPACE", "NVCF_GATEWAY_NAMES", "NVCF_N2N_PROBE_IMAGE",
+		"NVCF_STORAGE_CLASS",
+	} {
 		t.Setenv(k, "")
 	}
 
 	checkPre = false
-	env := clusterValidatorJobEnv(selfhosted.StackValues{EnvoyGatewayNamespace: "gateway"})
+	env := clusterValidatorJobEnv(selfhosted.StackValues{EnvoyGatewayNamespace: "gateway", StorageClass: "fast-ssd"})
 	assert.Equal(t, "true", env["VALIDATOR_POST_INSTALL"], "a post-install run must say so")
 	assert.Equal(t, "gateway", env["NVCF_ENVOY_GATEWAY_NAMESPACE"], "the stack's controller namespace is forwarded")
+	assert.Equal(t, "fast-ssd", env["NVCF_STORAGE_CLASS"], "the stack's global.storageClass is forwarded")
 	assert.NotContains(t, env, "NVCF_OPENBAO_NAMESPACE")
+	assert.NotContains(t, clusterValidatorJobEnv(selfhosted.StackValues{}), "NVCF_STORAGE_CLASS",
+		"without one the validator requires a default class")
 
 	checkPre = true
 	t.Setenv("NVCF_OPENBAO_NAMESPACE", "openbao")
 	t.Setenv("NVCF_ENVOY_GATEWAY_NAMESPACE", "edge")
 	t.Setenv("NVCF_GATEWAY_NAMES", "gateway/shared-gw")
+	t.Setenv("NVCF_STORAGE_CLASS", "standard")
 	require.NoError(t, selfHostedCheckCmd.Flags().Set("cluster-validator-probe-image", "mirror.example/busybox:1.36"))
-	env = clusterValidatorJobEnv(selfhosted.StackValues{EnvoyGatewayNamespace: "gateway"})
+	env = clusterValidatorJobEnv(selfhosted.StackValues{EnvoyGatewayNamespace: "gateway", StorageClass: "fast-ssd"})
+	assert.Equal(t, "standard", env["NVCF_STORAGE_CLASS"], "an explicit setting beats the stack values")
 	assert.NotContains(t, env, "VALIDATOR_POST_INSTALL", "--pre is pre-install")
 	assert.Equal(t, "openbao", env["NVCF_OPENBAO_NAMESPACE"])
 	assert.Equal(t, "edge", env["NVCF_ENVOY_GATEWAY_NAMESPACE"], "an explicit setting beats the stack values")

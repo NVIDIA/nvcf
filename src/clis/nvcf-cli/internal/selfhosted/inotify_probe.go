@@ -138,10 +138,6 @@ func NewInotifyProber(image string) NodeInotifyProber {
 // shorten it.
 var inotifyProbeBudget = 100 * time.Second
 
-// InotifyProbeBudget is the longest the node inotify probe runs, which the
-// check command's time budget must cover.
-func InotifyProbeBudget() time.Duration { return inotifyProbeBudget }
-
 // probePodCleanupTimeout bounds the deletion of a probe pod, which runs after
 // the probe's own deadline. The probe share leaves room for it.
 var probePodCleanupTimeout = 10 * time.Second
@@ -180,7 +176,8 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface, image strin
 	// Each pod is deleted once its node is probed, but a Create the budget or
 	// an interrupt cut off may still have been applied, and then no per-node
 	// delete runs. This reclaims those by the run's label on every return.
-	defer run.reclaim(client)
+	probeDeadline, _ := ctx.Deadline()
+	defer func() { run.reclaim(client, probeDeadline) }()
 	results := make([]NodeInotifyLimits, len(nodes.Items))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(probeConcurrency)
@@ -438,8 +435,16 @@ func (r *probeRun) created(pod *corev1.Pod) {
 // interrupted twice, leaves pods that mount the host's root and tolerate
 // every taint, and nothing else removes them. Another run's younger pods may
 // belong to a probe still in progress, so they are kept.
-func (r *probeRun) reclaim(client kubernetes.Interface) {
-	ctx, cancel := context.WithTimeout(context.Background(), validatorCleanupTimeout)
+//
+// It ends within probePodCleanupTimeout of the probe's deadline, the room the
+// probe share leaves for the cleanup after it, which the per-node deletes may
+// already have used.
+func (r *probeRun) reclaim(client kubernetes.Interface, probeDeadline time.Time) {
+	start := time.Now()
+	if !probeDeadline.IsZero() && probeDeadline.Before(start) {
+		start = probeDeadline
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), start.Add(probePodCleanupTimeout))
 	defer cancel()
 	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labels.SelectorFromSet(inotifyProbeLabels("")).String(),

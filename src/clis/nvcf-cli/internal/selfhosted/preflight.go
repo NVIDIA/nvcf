@@ -1218,11 +1218,9 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				r.Err = err
 				return r
 			}
-			// The error reaches the result even beside findings, so a budget
-			// that ran out mid-scan is graded as cut short rather than clean.
-			r.Err = err
 			if len(stale) == 0 {
 				if err != nil {
+					r.Err = err
 					r.Message = "stale namespace probe failed: " + err.Error()
 					return r
 				}
@@ -1260,6 +1258,13 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				len(stale), strings.Join(parts, ", "), strings.Join(hints, "; "))
 			if err != nil {
 				r.Message += ". Additionally could not probe: " + err.Error()
+			}
+			// The error reaches a warning row, so a budget that ran out
+			// mid-scan grades it as cut short rather than as the warnings
+			// found so far. A stuck namespace is a finding however the scan
+			// ended: graded as cut short it would lose its name and exit 5.
+			if r.Severity != SeverityError {
+				r.Err = err
 			}
 			r.Transient = r.Transient && r.Severity == SeverityWarning
 			return r

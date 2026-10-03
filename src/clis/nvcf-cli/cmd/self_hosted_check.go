@@ -237,29 +237,8 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// behind until a later check's orphan sweep.
 	sigCtx, stop := signal.NotifyContext(runCtx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	// After the first signal or quit key, say at once how to remove what the
-	// runs in progress may leave, before anything can end the process. A
-	// second Ctrl-C then exits at once, through the default handler. SIGTERM
-	// and SIGHUP stay caught until the bounded teardown ends: CI follows its
-	// SIGINT with a SIGTERM a few seconds later.
 	held := make(chan os.Signal, 1)
 	defer signal.Stop(held)
-	var noteOnce sync.Once
-	noteInterrupt := func() {
-		noteOnce.Do(func() { printInterruptCleanup(errOut, ledger.Outstanding()) })
-	}
-	returned := make(chan struct{})
-	defer close(returned)
-	go func() {
-		select {
-		case <-returned:
-			return
-		case <-sigCtx.Done():
-		}
-		signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP)
-		stop()
-		noteInterrupt()
-	}()
 	// interrupted is an explicit cancel, not the timeout below, which is a
 	// child of sigCtx and leaves it live.
 	interrupted := func() bool { return sigCtx.Err() != nil }
@@ -315,6 +294,39 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if starter, ok := sink.(interface{ Start() }); ok {
 		starter.Start()
 	}
+	// After the first signal or quit key, say at once how to remove what the
+	// runs in progress may leave, before anything can end the process. A
+	// second Ctrl-C then exits at once, through the default handler. SIGTERM
+	// and SIGHUP stay caught until the bounded teardown ends: CI follows its
+	// SIGINT with a SIGTERM a few seconds later.
+	var noteOnce sync.Once
+	noteInterrupt := func() {
+		noteOnce.Do(func() {
+			commands := ledger.Outstanding()
+			if len(commands) == 0 {
+				return
+			}
+			// A dashboard on the alternate screen takes everything printed
+			// meanwhile with it when it closes. The run is ending, so it is
+			// closed first and the note stays on the operator's terminal.
+			if owner, ok := sink.(interface{ OwnsTerminal() bool }); ok && owner.OwnsTerminal() {
+				_ = sink.Close()
+			}
+			printInterruptCleanup(errOut, commands)
+		})
+	}
+	returned := make(chan struct{})
+	defer close(returned)
+	go func() {
+		select {
+		case <-returned:
+			return
+		case <-sigCtx.Done():
+		}
+		signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP)
+		stop()
+		noteInterrupt()
+	}()
 	var lastResults []selfhosted.CheckResult
 	runErr := func() error {
 		// An interrupted run still ends the stream with a final event, marked
@@ -1062,7 +1074,9 @@ func validatorEnvForRole(env map[string]string, roleFlag bool) map[string]string
 //   - the overlay probe image, so a mirrored cluster does not pull busybox
 //     from Docker Hub;
 //   - NVCF_EXTERNAL_COMPONENTS, the dependencies that run outside the stack,
-//     so the validator does not fail them for being absent from the cluster.
+//     so the validator does not fail them for being absent from the cluster;
+//   - NVCF_STORAGE_CLASS, the class the stack's PVCs name, so a cluster with
+//     no default class is not failed for it.
 func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	env := map[string]string{}
 	if !checkPre || checkAll {
@@ -1097,6 +1111,9 @@ func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	}
 	if len(external) > 0 {
 		env["NVCF_EXTERNAL_COMPONENTS"] = strings.Join(external, ",")
+	}
+	if class := cmp.Or(configValue("NVCF_STORAGE_CLASS"), stack.StorageClass); class != "" {
+		env["NVCF_STORAGE_CLASS"] = class
 	}
 	return env
 }

@@ -686,7 +686,7 @@ func TestStaleNamespaceCheck_StuckStaysAnErrorBesideAProbeError(t *testing.T) {
 	assert.Equal(t, SeverityError, r.Severity)
 	assert.Contains(t, r.Message, "cassandra-system (stuck Terminating)")
 	assert.Contains(t, r.Message, "could not probe: vault-system")
-	assert.ErrorIs(t, r.Err, readErr)
+	assert.NoError(t, r.Err, "the stuck namespace is a finding, so the row is not graded as a probe that failed")
 
 	// Without a stuck namespace the same pair is a warning that still lists
 	// what was found.

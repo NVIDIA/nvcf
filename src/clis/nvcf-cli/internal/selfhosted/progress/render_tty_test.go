@@ -1021,3 +1021,27 @@ func TestModel_QuitKeysCallOnQuit(t *testing.T) {
 	_, cmd := NewModel(ModelOpts{Mode: ModeCheck}).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	assert.NotNil(t, cmd, "without a hook the dashboard still quits")
 }
+
+// Close can run twice: the check command closes a dashboard early to print
+// the interrupt note on the restored screen, then again as it exits.
+// tea.Program.Wait returns only once, so a second Close through it hung.
+func TestTTYRenderer_CloseTwice(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTTYRendererFor(tea.NewProgram(NewModel(ModelOpts{Mode: ModeCheck, Output: &buf}),
+		tea.WithInput(nil), tea.WithOutput(&buf), tea.WithoutSignalHandler()))
+	assert.True(t, r.OwnsTerminal())
+	r.Start()
+	done := make(chan error, 2)
+	go func() {
+		done <- r.Close()
+		done <- r.Close()
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("Close call %d did not return", i+1)
+		}
+	}
+}
