@@ -500,8 +500,8 @@ func TestCheckTier1Deployments_MergedProxyCoversItsClassAfterInstall(t *testing.
 	assert.True(t, *state.Tier1DeploymentsOK)
 }
 
-// A proxy Deployment with no Ready pod does not cover its Gateway, wherever it
-// runs, including a namespace Tier-1 does not otherwise scan.
+// A proxy Deployment with no Ready pod does not cover its Gateway, wherever
+// the controller runs, including a namespace Tier-1 does not otherwise scan.
 func TestCheckTier1Deployments_ProxyDeploymentWithoutReadyPodIsAGap(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
@@ -509,11 +509,14 @@ func TestCheckTier1Deployments_ProxyDeploymentWithoutReadyPodIsAGap(t *testing.T
 	gateways := func() dynamic.Interface {
 		return envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg"))
 	}
-	state := runTier1(t, true, gateways(), envoyProxyAt("custom-envoy-system", "envoy-nvcf", labels, 2, 0), nvcfAPI())
+	controller := func() *appsv1.Deployment { return envoyController("custom-envoy-system") }
+	state := runTier1(t, true, gateways(), controller(),
+		envoyProxyAt("custom-envoy-system", "envoy-nvcf", labels, 2, 0), nvcfAPI())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.False(t, *state.Tier1DeploymentsOK)
 
-	state = runTier1(t, true, gateways(), envoyProxyAt("custom-envoy-system", "envoy-nvcf", labels, 2, 1), nvcfAPI())
+	state = runTier1(t, true, gateways(), controller(),
+		envoyProxyAt("custom-envoy-system", "envoy-nvcf", labels, 2, 2), nvcfAPI())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
 }
@@ -540,14 +543,15 @@ func TestCheckTier1Deployments_NVCFProxyAtZeroFails(t *testing.T) {
 	assert.False(t, *state.Tier1DeploymentsOK)
 }
 
-// The shared-namespace leniency follows a relocated Envoy Gateway.
+// The shared-namespace rule follows a relocated Envoy Gateway: a workload
+// there that no stack release installed is not judged.
 func TestCheckTier1Deployments_RelocatedEnvoyNamespaceIsShared(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "custom-envoy")
 	t.Setenv(nvcfGatewayNamesEnv, "")
 	state := runTier1(t, false, routeClient(), envoyProxyAt("custom-envoy", "parked", nil, 0, 0), nvcfAPI())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "custom-envoy/parked is scaled to zero")
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "custom-envoy/parked")
 }
 
 // A Gateway namespace Tier-1 scans only for proxies holds other workloads that

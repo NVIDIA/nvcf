@@ -220,10 +220,9 @@ func controlPlaneRunActions(t *testing.T) []ktesting.Action {
 	pairs := append(gatewayRequiredPairs(), gatewayAPIGroup+"/v1alpha2/udproutes")
 	client := gatewayDiscoveryClient(pairs...)
 	old := time.Now().Add(-2 * time.Hour)
-	missing := makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"})
-	missing[0].(*appsv1.StatefulSet).Status.UpdateRevision = "nats-r2"
+	missing := rollTo(makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"}), "nats-r2", old)
 	two := int32(2)
-	objs := append(inventoryNamespaces(), withRevision(createdAt(missing, old), old)...)
+	objs := append(inventoryNamespaces(), createdAt(missing, old)...)
 	objs = append(objs,
 		makeNode("node-1", true, 0),
 		inventoryNetworkChecks(true),

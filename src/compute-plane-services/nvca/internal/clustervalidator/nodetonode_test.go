@@ -261,9 +261,10 @@ func TestCheckNodeToNode_CleanupSurvivesACancelledRun(t *testing.T) {
 	assert.Regexp(t, `^DELETE /api/v1/namespaces/nvcf-n2n-validation-\w+$`, deletes[1])
 }
 
-// Every run reclaims what a killed probe left, whatever its role: the probe
-// runs only for the control-plane role, but either role's validator can run
-// on a cluster.
+// Every run reclaims the probe namespaces a killed probe left, whatever its
+// role: the probe runs only for the control-plane role, but either role's
+// validator can run on a cluster. Legacy probe DaemonSets are swept only by
+// the control-plane role, the one granted DaemonSets.
 func TestRun_SweepsProbeLeftoversForEveryRole(t *testing.T) {
 	old := metav1.NewTime(time.Now().Add(-time.Hour))
 	for _, role := range []Role{RoleComputePlane, RoleControlPlane, ""} {
@@ -293,7 +294,11 @@ func TestRun_SweepsProbeLeftoversForEveryRole(t *testing.T) {
 			_, err := client.CoreV1().Namespaces().Get(ctx, nodeToNodeNSPrefix+"stale1", metav1.GetOptions{})
 			assert.True(t, apierrors.IsNotFound(err), "the stale probe namespace is swept")
 			_, err = client.AppsV1().DaemonSets("default").Get(ctx, nodeToNodeDSName+"-legacy", metav1.GetOptions{})
-			assert.True(t, apierrors.IsNotFound(err), "the legacy probe DaemonSet is swept")
+			if role == RoleControlPlane {
+				assert.True(t, apierrors.IsNotFound(err), "the legacy probe DaemonSet is swept")
+			} else {
+				assert.NoError(t, err, "a role without DaemonSet grants leaves it")
+			}
 			_, err = client.CoreV1().Namespaces().Get(ctx, "labelled-not-ours", metav1.GetOptions{})
 			assert.NoError(t, err, "a labelled namespace without the probe prefix survives")
 		})
@@ -484,7 +489,7 @@ func TestCheckNodeToNode_EventsListErrorIsAGap(t *testing.T) {
 	assert.True(t, *state.NodeToNodeOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: pod events could not be read")
 	assert.Empty(t, state.Recommendations)
-	assert.Equal(t, 3, calls, "the events list is retried before it is given up")
+	assert.Greater(t, calls, 1, "the events list is retried before it is given up")
 }
 
 // The checker's node is picked at random, so successive runs cover

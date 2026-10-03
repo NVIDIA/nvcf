@@ -64,7 +64,8 @@ func failWith(client *fake.Clientset, verb, resource string, err error) *atomic.
 // RBAC advice, and only a transient error is retried. The discovery rows fail
 // through the fake's "group" and "resource" actions.
 func TestObservationErrors_LeaveEachRowUnknownWithTheCause(t *testing.T) {
-	t.Setenv(envoyGatewayNamespaceEnv, "")
+	// The Envoy namespace is read only when it is named.
+	t.Setenv(envoyGatewayNamespaceEnv, envoyGatewayNamespace)
 	t.Setenv(nvcfGatewayNamesEnv, "")
 	envoyNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}}
 	type check func(context.Context, *fake.Clientset, *ValidationState)
@@ -97,15 +98,14 @@ func TestObservationErrors_LeaveEachRowUnknownWithTheCause(t *testing.T) {
 		{"Envoy controller pods", "list", "pods", []runtime.Object{envoyNS},
 			func(ctx context.Context, c *fake.Clientset, s *ValidationState) { checkEnvoyGateway(ctx, c, s) },
 			func(s *ValidationState) bool { return s.EnvoyGatewayOK == nil },
-			"Envoy Gateway: status unknown (could not read the Envoy Gateway controller pods in " +
-				"envoy-gateway-system: "},
+			"Envoy Gateway: status unknown (could not read the Envoy Gateway controller: " +
+				"listing Envoy Gateway controller pods: "},
 		{"LoadBalancer Services", "list", "services", nil,
 			func(ctx context.Context, c *fake.Clientset, s *ValidationState) {
 				checkExternalLoadBalancer(ctx, c, nil, s)
 			},
 			func(s *ValidationState) bool { return s.ExternalLBOK == nil },
-			"External Load Balancer: status unknown (0 pending LoadBalancer Service(s) seen, and could not read " +
-				"Services in envoy-gateway-system ("},
+			"External Load Balancer: status unknown (could not read Services: "},
 		{"Node-to-Node nodes", "list", "nodes", nil,
 			func(ctx context.Context, c *fake.Clientset, s *ValidationState) {
 				checkNodeToNode(ctx, c, s, enforcementDefaultImg)
@@ -391,7 +391,7 @@ func TestCheckTier1Deployments_MissingGatewayOutlivesAClassListError(t *testing.
 		routes.PrependReactor("list", "gatewayclasses", func(ktesting.Action) (bool, runtime.Object, error) {
 			return true, nil, err
 		})
-		state := runTier1(t, true, routes)
+		state := runTier1(t, true, routes, nvcfService())
 		require.NotNil(t, state.Tier1DeploymentsOK, name)
 		assert.False(t, *state.Tier1DeploymentsOK, name)
 	}
@@ -401,48 +401,31 @@ func TestCheckTier1Deployments_MissingGatewayOutlivesAClassListError(t *testing.
 	routes.PrependReactor("list", "gatewayclasses", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
 	})
-	state := runTier1(t, true, routes)
+	state := runTier1(t, true, routes, nvcfService())
 	assert.Nil(t, state.Tier1DeploymentsOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "check apiserver health")
 }
 
-// The LB row keeps what it saw when one namespace's Services cannot be read:
-// a pending NVCF Service still fails it, and a Gateway whose Service may be in
-// the unread namespace is unknown rather than missing.
-func TestCheckExternalLoadBalancer_UnreadNamespaceKeepsWhatWasSeen(t *testing.T) {
-	envoyNS := envoyGatewayNamespaceName()
+// A Gateway whose proxy Service a failed list may hold is unknown, not
+// missing, and the warning names the cause and what to do about it.
+func TestCheckExternalLoadBalancer_FailedProxyListLeavesUnseenGatewaysUnknown(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "nvcf/a-gw,nvcf/b-gw")
-	failNVCF := func(client *fake.Clientset) {
-		client.PrependReactor("list", "services", func(a ktesting.Action) (bool, runtime.Object, error) {
-			if a.GetNamespace() == "nvcf" {
-				return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
-			}
-			return false, nil, nil
-		})
-	}
-
-	client := routeDiscoveryClient()
-	addServices(t, client,
-		gatewayLBService(envoyNS, "envoy-a", "nvcf", "a-gw", corev1.ServiceTypeLoadBalancer, ""))
-	failNVCF(client)
+	client := fake.NewSimpleClientset(envoyController(envoyGatewayNamespace),
+		gatewayLBService(envoyGatewayNamespace, "envoy-a", "nvcf", "a-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"))
+	client.PrependReactor("list", "services", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.(ktesting.ListAction).GetListRestrictions().Labels.String() == owningGatewayClassLabel {
+			return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
+		}
+		return false, nil, nil
+	})
 	state := &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, routeClient(), state)
-	require.NotNil(t, state.ExternalLBOK, "an observed pending NVCF Service decides the row")
-	assert.False(t, *state.ExternalLBOK)
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
+	assert.Nil(t, state.ExternalLBOK, "b-gw's proxy Service may be in the list that failed")
 	joined := strings.Join(state.Warnings, "; ")
-	assert.Contains(t, joined, envoyNS+"/envoy-a have no external address")
-	assert.Contains(t, joined, "not assessed for nvcf/b-gw: could not read Services in nvcf (")
+	assert.Contains(t, joined, "status unknown (no proxy Service confirmed for nvcf/b-gw: listing Envoy proxy Services:")
+	assert.Contains(t, joined, "check apiserver health")
 	assert.NotContains(t, joined, "no proxy Service found")
-
-	client = routeDiscoveryClient()
-	addServices(t, client,
-		gatewayLBService(envoyNS, "envoy-a", "nvcf", "a-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"))
-	failNVCF(client)
-	state = &ValidationState{Log: testLog()}
-	checkExternalLoadBalancer(context.Background(), client, routeClient(), state)
-	assert.Nil(t, state.ExternalLBOK, "b-gw's proxy may be in the namespace that was not read")
-	assert.Contains(t, strings.Join(state.Warnings, "; "),
-		"status unknown (no proxy Service seen for nvcf/b-gw, and could not read Services in nvcf (")
 }
 
 // Only a denial is answered with RBAC advice. A throttled or failed route
@@ -482,7 +465,7 @@ func TestResolveGatewayOwnership_ConfiguredCrossCheckFailureIsReported(t *testin
 		return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
 	})
 	surface, surfaceErr := discoverGatewayAPIResources(context.Background(), routeDiscoveryClient())
-	own := resolveGatewayOwnershipIn(context.Background(), surface, surfaceErr, dyn)
+	own := resolveGatewayOwnershipIn(context.Background(), nil, surface, surfaceErr, dyn)
 	assert.Equal(t, gatewaySet{"gw/shared-gw": true}, own.gateways, "the configured list still applies")
 	state := &ValidationState{Log: testLog(), PostInstall: true}
 	own.reportInvalid(state.Log, state)
@@ -506,7 +489,8 @@ func TestProbeSandboxEvents_RetriesAndKeepsTheCause(t *testing.T) {
 	})
 	got, err := probeSandboxEvents(context.Background(), client, "ns")
 	require.NoError(t, err)
-	assert.Equal(t, map[string]sandboxEvidence{"p": sandboxFailed}, got)
+	require.Contains(t, got, "p")
+	assert.Equal(t, sandboxFailed, got["p"].state)
 	assert.Equal(t, 3, calls)
 
 	client = fake.NewSimpleClientset()
@@ -721,11 +705,18 @@ func TestRun_PartitionHeldRolloutPrintsNoRolloutMarker(t *testing.T) {
 	}
 }
 
-// Each pinned route pair is required on its own: dropping any one fails the
-// critical row.
+// Each required pair is required on its own: dropping any one fails the
+// critical row. Optional route types are the non-critical row's to judge.
 func TestCheckGatewayAPICRDs_EachRequiredPairIsRequired(t *testing.T) {
+	optional := map[string]bool{}
+	for _, r := range gatewayOptionalRouteRequirements {
+		optional[r.groupVersion+"/"+r.resource] = true
+	}
 	all := gatewayRequiredPairs()
 	for i, dropped := range all {
+		if optional[dropped] {
+			continue
+		}
 		pairs := append(append([]string{}, all[:i]...), all[i+1:]...)
 		state := &ValidationState{Log: testLog()}
 		checkGatewayAPICRDs(context.Background(), gatewayDiscoveryClient(pairs...), state)
@@ -801,9 +792,13 @@ func TestJudgeNVCFGatewayServices_ForeignPerGatewayServiceBesideAMergedProxy(t *
 	foreign := gatewayLBService(envoyNS, "envoy-team-b", "team-b", "b-gw", corev1.ServiceTypeLoadBalancer, "")
 	foreign.Labels[owningGatewayClassLabel] = "eg"
 
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/a-gw")
+	client := gatewayDiscoveryClient(gatewayAPIGroup+"/v1/gateways", gatewayAPIGroup+"/v1/gatewayclasses")
+	addServices(t, client, merged, foreign)
+	routes := envoyGatewayClient(t, gatewayObject("nvcf", "a-gw", "eg"))
 	state := &ValidationState{Log: testLog()}
-	judgeNVCFGatewayServices(state.Log, state, gatewaySet{"nvcf/a-gw": true},
-		map[string][]string{"eg": {"nvcf/a-gw"}}, nil, []corev1.Service{*merged, *foreign}, "")
+	checkExternalLoadBalancer(context.Background(), client, routes, state)
 	require.NotNil(t, state.ExternalLBOK)
 	assert.True(t, *state.ExternalLBOK)
 	assert.NotContains(t, strings.Join(state.Warnings, "; "), "envoy-team-b")

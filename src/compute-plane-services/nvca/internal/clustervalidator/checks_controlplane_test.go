@@ -3354,15 +3354,17 @@ func TestCheckTier2StatefulSets_RolloutWithoutProgressFails(t *testing.T) {
 		assert.True(t, *state.Tier2StatefulSetsOK, name)
 	}
 
-	// A pod missing with nothing to date the rollout is not observed: passing
-	// it would tolerate a replacement that is never created, forever.
+	// A pod missing with nothing to date the rollout, no readable revision and
+	// no recorded spec write, is not observed: passing it would tolerate a
+	// replacement that is never created, forever.
 	for name, revErr := range map[string]error{
 		"revision absent": nil,
 		"revision denied": apierrors.NewForbidden(
 			schema.GroupResource{Group: "apps", Resource: "controllerrevisions"}, "nats-r2", fmt.Errorf("denied")),
 		"revision read fails": apierrors.NewInternalError(fmt.Errorf("etcd timeout")),
 	} {
-		client := fake.NewSimpleClientset(createdAt(missing(), old)...)
+		client := fake.NewSimpleClientset(
+			withoutRevision(unrecorded(rollTo(createdAt(missing(), old), "nats-r2", old)), "nats-r2")...)
 		if revErr != nil {
 			client.PrependReactor("get", "controllerrevisions", func(ktesting.Action) (bool, runtime.Object, error) {
 				return true, nil, revErr
