@@ -25,9 +25,9 @@ import (
 
 // TestMain points HOME at an empty directory so no test reads the developer's
 // ~/.docker/config.json, or runs a credential helper it names. Tests that need
-// a docker config write their own under a temporary HOME. HELM_DRIVER is
-// cleared too: an exported sql driver turns off the stale-namespace probe's
-// no-release signal, which the probe tests assert on.
+// a docker config write their own under a temporary HOME. HELM_DRIVER and the
+// NGC key variables are cleared too: an exported sql driver turns off the
+// stale-namespace probe's no-release signal, which the probe tests assert on.
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "selfhosted-test-home-")
 	if err != nil {
@@ -35,6 +35,11 @@ func TestMain(m *testing.M) {
 	}
 	_ = os.Setenv("HOME", home)
 	_ = os.Unsetenv("HELM_DRIVER")
+	// An exported NGC key is preferred over the docker config for nvcr.io,
+	// so it would change what the credential tests resolve.
+	for _, name := range ngcAPIKeyEnvNames {
+		_ = os.Unsetenv(name)
+	}
 	// The fake clientset has no controllers, so a pod never ends on its own:
 	// keep the waits for that short. Tests of the waits set their own.
 	validatorStopTimeout = 2 * time.Second

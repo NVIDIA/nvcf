@@ -180,6 +180,7 @@ func TestCheck_PreflightStreamingOrder(t *testing.T) {
 	_ = rootCmd.Execute()
 
 	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
 	// Skip schemaVersion header.
 	var kinds []string
 	for _, l := range lines[1:] {

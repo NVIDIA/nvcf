@@ -24,6 +24,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
@@ -53,13 +54,32 @@ func TestMain(m *testing.M) {
 	// The state manager resolved its path from HOME at package init, before
 	// the swap above, so it still points at the real ~/.nvcf-cli.state.
 	state.ResetDefaultStateManager()
-	// A developer's own toggles would change what every check test runs.
+	// Check reads the stack above the working directory when no
+	// --control-plane-stack is given, so run from a directory with none: from
+	// the package directory every test would read the repository's stack and
+	// any untracked environment file next to it.
+	if err := os.Chdir(home); err != nil {
+		panic(err)
+	}
+	// A developer's own toggles, validator settings and NGC keys would change
+	// what every check test runs. The NVCF_ prefixed names are viper's
+	// automatic aliases of the cluster_validator_* config keys.
 	for _, k := range []string{
 		"NVCF_CLI_SELFHOSTED_LOCAL_ONLY", "NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION",
 		"NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "NVCF_CLI_SELFHOSTED_FORCE_FAIL",
+		"NVCF_CLI_CLUSTER_VALIDATOR_IMAGE", "NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES",
+		"NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE", "NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS",
+		"NVCF_CLUSTER_VALIDATOR_IMAGE", "NVCF_CLUSTER_VALIDATOR_REGISTRIES",
+		"NVCF_CLUSTER_VALIDATOR_PROBE_IMAGE", "NVCF_CLUSTER_VALIDATOR_TOLERATIONS",
+		"NVCF_OPENBAO_NAMESPACE", "NVCF_ENVOY_GATEWAY_NAMESPACE", "NVCF_GATEWAY_NAMES",
+		"NVCF_N2N_PROBE_IMAGE", "HELMFILE_ENV",
+		"NGC_IMAGE_PULL_API_KEY", "NVCF_NGCR_API_KEY", "NVCF_NGC_API_KEY", "NGC_API_KEY",
 	} {
 		_ = os.Unsetenv(k)
 	}
+	// The real tool checks run `helmfile version`, which asks github.com for
+	// the latest release, and pass or fail on what the machine has installed.
+	checkPreflightTools = passingPreflightTools
 	resolveLatestValidatorTagForSelfHosted = func(_ context.Context, _ string) (string, bool) {
 		return "", false
 	}
@@ -75,20 +95,13 @@ func TestMain(m *testing.M) {
 	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
 		return func(context.Context, string, string, bool) error { return nil }
 	}
-	// No validator Job. A developer with NVCF_CLI_CLUSTER_VALIDATOR_IMAGE
-	// exported, or cluster_validator_image in ~/.nvcf-cli.yaml, would
-	// otherwise have every check test create RBAC, Secrets and Jobs in the
-	// current kube context and wait up to five minutes per role.
+	// No validator Job. A test that passes --cluster-validator-image would
+	// otherwise create RBAC, Secrets and Jobs in the current kube context and
+	// wait up to five minutes per role.
 	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
 		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
 			return selfhosted.ClusterValidatorResult{Passed: true, Logs: "Validator role: " + p.Role + "\nCluster is NVCF-Ready\n"}
 		}
-	}
-	for _, k := range []string{
-		"NVCF_CLI_CLUSTER_VALIDATOR_IMAGE", "NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES",
-		"NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE",
-	} {
-		_ = os.Unsetenv(k)
 	}
 	// The SIS reachability check has no seam, but it resolves its URL from
 	// NVCF_ICMS_URL, so resetCheckFlags points check tests at this local
@@ -129,6 +142,10 @@ func resetCheckFlags(t *testing.T) {
 		t.Setenv("NVCF_ICMS_URL", testSISURL)
 	}
 	reset := func() {
+		// cobra keeps the first context a command ran with, so a test that
+		// cancelled rootCmd's context would otherwise end every later run
+		// as interrupted.
+		selfHostedCheckCmd.SetContext(context.Background())
 		checkPre, checkControlPlane, checkComputePlane, checkAll = false, false, false, false
 		checkClusterName = ""
 		checkLocalOnly, checkSkipInotifyCheck, checkSkipClusterValidation = false, false, false
@@ -160,4 +177,20 @@ func resetCheckFlags(t *testing.T) {
 	}
 	reset()
 	t.Cleanup(reset)
+}
+
+// passingPreflightTools is the real tool set with every tool found at its
+// minimum version.
+func passingPreflightTools() []selfhosted.BinarySpec {
+	specs := selfHostedPreflightTools()
+	for i := range specs {
+		v := specs[i].MinVer
+		if v == nil {
+			v = semver.MustParse("1.0.0")
+		}
+		name := specs[i].Name
+		specs[i].LookPath = func(string) (string, error) { return "/usr/local/bin/" + name, nil }
+		specs[i].Version = func(context.Context, string) (*semver.Version, error) { return v, nil }
+	}
+	return specs
 }

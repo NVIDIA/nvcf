@@ -35,7 +35,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -166,10 +165,8 @@ func runCheckWith(t *testing.T, budget time.Duration, validator selfhosted.Clust
 	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
 	// Hints name the current context; keep the developer's out of them.
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "none"))
-	prevBudget, prevCV, prevTools := checkBudget, newClusterValidatorForSelfHosted, checkPreflightTools
+	prevBudget, prevCV := checkBudget, newClusterValidatorForSelfHosted
 	checkBudget = func(d time.Duration) time.Duration { requestedBudget = d; return budget }
-	checkPreflightTools = passingPreflightTools
-	t.Cleanup(func() { checkPreflightTools = prevTools })
 	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator { return validator }
 	t.Cleanup(func() { checkBudget, newClusterValidatorForSelfHosted = prevBudget, prevCV })
 	rootCmd.SetErr(out)
@@ -242,7 +239,9 @@ func validatorRow(t *testing.T, stderr string) map[string]any {
 }
 
 // A run that outlives its budget is a timeout, never a pass: exit 5 with a
-// final event that says it failed, not success on whatever had run.
+// final event that says it failed, not success on whatever had run. On a
+// loaded machine the budget can run out before the validator starts, so its
+// row is either cut short or not run; both are blocking.
 func TestCheck_BudgetSpentIsATimeout(t *testing.T) {
 	for _, args := range [][]string{nil, {"--wait", "1m"}} {
 		err, stderr := runCheckWithBudget(t, 300*time.Millisecond, holdUntilDone, args...)
@@ -252,7 +251,10 @@ func TestCheck_BudgetSpentIsATimeout(t *testing.T) {
 		final := finalEvent(t, stderr)
 		assert.Equal(t, false, final["success"], "args %v", args)
 		assert.Equal(t, "timeout", final["verdict"], "args %v", args)
-		assert.Contains(t, validatorRow(t, stderr)["message"], "cut short: ", "args %v", args)
+		row := validatorRow(t, stderr)
+		assert.Equal(t, false, row["passed"], "args %v", args)
+		assert.Equal(t, selfhosted.SeverityError, row["severity"], "args %v", args)
+		assert.Regexp(t, `^(cut short|not run): the check's time budget ran out`, row["message"], "args %v", args)
 	}
 }
 
@@ -388,22 +390,6 @@ func TestCheck_WaitWithNoCleanupIsRejected(t *testing.T) {
 	err := rootCmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be combined with --wait")
-}
-
-// passingPreflightTools is the real tool set with every tool found at its
-// minimum version.
-func passingPreflightTools() []selfhosted.BinarySpec {
-	specs := selfHostedPreflightTools()
-	for i := range specs {
-		v := specs[i].MinVer
-		if v == nil {
-			v = semver.MustParse("1.0.0")
-		}
-		name := specs[i].Name
-		specs[i].LookPath = func(string) (string, error) { return "/usr/local/bin/" + name, nil }
-		specs[i].Version = func(context.Context, string) (*semver.Version, error) { return v, nil }
-	}
-	return specs
 }
 
 // An unpinned validator image whose tag cannot be discovered is not launched:
