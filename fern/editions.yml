@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Registry for branch-backed docs editions. Keep each recorded branch immutable.
 schema_version: 1
-default: 1.0.0
+default: 1.0.1
 editions:
-    - version: 1.0.0
-      ref: docs/releases/1.0.0
-      commit: ddb2e65ffb822ad035884df166ea0e3679426e22
+    - version: 1.0.1
+      ref: docs/releases/1.0.1
+      commit: 23d40a34636dbb3bdcd21e8f07e9e33cd6a36a2c
