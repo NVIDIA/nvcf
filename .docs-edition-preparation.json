@@ -1,0 +1,12 @@
+{
+  "source": "721ac6324c451fe0ed3c82742a1abbbf33c0a52e",
+  "version": "1.0.3",
+  "previous_version": "1.0.2",
+  "change": "patch",
+  "self_managed": "1.0.1",
+  "compute_plane": "1.0.0",
+  "observability": "1.0.0",
+  "navigation": "navigation.yml",
+  "qualification": "https://github.com/NVIDIA/nvcf/pull/2256",
+  "digest": "01f1c6b309994d57c25f0903b7c1dade96fc78159542e2656832756387639724"
+}
