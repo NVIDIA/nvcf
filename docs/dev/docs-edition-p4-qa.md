@@ -345,9 +345,13 @@ outside Manifest and Release Notes. It also records historical duplicates and
 maintainer-only excerpts. The report is for wording review; those passages have
 not been edited.
 
-The protected release branch and canonical registry remain at `d4fa180b1`.
-Applying candidate `570d4a479` awaits a new explicit approval for the temporary
-single-branch exception, exact force-with-lease, and immediate protection
-restoration. The previous exact-commit approval has already been completed.
+The maintainer approved replacing unpublished `docs/releases/1.0.1` from
+`d4fa180b1` to `570d4a47927c148159a1ec660b3ba746ccefece8`. One exact
+force-with-lease was applied under a temporary exception limited to that branch.
+Protection was immediately restored and verified: active, no exclusions or
+bypass actors, and effective rules blocking updates, deletion, and force pushes.
+P4 head `b604daecabf6760820f72e1696dbf71d4a79bd25` pins that exact commit.
+Canonical validation passes against the updated protected ref. Final pin CI is
+running. The six remaining wording excerpts are unchanged for review.
 The two open OpenBao instruction findings and indexed staging search remain
 separate pre-merge work. No production publication or merge occurred.
