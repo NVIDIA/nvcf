@@ -480,7 +480,8 @@ func TestCheckTier1Deployments_RollingOutEmitsWarningNotFailure(t *testing.T) {
 	client := fake.NewSimpleClientset(&appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "nvcf-api", Namespace: "nvcf",
-			Generation: 3, // new spec written
+			Generation:    3, // new spec written, a minute ago
+			ManagedFields: []metav1.ManagedFieldsEntry{specWrite(installManager, time.Now().Add(-time.Minute))},
 		},
 		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
 		Status: appsv1.DeploymentStatus{
@@ -595,18 +596,30 @@ func TestCheckTier1Deployments_ForbiddenIsNotAPass(t *testing.T) {
 
 // -- checkTier2StatefulSets --
 
-// makeQuorumSTS builds a StatefulSet plus the pods its selector matches, so the
-// co-location scan has something to walk. nodes gives one node name per pod.
-// makeQuorumSTS builds a StatefulSet in the shape an HA mode renders: its
-// pods carry hostname anti-affinity. withoutSpread removes it, as mode none.
+// makeQuorumSTS builds a StatefulSet in the shape an HA mode renders, its pods
+// carrying hostname anti-affinity (withoutSpread removes it, as mode none),
+// settled on revision <name>-r1. Like a real apiserver it holds the
+// ControllerRevision and one owned pod per entry of nodes, the first ready of
+// them Ready, labelled with their revision and index. All of it was written
+// at installedAt; the controller's status writes are recent, as they always
+// are. rollTo starts a rollout over it.
 func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []runtime.Object {
 	sel := map[string]string{"app": name}
 	// IsControlledBy compares the controller reference UID, so the fixture needs
 	// a real one on both sides.
 	uid := types.UID("uid-" + name)
 	controller := true
+	owner := []metav1.OwnerReference{{
+		APIVersion: "apps/v1", Kind: "StatefulSet", Name: name, UID: uid, Controller: &controller,
+	}}
+	installed, rev, count := metav1.NewTime(installedAt), name+"-r1", int32(len(nodes))
 	objs := []runtime.Object{&appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: uid},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: ns, UID: uid, Generation: 1, CreationTimestamp: installed,
+			ManagedFields: []metav1.ManagedFieldsEntry{
+				specWrite(installManager, installedAt), statusWrite(time.Now()),
+			},
+		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: sel},
@@ -623,27 +636,35 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 			}}},
 		},
 		Status: appsv1.StatefulSetStatus{
-			ReadyReplicas:   ready,
-			CurrentRevision: name + "-r1",
-			UpdateRevision:  name + "-r1",
+			ObservedGeneration: 1,
+			Replicas:           count, CurrentReplicas: count, UpdatedReplicas: count,
+			ReadyReplicas: ready, AvailableReplicas: ready,
+			CurrentRevision: rev, UpdateRevision: rev,
 		},
+	}, &appsv1.ControllerRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: rev, Namespace: ns, CreationTimestamp: installed, Labels: sel, OwnerReferences: owner,
+		},
+		Revision: 1,
 	}}
 	for i, node := range nodes {
+		readyStatus := corev1.ConditionFalse
+		if int32(i) < ready {
+			readyStatus = corev1.ConditionTrue
+		}
 		objs = append(objs, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
-				// Created just now, as a real pod is always dated: a rollout
-				// over these is recent. createdAt re-dates them.
-				CreationTimestamp: metav1.Now(),
-				Name:              fmt.Sprintf("%s-%d", name, i), Namespace: ns, Labels: sel,
-				OwnerReferences: []metav1.OwnerReference{{
-					APIVersion: "apps/v1", Kind: "StatefulSet",
-					Name: name, UID: uid, Controller: &controller,
-				}},
+				CreationTimestamp: installed,
+				Name:              fmt.Sprintf("%s-%d", name, i), Namespace: ns,
+				Labels: map[string]string{
+					"app": name, appsv1.ControllerRevisionHashLabelKey: rev, appsv1.PodIndexLabel: fmt.Sprint(i),
+				},
+				OwnerReferences: owner,
 			},
 			Spec: corev1.PodSpec{NodeName: node},
 			Status: corev1.PodStatus{
 				Phase:      corev1.PodRunning,
-				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: readyStatus}},
 			},
 		})
 	}
@@ -692,10 +713,10 @@ func TestCheckTier2StatefulSets_CoLocatedPeersFail(t *testing.T) {
 // StatefulSets roll one pod at a time, so a below-target ready count is the
 // steady state for the whole duration of any upgrade. That must warn, not fail.
 func TestCheckTier2StatefulSets_RollingUpdateWarnsNotFails(t *testing.T) {
-	objs := makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"})
-	sts := objs[0].(*appsv1.StatefulSet)
-	sts.Status.UpdateRevision = "nats-r2" // differs from CurrentRevision
-	client := fake.NewSimpleClientset(withRevision(objs, time.Now())...)
+	// A minute into a rollout, the replaced pod not yet recreated.
+	objs := rollTo(makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"}),
+		"nats-r2", time.Now().Add(-time.Minute))
+	client := fake.NewSimpleClientset(objs...)
 	state := &ValidationState{Log: testLog()}
 	checkTier2StatefulSets(context.Background(), client, state)
 
@@ -876,9 +897,8 @@ func TestCheckTier2StatefulSets_IgnoresSameNamedOwnerOfAnotherKind(t *testing.T)
 // rollout is reported in the warnings rather than hidden behind a healthy peer.
 func TestCheckTier2StatefulSets_HealthyPeerDoesNotMaskRollingOne(t *testing.T) {
 	healthy := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
-	rolling := makeQuorumSTS("openbao", "vault-system", 3, 2, []string{"node-1", "node-2"})
-	rolling[0].(*appsv1.StatefulSet).Status.UpdateRevision = "openbao-r2"
-	rolling = withRevision(rolling, time.Now())
+	rolling := rollTo(makeQuorumSTS("openbao", "vault-system", 3, 2, []string{"node-1", "node-2"}),
+		"openbao-r2", time.Now().Add(-time.Minute))
 
 	client := fake.NewSimpleClientset(append(healthy, rolling...)...)
 	state := &ValidationState{Log: testLog()}
@@ -906,8 +926,9 @@ func TestCheckTier1Deployments_RollingAtFullReplicasStillPasses(t *testing.T) {
 			},
 		},
 		&appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "rolling", Namespace: "sis", Generation: 3},
-			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			ObjectMeta: metav1.ObjectMeta{Name: "rolling", Namespace: "sis", Generation: 3,
+				ManagedFields: []metav1.ManagedFieldsEntry{specWrite(installManager, time.Now())}},
+			Spec: appsv1.DeploymentSpec{Replicas: &two},
 			Status: appsv1.DeploymentStatus{
 				ObservedGeneration: 2, UpdatedReplicas: 1, ReadyReplicas: 2,
 			},
@@ -936,7 +957,8 @@ func TestCheckTier1Deployments_RollingAndUnderReplicatedIsTolerated(t *testing.T
 			},
 		},
 		&appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "rolling", Namespace: "sis", Generation: 3},
+			ObjectMeta: metav1.ObjectMeta{Name: "rolling", Namespace: "sis", Generation: 3,
+				ManagedFields: []metav1.ManagedFieldsEntry{specWrite(installManager, time.Now())}},
 			// maxUnavailable=1 makes 1/2 a state the controller really
 			// produces mid-rollout; the 25% default never drops below 2/2.
 			Spec: appsv1.DeploymentSpec{Replicas: &two, Strategy: appsv1.DeploymentStrategy{
@@ -2193,24 +2215,46 @@ func TestDiscoverNVCFGateways_NoClientIsAnError(t *testing.T) {
 // A paused Deployment is not mid-rollout, so it is assessed at its current
 // readiness. Tolerating it as a rollout passed one at 0/3 on every run.
 func TestCheckTier1Deployments_PausedIsAssessedNotTolerated(t *testing.T) {
-	three := int32(3)
-	paused := func(ready int32) *appsv1.Deployment {
+	three, noDeadline := int32(3), int32(math.MaxInt32)
+	one := intstr.FromInt32(1)
+	// Each shape would be a tolerated rollout at its floor of 2 if it were
+	// not paused: one the controller reports as moving, and one with no
+	// progress deadline and old pods still running, a minute after its spec
+	// was written.
+	moving := func() *appsv1.Deployment {
 		return &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 2},
-			Spec:       appsv1.DeploymentSpec{Replicas: &three, Paused: true},
+			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 2,
+				ManagedFields: []metav1.ManagedFieldsEntry{specWrite(installManager, time.Now().Add(-time.Minute))}},
+			Spec: appsv1.DeploymentSpec{Replicas: &three, Paused: true, Strategy: appsv1.DeploymentStrategy{
+				RollingUpdate: &appsv1.RollingUpdateDeployment{MaxUnavailable: &one}}},
 			Status: appsv1.DeploymentStatus{
-				ObservedGeneration: 2, UpdatedReplicas: 0, ReadyReplicas: ready,
+				ObservedGeneration: 2, Replicas: 3, UpdatedReplicas: 1, ReadyReplicas: 2,
+				Conditions: []appsv1.DeploymentCondition{rolloutProgressing()},
 			},
 		}
 	}
+	unbounded := moving()
+	unbounded.Spec.ProgressDeadlineSeconds = &noDeadline
+	unbounded.Status.Conditions = nil
 
+	for name, d := range map[string]*appsv1.Deployment{"progressing": moving(), "no deadline": unbounded} {
+		state := &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), fake.NewSimpleClientset(d), nil, state)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.False(t, *state.Tier1DeploymentsOK, "a paused Deployment at 2/3 is held, not rolling: %s", name)
+
+		unpaused := d.DeepCopy()
+		unpaused.Spec.Paused = false
+		state = &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), fake.NewSimpleClientset(unpaused), nil, state)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.True(t, *state.Tier1DeploymentsOK, "the same rollout unpaused is tolerated: %s", name)
+	}
+
+	ready := moving()
+	ready.Status.ReadyReplicas = 3
 	state := &ValidationState{Log: testLog()}
-	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(paused(0)), nil, state)
-	require.NotNil(t, state.Tier1DeploymentsOK)
-	assert.False(t, *state.Tier1DeploymentsOK, "a paused Deployment with no ready pods is down")
-
-	state = &ValidationState{Log: testLog()}
-	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(paused(3)), nil, state)
+	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(ready), nil, state)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK, "a paused Deployment at full readiness serves traffic")
 	assert.NotContains(t, strings.Join(state.Warnings, "; "), "rollout in progress")
@@ -2358,22 +2402,16 @@ func TestCheckTier1Deployments_OnlyNVCFEnvoyProxiesAreAssessed(t *testing.T) {
 // ring at 0/4 is down whatever its parity, and a NATS mid-rollout beside it
 // must not hide that.
 func TestCheckTier2StatefulSets_EvenKnownQuorumComponentIsAssessed(t *testing.T) {
-	four, three := int32(4), int32(3)
+	four := int32(4)
 	cassandra := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "cassandra", Namespace: "cassandra-system"},
 		Spec:       appsv1.StatefulSetSpec{Replicas: &four},
 		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 0},
 	}
-	natsRolling := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "nats", Namespace: "nats-system"},
-		Spec: appsv1.StatefulSetSpec{Replicas: &three,
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "nats"}}},
-		Status: appsv1.StatefulSetStatus{
-			ReadyReplicas: 2, CurrentRevision: "a", UpdateRevision: "b",
-		},
-	}
+	natsRolling := rollTo(makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"}),
+		"nats-r2", time.Now().Add(-time.Minute))
 	state := &ValidationState{Log: testLog()}
-	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(cassandra, natsRolling), state)
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(append(natsRolling, cassandra)...), state)
 
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.False(t, *state.Tier2StatefulSetsOK)
@@ -2382,25 +2420,16 @@ func TestCheckTier2StatefulSets_EvenKnownQuorumComponentIsAssessed(t *testing.T)
 // A skipped StatefulSet stays in the warnings even when the row exits through
 // the tolerated-rollout pass.
 func TestCheckTier2StatefulSets_SkippedListSurvivesRolloutExit(t *testing.T) {
-	four, three := int32(4), int32(3)
+	four := int32(4)
 	other := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: "nvcf"},
 		Spec:       appsv1.StatefulSetSpec{Replicas: &four},
 		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 0},
 	}
-	natsRolling := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "nats", Namespace: "nats-system"},
-		Spec: appsv1.StatefulSetSpec{Replicas: &three,
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "nats"}}},
-		Status: appsv1.StatefulSetStatus{
-			ReadyReplicas: 2, CurrentRevision: "a", UpdateRevision: "b",
-		},
-	}
-	revision := &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{
-		Name: "b", Namespace: "nats-system", CreationTimestamp: metav1.Now(),
-	}}
+	natsRolling := rollTo(makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"}),
+		"nats-r2", time.Now().Add(-time.Minute))
 	state := &ValidationState{Log: testLog()}
-	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(other, natsRolling, revision), state)
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(append(natsRolling, other)...), state)
 
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK)
@@ -2996,18 +3025,21 @@ func TestNVCFGatewayClasses_ListNotFoundIsEmpty(t *testing.T) {
 	assert.Empty(t, got)
 }
 
-// rollingNATSWithDownPod is a 3-replica StatefulSet mid-RollingUpdate with two
-// Ready pods on the given nodes and a third, not Ready pod on revision rev.
+// rollingNATSWithDownPod is a 3-replica StatefulSet a minute into a
+// RollingUpdate to nats-r2, with two Ready pods on the given nodes and a
+// third, just created and not Ready, on revision rev.
 func rollingNATSWithDownPod(readyNodes []string, rev string, mutate func(*corev1.Pod)) []runtime.Object {
-	objs := makeQuorumSTS("nats", "nats-system", 3, 2, readyNodes)
+	objs := rollTo(makeQuorumSTS("nats", "nats-system", 3, 2, readyNodes), "nats-r2", time.Now().Add(-time.Minute))
 	sts := objs[0].(*appsv1.StatefulSet)
-	sts.Status.UpdateRevision = "nats-r2"
+	sts.Status.Replicas = 3
 	controller := true
 	down := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			CreationTimestamp: metav1.Now(),
 			Name:              "nats-2", Namespace: "nats-system",
-			Labels: map[string]string{"app": "nats", appsv1.ControllerRevisionHashLabelKey: rev},
+			Labels: map[string]string{
+				"app": "nats", appsv1.ControllerRevisionHashLabelKey: rev, appsv1.PodIndexLabel: "2",
+			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: "apps/v1", Kind: "StatefulSet", Name: "nats", UID: sts.UID, Controller: &controller,
 			}},
@@ -3027,40 +3059,37 @@ func runTier2(objs []runtime.Object) *ValidationState {
 	return state
 }
 
-// A rollout is tolerated one pod down only while it can finish. A new pod that
-// crash-loops, or an old-revision pod held back by a partition, stays down on
-// every run, and there is no StatefulSet progress deadline to report it.
+// A rollout is tolerated one pod down only while it can finish. Some evidence
+// says at once that it cannot: an image name that never parses, in a
+// container or an init container, a pod that failed, or an old-revision pod
+// held back by a partition, which the rollout will never replace.
 func TestCheckTier2StatefulSets_StalledRolloutFails(t *testing.T) {
-	crashLoop := func(p *corev1.Pod) {
-		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name:  "nats",
-			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+	failed := func(p *corev1.Pod) { p.Status.Phase = corev1.PodFailed }
+	invalidInit := func(p *corev1.Pod) {
+		p.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+			Name:  "init",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "InvalidImageName"}},
 		}}
 	}
-	restarting := func(p *corev1.Pod) {
-		p.Status.Phase = corev1.PodRunning
-		p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "nats", RestartCount: 5}}
+	down := func(rev string, mutate func(*corev1.Pod)) []runtime.Object {
+		return rollingNATSWithDownPod([]string{"node-1", "node-2"}, rev, mutate)
 	}
 	for name, objs := range map[string][]runtime.Object{
-		"crash-looping new pod":   rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", crashLoop),
-		"restarting new pod":      rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", restarting),
-		"old pod below partition": belowPartition(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", nil)),
+		"invalid image name":                down("nats-r2", waiting("InvalidImageName")),
+		"invalid init container image name": down("nats-r2", invalidInit),
+		"failed pod":                        down("nats-r2", failed),
+		"old pod below partition":           belowPartition(down("nats-r1", nil)),
 	} {
 		state := runTier2(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)
 		assert.False(t, *state.Tier2StatefulSetsOK, name)
+		assert.NotContains(t, strings.Join(state.Warnings, "; "), "rolling update in progress", name)
 	}
 }
 
 // A replacement pod that is still being created is a rollout in progress.
 func TestCheckTier2StatefulSets_StartingRolloutPodIsTolerated(t *testing.T) {
-	creating := func(p *corev1.Pod) {
-		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name:  "nats",
-			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
-		}}
-	}
-	state := runTier2(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", creating))
+	state := runTier2(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", waiting("ContainerCreating")))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "rolling update in progress")
@@ -3124,8 +3153,8 @@ func TestCheckTier2StatefulSets_TerminatingOldRevisionPodIsProgress(t *testing.T
 		p.DeletionTimestamp = &now
 		p.Status.Phase = corev1.PodRunning
 	}
-	objs := withRevision(createdAt(belowPartition(
-		rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", terminating)), old), old)
+	objs := rollTo(createdAt(belowPartition(
+		rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", terminating)), old), "nats-r2", old)
 	state := runTier2(objs)
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK)
@@ -3135,15 +3164,6 @@ func TestCheckTier2StatefulSets_TerminatingOldRevisionPodIsProgress(t *testing.T
 	state = runTier2(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r1", nil))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK)
-}
-
-// withRevision adds the update revision as a ControllerRevision created at
-// created, which dates the start of the rollout.
-func withRevision(objs []runtime.Object, created time.Time) []runtime.Object {
-	sts := objs[0].(*appsv1.StatefulSet)
-	return append(objs, &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{
-		Name: sts.Status.UpdateRevision, Namespace: sts.Namespace, CreationTimestamp: metav1.NewTime(created),
-	}})
 }
 
 // createdAt dates every pod in objs.
@@ -3158,37 +3178,37 @@ func createdAt(objs []runtime.Object, created time.Time) []runtime.Object {
 
 // A one-down rollout that makes no progress for too long fails however its
 // down pod looks: a replacement never created, one stuck in ContainerCreating,
-// or one Running but never Ready. A recent one is still tolerated.
+// or one Running but never Ready. A recent one is still tolerated. With the
+// update revision unreadable, the last write to the spec still dates it.
 func TestCheckTier2StatefulSets_RolloutWithoutProgressFails(t *testing.T) {
 	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-time.Minute)
-	creating := func(p *corev1.Pod) {
-		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name:  "nats",
-			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
-		}}
-	}
 	notJoining := func(p *corev1.Pod) { p.Status.Phase = corev1.PodRunning }
 	missing := func() []runtime.Object {
-		objs := makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"})
-		objs[0].(*appsv1.StatefulSet).Status.UpdateRevision = "nats-r2"
-		return objs
+		return makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"})
 	}
 	down := func(mutate func(*corev1.Pod)) []runtime.Object {
 		return rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", mutate)
 	}
 	for name, objs := range map[string][]runtime.Object{
-		"never created":      withRevision(createdAt(missing(), old), old),
-		"ContainerCreating":  withRevision(createdAt(down(creating), old), old),
-		"Running, not Ready": createdAt(down(notJoining), old),
+		"never created":      rollTo(createdAt(missing(), old), "nats-r2", old),
+		"ContainerCreating":  rollTo(createdAt(down(waiting("ContainerCreating")), old), "nats-r2", old),
+		"Running, not Ready": rollTo(createdAt(down(notJoining), old), "nats-r2", old),
+		"revision unreadable, pod missing": withoutRevision(
+			rollTo(createdAt(missing(), old), "nats-r2", old), "nats-r2"),
 	} {
-		state := runTier2(objs)
+		state, log := runTier2Logged(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)
 		assert.False(t, *state.Tier2StatefulSetsOK, name)
+		assert.Contains(t, log, "no progress for 2h", name)
 	}
 
 	for name, objs := range map[string][]runtime.Object{
-		"just started, pod not yet recreated": withRevision(createdAt(missing(), old), recent),
-		"replacement created recently":        withRevision(createdAt(down(creating), recent), old),
+		"just started, pod not yet recreated": rollTo(createdAt(missing(), old), "nats-r2", recent),
+		"replacement created recently": rollTo(createdAt(down(waiting("ContainerCreating")), recent),
+			"nats-r2", old),
+		"revision unreadable, spec written recently": withoutRevision(
+			rollTo(createdAt(missing(), old), "nats-r2", recent), "nats-r2"),
+		"spec write unrecorded, revision recent": unrecorded(rollTo(createdAt(missing(), old), "nats-r2", recent)),
 	} {
 		state := runTier2(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)
@@ -3251,13 +3271,8 @@ func TestCheckTier2StatefulSets_HAIsReadFromAntiAffinity(t *testing.T) {
 // A StatefulSet without anti-affinity has its placement left alone, but its
 // rollout is still held to the same rule: one that cannot finish fails.
 func TestCheckTier2StatefulSets_UnspreadStalledRolloutFails(t *testing.T) {
-	crashLoop := func(p *corev1.Pod) {
-		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name:  "nats",
-			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
-		}}
-	}
-	state := runTier2(withoutSpread(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", crashLoop)))
+	state := runTier2(withoutSpread(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2",
+		waiting("InvalidImageName"))))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.False(t, *state.Tier2StatefulSetsOK)
 }
@@ -3554,28 +3569,43 @@ func TestCheckTier1Deployments_GatewayCoverageUndecidedIsUnknown(t *testing.T) {
 
 // A Deployment with no progress deadline has no Progressing condition. A
 // healthy rollout of one, sitting at its readiness floor with old pods still
-// running, is tolerated as it is with a deadline.
+// running, is tolerated as it is with a deadline, but only for
+// stalledRolloutAfter from the spec write that started it: nothing else ever
+// ends it.
 func TestCheckTier1Deployments_RolloutWithoutProgressDeadlineIsTolerated(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "")
 	three, noDeadline := int32(3), int32(math.MaxInt32)
 	one := intstr.FromInt32(1)
 	zero := intstr.FromInt32(0)
-	rolling := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 2},
-		Spec: appsv1.DeploymentSpec{Replicas: &three, ProgressDeadlineSeconds: &noDeadline,
-			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType,
-				RollingUpdate: &appsv1.RollingUpdateDeployment{MaxUnavailable: &one, MaxSurge: &zero}}},
-		Status: appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 3, UpdatedReplicas: 1, ReadyReplicas: 2},
+	rolling := func(age time.Duration) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 2,
+				CreationTimestamp: metav1.NewTime(installedAt),
+				ManagedFields: []metav1.ManagedFieldsEntry{
+					specWrite(installManager, time.Now().Add(-age)), statusWrite(time.Now()),
+				}},
+			Spec: appsv1.DeploymentSpec{Replicas: &three, ProgressDeadlineSeconds: &noDeadline,
+				Strategy: appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType,
+					RollingUpdate: &appsv1.RollingUpdateDeployment{MaxUnavailable: &one, MaxSurge: &zero}}},
+			Status: appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 3, UpdatedReplicas: 1, ReadyReplicas: 2},
+		}
 	}
-	state := runTier1(t, false, routeClient(), rolling)
-	require.NotNil(t, state.Tier1DeploymentsOK)
-	assert.True(t, *state.Tier1DeploymentsOK)
+	for age, want := range map[time.Duration]bool{
+		time.Minute:        true,
+		14 * time.Minute:   true,
+		16 * time.Minute:   false,
+		7 * 24 * time.Hour: false,
+	} {
+		state := runTier1(t, false, routeClient(), rolling(age))
+		require.NotNil(t, state.Tier1DeploymentsOK, age)
+		assert.Equal(t, want, *state.Tier1DeploymentsOK, "rollout started %s ago", age)
+	}
 
 	// Without old pods it is no rollout: a finished ReplicaSet short a pod.
-	finished := rolling.DeepCopy()
+	finished := rolling(time.Minute)
 	finished.Status.Replicas, finished.Status.UpdatedReplicas = 2, 2
-	state = runTier1(t, false, routeClient(), finished)
+	state := runTier1(t, false, routeClient(), finished)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.False(t, *state.Tier1DeploymentsOK)
 }

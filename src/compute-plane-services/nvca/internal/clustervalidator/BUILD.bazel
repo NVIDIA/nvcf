@@ -56,6 +56,7 @@ go_test(
     name = "clustervalidator_test",
     srcs = [
         "checks_controlplane_test.go",
+        "checks_rollout_test.go",
         "checks_test.go",
         "config_test.go",
         "connectivity_test.go",
