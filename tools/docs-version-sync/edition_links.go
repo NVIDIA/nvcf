@@ -51,9 +51,13 @@ func stageEditionLinks(root, navigationPath string) error {
 				if !ok || slug == "" {
 					return fmt.Errorf("edition page %s requires an explicit slug", source)
 				}
-				path, err := filepath.EvalSymlinks(filepath.Join(root, "fern", filepath.Dir(navigationPath), source))
+				navigatedPath := filepath.Clean(filepath.Join(root, "fern", filepath.Dir(navigationPath), source))
+				path, err := filepath.EvalSymlinks(navigatedPath)
 				if err != nil {
 					return err
+				}
+				if path != navigatedPath {
+					return fmt.Errorf("edition navigation must use the real source path instead of a symlink: %s", source)
 				}
 				relative, err := filepath.Rel(root, path)
 				if err != nil || !strings.HasPrefix(relative, "docs"+string(filepath.Separator)) {

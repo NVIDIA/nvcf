@@ -1,5 +1,10 @@
 version: 1
 target: main
+docs_edition:
+  version: 1.0.2
+  status: development
+  previous_version: 1.0.1
+  change: patch
 registries:
   public-helm:
     host: https://helm.ngc.nvidia.com
@@ -1686,19 +1691,3 @@ outputs:
         renderer: image-mirroring-cli-snippet
   - path: docs/compute-plane/cluster-management/self-managed.md
   - path: docs/compute-plane/cluster-management/reference.md
-  - path: docs/overview/index.md
-    blocks:
-      - marker: edition-overview
-        renderer: edition-overview
-  - path: docs/self-managed/installation.md
-    blocks:
-      - marker: edition-control-plane
-        renderer: edition-control-plane
-  - path: docs/compute-plane/cluster-management/index.md
-    blocks:
-      - marker: edition-compute-plane
-        renderer: edition-compute-plane
-  - path: docs/observability/observability.md
-    blocks:
-      - marker: edition-observability
-        renderer: edition-observability

@@ -7,8 +7,8 @@ route, and configures worker pods to use the `pylon` sidecar for model-aware
 routing.
 
 For LLM function payload shape and invocation examples, see
-[Function Creation](/nvcf/overview/function-creation) and
-[LLM Gateway](/nvcf/overview/llm-gateway).
+[Function Creation](../overview/function-creation.md) and
+[LLM Gateway](../overview/llm-gateway.md).
 For request-router deployment, trusted headers, and rollout validation, see
 [LLM Request Router Load Balancing](./llm-request-router-load-balancing.md).
 
