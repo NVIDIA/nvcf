@@ -97,11 +97,16 @@ const validatorGradeReads = 4
 // termination grace must fall inside validatorDeadlineGrace, the wait for it.
 const validatorDeadlineOffset = 60 * time.Second
 
+// validatorTeardownBudget is the longest an interrupted validator spends
+// removing its node-to-node probe: the DaemonSet, the pods and the namespace,
+// one after another, each with its own 20s budget.
+const validatorTeardownBudget = 3 * 20 * time.Second
+
 // clusterValidatorTerminationGrace is the validator pod's termination grace
-// period. On SIGTERM the validator deletes its probe DaemonSet, pods and
-// namespace, and the default 30s let the kubelet kill it before the namespace
-// delete was sent.
-const clusterValidatorTerminationGrace = 60 * time.Second
+// period, the same as the chart's nvcaop.clusterValidatorJobSpec. It leaves
+// room past validatorTeardownBudget, so the kubelet does not kill the pod
+// before the probe namespace is deleted.
+const clusterValidatorTerminationGrace = 120 * time.Second
 
 // ClusterValidatorRunCeiling is the longest one validator run can take: its
 // own timeout, then on a timeout the wait for the Job's deadline to end the
@@ -1080,9 +1085,10 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 	if role != clusterValidatorControlPlaneRole {
 		return append([]rbacv1.PolicyRule{
 			// Read-only, except that every run deletes the netpol-validation
-			// namespaces an earlier enforcement run left behind.
+			// and node-to-node probe namespaces earlier runs left behind, and
+			// force-deletes the probe pods that keep one stuck Terminating.
 			{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"list"}},
-			{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"list"}},
+			{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"list", "delete"}},
 			{APIGroups: []string{""}, Resources: []string{"namespaces"}, Verbs: []string{"get", "list", "delete"}},
 			// SMB CSI driver and its version, read from its Deployment.
 			{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"csidrivers"}, Verbs: []string{"get"}},
@@ -1502,9 +1508,11 @@ func buildClusterValidatorJob(
 		TerminationGracePeriodSeconds: &grace,
 		Tolerations:                   append(clusterValidatorTolerations(), tolerations...),
 		SecurityContext: &corev1.PodSecurityContext{
-			RunAsUser:  &runAsUser,
-			RunAsGroup: &runAsUser,
-			FSGroup:    &runAsUser,
+			RunAsUser:      &runAsUser,
+			RunAsGroup:     &runAsUser,
+			FSGroup:        &runAsUser,
+			RunAsNonRoot:   &runAsNonRoot,
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 		Containers: []corev1.Container{{
 			Name:            clusterValidatorContainer,
@@ -1516,7 +1524,6 @@ func buildClusterValidatorJob(
 				ReadOnlyRootFilesystem:   &readOnlyRoot,
 				AllowPrivilegeEscalation: &allowPrivEsc,
 				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-				SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 			},
 			Env: []corev1.EnvVar{
 				{Name: "VALIDATOR_CONFIG_NAMESPACE", Value: clusterValidatorNamespace},

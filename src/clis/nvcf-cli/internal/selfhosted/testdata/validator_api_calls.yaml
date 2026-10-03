@@ -13,9 +13,11 @@ compute-plane:
     - {group: "", resource: nodes, verbs: [list],
        callers: [checkPrerequisites, checkControlPlaneHealth, detectManagedClusterProvider, checkGPUResources]}
     - {group: "", resource: pods, verbs: [list],
-       callers: [checkControlPlaneHealth, checkNetworkPolicies, checkGPUOperator]}
+       callers: [checkControlPlaneHealth, checkNetworkPolicies, checkGPUOperator, forceDeleteProbePods]}
+    - {group: "", resource: pods, verbs: [delete], callers: [forceDeleteProbePods]}
     - {group: "", resource: namespaces, verbs: [get], callers: [checkGPUOperator]}
-    - {group: "", resource: namespaces, verbs: [list, delete], callers: [sweepOrphanTestNamespaces]}
+    - {group: "", resource: namespaces, verbs: [list, delete],
+       callers: [sweepOrphanTestNamespaces, sweepOrphanN2NNamespaces]}
     - {group: admissionregistration.k8s.io, resource: mutatingwebhookconfigurations, verbs: [list],
        callers: [checkWebhookSupport]}
     - {group: admissionregistration.k8s.io, resource: validatingwebhookconfigurations, verbs: [list],
@@ -33,8 +35,10 @@ control-plane:
     - {group: "", resource: nodes, verbs: [list],
        callers: [checkPrerequisites, checkControlPlaneHealth, detectManagedClusterProvider, checkNodeToNode]}
     - {group: "", resource: pods, verbs: [list],
-       callers: [checkControlPlaneHealth, checkNetworkPolicies, checkEnvoyGateway, waitForProbePods, assess]}
-    - {group: "", resource: pods, verbs: [create, delete], callers: [runNodeToNodeChecker, checkNodeToNode]}
+       callers: [checkControlPlaneHealth, checkNetworkPolicies, checkEnvoyGateway, waitForProbePods, assess,
+                 forceDeleteProbePods]}
+    - {group: "", resource: pods, verbs: [create], callers: [n2nProbe.runChecker]}
+    - {group: "", resource: pods, verbs: [delete], callers: [forceDeleteProbePods]}
     - {group: "", resource: namespaces, verbs: [get], callers: [checkEnvoyGateway]}
     - {group: "", resource: namespaces, verbs: [list, delete],
        callers: [sweepOrphanTestNamespaces, sweepOrphanN2NNamespaces, checkNodeToNode]}
@@ -56,9 +60,9 @@ control-plane:
     - {group: apps, resource: statefulsets, verbs: [list], callers: [scanNamespace]}
     - {group: apps, resource: controllerrevisions, verbs: [get], callers: [updateRevisionCreated]}
     - {group: gateway.networking.k8s.io, resource: gateways, verbs: [list],
-       callers: [nvcfGatewayClassesIn, nvcfGatewayImplementations]}
+       callers: [nvcfGatewayClassOf]}
     - {group: gateway.networking.k8s.io, resource: gatewayclasses, verbs: [list],
-       callers: [nvcfGatewayImplementations]}
+       callers: [gatewayClassControllers]}
     - {group: gateway.networking.k8s.io, resource: httproutes, verbs: [list], callers: [discoverNVCFGatewaysIn]}
     - {group: gateway.networking.k8s.io, resource: grpcroutes, verbs: [list], callers: [discoverNVCFGatewaysIn]}
     - {group: gateway.networking.k8s.io, resource: tcproutes, verbs: [list], callers: [discoverNVCFGatewaysIn]}

@@ -924,6 +924,10 @@ func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
 	require.NotNil(t, spec.SecurityContext, "pod security context is required under restricted")
 	require.NotNil(t, spec.SecurityContext.RunAsUser)
 	assert.Equal(t, int64(65534), *spec.SecurityContext.RunAsUser, "chart runs this image as 65534")
+	require.NotNil(t, spec.SecurityContext.RunAsNonRoot)
+	assert.True(t, *spec.SecurityContext.RunAsNonRoot)
+	require.NotNil(t, spec.SecurityContext.SeccompProfile)
+	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, spec.SecurityContext.SeccompProfile.Type)
 
 	require.Len(t, spec.Containers, 1)
 	sc := spec.Containers[0].SecurityContext
@@ -934,8 +938,11 @@ func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
 	assert.False(t, *sc.AllowPrivilegeEscalation)
 	require.NotNil(t, sc.Capabilities)
 	assert.Equal(t, []corev1.Capability{"ALL"}, sc.Capabilities.Drop)
-	require.NotNil(t, sc.SeccompProfile)
-	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, sc.SeccompProfile.Type)
+
+	// An interrupted validator removes its probe before it exits; a shorter
+	// grace period lets the kubelet kill it with the probe namespace left.
+	require.NotNil(t, spec.TerminationGracePeriodSeconds)
+	assert.Greater(t, time.Duration(*spec.TerminationGracePeriodSeconds)*time.Second, validatorTeardownBudget)
 
 	var keys []string
 	for _, tol := range spec.Tolerations {
