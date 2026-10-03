@@ -36,18 +36,19 @@ git fetch origin --tags
 ```
 
 Prepare a new directory outside the checkout. The example is a docs-only patch
-after `1.0.0`; substitute the reviewed source commit and approval URL:
+after the initial `1.0.1`; substitute the reviewed source commit and approval URL:
 
 ```bash
 go run -C tools/docs-version-sync . edition prepare \
   --source <full-reviewed-source-commit> \
-  --version 1.0.1 --previous-version 1.0.0 --change patch \
+  --version 1.0.2 --previous-version 1.0.1 --change patch \
   --self-managed 1.0.1 --compute-plane 1.0.0 --observability 1.0.0 \
   --qualification https://github.com/NVIDIA/nvcf/pull/<release-review> \
-  --out /tmp/nvcf-docs-1.0.1
+  --out /tmp/nvcf-docs-1.0.2
 ```
 
-For the first edition, use `--change initial` and omit `--previous-version`.
+The initial consolidated release is `1.0.1`. For the first edition, use
+`--version 1.0.1 --change initial` and omit `--previous-version`.
 Omit `--qualification` while evaluating an unqualified candidate. The
 `Prepare Docs Edition` workflow performs the same preparation and uploads the
 files and review patch; it does not create a release branch or publish the site.
@@ -64,11 +65,11 @@ docs-release ruleset applies to that branch. It must prohibit updates, force
 pushes, and deletion, with no ordinary bypass actors. Creation remains allowed.
 
 ```bash
-git -C /tmp/nvcf-docs-1.0.1 switch -c docs/releases/1.0.1
-git -C /tmp/nvcf-docs-1.0.1 add docs fern .docs-edition-preparation.json
-git -C /tmp/nvcf-docs-1.0.1 commit -s
-git -C /tmp/nvcf-docs-1.0.1 push origin HEAD:refs/heads/docs/releases/1.0.1
-git -C /tmp/nvcf-docs-1.0.1 rev-parse HEAD
+git -C /tmp/nvcf-docs-1.0.2 switch -c docs/releases/1.0.2
+git -C /tmp/nvcf-docs-1.0.2 add docs fern .docs-edition-preparation.json
+git -C /tmp/nvcf-docs-1.0.2 commit -s
+git -C /tmp/nvcf-docs-1.0.2 push origin HEAD:refs/heads/docs/releases/1.0.2
+git -C /tmp/nvcf-docs-1.0.2 rev-parse HEAD
 ```
 
 The release branch retains its local `path` default. It must not reference
@@ -79,15 +80,15 @@ From the canonical checkout, register the exact resulting commit:
 
 ```bash
 go run -C tools/docs-version-sync . edition register \
-  --version 1.0.1 --commit <full-docs-branch-commit>
+  --version 1.0.2 --commit <full-docs-branch-commit>
 ```
 
 Add the matching entry first under `versions` in `fern/docs.yml`:
 
 ```yaml
-- display-name: "1.0.1"
-  slug: "1.0.1"
-  ref: docs/releases/1.0.1
+- display-name: "1.0.2"
+  slug: "1.0.2"
+  ref: docs/releases/1.0.2
 ```
 
 Keep Development and all historical entries. Advance the development candidate

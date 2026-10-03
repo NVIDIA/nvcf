@@ -438,24 +438,15 @@ navigation:
   - page: Compatibility Matrix
     path: ../docs/overview/compatibility-matrix.md
     slug: compatibility-matrix
-  - section: Stack Release Notes
+  - section: Upgrade Notes
     skip-slug: true
     contents:
-    - page: 1.0.1 Release Notes
-      path: ../docs/overview/release-notes/1.0.1.md
-      slug: 1-0-1-release-notes
     - page: 0.6.1 to 1.0.1 Upgrade
       path: ../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
       slug: 0-6-1-to-1-0-1-upgrade
-    - page: (Legacy) 0.6.1 Release Notes
-      path: ../docs/overview/release-notes/0.6.1.md
-      slug: legacy-0-6-1-release-notes
     - page: (Legacy) 0.6.0 to 0.6.1 Upgrade
       path: ../docs/overview/release-notes/0.6.0-to-0.6.1-upgrade.md
       slug: legacy-0-6-0-to-0-6-1-upgrade
-    - page: (Legacy) 0.6.0 Release Notes
-      path: ../docs/overview/release-notes/0.6.0.md
-      slug: legacy-0-6-0-release-notes
     - page: (Legacy) 0.5.0 to 0.6.0 Upgrade
       path: ../docs/overview/release-notes/0.5.0-to-0.6.0-upgrade.md
       slug: legacy-0-5-0-to-0-6-0-upgrade

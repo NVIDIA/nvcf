@@ -17,7 +17,7 @@ independent.
 
 - `docs/overview/`: shared customer guides, compatibility matrix, manifest,
   images, and samples. These belong to the selected edition. The manifest has
-  its own tab; the compatibility matrix and stack notes use Release Notes.
+  its own tab; the compatibility matrix and upgrade guides use Release Notes.
 - `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/`: current
   stack sources, published under Development from `main`.
 - `docs/dev/`: contributor guides. Only pages reached through navigation or
@@ -171,9 +171,12 @@ Check the staged candidate without publishing a preview:
 DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
 ```
 
-Native release notes live in `fern/changelog/YYYY-MM-DD.mdx`. Use `##` headings
-for entries and frontmatter tags for filtering. Record stack artifact versions
-separately from the docs edition. A preview entry must not claim qualification.
+Native release notes live in `fern/changelog/YYYY-MM-DD.mdx`. Keep full release
+notes in Releases and procedures in the Upgrade Notes sidebar. Use one `##`
+release heading per entry, lower-level section headings, and frontmatter tags
+for filtering. Record stack artifact versions separately from the docs edition.
+Retained standalone notes are historical compatibility sources; author current
+release notes in the changelog.
 
 See `tools/docs-version-sync/README.md` for edition preparation and registration.
 Release branches use their own path-based default navigation, with hidden legacy
