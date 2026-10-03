@@ -125,6 +125,9 @@ jobs:
       - name: Test OpenBao plugin catalog refresh hook
         run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
 
+      - name: Test OpenBao initialization tool requirements
+        run: bash deploy/helm/openbao/tests/init-tool-requirements.sh
+
       - name: Test ReVal authorization configuration
         run: bash deploy/helm/helm-reval/tests/auth-config.sh
 

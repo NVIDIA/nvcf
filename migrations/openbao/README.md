@@ -57,6 +57,11 @@ UI addons use `bao`, `kubectl`, and shell utilities. Helm runs outside this imag
 to create the hook Jobs. The image build checks that neither a Helm executable
 nor its Alpine package is installed on either supported architecture.
 
+Use an OpenBao chart whose initialization script checks for Helm only in
+standalone `script` mode. Older charts check for Helm even in the in-cluster
+`helm` hook mode and cannot initialize with this image. Publish and consume
+the chart prerequisite fix together with the migration image update.
+
 ```bash
 docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
