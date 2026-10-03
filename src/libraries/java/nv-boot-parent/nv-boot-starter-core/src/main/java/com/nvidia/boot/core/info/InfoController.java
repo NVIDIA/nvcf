@@ -18,10 +18,15 @@
 package com.nvidia.boot.core.info;
 
 import com.nvidia.boot.core.info.InfoResponseService.InfoResponse;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.MethodNotAllowedException;
 
 /**
  * Shared build-info controller for {@code GET /info}. Returns a flat {service, version, commit}
@@ -37,5 +42,11 @@ public class InfoController {
     @GetMapping("/info")
     public ResponseEntity<InfoResponse> getInfo() {
         return ResponseEntity.ok(infoResponseService.getInfo());
+    }
+
+    // Without this mapping, Spring auto-answers OPTIONS with 200; CORS preflight still matches GET.
+    @RequestMapping(value = "/info", method = RequestMethod.OPTIONS)
+    public void rejectOptions() {
+        throw new MethodNotAllowedException(HttpMethod.OPTIONS, Set.of(HttpMethod.GET));
     }
 }
