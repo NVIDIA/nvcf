@@ -69,4 +69,27 @@ func TestSetupGPUProfilingConfigMap(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "fn-1,fn-2", mirrored.Data["functionIds"])
 	})
+
+	t.Run("source is read from the configured operator namespace", func(t *testing.T) {
+		ctx := newTestContext()
+		clients := mockKubeClientsForIntegrationTests()
+		const chartNS = "some-other-ns"
+		bc := &BackendK8sCache{clients: clients, operatorNamespace: chartNS}
+
+		src := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      nvcfGPUProfilingConfigMapName,
+				Namespace: chartNS,
+			},
+			Data: map[string]string{"functionIds": "fn-3"},
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(chartNS).Create(ctx, src, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		require.NoError(t, bc.setupGPUProfilingConfigMap(ctx, nb))
+
+		mirrored, err := clients.K8s.CoreV1().ConfigMaps(agentNS).Get(ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "fn-3", mirrored.Data["functionIds"])
+	})
 }
