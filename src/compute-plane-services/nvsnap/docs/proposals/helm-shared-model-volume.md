@@ -603,3 +603,16 @@ the engine started, 137 s was the 15 GB engine image pull on the fresh
 nodes and 66 s the NVMesh attach; the nvsnap inits took 3 s. The set
 collected after the previous run was seeded on both pods (seed
 generation 1), so a scale-up pays only storage and engine time.
+
+Shared filesystem (OCI FSS, nvcf-sc, CRI-O arm64), 2026-10-02, a 62 GB
+Qwen2.5-32B vLLM Deployment without NVCA: cold start 6 min 37 s
+(download through the writer view, cache set collected after Ready);
+warm start 1 min 38 s (seed 2 s, AOT compile hit, engine init 13 s).
+Scaling the Deployment from one to four replicas landed three pods on
+three fresh nodes within 3 s of each other; each was Ready 72 to 78 s
+after creation, reading the weights from the shared filesystem in 27 to
+29 s (about 2.3 GB/s per node, about 7 GB/s aggregate off one FSS
+filesystem). No downloads, no attach wait, seed generation 1 on all
+three. The one node that had done the download read the same weights
+in 52 s on two consecutive starts while a direct read on that node ran
+at 2.2 GB/s; this is open and node-specific, not a filesystem ceiling.

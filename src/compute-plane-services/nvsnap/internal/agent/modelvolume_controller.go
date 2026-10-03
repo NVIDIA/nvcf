@@ -389,10 +389,7 @@ func (c *ModelVolumeController) recordJobBytes(ctx context.Context, job *batchv1
 		log.WithError(err).Warn("model volume: primary volume unknown; bytes not recorded")
 		return
 	}
-	if err := c.Provisioner.RecordBytes(ctx, pv, bytes); err != nil {
-		log.WithError(err).Warn("model volume: record bytes failed")
-		return
-	}
+	c.recordPrimaryBytes(ctx, pv, bytes)
 	log.WithFields(logrus.Fields{"bytes": bytes, "pv": pv}).Info("model volume: tree size recorded on the primary")
 }
 
@@ -556,7 +553,7 @@ func (c *ModelVolumeController) captureModel(ctx context.Context, pod *corev1.Po
 		log = log.WithFields(logrus.Fields{"bytes": bytes, "claim_size": size.String(), "claim": sysNS + "/" + claim})
 		log.Info("model volume: primary claim sized from the engine's download; copying")
 		start := time.Now()
-		if err := c.copyCaptured(ctx, uri, sysNS, claim, src); err != nil {
+		if err := c.copyCaptured(ctx, uri, sysNS, claim, src, bytes); err != nil {
 			c.mu.Lock()
 			c.attempts[key]++
 			n := c.attempts[key]
@@ -580,8 +577,9 @@ func (c *ModelVolumeController) captureModel(ctx context.Context, pod *corev1.Po
 }
 
 // copyCaptured waits for the claim, copies the tree in, marks it complete.
-func (c *ModelVolumeController) copyCaptured(ctx context.Context, uri, sysNS, claim, src string) error {
-	if _, err := c.Provisioner.WaitBound(ctx, sysNS, claim, stagingBindTimeout); err != nil {
+func (c *ModelVolumeController) copyCaptured(ctx context.Context, uri, sysNS, claim, src string, bytes int64) error {
+	pv, err := c.Provisioner.WaitBound(ctx, sysNS, claim, stagingBindTimeout)
+	if err != nil {
 		return err
 	}
 	if err := c.copyStaging(ctx, sysNS, claim, src); err != nil {
@@ -590,7 +588,21 @@ func (c *ModelVolumeController) copyCaptured(ctx context.Context, uri, sysNS, cl
 	if err := c.Provisioner.MarkComplete(ctx, uri, sysNS); err != nil {
 		return err
 	}
+	c.recordPrimaryBytes(ctx, pv, bytes)
 	return c.Provisioner.ClearFailure(ctx, uri)
+}
+
+// recordPrimaryBytes stamps the measured tree size on the primary so the
+// views are sized from it whichever path filled the volume (download Job,
+// staged copy, or capture from an engine download). Best effort: without
+// it the views keep the primary's capacity.
+func (c *ModelVolumeController) recordPrimaryBytes(ctx context.Context, pv string, bytes int64) {
+	if pv == "" || bytes <= 0 {
+		return
+	}
+	if err := c.Provisioner.RecordBytes(ctx, pv, bytes); err != nil {
+		c.log().WithError(err).WithFields(logrus.Fields{"pv": pv, "bytes": bytes}).Warn("model volume: record bytes failed")
+	}
 }
 
 // podVolumeHostPath is the kubelet path of a pod volume on this node: an
@@ -1028,6 +1040,7 @@ func (c *ModelVolumeController) copyStaged(ctx context.Context, uri, src string,
 	if err := c.Provisioner.MarkComplete(ctx, uri, sysNS); err != nil {
 		return err
 	}
+	c.recordPrimaryBytes(ctx, pv, bytes)
 	if err := c.Provisioner.ClearFailure(ctx, uri); err != nil {
 		log.WithError(err).Warn("model volume: clear failure record failed")
 	}

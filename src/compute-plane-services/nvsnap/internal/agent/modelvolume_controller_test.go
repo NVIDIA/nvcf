@@ -407,6 +407,10 @@ func TestModelVolumeController_StagingCopiedIntoSizedClaim(t *testing.T) {
 	if size := pv.Spec.Capacity[corev1.ResourceStorage]; size.String() != "33Gi" {
 		t.Errorf("claim sized from 30 GiB staged plus headroom, got %s", size.String())
 	}
+	waitUntil(t, "bytes recorded on the staged primary", func() bool {
+		pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-staged", metav1.GetOptions{})
+		return pv != nil && pv.Annotations[modelvolume.BytesAnnotation] == strconv.FormatInt(30<<30, 10)
+	})
 	if pv.Labels[modelvolume.CompleteLabel] != "true" || pv.Labels[modelvolume.IdentityLabel] != modelvolume.Key(mvURI) || pv.Labels[modelvolume.SourceNamespaceLabel] != "nvsnap-system" || pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
 		t.Errorf("primary must be complete and retained: %v", pv.Labels)
 	}
@@ -893,6 +897,10 @@ func TestModelVolumeController_CapturesEngineLandingFromReadyPod(t *testing.T) {
 	if size := pv.Spec.Capacity[corev1.ResourceStorage]; size.String() != "2200Gi" {
 		t.Errorf("primary sized from the 2000 GiB tree plus headroom, got %s", size.String())
 	}
+	waitUntil(t, "bytes recorded on the captured primary", func() bool {
+		pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-staged", metav1.GetOptions{})
+		return pv != nil && pv.Annotations[modelvolume.BytesAnnotation] == strconv.FormatInt(2000<<30, 10)
+	})
 	if pv.Labels[modelvolume.CompleteLabel] != "true" || pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
 		t.Errorf("primary must be complete and retained: %v", pv.Labels)
 	}
