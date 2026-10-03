@@ -67,6 +67,9 @@ if ./tools/ci/check-doc-links missing-base "$report" > /dev/null 2>&1; then
   exit 1
 fi
 git commit -qm 'test: commit changed docs'
+rm "$CAPTURE" "$report"
 ./tools/ci/check-doc-links 0000000000000000000000000000000000000000 "$report"
+[ -f "$CAPTURE" ]
 grep -Fxq 'fern/changelog/release.mdx' "$CAPTURE"
+grep -Fxq 'Mock link report' "$report"
 echo 'test-check-doc-links: PASS'
