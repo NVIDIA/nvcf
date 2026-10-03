@@ -34,6 +34,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/kubectx"
@@ -59,8 +60,8 @@ var (
 )
 
 // Test seam.
-var newInotifyProberForSelfHosted = func() selfhosted.NodeInotifyProber {
-	return selfhosted.NewInotifyProber()
+var newInotifyProberForSelfHosted = func(image string) selfhosted.NodeInotifyProber {
+	return selfhosted.NewInotifyProber(image)
 }
 
 // Test seam.
@@ -101,7 +102,8 @@ func init() {
 	selfHostedCheckCmd.Flags().BoolVar(&checkLocalOnly, "local-only", false, "Run local-host checks only (no kubectl contact)")
 	selfHostedCheckCmd.Flags().BoolVar(&checkSkipInotifyCheck, "skip-inotify-check", false,
 		"Disable the per-node inotify-limits probe. Required when the kubeconfig user "+
-			"cannot create pods in 'default'. Env: NVCF_CLI_SELFHOSTED_SKIP_INOTIFY")
+			"cannot create pods in 'default', or when the probe image comes from a registry that "+
+			"needs credentials: the probe pods get no pull secret. Env: NVCF_CLI_SELFHOSTED_SKIP_INOTIFY")
 	selfHostedCheckCmd.Flags().BoolVar(&checkSkipClusterValidation, "skip-cluster-validation", false,
 		"Disable the in-cluster cluster-validator probe. "+
 			"Env: NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION")
@@ -139,8 +141,9 @@ func init() {
 	_ = viper.BindPFlag("cluster_validator_tolerations",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-tolerations"))
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorProbeImage, "cluster-validator-probe-image", "",
-		"Image for the control-plane validator's node-to-node overlay probe (needs sh and busybox-style nc). "+
-			"Defaults to busybox:1.36 from Docker Hub; set a mirror for air-gapped clusters. "+
+		"Image for the node inotify probe and the control-plane validator's node-to-node overlay probe "+
+			"(needs sh and busybox-style nc). Defaults to busybox:1.36 from Docker Hub; set a mirror for "+
+			"air-gapped clusters. "+
 			"Env: NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE. "+
 			"Can also be set in nvcf-cli config as cluster_validator_probe_image.")
 	_ = viper.BindPFlag("cluster_validator_probe_image",
@@ -656,6 +659,14 @@ func parseToleration(entry string) (corev1.Toleration, error) {
 	if t.Key = entry; t.Key == "" {
 		return t, fmt.Errorf("a taint key is required")
 	}
+	// The apiserver applies the same rules when the Job is created, after the
+	// run's RBAC, Secret and ConfigMap already exist.
+	if errs := validation.IsQualifiedName(t.Key); len(errs) > 0 {
+		return t, fmt.Errorf("invalid taint key %q: %s", t.Key, strings.Join(errs, "; "))
+	}
+	if errs := validation.IsValidLabelValue(t.Value); len(errs) > 0 {
+		return t, fmt.Errorf("invalid taint value %q: %s", t.Value, strings.Join(errs, "; "))
+	}
 	return t, nil
 }
 
@@ -798,7 +809,7 @@ func runPreflightByRole(
 	// Visited, not targeted: the inotify limit is exactly what --pre exists to
 	// catch before NVCA bootstrap, so it must run for --pre in ModeSplit too.
 	if computePlaneIsVisited() && !skipInotify {
-		inotifyProber = newInotifyProberForSelfHosted()
+		inotifyProber = newInotifyProberForSelfHosted(configuredProbeImage())
 	}
 
 	// clusterValidatorImage is resolved by the caller. Empty value means
@@ -1023,14 +1034,21 @@ func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	} else if len(stack.Gateways) > 0 {
 		env["NVCF_GATEWAY_NAMES"] = strings.Join(stack.Gateways, ",")
 	}
-	probe := strings.TrimSpace(viper.GetString("cluster_validator_probe_image"))
-	if probe == "" {
-		probe = configValue("NVCF_N2N_PROBE_IMAGE")
-	}
-	if probe != "" {
+	if probe := configuredProbeImage(); probe != "" {
 		env["NVCF_N2N_PROBE_IMAGE"] = probe
 	}
 	return env
+}
+
+// configuredProbeImage is the busybox-style image the probe pods the check
+// launches use, from --cluster-validator-probe-image and its env and config
+// key, or else the validator's own NVCF_N2N_PROBE_IMAGE setting. Empty leaves
+// each probe on its default.
+func configuredProbeImage() string {
+	if probe := strings.TrimSpace(viper.GetString("cluster_validator_probe_image")); probe != "" {
+		return probe
+	}
+	return configValue("NVCF_N2N_PROBE_IMAGE")
 }
 
 // configValue reads a setting the way the CLI's cluster configuration does

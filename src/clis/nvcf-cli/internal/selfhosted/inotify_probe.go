@@ -29,14 +29,15 @@ import (
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 const (
-	// inotifyProbeImage is the image used by the per-node probe pod. Pinned
-	// to match the documented inotify-tuner DaemonSet so customers do not need
-	// to mirror an extra image.
+	// inotifyProbeImage is the per-node probe pod's image when no probe
+	// image is configured. Pinned to match the documented inotify-tuner
+	// DaemonSet so customers do not need to mirror an extra image.
 	inotifyProbeImage = "busybox:1.36"
 
 	// inotifyProbeNamespace is where probe pods are created. "default" exists
@@ -95,7 +96,10 @@ const (
 // PSA-restricted clusters where pod create is denied for unprivileged
 // users, customers may need to apply the documented node-inotify-tuner
 // DaemonSet manually before this probe will succeed.
-func NewInotifyProber() NodeInotifyProber {
+//
+// image replaces the default busybox image, for clusters that pull from a
+// mirror; empty keeps the default.
+func NewInotifyProber(image string) NodeInotifyProber {
 	return func(ctx context.Context, kubeContext string) ([]NodeInotifyLimits, error) {
 		restCfg, err := loadKubeConfig(kubeContext)
 		if err != nil {
@@ -116,7 +120,7 @@ func NewInotifyProber() NodeInotifyProber {
 		if err != nil {
 			return nil, fmt.Errorf("building kubernetes client: %w", err)
 		}
-		return probeAllNodes(ctx, client)
+		return probeAllNodes(ctx, client, image)
 	}
 }
 
@@ -140,7 +144,7 @@ func InotifyProbeBudget() time.Duration { return inotifyProbeBudget }
 // nodeInotifyCheck can always inspect partial results, and limit
 // violations on some nodes are never dropped when other nodes are
 // concurrently unreachable.
-func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInotifyLimits, error) {
+func probeAllNodes(ctx context.Context, client kubernetes.Interface, image string) ([]NodeInotifyLimits, error) {
 	// Nodes are probed probeConcurrency at a time, so on a cluster whose
 	// probe pods stall each wave takes perNodePodTimeout: unbounded, the probe
 	// ran past the time the check sets aside for the checks before the
@@ -165,7 +169,7 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInot
 		}
 		i, nodeName := i, n.Name
 		eg.Go(func() error {
-			results[i] = probeOneNode(egCtx, client, nodeName)
+			results[i] = probeOneNode(egCtx, client, nodeName, image)
 			// Per-node failures are encoded in results[i].Err; never
 			// propagate them as the errgroup's error, since that would
 			// cancel sibling probes still in flight.
@@ -182,7 +186,7 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInot
 
 // probeOneNode creates, waits on, and tears down a single probe pod, returning
 // the parsed limits or a per-node error.
-func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName string) NodeInotifyLimits {
+func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName, image string) NodeInotifyLimits {
 	res := NodeInotifyLimits{NodeName: nodeName}
 	if ctx.Err() != nil {
 		res.Err = fmt.Errorf("not probed: the inotify probe's %s budget ran out", inotifyProbeBudget)
@@ -192,7 +196,8 @@ func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName str
 	pctx, cancel := context.WithTimeout(ctx, perNodePodTimeout)
 	defer cancel()
 
-	pod, err := client.CoreV1().Pods(inotifyProbeNamespace).Create(pctx, buildInotifyProbePod(nodeName), metav1.CreateOptions{})
+	pod, err := client.CoreV1().Pods(inotifyProbeNamespace).Create(pctx, buildInotifyProbePod(nodeName, image),
+		metav1.CreateOptions{})
 	if err != nil {
 		res.Err = fmt.Errorf("create probe pod on node %s: %w", nodeName, err)
 		return res
@@ -224,9 +229,15 @@ func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName str
 // prints the two inotify sysctls to stdout. The container is unprivileged
 // and runs in the default PID namespace: /proc/sys/fs/inotify/max_user_*
 // are kernel-wide sysctls and are world-readable through the host's procfs
-// via the read-only /host hostPath mount.
-func buildInotifyProbePod(nodeName string) *corev1.Pod {
+// via the read-only /host hostPath mount, so the container also runs as a
+// non-root user with no capabilities. An empty image selects the default.
+func buildInotifyProbePod(nodeName, image string) *corev1.Pod {
+	if image == "" {
+		image = inotifyProbeImage
+	}
 	hostPathDir := corev1.HostPathDirectory
+	nobody := int64(65534)
+	runAsNonRoot, readOnlyRoot, allowPrivEsc := true, true, false
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "nvcf-inotify-probe-",
@@ -242,10 +253,33 @@ func buildInotifyProbePod(nodeName string) *corev1.Pod {
 			Tolerations: []corev1.Toleration{
 				{Operator: corev1.TolerationOpExists},
 			},
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsUser:  &nobody,
+				RunAsGroup: &nobody,
+			},
 			Containers: []corev1.Container{{
 				Name:    inotifyProbeContainer,
-				Image:   inotifyProbeImage,
+				Image:   image,
 				Command: []string{"sh", "-c", inotifyProbeShellCmd},
+				// Requests let the pod in under a namespace LimitRange or
+				// quota that requires them.
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("10m"),
+						corev1.ResourceMemory: resource.MustParse("16Mi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("32Mi"),
+					},
+				},
+				SecurityContext: &corev1.SecurityContext{
+					RunAsNonRoot:             &runAsNonRoot,
+					ReadOnlyRootFilesystem:   &readOnlyRoot,
+					AllowPrivilegeEscalation: &allowPrivEsc,
+					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+					SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				},
 				VolumeMounts: []corev1.VolumeMount{{
 					Name:      "host",
 					MountPath: "/host",

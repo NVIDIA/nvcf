@@ -942,6 +942,13 @@ func TestBuildControlPlaneValidatorConfig_EnforcementDisabledForPreflight(t *tes
 		"a read-only readiness check must not mutate the cluster or need Docker Hub")
 }
 
+// With enforcement off the ConfigMap names no probe image, so the validator's
+// own default, or NVCF_N2N_PROBE_IMAGE, picks the overlay probe image.
+func TestBuildControlPlaneValidatorConfig_LeavesTheProbeImageToTheValidator(t *testing.T) {
+	cfg := buildControlPlaneValidatorConfig([]RegistryEntry{{Registry: "nvcr.io"}})
+	assert.NotContains(t, cfg, "testImage")
+}
+
 // --no-cleanup must outlast the orphan TTL. Without a preserve marker the
 // orphan sweeper reclaims a deliberately kept run after 30 minutes, which
 // makes the flag mean "keep for 30 minutes".

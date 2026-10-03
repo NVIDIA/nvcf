@@ -84,7 +84,7 @@ func TestMain(m *testing.M) {
 		return "", false
 	}
 	// Nil prober: the inotify check is skipped rather than creating pods.
-	newInotifyProberForSelfHosted = func() selfhosted.NodeInotifyProber { return nil }
+	newInotifyProberForSelfHosted = func(string) selfhosted.NodeInotifyProber { return nil }
 	// No cluster contact, and a clean result so the category still renders.
 	newStaleNamespaceProberForSelfHosted = func() selfhosted.StaleNamespaceProber {
 		return func(context.Context, string, []string) ([]selfhosted.StaleNamespace, error) {

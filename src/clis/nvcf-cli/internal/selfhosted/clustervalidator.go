@@ -1196,6 +1196,10 @@ func newValidatorRunID() (string, error) {
 
 // controlPlaneValidatorEnforcementConfig follows the generated reachability
 // section in the control-plane validator ConfigMap.
+//
+// No testImage: the validator also reads it for the node-to-node overlay
+// probe, so a value here would override the validator's own default whenever
+// --cluster-validator-probe-image is not set.
 const controlPlaneValidatorEnforcementConfig = `enforcement:
   # Disabled for preflight. VALIDATOR_PREFLIGHT only suppresses the summary
   # write, so enforcement would still run: it creates netpol-validation
@@ -1204,9 +1208,6 @@ const controlPlaneValidatorEnforcementConfig = `enforcement:
   # before anything is installed and with no flag to turn it off, is not
   # something a read-only readiness check should do.
   enabled: false
-  testImage: busybox:1.36
-  timeoutSeconds: 60
-  critical: false
 `
 
 // ensureClusterValidatorConfig creates this run's network-check ConfigMap.

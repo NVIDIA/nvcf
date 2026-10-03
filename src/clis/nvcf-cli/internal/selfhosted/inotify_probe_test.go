@@ -42,7 +42,7 @@ func fakeNode(name string) *corev1.Node {
 
 func TestProbeAllNodes_EmptyCluster(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	results, err := probeAllNodes(context.Background(), client)
+	results, err := probeAllNodes(context.Background(), client, "")
 	require.NoError(t, err)
 	assert.Empty(t, results, "no nodes → no per-node results")
 }
@@ -52,7 +52,7 @@ func TestProbeAllNodes_ListNodesError(t *testing.T) {
 	client.PrependReactor("list", "nodes", func(_ ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, fmt.Errorf("forbidden: nodes")
 	})
-	_, err := probeAllNodes(context.Background(), client)
+	_, err := probeAllNodes(context.Background(), client, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "listing nodes")
 	assert.Contains(t, err.Error(), "forbidden")
@@ -65,7 +65,7 @@ func TestProbeAllNodes_PodCreateErrorSurfacesPerNode(t *testing.T) {
 	client.PrependReactor("create", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, fmt.Errorf("forbidden: pod create denied")
 	})
-	results, err := probeAllNodes(context.Background(), client)
+	results, err := probeAllNodes(context.Background(), client, "")
 	require.NoError(t, err, "list succeeded so the overall probe should not return an error")
 	require.Len(t, results, 2)
 	for _, r := range results {
@@ -100,7 +100,7 @@ func TestProbeAllNodes_StallingPodsAreBoundedByTheProbeBudget(t *testing.T) {
 	})
 
 	start := time.Now()
-	results, err := probeAllNodes(context.Background(), client)
+	results, err := probeAllNodes(context.Background(), client, "")
 	require.NoError(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "the probe outlived its budget")
 	require.Len(t, results, probeConcurrency+extra)
@@ -119,7 +119,7 @@ func TestProbeAllNodes_StallingPodsAreBoundedByTheProbeBudget(t *testing.T) {
 }
 
 func TestBuildInotifyProbePodShape(t *testing.T) {
-	pod := buildInotifyProbePod("node-x")
+	pod := buildInotifyProbePod("node-x", "")
 
 	assert.Equal(t, inotifyProbeNamespace, pod.Namespace)
 	assert.Equal(t, "nvcf-inotify-probe-", pod.GenerateName, "GenerateName lets the API server assign a unique suffix")
@@ -144,4 +144,23 @@ func TestBuildInotifyProbePodShape(t *testing.T) {
 	require.Len(t, pod.Spec.Volumes, 1)
 	require.NotNil(t, pod.Spec.Volumes[0].HostPath)
 	assert.Equal(t, "/", pod.Spec.Volumes[0].HostPath.Path)
+
+	assert.False(t, c.Resources.Requests.Cpu().IsZero(), "a LimitRange or quota needs requests")
+	assert.False(t, c.Resources.Requests.Memory().IsZero(), "a LimitRange or quota needs requests")
+	assert.False(t, c.Resources.Limits.Memory().IsZero())
+	require.NotNil(t, pod.Spec.SecurityContext)
+	require.NotNil(t, pod.Spec.SecurityContext.RunAsUser)
+	assert.NotZero(t, *pod.Spec.SecurityContext.RunAsUser, "the sysctls are world-readable, so root is not needed")
+	require.NotNil(t, c.SecurityContext)
+	assert.True(t, *c.SecurityContext.RunAsNonRoot)
+	assert.True(t, *c.SecurityContext.ReadOnlyRootFilesystem)
+	assert.False(t, *c.SecurityContext.AllowPrivilegeEscalation)
+	assert.Equal(t, []corev1.Capability{"ALL"}, c.SecurityContext.Capabilities.Drop)
+}
+
+// The configured probe image replaces the Docker Hub default, so a cluster
+// that pulls from a mirror can run the probe.
+func TestBuildInotifyProbePod_UsesTheConfiguredImage(t *testing.T) {
+	pod := buildInotifyProbePod("node-x", "mirror.example/busybox:1.36")
+	assert.Equal(t, "mirror.example/busybox:1.36", pod.Spec.Containers[0].Image)
 }

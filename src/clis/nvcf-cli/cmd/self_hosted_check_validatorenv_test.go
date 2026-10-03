@@ -20,9 +20,11 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -269,9 +271,74 @@ func TestParseToleration(t *testing.T) {
 		require.NoError(t, err, in)
 		assert.Equal(t, want, got, in)
 	}
-	for _, in := range []string{":NoSchedule", "=v", "k:Never"} {
+	for _, in := range []string{
+		":NoSchedule", "=v", "k:Never",
+		"dedicated=infra team:NoSchedule", "bad key", "key=v=w", "a/b/c", "-key", "k=-v",
+	} {
 		_, err := parseToleration(in)
 		assert.Error(t, err, in)
+	}
+}
+
+// A toleration the apiserver would reject fails the command as a usage error,
+// before the run creates anything for a validator Job that cannot be created.
+func TestCheck_MalformedTolerationFailsBeforeTheRun(t *testing.T) {
+	var calls atomic.Int32
+	prev := newClusterValidatorForSelfHosted
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(context.Context, selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			calls.Add(1)
+			return selfhosted.ClusterValidatorResult{Passed: true}
+		}
+	}
+	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetOut(&bytes.Buffer{})
+	for _, entry := range []string{"dedicated=infra team:NoSchedule", "bad key", "key=v=w", "a/b/c"} {
+		resetCheckFlags(t)
+		rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--json",
+			"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0",
+			"--cluster-validator-tolerations", entry})
+		err := rootCmd.Execute()
+		require.Error(t, err, entry)
+		assert.Contains(t, err.Error(), "--cluster-validator-tolerations", entry)
+		var exitErr *ExitCodeError
+		assert.False(t, errors.As(err, &exitErr), "%s: a usage error, not a failed run", entry)
+	}
+	assert.Zero(t, calls.Load(), "no validator runs")
+}
+
+// The inotify probe pods use the configured probe image, so a cluster that
+// pulls from a mirror can run them; with none set the probe keeps its default.
+func TestCheck_InotifyProbeUsesTheProbeImage(t *testing.T) {
+	for _, tc := range []struct {
+		name, flag, env, want string
+	}{
+		{name: "flag", flag: "mirror.example/busybox:1.36", want: "mirror.example/busybox:1.36"},
+		{name: "validator setting", env: "mirror.example/busybox:1.36", want: "mirror.example/busybox:1.36"},
+		{name: "unset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetCheckFlags(t)
+			t.Setenv("NVCF_N2N_PROBE_IMAGE", tc.env)
+			var got []string
+			prev := newInotifyProberForSelfHosted
+			newInotifyProberForSelfHosted = func(image string) selfhosted.NodeInotifyProber {
+				got = append(got, image)
+				return func(context.Context, string) ([]selfhosted.NodeInotifyLimits, error) { return nil, nil }
+			}
+			t.Cleanup(func() { newInotifyProberForSelfHosted = prev })
+			rootCmd.SetErr(&bytes.Buffer{})
+			rootCmd.SetOut(&bytes.Buffer{})
+			args := []string{"self-hosted", "check", "--pre", "--json"}
+			if tc.flag != "" {
+				args = append(args, "--cluster-validator-probe-image", tc.flag)
+			}
+			rootCmd.SetArgs(args)
+			_ = rootCmd.Execute()
+			assert.Equal(t, []string{tc.want}, got)
+		})
 	}
 }
 
