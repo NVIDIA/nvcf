@@ -63,6 +63,7 @@ go_test(
         "enforcement_test.go",
         "exit_contract_test.go",
         "netpol_test.go",
+        "nodetonode_test.go",
         "observe_test.go",
         "output_test.go",
         "rbac_inventory_test.go",

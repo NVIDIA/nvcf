@@ -292,6 +292,7 @@ func TestCheckNodeToNode_NoNodes(t *testing.T) {
 
 	assert.Nil(t, state.NodeToNodeOK,
 		"zero schedulable nodes exercised no overlay path, so the result must be unknown, not Verified")
+	assert.Empty(t, state.NodeToNodeNotApplicable, "no node at all is unobserved, not moot")
 	assert.NotEmpty(t, state.Warnings, "skip must add a warning so the banner is qualified")
 }
 
@@ -311,7 +312,7 @@ func TestCheckNodeToNode_UnschedulableNodesSkipped(t *testing.T) {
 
 // The probe tolerates every taint, so a GPU-tainted node is probed rather than
 // leaving the cluster UNKNOWN, while a NotReady node, which cannot run it, is
-// not expected to have a pod.
+// not expected to have a pod. It is still named as a coverage gap.
 func TestCheckNodeToNode_TaintedNodeIsProbedNotReadyIsNot(t *testing.T) {
 	n1, n2, n3 := makeNode("node-1", true, 0), makeNode("node-2", true, 0), makeNode("node-3", false, 0)
 	n2.Spec.Taints = []corev1.Taint{{Key: "nvidia.com/gpu", Effect: corev1.TaintEffectNoSchedule}}
@@ -328,8 +329,8 @@ func TestCheckNodeToNode_TaintedNodeIsProbedNotReadyIsNot(t *testing.T) {
 	// the other, so the GPU-tainted node is probed either way.
 	assert.NotEqual(t, strings.Contains(f.checkerCmd, "10.0.0.1"), strings.Contains(f.checkerCmd, "10.0.0.2"),
 		"the checker on one node dials the other: %s", f.checkerCmd)
-	assert.NotContains(t, strings.Join(state.Warnings, "; "), "node-3",
-		"a NotReady node is not expected to run the probe, so it is no coverage gap")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "Node-to-Node: not probed on 1 node(s): node-3 (NotReady)",
+		"a node left out of a Verified row is a named coverage gap")
 }
 
 // Any rejection of the probe DaemonSet means the probe never ran. Classifying
@@ -422,7 +423,13 @@ func TestSweepOrphanN2NNamespaces_TTL(t *testing.T) {
 		Labels:            labels,
 		CreationTimestamp: metav1.NewTime(time.Now()),
 	}}
-	client := fake.NewSimpleClientset(stale, fresh)
+	// The labels are public constants, so the generated name is required too.
+	unprefixed := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              "team-namespace",
+		Labels:            labels,
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-30 * time.Minute)),
+	}}
+	client := fake.NewSimpleClientset(stale, fresh, unprefixed)
 
 	sweepOrphanN2NNamespaces(context.Background(), testLog(), client, orphanN2NNamespaceTTL)
 
@@ -431,6 +438,50 @@ func TestSweepOrphanN2NNamespaces_TTL(t *testing.T) {
 
 	_, err = client.CoreV1().Namespaces().Get(context.Background(), fresh.Name, metav1.GetOptions{})
 	assert.NoError(t, err, "namespace inside the TTL may belong to a concurrent run and must survive")
+
+	_, err = client.CoreV1().Namespaces().Get(context.Background(), unprefixed.Name, metav1.GetOptions{})
+	assert.NoError(t, err, "a labelled namespace without the probe prefix is not the validator's")
+}
+
+// A probe namespace stuck Terminating is held by a probe pod on a node whose
+// kubelet is gone. The sweep does not delete it again, but force-deletes the
+// probe pods inside so it can finish.
+func TestSweepOrphanN2NNamespaces_ForcesPodsOutOfATerminatingNamespace(t *testing.T) {
+	now := metav1.Now()
+	stuck := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: nodeToNodeNSPrefix + "stuck1",
+		Labels: map[string]string{
+			"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
+			"app.kubernetes.io/component":  "n2n-probe",
+		},
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
+		DeletionTimestamp: &now,
+		Finalizers:        []string{"kubernetes"},
+	}}
+	probe := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "nvcf-n2n-server-abc", Namespace: stuck.Name,
+		Labels: map[string]string{"app.kubernetes.io/managed-by": "nvcf-cluster-validator"},
+	}}
+	other := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: stuck.Name}}
+	client := fake.NewSimpleClientset(stuck, probe, other)
+	var podDeletes []string
+	nsDeletes := 0
+	client.PrependReactor("delete", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		del := a.(ktesting.DeleteActionImpl)
+		require.NotNil(t, del.DeleteOptions.GracePeriodSeconds)
+		assert.Zero(t, *del.DeleteOptions.GracePeriodSeconds, "a pod on a gone node is only removed by force")
+		podDeletes = append(podDeletes, del.Name)
+		return false, nil, nil
+	})
+	client.PrependReactor("delete", "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+		nsDeletes++
+		return false, nil, nil
+	})
+
+	sweepOrphanN2NNamespaces(context.Background(), testLog(), client, orphanN2NNamespaceTTL)
+
+	assert.Equal(t, []string{probe.Name}, podDeletes)
+	assert.Zero(t, nsDeletes, "a namespace already Terminating is not deleted, or counted, again")
 }
 
 // -- checkTier1Deployments --
@@ -1330,13 +1381,17 @@ func TestBuildNodeToNodeDaemonSet_ToleratesEveryTaint(t *testing.T) {
 	ds := buildNodeToNodeDaemonSet("n2n", "ns", map[string]string{"a": "b"}, "img", []string{"node-1", "node-2"})
 	assert.Equal(t, everything, ds.Spec.Template.Spec.Tolerations)
 	// Tolerating everything, it is pinned to the nodes it is expected on.
-	required := ds.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	affinity := ds.Spec.Template.Spec.Affinity
+	require.NotNil(t, affinity)
+	require.NotNil(t, affinity.NodeAffinity)
+	required := affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	require.NotNil(t, required)
 	terms := required.NodeSelectorTerms
 	require.Len(t, terms, 1)
 	assert.Equal(t, []corev1.NodeSelectorRequirement{{
 		Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{"node-1", "node-2"},
 	}}, terms[0].MatchFields)
-	pod := buildNodeToNodeCheckerPod("checker", "ns", "node-1", []string{"10.0.0.1"}, "img")
+	pod := buildNodeToNodeCheckerPod("checker", "ns", "node-1", nil, []string{"10.0.0.1"}, "img")
 	assert.Equal(t, everything, pod.Spec.Tolerations)
 }
 
@@ -1545,8 +1600,10 @@ func TestWaitForProbePods_KeepsTheLastSuccessfulList(t *testing.T) {
 	pods, err := waitForProbePods(context.Background(), client, "probe", selector, nodes, time.Second)
 	require.NoError(t, err)
 	assert.Len(t, pods, 2)
-	failed := map[string]sandboxEvidence{"b": sandboxFailed}
-	assert.Equal(t, []string{"node-2"}, classifyProbeNodes(pods, nodes, failed, nil).networkFaults)
+	failed := map[string]sandboxEvidence{"b": {state: sandboxFailed, reason: "FailedCreatePodSandBox"}}
+	faults := classifyProbeNodes(pods, nodes, failed, nil).networkFaults
+	require.Len(t, faults, 1, "the straggler kept from the earlier list is still classified")
+	assert.Equal(t, "node-2", faults[0].node)
 
 	// A list older than the freshness bound shows the pods as they were when
 	// it was taken, not as they are, so it is not classified at all.
@@ -1637,17 +1694,11 @@ func TestCheckNodeToNode_DaemonSetDenialStaysUnknown(t *testing.T) {
 func TestCheckNodeToNode_UnreadableCheckerIsUnknown(t *testing.T) {
 	client := fake.NewSimpleClientset(makeNode("node-1", true, 0), makeNode("node-2", true, 0))
 	var dsLabels map[string]string
-	var dsName, dsNS string
+	var dsNS string
 	client.PrependReactor("create", "daemonsets", func(action ktesting.Action) (bool, runtime.Object, error) {
 		ds := action.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
-		dsLabels, dsName, dsNS = ds.Labels, ds.Name, ds.Namespace
+		dsLabels, dsNS = ds.Labels, ds.Namespace
 		return true, ds, nil
-	})
-	client.PrependReactor("get", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{Name: dsName, Namespace: dsNS, Generation: 1},
-			Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 2, ObservedGeneration: 1},
-		}, nil
 	})
 	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, &corev1.PodList{Items: []corev1.Pod{
@@ -1687,11 +1738,11 @@ func probePod(node, phase string, ip string, waiting string) corev1.Pod {
 	return p
 }
 
-// Only a pod the node could not network is evidence about the overlay. A pod
-// that could not pull its image, start its container, be scheduled, be
-// admitted by the kubelet, or be created at all says nothing about it, and
-// neither does one with no sandbox event or with events that could not be
-// read: silence is undecided, never a CNI fault.
+// Only a pod whose latest sandbox event is a failure to create it is evidence
+// about the overlay. A pod that could not pull its image, start its container,
+// be scheduled, be admitted by the kubelet, or be created at all says nothing
+// about it, and neither does silence: no sandbox event, however long after
+// scheduling, or events that could not be read.
 func TestClassifyProbeNodes(t *testing.T) {
 	nodes := []string{"node-1", "node-2"}
 	running := probePod("node-1", "Running", "10.0.0.1", "")
@@ -1703,62 +1754,84 @@ func TestClassifyProbeNodes(t *testing.T) {
 	evicted := probePod("node-2", "Failed", "", "")
 	evicted.Status.Reason = "Evicted"
 	creating := func() []corev1.Pod { return second(probePod("node-2", "Pending", "", "ContainerCreating")) }
-	longScheduled := probePod("node-2", "Pending", "", "ContainerCreating")
-	longScheduled.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
-	created := map[string]sandboxEvidence{"b": sandboxCreated}
+	// Scheduled 70 seconds ago with no sandbox event: past the grace an
+	// earlier version read as a CNI fault.
+	silent := probePod("node-2", "Pending", "", "ContainerCreating")
+	silent.CreationTimestamp = metav1.NewTime(time.Now().Add(-70 * time.Second))
+	silent.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodScheduled, Status: corev1.ConditionTrue,
+		LastTransitionTime: metav1.NewTime(time.Now().Add(-70 * time.Second)),
+	}}
+	latest := func(state sandboxState, reason, message string) map[string]sandboxEvidence {
+		return map[string]sandboxEvidence{"b": {state: state, reason: reason, message: message}}
+	}
 	unreadable := apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 	cases := []struct {
-		name      string
-		pods      []corev1.Pod
-		sandboxes map[string]sandboxEvidence
-		eventsErr error
-		fault     bool
-		gap       string
-		pullError bool
+		name       string
+		pods       []corev1.Pod
+		sandboxes  map[string]sandboxEvidence
+		eventsErr  error
+		fault      bool
+		gap        string
+		imageError bool
 	}{
 		{"pod never created", []corev1.Pod{running}, nil, nil, false, "no probe pod was created", false},
 		{"image pull backoff", second(probePod("node-2", "Pending", "", "ImagePullBackOff")),
 			nil, nil, false, "ImagePullBackOff", true},
 		{"first pull error", second(probePod("node-2", "Pending", "", "ErrImagePull")),
 			nil, nil, false, "ErrImagePull", true},
+		{"pull still in progress", creating(), latest(sandboxCreated, "Pulling", ""), nil, false,
+			"image pull still in progress", true},
 		{"container cannot start", second(probePod("node-2", "Running", "", "CrashLoopBackOff")),
 			nil, nil, false, "CrashLoopBackOff", false},
 		{"kubelet eviction", second(evicted), nil, nil, false, "rejected by the kubelet (Evicted)", false},
-		{"pull or start under way", creating(), created, nil, false, "sandbox created", false},
-		{"sandbox creation failed", creating(), map[string]sandboxEvidence{"b": sandboxFailed}, nil, true, "", false},
-		{"no sandbox event an hour after scheduling", second(longScheduled), nil, nil, false,
-			"no sandbox event yet", false},
+		{"start under way", creating(), latest(sandboxCreated, "Started", ""), nil, false,
+			"sandbox created", false},
+		{"created only", creating(), latest(sandboxCreated, "Created", ""), nil, false, "sandbox created", false},
+		{"sandbox creation failed", creating(), latest(sandboxFailed, "FailedCreatePodSandBox", "plugin type=calico"),
+			nil, true, "", false},
+		{"volume mount failing", creating(), latest(sandboxPending, "FailedMount", "kube-api-access timed out"),
+			nil, false, "sandbox not created yet (FailedMount: kube-api-access timed out)", false},
+		{"no sandbox event long after scheduling", second(silent), nil, nil, false,
+			"scheduled, but no sandbox event yet", false},
 		{"events unreadable", creating(), nil, unreadable, false,
 			"pod events could not be read (Internal error occurred: etcd timeout)", false},
 		{"running without IP", second(probePod("node-2", "Running", "", "")), nil, nil, false,
-			"no sandbox event yet", false},
+			"scheduled, but no sandbox event yet", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := classifyProbeNodes(tc.pods, nodes, tc.sandboxes, tc.eventsErr)
 			assert.Len(t, got.running, 1)
 			if tc.fault {
-				assert.Equal(t, []string{"node-2"}, got.networkFaults)
+				assert.Equal(t, []sandboxFault{{node: "node-2", message: "plugin type=calico"}}, got.networkFaults,
+					"the fault keeps the event message that produced it")
 				assert.Empty(t, got.gaps)
 				return
 			}
 			assert.Empty(t, got.networkFaults)
 			require.Len(t, got.gaps, 1)
 			assert.Contains(t, got.gaps[0], "node-2: "+tc.gap)
-			assert.Equal(t, tc.pullError, got.pullFailed)
+			assert.Equal(t, tc.imageError, got.imageProblem)
 		})
 	}
 }
 
 // Every kubelet event that follows sandbox creation says the sandbox exists,
-// Pulled included (an image already on the node is Pulled without Pulling);
-// the latest event decides, so a sandbox created on retry counts as created.
+// Pulled included (an image already on the node is Pulled without Pulling),
+// and Created alone too. The latest event decides whatever order the list
+// returns them in, so a sandbox created on retry counts as created, and a
+// mount failure after a sandbox failure leaves it undecided.
 func TestProbeSandboxEvents(t *testing.T) {
 	client := fake.NewSimpleClientset()
+	failed := podEvent("failed", "FailedCreatePodSandBox", 1)
+	failed.Message = "failed to get sandbox image \"registry.k8s.io/pause:3.9\""
 	events := []corev1.Event{
 		podEvent("pulled-only", "Pulled", 0),
-		podEvent("retried", "FailedCreatePodSandBox", 0), podEvent("retried", "Started", 1),
-		podEvent("failed", "Pulling", 0), podEvent("failed", "FailedCreatePodSandBox", 1),
+		podEvent("created-only", "Created", 0),
+		podEvent("retried", "Started", 1), podEvent("retried", "FailedCreatePodSandBox", 0),
+		failed, podEvent("failed", "Pulling", 0),
+		podEvent("mount", "FailedMount", 2), podEvent("mount", "FailedCreatePodSandBox", 1),
 		podEvent("scheduled-only", "Scheduled", 0),
 	}
 	client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
@@ -1766,9 +1839,32 @@ func TestProbeSandboxEvents(t *testing.T) {
 	})
 	got, err := probeSandboxEvents(context.Background(), client, "ns")
 	require.NoError(t, err)
-	assert.Equal(t, map[string]sandboxEvidence{
-		"pulled-only": sandboxCreated, "retried": sandboxCreated, "failed": sandboxFailed,
-	}, got)
+	states := map[string]sandboxState{}
+	for name, ev := range got {
+		states[name] = ev.state
+	}
+	assert.Equal(t, map[string]sandboxState{
+		"pulled-only": sandboxCreated, "created-only": sandboxCreated, "retried": sandboxCreated,
+		"failed": sandboxFailed, "mount": sandboxPending,
+	}, states)
+	assert.Equal(t, `failed to get sandbox image "registry.k8s.io/pause:3.9"`, got["failed"].message,
+		"the sandbox failure keeps its message, which tells the CNI from the runtime")
+}
+
+// An events list that keeps failing is retried until the read gives up, and
+// then leaves every pod undecided with the cause.
+func TestProbeSandboxEvents_UnreadableIsRetriedThenUndecided(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	calls := 0
+	client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+	})
+	got, err := probeSandboxEvents(context.Background(), client, "ns")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "etcd timeout")
+	assert.Nil(t, got)
+	assert.Greater(t, calls, 1)
 }
 
 // An unbound DaemonSet pod has no spec.nodeName, but the controller pins it to
@@ -2495,17 +2591,23 @@ func TestCheckNodeToNode_SlowFirstPullIsNotANetworkFault(t *testing.T) {
 		runningProbePod("s-1", "node-1", "10.0.0.1"), runningProbePod("s-2", "node-2", "10.0.0.2"), pulling,
 	}
 
-	for _, events := range [][]corev1.Event{
-		{podEvent("s-3", "Scheduled", 0), podEvent("s-3", "Pulling", 1)},
-		{podEvent("s-3", "Pulling", 0), podEvent("s-3", "Pulled", 1)},
-		{podEvent("s-3", "Pulled", 0), podEvent("s-3", "Created", 1), podEvent("s-3", "Started", 2)},
+	for _, tc := range []struct {
+		events []corev1.Event
+		gap    string
+	}{
+		{[]corev1.Event{podEvent("s-3", "Scheduled", 0), podEvent("s-3", "Pulling", 1)},
+			"node-3: image pull still in progress"},
+		{[]corev1.Event{podEvent("s-3", "Pulling", 0), podEvent("s-3", "Pulled", 1)},
+			"node-3: sandbox created"},
+		{[]corev1.Event{podEvent("s-3", "Pulled", 0), podEvent("s-3", "Created", 1), podEvent("s-3", "Started", 2)},
+			"node-3: sandbox created"},
 	} {
-		f := newN2NFixture(t, nodes(), servers, events, checkerExit(0))
+		f := newN2NFixture(t, nodes(), servers, tc.events, checkerExit(0))
 		state := &ValidationState{Log: testLog()}
 		checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
 		require.NotNil(t, state.NodeToNodeOK)
 		assert.True(t, *state.NodeToNodeOK)
-		assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: sandbox created")
+		assert.Contains(t, strings.Join(state.Warnings, "; "), tc.gap)
 	}
 
 	// A sandbox failure after the pull started is the network after all.
@@ -2554,18 +2656,48 @@ func TestNodeToNodeTargets_SkipsFencedNodes(t *testing.T) {
 	now := metav1.Now()
 	deleting := *makeNode("deleting", true, 0)
 	deleting.DeletionTimestamp = &now
-	targets, skipped := nodeToNodeTargets([]corev1.Node{
+	labelled := func(name, key, value string) corev1.Node {
+		n := *makeNode(name, true, 0)
+		n.Labels = map[string]string{key: value}
+		return n
+	}
+	targets, skipped, unsupported := nodeToNodeTargets([]corev1.Node{
 		*makeNode("ready", true, 0),
 		tainted("gpu", "nvidia.com/gpu"),
+		labelled("linux", corev1.LabelOSStable, "linux"),
 		*makeNode("not-ready", false, 0),
 		tainted("disrupted", "karpenter.sh/disrupted"),
 		tainted("scale-down", "ToBeDeletedByClusterAutoscaler"),
 		tainted("cilium", "node.cilium.io/agent-not-ready"),
-		tainted("virtual", "virtual-kubelet.io/provider"),
 		noNetwork, deleting,
+		tainted("virtual", "virtual-kubelet.io/provider"),
+		labelled("windows", corev1.LabelOSStable, "windows"),
+		labelled("fargate", "eks.amazonaws.com/compute-type", "fargate"),
 	})
-	assert.Equal(t, []string{"ready", "gpu"}, targets)
-	assert.Len(t, skipped, 7)
+	assert.Equal(t, []string{"ready", "gpu", "linux"}, targets)
+	assert.Equal(t, []string{
+		"not-ready (NotReady)", "disrupted (tainted karpenter.sh/disrupted)",
+		"scale-down (tainted ToBeDeletedByClusterAutoscaler)", "cilium (tainted node.cilium.io/agent-not-ready)",
+		"no-network (network unavailable)", "deleting (being deleted)",
+	}, skipped)
+	assert.Equal(t, []string{"virtual (virtual-kubelet)", "windows (windows)", "fargate (Fargate)"}, unsupported,
+		"a node no Linux DaemonSet pod runs on is never a target")
+}
+
+// Every fencing taint keeps the probe off its node, including the ones for a
+// node not yet registered or initialized.
+func TestNodeToNodeTargets_EveryFencingTaint(t *testing.T) {
+	assert.True(t, nodeFencingTaints["karpenter.sh/unregistered"])
+	assert.True(t, nodeFencingTaints["node.cluster.x-k8s.io/uninitialized"])
+	for key := range nodeFencingTaints {
+		t.Run(key, func(t *testing.T) {
+			n := *makeNode("fenced", true, 0)
+			n.Spec.Taints = []corev1.Taint{{Key: key, Effect: corev1.TaintEffectNoSchedule}}
+			targets, skipped, _ := nodeToNodeTargets([]corev1.Node{*makeNode("ready", true, 0), n})
+			assert.Equal(t, []string{"ready"}, targets)
+			assert.Equal(t, []string{"fenced (tainted " + key + ")"}, skipped)
+		})
+	}
 }
 
 // The kubelet can refuse the NodeName-pinned checker on a node at its pod
@@ -2583,17 +2715,14 @@ func TestCheckNodeToNode_RefusedCheckerMovesToAnotherNode(t *testing.T) {
 			}
 			return checkerPod(0), nil
 		})
-	var deletedPods []string
-	f.client.PrependReactor("delete", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
-		deletedPods = append(deletedPods, a.(ktesting.DeleteAction).GetName())
-		return true, nil, nil
-	})
 	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.True(t, *state.NodeToNodeOK)
 	assert.Equal(t, 2, calls, "the second node's checker ran")
-	assert.Len(t, deletedPods, 2, "both checker pods are cleaned up")
+	require.Len(t, f.checkerNodes, 2)
+	assert.NotEqual(t, f.checkerNodes[0], f.checkerNodes[1], "the checker moved to the other node")
+	assert.Empty(t, f.leftovers(t), "both checker pods are cleaned up")
 }
 
 // The checker is pinned with NodeName, so a full node rejects it at kubelet
@@ -2609,28 +2738,44 @@ func TestCheckerFailureCause(t *testing.T) {
 		}}}
 	}
 	cases := []struct {
-		name    string
-		status  corev1.PodStatus
-		network bool
+		name     string
+		status   corev1.PodStatus
+		reported bool
+		imageRec bool
 	}{
-		{"connection failed", exited(nodeToNodeUnreachableExit), true},
-		{"no nc in the image", exited(nodeToNodeNoNetcatExit), false},
-		{"other exit", exited(137), false},
-		{"kubelet rejected it", corev1.PodStatus{Phase: corev1.PodFailed, Reason: "OutOfcpu"}, false},
+		{"connection failed", exited(nodeToNodeUnreachableExit), true, false},
+		{"connection refused", exited(nodeToNodeRefusedExit), true, false},
+		{"nc failed its self-test", exited(nodeToNodeNoNetcatExit), false, true},
+		{"other exit", exited(137), false, false},
+		{"kubelet rejected it", corev1.PodStatus{Phase: corev1.PodFailed, Reason: "OutOfcpu"}, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			why := checkerFailureCause(pod(tc.status))
-			assert.Equal(t, tc.network, why == "", why)
+			why, rec := checkerFailureCause(pod(tc.status))
+			assert.Equal(t, tc.reported, why == "", why)
+			assert.Equal(t, tc.imageRec, strings.HasPrefix(rec, ProbeImageRecommendation), rec)
 		})
 	}
 }
 
+// The script separates a failed connection from everything else by exit code,
+// first proves the image's nc can listen and connect with the probe's own
+// flags, dials every target, and names the ones that failed last, where the
+// kubelet's termination message keeps them.
 func TestBuildNodeToNodeCheckerPod_ExitCodesSeparateNetworkFailures(t *testing.T) {
-	cmd := buildNodeToNodeCheckerPod("c", "ns", "node-1", []string{"10.0.0.2"}, "img").Spec.Containers[0].Command[2]
-	assert.Contains(t, cmd, fmt.Sprintf("|| exit %d", nodeToNodeNoNetcatExit))
-	assert.Contains(t, cmd,
-		fmt.Sprintf("nc -z -w 5 10.0.0.2 %d || exit %d", nodeToNodeTestPort, nodeToNodeUnreachableExit))
+	pod := buildNodeToNodeCheckerPod("c", "ns", "node-1", nil, []string{"10.0.0.2", "10.0.0.3"}, "img")
+	cmd := pod.Spec.Containers[0].Command[2]
+	assert.Contains(t, cmd, fmt.Sprintf("command -v nc >/dev/null 2>&1 || exit %d", nodeToNodeNoNetcatExit))
+	assert.Contains(t, cmd, fmt.Sprintf("nc -l -p %d >/dev/null 2>&1 &", nodeToNodeTestPort))
+	assert.Contains(t, cmd, fmt.Sprintf("until nc -v -z -w 5 127.0.0.1 %d", nodeToNodeTestPort))
+	assert.Contains(t, cmd, "for ip in 10.0.0.2 10.0.0.3; do")
+	assert.Contains(t, cmd, fmt.Sprintf("out=$(nc -v -z -w 5 $ip %d 2>&1) && continue", nodeToNodeTestPort))
+	assert.Contains(t, cmd, fmt.Sprintf("if [ $n -ge %d ]; then stopped=1; break; fi", nodeToNodeMaxUnreachable))
+	assert.Contains(t, cmd, "*refused*)")
+	assert.Contains(t, cmd, fmt.Sprintf(`echo "unreachable:$unreachable"; exit %d;`, nodeToNodeUnreachableExit))
+	assert.Contains(t, cmd, fmt.Sprintf(`[ -z "$refused" ] || exit %d`, nodeToNodeRefusedExit))
+	assert.Equal(t, corev1.TerminationMessageFallbackToLogsOnError, pod.Spec.Containers[0].TerminationMessagePolicy,
+		"the IPs the script names reach the pod status without a pods/log grant")
 }
 
 // Envoy is non-critical, so a missing namespace needs a warning or the run
@@ -2669,17 +2814,11 @@ func TestCheckNodeToNode_ExistingNamespaceIsNotAdopted(t *testing.T) {
 func TestCheckNodeToNode_KubeletRejectedCheckerIsUnknown(t *testing.T) {
 	client := fake.NewSimpleClientset(makeNode("node-1", true, 0), makeNode("node-2", true, 0))
 	var dsLabels map[string]string
-	var dsName, dsNS string
+	var dsNS string
 	client.PrependReactor("create", "daemonsets", func(action ktesting.Action) (bool, runtime.Object, error) {
 		ds := action.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
-		dsLabels, dsName, dsNS = ds.Labels, ds.Name, ds.Namespace
+		dsLabels, dsNS = ds.Labels, ds.Namespace
 		return true, ds, nil
-	})
-	client.PrependReactor("get", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{Name: dsName, Namespace: dsNS, Generation: 1},
-			Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 2, ObservedGeneration: 1},
-		}, nil
 	})
 	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, &corev1.PodList{Items: []corev1.Pod{
@@ -3787,12 +3926,19 @@ func TestCheckTier1Deployments_ReplicaFailureIsNotARollout(t *testing.T) {
 	assert.True(t, *state.Tier1DeploymentsOK, "a moving rollout at its floor is tolerated")
 }
 
-// n2nFixture is a fake cluster for checkNodeToNode: the probe pods it serves
-// are placed in the run's namespace with the DaemonSet's labels, and checker
-// scripts what each Get of the checker pod returns.
+// n2nFixture is a fake cluster for checkNodeToNode. Everything the run creates
+// is stored, so a test can list what it left behind. Creating the DaemonSet
+// stores the given probe pods in the run's namespace with its labels, as the
+// DaemonSet controller would, and checker scripts what each Get of the
+// checker pod returns.
 type n2nFixture struct {
 	client     *fake.Clientset
 	checkerCmd string
+	// checkerNode is the node of the latest checker pod, and checkerNodes all
+	// of them in order.
+	checkerNode  string
+	checkerNodes []string
+	ds           *appsv1.DaemonSet
 }
 
 func newN2NFixture(
@@ -3807,20 +3953,18 @@ func newN2NFixture(
 		objs = append(objs, n)
 	}
 	f := &n2nFixture{client: fake.NewSimpleClientset(objs...)}
-	var labels map[string]string
-	var ns string
+	podsGVR := corev1.SchemeGroupVersion.WithResource("pods")
 	f.client.PrependReactor("create", "daemonsets", func(a ktesting.Action) (bool, runtime.Object, error) {
 		ds := a.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
-		labels, ns = ds.Labels, ds.Namespace
-		return true, ds, nil
-	})
-	f.client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
-		items := make([]corev1.Pod, len(pods))
+		f.ds = ds.DeepCopy()
 		for i := range pods {
-			items[i] = *pods[i].DeepCopy()
-			items[i].Namespace, items[i].Labels = ns, labels
+			p := pods[i].DeepCopy()
+			p.Namespace, p.Labels = ds.Namespace, ds.Spec.Template.Labels
+			if err := f.client.Tracker().Create(podsGVR, p, ds.Namespace); err != nil {
+				return true, nil, err
+			}
 		}
-		return true, &corev1.PodList{Items: items}, nil
+		return false, nil, nil
 	})
 	f.client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, &corev1.EventList{Items: events}, nil
@@ -3828,13 +3972,42 @@ func newN2NFixture(
 	f.client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
 		p := a.(ktesting.CreateAction).GetObject().(*corev1.Pod)
 		f.checkerCmd = strings.Join(p.Spec.Containers[0].Command, " ")
-		return true, p, nil
+		f.checkerNode = p.Spec.NodeName
+		f.checkerNodes = append(f.checkerNodes, p.Spec.NodeName)
+		return false, nil, nil
 	})
 	f.client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
 		p, err := checker()
 		return true, p, err
 	})
 	return f
+}
+
+// leftovers lists every probe object the run left: DaemonSets and pods with
+// the validator's label in any namespace, and probe namespaces.
+func (f *n2nFixture) leftovers(t *testing.T) []string {
+	t.Helper()
+	ctx := context.Background()
+	sel := metav1.ListOptions{LabelSelector: "app.kubernetes.io/managed-by=nvcf-cluster-validator"}
+	var left []string
+	dss, err := f.client.AppsV1().DaemonSets("").List(ctx, sel)
+	require.NoError(t, err)
+	for _, ds := range dss.Items {
+		left = append(left, "daemonset "+ds.Namespace+"/"+ds.Name)
+	}
+	pods, err := f.client.CoreV1().Pods("").List(ctx, sel)
+	require.NoError(t, err)
+	for _, p := range pods.Items {
+		left = append(left, "pod "+p.Namespace+"/"+p.Name)
+	}
+	nss, err := f.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	for _, ns := range nss.Items {
+		if strings.HasPrefix(ns.Name, nodeToNodeNSPrefix) {
+			left = append(left, "namespace "+ns.Name)
+		}
+	}
+	return left
 }
 
 func runningProbePod(name, node, ip string) corev1.Pod {
@@ -3855,6 +4028,19 @@ func checkerPod(exit int32) *corev1.Pod {
 
 func checkerExit(exit int32) func() (*corev1.Pod, error) {
 	return func() (*corev1.Pod, error) { return checkerPod(exit), nil }
+}
+
+// checkerReported is a checker that exited with exit after printing lines,
+// which the kubelet keeps as its termination message.
+func checkerReported(exit int32, lines ...string) *corev1.Pod {
+	p := checkerPod(exit)
+	p.Status.ContainerStatuses[0].State.Terminated.Message = strings.Join(lines, "\n")
+	return p
+}
+
+// refusedChecker is a checker pod the kubelet refused at admission.
+func refusedChecker() *corev1.Pod {
+	return &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "OutOfpods"}}
 }
 
 // podEvent is a pod event seq seconds into the run, so events sort in order.

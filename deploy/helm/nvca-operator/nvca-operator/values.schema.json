@@ -1283,7 +1283,7 @@
                 },
                 "nodeToNodeProbeImage": {
                     "type": "string",
-                    "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets",
+                    "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36",
                     "default": ""
                 },
                 "tolerations": {

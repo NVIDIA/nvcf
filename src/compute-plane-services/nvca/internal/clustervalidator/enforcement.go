@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -41,6 +42,9 @@ const (
 	enforcementServerPod   = "netpol-server"
 	enforcementIngressPol  = "netpol-test-ingress"
 	enforcementEgressPol   = "netpol-test-egress"
+	// enforcementDeleteTimeout bounds each cleanup delete, on a context of its
+	// own so a cancelled run still cleans up.
+	enforcementDeleteTimeout = 20 * time.Second
 )
 
 // enforcementPropDelay is how long a policy change gets to reach the data
@@ -125,8 +129,17 @@ func checkNetworkPolicyEnforcement(
 		podTimeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
 
-	ns := fmt.Sprintf("netpol-validation-%d", time.Now().UnixNano()%100000)
+	ns := "netpol-validation-" + rand.String(6)
+	log.Info("Phase 1: Setting up test environment")
+	printInfo(log, fmt.Sprintf("Creating namespace %s", ns))
+	if err := createTestNamespace(ctx, client, ns); err != nil {
+		enforcementNotRun(log, state, fmt.Sprintf("could not create the test namespace %s: %v", ns, err))
+		return
+	}
+	// Registered only once the create succeeded: a namespace this run did not
+	// create belongs to another run, whose test this would otherwise delete.
 	defer cleanupTestNamespace(log, client, ns)
+	printSuccess(log, "Namespace created")
 
 	env, ok := setupEnforcementEnv(ctx, client, state, ns, image, podTimeout)
 	if !ok {
@@ -202,15 +215,6 @@ func setupEnforcementEnv(
 	state *ValidationState, ns, image string, podTimeout time.Duration,
 ) (*enforcementEnv, bool) {
 	log := state.Log
-	log.Info("Phase 1: Setting up test environment")
-	printInfo(log, fmt.Sprintf("Creating namespace %s", ns))
-
-	if err := createTestNamespace(ctx, client, ns); err != nil {
-		enforcementNotRun(log, state, fmt.Sprintf("could not create the test namespace %s: %v", ns, err))
-		return nil, false
-	}
-	printSuccess(log, "Namespace created")
-
 	printInfo(log, "Deploying server pod...")
 	if err := createServerPod(ctx, client, ns, image); err != nil {
 		enforcementNotRun(log, state, fmt.Sprintf("could not create the server pod in %s: %v", ns, err))
@@ -443,15 +447,17 @@ func runEgressPhase(env *enforcementEnv) bool {
 func createTestNamespace(ctx context.Context, client kubernetes.Interface, ns string) error {
 	_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   ns,
-			Labels: map[string]string{"app": "netpol-validation", "purpose": "enforcement-test"},
+			Name: ns,
+			Labels: map[string]string{
+				"app": "netpol-validation", "purpose": "enforcement-test", managedByLabel: validatorManager,
+			},
 		},
 	}, metav1.CreateOptions{})
 	return err
 }
 
 func cleanupTestNamespace(log *logrus.Entry, client kubernetes.Interface, ns string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), enforcementDeleteTimeout)
 	defer cancel()
 	printInfo(log, fmt.Sprintf("Cleaning up test namespace %s", ns))
 	err := client.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{})
@@ -492,6 +498,9 @@ func sweepOrphanTestNamespaces(
 		if ns.CreationTimestamp.After(cutoff) {
 			continue // still within TTL — might be a concurrent run
 		}
+		if ns.DeletionTimestamp != nil {
+			continue // already being deleted, so not this sweep's to count
+		}
 		delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
 		err := client.CoreV1().Namespaces().Delete(delCtx, ns.Name, metav1.DeleteOptions{})
 		delCancel()
@@ -513,7 +522,7 @@ func sweepOrphanTestNamespaces(
 // ---------------------------------------------------------------------------
 
 func buildServerPod(ns, image string) *corev1.Pod {
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      enforcementServerPod,
 			Namespace: ns,
@@ -537,6 +546,8 @@ func buildServerPod(ns, image string) *corev1.Pod {
 			RestartPolicy: corev1.RestartPolicyNever,
 		},
 	}
+	hardenProbePodSpec(&pod.Spec)
+	return pod
 }
 
 func createServerPod(ctx context.Context, client kubernetes.Interface, ns, image string) error {
@@ -554,7 +565,7 @@ func buildProbePod(ns, name, image, role, serverIP string, settleDelay int) *cor
 	if settleDelay > 0 {
 		cmd = fmt.Sprintf("sleep %d && %s", settleDelay, wgetCmd)
 	}
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
@@ -571,6 +582,8 @@ func buildProbePod(ns, name, image, role, serverIP string, settleDelay int) *cor
 			RestartPolicy: corev1.RestartPolicyNever,
 		},
 	}
+	hardenProbePodSpec(&pod.Spec)
+	return pod
 }
 
 // probeConnectivity creates a short-lived pod that attempts to reach the
@@ -604,7 +617,9 @@ func probeConnectivityWithDelay(
 		return false, fmt.Errorf("could not create the probe pod %s: %w", name, err)
 	}
 	defer func() {
-		_ = client.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
+		delCtx, cancel := context.WithTimeout(context.Background(), enforcementDeleteTimeout)
+		defer cancel()
+		_ = client.CoreV1().Pods(ns).Delete(delCtx, name, metav1.DeleteOptions{})
 	}()
 
 	succeeded, done, err := waitForPodDone(ctx, client, ns, name, timeout)
@@ -708,6 +723,25 @@ func attemptContext(ctx context.Context, deadline time.Time) (context.Context, c
 func waitForPodDone(
 	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
 ) (bool, *corev1.Pod, error) {
+	return waitForPodDoneOr(ctx, client, ns, name, timeout, nil)
+}
+
+// podStuckError reports a pod that cannot finish, for the reason stuck named.
+type podStuckError struct {
+	pod, reason string
+}
+
+func (e *podStuckError) Error() string {
+	return fmt.Sprintf("pod %s cannot finish: %s", e.pod, e.reason)
+}
+
+// waitForPodDoneOr is waitForPodDone that also gives up, with a
+// *podStuckError and the pod as read, as soon as stuck names a reason the pod
+// cannot finish, rather than waiting out the timeout.
+func waitForPodDoneOr(
+	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
+	stuck func(*corev1.Pod) string,
+) (bool, *corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
@@ -730,6 +764,11 @@ func waitForPodDone(
 				return true, pod, nil
 			case corev1.PodFailed:
 				return false, pod, nil
+			}
+			if stuck != nil {
+				if why := stuck(pod); why != "" {
+					return false, pod, &podStuckError{pod: ns + "/" + name, reason: why}
+				}
 			}
 		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsNotFound(err):
 			// Answers that cannot change inside the deadline.

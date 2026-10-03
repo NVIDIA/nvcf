@@ -502,7 +502,7 @@ networkPolicy:
 ## @param clusterValidator.envoyGatewayNamespace Namespace holding Envoy Gateway, when it is not envoy-gateway-system
 ## @param clusterValidator.gatewayNames Every NVCF Gateway as "namespace/name" (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1
 ## @param clusterValidator.storageClass StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required
-## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. Defaults to busybox:1.36 from Docker Hub
+## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub
 ## @param clusterValidator.tolerations Extra tolerations for the validator CronJob pods, added to the control-plane ones
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
 ## @param clusterValidator.configMapName ConfigMap name for user-defined network checks (reachability + network policy validation)
@@ -545,10 +545,12 @@ clusterValidator:
   # every PVC, so the StorageClass check requires that class to exist instead
   # of a default class.
   storageClass: ""
-  # Set for air-gapped or registry-mirrored clusters. Without it every probe
-  # pod pulls busybox from Docker Hub and the overlay row reports UNKNOWN.
-  # The probe runs in a fresh namespace with no imagePullSecrets, so the image
-  # must be pullable anonymously or through node-level registry credentials.
+  # Set for air-gapped or registry-mirrored clusters. When empty, the probe
+  # uses networkChecks.enforcement.testImage if that is set, and otherwise
+  # pulls busybox:1.36 from Docker Hub, so on a cluster that cannot reach it
+  # the overlay row reports UNKNOWN. The probe runs in a fresh namespace with
+  # no imagePullSecrets, so the image must be pullable anonymously or through
+  # node-level registry credentials. It is pulled only when a node lacks it.
   nodeToNodeProbeImage: ""
   # Added to the control-plane tolerations the validator Job always carries,
   # for clusters whose control-plane nodes use other taints. A validator that

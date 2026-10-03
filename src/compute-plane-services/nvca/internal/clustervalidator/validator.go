@@ -328,6 +328,11 @@ func Run(
 	// flow). Runs unconditionally so orphans get reclaimed even if enforcement
 	// is currently disabled.
 	sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
+	// Only the control-plane role runs the node-to-node probe, but either
+	// role's validator may run on a cluster, so every run reclaims what a
+	// killed probe left behind.
+	sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
+	sweepLegacyOrphanN2NDaemonSets(ctx, log, client, orphanN2NNamespaceTTL)
 
 	checkControlPlaneHealth(ctx, client, state)
 	checkWebhookSupport(ctx, client, state)
