@@ -26,9 +26,9 @@ navbar-links:
 
 # Docs editions share one selector. Released branches are pinned in editions.yml.
 versions:
-- display-name: "1.0.0"
-  slug: "1.0.0"
-  ref: docs/releases/1.0.0
+- display-name: "1.0.1"
+  slug: "1.0.1"
+  ref: docs/releases/1.0.1
 - display-name: Development
   slug: dev
   path: navigation.yml
