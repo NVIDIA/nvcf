@@ -1,9 +1,2 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-# Registry for branch-backed docs editions. Keep each recorded branch immutable.
 schema_version: 1
-default: 1.0.1
-editions:
-    - version: 1.0.1
-      ref: docs/releases/1.0.1
-      commit: d4fa180b10723aa220d52a18a3094fb3e15f050b
+editions: []

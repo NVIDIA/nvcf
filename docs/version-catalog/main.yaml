@@ -1,10 +1,10 @@
+docs_edition:
+  version: 1.0.1
+  status: qualified
+  change: initial
+  qualification: https://github.com/NVIDIA/nvcf/pull/2235
 version: 1
 target: main
-docs_edition:
-  version: 1.0.2
-  status: development
-  previous_version: 1.0.1
-  change: patch
 registries:
   public-helm:
     host: https://helm.ngc.nvidia.com
@@ -349,7 +349,6 @@ version_overrides:
     type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
-publication_pending: []
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
