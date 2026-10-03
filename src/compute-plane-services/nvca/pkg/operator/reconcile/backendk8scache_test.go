@@ -3722,3 +3722,31 @@ func TestCleanupResources_RemovesNVCFBackendFinalizer(t *testing.T) {
 		"cleanupResources must strip the operator finalizer so K8s can GC the CR; "+
 			"otherwise the reconciler loops forever on the same deletionTimestamp")
 }
+
+func TestBackendK8sCacheBuilder_Start_UsesSystemNamespace(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	const systemNamespace = "some-other-ns"
+	bc, _, err := NewBackendK8sCacheBuilder().
+		WithSystemNamespace(systemNamespace).
+		WithNGCServiceKeyFetcher(&mockTokenFetcher{token: "randomkey"}).
+		WithClients(mockKubeClients()).
+		Start(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, systemNamespace, bc.operatorNamespace)
+}
+
+func TestBackendK8sCacheBuilder_Start_DefaultsOperatorNamespace(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	bc, _, err := NewBackendK8sCacheBuilder().
+		WithNGCServiceKeyFetcher(&mockTokenFetcher{token: "randomkey"}).
+		WithClients(mockKubeClients()).
+		Start(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, NVCAOperatorNamespace, bc.operatorNamespace)
+}
