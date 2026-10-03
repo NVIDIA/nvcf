@@ -652,3 +652,17 @@ start. The cold pods did not collect a set because the engine-script
 capture path returned from admission before the cache stamping; that
 was a gap in nvsnap, since closed, which would have handed the
 second deployment the plan.
+
+A Dynamo function with an HF model (Qwen3-0.6B, 2026-10-03) found two
+more gaps on the shared-filesystem Job path. The Job runs with the
+function's posture, uid 1000, and a fresh FSS filesystem is root-owned
+and 0755, so the download could not create its first directory and
+the Job crashed six times in three minutes; the agent only reacted to
+succeeded Jobs, so the failure left no record and the readers waited
+out their 30 min deadline. The agent on the Job's node now opens the
+primary's root (1777) through the Job pod's kubelet mount, the writer
+waits until its landing is writable instead of crashing into the
+backoff, and a failed Job is recorded with its reason and the download
+container's last words, with the writer view retired and the primary
+claim kept for the retry. The engine-capture path never saw this
+because the agent copies as root.

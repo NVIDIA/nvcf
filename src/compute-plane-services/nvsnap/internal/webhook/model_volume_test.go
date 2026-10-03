@@ -1260,3 +1260,19 @@ func TestModelVolume_SharedFilesystem_PrimaryNotBoundYet(t *testing.T) {
 		t.Error("no read-only view yet: the agent mints it once the primary binds")
 	}
 }
+
+
+// The writer waits for its landing to become writable before downloading:
+// a fresh shared filesystem is root-owned until the agent on the Job's
+// node opens it, and the Job runs as the function's user.
+func TestWriterScript_WaitsForWritableLanding(t *testing.T) {
+	script := writerScript("hf download org/model", "/model/.nvsnap-complete")
+	wait := strings.Index(script, "while [ ! -w /model ]")
+	dl := strings.Index(script, "hf download org/model")
+	if wait < 0 || dl < 0 || wait > dl {
+		t.Fatalf("the writable wait must precede the download:\n%s", script)
+	}
+	if !strings.Contains(script, "if [ -f /model/.nvsnap-complete ]") || strings.Index(script, "if [ -f /model/.nvsnap-complete ]") > wait {
+		t.Errorf("the completed-marker check still comes first:\n%s", script)
+	}
+}

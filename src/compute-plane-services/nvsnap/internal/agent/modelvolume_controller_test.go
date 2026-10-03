@@ -1027,3 +1027,120 @@ func TestModelVolumeController_SharedFilesystemMintsViewsOnceBound(t *testing.T)
 	}
 	c.Handle(ctx, writer) // idempotent
 }
+
+// sharedFilesystemFixture is a bound RWX primary on a filesystem class
+// with its writer view minted in sr-fn, as the webhook leaves it.
+func sharedFilesystemFixture(t *testing.T) (*fake.Clientset, *modelvolume.Provisioner, *checkpointstore.SharedVolumePromoter) {
+	t.Helper()
+	ctx := context.Background()
+	primary := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-fs"}, Spec: corev1.PersistentVolumeSpec{
+		Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Ti")},
+		PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+		PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/export"}}}}
+	kc := fake.NewSimpleClientset(primary)
+	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("4Ti")}}
+	sysNS := p.Cfg.SystemNamespace()
+	if _, err := p.EnsureWriterClaim(ctx, mvURI, sysNS); err != nil {
+		t.Fatal(err)
+	}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{})
+	pvc.Spec.VolumeName, pvc.Status.Phase = "pv-fs", corev1.ClaimBound
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ := checkpointstore.LookupVolumeHandleTransform("")
+	minter := &checkpointstore.SharedVolumePromoter{KubeClient: kc, StorageClass: "fs", Transform: tx, Log: logrus.New()}
+	if err := minter.MintViewFromPVLabels(ctx, "pv-fs", p.Cfg.WriterViewPVName(mvURI, "sr-fn"), p.Cfg.WriterViewClaimName(mvURI), "sr-fn", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	return kc, p, minter
+}
+
+// A fresh shared filesystem is root-owned and 0755; the download Job runs
+// as the function's user. The agent on the Job's node opens the primary's
+// root through the kubelet mount of the Job pod; agents elsewhere leave it
+// alone.
+func TestModelVolumeController_WriterPodOpensPrimaryRootOnItsNode(t *testing.T) {
+	ctx := context.Background()
+	kc, p, minter := sharedFilesystemFixture(t)
+	view, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, p.Cfg.WriterViewClaimName(mvURI), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI) + "-x1", Namespace: "sr-fn", UID: "job-pod-uid",
+			Labels:      map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "writer"},
+			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI}},
+		Spec: corev1.PodSpec{NodeName: "node-a", Volumes: []corev1.Volume{{Name: "model", VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: view.Name}}}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, jobPod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	host := t.TempDir()
+	root := filepath.Join(host, "var/lib/kubelet/pods/job-pod-uid/volumes/kubernetes.io~csi", view.Spec.VolumeName, "mount")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-b", HostFSRoot: host, KubeletPodsDir: "/var/lib/kubelet/pods", Log: logrus.New()}
+	other.Handle(ctx, jobPod)
+	if st, _ := os.Stat(root); st.Mode().Perm()&0o002 != 0 {
+		t.Fatal("an agent on another node does not touch the mount")
+	}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", HostFSRoot: host, KubeletPodsDir: "/var/lib/kubelet/pods", Log: logrus.New()}
+	c.Handle(ctx, jobPod)
+	st, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o777 || st.Mode()&os.ModeSticky == 0 {
+		t.Errorf("the primary root is opened 1777 for the Job's user, got %v", st.Mode())
+	}
+}
+
+// A download Job that gave up is recorded as a failure with the reason and
+// the download container's last words, and its writer view is retired.
+// The primary claim stays so a retry reuses the volume.
+func TestModelVolumeController_FailedJobRecordsFailureAndRetiresWriterView(t *testing.T) {
+	ctx := context.Background()
+	kc, p, minter := sharedFilesystemFixture(t)
+	sysNS := p.Cfg.SystemNamespace()
+	jobPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI) + "-x1", Namespace: "sr-fn",
+			Labels: map[string]string{"batch.kubernetes.io/job-name": modelvolume.JobName(mvURI)}},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed, ContainerStatuses: []corev1.ContainerStatus{{Name: modelvolume.DownloadContainer,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", Message: "PermissionError: [Errno 13] Permission denied: '/model/hub'"}}}}},
+	}
+	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, jobPod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	job := downloadJob(0)
+	job.UID = "job-uid-1"
+	job.Status.Failed = 6
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit"}}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
+	c.HandleJob(ctx, job)
+	c.HandleJob(ctx, job) // the same failure is handled once
+	st, _ := p.Lookup(ctx, mvURI)
+	if st.Complete || !st.Failed {
+		t.Fatalf("the failure is recorded and the primary is not complete: %+v", st)
+	}
+	rec, err := kc.CoreV1().ConfigMaps(sysNS).Get(ctx, p.Cfg.FailureRecordName(mvURI), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := rec.Annotations[modelvolume.FailedAnnotation]
+	if !strings.Contains(reason, "BackoffLimitExceeded") || !strings.Contains(reason, "Permission denied: '/model/hub'") {
+		t.Errorf("the record carries the Job's reason and the download container's last words, got %q", reason)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, p.Cfg.WriterViewClaimName(mvURI), metav1.GetOptions{}); err == nil {
+		t.Error("the writer view claim is retired with the failed Job")
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err != nil {
+		t.Error("the primary claim stays for the retry")
+	}
+}

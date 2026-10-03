@@ -579,9 +579,16 @@ func initMountFor(init *corev1.Container, land modelid.Landing) string {
 // count from the pod status rather than from the volume, and size the
 // read-only views from it on storage whose claim size is nominal. Readers
 // only test that the marker exists.
+// writableWaitSeconds bounds the writer's wait for its landing to open.
+const writableWaitSeconds = 600
+
 func writerScript(download, marker string) string {
 	dir := path.Dir(marker)
-	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir))
+	// A fresh shared filesystem is root-owned until the agent on this node
+	// opens it; the Job runs as the function's user and waits rather than
+	// crash into the Job's backoff.
+	wait := fmt.Sprintf("d=0\nwhile [ ! -w %[1]s ]; do if [ $d -ge %[2]d ]; then echo 'nvsnap: landing %[1]s is not writable' >&2; break; fi; sleep 2; d=$((d+2)); done\n", shellQuote(dir), writableWaitSeconds)
+	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[4]s%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir), wait)
 }
 
 // readerScript waits for the marker; past the deadline it runs the

@@ -301,6 +301,7 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		// was; a brand-new filesystem can take longer than admission allows).
 		if c.Provisioner.Cfg.SharedWhileWriting() && pod.DeletionTimestamp == nil {
 			c.ensureWriterView(ctx, pod, uri)
+			c.openWriterRoot(ctx, pod, uri)
 		}
 		return
 	}
@@ -334,12 +335,19 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 	}
 	c.init()
 	uri := job.Annotations[modelvolume.IdentityAnnotation]
-	if uri == "" || job.Status.Succeeded == 0 {
+	if uri == "" {
 		return
 	}
 	log := c.log().WithFields(logrus.Fields{"job": job.Namespace + "/" + job.Name, "model": uri})
 	if job.Annotations[modelvolume.StagingAnnotation] != "" {
 		return // block storage: the staging pod event drives the copy
+	}
+	if cond := jobFailedCondition(job); cond != nil {
+		c.failJob(ctx, job, uri, cond, log)
+		return
+	}
+	if job.Status.Succeeded == 0 {
+		return
 	}
 	// The Job wrote through its namespace's read-write view into the
 	// primary in the nvsnap namespace. The agent on the Job's node reads
@@ -356,6 +364,114 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 		log.WithError(err).Warn("model volume: release writer view failed; the reaper retires it with the namespace")
 	}
 	log.Info("model volume: download complete; readers read the primary through their views")
+}
+
+// jobFailedCondition returns the Job's Failed condition if it is set.
+func jobFailedCondition(job *batchv1.Job) *batchv1.JobCondition {
+	for i := range job.Status.Conditions {
+		if c := &job.Status.Conditions[i]; c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return c
+		}
+	}
+	return nil
+}
+
+// failJob is the end of a download Job that gave up on storage that is
+// shared while written. Without it the Job's TTL removed the only trace,
+// no failure was recorded, and the readers waited out their deadline on
+// a marker nobody would write (Qwen3-0.6B on an FSS primary, 2026-10-03:
+// six crashes in three minutes, 30 min of waiting). The writer view is
+// retired; the primary claim stays so a retry reuses the volume; the
+// failure record keeps admissions off the model for a while and carries
+// the reason, including the download container's last words.
+func (c *ModelVolumeController) failJob(ctx context.Context, job *batchv1.Job, uri string, cond *batchv1.JobCondition, log logrus.FieldLogger) {
+	key := "jobfail:" + string(job.UID) + "/" + job.Name
+	c.mu.Lock()
+	seen := c.attempts[key] > 0
+	c.attempts[key] = 1
+	c.mu.Unlock()
+	if seen {
+		return
+	}
+	reason := strings.TrimSpace(cond.Reason + ": " + cond.Message)
+	if last := c.jobPodLastWords(ctx, job); last != "" {
+		reason += "; download container: " + last
+	}
+	log.WithField("reason", reason).Error("model volume: download job failed")
+	if err := c.Provisioner.RecordFailure(ctx, uri, reason); err != nil {
+		log.WithError(err).Warn("model volume: record failure failed")
+	}
+	if err := c.Provisioner.ReleaseWriterView(ctx, uri, job.Namespace); err != nil {
+		log.WithError(err).Warn("model volume: release writer view failed; the reaper retires it with the namespace")
+	}
+}
+
+// jobPodLastWords is the exit code and message of the download container
+// of the Job's most recent pod, if the pod is still around.
+func (c *ModelVolumeController) jobPodLastWords(ctx context.Context, job *batchv1.Job) string {
+	pods, err := c.Kube.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "batch.kubernetes.io/job-name=" + job.Name})
+	if err != nil || len(pods.Items) == 0 {
+		return ""
+	}
+	var last string
+	for i := range pods.Items {
+		for _, cs := range pods.Items[i].Status.ContainerStatuses {
+			if cs.Name != modelvolume.DownloadContainer {
+				continue
+			}
+			t := cs.State.Terminated
+			if t == nil {
+				t = cs.LastTerminationState.Terminated
+			}
+			if t != nil {
+				last = fmt.Sprintf("exit %d %s %s", t.ExitCode, t.Reason, strings.TrimSpace(t.Message))
+			}
+		}
+	}
+	return strings.TrimSpace(last)
+}
+
+// openWriterRoot makes the primary's root writable by the download Job's
+// user. A fresh shared filesystem comes up root-owned and 0755; the Job
+// runs with the function's posture (uid 1000 for Dynamo and NIM images)
+// and could not create a directory in it (PermissionError on
+// /model/hub, FSS 2026-10-03). The agent on the Job's node is root on the
+// host and reaches the mount through the kubelet pod directory once the
+// pod has it; the writer waits until its landing is writable, so the
+// order between the two does not matter.
+func (c *ModelVolumeController) openWriterRoot(ctx context.Context, pod *corev1.Pod, uri string) {
+	if pod.Spec.NodeName != c.NodeName {
+		return
+	}
+	claim := c.Provisioner.Cfg.WriterViewClaimName(uri)
+	vol := ""
+	for i := range pod.Spec.Volumes {
+		if v := &pod.Spec.Volumes[i]; v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == claim {
+			vol = v.Name
+		}
+	}
+	if vol == "" {
+		return
+	}
+	log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName})
+	src, err := c.podVolumeHostPath(ctx, pod, vol)
+	if err != nil {
+		log.WithError(err).Debug("model volume: writer landing not resolvable yet")
+		return
+	}
+	root := filepath.Join(c.HostFSRoot, src)
+	st, err := os.Stat(root)
+	if err != nil {
+		return // not mounted yet; the next pod event retries
+	}
+	if st.Mode().Perm()&0o002 != 0 {
+		return
+	}
+	if err := os.Chmod(root, os.ModeSticky|0o777); err != nil {
+		log.WithError(err).WithField("path", root).Warn("model volume: cannot open the primary root for the download job")
+		return
+	}
+	log.Info("model volume: primary root opened for the download job's user")
 }
 
 // recordJobBytes stamps the tree size a download Job measured onto the
