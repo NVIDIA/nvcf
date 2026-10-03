@@ -622,16 +622,16 @@ TP 8), 2026-10-03, chart 0.2.8 (NGC CLI concurrency 64), image pulls
 excluded. The engine-script path: the first deployment downloads, one
 pod is captured after Ready, later deployments read the view.
 
-| Step | Cold (first deployment) | Warm (second deployment, same nodes never used) |
-|---|---|---|
-| Admission to engine start | 83 s | 3 min 49 s, of which 2 min 2 s image pull, 1 s nvsnap init |
-| Model | script download 31 min at 800 to 1073 MiB/s per pod | 0 downloads, 1600Gi read-only view bound in seconds |
-| Weights into GPU (770 GiB per pod) | 188 s from local emptyDir | 425 s from the FSS view (about 1.8 GB/s per node) |
-| Profiling | about 5 min | 4 min 38 s (first run of this configuration, plan saved) |
-| CuTeDSL warmup | 19 s | 19 s |
-| CUDA graph capture | 95 s | 89 s |
-| Engine start to Ready | 45 min 7 s | 16 min 53 s |
-| Admission to Ready | 46 min 30 s | 20 min 42 s |
+| Step | Cold (first) | Warm (second, fresh nodes, no set yet) | Warm (third, seeded) |
+|---|---|---|---|
+| Admission to engine start | 83 s | 3 min 49 s (2 min 2 s image pull, 1 s nvsnap init) | 78 s (seed init 3 s, 821 files per rank) |
+| Model | script download 31 min at 800 to 1073 MiB/s per pod | 0 downloads, 1600Gi read-only view | 0 downloads, read-only view |
+| Weights into GPU (770 GiB per pod) | 188 s from local emptyDir | 425 s from the FSS view (about 1.8 GB/s per node) | 425 s from the FSS view |
+| Profiling | about 5 min | 4 min 38 s (plan saved) | 0 s (plan applied) |
+| CuTeDSL warmup | 19 s | 19 s | 19 s |
+| CUDA graph capture | 95 s | 89 s | 80 s |
+| Engine start to Ready | 45 min 7 s | 16 min 53 s | 11 min 2 s |
+| Admission to Ready | 46 min 30 s | 20 min 42 s | 12 min 20 s |
 
 The download rate is the per-connection ceiling of the NGC CDN from
 this region (about 17 MiB/s) times the CLI's concurrency; at the
@@ -645,5 +645,10 @@ while a sibling was still copying it into the transformers modules
 cache (transformers 5.14.1 writes it with shutil.copyfile, no lock);
 the files on the view were verified identical to the cold copy. The
 cache set (2 ranks, 1.28 GB, startup plans included) was collected 77 s
-after Ready, so the next deployment seeds the modules cache and skips
-profiling.
+after Ready; the third deployment seeded it in 3 s, applied the plan,
+started without the module race, and was Ready 12 min 20 s after
+admission, with the 425 s weight read now 64% of the time from engine
+start. The cold pods did not collect a set because the engine-script
+capture path returned from admission before the cache stamping; that
+is a gap in nvsnap, fixed separately, which would have handed the
+second deployment the plan.
