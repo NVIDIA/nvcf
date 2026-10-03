@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+  echo 'Usage: check-live-doc-links <report.json>' >&2
+  exit 2
+fi
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+report="$1"
+status=0
+cd "$repo_root"
+./tools/ci/run-fern docs link check --url https://docs.nvidia.com/nvcf \
+  --output json > "$report" || status=$?
+
+# Fern can return success with partial results after a dropped connection.
+# An empty or interrupted scan must not appear as a passing link audit.
+if ! jq -e '
+  .summary.status == "complete" and
+  (.summary.totalPages | type == "number" and . > 0) and
+  (.summary.totalLinks | type == "number" and . > 0) and
+  (.brokenLinks | type == "array") and
+  (.blockedLinks | type == "array") and
+  .summary.brokenLinks == (.brokenLinks | length) and
+  .summary.blockedLinks == (.blockedLinks | length)
+' "$report" > /dev/null; then
+  echo 'Live link check did not produce a complete report.' >&2
+  exit 1
+fi
+jq '.summary' "$report"
+jq -r '.brokenLinks[] | "Broken: \(.url) (\(.statusCode // .error // "unreachable"))"' "$report"
+blocked="$(jq '.blockedLinks | length' "$report")"
+if [ "$blocked" -gt 0 ]; then
+  echo "::warning::$blocked links were blocked by the destination and need review; see the report."
+fi
+if [ "$status" -ne 0 ]; then
+  exit "$status"
+fi
+jq -e '.brokenLinks | length == 0' "$report" > /dev/null

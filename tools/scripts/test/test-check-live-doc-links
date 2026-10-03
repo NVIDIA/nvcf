@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+mkdir -p "$workdir/source/tools/ci"
+cp "$repo_root/tools/ci/check-live-doc-links" "$workdir/source/tools/ci/"
+cat > "$workdir/source/tools/ci/run-fern" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$*" = 'docs link check --url https://docs.nvidia.com/nvcf --output json' ]
+cat "$FIXTURE"
+exit "${FERN_EXIT:-0}"
+SH
+chmod +x "$workdir/source/tools/ci/run-fern"
+export FIXTURE="$workdir/fixture.json"
+check="$workdir/source/tools/ci/check-live-doc-links"
+report="$workdir/report.json"
+cat > "$workdir/valid.json" <<'JSON'
+{"summary":{"status":"complete","totalPages":2,"totalLinks":3,"workingLinks":3,"brokenLinks":0,"blockedLinks":0},"brokenLinks":[],"blockedLinks":[]}
+JSON
+cp "$workdir/valid.json" "$FIXTURE"
+"$check" "$report" > /dev/null
+cmp "$FIXTURE" "$report"
+
+expect_failure() {
+  if "$check" "$report" > "$workdir/output.txt" 2>&1; then
+    echo "Expected live link validation failure: $1" >&2
+    exit 1
+  fi
+}
+jq '.summary.status = "interrupted"' "$workdir/valid.json" > "$FIXTURE"
+expect_failure interrupted
+jq '.summary.totalPages = 0 | .summary.totalLinks = 0' "$workdir/valid.json" > "$FIXTURE"
+expect_failure empty
+printf 'not JSON\n' > "$FIXTURE"
+expect_failure malformed
+jq '.brokenLinks = [{"url":"https://example.com/missing","statusCode":404}] | .summary.brokenLinks = 1 | .summary.workingLinks = 2' "$workdir/valid.json" > "$FIXTURE"
+expect_failure broken
+# Also fail if a future CLI emits broken links while returning success.
+grep -q 'https://example.com/missing' "$workdir/output.txt"
+jq '.summary.brokenLinks = 0' "$FIXTURE" > "$workdir/mismatch.json"
+mv "$workdir/mismatch.json" "$FIXTURE"
+expect_failure inconsistent
+jq '.blockedLinks = [{"url":"https://example.com/protected","statusCode":403}] | .summary.blockedLinks = 1 | .summary.workingLinks = 2' "$workdir/valid.json" > "$FIXTURE"
+"$check" "$report" > "$workdir/blocked.txt"
+grep -q '1 links were blocked' "$workdir/blocked.txt"
+cp "$workdir/valid.json" "$FIXTURE"
+status=0
+FERN_EXIT=42 "$check" "$report" > /dev/null || status=$?
+[ "$status" -eq 42 ] || { echo "Fern failure was hidden: $status"; exit 1; }
+echo 'test-check-live-doc-links: PASS'

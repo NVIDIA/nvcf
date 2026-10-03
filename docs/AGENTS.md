@@ -200,4 +200,18 @@ Run full docs validation before finishing docs changes:
 ./tools/ci/check-docs
 ```
 
+`fern/docs.yml` treats broken internal links as errors. PR CI checks both the
+canonical and Development layouts; previews and production builds use strict
+broken-link validation. The Published Docs Links CI job checks the live site
+with the pinned Fern CLI after publication and weekly. It also runs manually
+through Fern Docs CI with `live_links=true`. Its report includes external URLs
+and source pages. Broken links or incomplete scans fail; blocked destinations
+are reported separately for review.
+
+With a Fern token, run the same live check locally:
+
+```bash
+./tools/ci/check-live-doc-links /tmp/docs-link-report.json
+```
+
 For pure routing or AGENTS.md-only changes, `git diff --check` plus targeted `rg` checks are usually sufficient.
