@@ -2,7 +2,7 @@
 
 {/*docs-version-sync:BEGIN edition-compute-plane*/}
 
-Docs edition `1.0.1` | Compute plane `1.0.0` | Development candidate.
+Docs edition `1.0.1` | Compute plane `1.0.0` | Qualified combination.
 
 {/*docs-version-sync:END edition-compute-plane*/}
 
