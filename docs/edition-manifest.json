@@ -2,9 +2,10 @@
   "schema_version": 1,
   "docs_edition": {
     "version": "1.0.2",
-    "status": "development",
+    "status": "qualified",
     "previous_version": "1.0.1",
-    "change": "patch"
+    "change": "patch",
+    "qualification": "https://github.com/NVIDIA/nvcf/pull/2235"
   },
   "stacks": {
     "compute-plane": {
