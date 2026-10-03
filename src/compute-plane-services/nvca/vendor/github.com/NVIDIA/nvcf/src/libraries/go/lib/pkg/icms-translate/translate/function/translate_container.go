@@ -392,10 +392,11 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			Image:           initContainerImage,
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Env:             common.SortEnvs(initEnvs),
-			SecurityContext: common.NewInfraContainerSecurityContext(),
+			SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 			VolumeMounts:    initContainerVolumeMounts,
 		}
 		pod.Spec.InitContainers = append(pod.Spec.InitContainers, initContainer)
+		common.EnsureWorkerInitFSGroup(&pod.Spec)
 
 		// The ESS init container needs to be added after the init container,
 		// since the init container creates config.hcl.

@@ -37,6 +37,7 @@ test:
 	@tests/nvcf-ui-migrations-image-tag.sh
 	@tests/ha-value-wiring.sh
 	@tests/ha-chart-render.sh
+	@tests/nonroot-migration-addons.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"

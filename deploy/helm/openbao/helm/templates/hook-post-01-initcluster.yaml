@@ -37,6 +37,10 @@ spec:
         {{- toYaml . | nindent 8 }}
     {{- end }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
       {{- with .Values.openbao.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -48,6 +52,11 @@ spec:
       containers:
         - name: bao-init
           image: "{{ include "openbao.image" (dict "image" .Values.openbao.migrations.image "name" "openbao.migrations.image") }}"
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command: ["/bin/bash"]
           args:
             - -c

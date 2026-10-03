@@ -34,6 +34,10 @@ spec:
         {{- toYaml . | nindent 8 }}
     {{- end }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
       automountServiceAccountToken: false
       {{- with .Values.openbao.global.imagePullSecrets }}
       imagePullSecrets:
@@ -50,6 +54,11 @@ spec:
           # registered before the OnDelete StatefulSet is manually rotated.
           image: "{{ include "openbao.image" (dict "image" .Values.openbao.server.image "name" "openbao.server.image") }}"
           imagePullPolicy: {{ .Values.openbao.server.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command: ["/bin/sh", "-ec"]
           args:
             - |-

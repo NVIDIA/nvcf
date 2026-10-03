@@ -468,6 +468,14 @@ nats:
         {{- end }}
   {{- end }}
   container:
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
@@ -503,11 +511,16 @@ nats:
   {{- /* nats-box shares the release's instance label; select server Pods only. */}}
   {{- $natsServers := dict "app.kubernetes.io/component" "nats" -}}
   {{- $natsAffinity := include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
-  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
-  {{- if or $natsNs $natsTol $natsAffinity $natsTopoSpread }}
+  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) }}
   podTemplate:
     merge:
       spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
         {{- with $natsNs }}
         {{- . | nindent 8 }}
         {{- end }}
@@ -522,7 +535,6 @@ nats:
         topologySpreadConstraints:
           {{- . | nindent 10 }}
         {{- end }}
-  {{- end }}
 
   # One merged config: block -- a second config: key under nats: would be
   # silently collapsed. Surfaces server TLS for split-plane workers that reach
@@ -609,6 +621,14 @@ apikeys:
   {{- end }}
   {{- with dig "apikeys" "startupProbe" dict .Values }}
   startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "livenessProbe" dict .Values }}
+  livenessProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "resources" dict .Values }}
+  resources:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- with dig "apikeys" "env" dict .Values }}
