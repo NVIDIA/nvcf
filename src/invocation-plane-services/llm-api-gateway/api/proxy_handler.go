@@ -81,7 +81,7 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 	return writeProxyResponse(c, resp)
 }
 
-func (h *OpenAIProxyHandlers) requireFunctionRequestContext(
+func (h *Handlers) requireFunctionRequestContext(
 	c *GatewayContext,
 ) (*requestctx.RequestContext, error) {
 	if c == nil {
@@ -104,7 +104,19 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 	contentLength int64,
 	inputTokens int,
 ) (*provider.ProxyResponse, error) {
-	if h.handlers.proxyProvider == nil {
+	return h.handlers.dispatchEstimatedProxyRequest(c, reqCtx, headers, body, contentLength, inputTokens, inputTokens)
+}
+
+func (h *Handlers) dispatchEstimatedProxyRequest(
+	c *GatewayContext,
+	reqCtx *requestctx.RequestContext,
+	headers http.Header,
+	body io.ReadCloser,
+	contentLength int64,
+	inputTokens int,
+	tokenEstimate int,
+) (*provider.ProxyResponse, error) {
+	if h.proxyProvider == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "proxy endpoint is not configured")
 	}
 
@@ -117,7 +129,7 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 		headers.Del(echo.HeaderContentLength)
 	}
 
-	resp, err := h.handlers.proxyProvider.Proxy(
+	resp, err := h.proxyProvider.Proxy(
 		c.UserContext(),
 		reqCtx,
 		&provider.ProxyRequest{
@@ -127,7 +139,7 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 			Header:        headers,
 			Body:          body,
 			InputTokens:   inputTokens,
-			TokenEstimate: inputTokens,
+			TokenEstimate: tokenEstimate,
 		},
 	)
 	if err != nil {

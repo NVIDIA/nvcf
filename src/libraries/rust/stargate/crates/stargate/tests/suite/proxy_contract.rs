@@ -3429,3 +3429,180 @@ async fn submitted_post_is_not_replayed_after_header_timeout() {
     assert!(ambiguous.get_metric()[0].get_label().is_empty());
     assert_eq!(ambiguous.get_metric()[0].get_counter().value(), 1.0);
 }
+
+#[tokio::test]
+async fn native_messages_direct_and_reverse_tunnel_contracts() {
+    for protocol in [
+        TunnelTransportProtocol::RawQuic,
+        TunnelTransportProtocol::Http3,
+        TunnelTransportProtocol::WebTransport,
+    ] {
+        for reverse in [false, true] {
+            exercise_native_messages_contract(protocol, reverse).await;
+        }
+    }
+}
+
+async fn exercise_native_messages_contract(protocol: TunnelTransportProtocol, reverse: bool) {
+    let case = if reverse {
+        TunnelTestCase::reverse(protocol)
+    } else {
+        TunnelTestCase::direct(protocol)
+    };
+    let id = format!("messages-{}-{reverse}", case.protocol_label());
+    let (mut fixture, _) = ProxyFixture::start_for_tunnel_case(&id, case).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel();
+    let json_response = r#"{"type":"message","role":"assistant","content":[{"type":"thinking","thinking":"checking","signature":"sig"},{"type":"tool_use","id":"tool-1","name":"weather","input":{}}],"usage":{"input_tokens":7,"output_tokens":5}}"#;
+    let sse_response = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":1}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let error_response = r#"{"type":"error","error":{"type":"rate_limit_error","message":"busy"}}"#;
+    let app = Router::new().route(
+        "/v1/messages",
+        post(move |req: Request| {
+            let capture_tx = capture_tx.clone();
+            async move {
+                let (parts, body) = req.into_parts();
+                let body = axum::body::to_bytes(body, 1 << 20).await.unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let error = parts.uri.query().is_some_and(|q| q.contains("error=true"));
+                capture_tx
+                    .send((parts.uri.to_string(), parts.headers, body))
+                    .unwrap();
+                let (status, content_type, response) = if error {
+                    (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "application/json",
+                        error_response,
+                    )
+                } else if value["stream"] == true {
+                    (StatusCode::OK, "text/event-stream", sse_response)
+                } else {
+                    (StatusCode::OK, "application/json", json_response)
+                };
+                Response::builder()
+                    .status(status)
+                    .header("content-type", content_type)
+                    .header("request-id", "native-msg-request")
+                    .body(Body::from(response))
+                    .unwrap()
+            }
+        }),
+    );
+    let app = app.route("/health", get(|| async { "ok" }));
+    let backend_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let runtime_state = active_runtime("native-messages-model");
+    if reverse {
+        fixture.register(
+            reverse_registration_config_for_protocol(
+                fixture.grpc_addr,
+                &id,
+                &id,
+                format!("http://{addr}"),
+                protocol,
+                runtime_state,
+            ),
+            "Messages reverse registration failed",
+        );
+    } else {
+        let mut config =
+            QuicHttpTunnelConfig::new("127.0.0.1:0".parse().unwrap(), format!("http://{addr}"));
+        config.tunnel_protocol = protocol;
+        config.forwarding.runtime_state = runtime_state.clone();
+        let tunnel = start_quic_http_tunnel(config).await.unwrap();
+        fixture.register(
+            active_registration_config_with_state(
+                fixture.grpc_addr,
+                &id,
+                &id,
+                format!("quic://{}", tunnel.listen_addr()),
+                format!("http://{addr}"),
+                runtime_state,
+            ),
+            "Messages direct registration failed",
+        );
+        fixture.own_tunnel(tunnel);
+    }
+    fixture.wait_for_clusters("native-messages-model", 1).await;
+    let client = reqwest::Client::new();
+    for (stream, error) in [(false, false), (true, false), (false, true)] {
+        let path = format!(
+            "/v1/messages?error={error}&transport={}",
+            case.protocol_label()
+        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": "native-messages-model", "max_tokens": 64, "stream": stream,
+            "system": [{"type": "text", "text": "Be concise", "cache_control": {"type":"ephemeral"}}],
+            "messages": [
+                {"role":"user", "content":"weather?"},
+                {"role":"assistant", "content":[{"type":"thinking", "thinking":"checking", "signature":"sig"}, {"type":"tool_use","id":"tool-1","name":"weather","input":{}}]},
+                {"role":"user", "content":[{"type":"tool_result","tool_use_id":"tool-1","content":"sunny"}]}
+            ],
+            "backend_extension": {"preserve": true}
+        })).unwrap();
+        let response = proxy_request(
+            &client,
+            fixture.http_addr,
+            &path,
+            "native-messages-model",
+            "req-native-messages",
+        )
+        .header("x-priority", "7")
+        .header("x-dynamo-request-priority", "999999")
+        .header("x-dynamo-request-strict-priority", "999999")
+        .header("anthropic-version", "2023-06-01")
+        .header("anthropic-beta", "tools-test")
+        .header("extra-headers", "private")
+        .header("x-api-key", "private")
+        .body(body.clone())
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(
+            response.status(),
+            if error {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::OK
+            }
+        );
+        assert_eq!(
+            response_header(&response, "request-id"),
+            Some("native-msg-request")
+        );
+        assert_eq!(
+            response.text().await.unwrap(),
+            if error {
+                error_response
+            } else if stream {
+                sse_response
+            } else {
+                json_response
+            }
+        );
+        let (captured_path, headers, captured_body) = capture_rx.recv().await.unwrap();
+        assert_eq!(captured_path, path);
+        assert_eq!(captured_body.as_ref(), body);
+        assert_eq!(headers["anthropic-version"], "2023-06-01");
+        assert_eq!(headers["anthropic-beta"], "tools-test");
+        // The inbound engine values are stripped; Pylon derives these from
+        // gateway priority after applying the Messages header policy.
+        assert_eq!(headers["x-dynamo-request-priority"], "3593");
+        assert_eq!(headers["x-dynamo-request-strict-priority"], "0");
+        for name in [
+            "extra-headers",
+            "authorization",
+            "x-api-key",
+            "x-model",
+            "x-routing-key",
+            "x-input-tokens",
+            "x-token-estimate",
+            "x-cache-affinity-key",
+            "x-priority",
+        ] {
+            assert!(!headers.contains_key(name), "{name} leaked to model API");
+        }
+    }
+    fixture.shutdown().await;
+    backend_task.abort();
+}
