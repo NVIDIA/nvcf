@@ -34,6 +34,7 @@ import (
 	nvversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	cli "github.com/urfave/cli/v2"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
@@ -110,6 +111,16 @@ func NewOperatorCommand() *cli.Command {
 				Name:    "pod-namespace",
 				EnvVars: []string{"POD_NAMESPACE"},
 				Usage:   "Namespace of this pod (from Downward API)",
+			},
+			&cli.BoolFlag{
+				Name:    "cluster-validator-enabled",
+				EnvVars: []string{clustervalidator.EnabledEnv},
+				Usage:   "The chart runs the cluster-validator, so the agent publishes its metrics baseline",
+			},
+			&cli.StringFlag{
+				Name:    "cluster-validator-cronjob",
+				EnvVars: []string{clustervalidator.InitialRunCronJobEnv},
+				Usage:   "Cluster-validator CronJob in this pod's namespace to run once at startup",
 			},
 			&cli.StringFlag{
 				Name:    "deployment-name",
@@ -469,6 +480,8 @@ func doAction(c *cli.Context) error {
 		ShutdownAddr:                      c.String("listen-shutdown"),
 		PodName:                           c.String("pod-name"),
 		PodNamespace:                      c.String("pod-namespace"),
+		ClusterValidatorEnabled:           c.Bool("cluster-validator-enabled"),
+		ClusterValidatorCronJob:           c.String("cluster-validator-cronjob"),
 		DeploymentName:                    c.String("deployment-name"),
 		SystemNamespace:                   c.String("system-namespace"),
 		PriorityClassName:                 c.String("priority-class-name"),

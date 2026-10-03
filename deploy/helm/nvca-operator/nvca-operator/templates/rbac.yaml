@@ -44,6 +44,12 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list", "create", "delete", "watch"]
   - apiGroups: [""]
+    resources: ["events"]
+    # list: the node-to-node probe reads its pods' events to tell a slow
+    # first image pull, which publishes no pod IP until it returns, from a
+    # node that could not network the pod.
+    verbs: ["list"]
+  - apiGroups: [""]
     resources: ["configmaps"]
     # get: read the network-checks config ConfigMap (its name is overridable
     # via VALIDATOR_CONFIG_NAME, so this cannot be scoped by resourceName).
@@ -57,9 +63,23 @@ rules:
     # limit blast radius if the validator ServiceAccount is compromised.
     resourceNames: ["cluster-validator-summary"]
     verbs: ["update"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "daemonsets"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    # Read-only: the LoadBalancer and Tier-1 checks follow the NVCF routes'
+    # parentRefs to learn which Gateways are NVCF's, so another team's proxy
+    # in the shared Envoy namespace is not blamed on NVCF. gateways gives
+    # their GatewayClass, which is how a merged-gateways proxy is labelled.
+    resources: ["httproutes", "grpcroutes", "tcproutes", "udproutes", "gateways"]
     verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    # statefulsets: the Tier-2 quorum and placement check. Without it every
+    # control-plane namespace 403s and the critical row is permanently unknown.
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    # create/delete: the node-to-node overlay probe runs a short-lived
+    # DaemonSet in a per-run namespace and deletes it in the same run.
+    verbs: ["get", "list", "create", "delete"]
   - apiGroups: ["admissionregistration.k8s.io"]
     resources:
       - mutatingwebhookconfigurations
@@ -69,7 +89,9 @@ rules:
     resources: ["networkpolicies"]
     verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: ["storage.k8s.io"]
-    resources: ["csidrivers"]
+    # storageclasses: the default-StorageClass check. Without it the critical
+    # row is permanently unknown on every run.
+    resources: ["csidrivers", "storageclasses"]
     verbs: ["get", "list"]
   - apiGroups: ["nvidia.com"]
     resources: ["clusterpolicies"]

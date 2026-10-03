@@ -13,6 +13,7 @@ go_library(
         "//src/compute-plane-services/nvca/cmd/internal",
         "//src/compute-plane-services/nvca/internal/clustervalidator",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
     ],
 )
 
@@ -42,4 +43,7 @@ go_test(
     name = "cluster-validator_test",
     srcs = ["main_test.go"],
     embed = [":cluster-validator_lib"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/clustervalidator",
+    ],
 )

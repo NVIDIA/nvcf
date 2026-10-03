@@ -30,6 +30,16 @@ spec:
     metadata:
       labels:
         {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
+      {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+      {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+      {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
+      annotations:
+        # The operator starts the validator's first run when it starts, once
+        # per Job spec. A change to that spec restarts the operator, so an
+        # upgrade that changes only the validator's values runs it too.
+        checksum/cluster-validator-job: {{ include "nvcaop.clusterValidatorJobSpec" . | sha256sum }}
+      {{- end }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "nvcaop.serviceAccountName" . }}
       automountServiceAccountToken: true
@@ -95,6 +105,25 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        # Deliberately pinned to the compute-plane check set, and deliberately
+        # NOT wired to clusterValidator.role. This chart is only installed on
+        # compute-plane clusters, and a failed validation is fatal here, so
+        # running the control-plane set would gate operator startup on
+        # control-plane HA: a single OpenBao pod stuck Terminating, or the
+        # Gateway API CRDs simply being absent on a compute-only cluster, would
+        # leave the operator in Init:CrashLoopBackOff.
+        - name: VALIDATOR_ROLE
+          value: "compute-plane"
+        {{- /* Normalized like the validator's own parseRole, so a role of
+               "Control-Plane" still keeps this container off the summary. */}}
+        {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
+        # The CronJob owns the summary under the control-plane role, so this
+        # container must not republish a compute-plane summary over it: the GPU
+        # keys would reappear and the control-plane keys be pruned on every
+        # operator restart. Preflight mode keeps the checks and drops the write.
+        - name: VALIDATOR_PREFLIGHT
+          value: "true"
+        {{- end }}
         resources:
           requests:
             cpu: {{ $cv.resources.requests.cpu | quote }}
@@ -123,6 +152,20 @@ spec:
               fieldPath: metadata.namespace
         - name: DEPLOYMENT_NAME
           value: {{ include "nvcaop.fullname" . | quote }}
+        {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+        {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+        # The agent publishes the cluster-validator metrics baseline only
+        # where the validator runs.
+        - name: NVCA_CLUSTER_VALIDATOR_ENABLED
+          value: "true"
+        {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
+        # The init container publishes no summary under the control-plane
+        # role, so the operator runs the CronJob once at startup instead. It is
+        # not a release resource, so the install does not wait on it.
+        - name: NVCA_CLUSTER_VALIDATOR_CRONJOB
+          value: {{ printf "%s-cluster-validator" (include "nvcaop.fullname" .) | quote }}
+        {{- end }}
+        {{- end }}
         - name: NGC_API_URL
           value: {{ .Values.ngcConfig.apiURL }}
         - name: NGC_SERVICE_KEY_FILE

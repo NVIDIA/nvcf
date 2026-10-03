@@ -234,6 +234,12 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.image.repository`                   | Cluster Validator container registry path, without tag                            | `""`                                   |
 | `clusterValidator.image.tag`                          | Cluster Validator container image tag                                             | `v2.0.0`                               |
 | `clusterValidator.image.pullPolicy`                   | K8s ImagePullPolicy for cluster-validator                                         | `IfNotPresent`                         |
+| `clusterValidator.role`                               | Check set: `control-plane`, or `compute-plane` or empty for the GPU checks        | `""`                                   |
+| `clusterValidator.openBaoNamespace`                   | Namespace holding OpenBao when it is not `vault-system`                           | `""`                                   |
+| `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
+| `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; replaces discovery for the LB and Tier-1 checks | `[]` (discovered from NVCF routes)     |
+| `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets` | `""` (`busybox:1.36`)                  |
+| `clusterValidator.tolerations`                        | Extra tolerations for the validator Job pods, added to the control-plane ones     | `[]`                                   |
 | `clusterValidator.schedule`                           | CronJob schedule (cron expression)                                                | `0 */3 * * *`                          |
 | `clusterValidator.configMapName`                      | ConfigMap name for user-defined network checks                                    | `cluster-validator-network-checks`     |
 | `clusterValidator.networkChecks`                      | Network check configuration (creates the ConfigMap automatically when set)        | `{}`                                   |

@@ -1237,6 +1237,44 @@
                     "description": "ConfigMap name for user-defined network checks (reachability + network policy validation)",
                     "default": "cluster-validator-network-checks"
                 },
+                "role": {
+                    "type": "string",
+                    "description": "Check set: control-plane runs the gateway, storage, overlay and HA checks; compute-plane or empty runs the compute-plane checks. Matched case-insensitively; other values are rejected.",
+                    "pattern": "^\\s*([Cc][Oo][Nn][Tt][Rr][Oo][Ll]-[Pp][Ll][Aa][Nn][Ee]|[Cc][Oo][Mm][Pp][Uu][Tt][Ee]-[Pp][Ll][Aa][Nn][Ee])?\\s*$",
+                    "default": ""
+                },
+                "openBaoNamespace": {
+                    "type": "string",
+                    "description": "Namespace holding OpenBao when it is not vault-system",
+                    "default": ""
+                },
+                "envoyGatewayNamespace": {
+                    "type": "string",
+                    "description": "Namespace holding Envoy Gateway when it is not envoy-gateway-system",
+                    "default": ""
+                },
+                "gatewayNames": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[^/\\s]+/[^/\\s]+$"
+                    },
+                    "description": "Every NVCF Gateway as namespace/name; replaces discovery from the NVCF routes for the LoadBalancer and Tier-1 checks",
+                    "default": []
+                },
+                "nodeToNodeProbeImage": {
+                    "type": "string",
+                    "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets",
+                    "default": ""
+                },
+                "tolerations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    },
+                    "description": "Extra tolerations for the validator CronJob pods, added to the control-plane ones",
+                    "default": []
+                },
                 "networkChecks": {
                     "type": [
                         "object",

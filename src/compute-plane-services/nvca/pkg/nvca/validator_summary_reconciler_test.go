@@ -40,9 +40,11 @@ import (
 func newTestMetrics(t *testing.T) (*metrics.Metrics, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
+	// The reconciler runs where the validator does, which is what publishes
+	// the baseline these tests start from.
 	ctx := metrics.WithDefaultMetrics(context.Background(),
 		"nca-test", "test-cluster", "test-group", "v1.0.0",
-		metrics.WithRegisterer(reg))
+		metrics.WithRegisterer(reg), metrics.WithClusterValidatorEnabled(true))
 	m := metrics.FromContext(ctx)
 	require.NotNil(t, m)
 	t.Cleanup(func() { m.Destroy() })

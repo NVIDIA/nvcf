@@ -1402,7 +1402,9 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
 
 ## Cluster-Validator Metrics
 
-The cluster-validator runs as a short-lived process (init container + CronJob) so it cannot serve a `/metrics` endpoint directly. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
+The cluster-validator runs as a short-lived process so it cannot serve a `/metrics` endpoint directly. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. Under the default compute-plane role the operator's init container writes the first summary and the CronJob the rest. Under the control-plane role the init container runs in preflight mode and writes nothing, so the operator runs the CronJob once at startup to write the first summary; it runs again when an upgrade changes the validator's spec, since the chart restarts the operator then. That run is not part of the Helm release, so an install never waits on it or fails with it.
+
+The agent publishes these metrics only where the validator runs (`clusterValidator.enabled`, passed to the agent by the operator). Elsewhere no `nvca_cluster_validator_*` series exist, so an alert on them cannot fire for a cluster that has no validator. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
 
 ### `nvca_cluster_validator_ready`
 
@@ -1410,14 +1412,24 @@ Overall verdict for the latest cluster-validator run. **This is the load-bearing
 
 - **Type**: Gauge
 - **Value**: 1 if the run passed all critical checks (NVCF-Ready), 0 otherwise (NVCF-Not-Ready)
-- **Labels**: default labels only (initialized to 0 until the first run completes)
+- **Labels**: default labels only (initialized to 0 until the first run completes, where the validator runs)
 
 ### `nvca_cluster_validator_check_status`
 
-Per-check status from the latest run. The check set is fixed (~10 entries; see `CheckKey*` constants in `internal/clustervalidator/summary.go`).
+Per-check status from the latest run. The check set is fixed (18 entries; see `CheckKey*` constants in `internal/clustervalidator/summary.go`). Which subset appears depends on the validator role and on which conditional checks ran; see the caveat below.
 
 - **Type**: Gauge
-- **Value**: 1 = passed, 0 = failed (or not-run; the `check` label is omitted entirely when a check was skipped)
+- **Value**: 1 = passed, 0 = failed. Two other outcomes are reported as
+  absence rather than a number, so `absent()` and `== 0` mean different
+  things: a check that could not be observed (an RBAC denial or an apiserver
+  error), and one the cluster's shape made moot (the node-to-node overlay on a
+  single-node cluster). Neither is exported as 1, because no result was
+  produced; the run's log and the `warnings` list say which applies.
+
+  One exception to the "0 means failed" rule: at process start, and after
+  `ResetClusterValidatorMetrics`, all 18 keys are emitted at 0 as an
+  init-to-zero baseline, before any run has happened. A 0 in that window means
+  "no result yet", not "failed"; it is replaced or pruned by the first summary.
 - **Labels**: default labels + `check`
 
 > **Alerting caveat — absent vs. zero for optional checks.** Three checks are
@@ -1430,9 +1442,26 @@ Per-check status from the latest run. The check set is fixed (~10 entries; see `
 > distinguishable from "ran and failed"). Write alerts on these three with an
 > `absent()` guard, not a bare `== 0`, e.g.
 > `absent(nvca_cluster_validator_check_status{check="endpoint_reachability"}) or nvca_cluster_validator_check_status{check="endpoint_reachability"} == 0`.
-> The seven always-run checks (control_plane, worker_nodes_all_ready, webhooks,
-> network_policies_supported, smb_csi, gpu_resources, gpu_operator) are always
+> Four checks (control_plane, worker_nodes_all_ready, webhooks,
+> network_policies_supported) run under both validator roles, so they are always
 > present and safe to alert on with `== 0`.
+>
+> The three GPU and storage checks (smb_csi, gpu_resources, gpu_operator) run
+> only under the compute-plane role. A control-plane run omits them, so they are
+> pruned after its first summary and go absent. They are still pre-initialized
+> to `0` in the init-to-zero baseline, which means a control-plane cluster
+> reports `gpu_resources 0` from process start until its first summary lands.
+> Alert on these three with an `absent()` guard, as for the conditional checks
+> above, and scope the alert to compute-plane clusters.
+>
+> The control-plane-only checks (default_storage_class, gateway_api_crds,
+> envoy_gateway, gateway_routes, external_lb, node_to_node, tier1_deployments,
+> tier2_statefulsets) are the mirror image: present only on a control-plane run,
+> and absent when the check could not be observed at all (an RBAC denial or an
+> apiserver error). Absent means "not observed", which is not the same as `0`
+> ("observed and failing"), so these also need an `absent()` guard. Scope that
+> guard to control-plane clusters: a compute-plane run never emits these keys,
+> so an unscoped `absent()` fires on every compute-plane cluster.
 
 ### `nvca_cluster_validator_endpoint_reachable`
 
@@ -1493,6 +1522,13 @@ nvca_cluster_validator_endpoint_reachable{critical="true"} == 0
 # since time() - 0 is always far greater than the threshold.
 (time() - nvca_cluster_validator_last_run_timestamp_seconds > 21600)
   and nvca_cluster_validator_last_run_timestamp_seconds > 0
+
+# Alert: validator has never written a summary. The staleness alert above
+# excludes this case, so a validator that cannot run at all (image pull,
+# RBAC or scheduling failure) needs its own. The `for:` window covers the
+# first run after an install; use it on the alerting rule. The series exists
+# only where the validator is enabled, so this cannot fire elsewhere.
+nvca_cluster_validator_last_run_timestamp_seconds == 0
 ```
 
 ### Edge cases
@@ -1500,6 +1536,7 @@ nvca_cluster_validator_endpoint_reachable{critical="true"} == 0
 | Scenario | Effect on metrics |
 |---|---|
 | Agent boots before any validator run | Fixed-cardinality gauges at 0. No config-driven (endpoint/netpol) series until first run. |
+| Validator not enabled on the cluster | No `nvca_cluster_validator_*` series at all. |
 | Agent restart after a successful run | Reconciler's initial List delivers an Add event; metrics populated immediately. |
 | Validator pod panics mid-run | ConfigMap not updated; last-good metrics retained. Operator detects via `_last_run_timestamp_seconds` staleness. |
 | Summary ConfigMap deleted | Last-good metrics **preserved** — an accidental delete (kubectl, GC sweep, reinstall) must not wipe the SLI. Genuine staleness is caught by the `_last_run_timestamp_seconds` alert. |
@@ -1531,11 +1568,11 @@ The following metrics have dynamic cardinality based on cluster configuration:
   - Orphaned resource cleanup: number of resource types × status values (low, typically 2-4 series)
   - Cleaner runs: number of cleaner names × status values (low, typically 2-4 series)
 - **Cluster attribute metrics**: 1 series per cluster (Kata runtime isolation enabled/disabled)
-- **Cluster-validator metrics**: fixed-cardinality vectors (`nvca_cluster_validator_ready`, `_last_run_timestamp_seconds`, `_last_run_duration_seconds`) yield 1 series each and are updated in place on every run (no per-run churn). `_check_status` yields ~10 series (one per built-in check). `_endpoint_reachable` is bounded by the customer's `networkChecks` config (typically <20 entries); `_netpol_pair_passed` is bounded by 4 × the number of configured pairs (direction × policy_side). Config-driven series are pruned when the latest run no longer reports them.
+- **Cluster-validator metrics**: fixed-cardinality vectors (`nvca_cluster_validator_ready`, `_last_run_timestamp_seconds`, `_last_run_duration_seconds`) yield 1 series each and are updated in place on every run (no per-run churn). `_check_status` has 18 possible `check` label values. The init-to-zero baseline emits all 18; after the first summary, a compute-plane run emits up to 10 series and a control-plane run up to 15, depending on which conditional checks ran. `_endpoint_reachable` is bounded by the customer's `networkChecks` config (typically <20 entries); `_netpol_pair_passed` is bounded by 4 x the number of configured pairs (direction x policy_side). Config-driven series are pruned when the latest run no longer reports them.
 - **Upstream request metric** (`nvca_upstream_request_total`): 6 series fixed (3 operations × 2 statuses, pre-initialized)
 - **Scheduler workload count** (`nvca_scheduler_workload_count`): 4 series fixed (2 schedulers × 2 workload kinds, pre-initialized)
 
-Total expected cardinality per cluster: **159-254 time series** depending on configuration and active workload count.
+Total expected cardinality per cluster: **159-254 time series** for a compute-plane cluster, depending on configuration and active workload count. The upper bound is 259 for a control-plane cluster, and 262 while the 18-key init-to-zero baseline is active.
 
 ## Outbound Client Metrics (OpenTelemetry semconv)
 
