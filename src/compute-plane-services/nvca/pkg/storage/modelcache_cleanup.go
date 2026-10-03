@@ -329,14 +329,25 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 		return err
 	}
 
-	// Collect all volume handles from active storage requests to filter out PVs.
-	activeVolumeHandles := sets.Set[string]{}
+	// Collect the volumes and cache handles of active storage requests to
+	// filter out PVs. A request's status carries its secondary PV's handle,
+	// which is the primary's handle with the namespace segment rewritten
+	// (updateSecondaryPVVolumeHandle), so the two are compared by volume
+	// identity, not verbatim: a verbatim comparison never matched and the GC
+	// deleted a primary while a function was serving from its secondary
+	// (2026-10-03), after which that request's own reconcile could not find
+	// the primary and tore the secondary down too.
+	activeVolumeKeys := sets.Set[string]{}
+	activeCacheHandles := sets.Set[string]{}
 	for _, st := range stList.Items {
 		if st.DeletionTimestamp != nil {
 			continue
 		}
 		if st.Status.ModelCache != nil && st.Status.ModelCache.VolumeHandle != "" {
-			activeVolumeHandles = activeVolumeHandles.Insert(st.Status.ModelCache.VolumeHandle)
+			activeVolumeKeys = activeVolumeKeys.Insert(volumeHandleKey(st.Status.ModelCache.VolumeHandle))
+		}
+		if st.Spec.ModelCache != nil && st.Spec.ModelCache.CacheHandle != "" {
+			activeCacheHandles = activeCacheHandles.Insert(st.Spec.ModelCache.CacheHandle)
 		}
 	}
 
@@ -373,7 +384,10 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 			if primaryPVLastReferenced.Add(r.k8sTimeConfig.ModelCacheIdlePeriod).After(now) {
 				continue
 			}
-			if pv.Spec.CSI != nil && activeVolumeHandles.Has(pv.Spec.CSI.VolumeHandle) {
+			if pv.Spec.CSI != nil && activeVolumeKeys.Has(volumeHandleKey(pv.Spec.CSI.VolumeHandle)) {
+				continue
+			}
+			if pv.Labels != nil && activeCacheHandles.Has(pv.Labels[modelCacheHandleLabelKey]) {
 				continue
 			}
 		case corev1.VolumeFailed:
