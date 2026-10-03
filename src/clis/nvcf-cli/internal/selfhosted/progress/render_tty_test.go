@@ -568,6 +568,32 @@ func TestCheckOneShotRenderer_FlushesFailedSummaryOnFinal(t *testing.T) {
 	assert.Contains(t, out, "Status: ✘ failed  (1/2 passed, 1 failed)")
 }
 
+// An interrupted check ends on a cancelled final event, which must not read
+// as a pass.
+func TestCheckOneShotRenderer_CancelledIsNotOK(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	var buf bytes.Buffer
+	r := NewCheckOneShotRenderer(&buf, ModelOpts{Mode: ModeCheck, Output: &buf})
+	ctx := context.Background()
+	require.NoError(t, r.Emit(ctx, CheckStarted{Category: "local-host-tools", ID: "kubectl-on-path"}))
+	require.NoError(t, r.Emit(ctx, CheckCompleted{
+		Category: "local-host-tools", ID: "kubectl-on-path", Passed: true, Severity: "info", Message: "kubectl on PATH",
+	}))
+	require.NoError(t, r.Emit(ctx, Final{Cancelled: true}))
+	require.NoError(t, r.Close())
+
+	out := buf.String()
+	assert.Contains(t, out, "Status: cancelled")
+	assert.NotContains(t, out, "Status: ✓ ok")
+}
+
+// A warning row is not marked as a failure: it does not fail the run.
+func TestCheckGlyph_WarningIsNotAFailure(t *testing.T) {
+	assert.Equal(t, "[✓]", checkGlyph(checkRow{finished: true, passed: true}))
+	assert.Equal(t, "[✘]", checkGlyph(checkRow{finished: true, severity: "error"}))
+	assert.Equal(t, "[!]", checkGlyph(checkRow{finished: true, severity: "warning"}))
+}
+
 func TestCheckOneShotRenderer_UsesFinalTallyForStatus(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 
@@ -880,4 +906,42 @@ func TestTTY_StatusWatchTickResetsBetweenSnapshots(t *testing.T) {
 	sisCount := strings.Count(view, "SIS")
 	assert.Equal(t, 1, sisCount,
 		"rendered View should show SIS exactly once after 5 watch ticks, not %d times", sisCount)
+}
+
+// A finished run with a warning says so and accounts for it, rather than
+// printing "ok (2/3 passed, 0 failed)" with one check unexplained.
+func TestTTY_CheckCompleteWithWarning(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	m := NewModel(ModelOpts{Mode: ModeCheck, AsciiOnly: true, TotalChecks: 3,
+		NowFunc: func() time.Time { return ts("2026-04-29T03:45:12Z") }})
+	m.SetSize(120, 40)
+	events := []Event{
+		CheckStarted{Category: "local-host-tools", ID: "a"},
+		CheckCompleted{Category: "local-host-tools", ID: "a", Passed: true, Severity: "info", Message: "a"},
+		CheckStarted{Category: "local-host-tools", ID: "b"},
+		CheckCompleted{Category: "local-host-tools", ID: "b", Passed: true, Severity: "info", Message: "b"},
+		CheckStarted{Category: "registry-credentials", ID: "c"},
+		CheckCompleted{Category: "registry-credentials", ID: "c", Passed: false, Severity: "warning", Message: "c"},
+		Final{Success: true, TotalChecks: 3, PassedCount: 2, FailedCount: 0},
+	}
+	var model tea.Model = m
+	for _, e := range events {
+		model, _ = model.(Model).applyCheckEvent(e)
+	}
+	assert.Contains(t, model.(Model).View(), "ok with warnings  (2/3 passed, 0 failed, 1 warning(s))")
+}
+
+// Bubbletea reads the terminal in raw mode, so Ctrl-C is a key press, not a
+// signal. Each quit key must reach the run, or quitting closes the dashboard
+// while the command keeps running behind it.
+func TestModel_QuitKeysCallOnQuit(t *testing.T) {
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlC}, {Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune("q")}} {
+		called := 0
+		m := NewModel(ModelOpts{Mode: ModeCheck, OnQuit: func() { called++ }})
+		_, cmd := m.Update(key)
+		require.NotNil(t, cmd, key.String())
+		assert.Equal(t, 1, called, key.String())
+	}
+	_, cmd := NewModel(ModelOpts{Mode: ModeCheck}).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	assert.NotNil(t, cmd, "without a hook the dashboard still quits")
 }

@@ -20,7 +20,10 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,6 +73,49 @@ func TestProbeAllNodes_PodCreateErrorSurfacesPerNode(t *testing.T) {
 		assert.Contains(t, r.Err.Error(), "create probe pod")
 		assert.Contains(t, r.Err.Error(), r.NodeName)
 	}
+}
+
+// The probe is bounded as a whole. Nodes are probed probeConcurrency at a
+// time, so on a cluster whose probe pods never finish each wave took
+// perNodePodTimeout, and the probe cut short the validator that runs after it.
+// Nodes the budget did not reach are reported as not probed, and every pod
+// created is removed.
+func TestProbeAllNodes_StallingPodsAreBoundedByTheProbeBudget(t *testing.T) {
+	prev := inotifyProbeBudget
+	inotifyProbeBudget = 500 * time.Millisecond
+	t.Cleanup(func() { inotifyProbeBudget = prev })
+	const extra = 3
+	var nodes []runtime.Object
+	for i := 0; i < probeConcurrency+extra; i++ {
+		nodes = append(nodes, fakeNode(fmt.Sprintf("node-%02d", i)))
+	}
+	client := fake.NewSimpleClientset(nodes...)
+	var created atomic.Int32
+	client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		// The fake clientset does not honour generateName. The pods never
+		// reach a terminal phase, like pods that cannot pull or schedule.
+		pod := a.(ktesting.CreateAction).GetObject().(*corev1.Pod)
+		pod.Name = fmt.Sprintf("%s%d", pod.GenerateName, created.Add(1))
+		return false, nil, nil
+	})
+
+	start := time.Now()
+	results, err := probeAllNodes(context.Background(), client)
+	require.NoError(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second, "the probe outlived its budget")
+	require.Len(t, results, probeConcurrency+extra)
+	notProbed := 0
+	for _, r := range results {
+		require.Error(t, r.Err, r.NodeName)
+		if strings.Contains(r.Err.Error(), "not probed: the inotify probe's 500ms budget ran out") {
+			notProbed++
+		}
+	}
+	assert.Equal(t, extra, notProbed, "the nodes past the first wave are never reached")
+	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, pods.Items, "every probe pod created is removed")
+	assert.EqualValues(t, probeConcurrency, created.Load())
 }
 
 func TestBuildInotifyProbePodShape(t *testing.T) {

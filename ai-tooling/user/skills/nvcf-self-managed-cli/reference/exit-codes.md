@@ -6,9 +6,9 @@ Stable across subcommands. Use these to drive agent retry / surfacing logic.
 |---|---|---|
 | `0` | Success | All checks passed; install completed; deployment ACTIVE |
 | `1` | Generic error | Helm render failed; network unreachable; file not found; YAML parse error |
-| `2` | Pre-flight check failed | Gateway API CRDs missing; kubectl not on PATH; default StorageClass absent |
+| `2` | Pre-flight check failed | A `check` result at error severity: Gateway API CRDs missing; kubectl not on PATH; default StorageClass absent; a cluster-validator that could not run (RBAC denied, image pull failure, its own timeout, no tag found for an untagged image). Warning-severity results exit `0` |
 | `3` | Admin auth failed | No token + `--non-interactive` set; ICMS rejected JWT; init endpoint unreachable |
-| `5` | Manifest apply or `--wait` timed out | Helm install timeout; check polled but didn't pass before duration |
+| `5` | Manifest apply or `--wait` timed out | Helm install timeout; check polled but did not pass before DURATION, including a rollout still in progress; the check's time budget stopped a check before it finished (its row says not run or cut short). A check that already had its result keeps it, so a validator's own failure is exit `2` |
 | `130` | Cancelled by SIGINT/SIGTERM | User Ctrl-C; CI budget exceeded; pod evicted |
 
 ## How an agent should react
@@ -24,4 +24,4 @@ Stable across subcommands. Use these to drive agent retry / surfacing logic.
 
 ## Where to find more detail
 
-Every non-zero exit emits a structured `phase_failed` JSON event with `errCategory`, `errMessage`, `remediation` (array), `retryClass` (enum: `none|immediate|backoff|after_remediation|unknown`), `retryAfterSec` (int, optional), and `raw` (subprocess + HTTP + Kubernetes signal). Always consume these in `--json` mode rather than parsing English from stderr.
+`check` reports its outcome in one `final` event (`success`, `verdict`, `failedCount`) and never emits `phase_failed`; see `examples/ci-pipelines.md`. Its exit `5` has `success: false` and `verdict: "timeout"`. A `check_completed` event for a warning that `--wait` polls on carries `transient: true`. A cancellation (exit `130`) emits `final` with `cancelled: true` instead of `phase_failed`; `up` emits `phase_cancelled` before it. Every other non-zero exit emits a structured `phase_failed` JSON event with `errCategory`, `errMessage`, `remediation` (array), `retryClass` (enum: `none|immediate|backoff|after_remediation|unknown`), `retryAfterSec` (int, optional), and `raw` (subprocess + HTTP + Kubernetes signal). Always consume these in `--json` mode rather than parsing English from stderr.

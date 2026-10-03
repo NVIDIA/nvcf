@@ -192,6 +192,14 @@ type ModelOpts struct {
 	// Leave both empty (the default) for single-cluster mode.
 	ControlPlaneContext string
 	ComputePlaneContext string
+
+	// OnQuit runs when the operator presses a quit key. Bubbletea reads the
+	// terminal in raw mode, so Ctrl-C arrives as a key press, not a signal:
+	// without this, quitting closed the dashboard while the command kept
+	// running behind it. It is called synchronously inside Update, so it must
+	// not block: cancel a context or signal a channel, and leave the cleanup
+	// to the command.
+	OnQuit func()
 }
 
 // checkCategoryState holds the accumulated state for one pre-flight check
@@ -229,6 +237,7 @@ type Model struct {
 	controlCtx string // M+9: control-plane kubeconfig context (empty → single-cluster)
 	computeCtx string // M+9: compute-plane kubeconfig context (empty → single-cluster)
 	nowFunc    func() time.Time
+	onQuit     func()
 
 	// dynamic state (mutated by Update)
 	started  time.Time
@@ -285,6 +294,7 @@ type Model struct {
 	checkFinalTotal  int
 	checkFinalPassed int
 	checkFinalFailed int
+	checkCancelled   bool // final event came from SIGINT/SIGTERM, not a verdict
 
 	// log tail (LogLine ring buffer; rendered as a "Recent" panel during
 	// long phases like apply-cp). Capacity is fixed; new lines push older
@@ -353,6 +363,7 @@ func NewModel(opts ModelOpts) Model {
 		asciiOnly:   opts.AsciiOnly,
 		mode:        opts.Mode,
 		totalChecks: opts.TotalChecks,
+		onQuit:      opts.OnQuit,
 	}
 
 	switch opts.Mode {
@@ -436,6 +447,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
+			if m.onQuit != nil {
+				m.onQuit()
+			}
 			return m, tea.Quit
 		}
 		return m, nil
@@ -744,6 +758,7 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 		m.checkFinalTotal = ev.TotalChecks
 		m.checkFinalPassed = ev.PassedCount
 		m.checkFinalFailed = ev.FailedCount
+		m.checkCancelled = ev.Cancelled
 		return m, tea.Quit
 	}
 	return m, nil
@@ -1763,13 +1778,16 @@ func humanCategoryName(raw string) string {
 
 // checkGlyph returns the bracketed glyph for a check row. Matches install-mode
 // convention: bracket + unicode, unchanged in ASCII-only mode (AsciiOnly only
-// strips ANSI color codes, not unicode characters).
+// strips ANSI color codes, not unicode characters). A miss below error
+// severity is a warning, tallied and exited on as one, so it gets its own mark.
 func checkGlyph(row checkRow) string {
 	switch {
 	case row.finished && row.passed:
 		return "[✓]"
-	case row.finished && !row.passed:
+	case row.finished && row.severity == "error":
 		return "[✘]"
+	case row.finished:
+		return "[!]"
 	case row.started && !row.finished:
 		return "[▶]"
 	default:
@@ -1819,7 +1837,7 @@ func (m Model) viewCheck(now time.Time) string {
 	}
 
 	// ── status line ───────────────────────────────────────────────────────────
-	passed, failed, total := m.checkTally()
+	passed, failed, warned, total := m.checkTally()
 	if m.finished && m.checkFinalTotal > 0 {
 		passed = m.checkFinalPassed
 		failed = m.checkFinalFailed
@@ -1843,16 +1861,25 @@ func (m Model) viewCheck(now time.Time) string {
 	}
 
 	allFinished := !anyInFlight && m.finished
+	tally := fmt.Sprintf("%d/%d passed, %d failed", passed, total, failed)
+	if warned > 0 {
+		tally += fmt.Sprintf(", %d warning(s)", warned)
+	}
 	var statusLine string
 	switch {
+	case m.finished && m.checkCancelled:
+		// Checks cut short by the interrupt are neither passed nor failed.
+		statusLine = fmt.Sprintf("Status: cancelled  (%s)", tally)
 	case anyInFlight || (!m.finished && len(m.checkCategories) > 0 && !allFinished):
-		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, 0 failed)", passed, total)
+		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
 	case m.finished && failed > 0:
-		statusLine = fmt.Sprintf("Status: ✘ failed  (%d/%d passed, %d failed)", passed, total, failed)
-	case m.finished && failed == 0:
-		statusLine = fmt.Sprintf("Status: ✓ ok  (%d/%d passed, 0 failed)", passed, total)
+		statusLine = fmt.Sprintf("Status: ✘ failed  (%s)", tally)
+	case m.finished && warned > 0:
+		statusLine = fmt.Sprintf("Status: ✓ ok with warnings  (%s)", tally)
+	case m.finished:
+		statusLine = fmt.Sprintf("Status: ✓ ok  (%s)", tally)
 	default:
-		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, 0 failed)", passed, total)
+		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
 	}
 
 	b.WriteString("\n")
@@ -1863,20 +1890,26 @@ func (m Model) viewCheck(now time.Time) string {
 }
 
 // checkTally returns (passed, failed, total) counts from all accumulated check rows.
-func (m Model) checkTally() (passed, failed, total int) {
+// checkTally counts finished rows by the same rule as the final event: only an
+// error-severity miss is a failure, any other miss is a warning.
+func (m Model) checkTally() (passed, failed, warned, total int) {
 	for _, cat := range m.checkCategories {
 		for _, row := range cat.checks {
 			total++
-			if row.finished {
-				if row.passed {
-					passed++
-				} else {
-					failed++
-				}
+			if !row.finished {
+				continue
+			}
+			switch {
+			case row.passed:
+				passed++
+			case row.severity == "error":
+				failed++
+			default:
+				warned++
 			}
 		}
 	}
-	return passed, failed, total
+	return passed, failed, warned, total
 }
 
 // ─── style helpers ────────────────────────────────────────────────────────────

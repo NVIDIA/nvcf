@@ -19,12 +19,15 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/assert"
@@ -408,7 +411,10 @@ func TestRunPreflightForRole_LocalOnly(t *testing.T) {
 func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
 	sink := &captureSink{}
 	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
-	res := RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{KubeContext: "admin@cp"}, sink)
+	// No StaleNamespaceProber and no ClusterValidator: the control-plane
+	// category is empty but the category itself still fires (CategoryCompleted
+	// is always emitted).
+	RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{KubeContext: "admin@cp"}, sink)
 
 	seen := map[string]bool{}
 	for _, e := range sink.events {
@@ -417,14 +423,27 @@ func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
 		}
 	}
 	assert.True(t, seen["local-host-tools"], "expected local-host-tools category")
-	assert.True(t, seen["control-plane-cluster"], "expected control-plane-cluster category")
+	assert.True(t, seen["control-plane-cluster"], "expected control-plane-cluster category even with no checks configured")
+}
+
+func TestRunPreflightForRole_ControlPlaneWithValidatorAddsClusterValidatorCheck(t *testing.T) {
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	cv := func(_ context.Context, p ClusterValidatorParams) ClusterValidatorResult {
+		return ClusterValidatorResult{Passed: true}
+	}
+	res := RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{
+		KubeContext:           "admin@cp",
+		ClusterValidator:      cv,
+		ClusterValidatorImage: "nvcf-validator:1.0",
+	}, sink)
 
 	var gotCheckIDs []string
 	for _, r := range res {
 		gotCheckIDs = append(gotCheckIDs, r.ID)
 	}
-	assert.Contains(t, gotCheckIDs, "gateway-api-crds")
-	assert.Contains(t, gotCheckIDs, "default-storageclass")
+	assert.Contains(t, gotCheckIDs, "cluster-validator",
+		"cluster-validator check must appear when ClusterValidator is configured for control-plane role")
 }
 
 func TestRunPreflightForRole_ComputePlaneWithoutSISURL(t *testing.T) {
@@ -653,4 +672,187 @@ func TestParseInotifyOutput(t *testing.T) {
 		_, _, err := parseInotifyOutput("")
 		require.Error(t, err)
 	})
+}
+
+// In ModeSingle one cluster hosts both roles and only one stale-namespace
+// probe runs, so the skipped role's namespaces must be merged in. Dropping
+// them means a kai-scheduler or nvca-operator namespace wedged Terminating is
+// reported as "no stale NVCF namespaces detected".
+func TestStaleNamespaceCheck_MergesTheOtherRolesNamespaces(t *testing.T) {
+	var probed []string
+	prober := func(_ context.Context, _ string, namespaces []string) ([]StaleNamespace, error) {
+		probed = namespaces
+		return nil, nil
+	}
+	rc := RoleConfig{
+		StaleNamespaceProber: prober,
+		ExtraStaleNamespaces: ComputePlaneStaleNamespaces(""),
+	}
+	cat := controlPlaneCheckCategory(rc)
+	require.NotEmpty(t, cat.checks)
+	cat.checks[0].Run(context.Background())
+
+	for _, ns := range []string{"nvcf", "vault-system"} {
+		assert.Contains(t, probed, ns, "the control-plane list must still be covered")
+	}
+	for _, ns := range []string{"nvca-operator", "kai-scheduler"} {
+		assert.Contains(t, probed, ns, "the compute-plane list must be merged in, not dropped")
+	}
+}
+
+func TestMergeNamespaces_DedupesAndKeepsOrder(t *testing.T) {
+	got := mergeNamespaces([]string{"a", "b"}, []string{"b", "c", ""})
+	assert.Equal(t, []string{"a", "b", "c"}, got)
+	assert.Nil(t, mergeNamespaces(nil, nil))
+}
+
+// Every count derives from one rule: only an error-severity miss fails; any
+// other miss is a warning.
+func TestCountResults_OneRule(t *testing.T) {
+	p, f, w := CountResults([]CheckResult{
+		{Passed: true, Severity: SeverityInfo},
+		{Passed: false, Severity: SeverityError},
+		{Passed: false, Severity: SeverityWarning},
+		{Passed: false, Severity: SeverityInfo},
+	})
+	assert.Equal(t, 1, p)
+	assert.Equal(t, 1, f)
+	assert.Equal(t, 2, w)
+}
+
+// When the budget runs out, the checks not yet started are error rows rather
+// than silently dropped, so a partial run cannot grade as a pass. An
+// interrupt ends the run without them: the command reports the interrupt.
+func TestRunPreflight_BudgetSpentChecksAreNotRunErrors(t *testing.T) {
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0"), passingToolSpec("helm", "3.15.0")}}
+
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	res := RunPreflightForRole(expired, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{})
+	require.NotEmpty(t, res)
+	for _, r := range res {
+		assert.True(t, r.IsBlockingFailure(), r.ID)
+		assert.True(t, r.CutShort, r.ID)
+		assert.Contains(t, r.Message, "not run", r.ID)
+	}
+
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	assert.Empty(t, RunPreflightForRole(cancelled, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{}))
+
+	// A check cut short by the interrupt is not a finding either.
+	midRun, stopMidRun := context.WithCancel(context.Background())
+	defer stopMidRun()
+	interrupting := passingToolSpec("kubectl", "1.30.0")
+	interrupting.Version = func(context.Context, string) (*semver.Version, error) {
+		stopMidRun()
+		return nil, context.Canceled
+	}
+	cfg = PreflightConfig{Tools: []BinarySpec{interrupting}}
+	assert.Empty(t, RunPreflightForRole(midRun, cfg, RoleLocalOnly, RoleConfig{}, &captureSink{}))
+}
+
+// A check the budget stopped while it ran is cut short: no finding either way.
+// One that had its result, a pass or its own failure, keeps it even when the
+// budget ran out right after.
+func TestRunPreflight_CutShortOnlyWhenTheBudgetStoppedTheCheck(t *testing.T) {
+	spec := func(name string, version func(ctx context.Context) (*semver.Version, error)) BinarySpec {
+		s := passingToolSpec(name, "1.30.0")
+		s.Version = func(ctx context.Context, _ string) (*semver.Version, error) { return version(ctx) }
+		return s
+	}
+	for name, tc := range map[string]struct {
+		version  func(ctx context.Context) (*semver.Version, error)
+		cutShort bool
+		passed   bool
+	}{
+		"stopped by the budget": {
+			version:  func(ctx context.Context) (*semver.Version, error) { <-ctx.Done(); return nil, ctx.Err() },
+			cutShort: true,
+		},
+		"its own failure": {
+			version: func(ctx context.Context) (*semver.Version, error) {
+				<-ctx.Done()
+				return nil, errors.New("exec format error")
+			},
+		},
+		"passed as the budget ran out": {
+			version: func(ctx context.Context) (*semver.Version, error) {
+				<-ctx.Done()
+				return semver.MustParse("1.30.0"), nil
+			},
+			passed: true,
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		res := RunPreflightForRole(ctx, PreflightConfig{Tools: []BinarySpec{spec("kubectl", tc.version)}},
+			RoleLocalOnly, RoleConfig{}, &captureSink{})
+		cancel()
+		require.Len(t, res, 1, name)
+		assert.Equal(t, tc.cutShort, res[0].CutShort, name)
+		assert.Equal(t, tc.passed, res[0].Passed, name)
+		if tc.cutShort {
+			assert.True(t, strings.HasPrefix(res[0].Message, "cut short: "), name)
+		}
+	}
+}
+
+// A row that says how to remove what a check left in the cluster is reported
+// even when the run is interrupted, as an event too, since nothing else will
+// say it. An interrupted row without one is not a finding and is dropped.
+func TestRunPreflight_InterruptKeepsTheCleanupRow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &captureSink{}
+	rc := RoleConfig{
+		KubeContext:           "ctx-a",
+		ClusterValidatorImage: "nvcr.io/nvidia/validator:1",
+		ClusterValidator: func(context.Context, ClusterValidatorParams) ClusterValidatorResult {
+			cancel()
+			return ClusterValidatorResult{RunID: "run1", Err: context.Canceled, LeftBehind: true}
+		},
+	}
+	res := RunPreflightForRole(ctx, PreflightConfig{}, RoleControlPlane, rc, sink)
+	require.Len(t, res, 1)
+	assert.Equal(t, "cluster-validator", res[0].ID)
+	assert.Equal(t, SeverityWarning, res[0].Severity)
+	assert.Equal(t, "cluster-validator was interrupted", res[0].Message)
+	assert.Contains(t, res[0].Cleanup, clusterValidatorRunLabel+"=run1")
+	assert.Contains(t, res[0].Cleanup, "--context ctx-a")
+	var emitted []progress.CheckCompleted
+	for _, e := range sink.events {
+		if cc, ok := e.(progress.CheckCompleted); ok {
+			emitted = append(emitted, cc)
+		}
+	}
+	require.Len(t, emitted, 1)
+	assert.Contains(t, emitted[0].Detail, res[0].Cleanup)
+
+	dropped, stop := context.WithCancel(context.Background())
+	defer stop()
+	rc.ClusterValidator = func(context.Context, ClusterValidatorParams) ClusterValidatorResult {
+		stop()
+		return ClusterValidatorResult{RunID: "run2", Err: context.Canceled}
+	}
+	assert.Empty(t, RunPreflightForRole(dropped, PreflightConfig{}, RoleControlPlane, rc, &captureSink{}))
+}
+
+// A configured validator whose tag could not be resolved does not run, and
+// each role says so as a failed row: a note on stderr is lost to a consumer
+// of the JSON stream, and nothing was validated.
+func TestRunPreflight_UnresolvedValidatorImageFailsEachRole(t *testing.T) {
+	rc := RoleConfig{ClusterValidatorUnresolvedImage: "nvcr.io/nvidia/nvcf-byoc/cluster-validator"}
+	for _, role := range []Role{RoleControlPlane, RoleComputePlane} {
+		res := RunPreflightForRole(context.Background(), PreflightConfig{}, role, rc, &captureSink{})
+		var row *CheckResult
+		for i := range res {
+			if res[i].ID == "cluster-validator" {
+				row = &res[i]
+			}
+		}
+		require.NotNil(t, row, role)
+		assert.True(t, row.IsBlockingFailure(), role)
+		assert.Contains(t, row.Message, "could not resolve a tag for nvcr.io/nvidia/nvcf-byoc/cluster-validator", role)
+		assert.Contains(t, row.Message, "--skip-cluster-validation", role)
+	}
 }

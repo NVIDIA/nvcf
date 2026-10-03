@@ -12,20 +12,24 @@ deploy_nvcf:
   variables:
     KUBECONFIG: $KUBECONFIG_FILE
   script:
-    - nvcf-cli self-hosted check --pre --json | jq -e '.event != "phase_failed"' || exit 2
+    - nvcf-cli self-hosted check --pre --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .event == "final" and .success)' || exit 2
     - nvcf-cli self-hosted up --cluster-name=$CLUSTER_NAME --token=$NVCF_ADMIN_JWT --non-interactive --json
-    - nvcf-cli self-hosted status --json | jq -e '.verdict == "healthy"'
+    - nvcf-cli self-hosted status --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .verdict == "healthy")'
 ```
 
 Notes:
 
 - `--non-interactive --token=$JWT` is required in CI; never use interactive `init`.
 - Always `--json` for machine-parsing.
+- `--json` writes JSONL to stderr, not stdout, so redirect with `2>&1 >/dev/null` before a parser.
+- `check` reports its verdict in one `final` event, with `success: false` when any check failed at error severity or the run timed out (exit `5`, `verdict: "timeout"`). Gate on that event: `check` never emits `phase_failed`, so a condition on it always passes. Requiring the `final` event also fails the step when the command dies before emitting it.
+- Slurp with `jq -s` before testing a condition. Without it `jq -e` takes its exit status from the last event alone.
+- stderr also carries plain-text notices, so filter to JSON lines. Do not add `--show-logs` here: it appends a non-JSON transcript to the same stream.
 - Final status check gates downstream stages on `verdict == "healthy"`.
 
 ## GitOps (Argo / Flux) pattern
 
-CI doesn't `kubectl apply` — instead, render manifests, commit them, let the controller apply.
+CI doesn't `kubectl apply`. Instead, render manifests, commit them, let the controller apply.
 
 ```yaml
 render:

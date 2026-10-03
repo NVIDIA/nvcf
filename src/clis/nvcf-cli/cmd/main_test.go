@@ -19,16 +19,145 @@ package cmd
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+
+	"nvcf-cli/internal/selfhosted"
+	"nvcf-cli/internal/state"
 )
 
-// Default-stub out the validator-tag registry probe so cmd tests don't make
-// real network calls or pollute the on-disk cache. Individual tests can
-// reassign the variable if they explicitly want to exercise discovery.
+// Default-stub every seam that would otherwise reach the developer's cluster or
+// the network. Individual tests reassign a variable when they explicitly want
+// to exercise that path.
+//
+// These are not conveniences. Without them `go test ./cmd/` creates a hostPath
+// busybox pod per node in `default` (the inotify probe), lists Secrets across
+// the stack namespaces of whatever kubeconfig happens to be current, and makes
+// an outbound request to nvcr.io per configured registry. That mutates a real
+// cluster from a unit test, and it is why the package took minutes and failed
+// on a proxied kubeconfig rather than seconds and deterministically.
 func TestMain(m *testing.M) {
+	// Every command reads ~/.nvcf-cli.yaml and some tests save
+	// ~/.nvcf-cli.state, so a developer's real config would steer results and
+	// a test run would overwrite their saved credentials.
+	home, err := os.MkdirTemp("", "nvcf-cli-cmd-test-home-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	// The state manager resolved its path from HOME at package init, before
+	// the swap above, so it still points at the real ~/.nvcf-cli.state.
+	state.ResetDefaultStateManager()
+	// A developer's own toggles would change what every check test runs.
+	for _, k := range []string{
+		"NVCF_CLI_SELFHOSTED_LOCAL_ONLY", "NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION",
+		"NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "NVCF_CLI_SELFHOSTED_FORCE_FAIL",
+	} {
+		_ = os.Unsetenv(k)
+	}
 	resolveLatestValidatorTagForSelfHosted = func(_ context.Context, _ string) (string, bool) {
 		return "", false
 	}
-	os.Exit(m.Run())
+	// Nil prober: the inotify check is skipped rather than creating pods.
+	newInotifyProberForSelfHosted = func() selfhosted.NodeInotifyProber { return nil }
+	// No cluster contact, and a clean result so the category still renders.
+	newStaleNamespaceProberForSelfHosted = func() selfhosted.StaleNamespaceProber {
+		return func(context.Context, string, []string) ([]selfhosted.StaleNamespace, error) {
+			return nil, nil
+		}
+	}
+	// No outbound registry request.
+	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
+		return func(context.Context, string, string, bool) error { return nil }
+	}
+	// No validator Job. A developer with NVCF_CLI_CLUSTER_VALIDATOR_IMAGE
+	// exported, or cluster_validator_image in ~/.nvcf-cli.yaml, would
+	// otherwise have every check test create RBAC, Secrets and Jobs in the
+	// current kube context and wait up to five minutes per role.
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(context.Context, selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			return selfhosted.ClusterValidatorResult{Passed: true}
+		}
+	}
+	for _, k := range []string{
+		"NVCF_CLI_CLUSTER_VALIDATOR_IMAGE", "NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES",
+		"NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE",
+	} {
+		_ = os.Unsetenv(k)
+	}
+	// The SIS reachability check has no seam, but it resolves its URL from
+	// NVCF_ICMS_URL, so resetCheckFlags points check tests at this local
+	// server instead of the real SIS. Scoped per test: setting it for the
+	// whole package would change what the ICMS URL resolution tests resolve.
+	sis := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	testSISURL = sis.URL
+	code := m.Run()
+	sis.Close()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}
+
+// testSISURL is a local stand-in for SIS, set by TestMain.
+var testSISURL string
+
+// resetFlag returns f to its default value and clears its Changed marker. A
+// slice flag is replaced, since Set appends once the flag has been set.
+func resetFlag(f *pflag.Flag) {
+	if sv, ok := f.Value.(pflag.SliceValue); ok {
+		_ = sv.Replace(nil)
+	} else {
+		_ = f.Value.Set(f.DefValue)
+	}
+	f.Changed = false
+}
+
+// resetCheckFlags returns every `self-hosted check` flag to its default,
+// including cobra's Changed marker, now and when the test ends. The flag
+// variables are package globals that survive rootCmd.Execute, so without this
+// a test that passes --pre leaks it into whichever test runs next, and a
+// regression guard can pass or fail on test order alone.
+func resetCheckFlags(t *testing.T) {
+	t.Helper()
+	if testSISURL != "" {
+		t.Setenv("NVCF_ICMS_URL", testSISURL)
+	}
+	reset := func() {
+		checkPre, checkControlPlane, checkComputePlane, checkAll = false, false, false, false
+		checkClusterName = ""
+		checkLocalOnly, checkSkipInotifyCheck, checkSkipClusterValidation = false, false, false
+		checkClusterValidatorImage, checkClusterValidatorPullSecret = "", ""
+		checkClusterValidatorNoCleanup = false
+		checkClusterValidatorRegistries = nil
+		checkClusterValidatorProbeImage = ""
+		checkClusterValidatorTolerations = nil
+		checkShowLogs = false
+		selfHostedJSON, selfHostedPlain = false, false
+		selfHostedOutput = "text"
+		selfHostedWait = ""
+		selfHostedControlPlaneContext, selfHostedComputePlaneContext = "", ""
+		// Values too, not only the Changed marker: a test that passes
+		// --icms-url would otherwise point every later check at its URL.
+		for _, fs := range []*pflag.FlagSet{selfHostedCheckCmd.Flags(), selfHostedCmd.PersistentFlags()} {
+			fs.VisitAll(resetFlag)
+		}
+		// Other tests call viper.Reset(), which drops the bindings made at
+		// init, so a flag passed to check would silently not be read.
+		for key, flag := range map[string]string{
+			"cluster_validator_image":       "cluster-validator-image",
+			"cluster_validator_registries":  "cluster-validator-registries",
+			"cluster_validator_probe_image": "cluster-validator-probe-image",
+			"cluster_validator_tolerations": "cluster-validator-tolerations",
+		} {
+			_ = viper.BindPFlag(key, selfHostedCheckCmd.Flags().Lookup(flag))
+		}
+	}
+	reset()
+	t.Cleanup(reset)
 }

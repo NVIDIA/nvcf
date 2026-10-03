@@ -12,19 +12,55 @@
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--control-plane-stack=…` | Control-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
-| `--compute-plane-stack=…` | Compute-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
-| `--env=local\|prd\|…` | Helmfile environment name | `local` for dev builds, `prd` for releases |
+| `--control-plane-stack=...` | Control-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
+| `--compute-plane-stack=...` | Compute-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
+| `--env=local\|prd\|...` | Helmfile environment name | `local` for dev builds, `prd` for releases |
 | `--non-interactive` | Disable all stdin prompts | `false` |
 | `--token=$JWT` | Admin JWT, overrides stored session | - |
 | `--no-apply` | `install` only - emit YAML, do not kubectl apply | `false` |
 | `--output=text\|json` | Legacy alias for `--json` (deprecated, removed in next major) | `text` |
 | `--plain` | Force plain streaming output | auto-detect |
-| `--wait DURATION` | `check` only; block until pass | - |
+| `--wait DURATION` | `check` only; poll until the check passes or DURATION runs out (exit `5`, `final` with `success: false`). A warning that is expected to clear, such as a rollout in progress, keeps it polling, and its `check_completed` event carries `transient: true`. Cannot be combined with `--no-cleanup` | - |
 | `--control-plane-context CTX` | kubectl context for control plane (REQ-20) | current context |
 | `--compute-plane-context CTX` | kubectl context for compute plane (REQ-20) | current context |
 | `--icms-url URL` | Public ICMS URL; required when contexts differ | derived from `base_http_url` |
-| `--local-only` | `check --pre` only; skip all kubectl contact | `false` |
+| `--local-only` | `check` only; run the local-host checks and skip all kubectl contact, whatever scope flag is passed. The CLI prints a note saying so. Env: `NVCF_CLI_SELFHOSTED_LOCAL_ONLY` | `false` |
+
+## `check`-specific
+
+At least one of `--pre`, `--control-plane`, `--compute-plane`, or `--all` is
+required. Each selects a role; only the selected roles contact a cluster.
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--pre` | Pre-flight: local-host tools plus cluster readiness. Skips SIS reachability, since SIS is not installed yet, unless `--all` or `--compute-plane` is also passed. With `--all`, or with a role's own flag, that role's validator checks the cluster as installed | `false` |
+| `--control-plane` | Control-plane checks | `false` |
+| `--compute-plane` | Compute-plane checks | `false` |
+| `--all` | Every category, including SIS reachability when combined with `--pre` | `false` |
+| `--cluster-name NAME` | Cluster name for compute-plane checks | - |
+| `--skip-inotify-check` | Skip the per-node inotify-limits probe. Needed when the kubeconfig user cannot create pods in `default`. Env: `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY` | `false` |
+
+### Cluster-validator flags
+
+The validator runs as a Job in the cluster being checked. The CLI creates a
+ServiceAccount, ClusterRole, and ClusterRoleBinding for it and removes them
+after the run, so the kubeconfig context needs permission to manage those.
+
+When `check` reads the stack's environment file, `environments/<env>.yaml`
+from `--control-plane-stack` or a stack checkout above the working directory,
+it tells the validator which Gateways the stack wires NVCF routes to. Without
+that file it does not, and the validator finds them from the routes.
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. If no tag can be discovered, the validator does not run and its row fails the check, saying to pin a tag; `--wait` tries again on every poll. Unset everywhere skips the probe with a warning | - |
+| `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry`, and `quay.io` for the cert-manager ACME solver unless the stack sets `certManager.acmesolver.image`. `nvcr.io` is probed only when neither the image nor the stack names a registry. The validator dials from a pod with no proxy, so an unreachable registry is a warning; the local credential check is what fails a registry the install cannot pull from. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | - |
+| `--cluster-validator-probe-image REF` | Image for the control-plane validator's node-to-node overlay probe. Needs `sh` and a busybox-style `nc`. Set a mirror for air-gapped clusters. Env: `NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE`; config key `cluster_validator_probe_image` | `busybox:1.36` from Docker Hub |
+| `--cluster-validator-tolerations key[=value][:effect],...` | Tolerations added to the validator Job, beside the control-plane ones it always carries, for clusters whose nodes use other taints. Effect is `NoSchedule`, `PreferNoSchedule` or `NoExecute`. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS`; config key `cluster_validator_tolerations` | - |
+| `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and copies it into `default` for the run. Failing that, and only for an image on `nvcr.io`, it mints one from `NGC_API_KEY`. The key is never sent to another registry, other NVIDIA registries included; those use your docker login | auto-detect |
+| `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. A validator that is configured but cannot run fails the check, so use this to opt out explicitly, for example when the cluster cannot pull the image. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |
+| `--no-cleanup` | Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging. A later check reclaims them after 24 hours; the result prints the `kubectl delete` command that removes them now | `false` |
+| `--show-logs` | Print the validator transcript to stderr after the check events. The transcript is not JSON, and `--json` also writes to stderr, so leave this off when a parser is reading the stream | `false` |
 
 ## `up`-specific
 

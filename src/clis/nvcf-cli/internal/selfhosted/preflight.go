@@ -19,6 +19,7 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	corev1 "k8s.io/api/core/v1"
 
 	"nvcf-cli/internal/selfhosted/progress"
 )
@@ -44,6 +46,42 @@ const (
 	binaryVersionMessage = "%s %s on PATH (%s required)"
 )
 
+// Severity values for CheckResult. Typed constants rather than bare strings:
+// a typo'd "Error" silently downgraded a hard failure to a warning, and the
+// exit code keys off an exact match.
+const (
+	SeverityInfo    = "info"
+	SeverityWarning = "warning"
+	SeverityError   = "error"
+)
+
+// IsBlockingFailure reports whether the result fails the run: a miss at error
+// severity. The exit code, the final event, the category counts and the
+// summaries all derive from this one rule so they cannot disagree.
+func (r CheckResult) IsBlockingFailure() bool {
+	return !r.Passed && r.Severity == SeverityError
+}
+
+// IsWarning reports a miss that does not fail the run.
+func (r CheckResult) IsWarning() bool {
+	return !r.Passed && !r.IsBlockingFailure()
+}
+
+// CountResults tallies results by the one rule every count uses.
+func CountResults(results []CheckResult) (passed, failed, warned int) {
+	for _, r := range results {
+		switch {
+		case r.Passed:
+			passed++
+		case r.IsBlockingFailure():
+			failed++
+		default:
+			warned++
+		}
+	}
+	return passed, failed, warned
+}
+
 // One row in the linkerd-style output. Logs is internal-only and is not
 // forwarded into the CheckCompleted JSONL wire event, so it never leaks
 // into the stable JSON contract.
@@ -55,8 +93,18 @@ type CheckResult struct {
 	Message  string
 	Detail   string // optional: short version string or extra context (M+8.11)
 	HintURL  string
-	Err      error // populated only when the check itself failed to execute
+	Err      error  // populated only when the check itself failed to execute
 	Logs     string // optional: full check transcript for --show-logs; not emitted to JSON
+	// Transient marks a warning expected to clear by itself, such as a
+	// rollout in progress. --wait keeps polling while one remains.
+	Transient bool
+	// CutShort marks a check the run's time budget stopped: it never started,
+	// or ran out of time while it ran. Such a result is no finding about the
+	// cluster, so the verdict is a timeout.
+	CutShort bool
+	// Cleanup is the command that removes what the check left in the
+	// cluster. Its row is reported even when the run is interrupted.
+	Cleanup string
 }
 
 // BinarySpec defines a tool that must be on PATH and a version constraint.
@@ -75,7 +123,7 @@ func checkBinary(ctx context.Context, s BinarySpec) CheckResult {
 	r := CheckResult{
 		ID:       "local-host-tools-" + s.Name,
 		Category: "local-host-tools",
-		Severity: "error",
+		Severity: SeverityError,
 		HintURL:  s.HintURL,
 	}
 	path, err := s.LookPath(s.Name)
@@ -195,6 +243,15 @@ func runVersionCmdOnce(ctx context.Context, path string, args []string, re *rege
 type PreflightConfig struct {
 	LocalOnly bool
 	Tools     []BinarySpec
+
+	// Registries is the list of container registries to credential-check.
+	// When empty, the registry-credentials category is omitted entirely.
+	// Populated by the cmd layer from EnumerateRegistries.
+	Registries []RegistryEntry
+
+	// RegistryChecker validates credentials for one registry. Nil skips the
+	// category. Production wires NewRegistryCredentialChecker; tests pass fakes.
+	RegistryChecker RegistryCredentialChecker
 }
 
 // DefaultTools returns the kubectl/helmfile/helm specs with version floors
@@ -252,8 +309,16 @@ type Role int
 
 const (
 	RoleLocalOnly    Role = iota // shared local-host tools only; no kubectl contact
-	RoleControlPlane             // shared + Gateway API CRDs + default StorageClass
+	RoleControlPlane             // shared + gateway/StorageClass/LB checks via cluster-validator
 	RoleComputePlane             // shared + GPU operator + GPU node labels + (optional) SIS reachability
+)
+
+// Validator role strings passed as VALIDATOR_ROLE to the cluster-validator Job.
+// These must match the constants in the nvca cluster-validator binary's
+// clustervalidator package (RoleControlPlane / RoleComputePlane).
+const (
+	validatorRoleControlPlane = "control-plane"
+	validatorRoleComputePlane = "compute-plane"
 )
 
 // String returns a human-readable name for the role.
@@ -289,6 +354,40 @@ type RoleConfig struct {
 	ClusterValidatorImage      string
 	ClusterValidatorPullSecret string
 	ClusterValidatorNoCleanup  bool
+
+	// StaleNamespaceProber detects NVCF stack namespaces that are stuck
+	// Terminating or exist as empty shells after a partial teardown. Nil skips
+	// the check; production wires NewStaleNamespaceProber; tests pass fakes.
+	StaleNamespaceProber StaleNamespaceProber
+
+	// StackDir is the resolved stack checkout. When set, the namespaces to
+	// probe are read from its helmfile.d rather than the static fallback list,
+	// so the check follows the stack instead of drifting from it.
+	StackDir string
+
+	// ExtraStaleNamespaces are merged into this role's stale-namespace scan.
+	// In ModeSingle both roles share one cluster, so only one of them runs the
+	// probe to avoid emitting the same check ID twice; the other role's
+	// namespaces are passed here instead of being dropped. The two roles probe
+	// disjoint lists, so without this the skipped role's namespaces are never
+	// scanned on the one topology where they sit on the same cluster.
+	ExtraStaleNamespaces []string
+
+	// ClusterValidatorRegistries are the registries the control-plane
+	// validator probes for reachability: the EnumerateRegistries result the
+	// local credential check also uses. Ignored for the compute-plane validator.
+	ClusterValidatorRegistries []RegistryEntry
+
+	// ClusterValidatorEnv is passed to the validator container for both roles.
+	ClusterValidatorEnv map[string]string
+	// ClusterValidatorTolerations are added to the validator Job's
+	// control-plane tolerations.
+	ClusterValidatorTolerations []corev1.Toleration
+
+	// ClusterValidatorUnresolvedImage is a configured validator image without
+	// a tag whose latest tag could not be discovered. The validator does not
+	// run, and the role reports that as a failed check rather than nothing.
+	ClusterValidatorUnresolvedImage string
 }
 
 // categorySpec groups a set of checks under a named category. Categories run
@@ -316,6 +415,16 @@ func buildCategories(cfg PreflightConfig, role Role, rc RoleConfig) []categorySp
 
 	if local := buildLocalHostCategory(cfg); local != nil {
 		out = append(out, *local)
+	}
+
+	// Registry credential check runs from the operator's machine - no cluster
+	// contact needed. RunPreflightForRole is called once per role, so the
+	// caller clears Registries on every role but one to avoid duplicate
+	// check_started/check_completed events. Deduplicating on the role here
+	// instead would drop the check entirely when the control plane does not
+	// run, which is the case for a compute-plane-only invocation.
+	if len(cfg.Registries) > 0 && cfg.RegistryChecker != nil {
+		out = append(out, buildRegistryCredentialCategory(cfg))
 	}
 
 	if cfg.LocalOnly || role == RoleLocalOnly {
@@ -354,28 +463,48 @@ func buildLocalHostCategory(cfg PreflightConfig) *categorySpec {
 	return &categorySpec{name: "local-host-tools", role: RoleLocalOnly, checks: checks}
 }
 
-// controlPlaneCheckCategory returns the placeholder cluster-side checks for
-// control plane: Gateway API CRDs, default StorageClass. Real probes land
-// when M3 ships; for now they emit an "info" CheckResult so the renderer
-// matrix is observable.
-func controlPlaneCheckCategory(_ RoleConfig) categorySpec {
-	return categorySpec{
-		name: "control-plane-cluster",
-		role: RoleControlPlane,
-		checks: []binaryCheckSpec{
-			placeholderCheck("gateway-api-crds", "checking Gateway API CRDs…", "Gateway API CRD probe — pending M3 cluster-side preflight"),
-			placeholderCheck("default-storageclass", "checking default StorageClass…", "Default StorageClass probe — pending M3 cluster-side preflight"),
-		},
+// controlPlaneCheckCategory returns the cluster-side checks for the control
+// plane. The stale-namespace check runs first so a leftover namespace from a
+// prior partial teardown is surfaced before any other cluster work.
+// Gateway API CRD and StorageClass probes are placeholders pending M3.
+func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
+	cat := categorySpec{
+		name:   "control-plane-cluster",
+		role:   RoleControlPlane,
+		checks: []binaryCheckSpec{},
 	}
+	// Stale namespace check runs first so leftover namespaces surface
+	// before any other cluster work.
+	if rc.StaleNamespaceProber != nil {
+		cat.checks = append(cat.checks,
+			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
+				mergeNamespaces(resolveStackNamespaces(rc.StackDir, nvcfControlPlaneNamespaces),
+					rc.ExtraStaleNamespaces)))
+	}
+	// Containerized cluster-validator probe for control-plane checks
+	// (Gateway API CRDs, Envoy Gateway, StorageClass, external LB,
+	// node-to-node overlay, and reachability to nvcr.io + extra registries).
+	if rc.ClusterValidator != nil {
+		cat.checks = append(cat.checks, clusterValidatorCheck(
+			rc.ClusterValidator,
+			rc.KubeContext,
+			rc.ClusterValidatorImage,
+			rc.ClusterValidatorPullSecret,
+			rc.ClusterValidatorNoCleanup,
+			validatorRoleControlPlane,
+			rc.ClusterValidatorRegistries,
+			rc.ClusterValidatorEnv,
+			rc.ClusterValidatorTolerations...,
+		))
+	} else if rc.ClusterValidatorUnresolvedImage != "" {
+		cat.checks = append(cat.checks, unresolvedValidatorCheck(rc.ClusterValidatorUnresolvedImage))
+	}
+	return cat
 }
 
-// computePlaneCheckCategory returns the placeholder compute-plane checks.
-// Conditionally adds an SIS reachability probe when RoleConfig.SISURL is set,
-// a node-inotify-limits probe when RoleConfig.InotifyProber is set, and a
-// containerized cluster-validator probe when RoleConfig.ClusterValidator is
-// set. Each conditional probe is opt-in via its own RoleConfig field so
-// callers that opted out via a --skip-* flag simply leave the corresponding
-// field nil/empty and the check is omitted from the category entirely.
+// computePlaneCheckCategory returns the compute-plane checks. SIS, inotify,
+// and cluster-validator probes are opt-in via their RoleConfig fields; a nil
+// or empty field omits the corresponding check from the category.
 func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 	cat := categorySpec{
 		name: "compute-plane-cluster",
@@ -384,6 +513,15 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 			placeholderCheck("gpu-operator", "checking GPU operator…", "GPU operator probe — pending M+10 cluster-side preflight"),
 			placeholderCheck("gpu-node-labels", "checking GPU node labels…", "GPU node-label probe — pending M+10 cluster-side preflight"),
 		},
+	}
+	// Stale namespace check runs first so leftover namespaces from a prior
+	// partial teardown surface before any other cluster work.
+	if rc.StaleNamespaceProber != nil {
+		cat.checks = append([]binaryCheckSpec{
+			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
+				mergeNamespaces(resolveStackNamespaces(rc.StackDir, nvcfComputePlaneNamespaces),
+					rc.ExtraStaleNamespaces)),
+		}, cat.checks...)
 	}
 	if rc.SISURL != "" {
 		cat.checks = append(cat.checks, sisReachabilityCheck(rc.SISURL))
@@ -398,7 +536,13 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 			rc.ClusterValidatorImage,
 			rc.ClusterValidatorPullSecret,
 			rc.ClusterValidatorNoCleanup,
+			validatorRoleComputePlane,
+			nil, // registries: compute-plane doesn't use the ConfigMap reachability list
+			rc.ClusterValidatorEnv,
+			rc.ClusterValidatorTolerations...,
 		))
+	} else if rc.ClusterValidatorUnresolvedImage != "" {
+		cat.checks = append(cat.checks, unresolvedValidatorCheck(rc.ClusterValidatorUnresolvedImage))
 	}
 	return cat
 }
@@ -441,18 +585,18 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{
 				ID:       id,
-				Severity: "error",
+				Severity: SeverityError,
 				HintURL:  inotifyHintURL,
 			}
 			limits, err := prober(ctx, kubeContext)
 			if err != nil {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Message = "node inotify probe failed: " + err.Error()
 				r.Err = err
 				return r
 			}
 			if len(limits) == 0 {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Passed = true
 				r.Message = "no nodes returned by inotify probe; skipping"
 				return r
@@ -489,7 +633,7 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 				return r
 			}
 			if len(probeErrs) > 0 {
-				r.Severity = "warning"
+				r.Severity = SeverityWarning
 				r.Message = fmt.Sprintf(
 					"could not probe inotify limits on %d node(s): %s",
 					len(probeErrs), strings.Join(probeErrs, "; "),
@@ -503,10 +647,37 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 	}
 }
 
-// Severity mapping: runner errors (RBAC/pull/timeout) -> warning, since
-// they're operator-fixable infra issues; validator Passed=false ->
-// error (real check failures); Passed=true -> info.
-func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool) binaryCheckSpec {
+// unresolvedValidatorCheck reports a configured validator that cannot run
+// because its image has no tag and the latest one could not be discovered.
+// The kubelet would pull such a reference as :latest, which the validator
+// repository does not publish. It fails like any validator that could not
+// run: nothing was validated.
+func unresolvedValidatorCheck(image string) binaryCheckSpec {
+	const id = "cluster-validator"
+	return binaryCheckSpec{
+		ID:         id,
+		HumanLabel: "resolving the cluster-validator image…",
+		Run: func(context.Context) CheckResult {
+			return CheckResult{
+				ID:       id,
+				Severity: SeverityError,
+				HintURL:  clusterValidatorHintURL,
+				Message: "cluster-validator not run: could not resolve a tag for " + image +
+					"; pin cluster_validator_image to a tag, or pass --skip-cluster-validation",
+			}
+		},
+	}
+}
+
+// clusterValidatorCheck runs the validator Job. A validator that could not run
+// (RBAC denied, image pull failure, timeout) is an error like a validator
+// failure: nothing was checked, and a readiness gate must not pass on that.
+// --skip-cluster-validation is the explicit opt-out. role selects the check
+// set via VALIDATOR_ROLE; registries extends the ConfigMap reachability list.
+func clusterValidatorCheck(
+	cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool, role string,
+	registries []RegistryEntry, env map[string]string, tolerations ...corev1.Toleration,
+) binaryCheckSpec {
 	const id = "cluster-validator"
 	return binaryCheckSpec{
 		ID:         id,
@@ -521,35 +692,420 @@ func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret s
 				Image:       image,
 				PullSecret:  pullSecret,
 				NoCleanup:   noCleanup,
+				Role:        role,
+				Registries:  registries,
+				Env:         env,
+				Tolerations: tolerations,
 			})
 			r.Logs = result.Logs
-			r.Detail = clusterValidatorDetail(result.JobName)
+			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)
+			switch {
+			case noCleanup:
+				r.Cleanup = validatorCleanupHint(kubeContext, result.RunID)
+			case result.LeftBehind:
+				// The pod could still be running, so its RBAC was kept rather
+				// than pulled out from under it. Say how to remove it once it
+				// ends, instead of leaving it for a later check's sweep.
+				r.Cleanup = validatorLeftBehindHint(kubeContext, result.RunID)
+			}
+			if r.Cleanup != "" {
+				r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + r.Cleanup
+			}
 
-			if result.Err != nil {
-				r.Severity = "warning"
-				r.Message = "cluster-validator did not complete: " + result.Err.Error()
+			if errors.Is(result.Err, context.Canceled) {
+				r.Severity = SeverityWarning
+				r.Message = "cluster-validator was interrupted"
 				r.Err = result.Err
 				return r
 			}
+			if result.Err != nil {
+				r.Severity = SeverityError
+				r.Message = "cluster-validator did not complete, so the cluster was not validated: " +
+					result.Err.Error() + "; fix the cause, or pass --skip-cluster-validation to run without it"
+				r.Err = result.Err
+				return r
+			}
+			// An image that predates role support ignores VALIDATOR_ROLE and runs
+			// the compute-plane GPU checks, which fail on a CPU-only control
+			// plane. The latest tag can be such an image until a release with
+			// role support is published, so report it as the image being too
+			// old rather than as the cluster failing. That needs positive
+			// evidence of the legacy check set, not just a missing role line: a
+			// role-aware image that fails before printing it (say, building its
+			// Kubernetes client) must still fail the run.
+			if role == validatorRoleControlPlane && isLegacyComputePlaneTranscript(result.Logs) {
+				// Downgrade only the failure the old image causes by itself: its
+				// GPU check on a CPU-only control plane. Its checks common to both
+				// roles (the control plane's /readyz, admission webhooks, critical
+				// registry reachability) still see real failures, and those fail.
+				if others := legacyCriticalFailures(result.Logs); len(others) > 0 {
+					r.Severity = SeverityError
+					r.Message = "cluster-validator reported failures (" + strings.Join(others, "; ") +
+						"); the image predates validator roles, so only its checks common to both roles ran"
+					return r
+				}
+				r.Severity = SeverityWarning
+				r.Message = "cluster-validator image does not support the control-plane checks (it ran the " +
+					"compute-plane set); use an image from an NVCA release that supports validator roles, " +
+					"or pass --skip-cluster-validation"
+				return r
+			}
 			r.Passed = result.Passed
+			if result.Passed && strings.Contains(result.Logs, validatorReadyWithWarnings) {
+				// The Job succeeding is not a clean pass when the validator
+				// itself reported warnings. A rollout in progress is expected
+				// to clear, so --wait keeps polling on it.
+				r.Passed = false
+				r.Severity = SeverityWarning
+				r.Transient = isRolloutTranscript(result.Logs)
+				r.Message = "cluster-validator passed with warnings; run with --show-logs for details"
+				if r.Transient {
+					r.Message = "cluster-validator passed with a rollout in progress; --wait polls until it completes"
+				}
+				return r
+			}
 			if result.Passed {
-				r.Severity = "info"
+				r.Severity = SeverityInfo
 				r.Message = "cluster passed cluster-validator built-in checks"
 				return r
 			}
-			r.Severity = "error"
+			r.Severity = SeverityError
 			r.Message = fmt.Sprintf("cluster-validator reported failures (exit code %d)", result.ExitCode)
 			return r
 		},
 	}
 }
 
-func clusterValidatorDetail(jobName string) string {
-	hint := kubectlLogsHint(jobName)
+// validatorRoleMarker prefixes the line a role-aware validator prints naming
+// the check set it runs. Must match RoleMarker in
+// nvca/internal/clustervalidator/validator.go.
+const validatorRoleMarker = "Validator role: "
+
+// validatorReadyWithWarnings is in the verdict line of a run that passed every
+// critical check with warnings. Must match printSummary in
+// nvca/internal/clustervalidator/validator.go.
+const validatorReadyWithWarnings = "NVCF-Ready (with warnings)"
+
+// validatorRolloutMarkers are in the validator's warnings for a Deployment or
+// StatefulSet rollout in progress (checks.go, Tier-1 and Tier-2).
+var validatorRolloutMarkers = []string{"rollout in progress", "rolling update in progress", "mid-rollout"}
+
+func isRolloutTranscript(logs string) bool {
+	for _, m := range validatorRolloutMarkers {
+		if strings.Contains(logs, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// validatorSummaryStart and validatorFailIcon locate the failed critical rows
+// the validator prints in its summary. Must match printSummary and printError
+// in nvca/internal/clustervalidator.
+const (
+	validatorSummaryStart = "Check Results:"
+	validatorFailIcon     = "\u2717"
+)
+
+// legacyCriticalFailures returns the failed critical summary rows of a
+// pre-role transcript other than GPU Resources, the one row the compute-plane
+// set fails on any CPU-only control plane. A transcript without a summary
+// returns a row saying so: nothing shows the run was otherwise clean.
+func legacyCriticalFailures(logs string) []string {
+	i := strings.LastIndex(logs, validatorSummaryStart)
+	if i < 0 {
+		return []string{"the validator printed no summary"}
+	}
+	var out []string
+	for _, line := range strings.Split(logs[i:], "\n") {
+		if strings.Contains(line, "Cluster is") {
+			break
+		}
+		_, row, ok := strings.Cut(line, validatorFailIcon)
+		if !ok {
+			continue
+		}
+		if row = strings.TrimSpace(row); row != "" && !strings.HasPrefix(row, "GPU Resources") {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// legacyComputePlaneHeader is a section header only the compute-plane check
+// set prints. A validator that predates roles always runs that set.
+const legacyComputePlaneHeader = "GPU Resources"
+
+// isLegacyComputePlaneTranscript reports whether logs come from a validator
+// that ignored the requested control-plane role: no role line, and the
+// compute-plane check set's output instead.
+func isLegacyComputePlaneTranscript(logs string) bool {
+	return !strings.Contains(logs, validatorRoleMarker) && strings.Contains(logs, legacyComputePlaneHeader)
+}
+
+// validatorCleanupHint is the command that removes everything one --no-cleanup
+// run kept. Everything it created carries the run label, so one selector
+// covers the namespaced objects and one the cluster-scoped RBAC.
+func validatorCleanupHint(kubeContext, runID string) string {
+	if runID == "" {
+		return ""
+	}
+	sel := clusterValidatorRunLabel + "=" + runID
+	ctx := kubectlContextArg(kubeContext)
+	return fmt.Sprintf("kept with --no-cleanup; remove with: kubectl%s delete -n %s job,serviceaccount,secret,configmap -l %s && "+
+		"kubectl%s delete clusterrole,clusterrolebinding -l %s",
+		ctx, clusterValidatorNamespace, sel, ctx, sel)
+}
+
+// validatorLeftBehindHint is the removal command for a run whose pod outlived
+// the wait, so its RBAC was kept.
+func validatorLeftBehindHint(kubeContext, runID string) string {
+	if runID == "" {
+		return ""
+	}
+	sel := clusterValidatorRunLabel + "=" + runID
+	ctx := kubectlContextArg(kubeContext)
+	return fmt.Sprintf("the validator pod was still running, so its objects were kept; once it ends remove them "+
+		"with: kubectl%s delete -n %s job,serviceaccount,secret,configmap -l %s && "+
+		"kubectl%s delete clusterrole,clusterrolebinding -l %s",
+		ctx, clusterValidatorNamespace, sel, ctx, sel)
+}
+
+func clusterValidatorDetail(kubeContext, jobName string) string {
+	hint := kubectlLogsHint(kubeContext, jobName)
 	if hint == "" {
 		return ""
 	}
 	return "logs: " + hint
+}
+
+// buildRegistryCredentialCategory returns the registry-credentials category
+// that probes each configured registry for reachability and valid credentials.
+func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
+	cat := categorySpec{
+		name:   "registry-credentials",
+		role:   RoleLocalOnly, // runs regardless of cluster role
+		checks: make([]binaryCheckSpec, 0, len(cfg.Registries)),
+	}
+	for _, reg := range cfg.Registries {
+		reg := reg // capture loop var
+		cat.checks = append(cat.checks, registryCredentialCheck(cfg.RegistryChecker, reg))
+	}
+	return cat
+}
+
+// registryCredentialCheck returns a binaryCheckSpec that probes one registry.
+// Critical registries (nvcr.io) fail at error severity; non-critical ones
+// fail at warning so they don't block the operator on optional registries.
+func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEntry) binaryCheckSpec {
+	id := "registry-cred-" + entry.Registry
+	severity := SeverityWarning
+	if entry.Critical {
+		severity = SeverityError
+	}
+	return binaryCheckSpec{
+		ID:         id,
+		HumanLabel: fmt.Sprintf("checking credentials for %s...", entry.Registry),
+		Run: func(ctx context.Context) CheckResult {
+			r := CheckResult{
+				ID:       id,
+				Severity: severity,
+			}
+			if err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical); err != nil {
+				// A registry this probe cannot speak to (ECR's SigV4, a Basic
+				// challenge) is not evidence of a credential problem, and an
+				// unreadable credential helper is not evidence of a missing
+				// credential. Neither may block the run.
+				var skipped errRegistryProbeSkipped
+				var unverified errRegistryCredentialsUnverified
+				var notVerified errRegistryCredentialsNotVerified
+				switch {
+				case errors.As(err, &notVerified):
+					r.Passed = true
+					r.Severity = SeverityInfo
+					r.Message = entry.Registry + ": " + err.Error()
+					return r
+				case errors.As(err, &skipped):
+					r.Passed = true
+					r.Severity = SeverityInfo
+					r.Message = entry.Registry + ": skipped (" + skipped.reason + ")"
+					return r
+				case errors.As(err, &unverified):
+					r.Severity = SeverityWarning
+					r.Message = entry.Registry + ": " + err.Error()
+					r.Err = err
+					return r
+				}
+				r.Message = entry.Registry + ": " + err.Error()
+				r.Err = err
+				return r
+			}
+			r.Passed = true
+			r.Severity = SeverityInfo
+			r.Message = entry.Registry + ": credentials valid"
+			return r
+		},
+	}
+}
+
+// mergeNamespaces returns the union of two namespace lists, order-stable and
+// de-duplicated.
+func mergeNamespaces(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, list := range [][]string{base, extra} {
+		for _, ns := range list {
+			if ns == "" || seen[ns] {
+				continue
+			}
+			seen[ns] = true
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
+// staleNamespaceCheck detects NVCF namespaces stuck Terminating or left as
+// empty shells after a partial teardown. Severity is error; prober errors
+// degrade to warning so transient kubeconfig issues don't falsely fail.
+func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namespaces []string) binaryCheckSpec {
+	const id = "stale-namespaces"
+	return binaryCheckSpec{
+		ID:         id,
+		HumanLabel: "checking for stale NVCF namespaces...",
+		Run: func(ctx context.Context) CheckResult {
+			r := CheckResult{ID: id, Severity: SeverityError}
+			// Resolve the context before probing, then probe that exact name.
+			// Resolving afterwards leaves a window where the current-context
+			// changes in between, which would have the hints delete namespaces
+			// in a cluster other than the one that was read.
+			probedContext := effectiveKubeContext(kubeContext)
+			stale, err := prober(ctx, probedContext, namespaces)
+			if err != nil {
+				r.Severity = SeverityWarning
+				r.Message = "stale namespace probe failed: " + err.Error()
+				r.Err = err
+				return r
+			}
+			if len(stale) == 0 {
+				r.Severity = SeverityInfo
+				r.Passed = true
+				r.Message = "no stale NVCF namespaces detected"
+				return r
+			}
+			parts := make([]string, 0, len(stale))
+			var terminating, emptyShell []string
+			for _, ns := range stale {
+				parts = append(parts, ns.Name+" ("+ns.Reason+")")
+				if ns.Reason == "stuck Terminating" {
+					terminating = append(terminating, ns.Name)
+				} else {
+					emptyShell = append(emptyShell, ns.Name)
+				}
+			}
+			// Every hint names the context that was actually probed, above.
+			// In split mode the two callers pass different contexts, and with
+			// no context flag the probe followed the current-context. Either
+			// way the name goes into the command, because these hints delete
+			// namespaces and the current-context can change between reading
+			// the output and pasting it.
+			kctl := "kubectl" + kubectlContextArg(probedContext)
+			var hints []string
+			if len(terminating) > 0 {
+				// Inspect first, force last. A namespace usually stays
+				// Terminating because an object inside it still has a
+				// finalizer; clearing the namespace's own finalizers skips that
+				// object's cleanup and can orphan what it manages, such as a
+				// cloud load balancer or volume.
+				// One command per namespace with the real name substituted. A
+				// `<ns>` placeholder is not pasteable: the shell reads `<` and
+				// `>` as redirection, so the command fails before kubectl runs.
+				for _, ns := range terminating {
+					hints = append(hints, fmt.Sprintf(
+						"find what is holding %s in Terminating: "+
+							"%s api-resources --verbs=list --namespaced -o name | "+
+							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
+						ns, kctl, kctl, ns))
+				}
+				// spec.finalizers is writable only through the /finalize
+				// subresource: a plain patch or update is silently reverted by
+				// the apiserver's namespace strategy, so `kubectl patch ...
+				// --type=merge` prints "patched" and changes nothing.
+				for _, ns := range terminating {
+					hints = append(hints, fmt.Sprintf(
+						"only if nothing inside %s can be cleaned up, force-clear its finalizers: %s get ns %s -o json | "+
+							"jq '.spec.finalizers=[]' | %s replace --raw /api/v1/namespaces/%s/finalize -f -",
+						ns, kctl, ns, kctl, ns))
+				}
+			}
+			if len(emptyShell) > 0 {
+				// Deliberately not a delete command. A namespace with no Helm
+				// release is not necessarily stale: the stack gates
+				// cert-manager, NATS, OpenBao and Cassandra on *.enabled, so an
+				// operator who installs one the documented upstream way, or via
+				// Argo, owns a healthy namespace with no owner=helm object.
+				// Handing them "kubectl delete namespace cert-manager" would
+				// destroy every Certificate and Issuer in the cluster.
+				// One command per namespace. kubectl takes a single
+				// namespace and keeps the last -n it sees, so joining them
+				// produces a command that silently inspects only the last one
+				// and reports the rest as empty, which is the opposite of what
+				// an operator deciding whether to delete them needs.
+				// Enumerate every namespaced kind, not `get all`: that omits
+				// PVCs, Secrets, ConfigMaps and custom resources, so after a
+				// partial teardown it reports "No resources found" over the
+				// Cassandra volumes and the OpenBao unseal Secret.
+				for _, ns := range emptyShell {
+					hints = append(hints, fmt.Sprintf(
+						"inspect %s and remove it only after confirming it is unused: "+
+							"%s api-resources --verbs=list --namespaced -o name | "+
+							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
+						ns, kctl, kctl, ns))
+				}
+			}
+			// Only a namespace stuck Terminating blocks the run. "No Helm
+			// release" is a heuristic over a conditionally-installed stack, so
+			// it warns rather than turning a supported install shape into exit 2.
+			if len(terminating) == 0 {
+				r.Severity = SeverityWarning
+			}
+			r.Message = fmt.Sprintf("%d stale namespace(s) detected: %s. To resolve: %s",
+				len(stale), strings.Join(parts, ", "), strings.Join(hints, "; "))
+			return r
+		},
+	}
+}
+
+// kubectlContextArg renders the probed context as a --context flag for the
+// remediation hints, or "" when no explicit context was given so the hint stays
+// readable for a single-cluster setup. The value is shell-quoted: a context
+// name is operator-supplied and arbitrary.
+func kubectlContextArg(kubeContext string) string {
+	if kubeContext == "" {
+		return ""
+	}
+	return " --context " + shellQuoteArg(kubeContext)
+}
+
+// shellQuoteArg makes s safe to paste into a shell. Unquoted when it holds only
+// characters no shell treats specially, so the common case stays legible.
+func shellQuoteArg(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := strings.IndexFunc(s, func(r rune) bool {
+		return !(r == '-' || r == '_' || r == '.' || r == '/' || r == ':' || r == '@' || r == '=' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z'))
+	}) == -1
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 // placeholderCheck returns a binaryCheckSpec that emits a passing "info"
@@ -561,7 +1117,7 @@ func placeholderCheck(id, label, message string) binaryCheckSpec {
 		Run: func(_ context.Context) CheckResult {
 			return CheckResult{
 				ID:       id,
-				Severity: "info",
+				Severity: SeverityInfo,
 				Passed:   true,
 				Message:  message,
 			}
@@ -580,7 +1136,7 @@ func sisReachabilityCheck(sisURL string) binaryCheckSpec {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(sisURL, "/")+"/v1/health", nil)
 			if err != nil {
 				return CheckResult{
-					ID: "sis-reachability", Severity: "error", Passed: false,
+					ID: "sis-reachability", Severity: SeverityError, Passed: false,
 					Message: "SIS request build failed: " + err.Error(),
 					HintURL: "https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#sis-reachability",
 				}
@@ -588,7 +1144,7 @@ func sisReachabilityCheck(sisURL string) binaryCheckSpec {
 			resp, err := cli.Do(req)
 			if err != nil {
 				return CheckResult{
-					ID: "sis-reachability", Severity: "error", Passed: false,
+					ID: "sis-reachability", Severity: SeverityError, Passed: false,
 					Message: "SIS unreachable: " + err.Error(),
 					HintURL: "https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#sis-reachability",
 				}
@@ -596,13 +1152,13 @@ func sisReachabilityCheck(sisURL string) binaryCheckSpec {
 			defer resp.Body.Close()
 			if resp.StatusCode >= 500 {
 				return CheckResult{
-					ID: "sis-reachability", Severity: "error", Passed: false,
+					ID: "sis-reachability", Severity: SeverityError, Passed: false,
 					Message: fmt.Sprintf("SIS returned %d", resp.StatusCode),
 					HintURL: "https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#sis-reachability",
 				}
 			}
 			return CheckResult{
-				ID: "sis-reachability", Severity: "info", Passed: true,
+				ID: "sis-reachability", Severity: SeverityInfo, Passed: true,
 				Message: fmt.Sprintf("SIS reachable (%d)", resp.StatusCode),
 			}
 		},
@@ -632,42 +1188,79 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 	categories := buildCategories(cfg, role, rc)
 	for _, cat := range categories {
 		catStart := time.Now()
-		var passed, failed int
+		var catResults []CheckResult
 		for _, spec := range cat.checks {
-			if ctx.Err() != nil {
+			var res CheckResult
+			switch {
+			case errors.Is(ctx.Err(), context.Canceled):
+				// Interrupted: the command reports the interrupt, not rows.
 				return all
+			case ctx.Err() != nil:
+				// The budget ran out before this check started. Dropping it
+				// let the partial set grade as the verdict, so a validator
+				// that never ran could pass the gate.
+				res = CheckResult{
+					ID: spec.ID, Severity: SeverityError, CutShort: true,
+					Message: "not run: the check's time budget ran out before it started",
+					Err:     ctx.Err(),
+				}
+			default:
+				_ = sink.Emit(ctx, progress.CheckStarted{
+					Category: cat.name,
+					ID:       spec.ID,
+					Message:  spec.HumanLabel,
+				})
+				res = spec.Run(ctx)
+				if errors.Is(ctx.Err(), context.Canceled) {
+					// Cut short by the interrupt, so its result is not a
+					// finding; the cancelled final event says what happened.
+					// A row that says how to remove what the check left in
+					// the cluster is still reported: nothing else will.
+					if res.Cleanup != "" {
+						res.Category = cat.name
+						all = append(all, res)
+						emitCheckCompleted(sink, cat.name, res)
+					}
+					return all
+				}
+				if !res.Passed && errors.Is(ctx.Err(), context.DeadlineExceeded) &&
+					errors.Is(res.Err, context.DeadlineExceeded) {
+					// The budget ran out while it ran: no finding either way.
+					res.CutShort = true
+					res.Severity = SeverityError
+					res.Message = "cut short: the check's time budget ran out before it finished (" + res.Message + ")"
+				}
 			}
-			_ = sink.Emit(ctx, progress.CheckStarted{
-				Category: cat.name,
-				ID:       spec.ID,
-				Message:  spec.HumanLabel,
-			})
-			res := spec.Run(ctx)
 			res.Category = cat.name
 			all = append(all, res)
-			_ = sink.Emit(ctx, progress.CheckCompleted{
-				Category: cat.name,
-				ID:       res.ID,
-				Passed:   res.Passed,
-				Severity: res.Severity,
-				Message:  res.Message,
-				Detail:   res.Detail,
-				HintURL:  res.HintURL,
-			})
-			if res.Passed {
-				passed++
-			} else {
-				failed++
-			}
+			emitCheckCompleted(sink, cat.name, res)
+			catResults = append(catResults, res)
 		}
+		passed, failed, warned := CountResults(catResults)
 		_ = sink.Emit(ctx, progress.CategoryCompleted{
-			Category:    cat.name,
-			PassedCount: passed,
-			FailedCount: failed,
-			DurationSec: time.Since(catStart).Seconds(),
+			Category:     cat.name,
+			PassedCount:  passed,
+			FailedCount:  failed,
+			WarningCount: warned,
+			DurationSec:  time.Since(catStart).Seconds(),
 		})
 	}
 	return all
+}
+
+// emitCheckCompleted reports one check's result. It uses a fresh context: the
+// run's own may have ended, and the row must still reach the stream.
+func emitCheckCompleted(sink progress.EventSink, category string, res CheckResult) {
+	_ = sink.Emit(context.Background(), progress.CheckCompleted{
+		Category:  category,
+		ID:        res.ID,
+		Passed:    res.Passed,
+		Severity:  res.Severity,
+		Message:   res.Message,
+		Detail:    res.Detail,
+		HintURL:   res.HintURL,
+		Transient: res.Transient,
+	})
 }
 
 // noopSink is a progress.EventSink that discards all events. Used by RunPreflight
@@ -685,4 +1278,15 @@ func (*noopSink) Close() error                               { return nil }
 // Cluster-side checks land in M3 (need a kubectl client wired up).
 func RunPreflight(ctx context.Context, cfg PreflightConfig) []CheckResult {
 	return RunPreflightStreaming(ctx, cfg, &noopSink{})
+}
+
+// ControlPlaneStaleNamespaces and ComputePlaneStaleNamespaces expose each
+// role's stale-namespace list so the cmd layer can merge the two when a single
+// cluster hosts both roles and only one probe runs.
+func ControlPlaneStaleNamespaces(stackDir string) []string {
+	return resolveStackNamespaces(stackDir, nvcfControlPlaneNamespaces)
+}
+
+func ComputePlaneStaleNamespaces(stackDir string) []string {
+	return resolveStackNamespaces(stackDir, nvcfComputePlaneNamespaces)
 }
