@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: fern/.node-version
 
       - name: Run docs validation
         run: ./tools/ci/check-docs

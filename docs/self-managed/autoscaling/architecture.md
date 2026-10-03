@@ -57,7 +57,7 @@ instance and concurrency data. These metrics must reach the backend that the
 autoscaler queries.
 
 The backend can be bundled VictoriaMetrics or an existing PromQL-compatible
-service. See [Observability Configuration](/nvcf/observability/observability) for backend,
+service. See [Observability Configuration](../../observability/observability.md) for backend,
 endpoint, and authentication settings.
 
 The autoscaler reports `not ready` until the query endpoint responds.
@@ -72,7 +72,7 @@ Coordination relies on Cassandra TTLs to recover from failures without operator 
 
 ## See Also
 
-- [Configure Autoscaling](/nvcf/overview/configure-autoscaling) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
+- [Configure Autoscaling](../../overview/configure-autoscaling.md) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
 - [Function Autoscaler Operations](./operations.md) for health endpoints and common issues.
-- [Autoscaler Metrics](/nvcf/observability/autoscaler) for emitted metrics, traces, and logs.
+- [Autoscaler Metrics](../../observability/metrics/function-autoscaler/metrics.md) for emitted metrics, traces, and logs.
 - [Helmfile Installation](../helmfile-installation.md#observability-configuration) for deployment profiles and metrics stack settings.
