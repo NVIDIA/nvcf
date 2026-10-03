@@ -26,7 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,8 +84,9 @@ const (
 	EnabledEnv = "NVCA_CLUSTER_VALIDATOR_ENABLED"
 
 	// InitialRunCronJobEnv names the cluster-validator CronJob the operator
-	// runs once at startup. The chart sets it under the control-plane role,
-	// where the operator's init container publishes no summary.
+	// runs whenever its validator spec changes, including at install. The
+	// chart sets it under the control-plane role, where the operator's init
+	// container publishes no summary.
 	InitialRunCronJobEnv = "NVCA_CLUSTER_VALIDATOR_CRONJOB"
 )
 
@@ -303,23 +303,19 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 }
 
 // writeSummaryConfigMap persists the summary as JSON to a well-known
-// ConfigMap. Creates the ConfigMap if it doesn't exist; otherwise
-// updates the data in place. Errors are logged but do NOT fail the
-// validator run — the metrics layer is an SLI, not a gate; failing the
-// validator over a metrics-write failure would surface as a critical
-// check failure to operators and is much worse than missing one data
-// point.
+// ConfigMap, creating it if it doesn't exist and otherwise updating the data
+// in place. The caller decides whether a failed write fails the run: for a
+// launcher's Job the summary is the run's output, for the operator's init
+// container it is not.
 func writeSummaryConfigMap(
 	ctx context.Context,
-	log *logrus.Entry,
 	client kubernetes.Interface,
 	namespace string,
 	summary *ValidatorSummary,
-) {
+) error {
 	payload, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
-		log.WithError(err).Warn("cluster-validator: failed to marshal summary; metrics will be stale")
-		return
+		return fmt.Errorf("marshal summary: %w", err)
 	}
 
 	writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -340,24 +336,17 @@ func writeSummaryConfigMap(
 		}
 		_, cerr := client.CoreV1().ConfigMaps(namespace).Create(writeCtx, cm, metav1.CreateOptions{})
 		if cerr == nil {
-			return
+			return nil
 		}
 		if !apierrors.IsAlreadyExists(cerr) {
-			log.WithError(cerr).Warn("cluster-validator: failed to create summary ConfigMap; metrics will be stale")
-			return
+			return fmt.Errorf("create summary ConfigMap %s/%s: %w", namespace, SummaryConfigMapName, cerr)
 		}
-		// A concurrent run created the ConfigMap between our Get and Create
-		// (e.g. an overlapping CronJob and init-container run). That is not a
-		// failure — re-read and fall through to Update so this run's results
-		// win, rather than logging a misleading "metrics will be stale".
+		// A concurrent run created the ConfigMap between our Get and Create.
+		// Re-read and fall through to Update so this run's results win.
 		existing, err = client.CoreV1().ConfigMaps(namespace).Get(writeCtx, SummaryConfigMapName, metav1.GetOptions{})
-		if err != nil {
-			log.WithError(err).Warn("cluster-validator: failed to re-read summary ConfigMap after create conflict; metrics will be stale")
-			return
-		}
-	} else if err != nil {
-		log.WithError(err).Warn("cluster-validator: failed to read summary ConfigMap; metrics will be stale")
-		return
+	}
+	if err != nil {
+		return fmt.Errorf("read summary ConfigMap %s/%s: %w", namespace, SummaryConfigMapName, err)
 	}
 
 	updated := existing.DeepCopy()
@@ -365,9 +354,10 @@ func writeSummaryConfigMap(
 		updated.Data = map[string]string{}
 	}
 	updated.Data[SummaryConfigMapKey] = string(payload)
-	if _, uerr := client.CoreV1().ConfigMaps(namespace).Update(writeCtx, updated, metav1.UpdateOptions{}); uerr != nil {
-		log.WithError(uerr).Warn("cluster-validator: failed to update summary ConfigMap; metrics will be stale")
+	if _, err := client.CoreV1().ConfigMaps(namespace).Update(writeCtx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update summary ConfigMap %s/%s: %w", namespace, SummaryConfigMapName, err)
 	}
+	return nil
 }
 
 // ParseSummary unmarshals a summary JSON document and validates its

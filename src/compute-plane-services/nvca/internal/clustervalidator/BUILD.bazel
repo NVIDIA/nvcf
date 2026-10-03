@@ -60,6 +60,7 @@ go_test(
         "config_test.go",
         "connectivity_test.go",
         "enforcement_test.go",
+        "exit_contract_test.go",
         "netpol_test.go",
         "observe_test.go",
         "output_test.go",

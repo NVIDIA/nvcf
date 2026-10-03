@@ -1262,6 +1262,20 @@
                     "description": "Every NVCF Gateway as namespace/name; replaces discovery from the NVCF routes for the LoadBalancer and Tier-1 checks",
                     "default": []
                 },
+                "externalComponents": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "nats",
+                            "openbao",
+                            "cassandra"
+                        ]
+                    },
+                    "uniqueItems": true,
+                    "description": "Quorum components the stack runs outside this cluster, so the Tier-2 check does not report them missing after install",
+                    "default": []
+                },
                 "nodeToNodeProbeImage": {
                     "type": "string",
                     "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets",

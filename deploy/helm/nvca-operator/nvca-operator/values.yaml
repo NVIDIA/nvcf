@@ -530,6 +530,10 @@ clusterValidator:
   # another team's Gateway. After install, each listed Gateway must exist, and
   # one that Envoy Gateway runs must have a proxy with a Ready pod.
   gatewayNames: []
+  # Quorum components the stack runs outside this cluster: any of nats,
+  # openbao and cassandra. After install the Tier-2 check reports a known
+  # quorum component it cannot find, unless it is listed here.
+  externalComponents: []
   # Set for air-gapped or registry-mirrored clusters. Without it every probe
   # pod pulls busybox from Docker Hub and the overlay row reports UNKNOWN.
   # The probe runs in a fresh namespace with no imagePullSecrets, so the image

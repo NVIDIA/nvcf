@@ -120,7 +120,7 @@ func NewOperatorCommand() *cli.Command {
 			&cli.StringFlag{
 				Name:    "cluster-validator-cronjob",
 				EnvVars: []string{clustervalidator.InitialRunCronJobEnv},
-				Usage:   "Cluster-validator CronJob in this pod's namespace to run once at startup",
+				Usage:   "Cluster-validator CronJob in this pod's namespace to run whenever its validator spec changes",
 			},
 			&cli.StringFlag{
 				Name:    "deployment-name",

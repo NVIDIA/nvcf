@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -176,7 +177,7 @@ func TestWriteSummaryConfigMap_CreatesWhenMissing(t *testing.T) {
 		VerdictReady:  true,
 		Checks:        map[string]bool{CheckKeyControlPlane: true},
 	}
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", summary)
+	require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator", summary))
 
 	cm, err := client.CoreV1().ConfigMaps("nvca-operator").
 		Get(context.Background(), SummaryConfigMapName, metav1.GetOptions{})
@@ -201,7 +202,7 @@ func TestWriteSummaryConfigMap_UpdatesExisting(t *testing.T) {
 		VerdictReady:  false,
 		Checks:        map[string]bool{CheckKeyControlPlane: false},
 	}
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", summary)
+	require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator", summary))
 
 	cm, err := client.CoreV1().ConfigMaps("nvca-operator").
 		Get(context.Background(), SummaryConfigMapName, metav1.GetOptions{})
@@ -239,28 +240,62 @@ func TestWriteSummaryConfigMap_ConcurrentCreateFallsBackToUpdate(t *testing.T) {
 		return true, cm, nil
 	})
 
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", &ValidatorSummary{
+	require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator", &ValidatorSummary{
 		SchemaVersion: SummarySchemaVersion,
 		RanAt:         "2026-06-11T10:00:00Z",
 		Verdict:       "NVCF-Ready",
 		VerdictReady:  true,
-	})
+	}))
 
 	assert.Contains(t, updatedData, `"verdict": "NVCF-Ready"`,
 		"after AlreadyExists, this run's payload must be written via Update")
 }
 
-func TestWriteSummaryConfigMap_FailureDoesNotPanic(t *testing.T) {
-	// nil client would obviously panic; this checks the function tolerates
-	// the kind of API failure modes a real cluster surfaces. Specifically,
-	// even if marshal fails we should return cleanly.
-	client := fake.NewSimpleClientset()
-	// A summary that JSON-marshals fine — the API path is what we're testing.
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", &ValidatorSummary{
-		SchemaVersion: SummarySchemaVersion,
-		RanAt:         "2026-06-11T10:00:00Z",
-	})
-	// Just no panic = success here.
+// Every way the write can fail is returned, so a launcher's Job can retry a
+// run that did not publish instead of completing without a summary.
+func TestWriteSummaryConfigMap_ReturnsEveryFailure(t *testing.T) {
+	gr := corev1.Resource("configmaps")
+	existing := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: SummaryConfigMapName, Namespace: "nvca-operator"}}
+	denied := func(why string) error { return apierrors.NewForbidden(gr, SummaryConfigMapName, errors.New(why)) }
+	internal := apierrors.NewInternalError(errors.New("etcd"))
+	conflict := apierrors.NewConflict(gr, SummaryConfigMapName, errors.New("stale"))
+	present := []runtime.Object{existing}
+	raced := apierrors.NewAlreadyExists(gr, SummaryConfigMapName)
+	for name, tc := range map[string]struct {
+		objs           []runtime.Object
+		verb           string
+		err            error
+		alreadyExisted bool
+	}{
+		"read denied":          {verb: "get", err: denied("rbac")},
+		"read 500":             {verb: "get", err: internal},
+		"create denied":        {verb: "create", err: denied("policy")},
+		"create 500":           {verb: "create", err: internal},
+		"update conflict":      {objs: present, verb: "update", err: conflict},
+		"update denied":        {objs: present, verb: "update", err: denied("policy")},
+		"re-read after a race": {verb: "create", err: raced, alreadyExisted: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(tc.objs...)
+			client.PrependReactor(tc.verb, "configmaps", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+			if tc.alreadyExisted {
+				gets := 0
+				client.PrependReactor("get", "configmaps", func(ktesting.Action) (bool, runtime.Object, error) {
+					gets++
+					if gets == 1 {
+						return true, nil, apierrors.NewNotFound(gr, SummaryConfigMapName)
+					}
+					return true, nil, apierrors.NewInternalError(errors.New("etcd"))
+				})
+			}
+			err := writeSummaryConfigMap(context.Background(), client, "nvca-operator",
+				&ValidatorSummary{SchemaVersion: SummarySchemaVersion})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), SummaryConfigMapName)
+		})
+	}
 }
 
 // TestAllCheckKeysCoversEveryCheckKeyConst guards against forgetting to

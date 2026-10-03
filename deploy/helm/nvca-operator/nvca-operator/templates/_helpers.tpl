@@ -433,6 +433,7 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "openBaoNamespace" ""
     "envoyGatewayNamespace" ""
     "gatewayNames" (list)
+    "externalComponents" (list)
     "nodeToNodeProbeImage" ""
     "tolerations" (list)
     "networkChecks" (dict)
@@ -467,9 +468,18 @@ nvcr.io/nvidia/nvcf-byoc/cluster-validator
 {{- end -}}
 
 {{/*
+Identifies everything a validator run reads from the release: its Job spec and
+its network-checks ConfigMap. The CronJob stamps it on every Job, and under the
+control-plane role the operator starts a run when the newest Job lacks it.
+*/}}
+{{- define "nvcaop.clusterValidatorSpecHash" -}}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
+{{- printf "%s\n---\n%s" (include "nvcaop.clusterValidatorJobSpec" .) (toYaml $cv.networkChecks) | sha256sum | trunc 16 -}}
+{{- end -}}
+
+{{/*
 The cluster-validator CronJob's Job spec. Under the control-plane role the
-operator also runs it once at startup, from the CronJob itself, so the two
-cannot drift.
+operator also starts runs from the CronJob itself, so the two cannot drift.
 */}}
 {{- define "nvcaop.clusterValidatorJobSpec" -}}
 {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
@@ -477,6 +487,16 @@ parallelism: 1
 completions: 1
 backoffLimit: 2
 activeDeadlineSeconds: 600
+# A published Not-Ready verdict exits 3. Rerunning the suite would not change
+# it, so it fails the Job at once; any other failure, including a summary the
+# run could not write, is retried.
+podFailurePolicy:
+  rules:
+    - action: FailJob
+      onExitCodes:
+        containerName: cluster-validator
+        operator: In
+        values: [3]
 template:
   metadata:
     labels:
@@ -486,10 +506,16 @@ template:
     serviceAccountName: {{ include "nvcaop.fullname" . }}-cluster-validator
     automountServiceAccountToken: true
     restartPolicy: Never
+    # Long enough for an interrupted run to delete its probe DaemonSet, pods
+    # and namespace, each of which gets its own 20s budget.
+    terminationGracePeriodSeconds: 120
     securityContext:
       runAsUser: 65534
       runAsGroup: 65534
       fsGroup: 65534
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
     {{- if or .Values.generateImagePullSecret (gt (len .Values.imagePullSecrets) 0) }}
     imagePullSecrets:
     {{- if .Values.generateImagePullSecret }}
@@ -527,6 +553,16 @@ template:
           # control plane is a failure here rather than pre-install.
           - name: VALIDATOR_POST_INSTALL
             value: "true"
+          # The summary is this Job's output: a run that could not write it
+          # fails and is retried rather than completing.
+          - name: VALIDATOR_REQUIRE_SUMMARY
+            value: "true"
+          {{- with $cv.externalComponents }}
+          # Quorum components the stack does not run in-cluster, so Tier-2
+          # does not report them missing.
+          - name: NVCF_EXTERNAL_COMPONENTS
+            value: {{ join "," . | quote }}
+          {{- end }}
           {{- if $cv.openBaoNamespace }}
           # Relocated OpenBao: without this the Tier-2 quorum check
           # silently skips its StatefulSet.

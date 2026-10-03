@@ -19,6 +19,7 @@ package clustervalidator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -217,6 +218,65 @@ func postInstallMode(v string) bool {
 	}
 }
 
+// envTrue reports whether the named env var holds a true value.
+func envTrue(name string) bool { return postInstallMode(os.Getenv(name)) }
+
+// RequireSummaryEnv marks a run whose output is its summary ConfigMap: the
+// chart's validator Job. A run that could not write the summary returns
+// ErrSummaryNotPublished, so the Job retries it instead of completing.
+const RequireSummaryEnv = "VALIDATOR_REQUIRE_SUMMARY"
+
+// StartupGateEnv marks a run that gates a workload's startup: the operator's
+// init container. Only a critical check that ran and failed fails it. A
+// critical check that could not run still makes the verdict and the summary
+// Not-Ready, but must not keep the operator from starting.
+const StartupGateEnv = "VALIDATOR_STARTUP_GATE"
+
+// ExitNotReady is the exit code of a RequireSummaryEnv run that published a
+// Not-Ready verdict. The chart's podFailurePolicy fails the Job on it rather
+// than rerunning a suite whose result would not change. Other runs keep exit
+// code 1 for Not-Ready, which launchers grade on.
+const ExitNotReady = 3
+
+// ErrNotReady is the error Run returns, as a *NotReadyError, when the cluster
+// is NVCF-Not-Ready.
+var ErrNotReady = errors.New("cluster is NVCF-Not-Ready")
+
+// ErrSummaryNotPublished is the error Run returns when RequireSummaryEnv is
+// set and the summary could not be written.
+var ErrSummaryNotPublished = errors.New("the validation summary was not published")
+
+// NotReadyError is an NVCF-Not-Ready verdict. Failed counts the critical
+// checks that ran and failed; Unobserved counts those that could not run.
+type NotReadyError struct {
+	Failed, Unobserved int
+}
+
+func (e *NotReadyError) Error() string { return ErrNotReady.Error() }
+
+// Is makes errors.Is(err, ErrNotReady) hold.
+func (e *NotReadyError) Is(target error) bool { return target == ErrNotReady }
+
+// ExitCode maps Run's result to the process exit code, per RequireSummaryEnv
+// and StartupGateEnv.
+func ExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var notReady *NotReadyError
+	if !errors.As(err, &notReady) {
+		return 1
+	}
+	switch {
+	case envTrue(StartupGateEnv) && notReady.Failed == 0:
+		return 0
+	case envTrue(RequireSummaryEnv):
+		return ExitNotReady
+	default:
+		return 1
+	}
+}
+
 // Run executes all cluster validation checks and returns a non-nil error when
 // the cluster is not ready. role selects the check set; configNamespace/configName
 // identify the optional ConfigMap; emitMetrics gates the summary write. routes
@@ -318,22 +378,35 @@ func Run(
 	}
 
 	summaryErr := printSummary(state)
+	if err := publishSummary(ctx, client, state, startedAt, summaryErr, summaryNamespace, emitMetrics); err != nil {
+		if envTrue(RequireSummaryEnv) {
+			return fmt.Errorf("%w: %w", ErrSummaryNotPublished, err)
+		}
+		log.WithError(err).Warn("cluster-validator: the summary was not written; metrics will be stale")
+	}
+	return summaryErr
+}
 
-	// Persist the summary (to summaryNamespace, the agent's watch namespace)
-	// for the agent to publish as metrics. Gated on emitMetrics so preflight
-	// skips it. Best-effort: failures are logged, never block the verdict.
-	// The write gets its own budget: a run that spent its deadline on the
-	// checks must still publish what they found.
+// publishSummary writes the summary to summaryNamespace, the agent's watch
+// namespace, for the agent to publish as metrics. Preflight runs
+// (emitMetrics=false) write nothing. The write gets its own budget: a run
+// that spent its deadline on the checks must still publish what they found.
+func publishSummary(
+	ctx context.Context, client kubernetes.Interface, state *ValidationState, startedAt time.Time,
+	summaryErr error, summaryNamespace string, emitMetrics bool,
+) error {
+	if !emitMetrics {
+		return nil
+	}
+	if summaryNamespace == "" {
+		return errors.New("no summary namespace")
+	}
 	verdict := VerdictReady
 	if summaryErr != nil {
 		verdict = VerdictNotReady
 	}
-	if emitMetrics && summaryNamespace != "" {
-		writeSummaryConfigMap(context.WithoutCancel(ctx), log, client, summaryNamespace,
-			buildSummary(state, startedAt, summaryErr == nil, verdict))
-	}
-
-	return summaryErr
+	return writeSummaryConfigMap(context.WithoutCancel(ctx), client, summaryNamespace,
+		buildSummary(state, startedAt, summaryErr == nil, verdict))
 }
 
 // printSummary outputs the final validation results and returns an error if
@@ -503,6 +576,7 @@ func printSummary(state *ValidationState) error {
 	}
 
 	var unknownCritical []string
+	failedCritical := 0
 	for _, c := range checks {
 		switch {
 		case c.NotApplicable:
@@ -523,6 +597,7 @@ func printSummary(state *ValidationState) error {
 			printSuccess(log, fmt.Sprintf("  %s", c.PassMsg))
 		case c.Critical:
 			printError(log, fmt.Sprintf("  %s", c.FailMsg))
+			failedCritical++
 			isReady = false
 		default:
 			printWarning(log, fmt.Sprintf("  %s", c.FailMsg))
@@ -594,7 +669,7 @@ func printSummary(state *ValidationState) error {
 	log.Infof("Validation completed at %s", time.Now().UTC().Format("2006-01-02 15:04:05 UTC"))
 
 	if !isReady {
-		return fmt.Errorf("cluster is NVCF-Not-Ready")
+		return &NotReadyError{Failed: failedCritical, Unobserved: len(unknownCritical)}
 	}
 	return nil
 }

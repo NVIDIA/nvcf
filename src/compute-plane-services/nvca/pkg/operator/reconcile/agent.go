@@ -183,8 +183,9 @@ type AgentOptions struct {
 	// the agent publishes its metrics baseline before the first summary.
 	ClusterValidatorEnabled bool
 	// ClusterValidatorCronJob names the cluster-validator CronJob in the
-	// operator's namespace to run once at startup. The chart sets it under
-	// the control-plane role, where nothing else writes the first summary.
+	// operator's namespace to run whenever its validator spec changes. The
+	// chart sets it under the control-plane role, where the init container
+	// writes no summary.
 	ClusterValidatorCronJob string
 }
 
@@ -448,7 +449,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		return err
 	}
 	if a.ClusterValidatorCronJob != "" {
-		go startInitialValidatorRun(ctx, backendK8sClients.K8s, a.PodNamespace, a.ClusterValidatorCronJob)
+		go watchValidatorSpec(ctx, backendK8sClients.K8s, a.PodNamespace, a.ClusterValidatorCronJob)
 	}
 
 	// TODO: source this directly from values and default URL's based on that.

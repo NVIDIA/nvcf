@@ -113,8 +113,13 @@ func main() {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	err = clustervalidator.Run(runCtx, client, routes, configNS, configName, summaryNS, emitMetrics, role)
 	cancel()
-	if err != nil {
-		log.WithError(err).Fatal("Cluster validation failed")
+	switch code := clustervalidator.ExitCode(err); {
+	case code != 0:
+		log.WithError(err).Error("Cluster validation failed")
+		os.Exit(code)
+	case err != nil:
+		log.WithError(err).Warn("Cluster validation could not observe every critical check; " +
+			"the operator starts, and the published verdict stays Not-Ready")
 	}
 }
 

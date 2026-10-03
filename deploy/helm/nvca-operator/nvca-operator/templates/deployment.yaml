@@ -30,16 +30,6 @@ spec:
     metadata:
       labels:
         {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
-      {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
-      {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
-      {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
-      annotations:
-        # The operator starts the validator's first run when it starts, once
-        # per Job spec. A change to that spec restarts the operator, so an
-        # upgrade that changes only the validator's values runs it too.
-        checksum/cluster-validator-job: {{ include "nvcaop.clusterValidatorJobSpec" . | sha256sum }}
-      {{- end }}
-      {{- end }}
     spec:
       serviceAccountName: {{ include "nvcaop.serviceAccountName" . }}
       automountServiceAccountToken: true
@@ -114,6 +104,11 @@ spec:
         # leave the operator in Init:CrashLoopBackOff.
         - name: VALIDATOR_ROLE
           value: "compute-plane"
+        # A check that could not run still makes the verdict and the summary
+        # Not-Ready, but only an observed critical failure stops the operator
+        # from starting.
+        - name: VALIDATOR_STARTUP_GATE
+          value: "true"
         {{- /* Normalized like the validator's own parseRole, so a role of
                "Control-Plane" still keeps this container off the summary. */}}
         {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
@@ -160,8 +155,9 @@ spec:
           value: "true"
         {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
         # The init container publishes no summary under the control-plane
-        # role, so the operator runs the CronJob once at startup instead. It is
-        # not a release resource, so the install does not wait on it.
+        # role, so the operator runs the CronJob whenever its spec changes,
+        # including at install. The run is not a release resource, so the
+        # install does not wait on it.
         - name: NVCA_CLUSTER_VALIDATOR_CRONJOB
           value: {{ printf "%s-cluster-validator" (include "nvcaop.fullname" .) | quote }}
         {{- end }}

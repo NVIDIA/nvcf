@@ -35,6 +35,10 @@ spec:
       labels:
         {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: validation
+      annotations:
+        # Every Job carries the spec it ran, so the operator can tell whether
+        # the newest run used the current one.
+        nvca.nvcf.nvidia.io/cluster-validator-spec: {{ include "nvcaop.clusterValidatorSpecHash" . | quote }}
     spec:
       {{- include "nvcaop.clusterValidatorJobSpec" . | nindent 6 }}
 {{- end }}

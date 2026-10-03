@@ -44,7 +44,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci render-values-from-stack install-from-stack test-render-values test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-otel-collector-compatibility test-image-pull-secret-defaults test-pod-disruption-budget test-first-class-byoo-values test-first-class-storage-worker-values test-default-ownership test-resource-quantity-schema
+.PHONY: install uninstall status lint template validate clean package push-oci render-values-from-stack install-from-stack test-render-values test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-otel-collector-compatibility test-image-pull-secret-defaults test-pod-disruption-budget test-first-class-byoo-values test-first-class-storage-worker-values test-default-ownership test-resource-quantity-schema test-cluster-validator
 
 install:
 ifndef values
@@ -133,6 +133,9 @@ test-default-ownership:
 
 test-resource-quantity-schema:
 	@bash ./tests/resource_quantity_schema_test.sh
+
+test-cluster-validator:
+	@bash ./tests/cluster_validator_test.sh
 
 uninstall:
 	@echo "Deleting $(release) from namespace $(namespace)..."

@@ -238,6 +238,7 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.openBaoNamespace`                   | Namespace holding OpenBao when it is not `vault-system`                           | `""`                                   |
 | `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
 | `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; replaces discovery for the LB and Tier-1 checks | `[]` (discovered from NVCF routes)     |
+| `clusterValidator.externalComponents`                 | Quorum components (`nats`, `openbao`, `cassandra`) the stack runs outside the cluster, so Tier-2 does not report them missing after install | `[]`                                   |
 | `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets` | `""` (`busybox:1.36`)                  |
 | `clusterValidator.tolerations`                        | Extra tolerations for the validator Job pods, added to the control-plane ones     | `[]`                                   |
 | `clusterValidator.schedule`                           | CronJob schedule (cron expression)                                                | `0 */3 * * *`                          |
