@@ -616,3 +616,34 @@ filesystem). No downloads, no attach wait, seed generation 1 on all
 three. The one node that had done the download read the same weights
 in 52 s on two consecutive starts while a direct read on that node ran
 at 2.2 GB/s; this is open and node-specific, not a filesystem ceiling.
+
+kimi-k3 on the shared filesystem (OCI FSS, nvcf-sc, 1.56 TB, two pods,
+TP 8), 2026-10-03, chart 0.2.8 (NGC CLI concurrency 64), image pulls
+excluded. The engine-script path: the first deployment downloads, one
+pod is captured after Ready, later deployments read the view.
+
+| Step | Cold (first deployment) | Warm (second deployment, same nodes never used) |
+|---|---|---|
+| Admission to engine start | 83 s | 3 min 49 s, of which 2 min 2 s image pull, 1 s nvsnap init |
+| Model | script download 31 min at 800 to 1073 MiB/s per pod | 0 downloads, 1600Gi read-only view bound in seconds |
+| Weights into GPU (770 GiB per pod) | 188 s from local emptyDir | 425 s from the FSS view (about 1.8 GB/s per node) |
+| Profiling | about 5 min | 4 min 38 s (first run of this configuration, plan saved) |
+| CuTeDSL warmup | 19 s | 19 s |
+| CUDA graph capture | 95 s | 89 s |
+| Engine start to Ready | 45 min 7 s | 16 min 53 s |
+| Admission to Ready | 46 min 30 s | 20 min 42 s |
+
+The download rate is the per-connection ceiling of the NGC CDN from
+this region (about 17 MiB/s) times the CLI's concurrency; at the
+chart's old default of 16 the same pods measured a flat 270 MiB/s, and
+the proxy cache's lock collapses both pods onto the same upstream
+streams, so a second pod adds nothing. The capture copied 1.56 TB into
+the FSS primary in 24 min 4 s (about 1.08 GB/s, 8 sendfile workers),
+against 11 min into NVMesh. The follower pod of the warm run restarted
+once at start: two of its four workers imported a model code module
+while a sibling was still copying it into the transformers modules
+cache (transformers 5.14.1 writes it with shutil.copyfile, no lock);
+the files on the view were verified identical to the cold copy. The
+cache set (2 ranks, 1.28 GB, startup plans included) was collected 77 s
+after Ready, so the next deployment seeds the modules cache and skips
+profiling.
