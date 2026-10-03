@@ -1404,83 +1404,75 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
 
 The cluster-validator runs as a short-lived process so it cannot serve a `/metrics` endpoint directly. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. Under the default compute-plane role the operator's init container writes the first summary and the CronJob the rest. Under the control-plane role the init container runs in preflight mode and writes nothing, so the operator runs the CronJob itself whenever the newest Job the CronJob owns did not use its current validator spec: at install, and after any upgrade or rollback that changes the validator's Job spec or network checks. The chart stamps that spec as the `nvca.nvcf.nvidia.io/cluster-validator-spec` annotation on every Job; a plain operator restart starts no run, and no run starts while the CronJob is suspended or a run is in progress. That run is not part of the Helm release, so an install never waits on it or fails with it. A validator Job that could not write its summary fails and is retried; one that published a Not-Ready verdict exits 3 and fails without a retry.
 
-The agent publishes these metrics only where the validator runs (`clusterValidator.enabled`, passed to the agent by the operator). Elsewhere no `nvca_cluster_validator_*` series exist, so an alert on them cannot fire for a cluster that has no validator. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
+The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
+
+### Where the metrics are published
+
+The chart passes `clusterValidator.enabled` to the operator, and the operator always sets `NVCA_CLUSTER_VALIDATOR_ENABLED` on the agent to `true` or `false`:
+
+| Agent sees | Effect |
+|---|---|
+| `true` | The agent publishes the init-to-zero baseline at startup and republishes every summary. |
+| `false` | The agent reads no summary and publishes no `nvca_cluster_validator_*` series, so no alert on them can fire. At startup the operator also deletes a summary ConfigMap the validator wrote while it was enabled. |
+| unset (an operator older than this gating) | The agent republishes any summary it finds but publishes no baseline, so the never-ran alert below cannot fire. |
+
+An agent older than this gating ignores the variable and publishes the baseline on every cluster. The agent image follows the NVCFBackend `spec.version`, not the operator chart, so the two can differ. Use the never-ran alert only where both the operator and the agent include this gating.
+
+### Reading a check: 1, 0 or absent
+
+Each check in `nvca_cluster_validator_check_status` has three outcomes:
+
+- `1`: the check passed. A `1` may carry a warning: a tolerated condition, such as a Deployment or StatefulSet rollout still within its time bound, or a pending LoadBalancer Service beside one that has an address, passes the check and is listed in the summary's `warnings` and in the run's log.
+- `0`: the check ran and failed. The one exception is the init-to-zero baseline, where every known check is `0` before any run (see the lifecycle below).
+- absent: the run produced no result for the check.
+
+A check is absent when:
+
+1. The validator is not enabled on the cluster. No `nvca_cluster_validator_*` series exist at all.
+2. The run's role does not run it. `smb_csi`, `gpu_resources` and `gpu_operator` run only under the compute-plane role. `default_storage_class`, `gateway_api_crds`, `envoy_gateway`, `gateway_routes`, `external_lb`, `node_to_node`, `tier1_deployments` and `tier2_statefulsets` run only under the control-plane role. `control_plane`, `worker_nodes_all_ready`, `webhooks` and `network_policies_supported` run under both.
+3. The check is not configured. `endpoint_reachability`, `configurable_netpol` and `netpol_enforcement` run only when the network-checks ConfigMap configures them and loads.
+4. The check could not be observed: an RBAC denial, an apiserver error, a probe that could not run, or, after install, an expected component that was not found. When the check is critical, the run also reports `nvca_cluster_validator_ready` as `0`.
+5. The check does not apply to the cluster. `node_to_node` does not apply with exactly one eligible node (Ready, not cordoned, not fenced); with zero eligible nodes it could not be observed, which is cause 4.
+6. `external_lb` has no load balancer to judge. This happens by design when every NVCF Gateway is exposed by NodePort or ClusterIP, when no NVCF Gateway is named or discovered, and when a merged-gateways proxy cannot be attributed to the NVCF Gateways. `external_lb` is not critical, so none of these affect `ready`.
+
+The run's `warnings` list and log say which cause applies to each absent check.
+
+The critical checks are `control_plane`, `webhooks`, `gpu_resources` (compute-plane), `default_storage_class`, `gateway_api_crds`, `node_to_node`, `tier1_deployments` and `tier2_statefulsets` (control-plane), and each configured network check whose entries are marked critical. A critical check that fails, or that could not be observed, makes the run NVCF-Not-Ready.
 
 ### `nvca_cluster_validator_ready`
 
-Overall verdict for the latest cluster-validator run. **This is the load-bearing SLI metric** for cluster-readiness alerting.
+Overall verdict for the latest cluster-validator run. This is the load-bearing SLI metric for cluster-readiness alerting.
 
-- **Type**: Gauge
-- **Value**: 1 if the run passed all critical checks (NVCF-Ready), 0 otherwise (NVCF-Not-Ready)
-- **Labels**: default labels only (initialized to 0 until the first run completes, where the validator runs)
+- Type: Gauge
+- Value: 1 if every critical check passed (NVCF-Ready, possibly with warnings), 0 otherwise (NVCF-Not-Ready). A critical check that could not be observed also gives 0, so this gauge covers critical checks that are absent from `_check_status`.
+- Labels: default labels only. 0 from agent start until the first summary, where the validator is enabled.
 
 ### `nvca_cluster_validator_check_status`
 
-Per-check status from the latest run. The check set is fixed (18 entries; see `CheckKey*` constants in `internal/clustervalidator/summary.go`). Which subset appears depends on the validator role and on which conditional checks ran; see the caveat below.
+Per-check status from the latest run. There are 18 known checks; see the `CheckKey*` constants in `internal/clustervalidator/summary.go`.
 
-- **Type**: Gauge
-- **Value**: 1 = passed, 0 = failed. Two other outcomes are reported as
-  absence rather than a number, so `absent()` and `== 0` mean different
-  things: a check that could not be observed (an RBAC denial or an apiserver
-  error), and one the cluster's shape made moot (the node-to-node overlay on a
-  single-node cluster). Neither is exported as 1, because no result was
-  produced; the run's log and the `warnings` list say which applies.
-
-  One exception to the "0 means failed" rule: at process start, and after
-  `ResetClusterValidatorMetrics`, all 18 keys are emitted at 0 as an
-  init-to-zero baseline, before any run has happened. A 0 in that window means
-  "no result yet", not "failed"; it is replaced or pruned by the first summary.
-- **Labels**: default labels + `check`
-
-> **Alerting caveat — absent vs. zero for optional checks.** Three checks are
-> *conditional*: `endpoint_reachability`, `configurable_netpol`, and
-> `netpol_enforcement` only run when a network-checks ConfigMap is configured.
-> They are pre-initialized to `0` in the init-to-zero baseline so they
-> appear on the first scrape, but on the **first real run of a cluster that has
-> no network-checks config** they are pruned and **not re-emitted** — they go
-> *absent*, not `0` (the validator omits a check it didn't run so "not run" is
-> distinguishable from "ran and failed"). Write alerts on these three with an
-> `absent()` guard, not a bare `== 0`, e.g.
-> `absent(nvca_cluster_validator_check_status{check="endpoint_reachability"}) or nvca_cluster_validator_check_status{check="endpoint_reachability"} == 0`.
-> Four checks (control_plane, worker_nodes_all_ready, webhooks,
-> network_policies_supported) run under both validator roles, so they are always
-> present and safe to alert on with `== 0`.
->
-> The three GPU and storage checks (smb_csi, gpu_resources, gpu_operator) run
-> only under the compute-plane role. A control-plane run omits them, so they are
-> pruned after its first summary and go absent. They are still pre-initialized
-> to `0` in the init-to-zero baseline, which means a control-plane cluster
-> reports `gpu_resources 0` from process start until its first summary lands.
-> Alert on these three with an `absent()` guard, as for the conditional checks
-> above, and scope the alert to compute-plane clusters.
->
-> The control-plane-only checks (default_storage_class, gateway_api_crds,
-> envoy_gateway, gateway_routes, external_lb, node_to_node, tier1_deployments,
-> tier2_statefulsets) are the mirror image: present only on a control-plane run,
-> and absent when the check could not be observed at all (an RBAC denial or an
-> apiserver error). Absent means "not observed", which is not the same as `0`
-> ("observed and failing"), so these also need an `absent()` guard. Scope that
-> guard to control-plane clusters: a compute-plane run never emits these keys,
-> so an unscoped `absent()` fires on every compute-plane cluster.
+- Type: Gauge
+- Value: 1 = passed (possibly with a warning), 0 = failed. Absent when the run produced no result; see the list of causes above.
+- Labels: default labels + `check`
 
 ### `nvca_cluster_validator_endpoint_reachable`
 
 Per-endpoint reachability for the user-configured `reachability.endpoints` list. Variable cardinality, but pruned on each new run.
 
-- **Type**: Gauge
-- **Value**: 1 if reachable, 0 otherwise
-- **Labels**: default labels + `endpoint` (user-supplied name) + `critical` (`"true"`/`"false"`)
+- Type: Gauge
+- Value: 1 if reachable, 0 otherwise
+- Labels: default labels + `endpoint` (user-supplied name) + `critical` (`"true"`/`"false"`)
 
 ### `nvca_cluster_validator_netpol_pair_passed`
 
-Directional NetworkPolicy coverage for the user-configured `networkPolicies.pairs` list. Each pair emits up to four series — one per `direction` × `policy_side` — so an operator can see exactly which side is blocked rather than just "the pair failed".
+Directional NetworkPolicy coverage for the user-configured `networkPolicies.pairs` list. Each pair emits up to four series, one per `direction` and `policy_side`, so an operator can see exactly which side is blocked rather than just "the pair failed".
 
-- **Type**: Gauge
-- **Value**: 1 if that side allows the traffic, 0 if blocked
-- **Labels**: default labels + `pair` (user-supplied name) + `direction` (`a_to_b`/`b_to_a`) + `policy_side` (`egress` = the source namespace's egress, `ingress` = the destination namespace's ingress) + `critical`
-- **Overall pair coverage**: `min by (pair) (nvca_cluster_validator_netpol_pair_passed)` (1 only when all four sides allow)
+- Type: Gauge
+- Value: 1 if that side allows the traffic, 0 if blocked
+- Labels: default labels + `pair` (user-supplied name) + `direction` (`a_to_b`/`b_to_a`) + `policy_side` (`egress` = the source namespace's egress, `ingress` = the destination namespace's ingress) + `critical`
+- Overall pair coverage: `min by (pair) (nvca_cluster_validator_netpol_pair_passed)` (1 only when all four sides allow)
 
-> A `0` always means a real policy block. When a direction cannot be evaluated before reaching policy rules (a namespace in the pair does not exist, or an API error occurs), that direction's series are omitted rather than emitted as `0`, so they never misreport a policy block. The pair still fails (`nvca_cluster_validator_check_status{check="configurable_netpol"}` is `0`) and the validator's recommendation names the real cause.
+A `0` always means a real policy block. When a direction cannot be evaluated before reaching policy rules (a namespace in the pair does not exist, or an API error occurs), that direction's series are omitted rather than emitted as `0`, so they never misreport a policy block. The pair still fails (`nvca_cluster_validator_check_status{check="configurable_netpol"}` is `0`) and the validator's recommendation names the real cause.
 
 ```promql
 # Which side of a pair is blocked?
@@ -1492,23 +1484,41 @@ min by (pair) (nvca_cluster_validator_netpol_pair_passed)
 
 ### `nvca_cluster_validator_last_run_timestamp_seconds`
 
-Unix timestamp (seconds) of the latest cluster-validator run. The canonical staleness signal — alert on `time() - <metric> > <threshold>` to catch a validator pod that has stopped running entirely.
+Unix timestamp (seconds) of the latest cluster-validator run, or 0 before the first run. The canonical staleness signal: alert on `time() - <metric> > <threshold>` to catch a validator pod that has stopped running entirely.
 
-- **Type**: Gauge
-- **Labels**: default labels only
+- Type: Gauge
+- Labels: default labels only
 
 ### `nvca_cluster_validator_last_run_duration_seconds`
 
 Wall-clock duration of the latest run.
 
-- **Type**: Gauge
-- **Labels**: default labels only
+- Type: Gauge
+- Labels: default labels only
+
+### Baseline and reset lifecycle
+
+1. Agent start, validator enabled: `ready`, `last_run_timestamp_seconds` and `last_run_duration_seconds` are 0, and all 18 checks are 0, including checks the cluster's role never runs. A 0 in this window means "no result yet", not "failed".
+2. First summary read: the gauges take the run's values, and every baseline check the run did not report is pruned. An agent that restarts after a run reads the existing summary at startup, so it publishes the baseline only until that read.
+3. Reset: create a ConfigMap named `cluster-validator-metrics-reset` in the summary namespace. The agent drops every series, restores the baseline if it was told the validator is enabled (and publishes nothing if the setting was unset), then deletes the reset ConfigMap. An agent told the validator is disabled does not watch for it. The reset lasts only until the agent next reads the summary ConfigMap: the next run, the reconciler's periodic resync (every 5 minutes) or an agent restart republishes it. To clear the metrics for good, delete the summary ConfigMap first, then create the reset ConfigMap.
+4. Summary ConfigMap deleted: the last values are kept. An accidental delete (kubectl, GC sweep, reinstall) must not wipe the SLI; the staleness alert catches a validator that stopped running.
 
 ### Example PromQL
 
 ```promql
 # Current SLI
 nvca_cluster_validator_ready
+
+# Alert: the cluster is not NVCF-Ready. This covers failed critical checks and
+# critical checks that could not be observed, which are absent from
+# _check_status. Use it instead of absent() on individual checks.
+nvca_cluster_validator_ready == 0
+  and nvca_cluster_validator_last_run_timestamp_seconds > 0
+
+# Alert: a specific check failed on a real run. The last_run guard skips the
+# baseline, where every check is 0 before the first run.
+nvca_cluster_validator_check_status{check="gpu_resources"} == 0
+  and ignoring(check) nvca_cluster_validator_last_run_timestamp_seconds > 0
 
 # Which checks regressed between the last two runs?
 ( nvca_cluster_validator_check_status offset 3h ) - nvca_cluster_validator_check_status
@@ -1527,20 +1537,24 @@ nvca_cluster_validator_endpoint_reachable{critical="true"} == 0
 # excludes this case, so a validator that cannot run at all (image pull,
 # RBAC or scheduling failure) needs its own. The `for:` window covers the
 # first run after an install; use it on the alerting rule. The series exists
-# only where the validator is enabled, so this cannot fire elsewhere.
+# only where the agent was told the validator is enabled; see "Where the
+# metrics are published" for mixed operator and agent versions.
 nvca_cluster_validator_last_run_timestamp_seconds == 0
 ```
+
+Do not alert on `absent()` of `external_lb` or `node_to_node`: both are absent on healthy clusters by design (a NodePort-exposed NVCF Gateway, a single eligible node), so such an alert fires forever. No series carries the validator's role, so an `absent()` on any role-specific or configured check cannot be scoped by role either. If you need one, scope it with `nvca_cluster_name` to the clusters where you know the check runs. For critical checks, `ready == 0` already covers absence.
 
 ### Edge cases
 
 | Scenario | Effect on metrics |
 |---|---|
-| Agent boots before any validator run | Fixed-cardinality gauges at 0. No config-driven (endpoint/netpol) series until first run. |
+| Agent boots before any validator run | Fixed-cardinality gauges at 0 where the validator is enabled. No config-driven (endpoint/netpol) series until the first run. |
 | Validator not enabled on the cluster | No `nvca_cluster_validator_*` series at all. |
+| Validator enabled, then disabled | The agent restarts with `NVCA_CLUSTER_VALIDATOR_ENABLED=false` and publishes nothing; the operator deletes the summary the validator left. |
 | Agent restart after a successful run | Reconciler's initial List delivers an Add event; metrics populated immediately. |
 | Validator pod panics mid-run | ConfigMap not updated; last-good metrics retained. Operator detects via `_last_run_timestamp_seconds` staleness. |
-| Summary ConfigMap deleted | Last-good metrics **preserved** — an accidental delete (kubectl, GC sweep, reinstall) must not wipe the SLI. Genuine staleness is caught by the `_last_run_timestamp_seconds` alert. |
-| Explicit metrics reset requested | Create a ConfigMap named `cluster-validator-metrics-reset` in the summary namespace. The agent resets all fixed gauges to the zero baseline (and prunes config-driven series) and then deletes that ConfigMap (consumes the one-shot signal). |
+| Summary ConfigMap deleted | Last-good metrics preserved. |
+| Explicit metrics reset requested | See the baseline and reset lifecycle above. |
 | Malformed JSON / unknown schemaVersion | Last-good metrics preserved (no transient blip surfaces as SLI failure). |
 | Endpoint removed from customer config | Its `_endpoint_reachable` series pruned on next run; new endpoints appear. |
 

@@ -449,6 +449,12 @@ func TestSetupNVCADeployment(t *testing.T) {
 			Value: bc.operatorNamespace,
 		},
 		{
+			// Always set, so the agent can tell a disabled validator from
+			// an operator that predates the setting.
+			Name:  clustervalidator.EnabledEnv,
+			Value: "false",
+		},
+		{
 			Name: auth.ClientIDEnv,
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
@@ -660,6 +666,45 @@ func TestSetupNVCADeployment_OverrideEnvironmentVars(t *testing.T) {
 		assert.Nil(t, ev.ValueFrom, "override env var %q should use literal Value, not ValueFrom", name)
 	}
 	assert.Equal(t, "true", envByName[clustervalidator.EnabledEnv].Value)
+}
+
+// The operator's cluster-validator-enabled option reaches the agent through
+// the BackendK8sCache builder as "true" or "false", never unset: the agent
+// publishes the metrics baseline only on true, and reads no summary on false.
+func TestClusterValidatorEnabled_ReachesAgentDeployment(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			ctx := newTestContext()
+			clients := mockKubeClientsForIntegrationTests()
+			a := &Agent{AgentOptions: &AgentOptions{
+				ClusterValidatorEnabled: enabled,
+				TokenFetcher:            &mockTokenFetcher{token: "randomkey"},
+			}}
+			bc := a.backendK8sCacheBuilder(clients, nvidiaiov1.EnvTypeStage).newCache()
+			require.NoError(t, bc.setupNVCADeployment(ctx, getTestNVCFBackendMinimal()))
+
+			var dep *appsv1.Deployment
+			require.EventuallyWithT(t, func(ct *assert.CollectT) {
+				var err error
+				dep, err = clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace).
+					Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+				require.NoError(ct, err)
+			}, 10*time.Second, 100*time.Millisecond)
+
+			var values []string
+			for _, c := range dep.Spec.Template.Spec.Containers {
+				if c.Name != "agent" {
+					continue
+				}
+				for _, e := range c.Env {
+					if e.Name == clustervalidator.EnabledEnv {
+						values = append(values, e.Value)
+					}
+				}
+			}
+			assert.Equal(t, []string{fmt.Sprintf("%t", enabled)}, values)
+		})
+	}
 }
 
 func TestSetupNVCADeployment_Vault(t *testing.T) {
@@ -879,11 +924,17 @@ func TestSetupNVCADeployment_Vault(t *testing.T) {
 	assert.Equal(t, []string{"/usr/bin/nvca", "--config", "/var/run/nvca/config.yaml"}, nvcaContainer.Args)
 	// When Vault is enabled, OAuth credentials come from ClientSecretsEnvFile (Vault agent output),
 	// not from SecretKeyRef - so no OAUTH_CLIENT_ID env var is added (fixes "secret oauth-client-id not found").
-	// The only env var present is the always-injected validator-summary namespace.
+	// The only env vars present are the always-injected cluster-validator ones.
 	assert.Equal(t, []corev1.EnvVar{
 		{
 			Name:  clustervalidator.SummaryConfigMapNamespaceEnv,
 			Value: bc.operatorNamespace,
+		},
+		{
+			// Always set, so the agent can tell a disabled validator from
+			// an operator that predates the setting.
+			Name:  clustervalidator.EnabledEnv,
+			Value: "false",
 		},
 	}, nvcaContainer.Env)
 	assert.Equal(t, []corev1.VolumeMount{

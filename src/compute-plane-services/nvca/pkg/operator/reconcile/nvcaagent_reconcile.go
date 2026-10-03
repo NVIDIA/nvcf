@@ -2086,14 +2086,13 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 		Value: bc.operatorNamespace,
 	})
 	// Only where the validator runs does the agent publish its metrics
-	// baseline. Elsewhere a last_run of 0 would read as a validator that
-	// never ran, forever.
-	if bc.clusterValidatorEnabled {
-		nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
-			Name:  clustervalidator.EnabledEnv,
-			Value: "true",
-		})
-	}
+	// baseline; elsewhere a last_run of 0 would read as a validator that
+	// never ran, forever. Always set, so the agent can tell a disabled
+	// validator from an operator that predates the setting.
+	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
+		Name:  clustervalidator.EnabledEnv,
+		Value: strconv.FormatBool(bc.clusterValidatorEnabled),
+	})
 
 	// Add OAuth authentication environment variables.
 	oauthConfig := getOAuthConfig(nb)

@@ -54,6 +54,10 @@ const (
 	// namespace.
 	SummaryConfigMapName = "cluster-validator-summary"
 
+	// SummaryManagedBy is the app.kubernetes.io/managed-by label value on the
+	// summary ConfigMap, so a cleanup deletes only one the validator wrote.
+	SummaryManagedBy = "cluster-validator"
+
 	// SummaryConfigMapKey is the data key inside the ConfigMap that
 	// holds the JSON payload.
 	SummaryConfigMapKey = "summary.json"
@@ -77,10 +81,12 @@ const (
 	// Deployment.
 	SummaryConfigMapNamespaceEnv = "VALIDATOR_SUMMARY_NAMESPACE"
 
-	// EnabledEnv says the chart runs the cluster-validator. The chart sets it
-	// on the operator, and the operator on the agent, which publishes the
-	// metrics baseline only then: on a cluster without the validator, a
-	// last_run of 0 would read as a validator that never ran, forever.
+	// EnabledEnv says whether the chart runs the cluster-validator. The chart
+	// sets it on the operator, and the operator always sets it on the agent,
+	// to "true" or "false". The agent publishes the metrics baseline only when
+	// it is true: on a cluster without the validator, a last_run of 0 would
+	// read as a validator that never ran, forever. When it is false the agent
+	// reads no summary, so one left from an enabled period is not republished.
 	EnabledEnv = "NVCA_CLUSTER_VALIDATOR_ENABLED"
 
 	// InitialRunCronJobEnv names the cluster-validator CronJob the operator
@@ -90,10 +96,15 @@ const (
 	InitialRunCronJobEnv = "NVCA_CLUSTER_VALIDATOR_CRONJOB"
 )
 
-// Enabled reports whether EnabledEnv is set to a true value.
-func Enabled() bool {
+// Enabled reports what EnabledEnv says. set is false when it is unset or not a
+// boolean, as from an operator that predates it; enabled is then false too, and
+// the caller cannot tell an enabled validator from a disabled one.
+func Enabled() (enabled, set bool) {
 	v, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(EnabledEnv)))
-	return err == nil && v
+	if err != nil {
+		return false, false
+	}
+	return v, true
 }
 
 // ValidatorSummary is the structured wire format the validator writes to
@@ -329,7 +340,7 @@ func writeSummaryConfigMap(
 				Namespace: namespace,
 				Labels: map[string]string{
 					"app.kubernetes.io/component":  "cluster-validator",
-					"app.kubernetes.io/managed-by": "cluster-validator",
+					"app.kubernetes.io/managed-by": SummaryManagedBy,
 				},
 			},
 			Data: map[string]string{SummaryConfigMapKey: string(payload)},

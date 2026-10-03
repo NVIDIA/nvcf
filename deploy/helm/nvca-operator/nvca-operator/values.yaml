@@ -527,8 +527,11 @@ clusterValidator:
   # NVCF Gateway (the stack's ingress.gatewayApi.gateways), each as
   # namespace/name. A Gateway left out is not assessed (one the NVCF routes
   # attach to is reported), and a bare name is ignored because it could match
-  # another team's Gateway. After install, each listed Gateway must exist, and
-  # one that Envoy Gateway runs must have a proxy with a Ready pod.
+  # another team's Gateway. After install, each listed Gateway must exist. The
+  # LoadBalancer check needs an address on each one exposed through a
+  # LoadBalancer, and reports no value when all are exposed by NodePort or
+  # ClusterIP. Tier-1 needs each one Envoy Gateway runs to have a proxy with a
+  # Ready pod.
   gatewayNames: []
   # Quorum components the stack runs outside this cluster: any of nats,
   # openbao and cassandra. After install the Tier-2 check reports a known

@@ -342,6 +342,50 @@ func TestReconciler_PrunesOldRunOnUpdate(t *testing.T) {
 	assert.Equal(t, 1.0, val)
 }
 
+// A summary left from an enabled period must not come back once the operator
+// says the validator is disabled: its old last_run would fire the staleness
+// alert on a cluster with no validator. True, and unset from an operator that
+// predates the setting, still read it.
+func TestStartValidatorSummaryReconciler_FollowsEnabledSetting(t *testing.T) {
+	tests := []struct {
+		value       string
+		wantPublish bool
+	}{
+		{value: "false"},
+		{value: "true", wantPublish: true},
+		{value: "", wantPublish: true},
+	}
+	for _, tt := range tests {
+		t.Run("env="+tt.value, func(t *testing.T) {
+			t.Setenv(clustervalidator.EnabledEnv, tt.value)
+			t.Setenv(clustervalidator.SummaryConfigMapNamespaceEnv, "nvca-operator")
+			reg := prometheus.NewRegistry()
+			ctx, cancel := context.WithCancel(metrics.WithDefaultMetrics(context.Background(),
+				"nca-test", "test-cluster", "test-group", "v1.0.0", metrics.WithRegisterer(reg)))
+			defer cancel()
+			m := metrics.FromContext(ctx)
+			require.NotNil(t, m)
+			t.Cleanup(func() { m.Destroy() })
+			cm, _ := summaryCM(t, "nvca-operator", "2026-06-11T10:00:00Z", nil)
+			client := fake.NewSimpleClientset(cm)
+
+			a := &Agent{metrics: m}
+			a.startValidatorSummaryReconciler(ctx, client)
+
+			if !tt.wantPublish {
+				assert.Empty(t, client.Actions(), "a disabled validator's summary must not be read")
+				_, ok := readGaugeLabels(t, reg, metrics.ClusterValidatorLastRunTimestampMetricName, nil)
+				assert.False(t, ok, "no cluster-validator series where the validator is disabled")
+				return
+			}
+			require.Eventually(t, func() bool {
+				v, ok := readGaugeLabels(t, reg, metrics.ClusterValidatorReadyMetricName, nil)
+				return ok && v == 1.0
+			}, 5*time.Second, 50*time.Millisecond)
+		})
+	}
+}
+
 // resolveValidatorSummaryNamespace prefers the injected env var and
 // otherwise falls back to the default install namespace. It must NEVER
 // consult the agent's own namespace (SA mount / POD_NAMESPACE), since the

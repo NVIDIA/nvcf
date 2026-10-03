@@ -567,12 +567,13 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	nvcaotel.SetDefaultAttributes(opts.GetOTelAttributes())
 
 	// Initialize the default metrics
+	clusterValidatorEnabled, _ := clustervalidator.Enabled()
 	metricsOpts := []nvcametrics.DefaultMetricsOption{
 		nvcametrics.WithEventErrorTotalDefaultEvents(append(getAgentEvents(), getNVCAMetricEvents()...)),
 		nvcametrics.WithContainerCrashAndRestartTotalDefaultContainerNames(GetDefaultWorkloadContainerNamesToWatch()),
 		nvcametrics.WithKataRuntimeIsolationEnabled(opts.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrKataRuntimeIsolation)),
 		nvcametrics.WithMaintenanceMode(opts.MaintenanceMode),
-		nvcametrics.WithClusterValidatorEnabled(clustervalidator.Enabled()),
+		nvcametrics.WithClusterValidatorEnabled(clusterValidatorEnabled),
 	}
 	if opts.MetricsRegisterer != nil {
 		metricsOpts = append(metricsOpts, nvcametrics.WithRegisterer(opts.MetricsRegisterer))
@@ -1129,18 +1130,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Start the cluster-validator summary reconciler. This watches the
-	// well-known summary ConfigMap in the operator/validator namespace
-	// and republishes its content as Prometheus metrics on the agent's
-	// /metrics endpoint. Failures here are non-fatal — metrics are an
-	// SLI, not a gate.
-	if a.metrics != nil {
-		validatorNS := resolveValidatorSummaryNamespace()
-		validatorReconciler := NewValidatorSummaryReconciler(k8sclients.K8s, validatorNS, a.metrics)
-		if startErr := validatorReconciler.Start(ctx); startErr != nil {
-			log.WithError(startErr).Warn("cluster-validator summary reconciler failed to start; metrics will be unavailable")
-		}
-	}
+	a.startValidatorSummaryReconciler(ctx, k8sclients.K8s)
 
 	infraOverheadGetter := enforce.NewInfraOverheadGetter(a.FeatureFlagFetcher, a.Config, enforce.GetRuntimeClassK8sClient(k8sclients.K8s))
 

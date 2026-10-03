@@ -33,6 +33,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 )
 
 // validatorSpecAnnotation identifies the validator spec a run used: its Job
@@ -264,4 +266,37 @@ func validatorRunJobName(cronJobName, spec, newest string) string {
 		base = strings.TrimRight(base[:limit], "-")
 	}
 	return base + suffix
+}
+
+// deleteLeftoverValidatorSummary removes the summary a cluster-validator wrote
+// while it was enabled. Nothing updates it once the validator is disabled, so
+// an agent that still reads it, such as one older than this operator, would
+// republish its old last_run and fire the staleness alert; and were the
+// validator enabled again, it would do the same until the first new run. Only
+// a ConfigMap the validator wrote is deleted. Failures are logged and
+// otherwise ignored.
+func deleteLeftoverValidatorSummary(ctx context.Context, client kubernetes.Interface, namespace string) {
+	if namespace == "" {
+		return
+	}
+	log := core.GetLogger(ctx).WithField("configmap", namespace+"/"+clustervalidator.SummaryConfigMapName)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	configMaps := client.CoreV1().ConfigMaps(namespace)
+	cm, err := configMaps.Get(ctx, clustervalidator.SummaryConfigMapName, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return
+	case err != nil:
+		log.WithError(err).Warn("could not read the summary of a disabled cluster-validator to delete it")
+		return
+	case cm.Labels["app.kubernetes.io/managed-by"] != clustervalidator.SummaryManagedBy:
+		return
+	}
+	err = configMaps.Delete(ctx, cm.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &cm.UID}})
+	if err != nil && !apierrors.IsNotFound(err) {
+		log.WithError(err).Warn("could not delete the summary of a disabled cluster-validator")
+		return
+	}
+	log.Info("deleted the summary of a disabled cluster-validator")
 }

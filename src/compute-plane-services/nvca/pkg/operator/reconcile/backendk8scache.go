@@ -402,14 +402,13 @@ func (b *BackendK8sCacheBuilder) WithClusterSource(clusterSource nvcaoptypes.Clu
 	return &next
 }
 
-func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
-	log := core.GetLogger(ctx)
-	resyncPeriod := b.resyncPeriod
-
+// newCache builds the cache from the builder's settings without starting any
+// informers.
+func (b *BackendK8sCacheBuilder) newCache() *BackendK8sCache {
 	eventBroadcaster := record.NewBroadcaster()
 
 	c := &BackendK8sCache{
-		resyncPeriod:         resyncPeriod,
+		resyncPeriod:         b.resyncPeriod,
 		clients:              b.clients,
 		eventBroadcaster:     eventBroadcaster,
 		eventRecorder:        eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "nvca-operator"}),
@@ -455,6 +454,12 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	if c.operatorNamespace == "" {
 		c.operatorNamespace = NVCAOperatorNamespace
 	}
+	return c
+}
+
+func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
+	log := core.GetLogger(ctx)
+	c := b.newCache()
 
 	out := make(chan *core.Event)
 

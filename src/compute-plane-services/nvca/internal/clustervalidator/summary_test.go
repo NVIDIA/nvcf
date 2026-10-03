@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -33,6 +34,41 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
+
+// The agent acts on all three answers: true publishes the baseline, false reads
+// no summary at all, and unset (an operator that predates the variable) reads
+// summaries without a baseline. A value that is not a boolean says nothing.
+func TestEnabled(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       *string
+		wantEnabled bool
+		wantSet     bool
+	}{
+		{name: "unset"},
+		{name: "empty", value: strPtr("")},
+		{name: "true", value: strPtr("true"), wantEnabled: true, wantSet: true},
+		{name: "padded upper case", value: strPtr(" TRUE "), wantEnabled: true, wantSet: true},
+		{name: "one", value: strPtr("1"), wantEnabled: true, wantSet: true},
+		{name: "false", value: strPtr("false"), wantSet: true},
+		{name: "garbage", value: strPtr("enabled")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setenv first so the variable is restored after the test even
+			// when the case unsets it.
+			t.Setenv(EnabledEnv, "")
+			if tt.value == nil {
+				require.NoError(t, os.Unsetenv(EnabledEnv))
+			} else {
+				t.Setenv(EnabledEnv, *tt.value)
+			}
+			enabled, set := Enabled()
+			assert.Equal(t, tt.wantEnabled, enabled, "enabled")
+			assert.Equal(t, tt.wantSet, set, "set")
+		})
+	}
+}
 
 func TestBuildSummary_PopulatesFixedChecksAndDynamicMaps(t *testing.T) {
 	reachOK := true

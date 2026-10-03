@@ -36,6 +36,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 )
 
 const (
@@ -369,4 +371,41 @@ func TestValidatorRunJobName(t *testing.T) {
 	assert.Equal(t, name, validatorRunJobName(long, "spec", "uid-1"))
 	assert.NotEqual(t, name, validatorRunJobName(long, "other", "uid-1"))
 	assert.NotEqual(t, name, validatorRunJobName(long, "spec", "uid-2"))
+}
+
+// A disabled validator's summary is deleted so no agent republishes its old
+// last_run, but only when the validator wrote it.
+func TestDeleteLeftoverValidatorSummary(t *testing.T) {
+	summary := func(managedBy string) *corev1.ConfigMap {
+		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name: clustervalidator.SummaryConfigMapName, Namespace: "nvca-operator",
+		}}
+		if managedBy != "" {
+			cm.Labels = map[string]string{"app.kubernetes.io/managed-by": managedBy}
+		}
+		return cm
+	}
+	tests := []struct {
+		name     string
+		existing []runtime.Object
+		wantKept bool
+	}{
+		{name: "written by the validator", existing: []runtime.Object{summary(clustervalidator.SummaryManagedBy)}},
+		{name: "not written by the validator", existing: []runtime.Object{summary("someone-else")}, wantKept: true},
+		{name: "unlabeled", existing: []runtime.Object{summary("")}, wantKept: true},
+		{name: "absent"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(tt.existing...)
+			deleteLeftoverValidatorSummary(context.Background(), client, "nvca-operator")
+			_, err := client.CoreV1().ConfigMaps("nvca-operator").Get(
+				context.Background(), clustervalidator.SummaryConfigMapName, metav1.GetOptions{})
+			if tt.wantKept {
+				assert.NoError(t, err)
+				return
+			}
+			assert.True(t, apierrors.IsNotFound(err), "got %v", err)
+		})
+	}
 }

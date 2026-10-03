@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,35 +121,91 @@ func runAndReadSummary(t *testing.T, client kubernetes.Interface, role Role) *Va
 	return &s
 }
 
-// The control-plane role must dispatch the control-plane check set and none of
-// the compute-plane ones. Both halves are asserted on the published summary:
-// a GPU key present at all means either the check ran or its zero value leaked
-// onto the wire, and both are bugs under this role.
+// Every check key belongs to exactly one dispatch group. The role tests below
+// assert whole groups, so a key added without a group, or moved between the
+// role branches of Run, fails them rather than going unasserted.
+var (
+	bothRoleCheckKeys = []string{
+		CheckKeyControlPlane, CheckKeyWorkerNodesAllReady, CheckKeyWebhooks, CheckKeyNetworkPoliciesSupport,
+	}
+	computePlaneCheckKeys = []string{CheckKeySMBCSI, CheckKeyGPUResources, CheckKeyGPUOperator}
+	// Published only when the network-checks ConfigMap configures them, which
+	// the role tests do not.
+	configuredCheckKeys = []string{CheckKeyEndpointReachability, CheckKeyConfigurableNetpol, CheckKeyNetpolEnforcement}
+	// controlPlaneCheckRows maps each control-plane key to the row label its
+	// warnings start with, so a key absent from a summary can be matched to the
+	// warning that says why.
+	controlPlaneCheckRows = map[string]string{
+		CheckKeyDefaultStorageClass: "Default StorageClass:",
+		CheckKeyGatewayAPICRDs:      "Gateway API CRDs:",
+		CheckKeyEnvoyGateway:        "Envoy Gateway:",
+		CheckKeyGatewayRoutes:       "Gateway Route CR Types:",
+		CheckKeyExternalLB:          "External Load Balancer:",
+		CheckKeyNodeToNode:          "Node-to-Node:",
+		CheckKeyTier1Deployments:    "Tier-1 Deployments:",
+		CheckKeyTier2StatefulSets:   "Tier-2 StatefulSets:",
+	}
+)
+
+func TestCheckKeyGroupsPartitionAllCheckKeys(t *testing.T) {
+	var grouped []string
+	grouped = append(grouped, bothRoleCheckKeys...)
+	grouped = append(grouped, computePlaneCheckKeys...)
+	grouped = append(grouped, configuredCheckKeys...)
+	for k := range controlPlaneCheckRows {
+		grouped = append(grouped, k)
+	}
+	assert.ElementsMatch(t, AllCheckKeys, grouped)
+}
+
+func hasWarningFor(s *ValidatorSummary, row string) bool {
+	for _, w := range s.Warnings {
+		if strings.HasPrefix(w, row) {
+			return true
+		}
+	}
+	return false
+}
+
+// The control-plane role publishes the shared and control-plane keys and none
+// of the compute-plane ones. A control-plane key may be absent only when a
+// warning on its row says why: the single node here makes node_to_node not
+// applicable, and every other row must be present.
 func TestRun_ControlPlaneRoleDispatch(t *testing.T) {
 	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
 	s := runAndReadSummary(t, client, RoleControlPlane)
 
-	assert.Contains(t, s.Checks, CheckKeyDefaultStorageClass,
-		"control-plane role must run and publish the StorageClass check")
-
-	for _, k := range []string{CheckKeyGPUResources, CheckKeyGPUOperator, CheckKeySMBCSI} {
-		assert.NotContains(t, s.Checks, k,
-			"compute-plane check %q must not be published under the control-plane role", k)
+	for _, k := range bothRoleCheckKeys {
+		assert.Contains(t, s.Checks, k, "shared check %q must be published under the control-plane role", k)
+	}
+	for k, row := range controlPlaneCheckRows {
+		if _, ok := s.Checks[k]; !ok {
+			assert.True(t, hasWarningFor(s, row),
+				"control-plane check %q is absent and no warning starting %q says why; warnings: %q",
+				k, row, s.Warnings)
+		}
+	}
+	assert.NotContains(t, s.Checks, CheckKeyNodeToNode, "one schedulable node has no cross-node path")
+	assert.True(t, hasWarningFor(s, controlPlaneCheckRows[CheckKeyNodeToNode]))
+	for _, k := range append(append([]string(nil), computePlaneCheckKeys...), configuredCheckKeys...) {
+		assert.NotContains(t, s.Checks, k, "check %q must not be published under the control-plane role", k)
 	}
 }
 
-// The mirror of the above: the compute-plane role publishes the GPU keys and
-// none of the control-plane ones.
+// The compute-plane role publishes exactly the shared and compute-plane keys.
 func TestRun_ComputePlaneRoleDispatch(t *testing.T) {
 	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
 	s := runAndReadSummary(t, client, RoleComputePlane)
 
-	for _, k := range []string{CheckKeyGPUResources, CheckKeyGPUOperator, CheckKeySMBCSI} {
-		assert.Contains(t, s.Checks, k,
-			"compute-plane check %q must be published under the compute-plane role", k)
+	want := append(append([]string(nil), bothRoleCheckKeys...), computePlaneCheckKeys...)
+	got := make([]string, 0, len(s.Checks))
+	for k := range s.Checks {
+		got = append(got, k)
 	}
-	assert.NotContains(t, s.Checks, CheckKeyDefaultStorageClass,
-		"control-plane check must not run under the compute-plane role")
+	assert.ElementsMatch(t, want, got)
+	for k := range controlPlaneCheckRows {
+		assert.NotContains(t, s.Checks, k, "control-plane check %q must not run under the compute-plane role", k)
+	}
 }
 
 // TestPrintSummary_ControlPlaneRole verifies that with Role=RoleControlPlane
