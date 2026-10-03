@@ -1,10 +1,6 @@
 # Compatibility Matrix
 
-NVCF ships as three independently versioned Helm stacks: the self-managed
-control plane, the compute plane, and the observability stack. Each stack
-releases from its own release train and publishes its own documentation
-version. Use this page to pick stack versions that are qualified to run
-together.
+Use this page to pick stack versions that are qualified to run together.
 
 Releases are listed as exact semantic versions (`X.Y.Z`). A requirement such
 as `1.0.0 or later` includes later compatible patch and minor releases. Only
@@ -32,6 +28,4 @@ to a maintained train before moving further.
 
 {/*docs-version-sync:END compatibility-matrix*/}
 
-Stack versions above are read from the latest published GitHub release of
-each stack. Documentation for each stack version is available from the
-version menu on that stack's tab.
+The tables show the stack versions documented by the selected release.
