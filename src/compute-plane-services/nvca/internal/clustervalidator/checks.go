@@ -33,6 +33,8 @@ import (
 	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -56,7 +58,8 @@ func checkPrerequisites(ctx context.Context, client kubernetes.Interface, state 
 		log.WithError(err).Error("Cannot connect to Kubernetes cluster")
 		printError(log, "Cannot connect to Kubernetes cluster.")
 		log.Error("╔═══════════════════════════════════════════════════════════╗")
-		log.Errorf("║              %s  Cluster is NVCF-Not-Ready  %s              ║", iconCross, iconCross)
+		log.Errorf("\u2551              %s  %s%s  %s              \u2551",
+			iconCross, VerdictLinePrefix, VerdictNotReady, iconCross)
 		log.Error("╚═══════════════════════════════════════════════════════════╝")
 		return fmt.Errorf("cluster not reachable")
 	}
@@ -67,11 +70,14 @@ func checkPrerequisites(ctx context.Context, client kubernetes.Interface, state 
 	state.K8sVersion = sv.GitVersion
 	printInfo(log, fmt.Sprintf("  Kubernetes version: %s", state.K8sVersion))
 
-	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := observe(ctx, func(c context.Context) (*corev1.NodeList, error) {
+		return client.CoreV1().Nodes().List(c, metav1.ListOptions{})
+	})
 	if err == nil {
 		state.TotalNodes = strconv.Itoa(len(nodes.Items))
 	} else {
-		state.TotalNodes = "0"
+		printWarning(log, readFailure("nodes", err))
+		state.TotalNodes = "unknown"
 	}
 	printInfo(log, fmt.Sprintf("  Total nodes: %s", state.TotalNodes))
 
@@ -236,14 +242,16 @@ func checkControlPlaneHealth(ctx context.Context, client kubernetes.Interface, s
 	// ── 4. Node status ──
 	log.Info("")
 	log.Info("Node Status:")
-	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := observe(ctx, func(c context.Context) (*corev1.NodeList, error) {
+		return client.CoreV1().Nodes().List(c, metav1.ListOptions{})
+	})
+	nodesObserved := err == nil
 	if err != nil {
-		printError(log, fmt.Sprintf("Failed to list nodes: %v", err))
-		podsHealthy = false
-		// Node readiness is unknown — reflect that in the summary row so
-		// it doesn't read "Worker Nodes: All Ready" when we never checked.
-		nodesAllReady = false
-		state.NodesAllReady = false
+		// Node readiness was not observed, which says nothing about the
+		// control plane: /readyz and the probes above judge that.
+		printWarning(log, "  "+readFailure("nodes", err))
+		state.Warnings = append(state.Warnings, unknownWarning("Worker Nodes", "nodes", err))
+		state.markUnobserved(CheckKeyWorkerNodesAllReady)
 	} else if len(nodes.Items) > 0 {
 		ready, notReady := 0, 0
 		for i := range nodes.Items {
@@ -277,6 +285,8 @@ func checkControlPlaneHealth(ctx context.Context, client kubernetes.Interface, s
 	// ── 5. Verdict ──
 	log.Info("")
 	switch {
+	case podsHealthy && !nodesObserved:
+		printWarning(log, "Control plane API & services healthy; worker node status not observed")
 	case podsHealthy && nodesAllReady:
 		printSuccess(log, "Control plane is healthy")
 	case podsHealthy && !nodesAllReady:
@@ -432,7 +442,14 @@ func checkWebhookSupport(ctx context.Context, client kubernetes.Interface, state
 	supported := true
 
 	log.Info("Admission Registration API:")
-	hasMutating, hasValidating := discoverWebhookAPIs(client.Discovery())
+	hasMutating, hasValidating, err := discoverWebhookAPIs(ctx, client.Discovery())
+	if err != nil {
+		printWarning(log, readFailure("the admissionregistration.k8s.io/v1 API", err))
+		state.Warnings = append(state.Warnings,
+			unknownWarning("Admission Webhooks", "the admissionregistration.k8s.io/v1 API", err))
+		state.markUnobserved(CheckKeyWebhooks)
+		return
+	}
 
 	if hasMutating {
 		printSuccess(log, "MutatingWebhookConfiguration API is available")
@@ -471,10 +488,17 @@ func checkWebhookSupport(ctx context.Context, client kubernetes.Interface, state
 	}
 }
 
-func discoverWebhookAPIs(disco discovery.DiscoveryInterface) (hasMutating, hasValidating bool) {
-	resources, err := disco.ServerResourcesForGroupVersion("admissionregistration.k8s.io/v1")
+// discoverWebhookAPIs reports which webhook configuration APIs are served. A
+// group version the apiserver does not serve is an answer, not an error.
+func discoverWebhookAPIs(
+	ctx context.Context, disco discovery.DiscoveryInterface,
+) (hasMutating, hasValidating bool, err error) {
+	resources, err := serverResources(ctx, disco, "admissionregistration.k8s.io/v1")
+	if apierrors.IsNotFound(err) {
+		return false, false, nil
+	}
 	if err != nil {
-		return false, false
+		return false, false, err
 	}
 	for _, r := range resources.APIResources {
 		switch r.Name {
@@ -484,7 +508,19 @@ func discoverWebhookAPIs(disco discovery.DiscoveryInterface) (hasMutating, hasVa
 			hasValidating = true
 		}
 	}
-	return hasMutating, hasValidating
+	return hasMutating, hasValidating, nil
+}
+
+// serverResources is ServerResourcesForGroupVersion with retries, bounded by
+// ctx.
+func serverResources(
+	ctx context.Context, disco discovery.DiscoveryInterface, groupVersion string,
+) (*metav1.APIResourceList, error) {
+	return observe(ctx, func(c context.Context) (*metav1.APIResourceList, error) {
+		return withContext(c, func() (*metav1.APIResourceList, error) {
+			return disco.ServerResourcesForGroupVersion(groupVersion)
+		})
+	})
 }
 
 // checkNetworkPolicies verifies that the NetworkPolicy API is available and
@@ -494,19 +530,22 @@ func checkNetworkPolicies(ctx context.Context, client kubernetes.Interface, stat
 	printHeader(log, "Network Policy Support")
 	supportsNetpol := false
 
-	resources, err := client.Discovery().ServerResourcesForGroupVersion("networking.k8s.io/v1")
-	if err != nil {
-		printError(log, "NetworkPolicy API is not available")
-		state.Recommendations = append(state.Recommendations,
-			"Ensure Kubernetes cluster supports networking.k8s.io API group")
+	resources, err := serverResources(ctx, client.Discovery(), "networking.k8s.io/v1")
+	if err != nil && !apierrors.IsNotFound(err) {
+		printWarning(log, readFailure("the networking.k8s.io/v1 API", err))
+		state.Warnings = append(state.Warnings,
+			unknownWarning("Network Policies", "the networking.k8s.io/v1 API", err))
+		state.markUnobserved(CheckKeyNetworkPoliciesSupport)
 		return
 	}
 
 	found := false
-	for _, r := range resources.APIResources {
-		if r.Name == "networkpolicies" {
-			found = true
-			break
+	if err == nil {
+		for _, r := range resources.APIResources {
+			if r.Name == "networkpolicies" {
+				found = true
+				break
+			}
 		}
 	}
 	if !found {
@@ -532,10 +571,16 @@ func checkNetworkPolicies(ctx context.Context, client kubernetes.Interface, stat
 		{"Canal", "kube-system", "k8s-app=canal"},
 	}
 
+	// readErr keeps the last failed detection read: support that could not
+	// be confirmed because nothing could be read is unknown, not unconfirmed.
+	var readErr error
 	for _, cni := range cniChecks {
-		pods, err := client.CoreV1().Pods(cni.Namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: cni.Label,
+		pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+			return client.CoreV1().Pods(cni.Namespace).List(c, metav1.ListOptions{LabelSelector: cni.Label})
 		})
+		if err != nil {
+			readErr = err
+		}
 		if err == nil && len(pods.Items) > 0 {
 			for i := range pods.Items {
 				if pods.Items[i].Status.Phase == corev1.PodRunning {
@@ -551,11 +596,23 @@ func checkNetworkPolicies(ctx context.Context, client kubernetes.Interface, stat
 	}
 
 	if !supportsNetpol {
-		netpols, err := client.NetworkingV1().NetworkPolicies("").List(ctx, metav1.ListOptions{})
-		if err == nil && len(netpols.Items) > 0 {
+		netpols, err := observe(ctx, func(c context.Context) (*networkingv1.NetworkPolicyList, error) {
+			return client.NetworkingV1().NetworkPolicies("").List(c, metav1.ListOptions{Limit: 1})
+		})
+		if err != nil {
+			readErr = err
+		}
+		switch {
+		case err == nil && len(netpols.Items) > 0:
 			printInfo(log, "Existing NetworkPolicies found in cluster")
 			supportsNetpol = true
-		} else {
+		case readErr != nil:
+			printWarning(log, readFailure("the pods and NetworkPolicies that show CNI support", readErr))
+			state.Warnings = append(state.Warnings, unknownWarning("Network Policies",
+				"the pods and NetworkPolicies that show CNI support", readErr))
+			state.markUnobserved(CheckKeyNetworkPoliciesSupport)
+			return
+		default:
 			printWarning(log, "Could not detect a known CNI plugin with network policy support")
 			printInfo(log, "Common CNI plugins checked: Calico, Cilium, Weave, Antrea, Canal")
 		}
@@ -582,7 +639,15 @@ func checkSMBCSIDriver(ctx context.Context, client kubernetes.Interface, state *
 	printHeader(log, "SMB CSI Driver")
 	const requiredVersion = "1.16.0"
 
-	_, err := client.StorageV1().CSIDrivers().Get(ctx, "smb.csi.k8s.io", metav1.GetOptions{})
+	_, err := observe(ctx, func(c context.Context) (*storagev1.CSIDriver, error) {
+		return client.StorageV1().CSIDrivers().Get(c, "smb.csi.k8s.io", metav1.GetOptions{})
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
+		printWarning(log, readFailure("CSIDriver smb.csi.k8s.io", err))
+		state.Warnings = append(state.Warnings, unknownWarning("SMB CSI Driver", "CSIDriver smb.csi.k8s.io", err))
+		state.markUnobserved(CheckKeySMBCSI)
+		return
+	}
 	if err != nil {
 		// SMB CSI is required only when the HelmSharedStorage feature flag
 		// is enabled (model-cache backed by an in-cluster Samba server).
@@ -666,13 +731,16 @@ func detectSMBVersion(ctx context.Context, client kubernetes.Interface) string {
 // checkGPUResources inspects node GPU capacity and allocatable resources.
 func checkGPUResources(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
 	log := state.Log
-	printHeader(log, "GPU Resources")
+	printHeader(log, GPUResourcesLabel)
 
-	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := observe(ctx, func(c context.Context) (*corev1.NodeList, error) {
+		return client.CoreV1().Nodes().List(c, metav1.ListOptions{})
+	})
 	if err != nil {
-		printWarning(log, "Could not retrieve node information")
-		state.Recommendations = append(state.Recommendations,
-			"Add GPU nodes to the cluster or verify GPU Operator is functioning")
+		// No GPU count was read, which is not a count of zero.
+		printWarning(log, readFailure("nodes", err))
+		state.Warnings = append(state.Warnings, unknownWarning(GPUResourcesLabel, "nodes", err))
+		state.markUnobserved(CheckKeyGPUResources)
 		return
 	}
 
@@ -739,12 +807,25 @@ func checkGPUOperator(ctx context.Context, client kubernetes.Interface, state *V
 
 	const gpuOperatorNS = "gpu-operator"
 	installed := false
+	// readErr keeps a failed read: not finding the operator because nothing
+	// could be read is unknown, not "not installed".
+	var readErr error
 
-	_, err := client.CoreV1().Namespaces().Get(ctx, gpuOperatorNS, metav1.GetOptions{})
+	_, err := observe(ctx, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Get(c, gpuOperatorNS, metav1.GetOptions{})
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
+		readErr = err
+	}
 	if err == nil {
 		printSuccess(log, fmt.Sprintf("GPU Operator namespace exists: %s", gpuOperatorNS))
 
-		pods, err := client.CoreV1().Pods(gpuOperatorNS).List(ctx, metav1.ListOptions{})
+		pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+			return client.CoreV1().Pods(gpuOperatorNS).List(c, metav1.ListOptions{})
+		})
+		if err != nil {
+			readErr = err
+		}
 		if err == nil && len(pods.Items) > 0 {
 			installed = true
 			printSuccess(log, fmt.Sprintf("GPU Operator pods found: %d", len(pods.Items)))
@@ -766,9 +847,12 @@ func checkGPUOperator(ctx context.Context, client kubernetes.Interface, state *V
 	}
 
 	if !installed {
-		pods, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-			LabelSelector: "app=gpu-operator",
+		pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+			return client.CoreV1().Pods("").List(c, metav1.ListOptions{LabelSelector: "app=gpu-operator"})
 		})
+		if err != nil {
+			readErr = err
+		}
 		if err == nil && len(pods.Items) > 0 {
 			nsSet := make(map[string]bool)
 			for i := range pods.Items {
@@ -783,6 +867,13 @@ func checkGPUOperator(ctx context.Context, client kubernetes.Interface, state *V
 		}
 	}
 
+	if !installed && readErr != nil {
+		printWarning(log, readFailure("the GPU Operator namespace and pods", readErr))
+		state.Warnings = append(state.Warnings,
+			unknownWarning("GPU Operator", "the GPU Operator namespace and pods", readErr))
+		state.markUnobserved(CheckKeyGPUOperator)
+		return
+	}
 	if !installed {
 		// If GPUs are already usable (node capacity exposes nvidia.com/gpu),
 		// GPU Operator is not required — the cluster is in Manual Instance
@@ -829,13 +920,14 @@ func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *
 	log := state.Log
 	printHeader(log, "Default StorageClass")
 
-	classes, err := client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	classes, err := observe(ctx, func(c context.Context) (*storagev1.StorageClassList, error) {
+		return client.StorageV1().StorageClasses().List(c, metav1.ListOptions{})
+	})
 	if err != nil {
-		// Leave DefaultStorageClassOK nil (unknown) so the summary row is
-		// omitted rather than reported as "Not Found"; an API error is not
+		// Leave DefaultStorageClassOK nil (unknown): an API error is not
 		// confirmation that no default StorageClass exists.
-		printWarning(log, fmt.Sprintf("Could not list StorageClasses: %v", err))
-		state.Warnings = append(state.Warnings, "Default StorageClass: status unknown (listing failed)")
+		printWarning(log, readFailure("StorageClasses", err))
+		state.Warnings = append(state.Warnings, unknownWarning("Default StorageClass", "StorageClasses", err))
 		return
 	}
 
@@ -983,21 +1075,24 @@ func (s gatewayAPISurface) hasPair(groupVersion, resource string) bool {
 // discoverGatewayAPIResources walks every served version of
 // gateway.networking.k8s.io and records what it finds, keeping the version so
 // callers can require an exact pair where the charts pin one.
-func discoverGatewayAPIResources(client kubernetes.Interface) (gatewayAPISurface, error) {
+func discoverGatewayAPIResources(ctx context.Context, client kubernetes.Interface) (gatewayAPISurface, error) {
 	surface := gatewayAPISurface{
 		byGroupVersion: make(map[string]bool),
 		anyVersion:     make(map[string]bool),
 	}
-	groups, err := client.Discovery().ServerGroups()
+	disco := client.Discovery()
+	groups, err := observe(ctx, func(c context.Context) (*metav1.APIGroupList, error) {
+		return withContext(c, disco.ServerGroups)
+	})
 	if err != nil {
-		return surface, err
+		return surface, fmt.Errorf("listing API groups: %w", err)
 	}
 	for _, g := range groups.Groups {
 		if g.Name != gatewayAPIGroup {
 			continue
 		}
 		for _, v := range g.Versions {
-			resources, err := client.Discovery().ServerResourcesForGroupVersion(v.GroupVersion)
+			resources, err := serverResources(ctx, disco, v.GroupVersion)
 			if err != nil {
 				// The group exists, so a failure here is an API problem, not an
 				// absent resource. Swallowing it would leave the surface
@@ -1024,9 +1119,9 @@ func checkGatewayAPICRDsIn(state *ValidationState, surface gatewayAPISurface, er
 	if err != nil {
 		// Leave the pointer nil: discovery failure is not evidence the CRDs
 		// are absent, and this row is critical.
-		printWarning(log, fmt.Sprintf("Could not discover Gateway API resources: %v", err))
+		printWarning(log, readFailure("the Gateway API resources", err))
 		state.Warnings = append(state.Warnings,
-			"Gateway API CRDs: status unknown (API group discovery failed)")
+			unknownWarning("Gateway API CRDs", "the Gateway API resources", err))
 		return
 	}
 
@@ -1071,15 +1166,16 @@ func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *
 	printHeader(log, "Envoy Gateway")
 
 	envoyNS := envoyGatewayNamespaceName()
-	_, err := client.CoreV1().Namespaces().Get(ctx, envoyNS, metav1.GetOptions{})
+	_, err := observe(ctx, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Get(c, envoyNS, metav1.GetOptions{})
+	})
 	if err != nil {
 		// Only NotFound is evidence that Envoy is absent. A 403 or an apiserver
 		// 500 means we never observed it, so leave the pointer nil and warn,
 		// matching every sibling control-plane check.
 		if !apierrors.IsNotFound(err) {
-			msg := fmt.Sprintf("Could not check Envoy Gateway namespace %s: %v", envoyNS, err)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Envoy Gateway: status unknown ("+msg+")")
+			printWarning(log, readFailure("namespace "+envoyNS, err))
+			state.Warnings = append(state.Warnings, unknownWarning("Envoy Gateway", "namespace "+envoyNS, err))
 			return
 		}
 		msg := fmt.Sprintf("Envoy Gateway namespace %s not found", envoyNS)
@@ -1099,15 +1195,15 @@ func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *
 	// Select on the controller label: the same namespace also holds the
 	// envoy-<ns>-<gw>-<hash> data-plane proxies and the certgen Job pod, and
 	// counting those lets a dead controller pass.
-	pods, err := client.CoreV1().Pods(envoyNS).List(ctx, metav1.ListOptions{
-		LabelSelector: envoyGatewayControllerSelector,
+	pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+		return client.CoreV1().Pods(envoyNS).List(c, metav1.ListOptions{LabelSelector: envoyGatewayControllerSelector})
 	})
 	if err != nil {
 		// Same reasoning as the namespace Get above: a List failure is not
 		// evidence that no controller is running.
-		msg := fmt.Sprintf("Could not list Envoy Gateway pods in %s: %v", envoyNS, err)
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "Envoy Gateway: status unknown ("+msg+")")
+		resource := "the Envoy Gateway controller pods in " + envoyNS
+		printWarning(log, readFailure(resource, err))
+		state.Warnings = append(state.Warnings, unknownWarning("Envoy Gateway", resource, err))
 		return
 	}
 
@@ -1152,9 +1248,9 @@ func checkGatewayRoutesIn(state *ValidationState, surface gatewayAPISurface, err
 	if err != nil {
 		// Leave the pointer nil: a discovery failure is not evidence that the
 		// route CR types are absent.
-		printWarning(log, fmt.Sprintf("Could not discover Gateway API resources: %v", err))
+		printWarning(log, readFailure("the Gateway API resources", err))
 		state.Warnings = append(state.Warnings,
-			"Gateway Route CR Types: status unknown (API group discovery failed)")
+			unknownWarning("Gateway Route CR Types", "the Gateway API resources", err))
 		return
 	}
 
@@ -1224,17 +1320,25 @@ func checkExternalLoadBalancerFor(
 	// both so either mode is covered once the Gateway namespaces are known.
 	namespaces := append([]string{envoyNS}, gateways.namespaces(envoyNS)...)
 	var services []corev1.Service
+	var unread []string
+	var unreadErrs []error
 	for _, ns := range namespaces {
-		list, err := client.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
+		list, err := observe(ctx, func(c context.Context) (*corev1.ServiceList, error) {
+			return client.CoreV1().Services(ns).List(c, metav1.ListOptions{})
+		})
 		if err != nil {
-			// Leave the pointer nil: a List failure is not evidence that no
-			// LoadBalancer has an address.
-			printWarning(log, fmt.Sprintf("Could not list services in %s: %v", ns, err))
-			state.Warnings = append(state.Warnings,
-				"External Load Balancer: status unknown (Service listing failed)")
-			return
+			// Keep going: what the other namespaces show still counts, and a
+			// pending NVCF Service fails the row whatever was not read.
+			printWarning(log, readFailure("Services in "+ns, err))
+			unread = append(unread, fmt.Sprintf("%s (%v)", ns, err))
+			unreadErrs = append(unreadErrs, err)
+			continue
 		}
 		services = append(services, list.Items...)
+	}
+	gap := ""
+	if len(unread) > 0 {
+		gap = "could not read Services in " + readFailures(unread, unreadErrs)
 	}
 
 	if len(gateways) > 0 {
@@ -1248,10 +1352,10 @@ func checkExternalLoadBalancerFor(
 				break
 			}
 		}
-		judgeNVCFGatewayServices(log, state, gateways, classes, classErr, services)
+		judgeNVCFGatewayServices(log, state, gateways, classes, classErr, services, gap)
 		return
 	}
-	judgeUnattributedServices(log, state, services, discoveryErr)
+	judgeUnattributedServices(log, state, services, discoveryErr, gap)
 }
 
 // errNoNVCFGatewaysPostInstall stands in for a failed ownership lookup when the
@@ -1280,10 +1384,11 @@ func lbAddress(svc *corev1.Service) string {
 
 // judgeNVCFGatewayServices is the strict path: every NVCF Gateway must have a
 // proxy Service, and every one exposed through a LoadBalancer must have an
-// address. Other Gateways' Services are ignored.
+// address. Other Gateways' Services are ignored. gap names the namespaces
+// whose Services could not be read, or is empty.
 func judgeNVCFGatewayServices(
 	log *logrus.Entry, state *ValidationState, gateways gatewaySet,
-	classes map[string][]string, classErr error, services []corev1.Service,
+	classes map[string][]string, classErr error, services []corev1.Service, gap string,
 ) {
 	var found []lbResult
 	var pending []string
@@ -1323,23 +1428,39 @@ func judgeNVCFGatewayServices(
 	}
 
 	// A merged-gateways proxy may be serving the "missing" Gateways, but
-	// without their classes it cannot be attributed, so they are unknown
+	// without their classes it cannot be attributed; and a proxy Service may
+	// sit in a namespace that could not be read. Either way they are unknown
 	// rather than missing. An NVCF proxy observed without an address still
-	// fails the row: that is a failure whatever the unattributed ones show.
-	unattributed := len(missing) > 0 && classErr != nil && mergedProxies > 0
-	if unattributed {
-		msg := fmt.Sprintf("no per-Gateway proxy for %s, and the merged-gateways proxy could not be "+
-			"attributed: %v", strings.Join(missing, ", "), classErr)
+	// fails the row: that is a failure whatever the unobserved ones show.
+	var undecided []string
+	if len(missing) > 0 && classErr != nil && mergedProxies > 0 {
+		undecided = append(undecided, fmt.Sprintf("the merged-gateways proxy could not be attributed: %v", classErr))
+	}
+	if len(missing) > 0 && gap != "" {
+		undecided = append(undecided, gap)
+	}
+	switch {
+	case len(undecided) > 0 && len(pending) == 0:
+		msg := fmt.Sprintf("no proxy Service seen for %s, and %s", strings.Join(missing, ", "),
+			strings.Join(undecided, "; and "))
 		printWarning(log, msg)
-		if len(pending) == 0 {
-			state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
-			return
-		}
+		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+		return
+	case len(undecided) > 0:
+		// The pending Service decides the row; the gap is still reported.
+		msg := fmt.Sprintf("not assessed for %s: %s", strings.Join(missing, ", "), strings.Join(undecided, "; and "))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "External Load Balancer: "+msg)
+	case gap != "":
+		// Every NVCF Gateway's Service was seen, so the unread namespaces do
+		// not decide the row, but they are still reported.
+		printWarning(log, gap)
+		state.Warnings = append(state.Warnings, "External Load Balancer: "+gap)
 	}
 
-	if (len(missing) > 0 && !unattributed) || len(pending) > 0 {
+	if (len(missing) > 0 && len(undecided) == 0) || len(pending) > 0 {
 		var problems []string
-		if len(missing) > 0 && !unattributed {
+		if len(missing) > 0 && len(undecided) == 0 {
 			problems = append(problems, fmt.Sprintf("no proxy Service found for Gateway(s) %s; "+
 				"check the Gateway exists and Envoy Gateway provisioned it", strings.Join(missing, ", ")))
 		}
@@ -1377,7 +1498,7 @@ func judgeNVCFGatewayServices(
 // before nvcf-cli up), nothing addressed fails and a pending Service beside an
 // addressed one only warns.
 func judgeUnattributedServices(
-	log *logrus.Entry, state *ValidationState, services []corev1.Service, discoveryErr error,
+	log *logrus.Entry, state *ValidationState, services []corev1.Service, discoveryErr error, gap string,
 ) {
 	var found []lbResult
 	var pending []string
@@ -1398,19 +1519,36 @@ func judgeUnattributedServices(
 			"%d pending LoadBalancer Service(s) cannot be attributed", discoveryErr, len(found), len(pending))
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
-		if errors.Is(discoveryErr, errNoNVCFGatewaysPostInstall) {
+		switch {
+		case errors.Is(discoveryErr, errNoNVCFGatewaysPostInstall):
 			// The routes were read and none is NVCF's, so more permissions
 			// would not change the result.
 			state.Recommendations = append(state.Recommendations,
 				"Check that the gateway routes release is installed, or set clusterValidator.gatewayNames "+
 					"(env "+nvcfGatewayNamesEnv+").")
-		} else {
+		case apierrors.IsForbidden(discoveryErr):
 			state.Recommendations = append(state.Recommendations,
 				"Grant the cluster-validator ServiceAccount get and list on gateway.networking.k8s.io "+
 					"httproutes, grpcroutes, tcproutes and udproutes, or set clusterValidator.gatewayNames "+
 					"(env "+nvcfGatewayNamesEnv+").")
+		default:
+			// Throttling or an apiserver fault: the grants are not the cause.
+			state.Recommendations = append(state.Recommendations,
+				"Re-run once the apiserver is healthy, or set clusterValidator.gatewayNames "+
+					"(env "+nvcfGatewayNamesEnv+") so the NVCF Gateways need not be discovered.")
 		}
 		return
+	}
+
+	if gap != "" {
+		if len(found) == 0 {
+			// An addressed Service may be in a namespace that was not read.
+			msg := fmt.Sprintf("%d pending LoadBalancer Service(s) seen, and %s", len(pending), gap)
+			printWarning(log, msg)
+			state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+			return
+		}
+		state.Warnings = append(state.Warnings, "External Load Balancer: "+gap)
 	}
 
 	if len(found) == 0 && len(pending) > 0 {
@@ -1424,14 +1562,14 @@ func judgeUnattributedServices(
 		return
 	}
 	if len(found) == 0 {
-		printWarning(log, "No LoadBalancer Services with an assigned external address found")
+		// No LoadBalancer Service exists at all, which is normal before
+		// nvcf-cli up: there is nothing to judge the LB controller by.
+		printWarning(log, "No Service of type LoadBalancer exists")
 		printInfo(log, "  This may indicate: no LB controller is installed (MetalLB, cloud LB), "+
 			"or no LoadBalancer Service exists yet (normal before nvcf-cli up)")
 		state.Warnings = append(state.Warnings,
-			"External Load Balancer: no Service of type LoadBalancer has an assigned external IP or hostname. "+
-				"Verify a load balancer controller is installed.")
-		ok := false
-		state.ExternalLBOK = &ok
+			"External Load Balancer: status unknown (no Service of type LoadBalancer exists yet, so whether a "+
+				"load balancer controller assigns addresses was not observed). Verify one is installed.")
 		return
 	}
 
@@ -1633,7 +1771,8 @@ func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kub
 // probe pod that cannot pull its image or start its container, leaves the
 // result unknown rather than failing the overlay: none of them is evidence that
 // node-to-node traffic is broken. Only a checker that ran and could not
-// connect, or a probe pod the node could not network, fails the check.
+// connect, or a probe pod whose latest sandbox event is a failed creation,
+// fails the check.
 //
 // Critical: broken overlay means NVCF services on different nodes cannot
 // communicate, causing cascade failures across every API call.
@@ -1656,10 +1795,12 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
 	sweepLegacyOrphanN2NDaemonSets(ctx, log, client, orphanN2NNamespaceTTL)
 
-	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := observe(ctx, func(c context.Context) (*corev1.NodeList, error) {
+		return client.CoreV1().Nodes().List(c, metav1.ListOptions{})
+	})
 	if err != nil {
-		printWarning(log, fmt.Sprintf("Could not list nodes: %v", err))
-		state.Warnings = append(state.Warnings, "Node-to-Node: status unknown (node listing failed)")
+		printWarning(log, readFailure("nodes", err))
+		state.Warnings = append(state.Warnings, unknownWarning("Node-to-Node", "nodes", err))
 		return
 	}
 
@@ -1708,9 +1849,7 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	// AlreadyExists is an error too: the deferred cleanup deletes this
 	// namespace, so it must be one this run created.
 	if err := createNodeToNodeNamespace(ctx, client, ns); err != nil {
-		printWarning(log, fmt.Sprintf("Could not create probe namespace %s: %v", ns, err))
-		state.Warnings = append(state.Warnings,
-			"Node-to-Node: status unknown (probe namespace could not be created)")
+		notObserved(fmt.Sprintf("could not create the probe namespace %s: %v", ns, err), "")
 		return
 	}
 
@@ -1738,15 +1877,16 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		}
 	}()
 
-	if _, err := client.AppsV1().DaemonSets(ns).Create(
-		ctx, buildNodeToNodeDaemonSet(dsName, ns, dsLabels, image, probeNodes), metav1.CreateOptions{},
-	); err != nil {
-		// Any create error means the probe was never admitted, which says
-		// nothing about the overlay. Classifying by status code split one
-		// cause across two verdicts: RBAC, a ResourceQuota and Gatekeeper
-		// return 403, Kyverno 400, a ValidatingAdmissionPolicy 422 and a
-		// fail-closed webhook 500 or 503.
-		notObserved(fmt.Sprintf("probe DaemonSet was not admitted in %s: %v", ns, err), "")
+	ds := buildNodeToNodeDaemonSet(dsName, ns, dsLabels, image, probeNodes)
+	if _, err := observe(ctx, func(c context.Context) (*appsv1.DaemonSet, error) {
+		return client.AppsV1().DaemonSets(ns).Create(c, ds, metav1.CreateOptions{})
+	}); err != nil {
+		// Any create error means the probe never ran, which says nothing
+		// about the overlay. Classifying by status code split one cause
+		// across two verdicts: RBAC, a ResourceQuota and Gatekeeper return
+		// 403, Kyverno 400, a ValidatingAdmissionPolicy 422 and a fail-closed
+		// webhook 500 or 503.
+		notObserved(fmt.Sprintf("could not create the probe DaemonSet in %s: %v", ns, err), "")
 		return
 	}
 
@@ -1763,8 +1903,8 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		return
 	}
 
-	sandboxes, eventsRead := probeSandboxEvents(ctx, client, ns)
-	outcome := classifyProbeNodes(pods, probeNodes, sandboxes, eventsRead, time.Now())
+	sandboxes, eventsErr := probeSandboxEvents(ctx, client, ns)
+	outcome := classifyProbeNodes(pods, probeNodes, sandboxes, eventsErr)
 	if len(outcome.networkFaults) > 0 {
 		// A pod the node scheduled but could not give an address to is the
 		// fault this check exists for, whatever the other nodes did.
@@ -1865,12 +2005,13 @@ func runNodeToNodeChecker(
 		run.targets = len(targetIPs)
 		name := fmt.Sprintf("%s-%d", namePrefix, len(refusals))
 		*created = append(*created, name)
-		if _, err := client.CoreV1().Pods(ns).Create(
-			ctx, buildNodeToNodeCheckerPod(name, ns, run.node, targetIPs, image), metav1.CreateOptions{},
-		); err != nil {
-			// As for the DaemonSet: any rejection means the probe was never
-			// admitted, which says nothing about the overlay.
-			return run, fmt.Sprintf("checker pod was not admitted in %s: %v", ns, err)
+		pod := buildNodeToNodeCheckerPod(name, ns, run.node, targetIPs, image)
+		if _, err := observe(ctx, func(c context.Context) (*corev1.Pod, error) {
+			return client.CoreV1().Pods(ns).Create(c, pod, metav1.CreateOptions{})
+		}); err != nil {
+			// As for the DaemonSet: a checker that was never created says
+			// nothing about the overlay.
+			return run, fmt.Sprintf("could not create the checker pod in %s: %v", ns, err)
 		}
 		// An error here means no result was read: the checker never finished,
 		// or its status could not be fetched. A connection failure is reported
@@ -1995,7 +2136,7 @@ func waitForProbePods(
 		switch {
 		case err == nil:
 			listedAt, lastPods = time.Now(), pods.Items
-			if len(classifyProbeNodes(lastPods, expected, nil, false, listedAt).running) == len(expected) {
+			if len(classifyProbeNodes(lastPods, expected, nil, errEventsNotRead).running) == len(expected) {
 				return lastPods, nil
 			}
 		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
@@ -2044,7 +2185,8 @@ var probeImagePullReasons = map[string]bool{
 
 // probeContainerStartReasons are waiting reasons for a pulled probe container
 // that could not run. None involves the pod network: a CNI fault leaves the pod
-// in ContainerCreating with no sandbox, which stays a failure.
+// in ContainerCreating with a FailedCreatePodSandBox event, which stays a
+// failure.
 var probeContainerStartReasons = map[string]bool{
 	"CreateContainerConfigError": true,
 	"CreateContainerError":       true,
@@ -2070,22 +2212,21 @@ type probeOutcome struct {
 	pullFailed bool
 }
 
-// probeSandboxGrace is how long a scheduled probe pod may go with no sandbox
-// event before that absence counts against the node's pod network.
-const probeSandboxGrace = time.Minute
+// errEventsNotRead stands in for the events while the probe pods are still
+// being waited on, when only the Running ones matter.
+var errEventsNotRead = errors.New("not read yet")
 
 // classifyProbeNodes decides, per expected node, what its probe pod says.
-// sandboxes holds what each pod's events say about its sandbox, and
-// eventsRead whether they could be read. The kubelet creates the sandbox, and
+// sandboxes holds what each pod's events say about its sandbox, and eventsErr
+// why they could not be read, or nil. The kubelet creates the sandbox, and
 // with it the pod's network, before it pulls or starts anything, but
 // publishes the pod IP only once that sync returns. So a pod with no IP whose
-// events show a pull or a container start has a working pod network; one
-// whose sandbox creation failed does not, and neither does one that has gone
-// a minute after scheduling with no sandbox event at all (a hung CNI plugin
-// reports nothing until the runtime times it out). With the events unread,
-// a pod with no IP is undecided rather than a fault.
+// events show a pull or a container start has a working pod network, and one
+// whose latest sandbox event is a failed creation does not. Anything else,
+// including no sandbox event at all or events that could not be read, is
+// undecided rather than a fault: silence is not evidence about the network.
 func classifyProbeNodes(
-	pods []corev1.Pod, expected []string, sandboxes map[string]sandboxEvidence, eventsRead bool, now time.Time,
+	pods []corev1.Pod, expected []string, sandboxes map[string]sandboxEvidence, eventsErr error,
 ) probeOutcome {
 	byNode := map[string][]*corev1.Pod{}
 	for i := range pods {
@@ -2129,13 +2270,11 @@ func classifyProbeNodes(
 		case sandboxes[pick.Name] == sandboxFailed:
 			out.networkFaults = append(out.networkFaults, node)
 			continue
-		case !eventsRead:
-			reason = "pod events could not be read, so whether its sandbox exists is undecided"
-		case now.Sub(scheduledAt(pick)) < probeSandboxGrace:
-			reason = "scheduled too recently to judge"
+		case eventsErr != nil:
+			reason = fmt.Sprintf("pod events could not be read (%v), so whether its sandbox exists is undecided",
+				eventsErr)
 		default:
-			out.networkFaults = append(out.networkFaults, node)
-			continue
+			reason = "no sandbox event yet, so whether its pod network works is undecided"
 		}
 		if probeImagePullReasons[reason] {
 			out.pullFailed = true
@@ -2191,24 +2330,16 @@ var sandboxEventReasons = map[string]sandboxEvidence{
 
 // probeSandboxEvents reads each probe pod's sandbox evidence from its events,
 // the latest one deciding: a sandbox that failed and was then created on
-// retry counts as created. It reports false when the events could not be
-// read, which leaves a pod with no IP undecided.
+// retry counts as created. It returns why the events could not be read, which
+// leaves a pod with no IP undecided.
 func probeSandboxEvents(
 	ctx context.Context, client kubernetes.Interface, ns string,
-) (map[string]sandboxEvidence, bool) {
-	var events *corev1.EventList
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		listCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
-		events, err = client.CoreV1().Events(ns).List(listCtx, metav1.ListOptions{})
-		cancel()
-		if err == nil || apierrors.IsForbidden(err) || ctx.Err() != nil {
-			break
-		}
-		time.Sleep(time.Second)
-	}
+) (map[string]sandboxEvidence, error) {
+	events, err := observe(ctx, func(c context.Context) (*corev1.EventList, error) {
+		return client.CoreV1().Events(ns).List(c, metav1.ListOptions{})
+	})
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	sort.SliceStable(events.Items, func(i, j int) bool {
 		return eventTime(&events.Items[i]).Before(eventTime(&events.Items[j]))
@@ -2223,18 +2354,7 @@ func probeSandboxEvents(
 			sandboxes[e.InvolvedObject.Name] = evidence
 		}
 	}
-	return sandboxes, true
-}
-
-// scheduledAt is when p was bound to its node, or when it was created when
-// that is not recorded.
-func scheduledAt(p *corev1.Pod) time.Time {
-	for _, c := range p.Status.Conditions {
-		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
-			return c.LastTransitionTime.Time
-		}
-	}
-	return p.CreationTimestamp.Time
+	return sandboxes, nil
 }
 
 // checkerRefused reports whether the kubelet refused the checker pod at
@@ -2533,7 +2653,7 @@ func nvcfGatewayClassesIn(
 		return nil, fmt.Errorf("no client available to list gateways")
 	}
 	gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gateways"}
-	list, err := routes.Resource(gvr).List(ctx, metav1.ListOptions{})
+	list, err := listDynamic(ctx, routes, gvr, metav1.ListOptions{})
 	if err != nil {
 		// The CRD can go between discovery and the List. No Gateways means no
 		// classes, the same as the resource not being served.
@@ -2639,6 +2759,10 @@ type gatewayOwnership struct {
 	// routesMissing means a configured list is in use and no NVCF route
 	// exists at all, though the cluster serves the route kinds.
 	routesMissing bool
+	// crossCheckErr is why a configured list could not be checked against
+	// the NVCF routes, so unlisted Gateways and a missing routes release
+	// would go unseen.
+	crossCheckErr error
 
 	surface         gatewayAPISurface
 	routes          dynamic.Interface
@@ -2660,19 +2784,24 @@ func resolveGatewayOwnershipIn(
 	if len(configured) > 0 {
 		own.gateways, own.source = configured, nvcfGatewayNamesEnv
 		// A configured list replaces discovery, so a Gateway it leaves out is
-		// not assessed. Discover anyway, best effort, to say so.
-		if surfaceErr == nil {
-			if discovered, err := discoverNVCFGatewaysIn(ctx, surface, routes); err == nil {
-				for _, e := range discovered.sorted() {
-					if !configured[e] {
-						own.unlisted = append(own.unlisted, e)
-					}
-				}
-				// The routes release may be missing. Discovery says so after
-				// install, and a configured list must not hide it.
-				own.routesMissing = len(discovered) == 0 && surface.servesRoutes()
+		// not assessed. Discover anyway to say so, and say when that failed.
+		if surfaceErr != nil {
+			own.crossCheckErr = fmt.Errorf("discovering Gateway API resources: %w", surfaceErr)
+			return own
+		}
+		discovered, err := discoverNVCFGatewaysIn(ctx, surface, routes)
+		if err != nil {
+			own.crossCheckErr = err
+			return own
+		}
+		for _, e := range discovered.sorted() {
+			if !configured[e] {
+				own.unlisted = append(own.unlisted, e)
 			}
 		}
+		// The routes release may be missing. Discovery says so after install,
+		// and a configured list must not hide it.
+		own.routesMissing = len(discovered) == 0 && surface.servesRoutes()
 		return own
 	}
 	if surfaceErr != nil {
@@ -2705,6 +2834,13 @@ func (o *gatewayOwnership) reportInvalid(log *logrus.Entry, state *ValidationSta
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
 		o.unlisted = nil
+	}
+	if o.crossCheckErr != nil {
+		msg := fmt.Sprintf("could not read the NVCF routes to confirm the %s list: %v; %s",
+			nvcfGatewayNamesEnv, o.crossCheckErr, readAdvice(o.crossCheckErr))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Gateway names: "+msg)
+		o.crossCheckErr = nil
 	}
 	if o.routesMissing && state.PostInstall {
 		msg := fmt.Sprintf("no NVCF routes found although the control plane is installed, so nothing reaches "+
@@ -2765,7 +2901,7 @@ func discoverNVCFGatewaysIn(
 		gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: resource}
 		// Filter server-side on the label's presence; its value is a
 		// chart-plus-version string, so the prefix is matched client-side.
-		list, err := routes.Resource(gvr).List(ctx, metav1.ListOptions{LabelSelector: helmChartLabel})
+		list, err := listDynamic(ctx, routes, gvr, metav1.ListOptions{LabelSelector: helmChartLabel})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				// The CRD went away between discovery and the list.
@@ -2784,6 +2920,15 @@ func discoverNVCFGatewaysIn(
 		}
 	}
 	return set, nil
+}
+
+// listDynamic lists gvr cluster-wide, retrying transient errors.
+func listDynamic(
+	ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, opts metav1.ListOptions,
+) (*unstructured.UnstructuredList, error) {
+	return observe(ctx, func(c context.Context) (*unstructured.UnstructuredList, error) {
+		return client.Resource(gvr).List(c, opts)
+	})
 }
 
 // gatewayParentRefs returns a route's Gateway parents as "namespace/name",
@@ -2996,8 +3141,11 @@ type tier1Scan struct {
 	scaledToZero    []string
 	gatewayGaps     []string
 	checkedCount    int
-	deniedCount     int
-	rollingCount    int
+	// unread holds each namespace whose Deployments could not be read, with
+	// the cause, and unreadErrs the errors themselves.
+	unread       []string
+	unreadErrs   []error
+	rollingCount int
 	// rollingUnderReplicated counts tolerated rollouts that are below their
 	// replica target but still at or above their rollout floor.
 	rollingUnderReplicated int
@@ -3037,20 +3185,18 @@ func (s *tier1Scan) warn(msg string) {
 }
 
 func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interface, ns string) {
-	deploys, err := client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+	deploys, err := observe(ctx, func(c context.Context) (*appsv1.DeploymentList, error) {
+		return client.AppsV1().Deployments(ns).List(c, metav1.ListOptions{})
+	})
 	if err != nil {
-		// A 403 means we could not observe the namespace, not that it is
-		// healthy. Track it separately so it cannot reach the trivial-pass
-		// exit below. A LIST against a missing namespace returns an empty
-		// 200, so IsNotFound is not a case here. Any other error keeps going
-		// the same way: returning here threw away the under-replicated
-		// Deployments already collected from earlier namespaces.
-		if !apierrors.IsForbidden(err) {
-			printWarning(s.log, fmt.Sprintf("Could not list Deployments in %s: %v", ns, err))
-			s.state.Warnings = append(s.state.Warnings,
-				fmt.Sprintf("Tier-1 Deployments: status unknown (listing failed in %s)", ns))
-		}
-		s.deniedCount++
+		// An unread namespace was not observed, not found healthy. Track it
+		// so it cannot reach the trivial-pass exit below, and keep going:
+		// returning here threw away the under-replicated Deployments already
+		// collected from earlier namespaces. A LIST against a missing
+		// namespace returns an empty 200, so IsNotFound is not a case here.
+		printWarning(s.log, readFailure("Deployments in "+ns, err))
+		s.unread = append(s.unread, fmt.Sprintf("%s (%v)", ns, err))
+		s.unreadErrs = append(s.unreadErrs, err)
 		return
 	}
 	for i := range deploys.Items {
@@ -3091,8 +3237,8 @@ func (s *tier1Scan) assess(ctx context.Context, ns string, d *appsv1.Deployment)
 	// readiness floor no healthy RollingUpdate drops below.
 	if deploymentRollingOut(d, want) && !deploymentRolloutStalled(d) &&
 		d.Status.ReadyReplicas >= rolloutReadyFloor(d, want) {
-		s.warn(fmt.Sprintf("%s/%s: rollout in progress (updated: %d/%d); re-run check after rollout completes",
-			ns, d.Name, d.Status.UpdatedReplicas, want))
+		s.warn(fmt.Sprintf("%s/%s: %s (updated: %d/%d); re-run check after rollout completes",
+			ns, d.Name, RolloutInProgressMarker, d.Status.UpdatedReplicas, want))
 		s.rollingCount++
 		if d.Status.ReadyReplicas < want {
 			s.rollingUnderReplicated++
@@ -3177,37 +3323,59 @@ func (s *tier1Scan) checkGatewayCoverage(ctx context.Context, client kubernetes.
 		// No NVCF Gateway is named: reportProxyAttribution says so.
 		return false
 	}
-	classOf, envoyClasses, err := nvcfGatewayImplementations(ctx, s.own.surface, s.own.routes, s.own.gateways)
+	classOf, err := nvcfGatewayClassOf(ctx, s.own.surface, s.own.routes, s.own.gateways)
 	if err != nil {
-		s.warn(fmt.Sprintf("could not tell which NVCF Gateways Envoy Gateway runs, so their proxies were not "+
-			"confirmed: %v", err))
+		s.warn(fmt.Sprintf("could not confirm the NVCF Gateways exist and have a proxy: %v; %s",
+			err, readAdvice(err)))
 		return true
 	}
-	var envoyEntries []string
-	envoyByClass := map[string][]string{}
+	// Record the Gateways seen not to exist first: that finding stands
+	// whatever a later read says.
+	var existing []string
 	for _, e := range s.own.gateways.sorted() {
-		class, exists := classOf[e]
-		switch {
-		case !exists:
+		if _, exists := classOf[e]; exists {
+			existing = append(existing, e)
+		} else {
 			s.gatewayGaps = append(s.gatewayGaps, "NVCF Gateway "+e+" does not exist")
-		case envoyClasses[class]:
-			envoyEntries = append(envoyEntries, e)
-			envoyByClass[class] = append(envoyByClass[class], e)
 		}
 	}
-	undecided := false
-	if len(envoyEntries) > 0 {
-		gaps, err := s.envoyProxyGaps(ctx, client, envoyEntries, envoyByClass)
-		if err != nil {
-			s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", err))
-			undecided = true
-		}
-		s.gatewayGaps = append(s.gatewayGaps, gaps...)
-	}
+	undecided := len(existing) > 0 && s.envoyCoverageUndecided(ctx, client, existing, classOf)
 	if len(s.gatewayGaps) > 0 {
 		s.checkedCount++
 	}
 	return undecided
+}
+
+// envoyCoverageUndecided adds a gap for each of existing, the NVCF Gateways
+// that exist, that Envoy Gateway runs and that has no Ready proxy, and
+// reports whether that could not be decided.
+func (s *tier1Scan) envoyCoverageUndecided(
+	ctx context.Context, client kubernetes.Interface, existing []string, classOf map[string]string,
+) bool {
+	envoyClasses, err := envoyGatewayClasses(ctx, s.own.surface, s.own.routes)
+	if err != nil {
+		s.warn(fmt.Sprintf("could not tell which NVCF Gateways Envoy Gateway runs, so the proxies of %s were "+
+			"not confirmed: %v; %s", strings.Join(existing, ", "), err, readAdvice(err)))
+		return true
+	}
+	var envoyEntries []string
+	envoyByClass := map[string][]string{}
+	for _, e := range existing {
+		if class := classOf[e]; envoyClasses[class] {
+			envoyEntries = append(envoyEntries, e)
+			envoyByClass[class] = append(envoyByClass[class], e)
+		}
+	}
+	if len(envoyEntries) == 0 {
+		return false
+	}
+	gaps, err := s.envoyProxyGaps(ctx, client, envoyEntries, envoyByClass)
+	s.gatewayGaps = append(s.gatewayGaps, gaps...)
+	if err != nil {
+		s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v; %s", err, readAdvice(err)))
+		return true
+	}
+	return false
 }
 
 // envoyProxyGaps returns a finding for each of entries, the NVCF Gateways
@@ -3267,7 +3435,9 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 	}
 	for _, label := range []string{owningGatewayNameLabel, owningGatewayClassLabel} {
 		opts := metav1.ListOptions{LabelSelector: label}
-		deployments, err := client.AppsV1().Deployments(metav1.NamespaceAll).List(ctx, opts)
+		deployments, err := observe(ctx, func(c context.Context) (*appsv1.DeploymentList, error) {
+			return client.AppsV1().Deployments(metav1.NamespaceAll).List(c, opts)
+		})
 		if err != nil {
 			return nil, fmt.Errorf("listing Envoy proxy Deployments: %w", err)
 		}
@@ -3275,7 +3445,9 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 			d := &deployments.Items[i]
 			add("Deployment", d.Namespace, d.Name, d.Labels, d.Status.ReadyReplicas > 0)
 		}
-		daemonSets, err := client.AppsV1().DaemonSets(metav1.NamespaceAll).List(ctx, opts)
+		daemonSets, err := observe(ctx, func(c context.Context) (*appsv1.DaemonSetList, error) {
+			return client.AppsV1().DaemonSets(metav1.NamespaceAll).List(c, opts)
+		})
 		if err != nil {
 			return nil, fmt.Errorf("listing Envoy proxy DaemonSets: %w", err)
 		}
@@ -3287,38 +3459,52 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 	return out, nil
 }
 
-// nvcfGatewayImplementations returns the class of each NVCF Gateway that
-// exists, and the classes Envoy Gateway runs.
-func nvcfGatewayImplementations(
+// nvcfGatewayClassOf returns the class of each NVCF Gateway that exists. A
+// Gateway missing from the result was observed not to exist.
+func nvcfGatewayClassOf(
 	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface, g gatewaySet,
-) (classOf map[string]string, envoyClasses map[string]bool, err error) {
-	gatewayVersion, classVersion := surface.servedVersion("gateways"), surface.servedVersion("gatewayclasses")
-	if gatewayVersion == "" || classVersion == "" {
-		return nil, nil, errors.New("the cluster does not serve the Gateway API gateways and gatewayclasses")
+) (map[string]string, error) {
+	version := surface.servedVersion("gateways")
+	if version == "" {
+		return nil, errors.New("the cluster does not serve the Gateway API gateways")
 	}
 	if routes == nil {
-		return nil, nil, errors.New("no client available to list gateways")
+		return nil, errors.New("no client available to list gateways")
 	}
-	gateways, err := routes.Resource(schema.GroupVersionResource{
-		Group: gatewayAPIGroup, Version: gatewayVersion, Resource: "gateways",
-	}).List(ctx, metav1.ListOptions{})
+	gateways, err := listDynamic(ctx, routes,
+		schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gateways"},
+		metav1.ListOptions{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("listing gateways: %w", err)
+		return nil, fmt.Errorf("listing gateways: %w", err)
 	}
-	classOf = map[string]string{}
+	classOf := map[string]string{}
 	for i := range gateways.Items {
 		gw := &gateways.Items[i]
 		if entry := gw.GetNamespace() + "/" + gw.GetName(); g[entry] {
 			classOf[entry], _, _ = unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
 		}
 	}
-	classes, err := routes.Resource(schema.GroupVersionResource{
-		Group: gatewayAPIGroup, Version: classVersion, Resource: "gatewayclasses",
-	}).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, nil, fmt.Errorf("listing gatewayclasses: %w", err)
+	return classOf, nil
+}
+
+// envoyGatewayClasses returns the GatewayClasses Envoy Gateway runs.
+func envoyGatewayClasses(
+	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface,
+) (map[string]bool, error) {
+	version := surface.servedVersion("gatewayclasses")
+	if version == "" {
+		return nil, errors.New("the cluster does not serve the Gateway API gatewayclasses")
 	}
-	envoyClasses = map[string]bool{}
+	if routes == nil {
+		return nil, errors.New("no client available to list gatewayclasses")
+	}
+	classes, err := listDynamic(ctx, routes,
+		schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gatewayclasses"},
+		metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing gatewayclasses: %w", err)
+	}
+	envoyClasses := map[string]bool{}
 	for i := range classes.Items {
 		c := &classes.Items[i]
 		if controller, _, _ := unstructured.NestedString(c.Object, "spec", "controllerName"); controller ==
@@ -3326,7 +3512,7 @@ func nvcfGatewayImplementations(
 			envoyClasses[c.GetName()] = true
 		}
 	}
-	return classOf, envoyClasses, nil
+	return envoyClasses, nil
 }
 
 func (s *tier1Scan) setOK(ok bool) {
@@ -3337,13 +3523,18 @@ const tier1ProxiesUnknown = "Tier-1 Deployments: status unknown (NVCF Envoy prox
 	"so they were not assessed)"
 
 func (s *tier1Scan) deniedWarning() string {
-	return fmt.Sprintf("Tier-1 Deployments: status unknown (Deployment list denied or failed in %d "+
-		"control-plane namespace(s))", s.deniedCount)
+	return fmt.Sprintf("Tier-1 Deployments: could not read Deployments in %d control-plane namespace(s): %s",
+		len(s.unread), readFailures(s.unread, s.unreadErrs))
 }
 
 // verdict decides the row. An observed failure wins over anything unobserved,
 // and a tolerated rollout is a pass with a warning, not UNKNOWN.
 func (s *tier1Scan) verdict(proxiesUnobserved bool) {
+	if len(s.unread) > 0 {
+		// Reported whatever decides the row, so a namespace that was never
+		// read is not first heard of once the failure beside it is fixed.
+		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+	}
 	if s.checkedCount == 0 {
 		s.verdictNothingAssessed(proxiesUnobserved)
 		return
@@ -3366,23 +3557,22 @@ func (s *tier1Scan) verdict(proxiesUnobserved bool) {
 		s.setOK(false)
 	case proxiesUnobserved:
 		s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
-	case s.deniedCount > 0:
+	case len(s.unread) > 0:
 		// Some namespaces were never observed, so "all ready" is not a claim we
 		// can make even though every Deployment we could see passed.
 		printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
-			s.checkedCount, s.deniedCount))
-		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+			s.checkedCount, len(s.unread)))
 	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown. Rolling one pod at a time is what an upgrade
 		// looks like; reporting it as an unobserved critical check made every
 		// control-plane upgrade NVCF-Not-Ready with a non-zero exit.
-		s.warn(fmt.Sprintf("%d Deployment(s) ready, %d mid-rollout and below their replica target",
-			s.checkedCount, s.rollingUnderReplicated))
+		s.warn(fmt.Sprintf("%d Deployment(s) ready, %d %s and below their replica target",
+			s.checkedCount, s.rollingUnderReplicated, MidRolloutMarker))
 		s.setOK(true)
 	default:
 		if s.rollingCount > 0 {
-			printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, %d mid-rollout but still at their replica target",
-				s.checkedCount, s.rollingCount))
+			printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, %d %s but still at their replica target",
+				s.checkedCount, s.rollingCount, MidRolloutMarker))
 		}
 		printSuccess(s.log, fmt.Sprintf("All %d assessed Deployment(s) in control-plane namespaces are fully ready",
 			s.checkedCount))
@@ -3400,16 +3590,16 @@ func (s *tier1Scan) verdictNothingAssessed(proxiesUnobserved bool) {
 		s.setOK(false)
 	case proxiesUnobserved:
 		s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
-	case s.deniedCount > 0:
+	case len(s.unread) > 0:
 		// Leave nil: nothing was assessed and at least one namespace could not
 		// be read, so an empty result is not evidence of pre-install.
-		printWarning(s.log, fmt.Sprintf("Deployments not readable in %d control-plane namespace(s)", s.deniedCount))
-		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+		printWarning(s.log, fmt.Sprintf("Deployments not readable in %d control-plane namespace(s)", len(s.unread)))
 	case s.rollingCount > 0:
 		// A tolerated rollout is a pass with a warning. Stalled rollouts and
 		// those below their readiness floor never get here: they were assessed
 		// and reach the failure path instead.
-		s.warn(fmt.Sprintf("all %d Deployment(s) are mid-rollout; re-run after the rollout completes", s.rollingCount))
+		s.warn(fmt.Sprintf("all %d Deployment(s) are %s; re-run after the rollout completes",
+			s.rollingCount, MidRolloutMarker))
 		s.setOK(true)
 	case !s.state.PostInstall:
 		printInfo(s.log, "  No Deployments found in control-plane namespaces (pre-install state)")
@@ -3475,14 +3665,17 @@ type tier2Scan struct {
 	// placement is not judged: highAvailability.mode none renders none.
 	unspread     []string
 	checkedCount int
-	deniedCount  int
+	// unread holds each namespace whose StatefulSets could not be read, with
+	// the cause, and unreadErrs the errors themselves.
+	unread       []string
+	unreadErrs   []error
 	rollingCount int
 	// rollingUnderReplicated bounds the rollout skip, as in Tier-1.
 	rollingUnderReplicated int
-	// podsUnknown counts StatefulSets whose pods could not be listed, so an
-	// unreadable namespace cannot masquerade as a clean placement or rollout
-	// result.
-	podsUnknown int
+	// unobserved holds the assessed StatefulSets whose pods or rollout start
+	// could not be read, so an unreadable object cannot masquerade as a clean
+	// placement or rollout result.
+	unobserved []string
 }
 
 func (s *tier2Scan) warn(msg string) {
@@ -3495,16 +3688,15 @@ func (s *tier2Scan) fail(format string, args ...any) {
 }
 
 func (s *tier2Scan) scanNamespace(ctx context.Context, client kubernetes.Interface, ns string) {
-	stsList, err := client.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+	stsList, err := observe(ctx, func(c context.Context) (*appsv1.StatefulSetList, error) {
+		return client.AppsV1().StatefulSets(ns).List(c, metav1.ListOptions{})
+	})
 	if err != nil {
-		// As in Tier-1: a 403 must not reach the trivial-pass exit, and any
-		// other error keeps going so failures already observed are kept.
-		if !apierrors.IsForbidden(err) {
-			printWarning(s.log, fmt.Sprintf("Could not list StatefulSets in %s: %v", ns, err))
-			s.state.Warnings = append(s.state.Warnings,
-				fmt.Sprintf("Tier-2 StatefulSets: status unknown (listing failed in %s)", ns))
-		}
-		s.deniedCount++
+		// As in Tier-1: an unread namespace must not reach the trivial-pass
+		// exit, and the scan keeps going so failures already observed count.
+		printWarning(s.log, readFailure("StatefulSets in "+ns, err))
+		s.unread = append(s.unread, fmt.Sprintf("%s (%v)", ns, err))
+		s.unreadErrs = append(s.unreadErrs, err)
 		return
 	}
 	for i := range stsList.Items {
@@ -3559,13 +3751,15 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 	}
 
 	selector := metav1.FormatLabelSelector(sts.Spec.Selector)
-	pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+		return client.CoreV1().Pods(ns).List(c, metav1.ListOptions{LabelSelector: selector})
+	})
 	if err != nil {
 		// Not a placement failure: we could not look. Recording it in failures
 		// would report a broken quorum for an RBAC gap on pods, while the
 		// identical gap on statefulsets is correctly reported as unknown.
-		s.warn(fmt.Sprintf("%s/%s: could not list pods: %v", ns, sts.Name, err))
-		s.podsUnknown++
+		s.warn(fmt.Sprintf("%s/%s: %s", ns, sts.Name, readFailure("its pods", err)))
+		s.unobserved = append(s.unobserved, ns+"/"+sts.Name)
 		return
 	}
 
@@ -3574,10 +3768,19 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 	// evidence: one that cannot start, one the rollout will not replace, or
 	// no progress at all for too long.
 	if oneDownRolling {
-		revisionCreated := updateRevisionCreated(ctx, client, ns, sts)
-		if reason := stalledRollout(sts, pods.Items, revisionCreated, time.Now()); reason != "" {
+		revisionCreated, revErr := updateRevisionCreated(ctx, client, ns, sts)
+		reason, undated := stalledRollout(sts, pods.Items, revisionCreated, time.Now())
+		switch {
+		case reason != "":
 			s.fail("%s/%s: readyReplicas=%d (need %d), rolling update is not progressing: %s",
 				ns, sts.Name, sts.Status.ReadyReplicas, want, reason)
+			return
+		case undated:
+			// A pod is missing and nothing dates the rollout, so how long it
+			// has been missing is unknown: tolerating it would be unbounded.
+			s.warn(fmt.Sprintf("%s/%s: a pod is missing and when its rollout began is unknown: %s", ns, sts.Name,
+				readFailure("ControllerRevision "+ns+"/"+sts.Status.UpdateRevision, revErr)))
+			s.unobserved = append(s.unobserved, ns+"/"+sts.Name)
 			return
 		}
 		s.rollingUnderReplicated++
@@ -3630,8 +3833,8 @@ func (s *tier2Scan) assessRollout(ns string, sts *appsv1.StatefulSet, want int32
 			ns, sts.Name, partition, sts.Status.UpdatedReplicas, want))
 		return false, false
 	}
-	s.warn(fmt.Sprintf("%s/%s: rolling update in progress (ready: %d/%d)",
-		ns, sts.Name, sts.Status.ReadyReplicas, want))
+	s.warn(fmt.Sprintf("%s/%s: %s (ready: %d/%d)",
+		ns, sts.Name, RollingUpdateMarker, sts.Status.ReadyReplicas, want))
 	s.rollingCount++
 	switch {
 	case sts.Status.ReadyReplicas >= want:
@@ -3639,8 +3842,8 @@ func (s *tier2Scan) assessRollout(ns string, sts *appsv1.StatefulSet, want int32
 	case sts.Status.ReadyReplicas == want-1:
 		return true, false
 	default:
-		s.fail("%s/%s: readyReplicas=%d (need %d, rolling update in progress)",
-			ns, sts.Name, sts.Status.ReadyReplicas, want)
+		s.fail("%s/%s: readyReplicas=%d (need %d, %s)",
+			ns, sts.Name, sts.Status.ReadyReplicas, want, RollingUpdateMarker)
 		s.checkedCount++
 		return false, true
 	}
@@ -3670,11 +3873,15 @@ func (s *tier2Scan) setOK(ok bool) {
 }
 
 func (s *tier2Scan) deniedWarning() string {
-	return fmt.Sprintf("Tier-2 StatefulSets: status unknown (StatefulSet list denied or failed in %d "+
-		"control-plane namespace(s))", s.deniedCount)
+	return fmt.Sprintf("Tier-2 StatefulSets: could not read StatefulSets in %d control-plane namespace(s): %s",
+		len(s.unread), readFailures(s.unread, s.unreadErrs))
 }
 
 func (s *tier2Scan) verdict() {
+	if len(s.unread) > 0 {
+		// As in Tier-1: reported whatever decides the row.
+		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+	}
 	if len(s.unspread) > 0 {
 		printInfo(s.log, fmt.Sprintf("  Placement not assessed (no pod anti-affinity, as highAvailability.mode "+
 			"none renders): %s", strings.Join(s.unspread, ", ")))
@@ -3697,28 +3904,27 @@ func (s *tier2Scan) verdict() {
 			"Ensure each Tier-2 StatefulSet (NATS, OpenBao, Cassandra) has all spec.replicas pods Ready "+
 				"and spread across distinct nodes.")
 		s.setOK(false)
-	case s.deniedCount > 0:
+	case len(s.unread) > 0:
 		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d namespace(s) were not readable",
-			s.checkedCount, s.deniedCount))
-		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
-	case s.podsUnknown > 0:
-		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but the pods of %d could not be read",
-			s.checkedCount, s.podsUnknown))
-		s.state.Warnings = append(s.state.Warnings,
-			"Tier-2 StatefulSets: status unknown (the pods of one or more StatefulSets could not be read)")
+			s.checkedCount, len(s.unread)))
+	case len(s.unobserved) > 0:
+		printWarning(s.log, fmt.Sprintf("%d quorum StatefulSet(s) assessed, but %s could not be observed",
+			s.checkedCount, strings.Join(s.unobserved, ", ")))
+		s.state.Warnings = append(s.state.Warnings, fmt.Sprintf(
+			"Tier-2 StatefulSets: status unknown (%s could not be observed)", strings.Join(s.unobserved, ", ")))
 	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown: same rule as Tier-1. A NATS StatefulSet at
 		// 2/3 mid-RollingUpdate is what an upgrade looks like, and reporting
 		// it as an unobserved critical check made every control-plane upgrade
 		// NVCF-Not-Ready with a non-zero exit.
-		s.warn(fmt.Sprintf("%d quorum StatefulSet(s) healthy, %d mid-rollout and below target",
-			s.checkedCount, s.rollingUnderReplicated))
+		s.warn(fmt.Sprintf("%d quorum StatefulSet(s) healthy, %d %s and below target",
+			s.checkedCount, s.rollingUnderReplicated, MidRolloutMarker))
 		s.setOK(true)
 	default:
 		if s.rollingCount > 0 {
 			printWarning(s.log, fmt.Sprintf(
-				"%d quorum StatefulSet(s) healthy, %d mid-rollout but at their replica target",
-				s.checkedCount, s.rollingCount))
+				"%d quorum StatefulSet(s) healthy, %d %s but at their replica target",
+				s.checkedCount, s.rollingCount, MidRolloutMarker))
 		}
 		printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", s.checkedCount))
 		s.setOK(true)
@@ -3727,17 +3933,14 @@ func (s *tier2Scan) verdict() {
 
 func (s *tier2Scan) verdictNothingAssessed() {
 	switch {
-	case s.deniedCount > 0:
-		printWarning(s.log, fmt.Sprintf("StatefulSets not readable in %d control-plane namespace(s)", s.deniedCount))
-		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
+	case len(s.unread) > 0:
+		printWarning(s.log, fmt.Sprintf("StatefulSets not readable in %d control-plane namespace(s)", len(s.unread)))
 	case len(s.skippedParity) > 0:
 		// StatefulSets exist in the quorum namespaces but none was assessed.
 		// Claiming "Quorum and Placement OK" here would certify a ring this
 		// check never looked at.
 		s.state.Warnings = append(s.state.Warnings,
 			"Tier-2 StatefulSets: status unknown (no quorum-shaped StatefulSet was assessed)")
-	case s.podsUnknown > 0:
-		printWarning(s.log, fmt.Sprintf("Pods not readable for %d StatefulSet(s)", s.podsUnknown))
 	case s.state.PostInstall:
 		// Installed, yet no quorum component is here. The stack can leave
 		// NATS, OpenBao and Cassandra to run elsewhere, so this is a warning
@@ -3753,7 +3956,7 @@ func (s *tier2Scan) verdictNothingAssessed() {
 
 // checkConfigurableReachability probes user-defined endpoints loaded from the
 // cluster-validator ConfigMap.
-func checkConfigurableReachability(state *ValidationState, cfg *ReachabilityConfig) {
+func checkConfigurableReachability(ctx context.Context, state *ValidationState, cfg *ReachabilityConfig) {
 	log := state.Log
 	printHeader(log, "Endpoint Reachability Checks")
 	printInfo(log, "Testing configured endpoints...")
@@ -3801,7 +4004,7 @@ func checkConfigurableReachability(state *ValidationState, cfg *ReachabilityConf
 			continue
 		}
 
-		if TestEndpoint(target) {
+		if TestEndpoint(ctx, target) {
 			state.EndpointResults[ep.Name] = EndpointResult{Reachable: true, Critical: ep.Critical}
 			printSuccess(log, fmt.Sprintf("  %s: %s - Reachable", ep.Name, display))
 		} else {
@@ -3958,7 +4161,11 @@ var stalledRolloutAfter = 15 * time.Minute
 // stalledRollout reports why a one-down StatefulSet rollout cannot finish, or
 // "" when it still can. revisionCreated is when the update revision was
 // created, which dates the start of the rollout; zero when it is unknown.
-func stalledRollout(sts *appsv1.StatefulSet, pods []corev1.Pod, revisionCreated, now time.Time) string {
+// undated reports that a pod is missing and nothing dates the rollout, so
+// whether it stalled cannot be told.
+func stalledRollout(
+	sts *appsv1.StatefulSet, pods []corev1.Pod, revisionCreated, now time.Time,
+) (reason string, undated bool) {
 	lastProgress := revisionCreated
 	owned := 0
 	for i := range pods {
@@ -3979,20 +4186,23 @@ func stalledRollout(sts *appsv1.StatefulSet, pods []corev1.Pod, revisionCreated,
 			continue
 		}
 		if reason := stalledPodReason(sts, p); reason != "" {
-			return reason
+			return reason, false
 		}
 	}
-	if lastProgress.IsZero() || (owned < int(*sts.Spec.Replicas) && revisionCreated.IsZero()) {
-		// Nothing dates the rollout, or a pod is missing and when the rollout
-		// began is unknown: a missing pod is usually the controller between
-		// deleting a pod and recreating it.
-		return ""
+	if owned < int(*sts.Spec.Replicas) && revisionCreated.IsZero() {
+		// A pod is missing and when the rollout began is unknown. A missing
+		// pod is usually the controller between deleting a pod and recreating
+		// it, but one that is never recreated would be tolerated forever.
+		return "", true
+	}
+	if lastProgress.IsZero() {
+		return "", false
 	}
 	if idle := now.Sub(lastProgress); idle > stalledRolloutAfter {
 		return fmt.Sprintf("no progress for %s: no pod created or deleted, and no new revision, since %s",
-			idle.Round(time.Minute), lastProgress.UTC().Format(time.RFC3339))
+			idle.Round(time.Minute), lastProgress.UTC().Format(time.RFC3339)), false
 	}
-	return ""
+	return "", false
 }
 
 // stalledPodReason reports why a down pod of a rolling StatefulSet will not
@@ -4057,21 +4267,21 @@ func podOrdinal(sts *appsv1.StatefulSet, p *corev1.Pod) int {
 }
 
 // updateRevisionCreated is when the StatefulSet's update revision was
-// created, which is when its current rollout began, or the zero time when the
-// revision cannot be read.
+// created, which is when its current rollout began, or the zero time and why
+// the revision could not be read.
 func updateRevisionCreated(
 	ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet,
-) time.Time {
+) (time.Time, error) {
 	if sts.Status.UpdateRevision == "" {
-		return time.Time{}
+		return time.Time{}, errors.New("the StatefulSet reports no update revision")
 	}
-	getCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
-	defer cancel()
-	rev, err := client.AppsV1().ControllerRevisions(ns).Get(getCtx, sts.Status.UpdateRevision, metav1.GetOptions{})
+	rev, err := observe(ctx, func(c context.Context) (*appsv1.ControllerRevision, error) {
+		return client.AppsV1().ControllerRevisions(ns).Get(c, sts.Status.UpdateRevision, metav1.GetOptions{})
+	})
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, err
 	}
-	return rev.CreationTimestamp.Time
+	return rev.CreationTimestamp.Time, nil
 }
 
 func laterOf(a, b time.Time) time.Time {

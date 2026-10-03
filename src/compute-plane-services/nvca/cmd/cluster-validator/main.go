@@ -20,10 +20,13 @@ package main
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 
 	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
@@ -33,6 +36,17 @@ const (
 	defaultConfigMapName = "cluster-validator-network-checks"
 	defaultNamespace     = "nvca-system"
 	podNamespaceFile     = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+	// requestTimeout bounds every apiserver request, including the discovery
+	// calls that take no context.
+	requestTimeout = 30 * time.Second
+	// runTimeoutEnv bounds the checks, as a Go duration or whole seconds. A
+	// launcher sets it below its Job's activeDeadlineSeconds, so the run ends
+	// with time left to publish its summary instead of being killed first.
+	runTimeoutEnv = "VALIDATOR_TIMEOUT"
+	// defaultRunTimeout leaves a minute of the chart Job's 600s
+	// activeDeadlineSeconds for the summary write.
+	defaultRunTimeout = 9 * time.Minute
 )
 
 func main() {
@@ -40,7 +54,12 @@ func main() {
 	log := core.GetLogger(ctx)
 	log.Logger.SetFormatter(&clustervalidator.CLIFormatter{})
 
-	client, restCfg, err := internalutil.NewK8sClient(ctx, "")
+	_, restCfg, err := internalutil.NewK8sClient(ctx, "")
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create Kubernetes client")
+	}
+	restCfg.Timeout = requestTimeout
+	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create Kubernetes client")
 	}
@@ -87,10 +106,38 @@ func main() {
 		log.Warnf("VALIDATOR_ROLE=%q is not recognized; defaulting to compute-plane", roleEnv)
 	}
 
-	err = clustervalidator.Run(ctx, client, routes, configNS, configName, summaryNS, emitMetrics, role)
+	timeout, ok := runTimeout(os.Getenv(runTimeoutEnv))
+	if !ok {
+		log.Warnf("%s=%q is not a positive duration; using %s", runTimeoutEnv, os.Getenv(runTimeoutEnv), timeout)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	err = clustervalidator.Run(runCtx, client, routes, configNS, configName, summaryNS, emitMetrics, role)
+	cancel()
 	if err != nil {
 		log.WithError(err).Fatal("Cluster validation failed")
 	}
+}
+
+// runTimeout parses runTimeoutEnv: a Go duration such as "5m", or whole
+// seconds. Unset gives the default; an invalid value gives the default and
+// false.
+func runTimeout(v string) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return defaultRunTimeout, true
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		secs, serr := strconv.Atoi(v)
+		if serr != nil {
+			return defaultRunTimeout, false
+		}
+		d = time.Duration(secs) * time.Second
+	}
+	if d <= 0 {
+		return defaultRunTimeout, false
+	}
+	return d, true
 }
 
 // parseRole normalizes the VALIDATOR_ROLE env value. Returns the matching

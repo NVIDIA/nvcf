@@ -38,11 +38,14 @@ const (
 	enforcementDefaultImg  = "busybox:1.36"
 	enforcementConnTimeout = 5
 	enforcementPodTimeout  = 90 * time.Second
-	enforcementPropDelay   = 3 * time.Second
 	enforcementServerPod   = "netpol-server"
 	enforcementIngressPol  = "netpol-test-ingress"
 	enforcementEgressPol   = "netpol-test-egress"
 )
+
+// enforcementPropDelay is how long a policy change gets to reach the data
+// plane before it is probed. A var so tests need not wait it out.
+var enforcementPropDelay = 3 * time.Second
 
 func enforcementResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
@@ -134,31 +137,64 @@ func checkNetworkPolicyEnforcement(
 		return
 	}
 
-	denyAllOK := runDenyAllIngressPhase(env, state)
-	selectiveOK := runSelectiveAllowPhase(env, state)
+	denyAll := runDenyAllIngressPhase(env, state)
+	selective := runSelectiveAllowPhase(env, state)
 	egressOK := runEgressPhase(env)
 
-	allOK := denyAllOK && selectiveOK
-	state.EnforcementOK = &allOK
-
 	log.Info("")
-	if allOK && egressOK {
-		printSuccess(log, "Network Policy Enforcement: FULLY VERIFIED")
-	} else if allOK {
-		printSuccess(log, "Network Policy Enforcement: Ingress verified")
-		if !egressOK {
-			printWarning(log, "Network Policy Enforcement: Egress not fully verified (non-critical)")
-			state.Warnings = append(state.Warnings,
-				"Network Policy Enforcement: Egress enforcement not verified (non-critical)")
-		}
-	} else {
+	switch {
+	case denyAll == phaseFailed || selective == phaseFailed:
+		// An observed failure decides the check whatever else did not run.
+		ok := false
+		state.EnforcementOK = &ok
 		printError(log, "Network Policy Enforcement: VALIDATION FAILED")
 		state.Warnings = append(state.Warnings,
 			"Network Policy Enforcement: CNI does not enforce NetworkPolicies")
 		state.Recommendations = append(state.Recommendations,
 			"Verify your CNI plugin supports and enforces NetworkPolicies "+
 				"(Calico, Cilium). Flannel does NOT support NetworkPolicies.")
+	case denyAll == phaseNotRun || selective == phaseNotRun:
+		// Leave the result unknown: the warnings name the call that failed.
+		printWarning(log, "Network Policy Enforcement: not verified, because a phase could not run")
+	case egressOK:
+		ok := true
+		state.EnforcementOK = &ok
+		printSuccess(log, "Network Policy Enforcement: FULLY VERIFIED")
+	default:
+		ok := true
+		state.EnforcementOK = &ok
+		printSuccess(log, "Network Policy Enforcement: Ingress verified")
+		printWarning(log, "Network Policy Enforcement: Egress not fully verified (non-critical)")
+		state.Warnings = append(state.Warnings,
+			"Network Policy Enforcement: Egress enforcement not verified (non-critical)")
 	}
+}
+
+// phaseResult is what an enforcement phase established. Only probes that ran
+// decide a phase: a policy or probe that could not be created, or a probe pod
+// that never ran, says nothing about the CNI.
+type phaseResult int
+
+const (
+	phaseNotRun phaseResult = iota
+	phasePassed
+	phaseFailed
+)
+
+// enforcementNotRun reports a step that could not run, naming it and the
+// cause, and returns phaseNotRun.
+func enforcementNotRun(log *logrus.Entry, state *ValidationState, msg string) phaseResult {
+	printWarning(log, msg)
+	state.Warnings = append(state.Warnings, "Network Policy Enforcement: status unknown ("+msg+")")
+	return phaseNotRun
+}
+
+// observed maps a phase's outcome to its result.
+func observed(ok bool) phaseResult {
+	if ok {
+		return phasePassed
+	}
+	return phaseFailed
 }
 
 func setupEnforcementEnv(
@@ -170,16 +206,14 @@ func setupEnforcementEnv(
 	printInfo(log, fmt.Sprintf("Creating namespace %s", ns))
 
 	if err := createTestNamespace(ctx, client, ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to create test namespace: %v", err))
-		state.Warnings = append(state.Warnings, "Network Policy Enforcement: setup failed")
+		enforcementNotRun(log, state, fmt.Sprintf("could not create the test namespace %s: %v", ns, err))
 		return nil, false
 	}
 	printSuccess(log, "Namespace created")
 
 	printInfo(log, "Deploying server pod...")
 	if err := createServerPod(ctx, client, ns, image); err != nil {
-		printError(log, fmt.Sprintf("Failed to create server pod: %v", err))
-		state.Warnings = append(state.Warnings, "Network Policy Enforcement: setup failed")
+		enforcementNotRun(log, state, fmt.Sprintf("could not create the server pod in %s: %v", ns, err))
 		return nil, false
 	}
 
@@ -187,16 +221,13 @@ func setupEnforcementEnv(
 	// adds a request that a transient error can fail.
 	server, err := waitForPodReady(ctx, client, ns, enforcementServerPod, podTimeout)
 	if err != nil {
-		printError(log, fmt.Sprintf("Server pod not ready: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: server pod failed to start")
+		enforcementNotRun(log, state, fmt.Sprintf("the server pod did not become Ready: %v", err))
 		return nil, false
 	}
 	serverIP := server.Status.PodIP
 	if serverIP == "" {
-		printError(log, fmt.Sprintf("Server pod %s/%s is Ready but has no IP", ns, enforcementServerPod))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: server pod has no IP")
+		enforcementNotRun(log, state, fmt.Sprintf("the server pod %s/%s is Ready but has no IP",
+			ns, enforcementServerPod))
 		return nil, false
 	}
 	printSuccess(log, fmt.Sprintf("Server pod ready at %s:%d", serverIP, enforcementTestPort))
@@ -215,9 +246,7 @@ func runBaselinePhase(env *enforcementEnv, state *ValidationState) bool {
 
 	clientOK, err := env.probe("client")
 	if err != nil {
-		printError(log, fmt.Sprintf("Baseline probe error: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: baseline probe failed")
+		enforcementNotRun(log, state, fmt.Sprintf("the baseline client probe did not run: %v", err))
 		return false
 	}
 	if !clientOK {
@@ -231,7 +260,11 @@ func runBaselinePhase(env *enforcementEnv, state *ValidationState) bool {
 
 	printBlue(log, "Testing: allowed-client → server (expect: allowed)")
 	allowedOK, err := env.probe("allowed")
-	if err != nil || !allowedOK {
+	if err != nil {
+		enforcementNotRun(log, state, fmt.Sprintf("the baseline allowed-client probe did not run: %v", err))
+		return false
+	}
+	if !allowedOK {
 		printError(log, "Baseline: allowed-client cannot reach server — aborting")
 		state.Warnings = append(state.Warnings,
 			"Network Policy Enforcement: baseline connectivity broken")
@@ -242,26 +275,33 @@ func runBaselinePhase(env *enforcementEnv, state *ValidationState) bool {
 	return true
 }
 
-func runDenyAllIngressPhase(env *enforcementEnv, state *ValidationState) bool {
+func runDenyAllIngressPhase(env *enforcementEnv, state *ValidationState) phaseResult {
 	log := env.log
 	log.Info("")
 	log.Info("Phase 3: Deny-all ingress enforcement")
 	printInfo(log, "Applying deny-all ingress policy on server pod...")
-	if err := applyDenyAllIngressPolicy(env.ctx, env.client, env.ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to apply deny-all policy: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: could not apply policy")
-		return false
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return applyDenyAllIngressPolicy(c, env.client, env.ns)
+	}); err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("could not create the deny-all ingress policy: %v", err))
 	}
 	printSuccess(log, "Deny-all ingress policy applied")
 	printInfo(log, fmt.Sprintf("Waiting %v for policy to propagate to data plane...",
 		enforcementPropDelay))
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return enforcementNotRun(log, state, "the run ended before the deny-all probes")
+	}
 
 	printBlue(log, "Testing: client → server (expect: blocked)")
-	clientReached, _ := env.probe("client")
+	clientReached, err := env.probe("client")
+	if err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("the deny-all client probe did not run: %v", err))
+	}
 	printBlue(log, "Testing: allowed-client → server (expect: blocked)")
-	allowedReached, _ := env.probe("allowed")
+	allowedReached, err := env.probe("allowed")
+	if err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("the deny-all allowed-client probe did not run: %v", err))
+	}
 
 	ok := !clientReached && !allowedReached
 	if ok {
@@ -276,29 +316,37 @@ func runDenyAllIngressPhase(env *enforcementEnv, state *ValidationState) bool {
 		printError(log, "NetworkPolicy enforcement is NOT working")
 		printError(log, "Your CNI plugin accepts NetworkPolicy objects but does not enforce them")
 	}
-	return ok
+	return observed(ok)
 }
 
-func runSelectiveAllowPhase(env *enforcementEnv, state *ValidationState) bool {
+func runSelectiveAllowPhase(env *enforcementEnv, state *ValidationState) phaseResult {
 	log := env.log
 	log.Info("")
 	log.Info("Phase 4: Selective allow rule validation")
 	printInfo(log, "Applying selective allow policy (role=allowed only)...")
-	if err := applySelectiveAllowPolicy(env.ctx, env.client, env.ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to apply selective allow policy: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: could not apply selective policy")
-		return false
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return applySelectiveAllowPolicy(c, env.client, env.ns)
+	}); err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("could not apply the selective allow policy: %v", err))
 	}
 	printSuccess(log, "Selective allow policy applied")
 	printInfo(log, fmt.Sprintf("Waiting %v for policy update to propagate...",
 		enforcementPropDelay))
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return enforcementNotRun(log, state, "the run ended before the selective allow probes")
+	}
 
 	printBlue(log, "Testing: client → server (expect: blocked)")
-	clientReached, _ := env.probe("client")
+	clientReached, err := env.probe("client")
+	if err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("the selective allow client probe did not run: %v", err))
+	}
 	printBlue(log, "Testing: allowed-client → server (expect: allowed)")
-	allowedReached, _ := env.probe("allowed")
+	allowedReached, err := env.probe("allowed")
+	if err != nil {
+		return enforcementNotRun(log, state,
+			fmt.Sprintf("the selective allow allowed-client probe did not run: %v", err))
+	}
 
 	ok := !clientReached && allowedReached
 	if ok {
@@ -312,7 +360,7 @@ func runSelectiveAllowPhase(env *enforcementEnv, state *ValidationState) bool {
 			printError(log, "The CNI may not correctly evaluate podSelector in ingress rules")
 		}
 	}
-	return ok
+	return observed(ok)
 }
 
 // egressSettleDelay gives the CNI time to program eBPF/iptables rules on a
@@ -325,13 +373,21 @@ func runEgressPhase(env *enforcementEnv) bool {
 	log.Info("Phase 5: Egress policy enforcement")
 
 	printInfo(log, "Removing ingress policy for clean egress test...")
-	if err := deleteNetworkPolicy(env.ctx, env.client, env.ns, enforcementIngressPol); err != nil {
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return deleteNetworkPolicy(c, env.client, env.ns, enforcementIngressPol)
+	}); err != nil {
 		printWarning(log, fmt.Sprintf("Could not remove ingress policy: %v", err))
 	}
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return false
+	}
 
 	printInfo(log, "Verifying connectivity restored (clean slate)...")
-	cleanSlate, _ := env.probe("client")
+	cleanSlate, err := env.probe("client")
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Skipping egress test: the clean-slate probe did not run: %v", err))
+		return false
+	}
 	if !cleanSlate {
 		printWarning(log, "Client still cannot reach server after policy removal — stale state")
 		printWarning(log, "Skipping egress test")
@@ -340,18 +396,30 @@ func runEgressPhase(env *enforcementEnv) bool {
 	printSuccess(log, "Connectivity restored after policy removal")
 
 	printInfo(log, "Applying deny-all egress policy on client pod...")
-	if err := applyDenyAllEgressPolicy(env.ctx, env.client, env.ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to apply egress policy: %v", err))
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return applyDenyAllEgressPolicy(c, env.client, env.ns)
+	}); err != nil {
+		printWarning(log, fmt.Sprintf("Could not create the deny-all egress policy: %v", err))
 		return false
 	}
 	printSuccess(log, "Deny-all egress policy applied")
 	printInfo(log, fmt.Sprintf("Waiting %v for policy to propagate...", enforcementPropDelay))
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return false
+	}
 
 	printBlue(log, "Testing: client → server (expect: blocked by egress)")
-	clientReached, _ := env.probeWithDelay("client", egressSettleDelay)
+	clientReached, err := env.probeWithDelay("client", egressSettleDelay)
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Egress not verified: the client probe did not run: %v", err))
+		return false
+	}
 	printBlue(log, "Testing: allowed-client → server (expect: allowed, unaffected)")
-	allowedReached, _ := env.probeWithDelay("allowed", egressSettleDelay)
+	allowedReached, err := env.probeWithDelay("allowed", egressSettleDelay)
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Egress not verified: the allowed-client probe did not run: %v", err))
+		return false
+	}
 
 	ok := !clientReached && allowedReached
 	if ok {
@@ -522,15 +590,42 @@ func probeConnectivityWithDelay(
 	timeout time.Duration, settleDelay int,
 ) (bool, error) {
 	pod := buildProbePod(ns, name, image, role, serverIP, settleDelay)
-	if _, err := client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
-		return false, fmt.Errorf("creating probe pod %s: %w", name, err)
+	if err := observeErr(ctx, func(c context.Context) error {
+		_, err := client.CoreV1().Pods(ns).Create(c, pod, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			// An earlier attempt that timed out went through: the name is this
+			// probe's own.
+			return nil
+		}
+		return err
+	}); err != nil {
+		return false, fmt.Errorf("could not create the probe pod %s: %w", name, err)
 	}
 	defer func() {
 		_ = client.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
 	}()
 
-	succeeded, _, err := waitForPodDone(ctx, client, ns, name, timeout)
-	return succeeded, err
+	succeeded, done, err := waitForPodDone(ctx, client, ns, name, timeout)
+	if err != nil {
+		return false, err
+	}
+	// Failed reads as blocked only when the probe ran: a pod the kubelet
+	// refused, or one whose container never started, sent no traffic.
+	if !succeeded && !containerTerminated(done) {
+		return false, fmt.Errorf("probe pod %s/%s ended %s without running (%s)",
+			ns, name, done.Status.Phase, done.Status.Reason)
+	}
+	return succeeded, nil
+}
+
+// containerTerminated reports whether any of pod's containers ran to an exit.
+func containerTerminated(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Terminated != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // waitForPodReady polls until the named pod has the Ready condition, and
@@ -683,6 +778,11 @@ func buildDenyAllIngressPolicy(ns string) *networkingv1.NetworkPolicy {
 func applyDenyAllIngressPolicy(ctx context.Context, client kubernetes.Interface, ns string) error {
 	_, err := client.NetworkingV1().NetworkPolicies(ns).Create(
 		ctx, buildDenyAllIngressPolicy(ns), metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		// The test namespace is this run's own, so an earlier attempt that
+		// timed out created it.
+		return nil
+	}
 	return err
 }
 
@@ -742,6 +842,9 @@ func buildDenyAllEgressPolicy(ns string) *networkingv1.NetworkPolicy {
 func applyDenyAllEgressPolicy(ctx context.Context, client kubernetes.Interface, ns string) error {
 	_, err := client.NetworkingV1().NetworkPolicies(ns).Create(
 		ctx, buildDenyAllEgressPolicy(ns), metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
 	return err
 }
 

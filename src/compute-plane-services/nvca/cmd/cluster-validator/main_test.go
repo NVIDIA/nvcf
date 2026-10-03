@@ -19,6 +19,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 )
@@ -71,5 +72,30 @@ func TestPreflightMode(t *testing.T) {
 		if got := preflightMode(tt.in); got != tt.want {
 			t.Errorf("preflightMode(%q) = %v, want %v", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestRunTimeout(t *testing.T) {
+	tests := []struct {
+		in     string
+		want   time.Duration
+		wantOK bool
+	}{
+		{"", defaultRunTimeout, true},
+		{"5m", 5 * time.Minute, true},
+		{"300", 300 * time.Second, true},
+		{" 90s ", 90 * time.Second, true},
+		{"0", defaultRunTimeout, false},
+		{"-1m", defaultRunTimeout, false},
+		{"soon", defaultRunTimeout, false},
+	}
+	for _, tt := range tests {
+		got, ok := runTimeout(tt.in)
+		if got != tt.want || ok != tt.wantOK {
+			t.Errorf("runTimeout(%q) = (%v, %v), want (%v, %v)", tt.in, got, ok, tt.want, tt.wantOK)
+		}
+	}
+	if defaultRunTimeout >= 600*time.Second {
+		t.Errorf("defaultRunTimeout %v must end before the chart Job's 600s activeDeadlineSeconds", defaultRunTimeout)
 	}
 }

@@ -104,9 +104,9 @@ func TestCheckStorageClass_NoStorageClasses(t *testing.T) {
 }
 
 // -- checkGatewayAPICRDs --
-// The fake discovery client does not populate ServerResourcesForGroupVersion,
-// so checkGatewayAPICRDs will always see the group as absent.
-// We test that it runs without panic and sets GatewayAPICRDsOK=false.
+// A bare fake serves no API groups, so discovery succeeds and observes the
+// Gateway API group as absent: an answer, not an error. A discovery error is
+// unknown instead (TestObservationErrors_LeaveEachRowUnknownWithTheCause).
 
 func TestCheckGatewayAPICRDs_AbsentOnFakeClient(t *testing.T) {
 	client := fake.NewSimpleClientset()
@@ -114,7 +114,7 @@ func TestCheckGatewayAPICRDs_AbsentOnFakeClient(t *testing.T) {
 	checkGatewayAPICRDs(context.Background(), client, state)
 
 	require.NotNil(t, state.GatewayAPICRDsOK,
-		"GatewayAPICRDsOK must be set even when discovery returns an error")
+		"a group discovery observed as absent is a result")
 	assert.False(t, *state.GatewayAPICRDsOK,
 		"absent Gateway API CRDs must set GatewayAPICRDsOK=false")
 	assert.NotEmpty(t, state.Recommendations)
@@ -264,9 +264,9 @@ func TestCheckExternalLoadBalancer_NoLBServices(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
-	require.NotNil(t, state.ExternalLBOK)
-	assert.False(t, *state.ExternalLBOK, "no LB service must set ExternalLBOK=false")
-	assert.NotEmpty(t, state.Warnings)
+	// Nothing to judge the LB controller by is not a failure of it.
+	assert.Nil(t, state.ExternalLBOK, "no LB Service at all before install is unknown, not a failure")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "no Service of type LoadBalancer exists yet")
 }
 
 func TestCheckExternalLoadBalancer_LBServicePendingNoIP(t *testing.T) {
@@ -354,8 +354,10 @@ func TestCheckNodeToNode_DaemonSetCreateRejectionIsUnknown(t *testing.T) {
 			state := &ValidationState{Log: testLog()}
 			checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
 
-			assert.Nil(t, state.NodeToNodeOK, "a probe that was never admitted must not fail the overlay")
-			assert.Contains(t, strings.Join(state.Warnings, "; "), "probe DaemonSet was not admitted")
+			assert.Nil(t, state.NodeToNodeOK, "a probe that was never created must not fail the overlay")
+			assert.Contains(t, strings.Join(state.Warnings, "; "),
+				"could not create the probe DaemonSet in "+nodeToNodeNSPrefix)
+			assert.Contains(t, strings.Join(state.Warnings, "; "), createErr.Error(), "the cause is named")
 		})
 	}
 }
@@ -693,7 +695,7 @@ func TestCheckTier2StatefulSets_RollingUpdateWarnsNotFails(t *testing.T) {
 	objs := makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"})
 	sts := objs[0].(*appsv1.StatefulSet)
 	sts.Status.UpdateRevision = "nats-r2" // differs from CurrentRevision
-	client := fake.NewSimpleClientset(objs...)
+	client := fake.NewSimpleClientset(withRevision(objs, time.Now())...)
 	state := &ValidationState{Log: testLog()}
 	checkTier2StatefulSets(context.Background(), client, state)
 
@@ -876,6 +878,7 @@ func TestCheckTier2StatefulSets_HealthyPeerDoesNotMaskRollingOne(t *testing.T) {
 	healthy := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
 	rolling := makeQuorumSTS("openbao", "vault-system", 3, 2, []string{"node-1", "node-2"})
 	rolling[0].(*appsv1.StatefulSet).Status.UpdateRevision = "openbao-r2"
+	rolling = withRevision(rolling, time.Now())
 
 	client := fake.NewSimpleClientset(append(healthy, rolling...)...)
 	state := &ValidationState{Log: testLog()}
@@ -1402,6 +1405,8 @@ func TestCheckGatewayRoutes_OptionalUDPRouteAbsentIsNonCritical(t *testing.T) {
 	assert.False(t, *routeState.GatewayRoutesOK)
 	assert.Contains(t, strings.Join(routeState.Warnings, "; "), "udproutes",
 		"UDPRoute is applied by udproute-llm-worker.yaml and must still be surfaced")
+	assert.Contains(t, strings.Join(routeState.Warnings, "; "), "nvcfGatewayRoutes.routes.llmWorker.enabled",
+		"the warning names the value that needs the type")
 }
 
 func TestCheckGatewayRoutes_OptionalUDPRoutePresentPasses(t *testing.T) {
@@ -1430,7 +1435,7 @@ func TestCheckTier2StatefulSets_PodListDenialIsUnknownNotFailure(t *testing.T) {
 
 	assert.Nil(t, state.Tier2StatefulSetsOK,
 		"an unreadable pod list is not evidence of a broken quorum")
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not list pods")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not read its pods: pods is forbidden")
 }
 
 // The wait returns as soon as every expected node has a Running pod with an
@@ -1484,7 +1489,8 @@ func TestWaitForProbePods_KeepsTheLastSuccessfulList(t *testing.T) {
 	pods, err := waitForProbePods(context.Background(), client, "probe", selector, nodes, time.Second)
 	require.NoError(t, err)
 	assert.Len(t, pods, 2)
-	assert.Equal(t, []string{"node-2"}, classifyProbeNodes(pods, nodes, nil, true, time.Now()).networkFaults)
+	failed := map[string]sandboxEvidence{"b": sandboxFailed}
+	assert.Equal(t, []string{"node-2"}, classifyProbeNodes(pods, nodes, failed, nil).networkFaults)
 
 	// A list older than the freshness bound shows the pods as they were when
 	// it was taken, not as they are, so it is not classified at all.
@@ -1567,7 +1573,7 @@ func TestCheckNodeToNode_DaemonSetDenialStaysUnknown(t *testing.T) {
 
 	assert.Nil(t, state.NodeToNodeOK,
 		"a denial is not evidence the overlay works, so it must not pass")
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "not admitted")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not create the probe DaemonSet")
 }
 
 // A checker whose status cannot be read produced no result, so the overlay
@@ -1627,7 +1633,9 @@ func probePod(node, phase string, ip string, waiting string) corev1.Pod {
 
 // Only a pod the node could not network is evidence about the overlay. A pod
 // that could not pull its image, start its container, be scheduled, be
-// admitted by the kubelet, or be created at all says nothing about it.
+// admitted by the kubelet, or be created at all says nothing about it, and
+// neither does one with no sandbox event or with events that could not be
+// read: silence is undecided, never a CNI fault.
 func TestClassifyProbeNodes(t *testing.T) {
 	nodes := []string{"node-1", "node-2"}
 	running := probePod("node-1", "Running", "10.0.0.1", "")
@@ -1639,36 +1647,39 @@ func TestClassifyProbeNodes(t *testing.T) {
 	evicted := probePod("node-2", "Failed", "", "")
 	evicted.Status.Reason = "Evicted"
 	creating := func() []corev1.Pod { return second(probePod("node-2", "Pending", "", "ContainerCreating")) }
-	justScheduled := probePod("node-2", "Pending", "", "ContainerCreating")
-	justScheduled.CreationTimestamp = metav1.NewTime(time.Now().Add(-5 * time.Second))
+	longScheduled := probePod("node-2", "Pending", "", "ContainerCreating")
+	longScheduled.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
 	created := map[string]sandboxEvidence{"b": sandboxCreated}
+	unreadable := apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 	cases := []struct {
-		name       string
-		pods       []corev1.Pod
-		sandboxes  map[string]sandboxEvidence
-		eventsRead bool
-		fault      bool
-		gap        string
-		pullError  bool
+		name      string
+		pods      []corev1.Pod
+		sandboxes map[string]sandboxEvidence
+		eventsErr error
+		fault     bool
+		gap       string
+		pullError bool
 	}{
-		{"pod never created", []corev1.Pod{running}, nil, true, false, "no probe pod was created", false},
+		{"pod never created", []corev1.Pod{running}, nil, nil, false, "no probe pod was created", false},
 		{"image pull backoff", second(probePod("node-2", "Pending", "", "ImagePullBackOff")),
-			nil, true, false, "ImagePullBackOff", true},
+			nil, nil, false, "ImagePullBackOff", true},
 		{"first pull error", second(probePod("node-2", "Pending", "", "ErrImagePull")),
-			nil, true, false, "ErrImagePull", true},
+			nil, nil, false, "ErrImagePull", true},
 		{"container cannot start", second(probePod("node-2", "Running", "", "CrashLoopBackOff")),
-			nil, true, false, "CrashLoopBackOff", false},
-		{"kubelet eviction", second(evicted), nil, true, false, "rejected by the kubelet (Evicted)", false},
-		{"pull or start under way", creating(), created, true, false, "sandbox created", false},
-		{"sandbox creation failed", creating(), map[string]sandboxEvidence{"b": sandboxFailed}, true, true, "", false},
-		{"no sandbox long after scheduling", creating(), nil, true, true, "", false},
-		{"events unreadable", creating(), nil, false, false, "pod events could not be read", false},
-		{"scheduled moments ago", second(justScheduled), nil, true, false, "scheduled too recently", false},
-		{"running without IP", second(probePod("node-2", "Running", "", "")), nil, true, true, "", false},
+			nil, nil, false, "CrashLoopBackOff", false},
+		{"kubelet eviction", second(evicted), nil, nil, false, "rejected by the kubelet (Evicted)", false},
+		{"pull or start under way", creating(), created, nil, false, "sandbox created", false},
+		{"sandbox creation failed", creating(), map[string]sandboxEvidence{"b": sandboxFailed}, nil, true, "", false},
+		{"no sandbox event an hour after scheduling", second(longScheduled), nil, nil, false,
+			"no sandbox event yet", false},
+		{"events unreadable", creating(), nil, unreadable, false,
+			"pod events could not be read (Internal error occurred: etcd timeout)", false},
+		{"running without IP", second(probePod("node-2", "Running", "", "")), nil, nil, false,
+			"no sandbox event yet", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classifyProbeNodes(tc.pods, nodes, tc.sandboxes, tc.eventsRead, time.Now())
+			got := classifyProbeNodes(tc.pods, nodes, tc.sandboxes, tc.eventsErr)
 			assert.Len(t, got.running, 1)
 			if tc.fault {
 				assert.Equal(t, []string{"node-2"}, got.networkFaults)
@@ -1697,8 +1708,8 @@ func TestProbeSandboxEvents(t *testing.T) {
 	client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, &corev1.EventList{Items: events}, nil
 	})
-	got, read := probeSandboxEvents(context.Background(), client, "ns")
-	require.True(t, read)
+	got, err := probeSandboxEvents(context.Background(), client, "ns")
+	require.NoError(t, err)
 	assert.Equal(t, map[string]sandboxEvidence{
 		"pulled-only": sandboxCreated, "retried": sandboxCreated, "failed": sandboxFailed,
 	}, got)
@@ -1712,7 +1723,7 @@ func TestClassifyProbeNodes_UnscheduledPodNamesItsNode(t *testing.T) {
 	pending := probePod("", "Pending", "", "")
 	pending.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}
 	pending.Spec.Affinity = daemonSetNodeAffinity("node-2")
-	got := classifyProbeNodes([]corev1.Pod{running, pending}, []string{"node-1", "node-2"}, nil, true, time.Now())
+	got := classifyProbeNodes([]corev1.Pod{running, pending}, []string{"node-1", "node-2"}, nil, nil)
 	require.Len(t, got.gaps, 1)
 	assert.Equal(t, "node-2: Unschedulable", got.gaps[0])
 }
@@ -1982,7 +1993,7 @@ func TestResolveNVCFGateways_ConfiguredReplacesDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, gatewaySet{"gw/shared-gw": true}, got)
 
-	surface, surfaceErr := discoverGatewayAPIResources(routeDiscoveryClient())
+	surface, surfaceErr := discoverGatewayAPIResources(context.Background(), routeDiscoveryClient())
 	own := resolveGatewayOwnershipIn(context.Background(), surface, surfaceErr, dyn)
 	assert.Equal(t, []string{"nvcf/other"}, own.unlisted)
 	state := &ValidationState{Log: testLog()}
@@ -1998,7 +2009,7 @@ func TestResolveNVCFGateways_ConfiguredReplacesDiscovery(t *testing.T) {
 // to say.
 func TestResolveNVCFGateways_ConfiguredWithoutRoutesWarnsAfterInstall(t *testing.T) {
 	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw")
-	surface, surfaceErr := discoverGatewayAPIResources(routeDiscoveryClient())
+	surface, surfaceErr := discoverGatewayAPIResources(context.Background(), routeDiscoveryClient())
 	withRoutes := routeClient(route("HTTPRoute", "nvcf", "api", "nvcf-gateway-routes-1.18.2",
 		parentRef("name", "shared-gw", "namespace", "gw")))
 	for name, tc := range map[string]struct {
@@ -2182,8 +2193,10 @@ func TestCheckTier1Deployments_ListFailureIsNotCalledRBAC(t *testing.T) {
 
 	assert.Nil(t, state.Tier1DeploymentsOK)
 	joined := strings.Join(state.Warnings, "; ")
-	assert.NotContains(t, joined, "RBAC denied")
-	assert.Contains(t, joined, "denied or failed")
+	assert.NotContains(t, joined, "grant the cluster-validator")
+	assert.Contains(t, joined, "could not read Deployments in")
+	assert.Contains(t, joined, "Too many requests: slow down")
+	assert.Contains(t, joined, "check apiserver health")
 }
 
 // A Deployment scaled to zero is an observed failure, so it must not be hidden
@@ -2349,8 +2362,11 @@ func TestCheckTier2StatefulSets_SkippedListSurvivesRolloutExit(t *testing.T) {
 			ReadyReplicas: 2, CurrentRevision: "a", UpdateRevision: "b",
 		},
 	}
+	revision := &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{
+		Name: "b", Namespace: "nats-system", CreationTimestamp: metav1.Now(),
+	}}
 	state := &ValidationState{Log: testLog()}
-	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(other, natsRolling), state)
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(other, natsRolling, revision), state)
 
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK)
@@ -3139,11 +3155,35 @@ func TestCheckTier2StatefulSets_RolloutWithoutProgressFails(t *testing.T) {
 	for name, objs := range map[string][]runtime.Object{
 		"just started, pod not yet recreated": withRevision(createdAt(missing(), old), recent),
 		"replacement created recently":        withRevision(createdAt(down(creating), recent), old),
-		"start unknown, pod missing":          createdAt(missing(), old),
 	} {
 		state := runTier2(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)
 		assert.True(t, *state.Tier2StatefulSetsOK, name)
+	}
+
+	// A pod missing with nothing to date the rollout is not observed: passing
+	// it would tolerate a replacement that is never created, forever.
+	for name, revErr := range map[string]error{
+		"revision absent": nil,
+		"revision denied": apierrors.NewForbidden(
+			schema.GroupResource{Group: "apps", Resource: "controllerrevisions"}, "nats-r2", fmt.Errorf("denied")),
+		"revision read fails": apierrors.NewInternalError(fmt.Errorf("etcd timeout")),
+	} {
+		client := fake.NewSimpleClientset(createdAt(missing(), old)...)
+		if revErr != nil {
+			client.PrependReactor("get", "controllerrevisions", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, revErr
+			})
+		}
+		state := &ValidationState{Log: testLog()}
+		checkTier2StatefulSets(context.Background(), client, state)
+		assert.Nil(t, state.Tier2StatefulSetsOK, name)
+		joined := strings.Join(state.Warnings, "; ")
+		assert.Contains(t, joined, "could not read ControllerRevision nats-system/nats-r2", name)
+		assert.Contains(t, joined, "status unknown (nats-system/nats could not be observed)", name)
+		if revErr != nil {
+			assert.Contains(t, joined, revErr.Error(), name)
+		}
 	}
 }
 
@@ -3662,20 +3702,20 @@ func daemonSetNodeAffinity(node string) *corev1.Affinity {
 // Test entry points that discover the Gateway API surface and resolve Gateway
 // ownership on their own. Run does both once and calls the In/For variants.
 
-func checkGatewayAPICRDs(_ context.Context, client kubernetes.Interface, state *ValidationState) {
-	surface, err := discoverGatewayAPIResources(client)
+func checkGatewayAPICRDs(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	surface, err := discoverGatewayAPIResources(ctx, client)
 	checkGatewayAPICRDsIn(state, surface, err)
 }
 
-func checkGatewayRoutes(_ context.Context, client kubernetes.Interface, state *ValidationState) {
-	surface, err := discoverGatewayAPIResources(client)
+func checkGatewayRoutes(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	surface, err := discoverGatewayAPIResources(ctx, client)
 	checkGatewayRoutesIn(state, surface, err)
 }
 
 func resolveGatewayOwnership(
 	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
 ) *gatewayOwnership {
-	surface, err := discoverGatewayAPIResources(client)
+	surface, err := discoverGatewayAPIResources(ctx, client)
 	return resolveGatewayOwnershipIn(ctx, surface, err, routes)
 }
 
@@ -3701,7 +3741,7 @@ func resolveNVCFGateways(
 func discoverNVCFGateways(
 	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
 ) (gatewaySet, error) {
-	surface, err := discoverGatewayAPIResources(client)
+	surface, err := discoverGatewayAPIResources(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
 	}
@@ -3711,7 +3751,7 @@ func discoverNVCFGateways(
 func nvcfGatewayClasses(
 	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface, g gatewaySet,
 ) (map[string][]string, error) {
-	surface, err := discoverGatewayAPIResources(client)
+	surface, err := discoverGatewayAPIResources(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
 	}

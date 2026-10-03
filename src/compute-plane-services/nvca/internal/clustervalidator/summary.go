@@ -280,6 +280,12 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 		s.Checks[CheckKeyTier2StatefulSets] = *state.Tier2StatefulSetsOK
 	}
 
+	// An always-run check that could not read what it checks has no result,
+	// and publishing its zero value would alert on an API error.
+	for key := range state.Unobserved {
+		delete(s.Checks, key)
+	}
+
 	if len(state.EndpointResults) > 0 {
 		s.Endpoints = make(map[string]EndpointStatus, len(state.EndpointResults))
 		for name, r := range state.EndpointResults {

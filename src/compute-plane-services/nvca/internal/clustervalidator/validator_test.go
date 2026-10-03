@@ -532,11 +532,12 @@ func TestCheckNetworkPolicies(t *testing.T) {
 
 func TestTestHTTPS(t *testing.T) {
 	t.Run("unreachable host returns false", func(t *testing.T) {
-		assert.False(t, testHTTPS("https://192.0.2.1:1")) // RFC 5737 TEST-NET, guaranteed non-routable
+		// RFC 5737 TEST-NET, guaranteed non-routable.
+		assert.False(t, testHTTPS(context.Background(), "https://192.0.2.1:1"))
 	})
 
 	t.Run("invalid URL returns false", func(t *testing.T) {
-		assert.False(t, testHTTPS("://not-a-url"))
+		assert.False(t, testHTTPS(context.Background(), "://not-a-url"))
 	})
 }
 
@@ -550,15 +551,15 @@ func TestTestTCP(t *testing.T) {
 		port := 0
 		fmt.Sscanf(portStr, "%d", &port)
 
-		assert.True(t, testTCP("127.0.0.1", port, false))
+		assert.True(t, testTCP(context.Background(), "127.0.0.1", port, false))
 	})
 
 	t.Run("unreachable TCP port", func(t *testing.T) {
-		assert.False(t, testTCP("192.0.2.1", 1, false))
+		assert.False(t, testTCP(context.Background(), "192.0.2.1", 1, false))
 	})
 
 	t.Run("unreachable host", func(t *testing.T) {
-		assert.False(t, testTCP("invalid.test.example", 443, false))
+		assert.False(t, testTCP(context.Background(), "invalid.test.example", 443, false))
 	})
 
 	t.Run("TLS handshake error counts as reachable", func(t *testing.T) {
@@ -580,18 +581,18 @@ func TestTestTCP(t *testing.T) {
 		port := 0
 		fmt.Sscanf(portStr, "%d", &port)
 
-		assert.True(t, testTCP("127.0.0.1", port, true))
+		assert.True(t, testTCP(context.Background(), "127.0.0.1", port, true))
 	})
 
 	t.Run("unreachable TLS port", func(t *testing.T) {
-		assert.False(t, testTCP("192.0.2.1", 443, true))
+		assert.False(t, testTCP(context.Background(), "192.0.2.1", 443, true))
 	})
 }
 
 func TestTestEndpoint(t *testing.T) {
 	t.Run("unknown protocol", func(t *testing.T) {
 		ep := Endpoint{Protocol: "grpc", Host: "localhost", Port: 1234}
-		assert.False(t, TestEndpoint(ep))
+		assert.False(t, TestEndpoint(context.Background(), ep))
 	})
 }
 
@@ -624,18 +625,17 @@ func TestPrintSummary(t *testing.T) {
 	})
 
 	t.Run("Worker Nodes row reads 'status unknown' on listing failure", func(t *testing.T) {
-		// When checkControlPlaneHealth's Nodes().List() errors, the state
-		// is left with NodesAllReady=false and NotReadyNodes=0 (zero value).
-		// The summary must say "status unknown", not the misleading
-		// "0 NotReady" — the operator was never able to count nodes.
+		// When checkControlPlaneHealth's Nodes().List() errors, the row is
+		// unobserved. The summary must say so, not the misleading
+		// "0 NotReady": the operator was never able to count nodes.
 		buf := &bytes.Buffer{}
 		l := logrus.New()
 		l.SetOutput(buf)
 		state := &ValidationState{
 			Log:                      logrus.NewEntry(l),
-			ControlPlaneHealthy:      false, // listing failure also flips this
-			NodesAllReady:            false,
-			NotReadyNodes:            0,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			Unobserved:               map[string]bool{CheckKeyWorkerNodesAllReady: true},
 			WebhooksSupported:        true,
 			NetworkPoliciesSupported: true,
 			SMBCSIDriverOK:           true,
@@ -646,8 +646,9 @@ func TestPrintSummary(t *testing.T) {
 		}
 		_ = printSummary(state)
 		out := buf.String()
-		assert.Contains(t, out, "Worker Nodes: status unknown (node listing failed)",
+		assert.Contains(t, out, "Worker Nodes: Status Unknown (not observed)",
 			"summary must reflect that nodes were never queried")
+		assert.NotContains(t, out, "Worker Nodes: All Ready")
 		assert.NotContains(t, out, "Worker Nodes: 0 NotReady",
 			"the misleading zero-count message must not appear when listing failed")
 	})
@@ -926,12 +927,12 @@ func TestIsTLSOrProtocolError(t *testing.T) {
 
 func TestTestEndpoint_TCP(t *testing.T) {
 	ep := Endpoint{Protocol: "tcp", Host: "192.0.2.1", Port: 1}
-	assert.False(t, TestEndpoint(ep))
+	assert.False(t, TestEndpoint(context.Background(), ep))
 }
 
 func TestTestEndpoint_TCPTLS(t *testing.T) {
 	ep := Endpoint{Protocol: "tcp+tls", Host: "192.0.2.1", Port: 1}
-	assert.False(t, TestEndpoint(ep))
+	assert.False(t, TestEndpoint(context.Background(), ep))
 }
 
 func TestToEndpoint(t *testing.T) {
@@ -951,7 +952,7 @@ func TestToEndpoint(t *testing.T) {
 // user writes `protocol: https` with host+port and no url, the validator
 // probes successfully — the same host:port already works as
 // `protocol: tcp+tls`. The fix substitutes the probe protocol to tcp+tls
-// rather than calling testHTTPS("") which silently returned false.
+// rather than calling testHTTPS(context.Background(), "") which silently returned false.
 func TestToEndpoint_HTTPSWithoutURLFallsBackToTCPTLS(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1063,7 +1064,7 @@ func TestCheckConfigurableReachability_UnprobableEndpointSurfacesReason(t *testi
 			{Name: "bad-https", Protocol: "https", Critical: true},
 		},
 	}
-	checkConfigurableReachability(state, cfg)
+	checkConfigurableReachability(context.Background(), state, cfg)
 
 	require.NotNil(t, state.ReachabilityOK)
 	assert.False(t, *state.ReachabilityOK)
@@ -1083,7 +1084,7 @@ func TestCheckConfigurableReachability_AllUnreachable(t *testing.T) {
 			{Name: "bad-ep", Host: "192.0.2.1", Port: 1, Protocol: "tcp"},
 		},
 	}
-	checkConfigurableReachability(state, cfg)
+	checkConfigurableReachability(context.Background(), state, cfg)
 	require.NotNil(t, state.ReachabilityOK)
 	assert.False(t, *state.ReachabilityOK)
 }
@@ -1095,7 +1096,7 @@ func TestCheckConfigurableReachability_CriticalFail(t *testing.T) {
 			{Name: "critical-ep", Host: "192.0.2.1", Port: 1, Protocol: "tcp", Critical: true},
 		},
 	}
-	checkConfigurableReachability(state, cfg)
+	checkConfigurableReachability(context.Background(), state, cfg)
 	require.NotNil(t, state.ReachabilityOK)
 	assert.False(t, *state.ReachabilityOK)
 	require.NotNil(t, state.ReachabilityCriticalOK)
@@ -1119,7 +1120,7 @@ func TestCheckConfigurableReachability_Unreachable(t *testing.T) {
 			{Name: "ep", Host: "192.0.2.1", Port: 1, Protocol: "tcp"},
 		},
 	}
-	checkConfigurableReachability(state, cfg)
+	checkConfigurableReachability(context.Background(), state, cfg)
 	require.NotNil(t, state.ReachabilityOK)
 	assert.False(t, *state.ReachabilityOK)
 }
@@ -1131,7 +1132,7 @@ func TestCheckConfigurableReachability_NonCriticalFailOnly(t *testing.T) {
 			{Name: "non-crit", Host: "192.0.2.1", Port: 1, Protocol: "tcp", Critical: false},
 		},
 	}
-	checkConfigurableReachability(state, cfg)
+	checkConfigurableReachability(context.Background(), state, cfg)
 	require.NotNil(t, state.ReachabilityOK)
 	assert.False(t, *state.ReachabilityOK)
 	assert.Nil(t, state.ReachabilityCriticalOK)

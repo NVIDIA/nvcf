@@ -35,6 +35,31 @@ import (
 // text is part of the interface and must not change.
 const RoleMarker = "Validator role: "
 
+// The strings below are the rest of what launchers grade a transcript on.
+// Like RoleMarker they are part of the interface: nvcf-cli matches each one,
+// so changing any of them changes how it reads every run.
+const (
+	// SummaryStart opens the summary rows.
+	SummaryStart = "Check Results:"
+	// VerdictLinePrefix starts each verdict banner, which ends the summary rows.
+	VerdictLinePrefix = "Cluster is "
+	// VerdictReady, VerdictReadyWithWarnings and VerdictNotReady follow
+	// VerdictLinePrefix. VerdictReadyWithWarnings is a pass with warnings.
+	VerdictReady             = "NVCF-Ready"
+	VerdictReadyWithWarnings = VerdictReady + " (with warnings)"
+	VerdictNotReady          = "NVCF-Not-Ready"
+	// FailIcon starts a failed summary row.
+	FailIcon = "\u2717"
+	// GPUResourcesLabel names the GPU section and its summary row, which only
+	// the compute-plane check set prints.
+	GPUResourcesLabel = "GPU Resources"
+	// The rollout markers appear in the Tier-1 and Tier-2 warnings for a
+	// rollout in progress and nowhere else, so a launcher can wait one out.
+	RolloutInProgressMarker = "rollout in progress"
+	RollingUpdateMarker     = "rolling update in progress"
+	MidRolloutMarker        = "mid-rollout"
+)
+
 // effectiveRole is the check set Run actually executes for role.
 func effectiveRole(role Role) Role {
 	if role == RoleControlPlane {
@@ -88,6 +113,14 @@ type ValidationState struct {
 	ContainerRuntime         string
 	Recommendations          []string
 	Warnings                 []string
+	// Unobserved holds the summary keys of the always-run checks above whose
+	// reads failed. Their bool is then no result: the key is left out of the
+	// summary and the row is shown as unknown.
+	Unobserved map[string]bool
+	// NetworkChecksErr is why the network-checks ConfigMap could not be
+	// loaded. Any check it configures may be critical, so a load failure is a
+	// critical unknown rather than an absent config.
+	NetworkChecksErr string
 
 	// ReachabilityOK is nil when no reachability config was loaded,
 	// non-nil when the check ran.
@@ -156,6 +189,15 @@ type NetpolPairResult struct {
 	Passed     bool
 	Critical   bool
 	Directions map[string]DirectionStatus
+}
+
+// markUnobserved records that the always-run check behind key could not read
+// what it checks, so its zero value is not reported as a failure.
+func (s *ValidationState) markUnobserved(key string) {
+	if s.Unobserved == nil {
+		s.Unobserved = map[string]bool{}
+	}
+	s.Unobserved[key] = true
 }
 
 // annotationTrue is the string form of true in annotations and env values.
@@ -228,14 +270,19 @@ func Run(
 	if configNamespace != "" && configName != "" {
 		cfg, err := LoadNetworkCheckConfig(ctx, client, configNamespace, configName)
 		if err != nil {
-			log.WithError(err).Warn("Failed to load network check ConfigMap; skipping configurable checks")
+			// The checks it would configure may be critical, so they cannot
+			// simply be skipped: say so, and leave the verdict unknown.
+			state.NetworkChecksErr = fmt.Sprintf("could not load %s/%s: %v", configNamespace, configName, err)
+			printWarning(log, "Network checks: "+state.NetworkChecksErr)
+			state.Warnings = append(state.Warnings, "Network checks: "+state.NetworkChecksErr+
+				"; its endpoint, NetworkPolicy and enforcement checks did not run")
 		} else {
 			netCfg = cfg
 		}
 	}
 
 	if netCfg != nil && netCfg.Reachability != nil && len(netCfg.Reachability.Endpoints) > 0 {
-		checkConfigurableReachability(state, netCfg.Reachability)
+		checkConfigurableReachability(ctx, state, netCfg.Reachability)
 	}
 
 	if role == RoleControlPlane {
@@ -245,7 +292,7 @@ func Run(
 		checkStorageClass(ctx, client, state)
 		// Discover the Gateway API surface and decide which Gateways are
 		// NVCF's once, so the LoadBalancer row and Tier-1 judge the same set.
-		surface, surfaceErr := discoverGatewayAPIResources(client)
+		surface, surfaceErr := discoverGatewayAPIResources(ctx, client)
 		checkGatewayAPICRDsIn(state, surface, surfaceErr)
 		checkEnvoyGateway(ctx, client, state)
 		checkGatewayRoutesIn(state, surface, surfaceErr)
@@ -275,12 +322,14 @@ func Run(
 	// Persist the summary (to summaryNamespace, the agent's watch namespace)
 	// for the agent to publish as metrics. Gated on emitMetrics so preflight
 	// skips it. Best-effort: failures are logged, never block the verdict.
-	verdict := "NVCF-Ready"
+	// The write gets its own budget: a run that spent its deadline on the
+	// checks must still publish what they found.
+	verdict := VerdictReady
 	if summaryErr != nil {
-		verdict = "NVCF-Not-Ready"
+		verdict = VerdictNotReady
 	}
 	if emitMetrics && summaryNamespace != "" {
-		writeSummaryConfigMap(ctx, log, client, summaryNamespace,
+		writeSummaryConfigMap(context.WithoutCancel(ctx), log, client, summaryNamespace,
 			buildSummary(state, startedAt, summaryErr == nil, verdict))
 	}
 
@@ -295,7 +344,7 @@ func printSummary(state *ValidationState) error {
 
 	isReady := true
 
-	log.Info("Check Results:")
+	log.Info(SummaryStart)
 
 	type check struct {
 		Passed   bool
@@ -316,26 +365,34 @@ func printSummary(state *ValidationState) error {
 		NAMsg         string
 	}
 
-	// Distinguish "we listed nodes and found N not-ready" (NotReadyNodes>0)
-	// from "we couldn't list nodes at all" (NotReadyNodes==0 + !NodesAllReady).
-	// Successful listing always yields either NodesAllReady=true (pass) or
-	// NotReadyNodes>0 (genuine NotReady count); the zero case can only
-	// happen when checkControlPlaneHealth's Nodes().List() returned an
-	// error, so avoid the misleading "0 NotReady" summary row.
+	// A failed node list marks the row unobserved rather than NotReady, so a
+	// failed row always has a NotReady count.
 	nodesFailMsg := fmt.Sprintf("Worker Nodes: %d NotReady (non-blocking)", state.NotReadyNodes)
-	if !state.NodesAllReady && state.NotReadyNodes == 0 {
-		nodesFailMsg = "Worker Nodes: status unknown (node listing failed)"
+
+	// unobservedRow renders an always-run check whose read failed as unknown,
+	// and any other as it ran.
+	unobservedRow := func(key, label string, c check) check {
+		if state.Unobserved[key] {
+			return check{Critical: c.Critical, Unknown: true, UnknownMsg: label + ": Status Unknown (not observed)"}
+		}
+		return c
 	}
 
 	checks := []check{
-		{Passed: state.ControlPlaneHealthy, PassMsg: "Control Plane: Healthy",
-			FailMsg: "Control Plane: Unhealthy", Critical: true},
-		{Passed: state.NodesAllReady, PassMsg: "Worker Nodes: All Ready",
-			FailMsg: nodesFailMsg, Critical: false},
-		{Passed: state.WebhooksSupported, PassMsg: "Admission Webhooks: Mutating & Validating Supported",
-			FailMsg: "Admission Webhooks: Not Supported", Critical: true},
-		{Passed: state.NetworkPoliciesSupported, PassMsg: "Network Policies: Supported",
-			FailMsg: "Network Policies: Not Confirmed", Critical: false},
+		unobservedRow(CheckKeyControlPlane, "Control Plane", check{Passed: state.ControlPlaneHealthy,
+			PassMsg: "Control Plane: Healthy", FailMsg: "Control Plane: Unhealthy", Critical: true}),
+		unobservedRow(CheckKeyWorkerNodesAllReady, "Worker Nodes", check{Passed: state.NodesAllReady,
+			PassMsg: "Worker Nodes: All Ready", FailMsg: nodesFailMsg, Critical: false}),
+		unobservedRow(CheckKeyWebhooks, "Admission Webhooks", check{Passed: state.WebhooksSupported,
+			PassMsg: "Admission Webhooks: Mutating & Validating Supported",
+			FailMsg: "Admission Webhooks: Not Supported", Critical: true}),
+		unobservedRow(CheckKeyNetworkPoliciesSupport, "Network Policies", check{
+			Passed: state.NetworkPoliciesSupported, PassMsg: "Network Policies: Supported",
+			FailMsg: "Network Policies: Not Confirmed", Critical: false}),
+	}
+	if state.NetworkChecksErr != "" {
+		checks = append(checks, check{Critical: true, Unknown: true,
+			UnknownMsg: "Network Checks: Status Unknown (the network-checks ConfigMap could not be loaded)"})
 	}
 
 	if state.ReachabilityOK != nil {
@@ -401,16 +458,18 @@ func printSummary(state *ValidationState) error {
 		// SMB CSI Driver missing is non-blocking: it is required only when
 		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
 		checks = append(checks,
-			check{Passed: state.SMBCSIDriverOK, PassMsg: "SMB CSI Driver: v1.16.0+ Installed",
-				FailMsg: "SMB CSI Driver: Not Installed or Below v1.16.0", Critical: false},
-			check{Passed: state.GPUAvailable, PassMsg: "GPU Resources: Available",
-				FailMsg: "GPU Resources: Not Available", Critical: true},
+			unobservedRow(CheckKeySMBCSI, "SMB CSI Driver", check{Passed: state.SMBCSIDriverOK,
+				PassMsg: "SMB CSI Driver: v1.16.0+ Installed",
+				FailMsg: "SMB CSI Driver: Not Installed or Below v1.16.0", Critical: false}),
+			unobservedRow(CheckKeyGPUResources, GPUResourcesLabel, check{Passed: state.GPUAvailable,
+				PassMsg: GPUResourcesLabel + ": Available", FailMsg: GPUResourcesLabel + ": Not Available",
+				Critical: true}),
 			// GPU Operator missing is non-blocking: clusters registered with
 			// Manual Instance Configuration expose GPUs via an alternative
 			// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
 			// GPU Operator. GPU Resources above is the load-bearing signal.
-			check{Passed: state.GPUOperatorInstalled, PassMsg: "GPU Operator: Installed",
-				FailMsg: "GPU Operator: Not Installed", Critical: false},
+			unobservedRow(CheckKeyGPUOperator, "GPU Operator", check{Passed: state.GPUOperatorInstalled,
+				PassMsg: "GPU Operator: Installed", FailMsg: "GPU Operator: Not Installed", Critical: false}),
 		)
 	}
 
@@ -477,13 +536,15 @@ func printSummary(state *ValidationState) error {
 		hasWarnings := len(state.Warnings) > 0
 		if hasWarnings {
 			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorYellow, colorReset)
-			log.Infof("%s║        %s  Cluster is NVCF-Ready (with warnings)  %s        ║%s", colorYellow, iconWarn, iconWarn, colorReset)
+			log.Infof("%s\u2551        %s  %s%s  %s        \u2551%s",
+				colorYellow, iconWarn, VerdictLinePrefix, VerdictReadyWithWarnings, iconWarn, colorReset)
 			log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorYellow, colorReset)
 			log.Info("")
 			printWarning(log, "Your cluster meets all critical requirements; see warnings below for non-blocking issues.")
 		} else {
 			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorGreen, colorReset)
-			log.Infof("%s║                %s  Cluster is NVCF-Ready  %s                ║%s", colorGreen, iconCheck, iconCheck, colorReset)
+			log.Infof("%s\u2551                %s  %s%s  %s                \u2551%s",
+				colorGreen, iconCheck, VerdictLinePrefix, VerdictReady, iconCheck, colorReset)
 			log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorGreen, colorReset)
 			log.Info("")
 			printSuccess(log, "Your cluster meets all requirements for NVCF workloads")
@@ -497,7 +558,8 @@ func printSummary(state *ValidationState) error {
 		}
 	} else {
 		log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorRed, colorReset)
-		log.Infof("%s║              %s  Cluster is NVCF-Not-Ready  %s              ║%s", colorRed, iconCross, iconCross, colorReset)
+		log.Infof("%s\u2551              %s  %s%s  %s              \u2551%s",
+			colorRed, iconCross, VerdictLinePrefix, VerdictNotReady, iconCross, colorReset)
 		log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorRed, colorReset)
 		log.Info("")
 		if len(unknownCritical) > 0 {
