@@ -1,18 +1,27 @@
-# NVCF Self-Hosted 0.6.1 Release Notes
+---
+title: Release 0.6.1
+tags: [legacy, self-managed]
+---
+
+## Release 0.6.1
 
 NVCF Self-Hosted 0.6.1 is a maintenance release. It updates OpenBao to address
 security issues in the runtime and migration images. It also replaces the
 archived Bitnami Cassandra runtime with the official Apache Cassandra 5.0.8
 image and an in-house Cassandra Helm chart.
 
-## Highlights
+<a id="highlights"></a>
+
+### Highlights
 
 | Change | Status | Summary |
 | --- | --- | --- |
 | OpenBao security update | GA | OpenBao uses the remediated runtime and migration images. Existing installations require a controlled server pod rotation after the Helm upgrade. |
 | Cassandra off Bitnami | GA | Cassandra runs on the official Apache Cassandra 5.0.8 image, deployed by an in-house Helm chart, replacing the Bitnami image and subchart. |
 
-## Cassandra runtime and chart
+<a id="cassandra-runtime-and-chart"></a>
+
+### Cassandra runtime and chart
 
 The Cassandra runtime image is now built on the official Apache Cassandra 5.0.8
 image instead of the archived Bitnami image, and the Bitnami Cassandra Helm
@@ -25,7 +34,9 @@ schema migrations.
 The chart runs the nodes with `storage_compatibility_mode: NONE` to match the
 existing fleet's on-disk and streaming format.
 
-## Upgrade Notes
+<a id="upgrade-notes"></a>
+
+### Upgrade Notes
 
 Fresh installs need no special handling; Cassandra comes up on the official
 image with the in-house chart.
@@ -34,11 +45,13 @@ Existing clusters that already hold data need a migration, because the runtime
 image, the Helm chart shape, and the on-disk data layout all change. A normal
 in-place Helm upgrade does not carry an existing Bitnami-based cluster onto the
 new stack. Follow the
-[0.6.0 to 0.6.1 Upgrade](./0.6.0-to-0.6.1-upgrade.md) procedure, which describes
+[0.6.0 to 0.6.1 Upgrade](../../docs/overview/release-notes/0.6.0-to-0.6.1-upgrade.md) procedure, which describes
 the supported migration methods (datacenter expansion, in-place volume
 adoption, backup and restore) and their trade-offs.
 
-## OpenBao security update
+<a id="openbao-security-update"></a>
+
+### OpenBao security update
 
 The OpenBao runtime and migration images include security fixes. OpenBao stores
 control-plane secrets and uses persistent Raft storage, so upgrade it before
@@ -66,7 +79,9 @@ downloaded the 0.6.1 stack, and that you run `make` from the extracted
 export HELMFILE_ENV=<your-environment>
 ```
 
-### Prepare the 0.6.1 configuration
+<a id="prepare-the-061-configuration"></a>
+
+#### Prepare the 0.6.1 configuration
 
 Return to the extracted 0.6.1 stack before running any 0.6.1 sync command.
 Reconcile the site-specific settings from the 0.6.0 deployment into the 0.6.1
@@ -91,7 +106,9 @@ for file in \
 done
 ```
 
-### Check OpenBao before the patch
+<a id="check-openbao-before-the-patch"></a>
+
+#### Check OpenBao before the patch
 
 Confirm that the current OpenBao release is healthy before starting the patch
 upgrade:
@@ -126,7 +143,9 @@ report `HA Mode standby` and include the active node address.
 
 Do not continue if any pod is sealed, uninitialized, or not ready.
 
-### Step 1: sync OpenBao from the 0.6.1 stack
+<a id="step-1-sync-openbao-from-the-061-stack"></a>
+
+#### Step 1: sync OpenBao from the 0.6.1 stack
 
 Sync only the OpenBao release first. This updates the OpenBao release and
 StatefulSet template, rolls the injector deployment, and runs the OpenBao
@@ -172,7 +191,9 @@ existing OpenBao server pods can still be running the previous OpenBao image.
 This is expected because the StatefulSet uses `OnDelete`.
 </Info>
 
-### Step 2: rotate OpenBao server pods
+<a id="step-2-rotate-openbao-server-pods"></a>
+
+#### Step 2: rotate OpenBao server pods
 
 Rotate OpenBao server pods manually so each pod is recreated from the updated
 StatefulSet template. Rotate standby pods first. Rotate the active pod last.
@@ -253,7 +274,9 @@ If a recreated pod does not become ready before the timeout, or if it reports
 `Sealed true` or `Initialized false`, stop the procedure and resolve that pod
 before rotating any other OpenBao server pod.
 
-### Verify OpenBao after rotation
+<a id="verify-openbao-after-rotation"></a>
+
+#### Verify OpenBao after rotation
 
 Confirm that all OpenBao server pods are ready and use the updated OpenBao image
 reference from the StatefulSet template:
@@ -295,7 +318,9 @@ done
 Do not continue if any pod is sealed, uninitialized, not ready, or still running
 the previous OpenBao image.
 
-### Sync the remaining 0.6.1 stack
+<a id="sync-the-remaining-061-stack"></a>
+
+#### Sync the remaining 0.6.1 stack
 
 After OpenBao is healthy on the updated OpenBao image, sync the rest of the
 0.6.1 stack:

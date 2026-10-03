@@ -279,8 +279,8 @@ func writeBranchConfiguration(root string, plan editionPreparation) error {
 	if err := versions.Encode(append([]any{map[string]any{"display-name": plan.Version, "slug": plan.Version, "path": plan.Navigation}}, archives...)); err != nil {
 		return err
 	}
-	// Preserve the reviewed shell, redirects, comments, and scalar formatting.
-	// Only the navigation selector changes when preparing a release branch.
+	// Preserve the reviewed shell, comments, and scalar formatting. Redirects
+	// into Development use the local default because this branch has no dev edition.
 	mapping := document.Content[0]
 	var fields []*yaml.Node
 	replaced := false
@@ -293,6 +293,16 @@ func writeBranchConfiguration(root string, plan editionPreparation) error {
 				replaced = true
 			}
 		case "navigation", "tabs":
+		case "redirects":
+			for _, redirect := range value.Content {
+				for j := 0; j+1 < len(redirect.Content); j += 2 {
+					field, destination := redirect.Content[j], redirect.Content[j+1]
+					if field.Value == "destination" && strings.HasPrefix(destination.Value, "/nvcf/dev/") {
+						destination.Value = "/nvcf/" + strings.TrimPrefix(destination.Value, "/nvcf/dev/")
+					}
+				}
+			}
+			fields = append(fields, key, value)
 		default:
 			fields = append(fields, key, value)
 		}
