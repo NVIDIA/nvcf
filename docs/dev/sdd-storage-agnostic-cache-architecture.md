@@ -45,7 +45,7 @@ Four pieces:
 | Workflow | `regularModelCache` (readers in the request namespace) or `helmModelCache` (readers in other namespaces) |
 | Flow | How a cache moves from writer to readers, derived from access modes: `rwxReadOnly` or `roxReadOnly` |
 | Cache handle | Content hash identifying one model cache |
-| Writer | The single Job that populates a cache, serialized by a Lease |
+| Writer | The single Job that populates a cache, serialized by a Lease. On a shared claim it runs as root, because shared-filesystem CSI drivers do not apply fsGroup to ReadWriteMany volumes and a fresh claim's root is owned by root; readers stay read-only and unprivileged |
 | Reader | A namespace-local read-only volume onto the same data |
 
 ## Capability catalog

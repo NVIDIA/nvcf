@@ -162,6 +162,16 @@ func TestRWXReadOnly_FirstRequestCreatesSharedClaimAndWriter(t *testing.T) {
 	require.NoError(t, err)
 	_, hasWitness := writer.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey]
 	assert.True(t, hasWitness, "the writer records which claim it populates")
+	// Shared-filesystem drivers do not apply fsGroup to ReadWriteMany volumes,
+	// so the writer must run as root to create the model directory at the
+	// root of a fresh claim.
+	for _, c := range writer.Spec.Template.Spec.Containers {
+		require.NotNil(t, c.SecurityContext, c.Name)
+		require.NotNil(t, c.SecurityContext.RunAsUser, c.Name)
+		assert.EqualValues(t, 0, *c.SecurityContext.RunAsUser, c.Name)
+		assert.Nil(t, c.SecurityContext.RunAsNonRoot, c.Name)
+	}
+
 }
 
 func TestRWXReadOnly_CompletedWriterMarksClaimPopulated(t *testing.T) {

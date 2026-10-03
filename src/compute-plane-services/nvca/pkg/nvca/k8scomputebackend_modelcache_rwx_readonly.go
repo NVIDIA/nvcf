@@ -140,6 +140,7 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 			job.Spec.Template.Annotations = map[string]string{}
 		}
 		job.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey] = string(current.UID)
+		runSharedClaimWriterAsRoot(job)
 		if _, err := jobs.Create(ctx, job, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
 			return fail(modelcachetypes.ReasonPVCSetupFailed, fmt.Errorf("create writer job %s: %w", job.Name, err))
 		}
@@ -312,4 +313,27 @@ func regularModelCacheKeepsSharedClaim(req *nvcav2beta1.ICMSRequest) bool {
 	return err == nil && present &&
 		selection.Mode == nvcastorage.ModelCacheSelectionDurable &&
 		selection.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly
+}
+
+// runSharedClaimWriterAsRoot makes the writer containers run as root on a
+// shared (ReadWriteMany) claim. The translator relies on the pod fsGroup to
+// make the volume writable by the non-root writer, but Kubernetes applies
+// fsGroup only where the CSI driver allows it, and shared-filesystem drivers
+// (OCI FSS declares fsGroupPolicy ReadWriteOnceWithFSType, which excludes
+// ReadWriteMany volumes) leave a fresh claim's root owned by root. The writer
+// then fails on its first mkdir with "permission denied". There is exactly one
+// writer per handle, it only populates the cache, and it writes world-readable
+// files, so running it as root on this path keeps the read-only readers
+// unprivileged. Block-backed claims keep the translator's non-root identity.
+func runSharedClaimWriterAsRoot(job *batchv1.Job) {
+	root := int64(0)
+	for i := range job.Spec.Template.Spec.Containers {
+		c := &job.Spec.Template.Spec.Containers[i]
+		if c.SecurityContext == nil {
+			c.SecurityContext = &corev1.SecurityContext{}
+		}
+		c.SecurityContext.RunAsUser = &root
+		c.SecurityContext.RunAsGroup = &root
+		c.SecurityContext.RunAsNonRoot = nil
+	}
 }
