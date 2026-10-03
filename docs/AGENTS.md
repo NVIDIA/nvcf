@@ -200,20 +200,21 @@ Run full docs validation before finishing docs changes:
 ./tools/ci/check-docs
 ```
 
-`fern/docs.yml` treats broken internal links as errors. PR CI checks both the
-canonical and Development layouts; previews and production builds use strict
-broken-link validation. The Published Docs Links CI job checks the live site
-with the pinned Fern CLI after publication and weekly. It also runs manually
-through Fern Docs CI with `live_links=true`. Its report includes external URLs
-and source pages. Broken links or incomplete scans fail; blocked destinations
-are reported separately for review. Fern can classify authentication responses
-as broken links; verify protected destinations and stale source references
-before changing customer links.
+The required `docs` PR check validates canonical and Development links with
+Fern, then checks public HTTP links in every added or modified `.md` and `.mdx`
+file under `docs/` and `fern/`. The same check runs in the merge queue. Failed
+links fail the required check. Previews and publication also use Fern's strict
+broken-link validation.
 
-With a Fern token, run the same live check locally:
+External checks use checksum-pinned Lychee 0.24.2. Results appear in the `docs`
+job log and its `docs-link-report` artifact. There is no recurring audit. Code
+examples are excluded; exact NGC login-page exceptions are documented in
+`tools/ci/docs-links.toml`. Do not suppress whole domains or all 401/403 errors.
+
+Run the external check against a base ref:
 
 ```bash
-./tools/ci/check-live-doc-links /tmp/docs-link-report.json
+./tools/ci/check-doc-links origin/main /tmp/docs-link-report.md
 ```
 
 For pure routing or AGENTS.md-only changes, `git diff --check` plus targeted `rg` checks are usually sufficient.
