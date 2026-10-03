@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/NVIDIA/nvcf-go v1.0.1
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
-	github.com/carlmjohnson/versioninfo v0.22.5
+	github.com/carlmjohnson/versioninfo/v2 v2.24.1
 	github.com/felixge/httpsnoop v1.0.4
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-chi/chi/v5 v5.2.2

@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.10
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.1
-	github.com/carlmjohnson/versioninfo v0.22.5
+	github.com/carlmjohnson/versioninfo/v2 v2.24.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-chi/cors v1.2.2
 	github.com/goccy/go-json v0.10.5
