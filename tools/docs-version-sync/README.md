@@ -145,9 +145,9 @@ A publication-only update does not require a new stack release.
 ## Historical per-stack snapshots
 
 Existing per-stack folders and their catalogs are retained for historical URLs.
-Do not cut new folders with `cut-docs-version.sh` or `--freeze-stack`; edition
-catalogs reject that workflow. Use the edition commands below to prepare a
-qualified three-stack combination on its own branch.
+The per-stack folder-cut script and freeze flags have been removed. Use the
+edition commands below to prepare a qualified three-stack combination on its
+own branch.
 
 ## Add an artifact to the stack inventory
 
@@ -322,13 +322,28 @@ keeps them inside the selected edition. Existing exact redirect aliases and
 anchors are preserved. Explicit historical-version links retain their archive
 URLs. Missing current-page targets fail preparation.
 
-The `fern/edition-preview.yml` configuration makes Development the default
-for PR previews. It uses the same conversion in the helper's temporary clone.
-Frozen files are not rewritten. For a manually staged clone, run:
+`tools/ci/preview-docs` derives a Development-first configuration from
+`fern/docs.yml` in a temporary clone and applies the same link conversion.
+Site settings, redirects, release refs, and archive entries come from the
+canonical configuration. A prepared release branch uses its local default.
+Frozen files and the source working tree are not rewritten.
 
 ```bash
-go run -C tools/docs-version-sync . edition links --repo /path/to/staged-clone
+tools/ci/preview-docs --check
 ```
+
+Set `DOCS_PREVIEW_CONFIG=fern/docs.yml` to preview the canonical ordering, or
+name another YAML file directly under `fern/` to preview an alternate config.
+Overrides are used as supplied, without reordering or link normalization.
+For a manually staged disposable clone, run:
+
+```bash
+go run -C tools/docs-version-sync . edition preview --repo /path/to/staged-clone
+```
+
+Use `edition links` instead of `edition preview` when only link conversion is
+needed. Both commands modify staged files; do not run them on the source
+working tree.
 
 Release branches retain hidden path-based historical versions after their own
 default. Fern reads only that default when composing the branch as a ref in the

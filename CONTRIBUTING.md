@@ -191,7 +191,7 @@ Run `./tools/ci/check-docs` before submitting. Preview the working tree with
 `tools/ci/run-fern docs dev`, or validate the Development-first PR configuration:
 
 ```bash
-DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
+tools/ci/preview-docs --check
 ```
 
 Stable editions use protected `docs/releases/X.Y.Z` branches, not copied

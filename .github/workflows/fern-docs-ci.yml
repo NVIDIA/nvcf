@@ -39,7 +39,7 @@ on:
         description: Publish an isolated hosted preview from this branch
         type: choice
         default: none
-        options: [none, existing, edition]
+        options: [none, edition]
 
 permissions:
   contents: read
@@ -78,9 +78,7 @@ jobs:
         run: ./tools/ci/check-docs
 
       - name: Validate the staged edition layout
-        if: ${{ !cancelled() && hashFiles('fern/edition-preview.yml') != '' }}
-        env:
-          DOCS_PREVIEW_CONFIG: fern/edition-preview.yml
+        if: ${{ !cancelled() }}
         run: ./tools/ci/preview-docs --check
 
   preview:
@@ -103,13 +101,9 @@ jobs:
       - name: Generate isolated preview
         env:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
-          PREVIEW: ${{ inputs.preview }}
           DOCS_PREVIEW_ID: nvcf-${{ github.run_id }}
           DOCS_PREVIEW_SKIP_COMMENT: '1'
         run: |
           set -euo pipefail
-          if [ "$PREVIEW" = edition ]; then
-            export DOCS_PREVIEW_CONFIG=fern/edition-preview.yml
-          fi
           ./tools/ci/preview-docs | tee "$RUNNER_TEMP/docs-preview.log"
           grep '^Preview URL:' "$RUNNER_TEMP/docs-preview.log" >> "$GITHUB_STEP_SUMMARY"

@@ -155,20 +155,22 @@ DOCS_PREVIEW_ID=nvcf-candidate DOCS_PREVIEW_SKIP_COMMENT=1 \
   DOCS_PREVIEW_CONFIG=fern/candidate.yml tools/ci/preview-docs
 ```
 
-The file must exist directly under `fern/`. The helper stages `docs/` and
-`fern/` in a temporary clone with the original Git remote for branch refs.
+The optional override must exist directly under `fern/` and is used as supplied.
+The helper always stages `docs/` and `fern/` in a temporary clone with the
+original Git remote for branch refs.
 CI and local helpers use the pin in `fern/fern.config.json`; CI uses the
 Node version in `fern/.node-version`.
 
-The edition preview also requires Go. It validates and normalizes current
-cross-tab links in a temporary workspace. Keep explicit page slugs in
-`fern/navigation.yml`. Never run `edition links` against frozen documentation
-trees. `fern/edition-preview.yml` makes Development the default for PR previews.
+Without an override, the helper uses Go to derive a Development-first preview
+from `fern/docs.yml` and normalize current cross-tab links. A prepared release
+branch uses its local default instead. Keep explicit page slugs in
+`fern/navigation.yml`. Run `edition preview` and `edition links` only in a
+disposable clone, never against frozen documentation trees.
 
 Check the staged candidate without publishing a preview:
 
 ```bash
-DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
+tools/ci/preview-docs --check
 ```
 
 Native release notes live in `fern/changelog/YYYY-MM-DD.mdx`. Keep full release
