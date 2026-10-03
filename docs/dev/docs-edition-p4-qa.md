@@ -313,3 +313,41 @@ retain the selected edition in the earlier browser checks. The pod-creation
 wait, final pod-status wording, and redirect-order comments require separate
 follow-up review before merge; the completed Overview change does not resolve
 those findings.
+
+## Stack introduction removal and terminology audit
+
+P4 source `0afec05e437006b29164fb3e28f9e2d3cead7bc9` removes the documentation-set
+sentence from Overview and the edition/version/qualification banners from the
+three stack landing pages. The catalog and default generator outputs no longer
+write those banners. The regeneration test verifies all four landing pages
+remain authored while the compatibility matrix and manifest still regenerate.
+
+The corrected unpublished 1.0.1 candidate is
+`570d4a47927c148159a1ec660b3ba746ccefece8` on
+`docs/candidates/2214-p4-stack-intros`. QA source
+`57f9445c78b52a5b1b115a48fdb59c7d8e2ed80f` composes that candidate with
+Development 1.0.2. The stack versions and generated release manifest are
+unchanged from the approved release.
+
+[Review the preview](https://nvidia-preview-nvcf-2214-p4-stack-intros.docs.buildwithfern.com/nvcf/self-managed/installation-overview).
+[Run 37094235755](https://github.com/NVIDIA/nvcf/actions/runs/37094235755)
+passes both Fern Check and Hosted Docs Preview. All 17 browser cases pass:
+eight landing-page checks across stable and Development; retained matrix,
+manifest, archive excerpts, and three mirroring warnings in both editions;
+and mobile layout without overflow. No page errors occurred. Desktop and mobile
+screenshots were reviewed. Go tests/vet, generated-content checks, strict
+canonical/Development/candidate Fern checks, Markdown lint, and whitespace checks
+pass. Current PR checks have no failures; root Bazel is still running.
+
+[The terminology report](./docs-terminology-review.md) records six unchanged
+passages across three pages after scanning all 95 current navigated pages
+outside Manifest and Release Notes. It also records historical duplicates and
+maintainer-only excerpts. The report is for wording review; those passages have
+not been edited.
+
+The protected release branch and canonical registry remain at `d4fa180b1`.
+Applying candidate `570d4a479` awaits a new explicit approval for the temporary
+single-branch exception, exact force-with-lease, and immediate protection
+restoration. The previous exact-commit approval has already been completed.
+The two open OpenBao instruction findings and indexed staging search remain
+separate pre-merge work. No production publication or merge occurred.
