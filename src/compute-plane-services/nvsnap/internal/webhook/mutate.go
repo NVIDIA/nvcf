@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
@@ -39,6 +40,8 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
@@ -49,6 +52,16 @@ import (
 //	"<hash>"         pin to a specific full sha256 hex (rollback / debug)
 //	"<short-hash>"   12-hex-char prefix; resolved by the backend
 const RestoreFromAnnotation = "nvsnap.io/restore-from"
+
+// InjectLabel on a pod (or, via the registration's namespaceSelector, on
+// its namespace) set to InjectDisabled opts the pod out of every nvsnap
+// mutation. The MutatingWebhookConfiguration filters on it so labelled
+// pods are never sent here; Mutate checks it again so a stale
+// registration still admits them unchanged.
+const InjectLabel = "nvsnap.io/inject"
+
+// InjectDisabled is the InjectLabel value that opts a pod out.
+const InjectDisabled = "false"
 
 // TargetNodeAnnotation overrides the auto-pin to manifest.CapturedOnNodes.
 // When set, the webhook injects nodeAffinity to this single node instead.
@@ -132,6 +145,12 @@ func patchElementName(v any) string {
 //
 // Non-mergeable paths (command, args, securityContext, annotations, …) and
 // non-add ops pass through untouched.
+// isMetadataMap reports whether path is one of the pod metadata maps a
+// metaPatcher bootstraps.
+func isMetadataMap(path string) bool {
+	return path == "/metadata/labels" || path == "/metadata/annotations"
+}
+
 func mergePatchPlan(patches []PatchOp) []PatchOp {
 	bootstrapped := map[string]bool{}    // array path -> already has a bootstrap add
 	seen := map[string]map[string]bool{} // array path -> element names emitted
@@ -147,6 +166,23 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 	out := make([]PatchOp, 0, len(patches))
 	for _, p := range patches {
 		if p.Op != "add" {
+			out = append(out, p)
+			continue
+		}
+		// Metadata maps: a patcher bootstraps /metadata/labels or
+		// /metadata/annotations with an empty map when the pod has none.
+		// Several patchers take part in one admission (model volume, cache
+		// set, election), and a second bootstrap would replace the map and
+		// drop every key the first one set (a Deployment pod with no
+		// annotations lost nvsnap.io/model-uri, OCI FSS 2026-10-02). Keep
+		// the first bootstrap only.
+		if isMetadataMap(p.Path) {
+			if m, ok := p.Value.(map[string]string); ok && len(m) == 0 {
+				if bootstrapped[p.Path] {
+					continue
+				}
+				bootstrapped[p.Path] = true
+			}
 			out = append(out, p)
 			continue
 		}
@@ -254,6 +290,29 @@ type Mutator struct {
 	// scheduling until the promote binds. nil keeps the label-driven
 	// capture and explicit-hash restore paths only. See election.go.
 	Elector election.Elector
+
+	// ModelVolume, when set, turns on the write-once model volume for
+	// Helm-function pods (docs/proposals/helm-shared-model-volume.md):
+	// the download lands in a per-identity shared volume, one writer,
+	// readers wait for the completion marker. Takes precedence over the
+	// gate-and-promote election above. Groups resolves identity for
+	// group members that name no model (LWS workers); may be nil.
+	// ModelWaitDeadline bounds a reader's wait before it downloads itself.
+	ModelVolume *modelvolume.Provisioner
+	// CacheVolume shares compile caches between Helm pods on block storage
+	// (KindCache provisioner); nil disables.
+	CacheVolume       *modelvolume.Provisioner
+	Groups            modelid.GroupResolver
+	ModelWaitDeadline time.Duration
+	// ModelHostRoot is the host directory where hostPath-mode readers get
+	// their landing and the agent binds completed model volumes:
+	// <root>/<identity key>.
+	ModelHostRoot string
+	// ViewMinter exposes a primary volume in the admitted pod's namespace:
+	// the read-only view readers mount, and on storage shared while
+	// written the read-write view the download Job writes through. nil
+	// leaves readers pending for the agent to serve.
+	ViewMinter ViewMinter
 
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a
@@ -421,6 +480,11 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	if m.Backend == nil {
 		return nil, errors.New("webhook: Mutator.Backend is nil")
 	}
+	if pod.Labels[InjectLabel] == InjectDisabled {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
+			Info("nvsnap.io/inject=false; admitting pod unchanged")
+		return nil, nil
+	}
 
 	ctx, span := tracing.Tracer().Start(ctx, "webhook.mutate")
 	defer span.End()
@@ -441,6 +505,12 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		// the label-driven capture inject below keeps its behaviour. An
 		// error is logged and admits the pod unchanged: the election is
 		// an optimisation, never a gate.
+		if vp, err := m.modelVolumePatches(ctx, pod); err != nil {
+			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
+				Warn("model volume decision failed; admitting pod unchanged")
+		} else if vp != nil {
+			return mergePatchPlan(append(injectPatches, vp...)), nil
+		}
 		if ep, err := m.electionPatches(ctx, pod); err != nil {
 			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
 				Warn("election failed; admitting pod unchanged")
@@ -698,8 +768,6 @@ func (m *Mutator) buildPatches(
 			Value: []any{},
 		})
 	}
-	needInitArray := pod.Spec.InitContainers == nil
-	bootstrappedInit := false
 
 	// addedVolumes dedupes spec.volumes entries by Volume.Name. K8s
 	// kubelet pod-worker treats each spec.volumes entry independently, but
@@ -735,15 +803,7 @@ func (m *Mutator) buildPatches(
 			Path:  fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
 			Value: pm.VolumeMount,
 		})
-		for i := range pm.InitContainers {
-			if needInitArray && !bootstrappedInit {
-				patches = append(patches, PatchOp{
-					Op: "add", Path: "/spec/initContainers", Value: []any{},
-				})
-				bootstrappedInit = true
-			}
-			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: pm.InitContainers[i]})
-		}
+		patches = appendInits(pod, patches, pm.InitContainers...)
 		// Track what we just added so a duplicate (e.g. extract path
 		// matching a user-data path) doesn't double-mount.
 		customerMountPaths[vm.MountPath] = struct{}{}
@@ -885,7 +945,7 @@ func (m *Mutator) buildPatches(
 	//     would be a no-op so we just skip emitting it.
 	if useInitContainer && len(initMounts) > 0 {
 		if err := m.emitMountPrepInitContainer(
-			&patches, &bootstrappedInit, needInitArray,
+			pod, &patches,
 			overlayKey, hash, overlayTargetNode, initMounts,
 		); err != nil {
 			return nil, fmt.Errorf("emit nvsnap-mount-prep init container: %w", err)
@@ -1094,4 +1154,13 @@ func (m *Mutator) logger() logrus.FieldLogger {
 		return m.Log
 	}
 	return logrus.NewEntry(logrus.New()).WithField("subsys", "webhook.mutate")
+}
+
+// ViewMinter exposes a primary volume in a namespace as a static view PV
+// pre-bound to a claim there (checkpointstore.SharedVolumePromoter
+// implements it): read-only for readers, read-write for a download Job.
+type ViewMinter interface {
+	MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error
+	MintReadOnlyFromPVLabels(ctx context.Context, primaryPV, roPVName, roClaim, ns string, labels map[string]string) error
+	MintViewFromPVLabels(ctx context.Context, primaryPV, pvName, claim, ns string, labels map[string]string, readOnly bool) error
 }

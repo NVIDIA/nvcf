@@ -1,5 +1,9 @@
 # L2 per-capture PVC for the CRIU path (nvsnap#63)
 
+Note (2026-09-29): the L4 blob store tier described below was retired;
+model and compile-cache volumes are cluster artifacts and captures are
+promoted to shared volumes. References to nvsnap-blobstore are historical.
+
 > **Status:** The per-capture PVC fan-out described here is current and
 > shipping. This document is framed around the CRIU dump path; the same L2
 > mechanism now also serves the rootfs/cachedir capture paths (the primary

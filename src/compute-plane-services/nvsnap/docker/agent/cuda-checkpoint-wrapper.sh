@@ -30,21 +30,24 @@ if [ -f /etc/ld.so.preload ]; then
     trap 'mv /etc/ld.so.preload.bak /etc/ld.so.preload 2>/dev/null' EXIT
 fi
 
+# Multiarch libdir name for this CPU (x86_64-linux-gnu, aarch64-linux-gnu).
+ARCH_LIBDIR="$(uname -m)-linux-gnu"
+
 # Container view (this wrapper runs in the nvsnap-agent container's mntns).
 # Each entry is a directory where libcuda.so.1 *might* live on the host,
 # expressed as the agent's /host-prefixed view.
 FALLBACK_PATHS="\
-/host/run/nvidia/driver/usr/lib/x86_64-linux-gnu:\
+/host/run/nvidia/driver/usr/lib/${ARCH_LIBDIR}:\
 /host/home/kubernetes/bin/nvidia/lib64:\
 /host/usr/local/nvidia/lib64:\
-/host/usr/lib/x86_64-linux-gnu"
+/host/usr/lib/${ARCH_LIBDIR}"
 
 # Host view (used when this wrapper runs inside nsenter into host mntns).
 HOST_FALLBACK_PATHS="\
-/run/nvidia/driver/usr/lib/x86_64-linux-gnu:\
+/run/nvidia/driver/usr/lib/${ARCH_LIBDIR}:\
 /home/kubernetes/bin/nvidia/lib64:\
 /usr/local/nvidia/lib64:\
-/usr/lib/x86_64-linux-gnu"
+/usr/lib/${ARCH_LIBDIR}"
 
 # Resolve our own directory BEFORE touching LD_LIBRARY_PATH — readlink/dirname
 # themselves die once the path is exported (host/driver dirs ship their own
@@ -54,7 +57,7 @@ DIR="$(dirname "$(readlink -f "$0")")"
 
 # Container's own libdir FIRST so libc/libm resolve from this container; the
 # host/driver dirs after it only supply libs missing here (libcuda.so.1).
-LD_PATH="/usr/lib/x86_64-linux-gnu"
+LD_PATH="/usr/lib/${ARCH_LIBDIR}"
 if [ -n "${NVSNAP_CUDA_LIB_DIR:-}" ]; then
     LD_PATH="${LD_PATH}:${NVSNAP_CUDA_LIB_DIR}"
 fi

@@ -13,7 +13,8 @@ COPY ui/ .
 RUN npm run build
 
 # Stage 2: Build Go server binary (embeds ui/dist from stage 1)
-FROM golang:1.25-bookworm AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
+ARG TARGETARCH
 WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
@@ -21,7 +22,7 @@ COPY . .
 # Copy built UI into the embed directory
 COPY --from=ui-builder /ui/dist ./ui/dist/
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -o nvsnap-server ./cmd/nvsnap-server
 

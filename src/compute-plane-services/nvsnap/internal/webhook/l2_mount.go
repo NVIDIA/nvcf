@@ -150,23 +150,9 @@ func (m *Mutator) tryL2Mount(ctx context.Context, pod *corev1.Pod, hash string) 
 	// the rox PVC reference is still injected; kubelet will just
 	// wait on the WFC binder until the agent finishes promote.
 	if m.L2WaitImage != "" {
-		waitC := buildL2WaitContainer(m.L2WaitImage, m.NvSnapServerURL, hash, m.L2WaitTimeout)
-		if len(pod.Spec.InitContainers) == 0 {
-			patches = append(patches, PatchOp{
-				Op:    "add",
-				Path:  "/spec/initContainers",
-				Value: []corev1.Container{waitC},
-			})
-		} else {
-			// Index 0 = prepend. nvsnap-l2-wait runs BEFORE all other
-			// init containers so the rest of the init chain doesn't
-			// fight with a not-yet-bound PVC.
-			patches = append(patches, PatchOp{
-				Op:    "add",
-				Path:  "/spec/initContainers/0",
-				Value: waitC,
-			})
-		}
+		// nvsnap-l2-wait runs BEFORE all other init containers so the rest
+		// of the init chain doesn't fight with a not-yet-bound PVC.
+		patches = prependInit(pod, patches, buildL2WaitContainer(m.L2WaitImage, m.NvSnapServerURL, hash, m.L2WaitTimeout))
 	}
 
 	// Make sure unused vars compile cleanly.

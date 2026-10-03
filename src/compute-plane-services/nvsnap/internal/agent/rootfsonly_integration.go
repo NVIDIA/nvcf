@@ -160,11 +160,10 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 		MountinfoProcRoot: "", // empty → mountinfo.DefaultProcRoot()
 		CacheDir:          a.config.RootfsCapture.PodCacheDir,
 		Log:               a.log.WithField("subsys", "rootfsonly.capture"),
-		// Push each successful capture to nvsnap-blobstore (same-cluster
-		// tier-3 fallback) AND, when cross-cluster replication is enabled,
-		// to this cluster's home bucket (the L4 cross-cluster tier).
-		// Both are best-effort; failures are logged and don't roll back
-		// the capture.
+		// When cross-cluster replication is enabled, push each successful
+		// capture to this cluster's home bucket (the L4 cross-cluster
+		// tier). Best-effort; failures are logged and don't roll back the
+		// capture.
 		PostCommit: a.postCaptureCommit,
 	}
 	watcher := &rootfsonly.Watcher{
@@ -205,7 +204,7 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 // PerCapturePVCBackend is appended only if the L2 config (a.l2Backend) is
 // wired — it requires a working RWX-capable StorageClass + VolumeSnapshotClass.
 // When missing, the chain degrades to Local + ConfigMap and restore falls
-// back to L3 (peer cascade) / L4 (nvsnap-blobstore).
+// back to L3 (peer cascade).
 func buildAgentBackend(cfg RootfsCaptureConfig, kubeClient kubernetes.Interface, a *Agent) (checkpointstore.Backend, error) {
 	inner, err := checkpointstore.NewLocal(cfg.CacheDir)
 	if err != nil {

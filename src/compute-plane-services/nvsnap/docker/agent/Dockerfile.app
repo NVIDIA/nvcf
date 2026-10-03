@@ -22,17 +22,20 @@ ARG LIBZMQ_IMAGE=nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
 # ============================================================================
 # Stage 1: Build Go binaries
 # ============================================================================
-FROM golang:1.25-bookworm AS go-builder
+# Go binaries cross-compile natively on the build host for the target
+# architecture (amd64 system nodes, arm64 Grace GPU nodes).
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
+ARG TARGETARCH
 
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/nvsnap-agent ./cmd/agent
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/restore-entrypoint ./cmd/restore-entrypoint
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/nvsnap-mount-prep ./cmd/nvsnap-mount-prep
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/nvsnap-rootfs-restore ./cmd/nvsnap-rootfs-restore
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /bin/nvsnap-agent ./cmd/agent
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /bin/restore-entrypoint ./cmd/restore-entrypoint
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /bin/nvsnap-mount-prep ./cmd/nvsnap-mount-prep
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /bin/nvsnap-rootfs-restore ./cmd/nvsnap-rootfs-restore
 
 # ============================================================================
 # Stage 2: Build intercept library
@@ -70,9 +73,23 @@ RUN cd /tmp/nvsnap_restore_helper && make && \
 # ============================================================================
 # Builder-payload stages (just pulled for COPY --from in final stage)
 # ============================================================================
-FROM ${UVLOOP_IMAGE} AS uvloop-payload
-FROM ${LIBUV_IMAGE}  AS libuv-payload
-FROM ${LIBZMQ_IMAGE} AS libzmq-payload
+# The io_uring/uvloop/libzmq payload for the criu-v2 restore path is
+# prebuilt for amd64 only. arm64 ships an empty payload: the model and
+# compile-cache volumes and the cachedir capture path do not use it, and
+# criu-v2 on arm64 is not validated.
+FROM --platform=linux/amd64 ${UVLOOP_IMAGE} AS uvloop-payload
+FROM --platform=linux/amd64 ${LIBUV_IMAGE}  AS libuv-payload
+FROM --platform=linux/amd64 ${LIBZMQ_IMAGE} AS libzmq-payload
+FROM --platform=$BUILDPLATFORM busybox:1.36 AS payload-amd64
+COPY --from=uvloop-payload /wheels/                  /payload/wheels/
+COPY --from=libuv-payload  /usr/local/lib/libuv.so   /payload/lib/libuv.so
+COPY --from=libuv-payload  /usr/local/lib/libuv.so.1 /payload/lib/libuv.so.1
+COPY --from=libzmq-payload /usr/local/lib/libzmq.so  /payload/lib/libzmq.so
+COPY --from=libzmq-payload /usr/local/lib/libzmq.so.5 /payload/lib/libzmq.so.5
+FROM --platform=$BUILDPLATFORM busybox:1.36 AS payload-arm64
+RUN mkdir -p /payload/wheels /payload/lib
+ARG TARGETARCH
+FROM payload-${TARGETARCH} AS payload
 
 # ============================================================================
 # Stage 3: Final image (fast - just copies binaries into base)
@@ -112,11 +129,7 @@ COPY lib/sitecustomize/sitecustomize.py /criu-bundle/sitecustomize/sitecustomize
 # copies these payloads into the workload pod's /nvsnap-lib emptyDir.
 # Replaces the previous 4-init-container fan-out and removes the
 # separate nvsnap-init image (one less artifact to keep version-matched).
-COPY --from=uvloop-payload /wheels/                  /criu-bundle/payload/wheels/
-COPY --from=libuv-payload  /usr/local/lib/libuv.so   /criu-bundle/payload/lib/libuv.so
-COPY --from=libuv-payload  /usr/local/lib/libuv.so.1 /criu-bundle/payload/lib/libuv.so.1
-COPY --from=libzmq-payload /usr/local/lib/libzmq.so  /criu-bundle/payload/lib/libzmq.so
-COPY --from=libzmq-payload /usr/local/lib/libzmq.so.5 /criu-bundle/payload/lib/libzmq.so.5
+COPY --from=payload /payload/ /criu-bundle/payload/
 COPY scripts/auto-inject-init.sh /criu-bundle/auto-inject-init.sh
 RUN chmod +x /criu-bundle/auto-inject-init.sh
 

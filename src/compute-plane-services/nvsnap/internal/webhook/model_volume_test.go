@@ -1,0 +1,1306 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+package webhook
+
+import (
+	"context"
+	appsv1 "k8s.io/api/apps/v1"
+	"strings"
+	"testing"
+
+	"github.com/sirupsen/logrus"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
+)
+
+func mvMutator(t *testing.T, mode modelvolume.Mode, role election.Role, kc *fake.Clientset) (*Mutator, *fakeElector) {
+	t.Helper()
+	m, el := mvMutatorReader(t, mode, modelvolume.ReaderHostPath, role, kc)
+	return m, el
+}
+
+func mvMutatorReader(t *testing.T, mode modelvolume.Mode, reader modelvolume.ReaderMode, role election.Role, kc *fake.Clientset) (*Mutator, *fakeElector) {
+	t.Helper()
+	el := &fakeElector{role: role}
+	// NVMesh handles carry the attaching namespace; a filesystem handle is
+	// used as is. The profile picks the transform; the tests mirror that.
+	transform := "nvmesh"
+	if mode == modelvolume.ModeRWX {
+		transform = ""
+	}
+	tx, _ := checkpointstore.LookupVolumeHandleTransform(transform)
+	cfg := modelvolume.Config{Mode: mode, StorageClass: "sc", Size: resource.MustParse("512Gi"), Reader: reader}
+	ccfg := cfg
+	ccfg.Kind = modelvolume.KindCache
+	return &Mutator{
+		Backend:     newBackend(t),
+		CacheDir:    "/opt/nvsnap",
+		Composer:    &rootfsonly.HashInputComposer{CUDADriverMajor: 580},
+		Elector:     el,
+		ModelVolume: &modelvolume.Provisioner{Kube: kc, Cfg: cfg},
+		CacheVolume: &modelvolume.Provisioner{Kube: kc, Cfg: ccfg},
+		ViewMinter:  &checkpointstore.SharedVolumePromoter{KubeClient: kc, StorageClass: "sc", Transform: tx, Log: logrus.New()},
+	}, el
+}
+
+// The prd11 function shape: NGC init download into an emptyDir, engine
+// from a positional MODEL_PATH, two pods per instance.
+func ngcFunctionPod() *corev1.Pod {
+	gpu := corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("4")}}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sr-fn", GenerateName: "mini-service-kimi-k3-"},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{
+				Name: "download-ngc-model", Image: "nvcr.io/org/ultra:vllm", Command: []string{"/bin/bash", "-c"},
+				Args:         []string{"set -euo pipefail\nngc registry model download-version --dest \"${NGC_MODEL_MOUNT}\" \"${NGC_MODEL_NAME}\"\n"},
+				Env:          []corev1.EnvVar{{Name: "NGC_MODEL_NAME", Value: "org/team/nemotron3-ultra-genrm:bf16-fixed"}, {Name: "NGC_MODEL_MOUNT", Value: "/config/models"}},
+				VolumeMounts: []corev1.VolumeMount{{Name: "ngc-models", MountPath: "/config/models"}, {Name: "secrets", MountPath: "/var/secrets", ReadOnly: true}, {Name: "scripts", MountPath: "/opt/kimi-k3"}},
+			}},
+			Containers: []corev1.Container{{
+				Name: "kimi-k3", Image: "nvcr.io/org/ultra:vllm", Command: []string{"/bin/bash", "/opt/kimi-k3/start.sh"},
+				Env:          []corev1.EnvVar{{Name: "MODEL_PATH", Value: "/config/models/nemotron3-ultra-genrm"}, {Name: "HF_HUB_OFFLINE", Value: "1"}},
+				Resources:    gpu,
+				VolumeMounts: []corev1.VolumeMount{{Name: "dshm", MountPath: "/dev/shm"}, {Name: "ngc-models", MountPath: "/config/models"}},
+			}},
+			Volumes: []corev1.Volume{
+				{Name: "dshm", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: "ngc-models", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: "secrets", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "function-secrets"}}},
+				{Name: "scripts", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "kimi-k3-scripts"}}}},
+			},
+		},
+	}
+}
+
+func stockVLLMPod() *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fn", GenerateName: "vllm-"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "vllm", Image: "vllm/vllm-openai:v0.20.0", Command: []string{"/bin/bash", "-lc"},
+			Args:      []string{"vllm serve --model Qwen/Qwen2.5-32B-Instruct --tensor-parallel-size 4"},
+			Env:       []corev1.EnvVar{{Name: "HF_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{Key: "token"}}}},
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("4")}},
+		}}},
+	}
+}
+
+type mvView struct {
+	labels, annotations map[string]string
+	volumes             map[string]corev1.Volume // by name, from replace/add ops
+	roMounts            []string
+	initScripts         map[string]string
+	newInits            []corev1.Container
+	env                 map[string]string
+}
+
+func viewMV(pod *corev1.Pod, patches []PatchOp) mvView {
+	v := mvView{labels: map[string]string{}, annotations: map[string]string{}, volumes: map[string]corev1.Volume{}, initScripts: map[string]string{}, env: map[string]string{}}
+	for _, p := range patches {
+		switch {
+		case strings.HasPrefix(p.Path, "/metadata/labels/"):
+			v.labels[strings.ReplaceAll(strings.TrimPrefix(p.Path, "/metadata/labels/"), "~1", "/")] = p.Value.(string)
+		case strings.HasPrefix(p.Path, "/metadata/annotations/"):
+			v.annotations[strings.ReplaceAll(strings.TrimPrefix(p.Path, "/metadata/annotations/"), "~1", "/")] = p.Value.(string)
+		case strings.HasSuffix(p.Path, "/readOnly") && p.Value == true:
+			v.roMounts = append(v.roMounts, p.Path)
+		case strings.HasPrefix(p.Path, "/spec/initContainers/") && strings.HasSuffix(p.Path, "/args"):
+			idx := strings.Split(strings.TrimPrefix(p.Path, "/spec/initContainers/"), "/")[0]
+			v.initScripts[pod.Spec.InitContainers[atoi(idx)].Name] = p.Value.([]string)[0]
+		}
+		switch val := p.Value.(type) {
+		case corev1.Volume:
+			v.volumes[val.Name] = val
+		case corev1.Container:
+			if strings.HasPrefix(p.Path, "/spec/initContainers") {
+				v.newInits = append(v.newInits, val)
+			}
+		case corev1.EnvVar:
+			v.env[val.Name] = val.Value
+		}
+	}
+	return v
+}
+
+// bindClaims makes the fake API server behave like a filesystem class that
+// binds at once: every created claim gets a bound PV named after it.
+func bindClaims(kc *fake.Clientset, driver string) {
+	kc.PrependReactor("create", "persistentvolumeclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		pvc := action.(k8stesting.CreateAction).GetObject().(*corev1.PersistentVolumeClaim).DeepCopy()
+		if pvc.Spec.VolumeName == "" {
+			pvc.Spec.VolumeName = "pv-" + pvc.Name
+			pv := &corev1.PersistentVolume{
+				ObjectMeta: metav1.ObjectMeta{Name: pvc.Spec.VolumeName},
+				Spec: corev1.PersistentVolumeSpec{
+					Capacity:                      corev1.ResourceList{corev1.ResourceStorage: pvc.Spec.Resources.Requests[corev1.ResourceStorage]},
+					AccessModes:                   pvc.Spec.AccessModes,
+					PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: driver, VolumeHandle: "fs:" + pvc.Name}},
+				},
+			}
+			if err := kc.Tracker().Create(corev1.SchemeGroupVersion.WithResource("persistentvolumes"), pv, ""); err != nil {
+				return true, nil, err
+			}
+		}
+		pvc.Status.Phase = corev1.ClaimBound
+		if err := kc.Tracker().Create(corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims"), pvc, pvc.Namespace); err != nil {
+			return true, nil, err
+		}
+		return true, pvc, nil
+	})
+}
+
+// completePrimary plants a complete, retained primary PV for uri.
+func completePrimary(t *testing.T, kc *fake.Clientset, uri, driver string) string {
+	t.Helper()
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-" + modelvolume.Key(uri) + "-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("64Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: driver, VolumeHandle: "vol:" + modelvolume.Key(uri) + ":nvsnap-system"}},
+		},
+	}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), pv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	return pv.Name
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, el := mvMutator(t, modelvolume.ModeBlock, election.RoleLeader, kc)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	if el.called != 0 {
+		t.Error("the download step is a Job; no election runs")
+	}
+	if v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
+		t.Errorf("every pod is a reader: ann=%v labels=%v", v.annotations, v.labels)
+	}
+	// Block mode: no claim is created at admission. The size of the model
+	// is unknown until it has been downloaded, and not every storage
+	// system can grow a volume, so the Job stages into an emptyDir and the
+	// agent sizes the claim from what landed (the cachedir shape).
+	if claims, _ := kc.CoreV1().PersistentVolumeClaims("").List(context.Background(), metav1.ListOptions{}); len(claims.Items) != 0 {
+		t.Errorf("block mode creates no claim at admission, got %d", len(claims.Items))
+	}
+	job, err := kc.BatchV1().Jobs("sr-fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("download Job must be created: %v", err)
+	}
+	// The download is an init container; a hold container keeps the pod,
+	// and with it the staged emptyDir, alive until the agent has copied.
+	if len(job.Spec.Template.Spec.InitContainers) != 1 || len(job.Spec.Template.Spec.Containers) != 1 || job.Spec.Template.Spec.Containers[0].Name != modelvolume.HoldContainer {
+		t.Fatalf("staging pod shape: inits=%d containers=%+v", len(job.Spec.Template.Spec.InitContainers), job.Spec.Template.Spec.Containers)
+	}
+	jc := job.Spec.Template.Spec.InitContainers[0]
+	script := jc.Args[0]
+	if jc.Image != "nvcr.io/org/ultra:vllm" || !strings.Contains(script, "ngc registry model download-version") || !strings.Contains(script, "> /config/models/.nvsnap-complete") {
+		t.Errorf("job must run the chart's own download then touch the marker:\n%s", script)
+	}
+	landing := job.Spec.Template.Spec.Volumes[0]
+	if len(jc.Env) != 2 || jc.VolumeMounts[0].MountPath != "/config/models" || landing.EmptyDir == nil || landing.Name != "ngc-models" || job.Annotations[modelvolume.StagingAnnotation] != "ngc-models" {
+		t.Errorf("job must carry the init's env and stage into an emptyDir at the init's path, named by the staging annotation: env=%v mounts=%v landing=%+v ann=%v", jc.Env, jc.VolumeMounts, landing, job.Annotations)
+	}
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds < 3600 {
+		t.Error("a staging Job carries an active deadline as the safety net for an agent that never copies")
+	}
+	// The NGC key lives in a secret file and the init's helper scripts in
+	// a ConfigMap; the Job must mount both or the download cannot run.
+	jobVols := map[string]corev1.Volume{}
+	for _, vol := range job.Spec.Template.Spec.Volumes {
+		jobVols[vol.Name] = vol
+	}
+	if len(jc.VolumeMounts) != 3 || jobVols["secrets"].Secret == nil || jobVols["secrets"].Secret.SecretName != "function-secrets" || jobVols["scripts"].ConfigMap == nil {
+		t.Errorf("job must carry every volume the init mounted, only the landing one redirected: mounts=%v volumes=%v", jc.VolumeMounts, jobVols)
+	}
+	if _, dshm := jobVols["dshm"]; dshm || len(jobVols) != 3 {
+		t.Errorf("volumes the init does not mount stay behind: %v", jobVols)
+	}
+	ps := job.Spec.Template.Spec
+	if jc.Resources.Requests.Cpu().IsZero() || jc.Resources.Limits.Memory().IsZero() || ps.SecurityContext == nil || ps.SecurityContext.SeccompProfile == nil ||
+		jc.SecurityContext == nil || jc.SecurityContext.AllowPrivilegeEscalation == nil || *jc.SecurityContext.AllowPrivilegeEscalation || jc.SecurityContext.Capabilities == nil ||
+		ps.AutomountServiceAccountToken == nil || *ps.AutomountServiceAccountToken {
+		t.Errorf("job pod must satisfy the function-namespace baselines (requests/limits, seccomp, no escalation, dropped caps, no SA token): %+v %+v", jc.Resources, ps.SecurityContext)
+	}
+	s := v.initScripts["download-ngc-model"]
+	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
+		t.Errorf("the pod's own init becomes a wait:\n%s", s)
+	}
+	if v.env["VLLM_ENABLE_STARTUP_PLAN"] != "1" {
+		t.Errorf("template switches that are not paths apply as written: env %v", v.env)
+	}
+	if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" || v.env["HF_HOME"] != "" {
+		t.Errorf("Block mode: compile caches to the local cachedir, model env untouched: %v", v.env)
+	}
+}
+
+func TestModelVolume_ReaderBlock_PendingBind(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutator(t, modelvolume.ModeBlock, election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" || v.annotations[modelvolume.LandingAnnotation] != "/config/models" {
+		t.Errorf("Block reader stamp: %v %v", v.labels, v.annotations)
+	}
+	vol, replaced := v.volumes["ngc-models"]
+	if !replaced || vol.HostPath == nil || vol.HostPath.Path != "/var/lib/containerd/nvsnap-models/"+modelvolume.Key("ngc://org/team/nemotron3-ultra-genrm:bf16-fixed") || *vol.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("Block reader lands on a hostPath under the model host root for the agent to bind into, got %+v", vol)
+	}
+	var propagations int
+	for _, p := range patches {
+		if strings.HasSuffix(p.Path, "/mountPropagation") && p.Value == corev1.MountPropagationHostToContainer {
+			propagations++
+		}
+	}
+	if propagations != 2 {
+		t.Errorf("engine and download init mounts must propagate host mounts in, got %d", propagations)
+	}
+	s := v.initScripts["download-ngc-model"]
+	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") || !strings.Contains(s, "ngc registry model download-version") || !strings.Contains(s, "deadline passed") {
+		t.Errorf("reader init must wait for the marker and fall back to its own download:\n%s", s)
+	}
+	for _, p := range patches {
+		if strings.HasPrefix(p.Path, "/spec/schedulingGates") {
+			t.Fatal("no pod is ever gated on the model volume path")
+		}
+	}
+}
+
+// Default reader mode on block storage: no hostPath (Kyverno's
+// disallow-host-path rejects it in function namespaces); the pod
+// references the read-only claim in its namespace and waits on binding.
+func TestModelVolume_ReaderBlockPVC_ReferencesReadOnlyClaim(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
+		t.Errorf("PVC reader is pending until the agent mints its claim: %v", v.labels)
+	}
+	vol, replaced := v.volumes["ngc-models"]
+	if !replaced || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != modelvolume.ReadOnlyClaimName(uri) {
+		t.Errorf("landing volume becomes the read-only claim, got %+v", vol)
+	}
+	for _, p := range patches {
+		if strings.HasSuffix(p.Path, "/mountPropagation") {
+			t.Error("no mount propagation in PVC mode")
+		}
+		if vv, ok := p.Value.(corev1.Volume); ok && vv.HostPath != nil {
+			t.Error("no hostPath in PVC mode")
+		}
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ReadOnlyClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("the read-only claim is minted by the agent after completion, not at admission of an incomplete volume")
+	}
+	if s := v.initScripts["download-ngc-model"]; !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
+		t.Errorf("reader init still waits for the marker on the bound claim:\n%s", s)
+	}
+}
+
+// Volume already complete: the webhook mints the read-only claim in the
+// pod namespace itself so the pod binds immediately, and it is not pending.
+// Engine-download chart in PVC mode: the injected init carries no
+// mount propagation (nothing arrives from the host) and satisfies the
+// baselines; the Job container gets requests and limits.
+func TestModelVolume_ReaderBlockPVC_InjectedInitHardened(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := stockVLLMPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	var init corev1.Container
+	for _, c := range v.newInits {
+		if c.Name == injectedDownloadInit {
+			init = c
+		}
+	}
+	if init.Name == "" {
+		t.Fatalf("injected download init expected, got %v", v.newInits)
+	}
+	for _, vm := range init.VolumeMounts {
+		if vm.MountPropagation != nil {
+			t.Errorf("no mount propagation in PVC mode: %+v", vm)
+		}
+	}
+	if init.Resources.Limits.Memory().IsZero() || init.SecurityContext == nil || init.SecurityContext.Capabilities == nil {
+		t.Errorf("injected init must carry limits and a security context: %+v %+v", init.Resources, init.SecurityContext)
+	}
+	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	job, err := kc.BatchV1().Jobs(pod.Namespace).Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("download Job: %v", err)
+	}
+	if jc := job.Spec.Template.Spec.Containers[0]; jc.Resources.Limits.Cpu().IsZero() || jc.Resources.Requests.Memory().IsZero() {
+		t.Errorf("engine-download Job container needs requests and limits: %+v", jc.Resources)
+	}
+}
+
+// The chart runs its engine as a fixed non-root user with an fsGroup.
+// The download Job and the injected init inherit that posture: the
+// volume is written by the user that reads it, and runAsNonRoot holds.
+func TestModelVolume_InheritsChartUserPosture(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := stockVLLMPod()
+	uid, gid, nonRoot := int64(1000), int64(2000), true
+	pod.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: &gid}
+	pod.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{RunAsNonRoot: &nonRoot, RunAsUser: &uid, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	isc := v.newInits[0].SecurityContext
+	if isc.RunAsNonRoot == nil || !*isc.RunAsNonRoot || isc.RunAsUser == nil || *isc.RunAsUser != uid || isc.SeccompProfile == nil {
+		t.Errorf("injected init inherits the engine's user posture: %+v", isc)
+	}
+	job, err := kc.BatchV1().Jobs(pod.Namespace).Get(context.Background(), modelvolume.JobName("hf://Qwen/Qwen2.5-32B-Instruct"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := job.Spec.Template.Spec
+	jsc := ps.Containers[0].SecurityContext
+	if jsc.RunAsNonRoot == nil || !*jsc.RunAsNonRoot || jsc.RunAsUser == nil || *jsc.RunAsUser != uid {
+		t.Errorf("Job container inherits the engine's user posture: %+v", jsc)
+	}
+	if ps.SecurityContext == nil || ps.SecurityContext.FSGroup == nil || *ps.SecurityContext.FSGroup != gid || ps.SecurityContext.SeccompProfile == nil {
+		t.Errorf("Job pod inherits the pod security context plus seccomp: %+v", ps.SecurityContext)
+	}
+	var drops []corev1.Capability
+	if jsc.Capabilities != nil {
+		drops = jsc.Capabilities.Drop
+	}
+	if len(drops) != 2 || drops[1] != "NET_RAW" {
+		t.Errorf("NET_RAW is dropped by name: %v", drops)
+	}
+}
+
+func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("512Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
+		},
+	}
+	kc := fake.NewSimpleClientset(pv)
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if _, pending := v.labels[modelvolume.PendingLabel]; pending {
+		t.Errorf("complete volume: the reader is not pending, labels %v", v.labels)
+	}
+	ro, err := kc.CoreV1().PersistentVolumeClaims("sr-other").Get(context.Background(), modelvolume.ReadOnlyClaimName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read-only claim must be minted in the pod namespace at admission: %v", err)
+	}
+	roPV, _ := kc.CoreV1().PersistentVolumes().Get(context.Background(), ro.Spec.VolumeName, metav1.GetOptions{})
+	if roPV.Spec.CSI.VolumeHandle != "cluster:csi-done:vol:sr-other" {
+		t.Errorf("handle rewritten to the reader namespace: %+v", roPV.Spec.CSI)
+	}
+	if _, err := kc.BatchV1().Jobs("sr-other").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("no download Job for a complete volume")
+	}
+}
+
+// A reader of a complete block volume gets the page-cache sweep before the
+// engine starts; NVSNAP_PREWARM=0 on the engine container turns it off, and
+// a volume that is not complete yet gets none (nothing to sweep).
+func TestModelVolume_ReaderBlockPVC_CompletePrewarms(t *testing.T) {
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("100Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
+		},
+	}
+	find := func(v mvView) *corev1.Container {
+		for i := range v.newInits {
+			if v.newInits[i].Name == modelPrewarmName {
+				return &v.newInits[i]
+			}
+		}
+		return nil
+	}
+
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset(pv))
+	pod := ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pw := find(viewMV(pod, patches))
+	if pw == nil {
+		t.Fatalf("complete block volume: prewarm init expected")
+	}
+	if pw.Image != pod.Spec.Containers[0].Image {
+		t.Errorf("sweep runs in the engine image: %q", pw.Image)
+	}
+	if len(pw.VolumeMounts) != 1 || !pw.VolumeMounts[0].ReadOnly || !strings.Contains(pw.Command[2], pw.VolumeMounts[0].MountPath) {
+		t.Errorf("sweep mounts the model read-only and reads that path: %+v %q", pw.VolumeMounts, pw.Command[2])
+	}
+	if pw.Resources.Limits.Cpu().MilliValue() < 1000 || pw.SecurityContext == nil || pw.SecurityContext.Capabilities == nil {
+		t.Errorf("sweep needs real CPU limits and a hardened security context: %+v %+v", pw.Resources, pw.SecurityContext)
+	}
+	if _, limited := pw.Resources.Limits[corev1.ResourceMemory]; limited {
+		t.Errorf("a memory limit below the model size evicts the sweep's own pages; the sweep must not carry one: %+v", pw.Resources.Limits)
+	}
+	if last := patches[len(patches)-1]; last.Path == "/spec/initContainers" {
+		t.Errorf("init list bootstrap must precede the sweep, not follow it")
+	}
+
+	pod = ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "NVSNAP_PREWARM", Value: "0"})
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if find(viewMV(pod, patches)) != nil {
+		t.Errorf("NVSNAP_PREWARM=0 turns the sweep off")
+	}
+
+	m, _ = mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset())
+	pod = ngcFunctionPod()
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if find(viewMV(pod, patches)) != nil {
+		t.Errorf("incomplete volume: nothing to sweep yet")
+	}
+
+	// A volume larger than the page cache can hold gets no sweep: it would
+	// evict its own pages and only cost time.
+	big := pv.DeepCopy()
+	big.Name, big.Spec.Capacity = "pvc-huge", corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1600Gi")}
+	big.Labels[modelvolume.IdentityLabel] = modelvolume.Key("ngc://org/team/kimi-k3:hf")
+	m, _ = mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset(big))
+	pod = ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	for i := range pod.Spec.Containers[0].Env {
+		if pod.Spec.Containers[0].Env[i].Name == "NGC_MODEL_NAME" {
+			pod.Spec.Containers[0].Env[i].Value = "org/team/kimi-k3:hf"
+		}
+	}
+	for i := range pod.Spec.InitContainers {
+		for j := range pod.Spec.InitContainers[i].Env {
+			if pod.Spec.InitContainers[i].Env[j].Name == "NGC_MODEL_NAME" {
+				pod.Spec.InitContainers[i].Env[j].Value = "org/team/kimi-k3:hf"
+			}
+		}
+	}
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if find(viewMV(pod, patches)) != nil {
+		t.Errorf("a 1600Gi volume exceeds the default 256Gi sweep cap: no prewarm")
+	}
+}
+
+// A shared filesystem is readable while written: the primary claim is
+// created in the nvsnap namespace at admission, the Job writes through a
+// read-write view in the pod's namespace, and the reader mounts its
+// read-only view at once and waits for the marker. No per-namespace
+// primary, no pending.
+func TestModelVolume_SharedFilesystem_FirstPodWritesThroughView(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	bindClaims(kc, "fss.csi.oraclecloud.com")
+	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, "", election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	ctx := context.Background()
+	primary, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, modelvolume.ClaimName(uri), metav1.GetOptions{})
+	if err != nil || primary.Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Fatalf("the primary claim is created in the nvsnap namespace, ReadWriteMany: %v %+v", err, primary)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, modelvolume.ClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("no primary claim in the function namespace")
+	}
+	cfg := m.ModelVolume.Cfg
+	wv, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, cfg.WriterViewClaimName(uri), metav1.GetOptions{})
+	if err != nil || wv.Spec.AccessModes[0] != corev1.ReadWriteMany || wv.Spec.VolumeName != cfg.WriterViewPVName(uri, "sr-fn") {
+		t.Fatalf("the Job's read-write view is minted in the function namespace: %v %+v", err, wv)
+	}
+	wpv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, cfg.WriterViewPVName(uri, "sr-fn"), metav1.GetOptions{})
+	if wpv.Spec.CSI == nil || wpv.Spec.CSI.ReadOnly || wpv.Spec.CSI.VolumeHandle != "fs:"+modelvolume.ClaimName(uri) || wpv.Labels[modelvolume.ViewRoleLabel] != modelvolume.ViewRoleWriter || !modelvolume.IsViewPV(wpv) {
+		t.Errorf("writer view PV is a read-write static view of the primary volume: %+v", wpv)
+	}
+	job, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if land := job.Spec.Template.Spec.Volumes[0]; land.PersistentVolumeClaim == nil || land.PersistentVolumeClaim.ClaimName != cfg.WriterViewClaimName(uri) || job.Annotations[modelvolume.StagingAnnotation] != "" {
+		t.Errorf("the Job writes through the writer view, no staging: %+v %v", land, job.Annotations)
+	}
+	ro, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, cfg.ReadOnlyClaimName(uri), metav1.GetOptions{})
+	if err != nil || ro.Spec.AccessModes[0] != corev1.ReadOnlyMany {
+		t.Fatalf("the reader's read-only view is minted at admission while the download runs: %v %+v", err, ro)
+	}
+	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "" {
+		t.Errorf("reader is not pending on a shared filesystem: %v", v.labels)
+	}
+	vol := v.volumes["ngc-models"]
+	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) || len(v.roMounts) != 1 {
+		t.Errorf("landing becomes the read-only view mounted read-only, got %+v ro=%v", vol, v.roMounts)
+	}
+	if sc := v.initScripts["download-ngc-model"]; !strings.Contains(sc, "while [ ! -f /config/models/.nvsnap-complete ]") {
+		t.Errorf("the chart's init waits for the marker:\n%s", sc)
+	}
+	if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" {
+		t.Errorf("compile caches live in the local cachedir, got %q", v.env["TORCHINDUCTOR_CACHE_DIR"])
+	}
+	if _, ok := v.volumes["nvsnap-cachedir"]; !ok {
+		t.Errorf("the local cachedir emptyDir is mounted, volumes %v", v.volumes)
+	}
+	if v.labels[CacheCaptureLabel] != "true" {
+		t.Errorf("the compile-cache set is collected on every storage: %v", v.labels)
+	}
+}
+
+func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	bindClaims(kc, "fss.csi.oraclecloud.com")
+	m, _ := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
+	pod := stockVLLMPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	job, err := kc.BatchV1().Jobs("fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("engine-download needs a download Job: %v", err)
+	}
+	jc := job.Spec.Template.Spec.Containers[0]
+	s := jc.Args[0]
+	if jc.Image != pod.Spec.Containers[0].Image || !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "> /nvsnap-model/.nvsnap-complete") || jc.VolumeMounts[0].MountPath != downloadMount {
+		t.Errorf("job must run hf download on the engine image into the landing mounted at %s: image=%s mounts=%v\n%s", downloadMount, jc.Image, jc.VolumeMounts, s)
+	}
+	// The download never touches the engine's /root: HF_HOME and HOME both
+	// point at the mounted landing (dev1 2026-10-01: a non-root engine
+	// posture made hf fail on /root/.cache/huggingface/token).
+	jenv := map[string]string{}
+	for _, e := range jc.Env {
+		jenv[e.Name] = e.Value
+	}
+	if jenv["HF_HOME"] != downloadMount || jenv["HOME"] != downloadMount {
+		t.Errorf("job HF_HOME and HOME must be the landing mount, got %v", jenv)
+	}
+	var sawToken bool
+	for _, e := range jc.Env {
+		if e.Name == "HF_TOKEN" && e.ValueFrom != nil {
+			sawToken = true
+		}
+	}
+	if !sawToken {
+		t.Error("registry credentials must be forwarded to the download Job")
+	}
+	ienv := map[string]string{}
+	for _, e := range v.newInits[0].Env {
+		ienv[e.Name] = e.Value
+	}
+	if ienv["HF_HOME"] != downloadMount || ienv["HOME"] != downloadMount || v.newInits[0].VolumeMounts[0].MountPath != downloadMount || !strings.Contains(v.newInits[0].Args[0], "/nvsnap-model/.nvsnap-complete") {
+		t.Errorf("the injected init mounts the landing at %s and waits for the marker there: env=%v mounts=%v", downloadMount, ienv, v.newInits[0].VolumeMounts)
+	}
+	// The wait init plus the cachedir init: compile caches stay local in
+	// every mode because the shared claim is read-only for readers.
+	var wait, cachedir bool
+	for _, c := range v.newInits {
+		switch c.Name {
+		case "nvsnap-model-download":
+			wait = strings.Contains(c.Args[0], "while [ ! -f")
+		case "nvsnap-cachedir-init":
+			cachedir = true
+		}
+	}
+	if !wait || !cachedir || len(v.newInits) != 2 {
+		t.Errorf("the pod gets a wait init and the cachedir init, got %v", v.newInits)
+	}
+	if v.env["HF_HUB_OFFLINE"] != "1" {
+		t.Error("engine must start offline and read the volume")
+	}
+	vol, ok := v.volumes[modelVolumeName]
+	if !ok || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != m.ModelVolume.Cfg.ReadOnlyClaimName(uri) {
+		t.Errorf("rootfs landing gets the read-only view: %+v", vol)
+	}
+	if land := job.Spec.Template.Spec.Volumes[0]; land.PersistentVolumeClaim == nil || land.PersistentVolumeClaim.ClaimName != m.ModelVolume.Cfg.WriterViewClaimName(uri) {
+		t.Errorf("the Job writes through the writer view: %+v", land)
+	}
+}
+
+func TestModelVolume_CompleteCreatesNoJob(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, el := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
+	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	completePrimary(t, kc, uri, "fss.csi.oraclecloud.com")
+	patches, err := m.Mutate(context.Background(), stockVLLMPod())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(stockVLLMPod(), patches)
+	if el.called != 0 || v.labels[modelvolume.RoleLabel] != "reader" {
+		t.Errorf("complete volume: reader role; labels=%v", v.labels)
+	}
+	if _, err := kc.BatchV1().Jobs("fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("a complete volume needs no download Job")
+	}
+}
+
+func TestModelVolume_LeavesOthersAlone(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, el := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
+	customer := stockVLLMPod()
+	customer.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: "models", MountPath: "/root/.cache/huggingface"}}
+	customer.Spec.Volumes = []corev1.Volume{{Name: "models", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "their-nfs"}}}}
+	if p, err := m.modelVolumePatches(context.Background(), customer); err != nil || p != nil {
+		t.Errorf("customer PVC at HF_HOME must be left alone: %v %v", p, err)
+	}
+	noGPU := stockVLLMPod()
+	noGPU.Spec.Containers[0].Resources = corev1.ResourceRequirements{}
+	if p, _ := m.modelVolumePatches(context.Background(), noGPU); p != nil {
+		t.Error("a pod without GPUs is not a model worker")
+	}
+	frontend := stockVLLMPod()
+	frontend.Spec.Containers[0].Args = []string{"python3 -m dynamo.frontend --router-mode kv"}
+	if p, _ := m.modelVolumePatches(context.Background(), frontend); p != nil {
+		t.Error("a pod naming no model is left alone")
+	}
+	if el.called != 0 {
+		t.Error("no election for pods that are left alone")
+	}
+}
+
+// A fresh failure record means the last copy gave up; a reader that
+// referenced the read-only claim would wait forever, so the pod keeps its
+// own download and nothing is created for it.
+func TestModelVolume_RecentFailureLeavesPodAlone(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	if err := m.ModelVolume.RecordFailure(context.Background(), uri, "copy failed"); err != nil {
+		t.Fatal(err)
+	}
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range patches {
+		if strings.Contains(p.Path, "nvsnap.io~1model") || strings.HasPrefix(p.Path, "/spec/volumes") || strings.HasPrefix(p.Path, "/spec/initContainers") {
+			t.Errorf("pod must be left on its own download, got patch %s", p.Path)
+		}
+	}
+	if jobs, _ := kc.BatchV1().Jobs("").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Error("no download Job while the failure record is fresh")
+	}
+}
+
+func cacheMutator(t *testing.T, kc *fake.Clientset) *Mutator {
+	t.Helper()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	ccfg := m.ModelVolume.Cfg
+	ccfg.Kind = modelvolume.KindCache
+	m.CacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+	return m
+}
+
+func completeModelPV(t *testing.T, kc *fake.Clientset, uri string) {
+	t.Helper()
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-" + modelvolume.Key(uri),
+		Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true"}},
+		Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-m:v"}}}}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), pv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// No cache volume for this engine configuration and ordinal yet: the pod
+// keeps its local cachedir and is marked for capture after Ready, with the
+// identity (config hash + ordinal) and the emptyDir location stamped.
+func TestCacheVolume_FirstPodMarkedForCapture(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	completeModelPV(t, kc, uri)
+	m := cacheMutator(t, kc)
+	two := int32(2)
+	if _, err := kc.AppsV1().StatefulSets("sr-fn").Create(context.Background(), &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3", Namespace: "sr-fn"}, Spec: appsv1.StatefulSetSpec{Replicas: &two}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pod := ngcFunctionPod()
+	pod.Name = "mini-service-kimi-k3-1"
+	pod.OwnerReferences = []metav1.OwnerReference{{Kind: "StatefulSet", Name: "mini-service-kimi-k3"}}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	curi := v.annotations[CacheURIAnnotation]
+	if v.labels[CacheCaptureLabel] != "true" || !strings.HasPrefix(curi, "cache://") || strings.Contains(strings.TrimPrefix(curi, "cache://"), "/") ||
+		v.labels[modelvolume.CacheKeyLabel] != modelvolume.Key(curi) || v.annotations[modelvolume.CacheOrdinalAnnotation] != "1" || v.annotations[modelvolume.CacheGroupSizeAnnotation] != "2" ||
+		v.annotations[CacheVolumeAnnotation] != cacheDirVolumeName || v.annotations[CacheSubpathAnnotation] != "cache" {
+		t.Errorf("rank stamps: the set identity has no ordinal, the ordinal and the StatefulSet's replica count are stamped: labels=%v ann=%v", v.labels, v.annotations)
+	}
+	for _, c := range v.newInits {
+		if c.Name == cacheSeedInitName {
+			t.Error("no seed init without a complete cache set")
+		}
+	}
+	// Ordinal 0 of the same configuration shares the set identity.
+	pod0 := ngcFunctionPod()
+	pod0.Name = "mini-service-kimi-k3-0"
+	pod0.OwnerReferences = pod.OwnerReferences
+	p0, _ := m.Mutate(context.Background(), pod0)
+	if v0 := viewMV(pod0, p0); v0.annotations[CacheURIAnnotation] != curi || v0.annotations[modelvolume.CacheOrdinalAnnotation] != "0" {
+		t.Errorf("ordinal 0 shares the set: %v", v0.annotations)
+	}
+	// No owner: a group of one.
+	lone := ngcFunctionPod()
+	lone.Name = "vllm-single"
+	pl, _ := m.Mutate(context.Background(), lone)
+	if vl := viewMV(lone, pl); vl.annotations[modelvolume.CacheGroupSizeAnnotation] != "1" || vl.annotations[modelvolume.CacheOrdinalAnnotation] != "0" {
+		t.Errorf("lone pod is ordinal 0 of a group of one: %v", vl.annotations)
+	}
+}
+
+// Cache volume complete: the read-only claim is minted at admission and a
+// seed init copies it into the pod's cachedir before the engine starts.
+func TestCacheVolume_CompleteSeedsCachedir(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	completeModelPV(t, kc, uri)
+	m := cacheMutator(t, kc)
+	pod := ngcFunctionPod()
+	pod.Name = "mini-service-kimi-k3-0"
+	curi, ok := m.cacheURI(pod)
+	if !ok {
+		t.Fatal("cache uri")
+	}
+	cpv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-cache",
+		Labels: map[string]string{modelvolume.CacheLabel: modelvolume.Key(curi), modelvolume.CompleteLabel: "true"}},
+		Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-c:v"}}}}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), cpv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.labels[CacheCaptureLabel] != "" {
+		t.Error("a pod seeded from a complete cache is not a capture candidate")
+	}
+	claim := m.CacheVolume.Cfg.ReadOnlyClaimName(curi)
+	vol, ok := v.volumes[cacheSeedVolumeName]
+	if !ok || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != claim || !vol.PersistentVolumeClaim.ReadOnly {
+		t.Errorf("cache seed volume must reference the read-only cache claim: %+v", vol)
+	}
+	pvc, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), claim, metav1.GetOptions{})
+	if err != nil || pvc.Labels[modelvolume.CacheLabel] != modelvolume.Key(curi) || pvc.Spec.AccessModes[0] != corev1.ReadOnlyMany {
+		t.Errorf("read-only cache claim minted at admission with the cache label: %v %v", err, pvc)
+	}
+	var seed *corev1.Container
+	for i := range v.newInits {
+		if v.newInits[i].Name == cacheSeedInitName {
+			seed = &v.newInits[i]
+		}
+	}
+	if seed == nil {
+		t.Fatalf("seed init missing: %v", v.newInits)
+	}
+	if seed.Image != pod.Spec.Containers[0].Image || !strings.Contains(seed.Args[0], "cp -a /nvsnap-cache-seed/0/. /opt/nvsnap/cache/") || !strings.HasSuffix(seed.Args[0], "exit 0") ||
+		seed.SecurityContext == nil || seed.SecurityContext.Capabilities == nil || seed.Resources.Limits.Cpu().IsZero() {
+		t.Errorf("seed init copies best effort with the baselines: %+v", seed)
+	}
+	mounts := map[string]string{}
+	for _, vm := range seed.VolumeMounts {
+		mounts[vm.Name] = vm.MountPath
+	}
+	if mounts[cacheSeedVolumeName] != cacheSeedMount || mounts[cacheDirVolumeName] != "/opt/nvsnap" {
+		t.Errorf("seed mounts: %v", mounts)
+	}
+}
+
+func TestPodOrdinal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lbl  string
+		want int
+	}{{"mini-service-kimi-k3-7", "", 7}, {"vllm-7c9f8b5d4-x2k9q", "", 0}, {"lws-0-3", "", 3}, {"lws-0-3", "5", 5}, {"", "", 0}} {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: tc.name}}
+		if tc.lbl != "" {
+			p.Labels = map[string]string{lwsWorkerIndexLabel: tc.lbl}
+		}
+		if got := podOrdinal(p); got != tc.want {
+			t.Errorf("%q/%q: %d want %d", tc.name, tc.lbl, got, tc.want)
+		}
+	}
+}
+
+// kimi-k3 shape: the main container's script downloads an NGC artifact
+// into the pod's own volumeClaimTemplate claim. nvsnap has no recipe for
+// that download, so the first pod is stamped for capture after Ready and
+// keeps its writable claim; nothing waits and no Job is created.
+func kimiEnginePod() *corev1.Pod {
+	gpu := corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("4")}}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3-0", Namespace: "sr-fn",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "mini-service-kimi-k3"}}},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "kimi-k3", Image: "nvcr.io/org/llm_nim/kimi-k3:vllm", Command: []string{"/bin/bash", "/opt/kimi-k3/start.sh"},
+				Env: []corev1.EnvVar{{Name: "MODEL_PATH", Value: "/config/models/kimi-k3"}, {Name: "NGC_MODEL_NAME", Value: "org/llm_nim/kimi-k3:hf"},
+					{Name: "NGC_MODEL_MOUNT", Value: "/config/models"}, {Name: "NGC_STABLE_MODEL_PATH", Value: "/config/models/kimi-k3"}},
+				VolumeMounts: []corev1.VolumeMount{{Name: "ngc-models", MountPath: "/config/models"}},
+				Resources:    gpu,
+			}},
+			Volumes: []corev1.Volume{{Name: "ngc-models", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "ngc-models-mini-service-kimi-k3-0"}}}},
+		},
+	}
+}
+
+func TestModelVolume_EngineNGCDownload_FirstPodCapturedAfterReady(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleLeader, kc)
+	pod := kimiEnginePod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/llm_nim/kimi-k3:hf"
+	if v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.CaptureLabel] != "true" || v.annotations[modelvolume.CaptureVolumeAnnotation] != "ngc-models" {
+		t.Errorf("first pod is stamped for capture of its landing volume: labels=%v annotations=%v", v.labels, v.annotations)
+	}
+	if v.labels[modelvolume.RoleLabel] != "" || v.labels[modelvolume.PendingLabel] != "" {
+		t.Errorf("a capture source is not a reader and never waits: %v", v.labels)
+	}
+	if _, replaced := v.volumes["ngc-models"]; replaced || len(v.roMounts) != 0 {
+		t.Errorf("the pod keeps its own writable claim: volumes=%v ro=%v", v.volumes, v.roMounts)
+	}
+	for _, init := range v.newInits {
+		if init.Name != "nvsnap-cachedir-init" {
+			t.Errorf("a capture source gets no wait or download init, only the cachedir: %s", init.Name)
+		}
+	}
+	// The compile caches are collected from the capture source like from
+	// any reader, so the first warm deployment does not profile again.
+	if _, ok := v.volumes["nvsnap-cachedir"]; !ok || v.labels[modelvolume.CacheKeyLabel] == "" || v.labels[CacheCaptureLabel] != "true" {
+		t.Errorf("capture source is stamped for cache-set collection with a local cachedir: volumes=%v labels=%v", v.volumes, v.labels)
+	}
+	if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Error("no download Job: nvsnap has no recipe for the chart's own NGC download")
+	}
+}
+
+// Once captured, the next pod's per-replica claim is replaced by the
+// read-only copy at the same path, mounted read-only, with no wait init
+// and no offline switch: the chart's script finds its own markers there.
+func TestModelVolume_EngineNGCDownload_LaterPodReadsCapturedVolume(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	uri := "ngc://org/llm_nim/kimi-k3:hf"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-kimi-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Ti")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-kimi:vol:nvsnap-system"}},
+		},
+	}
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), pv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pod := kimiEnginePod()
+	pod.Name = "mini-service-kimi-k3-1"
+	pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName = "ngc-models-mini-service-kimi-k3-1"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.labels[modelvolume.CaptureLabel] != "" || v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "" {
+		t.Errorf("complete: a plain reader, not pending: %v", v.labels)
+	}
+	vol, replaced := v.volumes["ngc-models"]
+	if !replaced || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != modelvolume.ReadOnlyClaimName(uri) || len(v.roMounts) != 1 {
+		t.Errorf("landing claim becomes the read-only copy mounted read-only, got %+v ro=%v", vol, v.roMounts)
+	}
+	for _, init := range v.newInits {
+		if init.Name == "nvsnap-model-download" {
+			t.Errorf("no wait init for a captured tree: the chart's script finds its markers on the volume: %v", init.Args)
+		}
+	}
+	if v.env["HF_HUB_OFFLINE"] != "" {
+		t.Errorf("no offline switch for a captured tree: env=%v", v.env)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ReadOnlyClaimName(uri), metav1.GetOptions{}); err != nil {
+		t.Errorf("read-only claim minted at admission of a complete volume: %v", err)
+	}
+}
+
+// A chart that points HF_HOME at the model directory (the nemoton-3-omni
+// dynamo chart) makes transformers write trust_remote_code modules into
+// $HF_HOME/modules, which is the read-only shared volume for every
+// reader. The webhook moves that cache next to the other per-pod caches;
+// a chart that set HF_MODULES_CACHE itself is left alone.
+func TestModelVolume_HFHomeOnLanding_ModulesCacheMovedOffVolume(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "HF_HOME", Value: "/config/models"})
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.env["HF_MODULES_CACHE"] != "/opt/nvsnap/cache/hf_modules" {
+		t.Errorf("HF_MODULES_CACHE must leave the read-only landing, got %q (env %v)", v.env["HF_MODULES_CACHE"], v.env)
+	}
+	if v.env["HF_HOME"] != "" {
+		t.Errorf("HF_HOME itself stays with the model: %v", v.env)
+	}
+
+	own := ngcFunctionPod()
+	own.Spec.Containers[0].Env = append(own.Spec.Containers[0].Env, corev1.EnvVar{Name: "HF_HOME", Value: "/config/models"}, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: "/tmp/mods"})
+	patches, err = m.Mutate(context.Background(), own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := viewMV(own, patches); v.env["HF_MODULES_CACHE"] != "" {
+		t.Errorf("a chart-set HF_MODULES_CACHE is respected, got patch %q", v.env["HF_MODULES_CACHE"])
+	}
+
+	plain := ngcFunctionPod() // HF_HOME unset: HOME already points at the cachedir
+	patches, err = m.Mutate(context.Background(), plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := viewMV(plain, patches); v.env["HF_MODULES_CACHE"] != "" {
+		t.Errorf("no HF_HOME on the landing: nothing to move, got %q", v.env["HF_MODULES_CACHE"])
+	}
+}
+
+// The sweep is for the default single-thread loader: an engine that reads
+// in parallel (fastsafetensors, the Run:ai streamer) gets none, whatever
+// the volume size.
+func TestModelVolume_NoPrewarmForParallelLoader(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"vllm", "serve", "m", "--load-format", "fastsafetensors"}, "fastsafetensors"},
+		{[]string{"vllm serve m --load-format=runai_streamer --tp 8"}, "runai_streamer"},
+		{[]string{"vllm", "serve", "m", "--load-format", "safetensors"}, ""},
+		{[]string{"vllm", "serve", "m"}, ""},
+	} {
+		if got := parallelLoader(&corev1.Container{Args: tc.args}); got != tc.want {
+			t.Errorf("parallelLoader(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("100Gi")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
+		},
+	}
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset(pv))
+	pod := ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	pod.Spec.Containers[0].Args = append(pod.Spec.Containers[0].Args, "--load-format", "fastsafetensors")
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range viewMV(pod, patches).newInits {
+		if c.Name == modelPrewarmName {
+			t.Fatal("a parallel loader gets no sweep")
+		}
+	}
+}
+
+// The flow is the same on every storage. Only the download's path to the
+// primary differs: staged and copied on block storage, written through a
+// read-write view on a shared filesystem. Everything a pod sees is
+// identical, and this test is where a branch that exists in one mode and
+// not the other fails.
+func TestModelVolume_SameFlowOnEveryStorage(t *testing.T) {
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	kimi := "ngc://org/llm_nim/kimi-k3:hf"
+	for _, tc := range []struct {
+		name   string
+		mode   modelvolume.Mode
+		driver string
+		bind   bool
+	}{
+		{"block", modelvolume.ModeBlock, "nvmesh-csi.excelero.com", false},
+		{"shared-filesystem", modelvolume.ModeRWX, "fss.csi.oraclecloud.com", true},
+	} {
+		t.Run(tc.name+"/cold", func(t *testing.T) {
+			kc := fake.NewSimpleClientset()
+			if tc.bind {
+				bindClaims(kc, tc.driver)
+			}
+			m, _ := mvMutatorReader(t, tc.mode, "", election.RoleFollower, kc)
+			pod := ngcFunctionPod()
+			patches, err := m.Mutate(context.Background(), pod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := viewMV(pod, patches)
+			cfg := m.ModelVolume.Cfg
+			if v.labels[modelvolume.RoleLabel] != "reader" || v.annotations[modelvolume.IdentityAnnotation] != uri {
+				t.Errorf("every pod is a reader of the identity: %v %v", v.labels, v.annotations)
+			}
+			if vol := v.volumes["ngc-models"]; vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) || len(v.roMounts) != 1 {
+				t.Errorf("landing is the read-only view, mounted read-only: %+v %v", vol, v.roMounts)
+			}
+			if sc := v.initScripts["download-ngc-model"]; !strings.Contains(sc, "while [ ! -f /config/models/.nvsnap-complete ]") {
+				t.Errorf("the chart's init waits for the marker:\n%s", sc)
+			}
+			if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" || v.env["HF_HOME"] != "" {
+				t.Errorf("compile caches in the local cachedir, model env untouched: %v", v.env)
+			}
+			if _, ok := v.volumes["nvsnap-cachedir"]; !ok || v.labels[CacheCaptureLabel] != "true" {
+				t.Errorf("local cachedir and cache-set collection on every storage: %v %v", v.volumes, v.labels)
+			}
+			if _, err := kc.BatchV1().Jobs("sr-fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{}); err != nil {
+				t.Errorf("one download Job in the pod's namespace: %v", err)
+			}
+			if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), cfg.ClaimName(uri), metav1.GetOptions{}); err == nil {
+				t.Error("no primary claim in a function namespace on any storage")
+			}
+			// The one visible difference: a shared filesystem gives the reader
+			// its view now; block storage leaves it pending until the primary
+			// is complete and detached.
+			if pending := v.labels[modelvolume.PendingLabel] == "true"; pending == cfg.SharedWhileWriting() {
+				t.Errorf("pending=%v on %s", pending, tc.name)
+			}
+		})
+		t.Run(tc.name+"/complete", func(t *testing.T) {
+			kc := fake.NewSimpleClientset()
+			completePrimary(t, kc, uri, tc.driver)
+			m, _ := mvMutatorReader(t, tc.mode, "", election.RoleFollower, kc)
+			pod := ngcFunctionPod()
+			patches, err := m.Mutate(context.Background(), pod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := viewMV(pod, patches)
+			cfg := m.ModelVolume.Cfg
+			if v.labels[modelvolume.PendingLabel] != "" {
+				t.Errorf("a complete volume never pends: %v", v.labels)
+			}
+			if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), cfg.ReadOnlyClaimName(uri), metav1.GetOptions{}); err != nil {
+				t.Errorf("read-only view minted at admission of a complete volume: %v", err)
+			}
+			if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+				t.Error("a complete volume needs no download Job")
+			}
+		})
+		t.Run(tc.name+"/engine-script-capture", func(t *testing.T) {
+			kc := fake.NewSimpleClientset()
+			if tc.bind {
+				bindClaims(kc, tc.driver)
+			}
+			m, _ := mvMutatorReader(t, tc.mode, "", election.RoleLeader, kc)
+			pod := kimiEnginePod()
+			patches, err := m.Mutate(context.Background(), pod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := viewMV(pod, patches)
+			if v.labels[modelvolume.CaptureLabel] != "true" || v.annotations[modelvolume.CaptureVolumeAnnotation] != "ngc-models" || v.annotations[modelvolume.IdentityAnnotation] != kimi {
+				t.Errorf("an engine-script download is captured after Ready on every storage: %v %v", v.labels, v.annotations)
+			}
+			if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+				t.Error("no Job for a download nvsnap has no recipe for")
+			}
+		})
+	}
+}
+
+// A pod with no annotations is decorated by several patchers in one
+// admission (model volume, cache set). Each may bootstrap the annotations
+// map; only the first bootstrap may survive, or the later one replaces the
+// map and drops the identity (a plain Deployment, OCI FSS 2026-10-02: the
+// agent saw no nvsnap.io/model-uri and never captured the cache rank).
+func TestModelVolume_PlainPodKeepsEveryAnnotation(t *testing.T) {
+	for _, mode := range []modelvolume.Mode{modelvolume.ModeBlock, modelvolume.ModeRWX} {
+		kc := fake.NewSimpleClientset()
+		if mode == modelvolume.ModeRWX {
+			bindClaims(kc, "fss.csi.oraclecloud.com")
+		}
+		m, _ := mvMutatorReader(t, mode, "", election.RoleFollower, kc)
+		pod := stockVLLMPod()
+		if pod.Annotations != nil || pod.Labels != nil {
+			t.Fatal("fixture must carry no metadata maps")
+		}
+		patches, err := m.Mutate(context.Background(), pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bootstraps := map[string]int{}
+		for _, p := range patches {
+			if p.Op == "add" && (p.Path == "/metadata/annotations" || p.Path == "/metadata/labels") {
+				bootstraps[p.Path]++
+			}
+		}
+		if bootstraps["/metadata/annotations"] != 1 || bootstraps["/metadata/labels"] != 1 {
+			t.Errorf("%s: each metadata map is bootstrapped once, got %v", mode, bootstraps)
+		}
+		v := viewMV(pod, patches)
+		if v.annotations[modelvolume.IdentityAnnotation] == "" || v.annotations[CacheURIAnnotation] == "" {
+			t.Errorf("%s: both the identity and the cache stamps are present: %v", mode, v.annotations)
+		}
+	}
+}
+
+// A brand-new filesystem can take longer to bind than admission allows.
+// The pod is still decorated: the Job is created against the writer view
+// by name, the reader references its read-only view and is marked pending,
+// and the agents mint both views once the primary binds. Nothing waits in
+// the webhook and nothing is admitted unchanged.
+func TestModelVolume_SharedFilesystem_PrimaryNotBoundYet(t *testing.T) {
+	kc := fake.NewSimpleClientset() // no binding reactor: claims stay Pending
+	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, "", election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatalf("an unbound primary must not fail admission: %v", err)
+	}
+	v := viewMV(pod, patches)
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	cfg := m.ModelVolume.Cfg
+	ctx := context.Background()
+	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, cfg.ClaimName(uri), metav1.GetOptions{}); err != nil {
+		t.Fatalf("the primary claim is created at admission: %v", err)
+	}
+	job, err := kc.BatchV1().Jobs("sr-fn").Get(ctx, modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("the Job is created even before the primary binds: %v", err)
+	}
+	if land := job.Spec.Template.Spec.Volumes[0]; land.PersistentVolumeClaim == nil || land.PersistentVolumeClaim.ClaimName != cfg.WriterViewClaimName(uri) {
+		t.Errorf("the Job references the writer view by name: %+v", land)
+	}
+	if job.Spec.Template.Labels[modelvolume.RoleLabel] != "writer" {
+		t.Errorf("the Job's pod carries the writer role so the agents mint its view: %v", job.Spec.Template.Labels)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, cfg.WriterViewClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("no writer view yet: there is no volume to view")
+	}
+	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
+		t.Errorf("the reader is stamped pending until its view exists: %v", v.labels)
+	}
+	if vol := v.volumes["ngc-models"]; vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) {
+		t.Errorf("the reader references its read-only view by name: %+v", vol)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(ctx, cfg.ReadOnlyClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("no read-only view yet: the agent mints it once the primary binds")
+	}
+}
+
+
+// The writer waits for its landing to become writable before downloading:
+// a fresh shared filesystem is root-owned until the agent on the Job's
+// node opens it, and the Job runs as the function's user.
+func TestWriterScript_WaitsForWritableLanding(t *testing.T) {
+	script := writerScript("hf download org/model", "/model/.nvsnap-complete")
+	wait := strings.Index(script, "while [ ! -w /model ]")
+	dl := strings.Index(script, "hf download org/model")
+	if wait < 0 || dl < 0 || wait > dl {
+		t.Fatalf("the writable wait must precede the download:\n%s", script)
+	}
+	if !strings.Contains(script, "if [ -f /model/.nvsnap-complete ]") || strings.Index(script, "if [ -f /model/.nvsnap-complete ]") > wait {
+		t.Errorf("the completed-marker check still comes first:\n%s", script)
+	}
+	// A retry after a failed Job clears the failure marker before it
+	// downloads, so readers admitted meanwhile wait for the new attempt.
+	rm := strings.Index(script, "rm -f /model/.nvsnap-failed")
+	if rm < 0 || rm > dl || rm < wait {
+		t.Errorf("the failure marker is removed after the landing is writable and before the download:\n%s", script)
+	}
+}
+
+// A reader waiting on the completion marker falls back the moment the
+// failure marker appears, with the reason in its log, instead of waiting
+// out its deadline; the deadline fallback stays as the last resort.
+func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
+	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800)
+	failed := strings.Index(script, "if [ -f /model/.nvsnap-failed ]")
+	deadline := strings.Index(script, "if [ $d -ge 1800 ]")
+	if failed < 0 || deadline < 0 || failed > deadline {
+		t.Fatalf("the failure check comes before the deadline check:\n%s", script)
+	}
+	if strings.Count(script, "hf download org/model") != 2 {
+		t.Errorf("both the failure and the deadline branch run the fallback download:\n%s", script)
+	}
+	if !strings.Contains(script, "cat /model/.nvsnap-failed") {
+		t.Errorf("the reader logs the recorded reason:\n%s", script)
+	}
+	none := readerScript("", "/model/.nvsnap-complete", 60)
+	if strings.Count(none, "no download step to fall back to") != 2 {
+		t.Errorf("without a download step both branches exit cleanly:\n%s", none)
+	}
+}

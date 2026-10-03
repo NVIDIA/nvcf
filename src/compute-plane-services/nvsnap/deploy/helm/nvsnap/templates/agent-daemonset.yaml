@@ -112,6 +112,21 @@ spec:
             # stamped in the manifest.
             - --cachedir-env-file=/etc/nvsnap/cachedir-env/env
             {{- end }}
+            {{- if and .Values.agent.modelVolume .Values.agent.modelVolume.enabled }}
+            # write-once model volume (values: agent.modelVolume)
+            - --model-volume
+            - --model-volume-wait-deadline={{ .Values.agent.modelVolume.waitDeadline | default "1h" }}
+            - --model-volume-reap-interval={{ .Values.agent.modelVolume.reapInterval | default "10m" }}
+            - --model-volume-retention={{ .Values.agent.modelVolume.retention | default "168h" }}
+            {{- if not (and .Values.agent.cacheVolume (eq (toString .Values.agent.cacheVolume.refresh) "true")) }}
+            # Set refresh is opt-in (values: agent.cacheVolume.refresh).
+            - --cache-set-refresh-disabled
+            {{- end }}
+            {{- if and .Values.agent.cacheVolume .Values.agent.cacheVolume.refreshCooldown }}
+            - --cache-set-refresh-cooldown={{ .Values.agent.cacheVolume.refreshCooldown }}
+            {{- end }}
+            - --model-volume-host-root={{ .Values.agent.hostPaths.nvsnapModels | default "/var/lib/containerd/nvsnap-models" }}
+            {{- end }}
             {{- if and .Values.agent.election .Values.agent.election.enabled }}
             # one-downloader election (values: agent.election)
             - --election
@@ -139,6 +154,11 @@ spec:
             # disables the inject (back-compat for clusters without
             # the image pushed yet).
             - --webhook-l2-wait-image={{ include "nvsnap.l2wait.image" . }}
+            {{- end }}
+            {{- if .Values.webhook.cacheSalt }}
+            # Operator salt in every cache identity: bump to start fresh
+            # captures cluster-wide (values: webhook.cacheSalt).
+            - --webhook-cache-salt={{ .Values.webhook.cacheSalt }}
             {{- end }}
             {{- if .Values.agent.l2.hostBundleRoot }}
             # nvsnap#147 / nvsnap#184: override the default
@@ -204,10 +224,6 @@ spec:
             {{- if .Values.server.enabled }}
             - name: NVSNAP_CATALOG_URL
               value: "http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.port }}"
-            {{- end }}
-            {{- if .Values.blobstore.enabled }}
-            - name: NVSNAP_BLOB_STORE_URL
-              value: "http://nvsnap-blobstore.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.blobstore.service.port }}"
             {{- end }}
             {{- if .Values.jaeger.enabled }}
             # OTLP/gRPC. The bundled Jaeger all-in-one Pod listens on
@@ -279,8 +295,11 @@ spec:
               mountPath: /etc/nvsnap/cachedir-env
               readOnly: true
             {{- end }}
+            # Mounted at its host path so the agent's runtime probe sees the
+            # right name: /run/containerd/containerd.sock is containerd,
+            # /run/crio/crio.sock is CRI-O (hostPaths.containerdSock).
             - name: containerd-sock
-              mountPath: /run/containerd/containerd.sock
+              mountPath: {{ .Values.agent.hostPaths.containerdSock }}
             - name: host-proc
               mountPath: /host/proc
               readOnly: true
@@ -317,6 +336,15 @@ spec:
             - name: nvsnap-overlays
               mountPath: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
               mountPropagation: Bidirectional
+            {{- if and .Values.agent.modelVolume .Values.agent.modelVolume.enabled }}
+            # Completed model volumes are bound here for readers on block
+            # storage; same path in the agent and on the host, Bidirectional
+            # so the bind reaches kubelet. Not under the overlays root: its
+            # sweeper removes entries it does not own.
+            - name: nvsnap-models
+              mountPath: {{ .Values.agent.hostPaths.nvsnapModels | default "/var/lib/containerd/nvsnap-models" }}
+              mountPropagation: Bidirectional
+            {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: webhook-tls
               mountPath: /etc/nvsnap/webhook
@@ -345,6 +373,12 @@ spec:
           hostPath:
             path: {{ .Values.agent.hostPaths.checkpoints }}
             type: DirectoryOrCreate
+        {{- if and .Values.agent.modelVolume .Values.agent.modelVolume.enabled }}
+        - name: nvsnap-models
+          hostPath:
+            path: {{ .Values.agent.hostPaths.nvsnapModels | default "/var/lib/containerd/nvsnap-models" }}
+            type: DirectoryOrCreate
+        {{- end }}
         {{- if .Values.agent.podCacheDir }}
         - name: cachedir-env
           configMap:

@@ -26,6 +26,11 @@
 #
 # Reads the ServiceAccount permissions from a minimal Role/RoleBinding
 # scoped to the release namespace.
+# The ServiceAccount, Role and RoleBinding are deleted only when the next
+# run recreates them, never on hook-succeeded: a non-Job hook "succeeds"
+# the moment it is created, and Helm would remove the ServiceAccount
+# while the smoke Job is still running against it (18 node cluster,
+# 2026-09-30: step 2 failed with Unauthorized after a long step 1).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -35,7 +40,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -46,14 +51,14 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-4"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 rules:
   - apiGroups: [""]
     resources: ["pods", "services", "endpoints", "secrets"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
     resources: ["daemonsets", "deployments"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -64,7 +69,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-3"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -83,7 +88,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-4"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
@@ -108,7 +113,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-3"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -152,7 +157,7 @@ spec:
               echo "=== NvSnap post-install smoke test ==="
 
               echo "--- [1/5] nvsnap-agent DaemonSet ready ---"
-              kubectl rollout status ds/nvsnap-agent -n {{ .Release.Namespace }} --timeout=120s
+              kubectl rollout status ds/nvsnap-agent -n {{ .Release.Namespace }} --timeout={{ .Values.postInstallSmoke.agentRolloutTimeout }}
 
               {{- if .Values.server.enabled }}
               echo "--- [2/5] nvsnap-server reachable ---"
@@ -167,14 +172,6 @@ spec:
               fi
               {{- end }}
 
-              {{- if .Values.blobstore.enabled }}
-              echo "--- [3/5] nvsnap-blobstore Deployment ready ---"
-              # Blobstore has no /healthz endpoint — the readinessProbe in
-              # its Deployment is the source of truth, so rollout status
-              # already proves it's serving.
-              kubectl rollout status deploy/nvsnap-blobstore -n {{ .Release.Namespace }} --timeout=60s
-              echo "  OK"
-              {{- end }}
 
               {{- if .Values.webhook.enabled }}
               echo "--- [4/5] webhook TLS cert issued ---"

@@ -45,6 +45,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime/crio" // register CRI-O factory
@@ -133,13 +134,6 @@ type Config struct {
 	// genuinely mean "this node".
 	AdvertiseIP string
 
-	// BlobStoreURL is the base URL of the cluster's nvsnap-blobstore
-	// (Phase 5d.2 durable backstop). Empty disables capture-side
-	// upload AND cascade tier-3 fallback — agents fall back to
-	// peer-only fanout. Default in cluster:
-	// http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000
-	BlobStoreURL string
-
 	// FSStorePath is the agent-container path to a distributed
 	// filesystem mounted on every node — Lustre, Weka, EFS,
 	// Filestore, NFS, etc. Phase 2c of the 16-node distribution
@@ -163,6 +157,9 @@ type Config struct {
 	// for chart-shaped model workloads. Needs L2 (the followers mount the
 	// promoted rox); ignored when L2 is off.
 	Election ElectionConfig
+
+	// ModelVolume enables the write-once model volume for Helm functions.
+	ModelVolume ModelVolumeConfig
 
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
@@ -220,6 +217,31 @@ type ElectionConfig struct {
 	// server evicts the gated followers for re-election. Zero means
 	// election.DefaultDeadline.
 	Deadline time.Duration
+}
+
+// ModelVolumeConfig configures docs/proposals/helm-shared-model-volume.md.
+type ModelVolumeConfig struct {
+	// Enabled turns the write-once model volume on. Needs L2 and a storage
+	// profile that resolves a mode (block on NVMesh, rwx when declared).
+	Enabled bool
+	// WaitDeadline bounds a reader's wait for the marker before it downloads
+	// itself. Zero means one hour.
+	WaitDeadline time.Duration
+	// HostRoot is the host directory, mounted Bidirectional into the agent
+	// at the same path, where completed model volumes are bound for
+	// readers on block storage. Default /var/lib/containerd/nvsnap-models.
+	HostRoot string
+	// RefreshDisabled turns cache set refresh off; RefreshCooldown is the
+	// least time between generations of one set (zero: 6 hours).
+	// docs/proposals/helm-chart-cache-refresh.md.
+	RefreshDisabled bool
+	RefreshCooldown time.Duration
+	// ReapInterval is how often the reaper removes read-only model PVs
+	// without a claim and abandoned primaries. Zero means ten minutes.
+	ReapInterval time.Duration
+	// Retention is how long a complete model or cache volume is kept
+	// after its last use before the reaper frees it. Zero keeps forever.
+	Retention time.Duration
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
@@ -294,6 +316,14 @@ type Agent struct {
 	// elector is the admission election, built with the L2 backend when
 	// Election.Enabled; nil keeps the webhook on its explicit paths.
 	elector election.Elector
+	// modelVolume and modelMinter are built with the L2 backend when
+	// ModelVolume.Enabled; the webhook and the controller share them.
+	modelVolume *modelvolume.Provisioner
+	// cacheVolume is the KindCache twin of modelVolume (block mode only).
+	cacheVolume *modelvolume.Provisioner
+	modelMinter *checkpointstore.SharedVolumePromoter
+	// mvc is the model volume controller, which also serves ranks.
+	mvc *ModelVolumeController
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path
@@ -520,6 +550,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	router.HandleFunc("/v1/restore/trigger", a.triggerRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
+	// A ready rank's cache tree for the agent collecting its set
+	// (bearer-guarded like every agent-to-agent route).
+	router.HandleFunc("/v1/cache-rank/{key}/{ordinal}", a.cacheRankHandler).Methods("GET")
 	router.HandleFunc("/v1/containers", a.listContainersHandler).Methods("GET")
 	router.HandleFunc("/v1/gpu/processes", a.gpuProcessesHandler).Methods("GET")
 	router.HandleFunc("/v1/gpu/restore", a.gpuRestoreHandler).Methods("POST")
@@ -641,6 +674,34 @@ func (a *Agent) Run(ctx context.Context) error {
 	// + cache data + injected pod fragments stay consistent.
 	if err := a.startWebhook(ctx, a.config.Webhook, backend); err != nil {
 		a.log.WithError(err).Error("agent admission webhook failed to start; continuing without it")
+	}
+	if a.modelVolume != nil {
+		// Completes writer volumes and binds them into pending readers on
+		// this node (docs/proposals/helm-shared-model-volume.md).
+		mvc := &ModelVolumeController{
+			Kube:              a.kubeClient,
+			Provisioner:       a.modelVolume,
+			Minter:            a.modelMinter,
+			NodeName:          a.config.NodeName,
+			HostRoot:          a.modelHostRoot(),
+			HolderImage:       a.config.L2.WriterImage,
+			HolderPullSecrets: l2PullSecrets(a.config.L2),
+			Copier:            NewAgentCopier("/host", a.log.WithField("subsys", "modelvolume.copy")),
+			Cache:             a.cacheVolume,
+			RefreshDisabled:   a.config.ModelVolume.RefreshDisabled,
+			RefreshCooldown:   a.config.ModelVolume.RefreshCooldown,
+			Log:               a.log.WithField("subsys", "modelvolume"),
+		}
+		a.mvc = mvc
+		go func() {
+			if err := mvc.Run(ctx); err != nil {
+				a.log.WithError(err).Error("model volume controller stopped")
+			}
+		}()
+		// Read-only PVs whose namespace is gone and primaries whose copy
+		// never completed; idempotent, so every agent may run it.
+		reaper := &modelvolume.Reaper{Kube: a.kubeClient, Log: a.log.WithField("subsys", "modelvolume.reaper"), Retention: a.config.ModelVolume.Retention}
+		go reaper.Run(ctx, a.config.ModelVolume.ReapInterval)
 	}
 
 	// nvsnap#194: OverlayFS cleanup-on-pod-delete + startup sweep. Safe
@@ -1215,4 +1276,12 @@ func (a *Agent) readCheckpointFileHandler(w http.ResponseWriter, r *http.Request
 	// GET, etc. For peer fanout, Range support is the critical feature —
 	// receivers can pull one large pages-*.img via parallel ranges.
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+// modelHostRoot is the bind root for completed model volumes.
+func (a *Agent) modelHostRoot() string {
+	if a.config.ModelVolume.HostRoot != "" {
+		return a.config.ModelVolume.HostRoot
+	}
+	return "/var/lib/containerd/nvsnap-models"
 }

@@ -28,7 +28,7 @@ forks built from source. See [CONTRIBUTING.md](../../CONTRIBUTING.md) and
 ## 1. Build
 
 ```bash
-make build          # agent + restore-entrypoint + server + blobstore binaries
+make build          # agent + restore-entrypoint + server binaries
 make test           # Go unit tests (no GPU needed)
 ```
 
@@ -47,7 +47,7 @@ Bump the image tag on every rebuild — Kubernetes caches by tag
 ## 2. Deploy to a cluster
 
 ```bash
-./scripts/install-nvsnap.sh                    # agent + server + blobstore (+ webhook)
+./scripts/install-nvsnap.sh                    # agent + server (+ webhook)
 kubectl -n nvsnap-system rollout status ds/nvsnap-agent
 ```
 

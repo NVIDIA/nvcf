@@ -49,16 +49,24 @@ gpu-operator:
 # component's health endpoint and fails the install if anything is
 # broken. Gives `helm install` a clear PASS/FAIL signal beyond
 # "Pod Ready" — catches mis-configured webhooks, unreachable
-# blobstore, agent ↔ containerd plumbing issues, etc.
+# agent ↔ containerd plumbing issues, etc.
 postInstallSmoke:
   enabled: true
   # Timeout for the whole Job (each probe has its own short timeout).
-  # 5m covers slow first-time image pulls.
-  activeDeadlineSeconds: 300
+  # The agent DaemonSet rolls one node at a time, so both must scale with
+  # the GPU node count: 18 nodes took over five minutes (2026-09-30).
+  # A DaemonSet roll is serial (maxUnavailable 1, about 30 s per node), so
+  # the deadline and the rollout wait must fit the largest cluster the
+  # chart is installed on: 31 GPU nodes took 15 min (2026-10-02).
+  activeDeadlineSeconds: 2400
+  # kubectl rollout status timeout for the agent DaemonSet.
+  agentRolloutTimeout: 35m
   image:
     # alpine/k8s ships kubectl + curl + jq in a small image and has
     # stable tags (Bitnami deprecated bare bitnami/kubectl:<minor>).
-    repository: alpine/k8s
+    # Fully qualified: CRI-O enforces short-name resolution and rejects
+    # a bare alpine/k8s as ambiguous.
+    repository: docker.io/alpine/k8s
     tag: "1.31.13"
     pullPolicy: IfNotPresent
 
@@ -114,6 +122,50 @@ agent:
   # pod is elected to capture and the rest are held by a scheduling gate
   # (no node, no GPU) until nvsnap-server sees the promote and releases
   # them. Needs agent.l2. Off until qualified on a cluster.
+  # Write-once model volume for Helm functions
+  # (docs/proposals/helm-shared-model-volume.md): the model is downloaded
+  # once per cluster into a per-identity volume and every other pod that
+  # names it attaches that volume; compile caches are shared the same way.
+  # Mode comes from the storage profile: block on NVMesh (the L2 class),
+  # rwx when the profile declares a distributed-filesystem class. The
+  # lifecycle is the same in both: primary in this namespace, read-only
+  # views per reader namespace, local compile caches shared through a
+  # cache set. Block downloads stage in the Job's emptyDir and the agent
+  # copies them into a claim sized from the bytes on disk (profile
+  # modelVolume.minSize is the floor); rwx creates the primary at
+  # admission at profile modelVolume.size and the Job writes through a
+  # read-write view, so readers mount their view while the download runs.
+  # Block readers reference the view by default (profile
+  # modelVolume.readerMode: pvc); readerMode: hostPath schedules readers
+  # at once and binds the volume in, for gang-scheduled charts where
+  # policy allows hostPath. Needs agent.l2. Off until qualified.
+  modelVolume:
+    enabled: false
+    # How long a reader waits for the writer's download before it downloads
+    # itself. Never a deadlock: past this, every pod is self-sufficient.
+    waitDeadline: 1h
+    # How often each agent sweeps read-only model PVs whose claim or
+    # namespace is gone and primaries whose copy never completed.
+    reapInterval: 10m
+    # How long a complete model or compile-cache volume is kept after the
+    # last pod admitted against it. Past this, with no reader bound, the
+    # reaper frees its storage. Set to 0 to keep volumes forever.
+    retention: 168h
+
+  # Compile cache set refresh (docs/proposals/helm-chart-cache-refresh.md),
+  # off by default. When on, a warm rank whose cachedir gained files before
+  # it reported Ready (what the next start pays for) proposes a refresh;
+  # one agent collects a new generation of the set from the warm ranks and
+  # later pods seed from it. Serving-time compiles never count.
+  # refreshCooldown is the least time between generations of one set; a
+  # superseded generation with no reader bound is retired about an hour
+  # after it is replaced. Turn on per cluster when a measured case needs
+  # it; the mechanism has run on GB300 but is not yet proven across
+  # engines.
+  cacheVolume:
+    refresh: false
+    refreshCooldown: 6h
+
   election:
     enabled: false
     # Bound on the leader's cold start plus capture. Past it the server
@@ -135,13 +187,17 @@ agent:
     TORCHINDUCTOR_CACHE_DIR={cache}/torchinductor
     TRITON_CACHE_DIR={cache}/.triton/cache
     VLLM_CACHE_ROOT={cache}/.cache/vllm
+    VLLM_ENABLE_STARTUP_PLAN=1
     CUDA_CACHE_PATH={cache}/.nv/ComputeCache
     NIM_CACHE_PATH={model}
     HF_HOME={model}
 
-  # Runtime variant. "containerd" or "crio". The CRI-O variant mounts the
-  # CRI-O socket and uses a different pidns path; everything else is the
-  # same.
+  # Container runtime. The agent probes the socket it is given and the
+  # well-known paths, so a CRI-O cluster needs only the hostPaths below
+  # pointed at CRI-O (containerdSock: /run/crio/crio.sock,
+  # containerdStorage: /var/lib/containers/storage, and the nvsnap-*
+  # directories under a path that exists on the node). `runtime` is
+  # informational.
   runtime: containerd
 
   image:
@@ -242,6 +298,9 @@ agent:
     checkpoints: /var/lib/containerd/nvsnap-checkpoints
     containerdSock: /run/containerd/containerd.sock
     containerdStorage: /var/lib/containerd
+    # Bind root for completed model volumes (agent.modelVolume); Bidirectional
+    # in the agent at the same path.
+    nvsnapModels: /var/lib/containerd/nvsnap-models
     # Cache, staging and overlays sit under the containerd root on purpose.
     # They are the bulk writers -- a 70B cachedir capture is ~132 GB -- and on
     # a typical GPU node /var/lib is the boot volume (network-backed, ~125
@@ -297,7 +356,7 @@ agent:
   #
   # Empty storageClass disables L2; CRIU dumps stay node-pinned on L1
   # hostpath. Restore in that mode still works (peer cascade / L4
-  # blobstore) but fan-out doesn't scale across nodes.
+  # object store) but fan-out doesn't scale across nodes.
   l2:
     # StorageClass for L2 per-capture PVCs. The backend creates a
     # writer PVC (rwx-<hash>, mounted ReadWriteOnce by a single
@@ -433,44 +492,6 @@ server:
       cpu: "500m"
       memory: "256Mi"
 
-# ─── NvSnap Blobstore (Phase 5d.2 durable backstop) ──────────────────────
-
-blobstore:
-  enabled: true
-
-  image:
-    registry: ""
-    repository: nvsnap-blobstore
-    # MUST match an actually-built+pushed tag (see _helpers.tpl —
-    # empty fails the chart render). Blobstore is rebuilt
-    # independently of agent/server; bump only when the blobstore
-    # binary changes.
-    tag: "v0.0.1"
-    pullPolicy: Always
-
-  persistence:
-    enabled: true
-    # 1 TiB holds ~30 captures of vllm-small (28 GB each). Scale to your
-    # retention policy. Same storage class as the server PVC by default;
-    # override here if you want them on different backends.
-    size: 1Ti
-    storageClassName: ""
-    accessMode: ReadWriteOnce
-
-  service:
-    # ClusterIP only — agents and the server reach this internally.
-    # External admin access goes through `kubectl port-forward`.
-    type: ClusterIP
-    port: 9000
-
-  resources:
-    requests:
-      cpu: "200m"
-      memory: "256Mi"
-    limits:
-      cpu: "2"
-      memory: "1Gi"
-
 # ─── Admission webhook (mutating, in-agent) ────────────────────────────
 
 webhook:
@@ -482,6 +503,31 @@ webhook:
   # Requires cert-manager installed in the cluster. Set to false if
   # you don't have cert-manager or don't want the auto-inject webhook.
   enabled: true
+
+  # Master switch for pod mutation. Every nvsnap mechanism that touches
+  # a function pod (cachedir env + emptyDir, the one-downloader election,
+  # the shared model and cache-set volumes, checkpoint restore) runs
+  # through the one MutatingWebhookConfiguration this gates. Setting it
+  # to false removes that registration and nothing else: the Service and
+  # TLS cert stay, the agents do not roll, and pods admitted from then
+  # on are exactly what the chart declared. Flip it back to true to
+  # resume. agent.modelVolume.enabled and agent.election.enabled turn
+  # off only their own mechanism; use this to turn off nvsnap as a whole.
+  #
+  # Per-workload opt-out without touching the release: label the pod or
+  # its namespace nvsnap.io/inject=false. The registration skips such
+  # pods and the agent admits them unchanged even if the registration
+  # is stale.
+  inject: true
+
+  # Operator salt folded into every cache identity the webhook composes.
+  # The identity covers image, model, arguments, cache-relevant env, driver
+  # and GPU class, but not a change whose effect exists only on a fresh
+  # capture: a new agent.cacheEnvTemplate, for instance, since warm pods
+  # replay the env stamped at capture. Set any new string to start fresh
+  # captures cluster-wide; the old sets age out under modelVolume.retention.
+  # Empty (default) leaves identities unchanged. Rolls the agents.
+  cacheSalt: ""
 
   # The dnsName the cert SAN matches and the apiserver dials.
   # Format: <service-name>.<namespace>.svc.cluster.local
@@ -536,7 +582,7 @@ webhook:
 # When enabled, the agent sets OTEL_EXPORTER_OTLP_ENDPOINT to the
 # in-cluster jaeger-collector and emits OTLP spans for checkpoint /
 # restore phases (cascade fetch tiers, CRIU dump/restore, CUDA replay,
-# blobstore upload). Open the Jaeger UI to see end-to-end timing.
+# replication upload). Open the Jaeger UI to see end-to-end timing.
 #
 # All-in-one mode bundles collector + query + UI in one Pod with
 # in-memory storage. Fine for demos and short-lived investigations;

@@ -158,71 +158,33 @@ func openTestDBSilent() *DB {
 	return d
 }
 
-// TestGetCheckpointSources_PeersAndBlobURI — the load-bearing
-// single-call query the cascade reads. Returns peers + blob URI in
-// one shot.
-func TestGetCheckpointSources_PeersAndBlobURI(t *testing.T) {
+// TestGetCheckpointSources_Peers is the single-call query the cascade
+// reads: the ordered peer list.
+func TestGetCheckpointSources_Peers(t *testing.T) {
 	d := openTestDB(t)
 	seedCheckpoint(t, d, "ckpt-5")
-
-	if err := d.AddPeer("ckpt-5", "node-A", "http://10.0.0.1:8081"); err != nil {
-		t.Fatal(err)
+	if err := d.AddPeer("ckpt-5", "node-a", "http://10.0.0.1:8081"); err != nil {
+		t.Fatalf("add peer: %v", err)
 	}
-	if err := d.SetCheckpointBlobURI("ckpt-5", "s3://nvsnap-blobs/captures/ckpt-5/"); err != nil {
-		t.Fatal(err)
-	}
-
-	peers, blobURI, err := d.GetCheckpointSources("ckpt-5")
+	peers, err := d.GetCheckpointSources("ckpt-5")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("sources: %v", err)
 	}
-	if len(peers) != 1 || peers[0].NodeName != "node-A" {
-		t.Errorf("peers wrong: %+v", peers)
-	}
-	if blobURI != "s3://nvsnap-blobs/captures/ckpt-5/" {
-		t.Errorf("blob_uri = %q, want s3://...", blobURI)
+	if len(peers) != 1 || peers[0].NodeName != "node-a" {
+		t.Errorf("peers = %+v, want node-a", peers)
 	}
 }
 
-// TestGetCheckpointSources_NoPeersNoBlob — fresh checkpoint with
-// nothing registered yet returns an empty list and empty blob URI.
-// The cascade must NOT 500 in this case; it surfaces "no sources" to
-// the receiver, which then errors at the application layer.
-func TestGetCheckpointSources_NoPeersNoBlob(t *testing.T) {
+// TestGetCheckpointSources_NoPeers: a fresh checkpoint with nothing
+// registered yet returns an empty list, not an error.
+func TestGetCheckpointSources_NoPeers(t *testing.T) {
 	d := openTestDB(t)
 	seedCheckpoint(t, d, "ckpt-6")
-
-	peers, blobURI, err := d.GetCheckpointSources("ckpt-6")
+	peers, err := d.GetCheckpointSources("ckpt-6")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("sources: %v", err)
 	}
 	if len(peers) != 0 {
-		t.Errorf("want 0 peers, got %d", len(peers))
-	}
-	if blobURI != "" {
-		t.Errorf("want empty blob URI, got %q", blobURI)
-	}
-}
-
-// TestSetCheckpointBlobURI_PersistsTimestamp — stage 5d.2 hook,
-// validated here so the schema/column wiring is testable now even
-// though no caller fires it yet.
-func TestSetCheckpointBlobURI_PersistsTimestamp(t *testing.T) {
-	d := openTestDB(t)
-	seedCheckpoint(t, d, "ckpt-7")
-
-	if err := d.SetCheckpointBlobURI("ckpt-7", "s3://x/y"); err != nil {
-		t.Fatal(err)
-	}
-	var s3URI, uploadedAt string
-	row := d.db.QueryRow(`SELECT s3_uri, blob_uploaded_at FROM checkpoints WHERE id = 'ckpt-7'`)
-	if err := row.Scan(&s3URI, &uploadedAt); err != nil {
-		t.Fatal(err)
-	}
-	if s3URI != "s3://x/y" {
-		t.Errorf("s3_uri = %q, want s3://x/y", s3URI)
-	}
-	if uploadedAt == "" {
-		t.Error("blob_uploaded_at should be set")
+		t.Errorf("want no peers, got %+v", peers)
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -207,9 +208,9 @@ func (m *Manager) Dump(ctx context.Context, opts DumpOptions) error {
 	// (exit 127). libcuda.so only exists in the driver tree so it still resolves.
 	if m.inContainer {
 		// Container has /host/run mounted from host's /run
-		cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/host/run/nvidia/driver/usr/lib/x86_64-linux-gnu")
+		cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+hostlibs.Dir()+":/usr/local/nvidia/lib64:"+hostlibs.DriverDir("/host/run/nvidia/driver"))
 	} else {
-		cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/run/nvidia/driver/usr/lib/x86_64-linux-gnu")
+		cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+hostlibs.Dir()+":/usr/local/nvidia/lib64:"+hostlibs.DriverDir("/run/nvidia/driver"))
 	}
 
 	var stdout, stderr bytes.Buffer

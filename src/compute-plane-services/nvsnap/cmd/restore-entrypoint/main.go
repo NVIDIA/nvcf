@@ -27,6 +27,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 	"io"
 	"math"
 	"net"
@@ -1820,7 +1821,7 @@ func discoverExternalMounts() []string {
 	// Auto-detect NVIDIA libraries (any version)
 	// Scan common library directories for libcuda.so.*, libnvidia-*.so.*
 	libDirs := []string{
-		"/usr/lib/x86_64-linux-gnu",
+		hostlibs.Dir(),
 		"/usr/lib64",
 		"/usr/local/cuda/lib64",
 	}
