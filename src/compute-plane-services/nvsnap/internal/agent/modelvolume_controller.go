@@ -844,6 +844,44 @@ func (c *ModelVolumeController) tryCollect(ctx context.Context, uri string, log 
 // collectSet attaches the set claim once and fills /<ordinal>/ for every
 // rank: local ranks through the copier, remote ranks streamed from the
 // agent on their node. Then complete and release.
+// credentialPaths are files that download scripts and engines write
+// under HOME, which is the collected cachedir: the NGC CLI's config holds
+// the API key (kimi-k3 chart, 2026-10-03), the Hub stores its token, and
+// so on. A set is shared by every pod of the configuration, so these
+// never travel in it. Paths are relative to the collected root.
+var credentialPaths = []string{
+	".ngc",
+	".netrc",
+	".git-credentials",
+	".docker",
+	".aws",
+	".kube",
+	".ssh",
+	".config/gcloud",
+	".huggingface/token",
+	".cache/huggingface/token",
+	".cache/huggingface/stored_tokens",
+}
+
+// cacheSetExcludes is credentialPaths in the form the tree copier takes
+// (rooted at the source).
+func cacheSetExcludes() []string {
+	out := make([]string, len(credentialPaths))
+	for i, p := range credentialPaths {
+		out[i] = "/" + p
+	}
+	return out
+}
+
+// cacheSetSkip is credentialPaths in the form the tar writer takes.
+func cacheSetSkip() map[string]bool {
+	out := make(map[string]bool, len(credentialPaths))
+	for _, p := range credentialPaths {
+		out[p] = true
+	}
+	return out
+}
+
 func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, claim string, ranks []rankSource, meta map[string]string, log logrus.FieldLogger) error {
 	if _, err := c.Cache.WaitBound(ctx, sysNS, claim, stagingBindTimeout); err != nil {
 		return err
@@ -867,7 +905,7 @@ func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, clai
 	for _, r := range ranks {
 		rankDst := filepath.Join(dst, strconv.Itoa(r.ordinal))
 		if r.pod.Spec.NodeName == c.NodeName {
-			if _, _, err := c.Copier.Copy(ctx, rankDst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: r.src}}); err != nil {
+			if _, _, err := c.Copier.Copy(ctx, rankDst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: r.src, Excludes: cacheSetExcludes()}}); err != nil {
 				return fmt.Errorf("copy rank %d: %w", r.ordinal, err)
 			}
 			continue
@@ -1002,7 +1040,7 @@ func (c *ModelVolumeController) ServeRank(w http.ResponseWriter, r *http.Request
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-tar")
-		if err := tarstream.Write(w, src, nil); err != nil {
+		if err := tarstream.Write(w, src, cacheSetSkip()); err != nil {
 			c.log().WithError(err).WithField("pod", p.Namespace+"/"+p.Name).Warn("cache volume: rank stream failed")
 		}
 		return

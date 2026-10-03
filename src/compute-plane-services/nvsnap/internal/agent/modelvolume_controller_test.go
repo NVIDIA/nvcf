@@ -642,8 +642,9 @@ func cacheController(t *testing.T, node string) (*fake.Clientset, *modelvolume.P
 }
 
 type setCopier struct {
-	mu    sync.Mutex
-	local map[string]string // dst -> src
+	mu       sync.Mutex
+	local    map[string]string // dst -> src
+	excludes []string          // of the last copy
 }
 
 func (r *setCopier) Copy(_ context.Context, destRoot string, sources []checkpointstore.CaptureSource) (int64, int64, error) {
@@ -653,7 +654,21 @@ func (r *setCopier) Copy(_ context.Context, destRoot string, sources []checkpoin
 		r.local = map[string]string{}
 	}
 	r.local[destRoot] = sources[0].SrcPath
+	r.excludes = sources[0].Excludes
 	return 1, 1, nil
+}
+
+// excluded reports whether the last copy excluded rel (relative to the
+// collected root).
+func (r *setCopier) excluded(rel string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.excludes {
+		if e == "/"+rel {
+			return true
+		}
+	}
+	return false
 }
 
 func rankReady(t *testing.T, kc *fake.Clientset, pod *corev1.Pod) bool {
@@ -685,6 +700,14 @@ func TestModelVolumeController_SingleRankGroupCollectedFromReadyPod(t *testing.T
 	c.Handle(ctx, pod)
 	waitUntil(t, "rank ready annotated", func() bool { return rankReady(t, kc, pod) })
 	waitUntil(t, "set complete", func() bool { st, _ := cache.Lookup(ctx, "cache://abc123"); return st.Complete })
+	// HOME is the collected root; the NGC CLI config (API key) and the Hub
+	// token must never travel in a set shared by every pod of the
+	// configuration.
+	for _, rel := range []string{".ngc", ".netrc", ".cache/huggingface/token"} {
+		if !cp.excluded(rel) {
+			t.Errorf("collection must exclude %s", rel)
+		}
+	}
 	want := "/var/lib/kubelet/pods/uid-node-a-0/volumes/kubernetes.io~empty-dir/nvsnap-cachedir/cache"
 	if cp.local[filepath.Join(mount, "0")] != want {
 		t.Errorf("rank 0 copied into /0/ from its emptyDir, got %v", cp.local)

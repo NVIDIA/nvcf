@@ -650,5 +650,5 @@ started without the module race, and was Ready 12 min 20 s after
 admission, with the 425 s weight read now 64% of the time from engine
 start. The cold pods did not collect a set because the engine-script
 capture path returned from admission before the cache stamping; that
-is a gap in nvsnap, fixed separately, which would have handed the
+was a gap in nvsnap, since closed, which would have handed the
 second deployment the plan.

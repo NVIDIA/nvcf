@@ -93,3 +93,36 @@ func TestWriteExtractPreservesModTimes(t *testing.T) {
 		}
 	}
 }
+
+// A skipped directory is left out with everything under it: the cache-set
+// skip list names directories such as .ngc.
+func TestWrite_SkipsDirectoryWithDescendants(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".ngc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".ngc", "config"), []byte("apikey = secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plan.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, dir, map[string]bool{".ngc": true}); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	files, _, err := Extract(&buf, out, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files != 1 {
+		t.Errorf("one file expected, got %d", files)
+	}
+	if _, err := os.Stat(filepath.Join(out, ".ngc", "config")); err == nil {
+		t.Error(".ngc/config must not be in the stream")
+	}
+	if _, err := os.Stat(filepath.Join(out, "plan.json")); err != nil {
+		t.Error("plan.json must be in the stream")
+	}
+}

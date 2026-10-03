@@ -95,6 +95,11 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		if captureSource {
 			patches = append(patches, mp.label(modelvolume.CaptureLabel, "true")...)
 			patches = append(patches, mp.annotation(modelvolume.CaptureVolumeAnnotation, land.VolumeName)...)
+			// The compile caches are collected from this pod like from any
+			// reader: without them the first warm deployment profiles and
+			// compiles again (kimi-k3 on GB300, 2026-10-03: 4 min 38 s of
+			// profiling the cold pods had already done).
+			patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
 			log.WithField("volume", land.VolumeName).Info("model volume: engine downloads a non-derivable artifact; pod keeps its own download and is captured after Ready")
 			return patches, nil
 		}

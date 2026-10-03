@@ -30,6 +30,9 @@ func Write(w io.Writer, dir string, skip map[string]bool) error {
 			return rerr
 		}
 		if skip[rel] {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		link := ""

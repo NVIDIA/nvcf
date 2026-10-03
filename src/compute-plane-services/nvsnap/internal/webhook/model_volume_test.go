@@ -933,8 +933,18 @@ func TestModelVolume_EngineNGCDownload_FirstPodCapturedAfterReady(t *testing.T) 
 	if v.labels[modelvolume.RoleLabel] != "" || v.labels[modelvolume.PendingLabel] != "" {
 		t.Errorf("a capture source is not a reader and never waits: %v", v.labels)
 	}
-	if _, replaced := v.volumes["ngc-models"]; replaced || len(v.roMounts) != 0 || len(v.newInits) != 0 {
-		t.Errorf("the pod keeps its own writable claim and gets no init: volumes=%v ro=%v inits=%v", v.volumes, v.roMounts, v.newInits)
+	if _, replaced := v.volumes["ngc-models"]; replaced || len(v.roMounts) != 0 {
+		t.Errorf("the pod keeps its own writable claim: volumes=%v ro=%v", v.volumes, v.roMounts)
+	}
+	for _, init := range v.newInits {
+		if init.Name != "nvsnap-cachedir-init" {
+			t.Errorf("a capture source gets no wait or download init, only the cachedir: %s", init.Name)
+		}
+	}
+	// The compile caches are collected from the capture source like from
+	// any reader, so the first warm deployment does not profile again.
+	if _, ok := v.volumes["nvsnap-cachedir"]; !ok || v.labels[modelvolume.CacheKeyLabel] == "" || v.labels[CacheCaptureLabel] != "true" {
+		t.Errorf("capture source is stamped for cache-set collection with a local cachedir: volumes=%v labels=%v", v.volumes, v.labels)
 	}
 	if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
 		t.Error("no download Job: nvsnap has no recipe for the chart's own NGC download")
