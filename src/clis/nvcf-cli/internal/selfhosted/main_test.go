@@ -19,6 +19,7 @@ package selfhosted
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -34,6 +35,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	_ = os.Setenv("HOME", home)
+	// client-go resolved ~/.kube/config at init, before the swap above.
+	_ = os.Setenv("KUBECONFIG", filepath.Join(home, ".kube", "config"))
 	_ = os.Unsetenv("HELM_DRIVER")
 	// A docker config or an NGC key exported on the machine running the
 	// tests would otherwise be the credential every registry test sends.

@@ -373,7 +373,8 @@ func TestSweepOrphanClusterValidatorRBAC_PreservedExpireAndLegacyIsSpared(t *tes
 			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: validatorPullSecretRunName(clusterValidatorControlPlaneRole,
 				run.id), Namespace: clusterValidatorNamespace, Labels: lbls}},
 			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorConfigRunName(run.id),
-				Namespace: clusterValidatorNamespace, Labels: clusterValidatorConfigLabels(clusterValidatorControlPlaneRole, run.id, true)}},
+				Namespace: clusterValidatorNamespace,
+				Labels:    clusterValidatorConfigLabels(clusterValidatorControlPlaneRole, run.id, true)}},
 			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name(run.id), Labels: lbls}},
 			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name(run.id), Labels: lbls}},
 		}

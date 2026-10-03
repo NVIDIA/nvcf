@@ -231,7 +231,8 @@ func TestResolveValidatorPullSecret_MatchesSchemePrefixedKeys(t *testing.T) {
 func TestResolveValidatorPullSecret_FlagOverride(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	got, note, err := resolveValidatorPullSecret(context.Background(), client, "custom-secret",
-		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false, nil)
+		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, "runid", false,
+		nil)
 	require.NoError(t, err)
 	assert.Equal(t, "custom-secret", got, "explicit override always wins")
 	assert.Empty(t, note)

@@ -158,7 +158,41 @@ func TestRunClusterValidator_AnotherRunsJobUnderThisRunsNameSurvives(t *testing.
 				clusterValidatorRBACName(clusterValidatorComputePlaneRole, res.RunID), metav1.GetOptions{})
 			assert.NoError(t, err)
 		})
+		// A kept run suspends its own Job when the create errored, never
+		// another run's under the name.
+		t.Run(name+", --no-cleanup", func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			client.PrependReactor("create", "jobs", func(a ktesting.Action) (bool, runtime.Object, error) {
+				job := a.(ktesting.CreateAction).GetObject().(*batchv1.Job)
+				other := job.DeepCopy()
+				other.Labels = clusterValidatorRunLabels(clusterValidatorComputePlaneRole, "otherrun", false)
+				other.UID = "uid-other"
+				require.NoError(t, client.Tracker().Add(other))
+				return true, nil, createErr(job.Name)
+			})
+			res := runClusterValidator(context.Background(), client, "registry.example.com/validator:1",
+				"", true, clusterValidatorComputePlaneRole, nil, nil)
+			require.ErrorContains(t, res.Err, "creating validator Job")
+			assert.False(t, jobSuspended(client), "another run's Job must not be suspended")
+			assert.NotContains(t, res.Err.Error(), "suspending the kept Job failed")
+		})
 	}
+}
+
+// A kept Job is suspended with its UID in the patch, so the apiserver refuses
+// it if another object has taken the name since.
+func TestSuspendValidatorJob_IsPinnedToTheJobsUID(t *testing.T) {
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "j", Namespace: clusterValidatorNamespace, UID: "uid-mine"}}
+	client := fake.NewSimpleClientset(job)
+	require.NoError(t, suspendValidatorJob(client, "j", "run1", runObjects{kindJob: job}))
+	var patch string
+	for _, a := range client.Actions() {
+		if p, ok := a.(ktesting.PatchAction); ok && p.GetResource().Resource == "jobs" {
+			patch = string(p.GetPatch())
+		}
+	}
+	assert.Contains(t, patch, `"uid":"uid-mine"`)
+	assert.Contains(t, patch, `"suspend":true`)
 }
 
 // A bootstrap that hits AlreadyExists did not create that object, so the

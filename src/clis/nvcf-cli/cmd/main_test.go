@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -54,6 +55,10 @@ func TestMain(m *testing.M) {
 	// The state manager resolved its path from HOME at package init, before
 	// the swap above, so it still points at the real ~/.nvcf-cli.state.
 	state.ResetDefaultStateManager()
+	// client-go also resolved ~/.kube/config at init. Point KUBECONFIG into
+	// the temporary HOME so no test reads the developer's current-context,
+	// which every hint and removal command now names.
+	_ = os.Setenv("KUBECONFIG", filepath.Join(home, ".kube", "config"))
 	// Check reads the stack above the working directory when no
 	// --control-plane-stack is given, so run from a directory with none: from
 	// the package directory every test would read the repository's stack and

@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,8 +149,6 @@ func runCheckWith(t *testing.T, budget time.Duration, validator selfhosted.Clust
 	t.Helper()
 	resetCheckFlags(t)
 	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
-	// Hints name the current context; keep the developer's out of them.
-	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "none"))
 	prevBudget, prevCV := checkBudget, newClusterValidatorForSelfHosted
 	checkBudget = func(d time.Duration) time.Duration { requestedBudget = d; return budget }
 	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator { return validator }
@@ -240,7 +237,7 @@ func TestCheck_BudgetSpentIsATimeout(t *testing.T) {
 		assert.Equal(t, "timeout", final["verdict"], "args %v", args)
 		row := validatorRow(t, stderr)
 		assert.Equal(t, false, row["passed"], "args %v", args)
-		assert.Equal(t, selfhosted.SeverityError, row["severity"], "args %v", args)
+		assert.EqualValues(t, selfhosted.SeverityError, row["severity"], "args %v", args)
 		assert.Regexp(t, `^(cut short|not run): the check's time budget ran out`, row["message"], "args %v", args)
 	}
 }
@@ -334,7 +331,6 @@ func TestCheck_WaitTimeoutOnARolloutIsNotASuccess(t *testing.T) {
 // closed. Wiring the key to the budget's cancel instead read as a finished
 // run.
 func TestCheck_QuitKeyInterruptsAndPrintsTheCleanupCommand(t *testing.T) {
-	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "none"))
 	prev := selectCheckRendererFn
 	t.Cleanup(func() { selectCheckRendererFn = prev })
 	quit := make(chan func(), 1)

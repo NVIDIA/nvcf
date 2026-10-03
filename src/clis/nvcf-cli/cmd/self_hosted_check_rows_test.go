@@ -24,6 +24,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -549,12 +551,12 @@ func TestCheck_FlagAndTopologyMatrix(t *testing.T) {
 			if mode == kubectx.ModeSingle {
 				require.Len(t, run.stale, 1, "%s: one cluster, one probe", name)
 				assert.Equal(t, tc.cp, contains(run.stale[0].namespaces, "vault-system"), name)
-				assert.Equal(t, tc.gpu, contains(run.stale[0].namespaces, "kai-scheduler"), name)
+				assert.Equal(t, tc.gpu, contains(run.stale[0].namespaces, "nvca-operator"), name)
 			} else {
 				var contexts []string
 				for _, c := range run.stale {
 					contexts = append(contexts, c.context)
-					assert.Equal(t, c.context == gpuCtx, contains(c.namespaces, "kai-scheduler"), name)
+					assert.Equal(t, c.context == gpuCtx, contains(c.namespaces, "nvca-operator"), name)
 				}
 				var want []string
 				if tc.cp {
@@ -593,4 +595,26 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// The stack's gates decide which namespaces the stale-namespace probe scans,
+// from base.yaml and the environment the operator named. A defaulted --env
+// may not be the install's, so its file is not read.
+func TestCheck_StaleNamespaceGatesNeedANamedEnvironment(t *testing.T) {
+	stack := t.TempDir()
+	envDir := filepath.Join(stack, "environments")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "base.yaml"),
+		[]byte("addons:\n  kaiScheduler:\n    enabled: false\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "local.yaml"),
+		[]byte("addons:\n  kaiScheduler:\n    enabled: true\n"), 0o644))
+	args := []string{"--compute-plane", "--skip-cluster-validation", "--compute-plane-stack", stack}
+
+	run := runCheck(t, checkStubs{}, args...)
+	require.Len(t, run.stale, 1)
+	assert.NotContains(t, run.stale[0].namespaces, "kai-scheduler", "the defaulted --env is not read")
+
+	run = runCheck(t, checkStubs{}, append(args, "--env", "local")...)
+	require.Len(t, run.stale, 1)
+	assert.Contains(t, run.stale[0].namespaces, "kai-scheduler", "the named environment turns the gate on")
 }

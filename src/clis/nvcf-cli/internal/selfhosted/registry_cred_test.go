@@ -1023,7 +1023,8 @@ func TestLoadStackValues_ExternalComponents(t *testing.T) {
 
 	// An environment file layered over base.yaml turns components off.
 	base, env := filepath.Join(t.TempDir(), "base.yaml"), filepath.Join(t.TempDir(), "prod.yaml")
-	require.NoError(t, writeFile(base, []byte("nats: {enabled: true}\nopenbao: {enabled: true}\ncassandra: {enabled: true}\n")))
+	require.NoError(t, writeFile(base, []byte(
+		"nats: {enabled: true}\nopenbao: {enabled: true}\ncassandra: {enabled: true}\n")))
 	require.NoError(t, writeFile(env, []byte("openbao: {enabled: false}\ncassandra: {enabled: false}\n")))
 	assert.Equal(t, []string{"cassandra", "openbao"}, LoadStackValues([]string{base, env}).ExternalComponents)
 	assert.Empty(t, LoadStackValues([]string{base}).ExternalComponents)

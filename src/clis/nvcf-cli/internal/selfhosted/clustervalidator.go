@@ -227,7 +227,9 @@ func runClusterValidator(
 // Testable core. Pass a fake clientset to unit-test without a real cluster.
 // The result is named so the deferred sweeps can report what they could not
 // remove.
-func runValidatorJob(ctx context.Context, client kubernetes.Interface, p ClusterValidatorParams) (res ClusterValidatorResult) {
+func runValidatorJob(
+	ctx context.Context, client kubernetes.Interface, p ClusterValidatorParams,
+) (res ClusterValidatorResult) {
 	image, pullSecret, noCleanup, role := p.Image, p.PullSecret, p.NoCleanup, p.Role
 	if image == "" {
 		// Defensive: callers gate on configured image before invoking the

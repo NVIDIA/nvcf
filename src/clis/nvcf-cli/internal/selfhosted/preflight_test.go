@@ -938,7 +938,8 @@ func TestRunPreflight_ProbeShareBoundsTheChecksBeforeTheValidator(t *testing.T) 
 		ClusterValidatorImage: "nvcr.io/nvidia/validator:1",
 		ClusterValidator: func(ctx context.Context, _ ClusterValidatorParams) ClusterValidatorResult {
 			ran, validatorCtxErr = true, ctx.Err()
-			return ClusterValidatorResult{Passed: true, Logs: validatorRoleMarker + "control-plane\n"}
+			return ClusterValidatorResult{Passed: true,
+				Logs: validatorRoleMarker + "control-plane\n" + validatorVerdictReady + "\n"}
 		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
