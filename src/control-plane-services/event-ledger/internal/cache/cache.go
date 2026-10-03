@@ -20,6 +20,7 @@ limitations under the License.
 package cache
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -47,10 +48,14 @@ type key struct {
 
 // entry is the cached state for a key.
 type entry struct {
-	// timestamp is the timestamp of the latest event seen for the key. The
-	// stats table stores nothing else, so no payload is cached.
+	// timestamp is the timestamp of the latest event seen for the key.
 	timestamp time.Time
-	// pending is true when timestamp has not yet been written to the database.
+	// source and details are the payload of the latest event, needed to write
+	// the events table. They are empty for the stats table, which stores
+	// neither. details is shared between copies and must not be mutated.
+	source  string
+	details json.RawMessage
+	// pending is true when the latest event has not yet been written to the database.
 	pending bool
 	// lastWritten is the time of the last successful database write.
 	lastWritten time.Time
@@ -118,7 +123,8 @@ func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config) (*CachingDBH
 // lookup returns a copy of the entry for k, and whether it exists. It returns
 // a copy because the read lock is released on return; a pointer would let the
 // caller read fields while a writer mutates them, which is a data race. The
-// entry is small, so the copy is cheaper than holding a lock for the caller.
+// copy is cheap because details is a slice header, not a copy of the payload,
+// and cheaper than holding a lock for the caller.
 func (h *CachingDBHandler) lookup(k key) (entry, bool) {
 	h.entriesMu.RLock()
 	defer h.entriesMu.RUnlock()

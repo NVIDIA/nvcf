@@ -18,6 +18,7 @@ limitations under the License.
 package cache
 
 import (
+	"encoding/json"
 	"strconv"
 	"sync"
 	"testing"
@@ -63,6 +64,8 @@ func TestLookup_AfterInsertHits(t *testing.T) {
 	ts := time.Date(2026, 9, 19, 14, 32, 10, 0, time.UTC)
 	want := entry{
 		timestamp:   ts,
+		source:      "nvidia-cluster-agent",
+		details:     json.RawMessage(`{"downloadProgress":0.75}`),
 		pending:     true,
 		lastWritten: ts.Add(-time.Minute),
 		lastUpdated: ts,
@@ -73,6 +76,20 @@ func TestLookup_AfterInsertHits(t *testing.T) {
 
 	require.True(t, ok)
 	assert.Equal(t, want, got)
+}
+
+func TestLookup_StatsEntryWithoutPayloadHits(t *testing.T) {
+	h := newTestHandler(t)
+	k := key{namespace: "ns", context: "ctx", eventName: "evt"}
+	ts := time.Date(2026, 9, 19, 14, 32, 10, 0, time.UTC)
+	h.insert(k, entry{timestamp: ts})
+
+	got, ok := h.lookup(k)
+
+	require.True(t, ok)
+	assert.Equal(t, ts, got.timestamp)
+	assert.Empty(t, got.source)
+	assert.Nil(t, got.details)
 }
 
 func TestLookup_ReturnsCopy(t *testing.T) {
@@ -121,7 +138,7 @@ func TestLookup_ConcurrentWithReplace(t *testing.T) {
 	h := newTestHandler(t)
 	k := key{namespace: "ns", context: "ctx", eventName: "evt"}
 	base := time.Date(2026, 9, 19, 14, 32, 10, 0, time.UTC)
-	h.insert(k, entry{timestamp: base, lastUpdated: base})
+	h.insert(k, entry{timestamp: base, lastUpdated: base, details: json.RawMessage("0")})
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -129,7 +146,7 @@ func TestLookup_ConcurrentWithReplace(t *testing.T) {
 		defer wg.Done()
 		for i := 1; i <= iterations; i++ {
 			ts := base.Add(time.Duration(i) * time.Second)
-			h.insert(k, entry{timestamp: ts, lastUpdated: ts, pending: i%2 == 0})
+			h.insert(k, entry{timestamp: ts, lastUpdated: ts, details: json.RawMessage(strconv.Itoa(i)), pending: i%2 == 0})
 		}
 	}()
 
@@ -146,6 +163,12 @@ func TestLookup_ConcurrentWithReplace(t *testing.T) {
 				// timestamp and lastUpdated are always written together, so a
 				// mismatch means the reader saw a partially written entry.
 				if !assert.True(t, got.timestamp.Equal(got.lastUpdated)) {
+					return
+				}
+				// details is written with the timestamp, so it must name the
+				// same iteration.
+				step := int(got.timestamp.Sub(base) / time.Second)
+				if !assert.Equal(t, strconv.Itoa(step), string(got.details)) {
 					return
 				}
 				// The writer only moves forward, so a reader must never see
