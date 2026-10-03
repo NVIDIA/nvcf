@@ -43,8 +43,12 @@ required. Each selects a role; only the selected roles contact a cluster.
 ### Cluster-validator flags
 
 The validator runs as a Job in the cluster being checked. The CLI creates a
-ServiceAccount, ClusterRole, and ClusterRoleBinding for it and removes them
-after the run, so the kubeconfig context needs permission to manage those.
+ServiceAccount, ClusterRole, and ClusterRoleBinding for it, plus a Role and
+RoleBinding in `default` that let it read only its own ConfigMap, and removes
+them after the run, so the kubeconfig context needs permission to manage those.
+The ClusterRole grants only the calls each role's checks make: reads, the
+namespace, DaemonSet and pod writes of the control-plane node-to-node probe,
+and deleting test namespaces an earlier validator run left behind.
 
 | Flag | Purpose | Default |
 |---|---|---|

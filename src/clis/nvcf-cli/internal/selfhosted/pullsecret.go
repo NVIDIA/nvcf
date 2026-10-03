@@ -137,11 +137,15 @@ var (
 // note says what the run copied or created, for the operator to see. err is
 // a copy or create that failed; read-side failures fall through to the next
 // layer.
+//
+// A Secret this run mints or mirrors is recorded in created, the only record
+// its cleanup trusts.
 func resolveValidatorPullSecret(
 	ctx context.Context,
 	client kubernetes.Interface,
 	provided, image, role, runID string,
 	preserve bool,
+	created runObjects,
 ) (name, note string, err error) {
 	if provided != "" {
 		return provided, "", nil
@@ -155,7 +159,8 @@ func resolveValidatorPullSecret(
 	write := func(cfg []byte) error {
 		wctx, cancel := context.WithTimeout(ctx, validatorPullSecretWriteTimeout)
 		defer cancel()
-		return writeDockerConfigSecret(wctx, client, clusterValidatorNamespace, runName, role, runID, cfg, preserve)
+		return writeDockerConfigSecret(wctx, client, clusterValidatorNamespace, runName, role, runID, cfg, preserve,
+			created)
 	}
 
 	if src, cfg := findClusterPullSecret(ctx, client, registry, repo); src != nil {
@@ -307,7 +312,8 @@ func buildDockerConfigJSON(registry, username, password string) ([]byte, error) 
 	})
 }
 
-// writeDockerConfigSecret creates the pull Secret this run will reference.
+// writeDockerConfigSecret creates the pull Secret this run will reference from
+// a .dockerconfigjson body, and records it in created.
 //
 // Create-only. The name carries this run's unguessable suffix, so nothing this
 // CLI created can already hold it and any collision is another object.
@@ -315,19 +321,31 @@ func buildDockerConfigJSON(registry, username, password string) ([]byte, error) 
 // which label-based ownership cannot prevent: the managed labels are three
 // public constants anyone can copy onto a Secret they pre-create under a
 // predictable name.
+//
+// The Secret is the legacy kubernetes.io/dockercfg type, which the kubelet
+// pulls with just as well. Released CLIs adopt any kubernetes.io/dockerconfigjson
+// Secret in the namespace whose registry matches, whatever its labels, so with
+// that type they would reuse this run's NGC key and lose it mid-pull when this
+// run's cleanup deletes it.
 func writeDockerConfigSecret(
-	ctx context.Context, client kubernetes.Interface, namespace, name, role, runID string, dockerConfig []byte, preserve bool,
+	ctx context.Context, client kubernetes.Interface, namespace, name, role, runID string, dockerConfig []byte,
+	preserve bool, created runObjects,
 ) error {
+	dockercfg, err := dockerCfgFromConfigJSON(dockerConfig)
+	if err != nil {
+		return fmt.Errorf("convert docker config: %w", err)
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 			Labels:    clusterValidatorRunLabels(role, runID, preserve),
 		},
-		Type: corev1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{corev1.DockerConfigJsonKey: dockerConfig},
+		Type: corev1.SecretTypeDockercfg,
+		Data: map[string][]byte{corev1.DockerConfigKey: dockercfg},
 	}
-	if _, err := client.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+	got, err := client.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf(
 				"refusing to overwrite existing secret %s/%s: this run generated that name, so "+
@@ -337,7 +355,23 @@ func writeDockerConfigSecret(
 		}
 		return fmt.Errorf("create: %w", err)
 	}
+	created.add(kindSecret, got)
 	return nil
+}
+
+// dockerCfgFromConfigJSON turns a .dockerconfigjson body into a .dockercfg
+// one: the same per-registry entries without the "auths" wrapper.
+func dockerCfgFromConfigJSON(cfg []byte) ([]byte, error) {
+	var doc struct {
+		Auths map[string]json.RawMessage `json:"auths"`
+	}
+	if err := json.Unmarshal(cfg, &doc); err != nil {
+		return nil, err
+	}
+	if len(doc.Auths) == 0 {
+		return nil, fmt.Errorf("no auths entries")
+	}
+	return json.Marshal(doc.Auths)
 }
 
 // isManagedByValidatorCLI reports whether a Secret carries the labels this CLI

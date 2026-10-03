@@ -19,7 +19,10 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,8 +38,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/yaml"
 )
 
 func jobSucceededReactor(name string) ktesting.ReactionFunc {
@@ -238,50 +243,132 @@ func TestRunClusterValidator_RBACNameCollisionIsNotAdopted(t *testing.T) {
 	assert.Contains(t, res.Err.Error(), "bootstrapping validator RBAC")
 }
 
-func TestEnsureClusterValidatorRBAC_WritableResources(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	ctx := context.Background()
+// validatorCall is one entry of testdata/validator_api_calls.yaml.
+type validatorCall struct {
+	Group    string   `json:"group"`
+	Resource string   `json:"resource"`
+	URL      string   `json:"url"`
+	Verbs    []string `json:"verbs"`
+	Callers  []string `json:"callers"`
+}
 
-	const role = clusterValidatorControlPlaneRole
-	const runID = "testrunid"
-	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role, runID, false))
+// validatorRoleCalls are one role's calls, by the kind of grant they need.
+type validatorRoleCalls struct {
+	Cluster         []validatorCall `json:"cluster"`
+	NonResourceURLs []validatorCall `json:"nonResourceURLs"`
+	Namespaced      []validatorCall `json:"namespaced"`
+}
 
-	cr, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorRBACName(role, runID), metav1.GetOptions{})
+// grantsOf flattens calls into sorted "group/resource:verb" and "url:verb"
+// entries.
+func grantsOf(t *testing.T, calls ...[]validatorCall) []string {
+	t.Helper()
+	set := map[string]bool{}
+	for _, list := range calls {
+		for _, c := range list {
+			require.NotEmpty(t, c.Callers, "every call names the validator function that makes it: %+v", c)
+			for _, v := range c.Verbs {
+				if c.URL != "" {
+					set[c.URL+":"+v] = true
+				} else {
+					set[c.Group+"/"+c.Resource+":"+v] = true
+				}
+			}
+		}
+	}
+	return sortedKeys(set)
+}
+
+// grantsOfRules flattens rules the same way grantsOf flattens calls.
+func grantsOfRules(rules []rbacv1.PolicyRule) []string {
+	set := map[string]bool{}
+	for _, r := range rules {
+		for _, v := range r.Verbs {
+			for _, u := range r.NonResourceURLs {
+				set[u+":"+v] = true
+			}
+			for _, g := range r.APIGroups {
+				for _, res := range r.Resources {
+					set[g+"/"+res+":"+v] = true
+				}
+			}
+		}
+	}
+	return sortedKeys(set)
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Each role's RBAC grants exactly the calls the validator makes for that role
+// when this CLI launches it, as the checked-in inventory lists them: nothing
+// it needs is missing, which turns a critical row UNKNOWN, and nothing it
+// never calls, such as NetworkPolicy writes, is granted. The ConfigMap read is
+// a namespaced Role limited to the names this run's Job can be pointed at.
+func TestValidatorRBAC_MatchesTheValidatorsCalls(t *testing.T) {
+	raw, err := os.ReadFile("testdata/validator_api_calls.yaml")
 	require.NoError(t, err)
-
-	type check struct {
-		group    string
-		resource string
-		verb     string
+	var inventory map[string]validatorRoleCalls
+	require.NoError(t, yaml.UnmarshalStrict(raw, &inventory))
+	roles := make([]string, 0, len(inventory))
+	for role := range inventory {
+		roles = append(roles, role)
 	}
-	required := []check{
-		// Enforcement checks create and delete probe namespaces.
-		{"", "namespaces", "create"},
-		{"", "namespaces", "delete"},
-		// Probe pods spun up for node-to-node and inter-namespace checks.
-		{"", "pods", "create"},
-		{"", "pods", "delete"},
-		// The external-LB check lists LoadBalancer Services.
-		{"", "services", "list"},
-		// The node-to-node probe DaemonSet.
-		{"apps", "daemonsets", "create"},
-		{"apps", "daemonsets", "delete"},
-		// Enforcement check creates/updates/deletes NetworkPolicies in temp namespace.
-		{"networking.k8s.io", "networkpolicies", "create"},
-		{"networking.k8s.io", "networkpolicies", "update"},
-		{"networking.k8s.io", "networkpolicies", "delete"},
-		// Gateway API health checks.
-		{"gateway.networking.k8s.io", "gateways", "list"},
-		{"gateway.networking.k8s.io", "httproutes", "get"},
-		{"gateway.networking.k8s.io", "grpcroutes", "list"},
-	}
+	assert.ElementsMatch(t, []string{clusterValidatorControlPlaneRole, clusterValidatorComputePlaneRole}, roles)
 
-	for _, want := range required {
-		t.Run(fmt.Sprintf("%s/%s/%s", want.group, want.resource, want.verb), func(t *testing.T) {
-			assert.True(t, rbacRuleCovers(cr.Rules, want.group, want.resource, want.verb),
-				"ClusterRole must grant %s on %s (group %q)", want.verb, want.resource, want.group)
+	for role, calls := range inventory {
+		t.Run(role, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			created := runObjects{}
+			require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client, role, "runid", false, created))
+			name := clusterValidatorRBACName(role, "runid")
+
+			cr, err := client.RbacV1().ClusterRoles().Get(context.Background(), name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, grantsOf(t, calls.Cluster, calls.NonResourceURLs), grantsOfRules(cr.Rules))
+			for _, r := range cr.Rules {
+				assert.Empty(t, r.ResourceNames)
+				assert.NotContains(t, r.Verbs, "*")
+				assert.NotContains(t, r.Resources, "*")
+			}
+
+			r, err := client.RbacV1().Roles(clusterValidatorNamespace).Get(context.Background(), name,
+				metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, grantsOf(t, calls.Namespaced), grantsOfRules(r.Rules))
+			for _, rule := range r.Rules {
+				assert.Equal(t, validatorConfigNames(role, "runid"), rule.ResourceNames)
+			}
+			rb, err := client.RbacV1().RoleBindings(clusterValidatorNamespace).Get(context.Background(), name,
+				metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}, rb.RoleRef)
+			assert.Equal(t, []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: name,
+				Namespace: clusterValidatorNamespace}}, rb.Subjects)
+
+			for _, kind := range validatorRBACKinds {
+				assert.Contains(t, created, kind, "the cleanup deletes only what was recorded")
+			}
 		})
 	}
+}
+
+// The compute role's ConfigMap name cannot be created, so nobody able to
+// create ConfigMaps in the namespace can hand every compute-plane run their
+// endpoints and an enabled enforcement test. Only the control-plane role can
+// read a ConfigMap of its own run.
+func TestValidatorConfigNames_SentinelCannotExist(t *testing.T) {
+	assert.NotEmpty(t, validation.IsDNS1123Subdomain(clusterValidatorNoConfigName),
+		"the apiserver must refuse a ConfigMap under the no-config name")
+	assert.Equal(t, []string{clusterValidatorNoConfigName}, validatorConfigNames(clusterValidatorComputePlaneRole, "r"))
+	assert.Equal(t, []string{clusterValidatorConfigRunName("r"), clusterValidatorNoConfigName},
+		validatorConfigNames(clusterValidatorControlPlaneRole, "r"))
 }
 
 // rbacRuleCovers returns true when any PolicyRule in rules grants verb on
@@ -453,7 +540,7 @@ func TestRunClusterValidator_ContextCanceled(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false, nil)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", clusterValidatorNoConfigName, false, nil)
 
 	assert.Equal(t, "test-job", job.Name)
 	assert.Equal(t, clusterValidatorNamespace, job.Namespace)
@@ -495,7 +582,8 @@ func TestBuildClusterValidatorJobShape(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape_ValidatorRoleInEnv(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", clusterValidatorControlPlaneRole, "runid", false, nil)
+	job := buildClusterValidatorJob("test-job", "img:1", "", clusterValidatorControlPlaneRole, "runid",
+		clusterValidatorNoConfigName, false, nil)
 	env := map[string]string{}
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
 		env[e.Name] = e.Value
@@ -505,19 +593,20 @@ func TestBuildClusterValidatorJobShape_ValidatorRoleInEnv(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape_WithPullSecret(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", "", "runid", false, nil)
+	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", "", "runid",
+		clusterValidatorNoConfigName, false, nil)
 	require.Len(t, job.Spec.Template.Spec.ImagePullSecrets, 1)
 	assert.Equal(t, "nvcr-pull-secret", job.Spec.Template.Spec.ImagePullSecrets[0].Name)
 }
 
 func TestBuildClusterValidatorJobShape_NoPullSecret(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false, nil)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", clusterValidatorNoConfigName, false, nil)
 	assert.Empty(t, job.Spec.Template.Spec.ImagePullSecrets,
 		"empty pull-secret arg must not produce an empty-name ImagePullSecrets entry")
 }
 
 func TestBuildClusterValidatorJobShape_NoCleanup(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", true, nil)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", clusterValidatorNoConfigName, true, nil)
 	assert.Nil(t, job.Spec.TTLSecondsAfterFinished,
 		"--no-cleanup must omit TTLSecondsAfterFinished so the Job persists for debugging")
 	assert.Nil(t, job.Spec.ActiveDeadlineSeconds,
@@ -665,26 +754,36 @@ func TestParseRegistryHostPort(t *testing.T) {
 		})
 	}
 }
-func TestEnsureClusterValidatorConfig_RefusesUnmanagedConfigMap(t *testing.T) {
-	ctx := context.Background()
-	client := fake.NewSimpleClientset(&corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusterValidatorConfigRunName("runid"),
-			Namespace: clusterValidatorNamespace,
-			Labels:    map[string]string{"owner": "operator"},
-		},
-		Data: map[string]string{"config.yaml": "operator: content"},
-	})
 
-	err := ensureClusterValidatorConfig(ctx, client, nil, "runid", false)
-	require.Error(t, err, "an unmanaged ConfigMap must not be overwritten")
-	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
+// The ConfigMap is create-only. One already holding the run's name was put
+// there by someone else, unlabelled or wearing forged managed labels, and is
+// neither updated nor recorded for this run's cleanup.
+func TestEnsureClusterValidatorConfig_IsCreateOnly(t *testing.T) {
+	for name, lbls := range map[string]map[string]string{
+		"unlabelled":    {"owner": "operator"},
+		"forged labels": clusterValidatorRunLabels(clusterValidatorControlPlaneRole, "runid", false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			client := fake.NewSimpleClientset(&corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: clusterValidatorConfigRunName("runid"), Namespace: clusterValidatorNamespace, Labels: lbls,
+				},
+				Data: map[string]string{"config.yaml": "operator: content"},
+			})
+			created := runObjects{}
+			err := ensureClusterValidatorConfig(ctx, client, nil, clusterValidatorControlPlaneRole, "runid", false,
+				created)
+			require.Error(t, err)
+			assert.True(t, apierrors.IsAlreadyExists(errors.Unwrap(err)), err.Error())
+			assert.NotContains(t, created, kindConfigMap)
 
-	got, getErr := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx,
-		clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
-	require.NoError(t, getErr)
-	assert.Equal(t, "operator: content", got.Data["config.yaml"],
-		"the operator's ConfigMap content must be untouched")
+			got, getErr := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx,
+				clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
+			require.NoError(t, getErr)
+			assert.Equal(t, "operator: content", got.Data["config.yaml"], "the other ConfigMap is untouched")
+		})
+	}
 }
 
 // The managed labels are three public constants, so a label check alone cannot
@@ -723,7 +822,7 @@ func TestEnsureClusterValidatorRBAC_DoesNotAdoptExistingObjects(t *testing.T) {
 		},
 	})
 
-	err := ensureClusterValidatorRBAC(ctx, client, role, runID, false)
+	err := ensureClusterValidatorRBAC(ctx, client, role, runID, false, nil)
 	require.Error(t, err, "a pre-existing object must not be adopted, forged labels or not")
 
 	_, bindErr := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
@@ -757,7 +856,7 @@ func TestSweepOrphanClusterValidatorRBAC_RequiresNameLabelsAndAge(t *testing.T) 
 		}},
 	)
 
-	sweepOrphanClusterValidatorRBAC(ctx, client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(ctx, client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	_, err := client.RbacV1().ClusterRoles().Get(ctx, staleName, metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(err), "a generated name past the TTL must be reclaimed")
@@ -780,31 +879,6 @@ func TestParseRegistryHostPort_RejectsMalformedExplicitPort(t *testing.T) {
 	host, port := parseRegistryHostPort("registry.example")
 	assert.Equal(t, "registry.example", host, "no explicit port keeps the default")
 	assert.Equal(t, 443, port)
-}
-
-// The network-checks ConfigMap was the one object a run created with no
-// cleanup path, so it accumulated in the cluster forever.
-func TestSweepClusterValidatorConfig_DeletesOwnAndSparesOperators(t *testing.T) {
-	managed := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: clusterValidatorConfigRunName("runid"), Namespace: clusterValidatorNamespace,
-		Labels: clusterValidatorLabels(),
-	}}
-	client := fake.NewSimpleClientset(managed)
-	sweepClusterValidatorConfig(context.Background(), client, "runid")
-	_, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
-		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "our own ConfigMap must be reclaimed")
-
-	// Same name, operator-owned: the name is a constant they could also use.
-	operator := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: clusterValidatorConfigRunName("runid"), Namespace: clusterValidatorNamespace,
-		Labels: map[string]string{"owner": "operator"},
-	}}
-	client2 := fake.NewSimpleClientset(operator)
-	sweepClusterValidatorConfig(context.Background(), client2, "runid")
-	_, err = client2.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
-		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
-	assert.NoError(t, err, "an unmanaged ConfigMap with the same name must survive")
 }
 
 // --no-cleanup must preserve the whole run, not just the Job: an operator who
@@ -844,7 +918,7 @@ func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
 // Either way the wait burns its full budget and the run leaks.
 func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
 	job := buildClusterValidatorJob("j", "nvcr.io/x/validator:1", "",
-		clusterValidatorControlPlaneRole, "runid", false, nil)
+		clusterValidatorControlPlaneRole, "runid", clusterValidatorNoConfigName, false, nil)
 	spec := job.Spec.Template.Spec
 
 	require.NotNil(t, spec.SecurityContext, "pod security context is required under restricted")
@@ -880,7 +954,7 @@ func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
 // suppressed on that path by design, so the deadline is the only reclaim.
 func TestBuildClusterValidatorJob_SetsActiveDeadline(t *testing.T) {
 	job := buildClusterValidatorJob("j", "nvcr.io/x/validator:1", "",
-		clusterValidatorControlPlaneRole, "runid", false, nil)
+		clusterValidatorControlPlaneRole, "runid", clusterValidatorNoConfigName, false, nil)
 	require.NotNil(t, job.Spec.ActiveDeadlineSeconds,
 		"a Job with no deadline cannot terminate itself on a pull failure")
 	assert.Greater(t, *job.Spec.ActiveDeadlineSeconds, int64(clusterValidatorTimeout/time.Second),
@@ -899,7 +973,7 @@ func TestSweepOrphanClusterValidatorRBAC_ReclaimsStalePullSecret(t *testing.T) {
 		CreationTimestamp: old,
 	}}
 	client := fake.NewSimpleClientset(stale)
-	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	_, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(
 		context.Background(), stale.Name, metav1.GetOptions{})
@@ -922,7 +996,7 @@ func TestSweepOrphanClusterValidatorRBAC_SparesFreshAndUnmanagedSecrets(t *testi
 		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
 	}}
 	client := fake.NewSimpleClientset(fresh, operator)
-	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	for _, name := range []string{fresh.Name, operator.Name} {
 		_, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(
@@ -966,7 +1040,7 @@ func TestSweepOrphanClusterValidatorRBAC_SparesPreservedObjects(t *testing.T) {
 			Namespace: clusterValidatorNamespace, Labels: labels, CreationTimestamp: old,
 		}},
 	)
-	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	_, err := client.RbacV1().ClusterRoles().Get(context.Background(),
 		clusterValidatorName+"-control-plane-abc", metav1.GetOptions{})
@@ -981,7 +1055,7 @@ func TestSweepOrphanClusterValidatorRBAC_SparesPreservedObjects(t *testing.T) {
 func TestEnsureClusterValidatorRBAC_LabelsPreservedRun(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client,
-		clusterValidatorControlPlaneRole, "abc123", true))
+		clusterValidatorControlPlaneRole, "abc123", true, nil))
 
 	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
 		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "abc123"), metav1.GetOptions{})
@@ -993,7 +1067,7 @@ func TestEnsureClusterValidatorRBAC_LabelsPreservedRun(t *testing.T) {
 func TestEnsureClusterValidatorRBAC_NoPreserveLabelByDefault(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client,
-		clusterValidatorControlPlaneRole, "abc123", false))
+		clusterValidatorControlPlaneRole, "abc123", false, nil))
 
 	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
 		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "abc123"), metav1.GetOptions{})
@@ -1015,7 +1089,7 @@ func TestSweepOrphanClusterValidatorRBAC_ReclaimsStaleConfigMap(t *testing.T) {
 		CreationTimestamp: old,
 	}}
 	client := fake.NewSimpleClientset(stale)
-	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	_, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
 		context.Background(), stale.Name, metav1.GetOptions{})
@@ -1037,7 +1111,7 @@ func TestSweepOrphanClusterValidatorRBAC_SparesFreshAndUnmanagedConfigMaps(t *te
 		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
 	}}
 	client := fake.NewSimpleClientset(fresh, operator)
-	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	for _, name := range []string{fresh.Name, operator.Name} {
 		_, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
@@ -1052,7 +1126,8 @@ func TestSweepOrphanClusterValidatorRBAC_SparesFreshAndUnmanagedConfigMaps(t *te
 // skips the configurable reachability and enforcement checks.
 func TestEnsureClusterValidatorConfig_MarksPreservedRun(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	require.NoError(t, ensureClusterValidatorConfig(context.Background(), client, nil, "runid", true))
+	require.NoError(t, ensureClusterValidatorConfig(context.Background(), client, nil,
+		clusterValidatorControlPlaneRole, "runid", true, nil))
 
 	cm, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
 		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
@@ -1064,7 +1139,7 @@ func TestEnsureClusterValidatorConfig_MarksPreservedRun(t *testing.T) {
 	_, err = client.CoreV1().ConfigMaps(clusterValidatorNamespace).Update(
 		context.Background(), cm, metav1.UpdateOptions{})
 	require.NoError(t, err)
-	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	_, err = client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
 		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
@@ -1073,7 +1148,8 @@ func TestEnsureClusterValidatorConfig_MarksPreservedRun(t *testing.T) {
 
 func TestEnsureClusterValidatorConfig_NoPreserveMarkerByDefault(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	require.NoError(t, ensureClusterValidatorConfig(context.Background(), client, nil, "runid", false))
+	require.NoError(t, ensureClusterValidatorConfig(context.Background(), client, nil,
+		clusterValidatorControlPlaneRole, "runid", false, nil))
 
 	cm, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
 		context.Background(), clusterValidatorConfigRunName("runid"), metav1.GetOptions{})
@@ -1087,11 +1163,11 @@ func TestEnsureClusterValidatorConfig_NoPreserveMarkerByDefault(t *testing.T) {
 // the same role deletes it, while its ConfigMap, RBAC and pull secret survive.
 func TestBuildClusterValidatorJob_MarksPreservedRun(t *testing.T) {
 	kept := buildClusterValidatorJob("j", "nvcr.io/x/v:1", "",
-		clusterValidatorControlPlaneRole, "runid", true, nil)
+		clusterValidatorControlPlaneRole, "runid", clusterValidatorNoConfigName, true, nil)
 	assert.Equal(t, "true", kept.Labels[clusterValidatorPreserveLabel])
 
 	ordinary := buildClusterValidatorJob("j", "nvcr.io/x/v:1", "",
-		clusterValidatorControlPlaneRole, "runid", false, nil)
+		clusterValidatorControlPlaneRole, "runid", clusterValidatorNoConfigName, false, nil)
 	assert.NotContains(t, ordinary.Labels, clusterValidatorPreserveLabel,
 		"an ordinary run must stay sweepable")
 }

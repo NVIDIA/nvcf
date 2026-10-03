@@ -152,6 +152,27 @@ func (m *miniAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 			m.mu.Lock()
 			return
 		}
+		// Preconditions are enforced as the apiserver does. Stored objects
+		// carry no resourceVersion, so a delete pinned to one conflicts, as a
+		// real one does whenever the object changed since it was read.
+		var opts struct {
+			Preconditions *struct {
+				UID             *string `json:"uid"`
+				ResourceVersion *string `json:"resourceVersion"`
+			} `json:"preconditions"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&opts)
+		if obj, ok := m.objects[collection][name].(map[string]any); ok && opts.Preconditions != nil {
+			meta, _ := obj["metadata"].(map[string]any)
+			uid, _ := meta["uid"].(string)
+			if (opts.Preconditions.UID != nil && *opts.Preconditions.UID != uid) ||
+				opts.Preconditions.ResourceVersion != nil {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = io.WriteString(w,
+					`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Conflict","code":409}`)
+				return
+			}
+		}
 		m.deletes = append(m.deletes, collection+"/"+name)
 		delete(m.objects[collection], name)
 		if strings.HasSuffix(collection, "/jobs") {
@@ -176,6 +197,7 @@ var listKinds = map[string]string{
 	"jobs": "JobList", "pods": "PodList", "secrets": "SecretList", "configmaps": "ConfigMapList",
 	"serviceaccounts": "ServiceAccountList", "clusterroles": "ClusterRoleList",
 	"clusterrolebindings": "ClusterRoleBindingList", "namespaces": "NamespaceList",
+	"roles": "RoleList", "rolebindings": "RoleBindingList",
 }
 
 // listAPIVersion is the group version in a collection path: "v1" under /api,
@@ -194,7 +216,7 @@ func isNamedPath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	resources := map[string]bool{
 		"jobs": true, "pods": true, "secrets": true, "configmaps": true, "serviceaccounts": true,
-		"clusterroles": true, "clusterrolebindings": true, "namespaces": true,
+		"clusterroles": true, "clusterrolebindings": true, "namespaces": true, "roles": true, "rolebindings": true,
 	}
 	return len(parts) >= 2 && resources[parts[len(parts)-2]]
 }
@@ -251,7 +273,8 @@ func TestRunClusterValidator_InterruptSendsCleanupOverTheWire(t *testing.T) {
 
 	got := strings.Join(m.deleted(), " ")
 	for _, want := range []string{
-		"/jobs/", "/clusterrolebindings/", "/clusterroles/", "/serviceaccounts/", "/secrets/", "/configmaps/",
+		"/jobs/", "/clusterrolebindings/", "/clusterroles/", "/rolebindings/", "/roles/", "/serviceaccounts/",
+		"/secrets/", "/configmaps/",
 	} {
 		assert.Contains(t, got, want)
 	}
@@ -278,7 +301,8 @@ func TestRunClusterValidator_BudgetEndStopsTheJobAndKeepsTheTranscript(t *testin
 	assert.Empty(t, res.JobName, "the Job is gone, so no hint may point at it")
 	got := strings.Join(m.deleted(), " ")
 	for _, want := range []string{
-		"/jobs/", "/clusterrolebindings/", "/clusterroles/", "/serviceaccounts/", "/secrets/", "/configmaps/",
+		"/jobs/", "/clusterrolebindings/", "/clusterroles/", "/rolebindings/", "/roles/", "/serviceaccounts/",
+		"/secrets/", "/configmaps/",
 	} {
 		assert.Contains(t, got, want)
 	}

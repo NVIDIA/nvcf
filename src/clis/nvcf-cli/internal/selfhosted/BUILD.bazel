@@ -62,6 +62,7 @@ go_test(
     name = "selfhosted_test",
     srcs = [
         "clustervalidator_lifecycle_test.go",
+        "clustervalidator_ownership_test.go",
         "clustervalidator_test.go",
         "credhelper_test.go",
         "inotify_probe_test.go",
@@ -77,8 +78,10 @@ go_test(
         "stack_namespaces_test.go",
         "stack_test.go",
         "stale_namespace_test.go",
+        "validator_config_parity_test.go",
         "validatortag_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":selfhosted"],
     deps = [
         "//src/clis/nvcf-cli/internal/client",
@@ -96,6 +99,7 @@ go_test(
         "@io_k8s_apimachinery//pkg/runtime",
         "@io_k8s_apimachinery//pkg/runtime/schema",
         "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_apimachinery//pkg/util/validation",
         "@io_k8s_client_go//kubernetes",
         "@io_k8s_client_go//kubernetes/fake",
         "@io_k8s_client_go//kubernetes/typed/core/v1:core",

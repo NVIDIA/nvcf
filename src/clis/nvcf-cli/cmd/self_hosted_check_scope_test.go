@@ -368,7 +368,7 @@ func TestCheck_QuitKeyInterruptsAndPrintsTheCleanupCommand(t *testing.T) {
 	cmd := "kubectl get pods -n default -l nvcf.nvidia.com/validator-run=run1; " +
 		"kubectl delete -n default job -l nvcf.nvidia.com/validator-run=run1 --cascade=foreground --wait; " +
 		"kubectl delete clusterrolebinding,clusterrole -l nvcf.nvidia.com/validator-run=run1; " +
-		"kubectl delete -n default serviceaccount,secret,configmap -l nvcf.nvidia.com/validator-run=run1"
+		"kubectl delete -n default rolebinding,role,serviceaccount,secret,configmap -l nvcf.nvidia.com/validator-run=run1"
 	assert.Equal(t, []any{cmd}, finalEvent(t, stderr)["cleanup"])
 	interruptNote := strings.Index(stderr, "note: interrupted; ")
 	require.GreaterOrEqual(t, interruptNote, 0, "the interrupt says at once how to remove the run's objects")
@@ -490,7 +490,7 @@ func removalCommand(runID string) string {
 	return "kubectl get pods -n default -l " + sel + "; " +
 		"kubectl delete -n default job -l " + sel + " --cascade=foreground --wait; " +
 		"kubectl delete clusterrolebinding,clusterrole -l " + sel + "; " +
-		"kubectl delete -n default serviceaccount,secret,configmap -l " + sel
+		"kubectl delete -n default rolebinding,role,serviceaccount,secret,configmap -l " + sel
 }
 
 // keptNote is what the command prints last when runs kept objects.

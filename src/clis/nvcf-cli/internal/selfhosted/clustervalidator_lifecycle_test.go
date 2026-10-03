@@ -69,6 +69,16 @@ func leftovers(t *testing.T, client *fake.Clientset, runID string) map[string][]
 	for _, o := range crbs.Items {
 		out["ClusterRoleBinding"] = append(out["ClusterRoleBinding"], o.Name)
 	}
+	roles, err := client.RbacV1().Roles(clusterValidatorNamespace).List(ctx, opts)
+	require.NoError(t, err)
+	for _, o := range roles.Items {
+		out["Role"] = append(out["Role"], o.Name)
+	}
+	rbs, err := client.RbacV1().RoleBindings(clusterValidatorNamespace).List(ctx, opts)
+	require.NoError(t, err)
+	for _, o := range rbs.Items {
+		out["RoleBinding"] = append(out["RoleBinding"], o.Name)
+	}
 	secrets, err := client.CoreV1().Secrets(clusterValidatorNamespace).List(ctx, opts)
 	require.NoError(t, err)
 	for _, o := range secrets.Items {
@@ -89,10 +99,15 @@ func lifecycleClient(jobStatus func(name string) *batchv1.Job, waiting string) *
 	var jobName atomic.Value
 	jobName.Store("")
 	var jobDeleted atomic.Bool
+	var jobLabels atomic.Value
+	jobLabels.Store(map[string]string{})
 	client.PrependReactor("create", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
 		job := action.(ktesting.CreateAction).GetObject().(*batchv1.Job)
-		job.UID = types.UID("uid-" + job.Name)
+		if job.UID == "" {
+			job.UID = types.UID("uid-" + job.Name)
+		}
 		jobName.Store(job.Name)
+		jobLabels.Store(job.Labels)
 		return false, nil, nil
 	})
 	client.PrependReactor("get", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
@@ -101,7 +116,8 @@ func lifecycleClient(jobStatus func(name string) *batchv1.Job, waiting string) *
 			return false, nil, nil
 		}
 		job := jobStatus(name)
-		job.Labels = clusterValidatorLabels()
+		job.UID = types.UID("uid-" + name)
+		job.Labels = jobLabels.Load().(map[string]string)
 		return true, job, nil
 	})
 	// The pod's phase follows the Job's: ended once the Job has finished,
@@ -309,7 +325,9 @@ func TestRunClusterValidator_NoCleanupKeepsRunAndPrintsTheCommand(t *testing.T) 
 		"", true, clusterValidatorControlPlaneRole, nil, nil)
 	require.NoError(t, res.Err)
 	left := leftovers(t, client, res.RunID)
-	for _, kind := range []string{"ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Secret", "ConfigMap"} {
+	for _, kind := range []string{
+		"ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "Secret", "ConfigMap",
+	} {
 		assert.Len(t, left[kind], 1, kind)
 	}
 	assert.True(t, res.Created)
@@ -355,7 +373,7 @@ func TestSweepOrphanClusterValidatorRBAC_PreservedExpireAndLegacyIsSpared(t *tes
 			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: validatorPullSecretRunName(clusterValidatorControlPlaneRole,
 				run.id), Namespace: clusterValidatorNamespace, Labels: lbls}},
 			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorConfigRunName(run.id),
-				Namespace: clusterValidatorNamespace, Labels: clusterValidatorConfigLabels(run.id, true)}},
+				Namespace: clusterValidatorNamespace, Labels: clusterValidatorConfigLabels(clusterValidatorControlPlaneRole, run.id, true)}},
 			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name(run.id), Labels: lbls}},
 			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name(run.id), Labels: lbls}},
 		}
@@ -365,7 +383,7 @@ func TestSweepOrphanClusterValidatorRBAC_PreservedExpireAndLegacyIsSpared(t *tes
 		}
 	}
 
-	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, time.Now(), orphanValidatorRBACTTL, "", "")
 
 	ctx := context.Background()
 	for _, run := range []struct {
@@ -402,12 +420,13 @@ func TestSweepOrphanClusterValidatorRBAC_PreservedExpireAndLegacyIsSpared(t *tes
 // Forwarded settings reach the container in a stable order, empty values are
 // dropped, and nothing forwarded can override what the Job itself sets.
 func TestBuildClusterValidatorJob_ForwardsEnvWithoutOverridingCore(t *testing.T) {
-	job := buildClusterValidatorJob("j", "img:1", "", clusterValidatorControlPlaneRole, "runid", false, map[string]string{
-		"NVCF_OPENBAO_NAMESPACE": "openbao",
-		"VALIDATOR_POST_INSTALL": "true",
-		"VALIDATOR_ROLE":         "compute-plane",
-		"NVCF_GATEWAY_NAMES":     "",
-	})
+	job := buildClusterValidatorJob("j", "img:1", "", clusterValidatorControlPlaneRole, "runid",
+		clusterValidatorNoConfigName, false, map[string]string{
+			"NVCF_OPENBAO_NAMESPACE": "openbao",
+			"VALIDATOR_POST_INSTALL": "true",
+			"VALIDATOR_ROLE":         "compute-plane",
+			"NVCF_GATEWAY_NAMES":     "",
+		})
 	env := map[string]string{}
 	var order []string
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
@@ -421,32 +440,6 @@ func TestBuildClusterValidatorJob_ForwardsEnvWithoutOverridingCore(t *testing.T)
 	assert.False(t, hasEmpty, "empty values are not forwarded")
 	assert.Equal(t, []string{"VALIDATOR_CONFIG_NAMESPACE", "VALIDATOR_CONFIG_NAME", "VALIDATOR_PREFLIGHT",
 		"VALIDATOR_ROLE", "NVCF_OPENBAO_NAMESPACE", "VALIDATOR_POST_INSTALL"}, order)
-}
-
-// The validator discovers NVCF Gateways from every route kind and reads the
-// Gateways' classes, so the CLI's ClusterRole must allow all of them.
-func TestEnsureClusterValidatorRBAC_GrantsGatewayAPIReads(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client, clusterValidatorControlPlaneRole, "runid", false))
-	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
-		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
-	require.NoError(t, err)
-	granted := map[string]bool{}
-	for _, r := range cr.Rules {
-		for _, g := range r.APIGroups {
-			if g != "gateway.networking.k8s.io" {
-				continue
-			}
-			for _, res := range r.Resources {
-				granted[res] = true
-			}
-		}
-	}
-	for _, res := range []string{"gateways", "gatewayclasses", "httproutes", "grpcroutes", "tcproutes", "udproutes"} {
-		assert.True(t, granted[res], res)
-	}
-	// Tier-2 dates a rolling StatefulSet's rollout from its update revision.
-	assert.True(t, rbacRuleCovers(cr.Rules, "apps", "controllerrevisions", "get"))
 }
 
 // The extra tolerations reach the Job beside the control-plane ones it always
@@ -552,52 +545,6 @@ func TestRunClusterValidator_InterruptLeavesNothingBehind(t *testing.T) {
 	assert.True(t, deleted, "the Job must be stopped so its pod stops using the RBAC")
 }
 
-// The run's ClusterRole grants only what the validator calls. It never creates
-// Services, reads pod logs or watches anything.
-func TestEnsureClusterValidatorRBAC_LeastPrivilege(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client, clusterValidatorControlPlaneRole, "runid", false))
-	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
-		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "runid"), metav1.GetOptions{})
-	require.NoError(t, err)
-	sawEvents := false
-	for _, r := range cr.Rules {
-		for _, v := range r.Verbs {
-			assert.NotEqual(t, "watch", v, "no rule needs watch")
-		}
-		for _, res := range r.Resources {
-			assert.NotEqual(t, "pods/log", res)
-			if res == "services" {
-				assert.ElementsMatch(t, []string{"get", "list"}, r.Verbs, "services are only read")
-			}
-			if res == "events" {
-				assert.Equal(t, []string{"list"}, r.Verbs, "the probe only lists its pods' events")
-				sawEvents = true
-			}
-		}
-	}
-	assert.True(t, sawEvents, "the overlay probe needs to list events")
-}
-
-// Only the control-plane Job reads a network-check ConfigMap. The compute-plane
-// Job gets a non-empty name that resolves to nothing: an empty value would let
-// the validator fall back to its default name and pick up control-plane config.
-func TestBuildClusterValidatorJob_ConfigNamePerRole(t *testing.T) {
-	configName := func(role string) string {
-		job := buildClusterValidatorJob("j", "img:1", "", role, "runid", false, nil)
-		for _, e := range job.Spec.Template.Spec.Containers[0].Env {
-			if e.Name == "VALIDATOR_CONFIG_NAME" {
-				return e.Value
-			}
-		}
-		return ""
-	}
-	assert.Equal(t, clusterValidatorConfigRunName("runid"), configName(clusterValidatorControlPlaneRole))
-	cp := configName(clusterValidatorComputePlaneRole)
-	assert.Equal(t, clusterValidatorNoConfigName, cp)
-	assert.NotEqual(t, clusterValidatorConfigName, cp, "must not be the validator's default name")
-}
-
 // An apiserver that stops answering after the bootstrap fails must not hold
 // the CLI open in the deferred sweeps: each one is bounded, and the run
 // returns once they time out.
@@ -609,6 +556,9 @@ func TestRunClusterValidator_CleanupIsBoundedWhenTheAPIServerHangs(t *testing.T)
 	var hang atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hang.Load() {
+			// The server notices a closed connection only once the body has
+			// been read, and the cleanup's deletes carry one.
+			_, _ = io.Copy(io.Discard, r.Body)
 			<-r.Context().Done()
 			return
 		}
@@ -1522,7 +1472,7 @@ func TestAwaitValidatorJob(t *testing.T) {
 // timeout, and with the pod's termination grace inside the wait for it.
 func TestRunClusterValidator_ActiveDeadlineFollowsTheRunsTimeout(t *testing.T) {
 	assert.Positive(t, validatorDeadlineOffset, "the deadline must not cut short the run's own wait")
-	assert.LessOrEqual(t, validatorDeadlineOffset+podTerminationGrace, defaultValidatorDeadlineGrace,
+	assert.LessOrEqual(t, validatorDeadlineOffset+clusterValidatorTerminationGrace, defaultValidatorDeadlineGrace,
 		"the pod must be gone before the CLI stops waiting for it")
 	assert.Equal(t, int64(68), validatorActiveDeadlineSeconds(7200*time.Millisecond))
 
@@ -1531,7 +1481,7 @@ func TestRunClusterValidator_ActiveDeadlineFollowsTheRunsTimeout(t *testing.T) {
 	t.Cleanup(func() { clusterValidatorTimeout = prev })
 	client := lifecycleClient(succeeded, "")
 	// A slow apiserver spends part of the timeout before the Job exists.
-	client.PrependReactor("list", "clusterrolebindings", func(ktesting.Action) (bool, runtime.Object, error) {
+	client.PrependReactor("create", "serviceaccounts", func(ktesting.Action) (bool, runtime.Object, error) {
 		time.Sleep(2 * time.Second)
 		return false, nil, nil
 	})
@@ -1692,7 +1642,7 @@ func TestValidatorRemovalCommand(t *testing.T) {
 	assert.Equal(t, "kubectl --context ctx-a get pods -n default -l "+sel+"; "+
 		"kubectl --context ctx-a delete -n default job -l "+sel+" --cascade=foreground --wait; "+
 		"kubectl --context ctx-a delete clusterrolebinding,clusterrole -l "+sel+"; "+
-		"kubectl --context ctx-a delete -n default serviceaccount,secret,configmap -l "+sel,
+		"kubectl --context ctx-a delete -n default rolebinding,role,serviceaccount,secret,configmap -l "+sel,
 		validatorRemovalCommand("ctx-a", "r1"))
 }
 

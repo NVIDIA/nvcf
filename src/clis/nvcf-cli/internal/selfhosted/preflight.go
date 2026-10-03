@@ -953,7 +953,8 @@ func validatorRemovalCommand(kubeContext, runID string) string {
 		fmt.Sprintf("%s get pods -n %s -l %s", kubectl, clusterValidatorNamespace, sel),
 		fmt.Sprintf("%s delete -n %s job -l %s --cascade=foreground --wait", kubectl, clusterValidatorNamespace, sel),
 		fmt.Sprintf("%s delete clusterrolebinding,clusterrole -l %s", kubectl, sel),
-		fmt.Sprintf("%s delete -n %s serviceaccount,secret,configmap -l %s", kubectl, clusterValidatorNamespace, sel),
+		fmt.Sprintf("%s delete -n %s rolebinding,role,serviceaccount,secret,configmap -l %s", kubectl,
+			clusterValidatorNamespace, sel),
 	}, "; ")
 }
 

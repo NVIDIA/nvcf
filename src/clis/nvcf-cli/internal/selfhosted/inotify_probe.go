@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -31,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -46,6 +48,13 @@ const (
 
 	// inotifyProbeContainer is the container name inside the probe pod.
 	inotifyProbeContainer = "probe"
+
+	// inotifyProbeAppLabel names the probe's pods apart from the validator's.
+	inotifyProbeAppLabel = "nvcf-inotify-probe"
+
+	// inotifyProbeRole is the role the probe's pods are labelled with: only
+	// the compute-plane checks run it.
+	inotifyProbeRole = clusterValidatorComputePlaneRole
 
 	// inotifyProbeShellCmd reads both sysctls. Each cat runs independently
 	// so a missing /proc entry on one path doesn't drop the other value;
@@ -159,6 +168,15 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface, image strin
 	if len(nodes.Items) == 0 {
 		return nil, nil
 	}
+	runID, err := newValidatorRunID()
+	if err != nil {
+		return nil, err
+	}
+	run := &probeRun{id: runID}
+	// Each pod is deleted once its node is probed, but a Create the budget or
+	// an interrupt cut off may still have been applied, and then no per-node
+	// delete runs. This reclaims those by the run's label on every return.
+	defer run.reclaim(client)
 	results := make([]NodeInotifyLimits, len(nodes.Items))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(probeConcurrency)
@@ -169,7 +187,7 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface, image strin
 		}
 		i, nodeName := i, n.Name
 		eg.Go(func() error {
-			results[i] = probeOneNode(egCtx, client, nodeName, image)
+			results[i] = probeOneNode(egCtx, client, run, nodeName, image)
 			// Per-node failures are encoded in results[i].Err; never
 			// propagate them as the errgroup's error, since that would
 			// cancel sibling probes still in flight.
@@ -186,7 +204,9 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface, image strin
 
 // probeOneNode creates, waits on, and tears down a single probe pod, returning
 // the parsed limits or a per-node error.
-func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName, image string) NodeInotifyLimits {
+func probeOneNode(
+	ctx context.Context, client kubernetes.Interface, run *probeRun, nodeName, image string,
+) NodeInotifyLimits {
 	res := NodeInotifyLimits{NodeName: nodeName}
 	if ctx.Err() != nil {
 		res.Err = fmt.Errorf("not probed: the inotify probe's %s budget ran out", inotifyProbeBudget)
@@ -196,13 +216,14 @@ func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName, im
 	pctx, cancel := context.WithTimeout(ctx, perNodePodTimeout)
 	defer cancel()
 
-	pod, err := client.CoreV1().Pods(inotifyProbeNamespace).Create(pctx, buildInotifyProbePod(nodeName, image),
+	pod, err := client.CoreV1().Pods(inotifyProbeNamespace).Create(pctx, buildInotifyProbePod(nodeName, run.id, image),
 		metav1.CreateOptions{})
 	if err != nil {
 		res.Err = fmt.Errorf("create probe pod on node %s: %w", nodeName, err)
 		return res
 	}
-	defer cleanupProbePod(client, pod.Name)
+	run.created(pod)
+	defer cleanupProbePod(client, pod)
 
 	if err := waitForPodTerminal(pctx, client, pod.Name); err != nil {
 		res.Err = fmt.Errorf("waiting for probe pod on node %s: %w", nodeName, err)
@@ -225,13 +246,22 @@ func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName, im
 	return res
 }
 
+// inotifyProbeLabels are the labels on every probe pod of one run: the
+// validator's managed labels under the probe's own name, the role, and the
+// run ID. With an empty runID they select every run's probe pods.
+func inotifyProbeLabels(runID string) map[string]string {
+	l := clusterValidatorRunLabels(inotifyProbeRole, runID, false)
+	l["app.kubernetes.io/name"] = inotifyProbeAppLabel
+	return l
+}
+
 // buildInotifyProbePod constructs a Pod that runs once on the named node and
 // prints the two inotify sysctls to stdout. The container is unprivileged
 // and runs in the default PID namespace: /proc/sys/fs/inotify/max_user_*
 // are kernel-wide sysctls and are world-readable through the host's procfs
 // via the read-only /host hostPath mount, so the container also runs as a
 // non-root user with no capabilities. An empty image selects the default.
-func buildInotifyProbePod(nodeName, image string) *corev1.Pod {
+func buildInotifyProbePod(nodeName, runID, image string) *corev1.Pod {
 	if image == "" {
 		image = inotifyProbeImage
 	}
@@ -240,12 +270,9 @@ func buildInotifyProbePod(nodeName, image string) *corev1.Pod {
 	runAsNonRoot, readOnlyRoot, allowPrivEsc := true, true, false
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "nvcf-inotify-probe-",
+			GenerateName: inotifyProbeAppLabel + "-",
 			Namespace:    inotifyProbeNamespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":       "nvcf-inotify-probe",
-				"app.kubernetes.io/managed-by": "nvcf-cli",
-			},
+			Labels:       inotifyProbeLabels(runID),
 		},
 		Spec: corev1.PodSpec{
 			NodeName:      nodeName,
@@ -362,20 +389,73 @@ func fetchPodLogs(ctx context.Context, client kubernetes.Interface, podName stri
 	return string(b), nil
 }
 
-// cleanupProbePod best-effort deletes the probe pod. Uses a background
-// context so the pod is cleaned up even when the caller's context was
-// canceled mid-probe.
-func cleanupProbePod(client kubernetes.Interface, podName string) {
-	delCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// cleanupProbePod best-effort deletes the probe pod this run created, pinned
+// to its UID. Uses a background context so the pod is cleaned up even when
+// the caller's context was canceled mid-probe.
+func cleanupProbePod(client kubernetes.Interface, pod *corev1.Pod) {
+	delCtx, cancel := context.WithTimeout(context.Background(), validatorCleanupTimeout)
 	defer cancel()
+	deleteProbePod(delCtx, client, pod)
+}
+
+// deleteProbePod deletes one probe pod at once, pinned to its UID. Errors are
+// swallowed: the caller already has its result, and a leaked probe pod is
+// preferable to an error that masks the real check outcome.
+func deleteProbePod(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod) {
+	opts := deleteExactly(pod)
 	grace := podDeleteGrace
-	err := client.CoreV1().Pods(inotifyProbeNamespace).Delete(delCtx, podName, metav1.DeleteOptions{
-		GracePeriodSeconds: &grace,
-	})
+	opts.GracePeriodSeconds = &grace
+	err := client.CoreV1().Pods(inotifyProbeNamespace).Delete(ctx, pod.Name, opts)
 	if err != nil && !apierrors.IsNotFound(err) {
-		// Swallow; the caller already has its result and a leaked probe pod
-		// is preferable to an error that masks the real check outcome.
 		_ = err
+	}
+}
+
+// probeRun is one probe's identity and what it learned of the apiserver's
+// clock from the pods it created.
+type probeRun struct {
+	id string
+	mu sync.Mutex
+	// serverNow is the latest creationTimestamp among this run's pods.
+	serverNow time.Time
+}
+
+func (r *probeRun) created(pod *corev1.Pod) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ts := pod.CreationTimestamp.Time; ts.After(r.serverNow) {
+		r.serverNow = ts
+	}
+}
+
+// reclaim deletes, on a fresh bounded context, every probe pod still carrying
+// this run's ID, and every other run's probe pod older than
+// orphanValidatorRBACTTL on the apiserver's clock: a run killed outright, or
+// interrupted twice, leaves pods that mount the host's root and tolerate
+// every taint, and nothing else removes them. Another run's younger pods may
+// belong to a probe still in progress, so they are kept.
+func (r *probeRun) reclaim(client kubernetes.Interface) {
+	ctx, cancel := context.WithTimeout(context.Background(), validatorCleanupTimeout)
+	defer cancel()
+	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.SelectorFromSet(inotifyProbeLabels("")).String(),
+	})
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	now := r.serverNow
+	r.mu.Unlock()
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !strings.HasPrefix(pod.Name, inotifyProbeAppLabel+"-") {
+			continue
+		}
+		mine := pod.Labels[clusterValidatorRunLabel] == r.id
+		stale := !now.IsZero() && pod.CreationTimestamp.Time.Before(now.Add(-orphanValidatorRBACTTL))
+		if mine || stale {
+			deleteProbePod(ctx, client, pod)
+		}
 	}
 }
 
