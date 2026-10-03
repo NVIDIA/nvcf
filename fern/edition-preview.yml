@@ -884,6 +884,12 @@ versions:
 - display-name: Development
   slug: dev
   path: navigation.yml
+- display-name: "1.0.2"
+  slug: "1.0.2"
+  ref: docs/releases/1.0.2
+- display-name: "1.0.1"
+  slug: "1.0.1"
+  ref: docs/releases/1.0.1
 - display-name: Self-Managed Stack 1.0.1 archive
   slug: self-managed/1.0.1
   path: products/self-managed/1.0.1.yml

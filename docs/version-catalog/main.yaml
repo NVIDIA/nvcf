@@ -1,9 +1,9 @@
 version: 1
 target: main
 docs_edition:
-  version: 1.0.2
+  version: 1.0.3
   status: development
-  previous_version: 1.0.1
+  previous_version: 1.0.2
   change: patch
 registries:
   public-helm:
