@@ -4,8 +4,7 @@
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
 
-NVCF ships as three independently versioned Helm stacks. Each stack has its
-own documentation set.
+NVCF ships as three independently versioned Helm stacks.
 
 - [Self-Managed Stack](../self-managed/installation.md)
   : Control plane installation, configuration, function APIs, and operations.

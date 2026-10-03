@@ -299,7 +299,7 @@ func TestEditionSummaryUsesSelectedCombination(t *testing.T) {
 	}
 }
 
-func TestSyncDefaultOutputsLeavesOverviewAuthored(t *testing.T) {
+func TestSyncDefaultOutputsLeavesLandingPagesAuthored(t *testing.T) {
 	root := t.TempDir()
 	catalog := editionTestCatalog()
 	catalog.Outputs = defaultOutputs()
@@ -323,22 +323,30 @@ func TestSyncDefaultOutputsLeavesOverviewAuthored(t *testing.T) {
 		}
 		writeFile(t, filepath.Join(root, output.Path), content)
 	}
-	overview := "# NVIDIA Cloud Functions\n\nDeployment and operation guides.\n"
-	overviewPath := filepath.Join(root, "docs/overview/index.md")
-	writeFile(t, overviewPath, overview)
+	landingPages := map[string]string{
+		"docs/overview/index.md":                         "# NVIDIA Cloud Functions\n\nDeployment and operation guides.\n",
+		"docs/self-managed/installation.md":              "# Deployment\n\nInstall the control plane.\n",
+		"docs/compute-plane/cluster-management/index.md": "# GPU Cluster Setup\n\nConnect a GPU cluster.\n",
+		"docs/observability/observability.md":            "# Observability Configuration\n\nConfigure metrics and logs.\n",
+	}
+	for path, content := range landingPages {
+		writeFile(t, filepath.Join(root, path), content)
+	}
 	if err := SyncDocs(root, catalog, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := SyncDocs(root, catalog, true); err != nil {
 		t.Fatalf("regenerated docs are inconsistent: %v", err)
 	}
-	got, err := os.ReadFile(overviewPath)
-	if err != nil || string(got) != overview {
-		t.Fatalf("overview changed during regeneration: %q, %v", got, err)
+	for path, content := range landingPages {
+		got, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil || string(got) != content {
+			t.Fatalf("%s changed during regeneration: %q, %v", path, got, err)
+		}
 	}
-	summary, err := os.ReadFile(filepath.Join(root, "docs/self-managed/installation.md"))
-	if err != nil || !strings.Contains(string(summary), "Docs edition `1.0.0`") {
-		t.Fatalf("stack summary was not regenerated: %q, %v", summary, err)
+	matrix, err := os.ReadFile(filepath.Join(root, "docs/overview/compatibility-matrix.md"))
+	if err != nil || !strings.Contains(string(matrix), "`1.2.3`") {
+		t.Fatalf("compatibility matrix was not regenerated: %q, %v", matrix, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "docs/edition-manifest.json")); err != nil {
 		t.Fatalf("edition manifest was not generated: %v", err)

@@ -1,11 +1,5 @@
 # Deployment
 
-{/*docs-version-sync:BEGIN edition-control-plane*/}
-
-Docs edition `1.0.2` | Self-managed (control plane) `1.0.1` | Development candidate.
-
-{/*docs-version-sync:END edition-control-plane*/}
-
 Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
 
 For a local k3d fresh install, start with the [Quickstart](../overview/quickstart.md). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.

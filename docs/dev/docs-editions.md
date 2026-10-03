@@ -107,7 +107,7 @@ DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
 
 Generate a hosted preview of the canonical configuration as well as the
 Development-first preview. Local Fern previews cannot prove remote-ref
-composition. Verify edition switching, all six tabs, version summaries,
+composition. Verify edition switching, all six tabs, manifest versions,
 changelog links, archives, anchors, downloads, and mobile/light/dark rendering.
 Use an isolated staging instance for indexed search. Record source commits,
 resolved refs, preview URLs, CI results, and the last validated production

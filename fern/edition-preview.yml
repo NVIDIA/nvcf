@@ -28,7 +28,7 @@ navbar-links:
 versions:
 - display-name: "1.0.1"
   slug: "1.0.1"
-  ref: docs/candidates/2214-p4-overview
+  ref: docs/candidates/2214-p4-stack-intros
 - display-name: Development
   slug: dev
   path: navigation.yml
