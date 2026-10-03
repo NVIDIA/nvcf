@@ -77,19 +77,19 @@ func runCheckRecording(t *testing.T, args ...string) (namespaces []string, sisHi
 }
 
 // Each role's namespaces are scanned only when that role runs. Merging both in
-// for a single-role run reported a stuck kai-scheduler on --control-plane.
+// for a single-role run reported a stuck nvca-operator on --control-plane.
 func TestCheck_StaleNamespacesFollowTheRequestedRoles(t *testing.T) {
 	ns, _ := runCheckRecording(t, "--control-plane")
 	assert.Contains(t, ns, "vault-system")
-	assert.NotContains(t, ns, "kai-scheduler", "--control-plane must not scan compute namespaces")
+	assert.NotContains(t, ns, "nvca-operator", "--control-plane must not scan compute namespaces")
 
 	ns, _ = runCheckRecording(t, "--compute-plane")
-	assert.Contains(t, ns, "kai-scheduler")
+	assert.Contains(t, ns, "nvca-operator")
 	assert.NotContains(t, ns, "vault-system", "--compute-plane must not scan control-plane namespaces")
 
 	ns, _ = runCheckRecording(t, "--all")
 	assert.Contains(t, ns, "vault-system")
-	assert.Contains(t, ns, "kai-scheduler", "--all scans both")
+	assert.Contains(t, ns, "nvca-operator", "--all scans both")
 }
 
 // A bare --pre skips SIS, which is not up before install; an explicit --all or

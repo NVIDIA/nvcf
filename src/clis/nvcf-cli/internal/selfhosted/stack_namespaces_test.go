@@ -20,6 +20,7 @@ package selfhosted
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,7 +57,7 @@ releases:
 `,
 	})
 
-	got := stackReleaseNamespaces(dir)
+	got := namespaceNames(stackReleaseNamespaces(dir))
 	assert.Equal(t, []string{"cert-manager", "nats-system", "nvcf", "nvcf-ui"}, got,
 		"namespaces must come from the stack, de-duplicated and sorted")
 }
@@ -75,16 +76,17 @@ releases:
 `,
 	})
 
-	got := stackReleaseNamespaces(dir)
+	got := namespaceNames(stackReleaseNamespaces(dir))
 	assert.Equal(t, []string{"nvcf"}, got, "a templated namespace must not be probed")
 }
 
 func TestResolveStackNamespaces_FallsBackWhenNoStack(t *testing.T) {
-	fallback := []string{"nvcf", "sis"}
+	fallback := []stackNamespace{{name: "nvcf"}, {name: "sis"}}
+	want := []string{"nvcf", "sis"}
 
-	assert.Equal(t, fallback, resolveStackNamespaces("", fallback),
+	assert.Equal(t, want, resolveStackNamespaces("", "", fallback),
 		"no stack path must use the static list")
-	assert.Equal(t, fallback, resolveStackNamespaces(t.TempDir(), fallback),
+	assert.Equal(t, want, resolveStackNamespaces(t.TempDir(), "local", fallback),
 		"a directory with no helmfile.d must use the static list")
 }
 
@@ -95,7 +97,7 @@ func TestResolveStackNamespaces_UnionsStackWithStatic(t *testing.T) {
 	dir := writeStack(t, map[string]string{
 		"01.yaml.gotmpl": "releases:\n  - name: a\n    namespace: from-stack\n",
 	})
-	got := resolveStackNamespaces(dir, []string{"static"})
+	got := resolveStackNamespaces(dir, "", []stackNamespace{{name: "static"}})
 	assert.Contains(t, got, "from-stack", "the stack's namespaces must be picked up")
 	assert.Contains(t, got, "static", "the static list must remain a floor")
 }
@@ -125,7 +127,7 @@ func TestStackReleaseNamespaces_ReadsPlainYAMLFragments(t *testing.T) {
 	dir := writeStack(t, map[string]string{
 		"01.yaml": "releases:\n  - name: a\n    namespace: plain-yaml\n",
 	})
-	assert.Contains(t, stackReleaseNamespaces(dir), "plain-yaml")
+	assert.Contains(t, namespaceNames(stackReleaseNamespaces(dir)), "plain-yaml")
 }
 
 // A `namespace:` key nested inside a release's values block is chart
@@ -145,7 +147,148 @@ releases:
 `,
 	})
 
-	got := stackReleaseNamespaces(dir)
+	got := namespaceNames(stackReleaseNamespaces(dir))
 	assert.Equal(t, []string{"nvcf"}, got,
 		"only release-level namespaces may be probed; nested values keys must be ignored")
+}
+
+// writeEnv adds environments/<name> to a stack laid out by writeStack.
+func writeEnv(t *testing.T, dir, name, body string) {
+	t.Helper()
+	envDir := filepath.Join(dir, "environments")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, name), []byte(body), 0o600))
+}
+
+// Keys from 5 spaces in sit inside a release's values: and are chart
+// configuration; 4 is the release level.
+func TestStackReleaseNamespaces_IndentCap(t *testing.T) {
+	dir := writeStack(t, map[string]string{
+		"01.yaml.gotmpl": "releases:\n  - name: a\n    namespace: four\n" +
+			"  - name: b\n     namespace: five\n  - name: c\n      namespace: six\n",
+	})
+	assert.Equal(t, []string{"four"}, namespaceNames(stackReleaseNamespaces(dir)))
+}
+
+// A release behind a condition: deploys its namespace only when the stack's
+// values turn it on. Without that, a default-off addon namespace the stack
+// never installs, such as a platform team's own kai-scheduler, fails the run.
+func TestResolveStackNamespaces_FollowsReleaseConditions(t *testing.T) {
+	dir := writeStack(t, map[string]string{
+		"01.yaml.gotmpl": `
+releases:
+  - name: kai-scheduler
+    condition: addons.kaiScheduler.enabled
+    namespace: kai-scheduler
+  - name: nvca-operator
+    namespace: nvca-operator
+  - name: grove-operator
+    condition: addons.groveOperator.enabled # comment
+    namespace: grove-system
+`,
+	})
+	writeEnv(t, dir, "base.yaml",
+		"addons:\n  kaiScheduler:\n    enabled: false\n  groveOperator:\n    enabled: false\n")
+	assert.Equal(t, []string{"nvca-operator"}, resolveStackNamespaces(dir, "prod", nil),
+		"base.yaml alone keeps the addons off")
+
+	writeEnv(t, dir, "prod.yaml", "addons:\n  kaiScheduler:\n    enabled: true\n")
+	assert.Equal(t, []string{"kai-scheduler", "nvca-operator"}, resolveStackNamespaces(dir, "prod", nil),
+		"the environment file layered over base.yaml turns kai-scheduler on")
+	assert.Equal(t, []string{"nvca-operator"}, resolveStackNamespaces(dir, "staging", nil),
+		"another environment's file does not count")
+}
+
+// The static lists follow the same gates: the default when the stack is not
+// readable, the stack's values when it is.
+func TestResolveStackNamespaces_GatesTheStaticList(t *testing.T) {
+	assert.Equal(t, []string{"nvca-operator"}, ComputePlaneStaleNamespaces("", ""),
+		"the scheduling addons are off by default")
+	cp := ControlPlaneStaleNamespaces("", "")
+	assert.Contains(t, cp, "cassandra-system", "default-on gates keep their namespace")
+	assert.NotContains(t, cp, "nvcf-ui", "the UI addon is off by default")
+
+	dir := t.TempDir()
+	writeEnv(t, dir, "base.yaml", "cassandra:\n  enabled: true\naddons:\n  kaiScheduler:\n    enabled: false\n")
+	writeEnv(t, dir, "prod.yaml", "cassandra:\n  enabled: false\naddons:\n  kaiScheduler:\n    enabled: true\n")
+	assert.NotContains(t, ControlPlaneStaleNamespaces(dir, "prod"), "cassandra-system",
+		"an external Cassandra's namespace is not the stack's")
+	assert.Contains(t, ComputePlaneStaleNamespaces(dir, "prod"), "kai-scheduler")
+	assert.NotContains(t, ComputePlaneStaleNamespaces(dir, "prod"), "grove-system")
+}
+
+// A release whose gate cannot be read from the source is not proof the stack
+// installs into its namespace; installed: false is proof it does not.
+func TestStackReleaseNamespaces_SkipsUnreadableGates(t *testing.T) {
+	dir := writeStack(t, map[string]string{
+		"01.yaml.gotmpl": `
+releases:
+  - name: always
+    namespace: always
+{{- if $managedIssuer }}
+  - name: in-template
+    namespace: in-template
+    needs:
+{{- if dig "x" "enabled" true .Values }}
+      - a/b
+{{- end }}
+{{- end }}
+  - name: after-template
+    namespace: after-template
+  - name: templated-installed
+    installed: {{ and $a $b }}
+    namespace: templated-installed
+  - name: not-installed
+    installed: false
+    namespace: not-installed
+  - name: installed
+    installed: true
+    namespace: installed
+`,
+	})
+	assert.Equal(t, []string{"after-template", "always", "installed"},
+		namespaceNames(stackReleaseNamespaces(dir)))
+}
+
+// No helmfile declaration can put a namespace NVCA creates at runtime on the
+// list: it holds live work.
+func TestResolveStackNamespaces_NeverProbesRuntimeOwnedNamespaces(t *testing.T) {
+	dir := writeStack(t, map[string]string{
+		"01.yaml.gotmpl": "releases:\n  - name: a\n    namespace: nvcf-backend\n" +
+			"  - name: b\n    namespace: nvca-system\n",
+	})
+	assert.Empty(t, resolveStackNamespaces(dir, "", nil))
+}
+
+// The static lists are what a released binary probes with no stack checkout,
+// so they must agree with the stacks: the same namespaces, gated by the same
+// conditions, with base.yaml's defaults.
+func TestStaticNamespaces_MatchTheStacks(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..", "..", "deploy", "stacks")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("deploy/stacks not reachable from the test's working directory: %v", err)
+	}
+	for stack, static := range map[string][]stackNamespace{
+		"self-managed":       nvcfControlPlaneNamespaces,
+		"nvcf-compute-plane": nvcfComputePlaneNamespaces,
+	} {
+		dir := filepath.Join(root, stack)
+		derived := stackReleaseNamespaces(dir)
+		require.NotEmpty(t, derived, stack)
+		base, found := loadValuesFiles([]string{filepath.Join(dir, "environments", "base.yaml")})
+		require.True(t, found, stack)
+
+		want := make(map[string]stackNamespace, len(derived))
+		for _, ns := range derived {
+			want[ns.name] = ns
+		}
+		assert.ElementsMatch(t, namespaceNames(derived), namespaceNames(static), stack)
+		for _, ns := range static {
+			assert.Equal(t, want[ns.name].gates, ns.gates, "%s: %s", stack, ns.name)
+			for _, gate := range ns.gates {
+				on, _ := digAny(base, strings.Split(gate, ".")...).(bool)
+				assert.Equal(t, on, ns.on, "%s: %s default", stack, ns.name)
+			}
+		}
+	}
 }

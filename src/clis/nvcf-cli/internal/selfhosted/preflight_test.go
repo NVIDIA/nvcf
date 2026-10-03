@@ -687,7 +687,7 @@ func TestStaleNamespaceCheck_MergesTheOtherRolesNamespaces(t *testing.T) {
 	}
 	rc := RoleConfig{
 		StaleNamespaceProber: prober,
-		ExtraStaleNamespaces: ComputePlaneStaleNamespaces(""),
+		ExtraStaleNamespaces: ComputePlaneStaleNamespaces("", ""),
 	}
 	cat := controlPlaneCheckCategory(rc)
 	require.NotEmpty(t, cat.checks)
@@ -696,15 +696,15 @@ func TestStaleNamespaceCheck_MergesTheOtherRolesNamespaces(t *testing.T) {
 	for _, ns := range []string{"nvcf", "vault-system"} {
 		assert.Contains(t, probed, ns, "the control-plane list must still be covered")
 	}
-	for _, ns := range []string{"nvca-operator", "kai-scheduler"} {
-		assert.Contains(t, probed, ns, "the compute-plane list must be merged in, not dropped")
-	}
+	assert.Contains(t, probed, "nvca-operator", "the compute-plane list must be merged in, not dropped")
 }
 
 func TestMergeNamespaces_DedupesAndKeepsOrder(t *testing.T) {
 	got := mergeNamespaces([]string{"a", "b"}, []string{"b", "c", ""})
 	assert.Equal(t, []string{"a", "b", "c"}, got)
 	assert.Nil(t, mergeNamespaces(nil, nil))
+	assert.Equal(t, []string{"a"}, mergeNamespaces([]string{"nvcf-backend", "a"}, []string{"nvca-system"}),
+		"namespaces NVCA creates at runtime hold live work and are never probed")
 }
 
 // Every count derives from one rule: only an error-severity miss fails; any

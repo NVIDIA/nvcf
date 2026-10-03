@@ -408,20 +408,7 @@ type StackValues struct {
 // the way helmfile layers an environment file over base.yaml. Unreadable or
 // malformed files are skipped.
 func LoadStackValues(files []string) StackValues {
-	merged := map[string]any{}
-	found := false
-	for _, path := range files {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var doc map[string]any
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			continue
-		}
-		found = true
-		mergeValues(merged, doc)
-	}
+	merged, found := loadValuesFiles(files)
 	return StackValues{
 		Found:                 found,
 		ImageRegistry:         digString(merged, "global", "image", "registry"),
@@ -512,6 +499,26 @@ func stackGateways(merged map[string]any) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// loadValuesFiles layers files in order and reports whether any was read.
+// Unreadable or malformed files are skipped.
+func loadValuesFiles(files []string) (map[string]any, bool) {
+	merged := map[string]any{}
+	found := false
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			continue
+		}
+		found = true
+		mergeValues(merged, doc)
+	}
+	return merged, found
 }
 
 // mergeValues deep-merges src into dst: maps merge key by key, anything else

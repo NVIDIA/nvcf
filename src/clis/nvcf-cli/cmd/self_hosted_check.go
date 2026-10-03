@@ -884,6 +884,10 @@ func runPreflightByRole(
 	}
 
 	staleNSProber := newStaleNamespaceProberForSelfHosted()
+	// Only a named environment decides the stack's gates, as for the other
+	// stack values: a defaulted one may not be the install's. Without one the
+	// stack's base.yaml defaults decide.
+	stackEnv, _ := explicitStackEnv()
 
 	// The control-plane validator probes the hosts the local credential check
 	// probes, extras included, each as a warning only.
@@ -943,6 +947,7 @@ func runPreflightByRole(
 					StaleNamespaceProber:            staleNSProber,
 					StackDir:                        localStackDir(selfHostedControlPlaneStack),
 					Skipped:                         cpSkips,
+					StackEnv:                        stackEnv,
 				}
 				cpResults = selfhosted.RunPreflightForRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
 				return nil
@@ -965,6 +970,7 @@ func runPreflightByRole(
 					StaleNamespaceProber:            staleNSProber,
 					StackDir:                        localStackDir(selfHostedComputePlaneStack),
 					Skipped:                         computeSkips,
+					StackEnv:                        stackEnv,
 				}
 				gpuResults = selfhosted.RunPreflightForRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
 				return nil
@@ -996,7 +1002,7 @@ func runPreflightByRole(
 			staleForComputePlane = nil
 			if runComputePlane {
 				cpExtraNamespaces = selfhosted.ComputePlaneStaleNamespaces(
-					localStackDir(selfHostedComputePlaneStack))
+					localStackDir(selfHostedComputePlaneStack), stackEnv)
 			}
 		} else {
 			staleForControlPlane = nil
@@ -1016,6 +1022,7 @@ func runPreflightByRole(
 				ValidatorCleanup:                ledger,
 				StaleNamespaceProber:            staleForControlPlane,
 				StackDir:                        localStackDir(selfHostedControlPlaneStack),
+				StackEnv:                        stackEnv,
 				ExtraStaleNamespaces:            cpExtraNamespaces,
 				Skipped:                         cpSkips,
 			}
@@ -1037,6 +1044,7 @@ func runPreflightByRole(
 				StaleNamespaceProber:            staleForComputePlane,
 				StackDir:                        localStackDir(selfHostedComputePlaneStack),
 				Skipped:                         computeSkips,
+				StackEnv:                        stackEnv,
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)

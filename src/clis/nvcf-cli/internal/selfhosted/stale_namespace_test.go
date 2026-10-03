@@ -19,9 +19,11 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,8 +31,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -259,6 +263,8 @@ func TestStaleNamespaceCheck_MessageNamesAllStaleNamespaces(t *testing.T) {
 		}, nil
 	}
 	r := staleNamespaceCheck(prober, "", []string{"nvcf", "api-keys"}).Run(context.Background())
+	assert.Equal(t, SeverityError, r.Severity,
+		"a namespace stuck Terminating fails the run whatever else is reported beside it")
 	assert.Contains(t, r.Message, "nvcf")
 	assert.Contains(t, r.Message, "api-keys")
 	assert.Contains(t, r.Message, "/api/v1/namespaces/nvcf/finalize",
@@ -273,49 +279,68 @@ func TestStaleNamespaceCheck_MessageNamesAllStaleNamespaces(t *testing.T) {
 // legitimately come back empty with a Continue token. Treating that as "no
 // release" reports a live namespace stale and tells the operator to delete it.
 func TestProbeStaleNamespaces_PagesPastNonMatchingObjects(t *testing.T) {
-	client := fake.NewSimpleClientset(&corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
-		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
-	})
+	for _, resource := range []string{"secrets", "configmaps"} {
+		t.Run(resource, func(t *testing.T) {
+			client := fake.NewSimpleClientset(&corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
+				Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+			}, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "nvcf"}})
 
-	// First page: empty with a Continue token. Second page: the release secret.
-	call := 0
-	client.PrependReactor("list", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		call++
-		if call == 1 {
-			return true, &corev1.SecretList{
-				ListMeta: metav1.ListMeta{Continue: "next-page-token"},
-			}, nil
-		}
-		return true, &corev1.SecretList{Items: []corev1.Secret{{
-			ObjectMeta: metav1.ObjectMeta{
+			// First page: empty with a Continue token. Second page: the
+			// release object.
+			calls := 0
+			release := metav1.ObjectMeta{
 				Name: "sh.helm.release.v1.nvcf.v1", Namespace: "nvcf",
-				Labels: map[string]string{"owner": "helm"},
-			},
-		}}}, nil
-	})
+				Labels: map[string]string{"owner": "helm", "name": "nvcf", "status": "deployed"},
+			}
+			client.PrependReactor("list", resource, func(a ktesting.Action) (bool, runtime.Object, error) {
+				if !listSelects(a, "deployed") {
+					return false, nil, nil
+				}
+				calls++
+				if calls == 1 {
+					if resource == "secrets" {
+						return true, &corev1.SecretList{ListMeta: metav1.ListMeta{Continue: "next"}}, nil
+					}
+					return true, &corev1.ConfigMapList{ListMeta: metav1.ListMeta{Continue: "next"}}, nil
+				}
+				if resource == "secrets" {
+					return true, &corev1.SecretList{Items: []corev1.Secret{{ObjectMeta: release}}}, nil
+				}
+				return true, &corev1.ConfigMapList{Items: []corev1.ConfigMap{{ObjectMeta: release}}}, nil
+			})
 
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
-	require.NoError(t, err)
-	assert.Empty(t, stale,
-		"an empty first page with a Continue token must not be read as 'no Helm release'")
-	assert.Greater(t, call, 1, "the probe must follow the Continue token")
+			stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+			require.NoError(t, err)
+			assert.Empty(t, stale,
+				"an empty first page with a Continue token must not be read as 'no Helm release'")
+			assert.Equal(t, 2, calls, "the probe must follow the Continue token")
+		})
+	}
 }
 
 // The remediation for a hit is "delete this namespace", so the list must only
 // contain namespaces a helmfile release actually owns. nvcf-backend is created
 // at runtime by NVCA and holds live worker pods.
 func TestControlPlaneNamespaceList_ExcludesRuntimeOwnedNamespaces(t *testing.T) {
+	cp := namespaceNames(nvcfControlPlaneNamespaces)
 	for _, ns := range []string{"nvcf-backend", "openbao-system"} {
-		assert.NotContains(t, nvcfControlPlaneNamespaces, ns,
+		assert.NotContains(t, cp, ns,
 			"%s hosts no Helm release; probing it yields a destructive false positive", ns)
 	}
 	for _, ns := range []string{"cert-manager", "nvcf-ui"} {
-		assert.Contains(t, nvcfControlPlaneNamespaces, ns,
-			"%s is a real stack namespace and must be probed", ns)
+		assert.Contains(t, cp, ns, "%s is a real stack namespace and must be probed", ns)
 	}
-	assert.NotContains(t, nvcfComputePlaneNamespaces, "nvca-system",
+	assert.NotContains(t, namespaceNames(nvcfComputePlaneNamespaces), "nvca-system",
 		"nvca-system is operator-created and hosts no release")
+}
+
+func namespaceNames(list []stackNamespace) []string {
+	out := make([]string, 0, len(list))
+	for _, ns := range list {
+		out = append(out, ns.name)
+	}
+	return out
 }
 
 // TestStaleNamespaceCheck_HintsPinTheProbedContext guards the remediation
@@ -486,9 +511,11 @@ func TestProbeStaleNamespaces_SQLDriverSkipsTheNoReleaseSignal(t *testing.T) {
 // A namespace stuck Terminating is still reported even when no Helm release
 // object exists anywhere: that signal does not depend on the storage driver.
 func TestProbeStaleNamespaces_TerminatingReportedWithoutHelmObjects(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "sql")
+	deleted := metav1.NewTime(time.Now().Add(-10 * time.Minute))
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
+			ObjectMeta: metav1.ObjectMeta{Name: "nvcf", DeletionTimestamp: &deleted},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
 		},
 	)
@@ -510,8 +537,11 @@ func TestStaleNamespaceCheck_NoHelmReleaseWarnsAndDoesNotSuggestDelete(t *testin
 
 	assert.Equal(t, SeverityWarning, r.Severity,
 		"a namespace with no Helm release must not fail the run")
-	assert.NotContains(t, r.Message, "delete namespace",
-		"the remediation must not destroy a namespace the operator may own")
+	for _, nudge := range []string{" delete ", "remove", "To resolve"} {
+		assert.NotContains(t, r.Message, nudge,
+			"no Helm release is an observation; the hint must not frame removing the namespace as the fix")
+	}
+	assert.Contains(t, r.Message, "xargs -n1 kubectl get -n cert-manager --show-kind --ignore-not-found")
 }
 
 // A namespace stuck Terminating does block the run.
@@ -522,6 +552,7 @@ func TestStaleNamespaceCheck_TerminatingIsStillAnError(t *testing.T) {
 	}
 	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
 	assert.Equal(t, SeverityError, r.Severity)
+	assert.False(t, r.Transient, "a stuck namespace does not clear by waiting")
 }
 
 // kubectl keeps only the last -n it is given, so a joined command inspects one
@@ -597,4 +628,369 @@ func TestProbeStaleNamespaces_NamespaceRunningPodsIsNotStale(t *testing.T) {
 	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nats-system"})
 	require.NoError(t, err)
 	assert.Empty(t, stale)
+}
+
+// listSelects reports whether a list action's label selector names value.
+func listSelects(a ktesting.Action, value string) bool {
+	return strings.Contains(a.(ktesting.ListAction).GetListRestrictions().Labels.String(), value)
+}
+
+func forbidden(resource, name string) error {
+	return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name, errors.New("denied"))
+}
+
+// One namespace that cannot be read must not hide what the others show: a
+// namespace stuck Terminating is still reported, before or after the read
+// that failed, and the failures name their namespaces.
+func TestProbeStaleNamespaces_KeepsProbingPastAReadError(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "")
+	deleted := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cassandra-system", DeletionTimestamp: &deleted}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "vault-system"}},
+	)
+	client.PrependReactor("get", "namespaces", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.(ktesting.GetAction).GetName() == "nvcf" {
+			return true, nil, forbidden("namespaces", "nvcf")
+		}
+		return false, nil, nil
+	})
+	client.PrependReactor("list", "secrets", func(a ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, forbidden("secrets", "")
+	})
+
+	stale, err := probeStaleNamespaces(context.Background(), client,
+		[]string{"nvcf", "cassandra-system", "vault-system"})
+	require.Len(t, stale, 1, "the namespace read after the failed one must still be probed")
+	assert.Equal(t, "cassandra-system", stale[0].Name)
+	assert.Equal(t, StaleStuckTerminating, stale[0].Reason)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get namespace nvcf")
+	assert.Contains(t, err.Error(), "; vault-system: list Helm secrets")
+	assert.NotContains(t, err.Error(), "\n", "the errors are rendered on the row's one line")
+	assert.True(t, apierrors.IsForbidden(err), "the underlying API errors stay reachable")
+}
+
+// A stuck namespace found next to a probe error keeps the row at error, and
+// the row names both. Grading the pair as the probe error alone let `check
+// --pre` pass over a namespace `up` would then fail to create into.
+func TestStaleNamespaceCheck_StuckStaysAnErrorBesideAProbeError(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	readErr := errors.New("vault-system: list Helm secrets: forbidden")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "cassandra-system", Reason: StaleStuckTerminating}}, readErr
+	}
+	r := staleNamespaceCheck(prober, "", nil).Run(context.Background())
+	assert.False(t, r.Passed)
+	assert.Equal(t, SeverityError, r.Severity)
+	assert.Contains(t, r.Message, "cassandra-system (stuck Terminating)")
+	assert.Contains(t, r.Message, "could not probe: vault-system")
+	assert.ErrorIs(t, r.Err, readErr)
+
+	// Without a stuck namespace the same pair is a warning that still lists
+	// what was found.
+	prober = func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "api-keys", Reason: StaleNoHelmRelease}}, readErr
+	}
+	r = staleNamespaceCheck(prober, "", nil).Run(context.Background())
+	assert.Equal(t, SeverityWarning, r.Severity)
+	assert.Contains(t, r.Message, "api-keys (no Helm release)")
+	assert.Contains(t, r.Message, "could not probe: vault-system")
+}
+
+// A namespace a moment into a normal deletion is draining volumes and
+// finalizers; `up` waits for it. Only past the bound, or once the namespace
+// controller reports a deletion failure, is it stuck.
+func TestProbeStaleNamespaces_StuckOnlyPastTheBoundOrOnAFailure(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "sql")
+	ago := func(d time.Duration) *metav1.Time { ts := metav1.NewTime(time.Now().Add(-d)); return &ts }
+	cond := func(t corev1.NamespaceConditionType) []corev1.NamespaceCondition {
+		return []corev1.NamespaceCondition{{Type: t, Status: corev1.ConditionTrue, Message: "held"}}
+	}
+	soon, late := ago(5*time.Second), ago(namespaceStuckAfter+time.Second)
+	cases := map[string]struct {
+		deleted    *metav1.Time
+		conditions []corev1.NamespaceCondition
+		want       string
+	}{
+		"just deleted":            {soon, nil, StaleTerminating},
+		"finalizers draining":     {soon, cond(corev1.NamespaceFinalizersRemaining), StaleTerminating},
+		"past the bound":          {late, nil, StaleStuckTerminating},
+		"content failure":         {soon, cond(corev1.NamespaceDeletionContentFailure), StaleStuckTerminating},
+		"discovery failure":       {soon, cond(corev1.NamespaceDeletionDiscoveryFailure), StaleStuckTerminating},
+		"group-version failure":   {soon, cond(corev1.NamespaceDeletionGVParsingFailure), StaleStuckTerminating},
+		"phase only, no failure":  {nil, nil, StaleTerminating},
+		"phase only, and failing": {nil, cond(corev1.NamespaceDeletionContentFailure), StaleStuckTerminating},
+	}
+	for name, tc := range cases {
+		client := fake.NewSimpleClientset(&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "nvcf", DeletionTimestamp: tc.deleted},
+			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating, Conditions: tc.conditions},
+		})
+		got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+		require.NoError(t, err, name)
+		require.Len(t, got, 1, name)
+		assert.Equal(t, tc.want, got[0].Reason, name)
+	}
+}
+
+// A namespace still being deleted is a warning with a read-only hint: no
+// /finalize, which would orphan the volumes it is still detaching.
+func TestStaleNamespaceCheck_TerminatingWarnsWithoutTheFinalizeHint(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "nvcf", Reason: StaleTerminating, Detail: "deleting for 5s"}}, nil
+	}
+	r := staleNamespaceCheck(prober, "", nil).Run(context.Background())
+	assert.Equal(t, SeverityWarning, r.Severity)
+	assert.True(t, r.Transient, "a deletion in progress clears by itself, so --wait polls it")
+	assert.Contains(t, r.Message, "nvcf (Terminating: deleting for 5s)")
+	assert.Contains(t, r.Message, "kubectl get ns nvcf -o jsonpath='{.status.conditions}'")
+	assert.NotContains(t, r.Message, "finalize")
+}
+
+// The stuck hint reads the namespace's conditions before anything else.
+func TestStaleNamespaceCheck_StuckHintReadsConditionsFirst(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "nvcf", Reason: StaleStuckTerminating}}, nil
+	}
+	r := staleNamespaceCheck(prober, "", nil).Run(context.Background())
+	conditions := strings.Index(r.Message, "get ns nvcf -o jsonpath='{.status.conditions}'")
+	inspect := strings.Index(r.Message, "xargs -n1 kubectl get -n nvcf")
+	require.GreaterOrEqual(t, conditions, 0)
+	assert.Less(t, conditions, inspect)
+}
+
+func helmRecord(ns, name, status string) *corev1.Secret {
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: "sh.helm.release.v1." + name + ".v1", Namespace: ns,
+		Labels: map[string]string{"owner": "helm", "name": name, "status": status},
+	}}
+}
+
+// Only a deployed, failed or superseded record is a release `helm upgrade
+// --install` builds on. One an interrupted install, upgrade or teardown left
+// behind makes the next install fail, so it is reported by name and status;
+// an uninstalled record kept by --keep-history is no release at all.
+func TestProbeStaleNamespaces_GradesReleasesByStatus(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "")
+	const mid = StaleReleaseMidOperation
+	cases := map[string]struct {
+		statuses []string
+		reason   string
+		detail   string
+	}{
+		"deployed":           {[]string{"deployed"}, "", ""},
+		"failed":             {[]string{"failed"}, "", ""},
+		"superseded":         {[]string{"superseded"}, "", ""},
+		"uninstalling":       {[]string{"uninstalling"}, mid, "cassandra uninstalling"},
+		"pending-install":    {[]string{"pending-install"}, mid, "cassandra pending-install"},
+		"pending-upgrade":    {[]string{"deployed", "pending-upgrade"}, mid, "cassandra pending-upgrade"},
+		"pending-rollback":   {[]string{"pending-rollback"}, mid, "cassandra pending-rollback"},
+		"uninstalled (kept)": {[]string{"uninstalled"}, StaleNoHelmRelease, ""},
+	}
+	for name, tc := range cases {
+		objects := []runtime.Object{
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cassandra-system"}},
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "cassandra-system"}},
+		}
+		for i, status := range tc.statuses {
+			rec := helmRecord("cassandra-system", "cassandra", status)
+			rec.Name = fmt.Sprintf("%s%d", rec.Name, i)
+			objects = append(objects, rec)
+		}
+		got, err := probeStaleNamespaces(context.Background(), fake.NewSimpleClientset(objects...),
+			[]string{"cassandra-system"})
+		require.NoError(t, err, name)
+		if tc.reason == "" {
+			assert.Empty(t, got, name)
+			continue
+		}
+		require.Len(t, got, 1, name)
+		assert.Equal(t, tc.reason, got[0].Reason, name)
+		assert.Equal(t, tc.detail, got[0].Detail, name)
+	}
+}
+
+// The ConfigMap driver's records are graded the same way.
+func TestProbeStaleNamespaces_ConfigMapReleaseMidOperation(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "")
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nats-system"}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "nats.v2", Namespace: "nats-system",
+			Labels: map[string]string{"owner": "helm", "name": "nats", "status": "pending-upgrade"}}},
+	)
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"nats-system"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, []string{"nats"}, got[0].Releases)
+}
+
+// A release left mid-operation is a warning, since an install may still be
+// running, and its hint reads the history on the probed context first.
+func TestStaleNamespaceCheck_ReleaseMidOperationHint(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "cassandra-system", Reason: StaleReleaseMidOperation,
+			Detail: "cassandra uninstalling", Releases: []string{"cassandra"}}}, nil
+	}
+	r := staleNamespaceCheck(prober, "cp ctx", nil).Run(context.Background())
+	assert.Equal(t, SeverityWarning, r.Severity)
+	assert.Contains(t, r.Message, "cassandra-system (Helm release mid-operation: cassandra uninstalling)")
+	assert.Contains(t, r.Message, "helm --kube-context 'cp ctx' history cassandra -n cassandra-system")
+}
+
+// A namespace whose pods or leftovers cannot be listed is listed as unread,
+// not reported as a leftover nobody saw, and not passed over in silence.
+func TestProbeStaleNamespaces_UnreadableWorkloadIsListedNotReported(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "")
+	for _, resource := range []string{"pods", "persistentvolumeclaims"} {
+		client := fake.NewSimpleClientset(
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "api-keys"}},
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "api-keys"}},
+		)
+		client.PrependReactor("list", resource, func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, forbidden(resource, "")
+		})
+		got, err := probeStaleNamespaces(context.Background(), client, []string{"api-keys"})
+		assert.Empty(t, got, resource)
+		require.Error(t, err, resource)
+		assert.Contains(t, err.Error(), "api-keys: list "+resource, resource)
+	}
+}
+
+// Each leftover kind is enough on its own, and one kind seen outweighs another
+// that could not be read.
+func TestHoldsInstallLeftovers_EachKindAndTheErrorDirection(t *testing.T) {
+	ns := "vault-system"
+	meta := metav1.ObjectMeta{Name: "x", Namespace: ns}
+	kinds := map[string]runtime.Object{
+		"persistentvolumeclaims": &corev1.PersistentVolumeClaim{ObjectMeta: meta},
+		"jobs":                   &batchv1.Job{ObjectMeta: meta},
+		"statefulsets":           &appsv1.StatefulSet{ObjectMeta: meta},
+		"deployments":            &appsv1.Deployment{ObjectMeta: meta},
+		"daemonsets":             &appsv1.DaemonSet{ObjectMeta: meta},
+	}
+	for kind, obj := range kinds {
+		got, err := holdsInstallLeftovers(context.Background(), fake.NewSimpleClientset(obj), ns)
+		require.NoError(t, err, kind)
+		assert.True(t, got, kind)
+
+		// Every other kind unreadable: what was seen still counts.
+		client := fake.NewSimpleClientset(obj)
+		for other := range kinds {
+			if other != kind {
+				client.PrependReactor("list", other, func(ktesting.Action) (bool, runtime.Object, error) {
+					return true, nil, forbidden(other, "")
+				})
+			}
+		}
+		got, err = holdsInstallLeftovers(context.Background(), client, ns)
+		require.NoError(t, err, kind)
+		assert.True(t, got, kind)
+	}
+
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, forbidden("jobs", "")
+	})
+	got, err := holdsInstallLeftovers(context.Background(), client, ns)
+	assert.False(t, got, "a kind that could not be read is not a leftover that was seen")
+	assert.Error(t, err)
+
+	got, err = holdsInstallLeftovers(context.Background(), fake.NewSimpleClientset(), ns)
+	assert.False(t, got)
+	assert.NoError(t, err)
+}
+
+func TestHasLiveWorkload_ReadErrorIsNotAWorkload(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, forbidden("pods", "")
+	})
+	live, err := hasLiveWorkload(context.Background(), client, "nvcf")
+	assert.False(t, live)
+	assert.Error(t, err)
+}
+
+// The budget running out mid-scan has to reach the result as the context's
+// error, so the runner grades the row as cut short (exit 5) rather than as a
+// clean pass or a warning.
+func TestProbeStaleNamespaces_BudgetCutOffIsReturned(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sis"}},
+	)
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		cancel()
+		return true, nil, context.Canceled
+	})
+	_, err := probeStaleNamespaces(ctx, client, []string{"nvcf", "sis"})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotContains(t, err.Error(), "sis", "the scan stops once the context is done")
+
+	// A budget that runs out between two namespaces fails no call, and the
+	// namespaces never read must still turn the scan into an error.
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	client = fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sis"}},
+	)
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		cancel()
+		return true, &corev1.PodList{}, nil
+	})
+	_, err = probeStaleNamespaces(ctx, client, []string{"nvcf", "sis"})
+	require.ErrorIs(t, err, context.Canceled, "an unfinished scan is never a clean one")
+
+	deadline := fmt.Errorf("list pods: %w", context.DeadlineExceeded)
+	prober := func(context.Context, string, []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "api-keys", Reason: StaleNoHelmRelease}}, deadline
+	}
+	pinCurrentKubeContext(t, "")
+	r := staleNamespaceCheck(prober, "", nil).Run(context.Background())
+	assert.ErrorIs(t, r.Err, context.DeadlineExceeded,
+		"findings beside a spent budget must still carry the budget error to the runner")
+}
+
+func TestFindHelmReleases_PageCapIsAnError(t *testing.T) {
+	calls := 0
+	list := func(metav1.ListOptions) ([]map[string]string, string, error) {
+		calls++
+		return nil, "more", nil
+	}
+	got, err := findHelmReleases(list, liveReleaseSelector, true)
+	require.Error(t, err, "running out of pages is not proof that no release exists")
+	assert.Nil(t, got)
+	assert.Equal(t, helmReleaseListMaxPages, calls)
+}
+
+func TestHelmReleasesAreInCluster_NormalisesTheDriver(t *testing.T) {
+	for driver, want := range map[string]bool{
+		"": true, "secret": true, "configmap": true, "sql": false, " SQL ": false, "Sql\n": false,
+	} {
+		t.Setenv("HELM_DRIVER", driver)
+		assert.Equal(t, want, helmReleasesAreInCluster(), "%q", driver)
+	}
+}
+
+// Under HELM_DRIVER=sql the release lists say nothing, so they are not read:
+// an error from them cannot cut the probe short.
+func TestProbeStaleNamespaces_SQLDriverSkipsTheReleaseLists(t *testing.T) {
+	t.Setenv("HELM_DRIVER", "sql")
+	client := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}})
+	for _, resource := range []string{"secrets", "configmaps", "pods"} {
+		client.PrependReactor("list", resource, func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, forbidden(resource, "")
+		})
+	}
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }

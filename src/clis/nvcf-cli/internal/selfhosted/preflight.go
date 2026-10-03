@@ -381,6 +381,11 @@ type RoleConfig struct {
 	// so the check follows the stack instead of drifting from it.
 	StackDir string
 
+	// StackEnv is the helmfile environment whose values file, layered over
+	// StackDir's environments/base.yaml, decides which gated releases the
+	// stack installs, and so which of their namespaces are probed.
+	StackEnv string
+
 	// ExtraStaleNamespaces are merged into this role's stale-namespace scan.
 	// In ModeSingle both roles share one cluster, so only one of them runs the
 	// probe to avoid emitting the same check ID twice; the other role's
@@ -565,7 +570,7 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 	if rc.StaleNamespaceProber != nil {
 		cat.checks = append(cat.checks,
 			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
-				mergeNamespaces(resolveStackNamespaces(rc.StackDir, nvcfControlPlaneNamespaces),
+				mergeNamespaces(resolveStackNamespaces(rc.StackDir, rc.StackEnv, nvcfControlPlaneNamespaces),
 					rc.ExtraStaleNamespaces)))
 	}
 	// Containerized cluster-validator probe for control-plane checks
@@ -592,7 +597,7 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 	if rc.StaleNamespaceProber != nil {
 		cat.checks = append(cat.checks,
 			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
-				mergeNamespaces(resolveStackNamespaces(rc.StackDir, nvcfComputePlaneNamespaces),
+				mergeNamespaces(resolveStackNamespaces(rc.StackDir, rc.StackEnv, nvcfComputePlaneNamespaces),
 					rc.ExtraStaleNamespaces)))
 	}
 	if rc.SISURL != "" {
@@ -1171,17 +1176,14 @@ func registryCredentialCheck(
 	}
 }
 
-// mergeNamespaces returns the union of two namespace lists, order-stable and
-// de-duplicated.
-func mergeNamespaces(base, extra []string) []string {
-	if len(extra) == 0 {
-		return base
-	}
-	seen := make(map[string]bool, len(base)+len(extra))
-	out := make([]string, 0, len(base)+len(extra))
-	for _, list := range [][]string{base, extra} {
+// mergeNamespaces returns the union of namespace lists, order-stable and
+// de-duplicated, without the namespaces NVCA creates at runtime.
+func mergeNamespaces(lists ...[]string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, list := range lists {
 		for _, ns := range list {
-			if ns == "" || seen[ns] {
+			if ns == "" || seen[ns] || runtimeOwnedNamespaces[ns] {
 				continue
 			}
 			seen[ns] = true
@@ -1191,122 +1193,141 @@ func mergeNamespaces(base, extra []string) []string {
 	return out
 }
 
-// staleNamespaceCheck detects NVCF namespaces stuck Terminating or left as
-// empty shells after a partial teardown. Severity is error; prober errors
-// degrade to warning so transient kubeconfig issues don't falsely fail.
+// staleNamespaceCheck detects NVCF namespaces stuck Terminating, holding a
+// Helm release left mid-operation, or left holding install data after a
+// partial teardown. Only a namespace stuck Terminating is an error; the
+// others, and a probe that could not read the cluster, are warnings.
 func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namespaces []string) binaryCheckSpec {
 	const id = "stale-namespaces"
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: "checking for stale NVCF namespaces...",
 		Run: func(ctx context.Context) CheckResult {
-			r := CheckResult{ID: id, Severity: SeverityError}
+			r := CheckResult{ID: id, Severity: SeverityWarning}
 			// Resolve the context before probing, then probe that exact name.
 			// Resolving afterwards leaves a window where the current-context
-			// changes in between, which would have the hints delete namespaces
-			// in a cluster other than the one that was read.
+			// changes in between, which would have the hints act on a
+			// cluster other than the one that was read.
 			probedContext := effectiveKubeContext(kubeContext)
 			stale, err := prober(ctx, probedContext, namespaces)
 			var unreachable *ClusterUnreachableError
 			if errors.As(err, &unreachable) {
 				// Nothing about this cluster was checked, so nothing passes.
+				r.Severity = SeverityError
 				r.Message = unreachable.Error()
 				r.Err = err
 				return r
 			}
-			if err != nil {
-				r.Severity = SeverityWarning
-				r.Message = "stale namespace probe failed: " + err.Error()
-				r.Err = err
-				return r
-			}
+			// The error reaches the result even beside findings, so a budget
+			// that ran out mid-scan is graded as cut short rather than clean.
+			r.Err = err
 			if len(stale) == 0 {
+				if err != nil {
+					r.Message = "stale namespace probe failed: " + err.Error()
+					return r
+				}
 				r.Severity = SeverityInfo
 				r.Passed = true
 				r.Message = "no stale NVCF namespaces detected"
 				return r
 			}
-			parts := make([]string, 0, len(stale))
-			var terminating, emptyShell []string
-			for _, ns := range stale {
-				parts = append(parts, ns.Name+" ("+ns.Reason+")")
-				if ns.Reason == "stuck Terminating" {
-					terminating = append(terminating, ns.Name)
-				} else {
-					emptyShell = append(emptyShell, ns.Name)
-				}
-			}
 			// Every hint names the context that was actually probed, above.
 			// In split mode the two callers pass different contexts, and with
 			// no context flag the probe followed the current-context. Either
-			// way the name goes into the command, because these hints delete
-			// namespaces and the current-context can change between reading
-			// the output and pasting it.
+			// way the name goes into the command, because the current-context
+			// can change between reading the output and pasting it.
 			kctl := "kubectl" + kubectlContextArg(probedContext)
+			parts := make([]string, 0, len(stale))
 			var hints []string
-			if len(terminating) > 0 {
-				// Inspect first, force last. A namespace usually stays
-				// Terminating because an object inside it still has a
-				// finalizer; clearing the namespace's own finalizers skips that
-				// object's cleanup and can orphan what it manages, such as a
-				// cloud load balancer or volume.
-				// One command per namespace with the real name substituted. A
-				// `<ns>` placeholder is not pasteable: the shell reads `<` and
-				// `>` as redirection, so the command fails before kubectl runs.
-				for _, ns := range terminating {
-					hints = append(hints, fmt.Sprintf(
-						"find what is holding %s in Terminating: "+
-							"%s api-resources --verbs=list --namespaced -o name | "+
-							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
-						ns, kctl, kctl, ns))
+			for _, ns := range stale {
+				part := ns.Name + " (" + ns.Reason
+				if ns.Detail != "" {
+					part += ": " + ns.Detail
 				}
-				// spec.finalizers is writable only through the /finalize
-				// subresource: a plain patch or update is silently reverted by
-				// the apiserver's namespace strategy, so `kubectl patch ...
-				// --type=merge` prints "patched" and changes nothing.
-				for _, ns := range terminating {
-					hints = append(hints, fmt.Sprintf(
-						"only if nothing inside %s can be cleaned up, force-clear its finalizers: %s get ns %s -o json | "+
-							"jq '.spec.finalizers=[]' | %s replace --raw /api/v1/namespaces/%s/finalize -f -",
-						ns, kctl, ns, kctl, ns))
+				parts = append(parts, part+")")
+				switch ns.Reason {
+				case StaleStuckTerminating:
+					// Positive evidence found before a later read failed
+					// still blocks the run.
+					r.Severity = SeverityError
+				case StaleTerminating:
+					// A normal deletion finishes by itself; --wait polls it.
+					r.Transient = true
 				}
+				hints = append(hints, staleNamespaceHints(ns, kctl, probedContext)...)
 			}
-			if len(emptyShell) > 0 {
-				// Deliberately not a delete command. A namespace with no Helm
-				// release is not necessarily stale: the stack gates
-				// cert-manager, NATS, OpenBao and Cassandra on *.enabled, so an
-				// operator who installs one the documented upstream way, or via
-				// Argo, owns a healthy namespace with no owner=helm object.
-				// Handing them "kubectl delete namespace cert-manager" would
-				// destroy every Certificate and Issuer in the cluster.
-				// One command per namespace. kubectl takes a single
-				// namespace and keeps the last -n it sees, so joining them
-				// produces a command that silently inspects only the last one
-				// and reports the rest as empty, which is the opposite of what
-				// an operator deciding whether to delete them needs.
-				// Enumerate every namespaced kind, not `get all`: that omits
-				// PVCs, Secrets, ConfigMaps and custom resources, so after a
-				// partial teardown it reports "No resources found" over the
-				// Cassandra volumes and the OpenBao unseal Secret.
-				for _, ns := range emptyShell {
-					hints = append(hints, fmt.Sprintf(
-						"inspect %s and remove it only after confirming it is unused: "+
-							"%s api-resources --verbs=list --namespaced -o name | "+
-							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
-						ns, kctl, kctl, ns))
-				}
-			}
-			// Only a namespace stuck Terminating blocks the run. "No Helm
-			// release" is a heuristic over a conditionally-installed stack, so
-			// it warns rather than turning a supported install shape into exit 2.
-			if len(terminating) == 0 {
-				r.Severity = SeverityWarning
-			}
-			r.Message = fmt.Sprintf("%d stale namespace(s) detected: %s. To resolve: %s",
+			r.Message = fmt.Sprintf("%d stale namespace(s) detected: %s. %s",
 				len(stale), strings.Join(parts, ", "), strings.Join(hints, "; "))
+			if err != nil {
+				r.Message += ". Additionally could not probe: " + err.Error()
+			}
+			r.Transient = r.Transient && r.Severity == SeverityWarning
 			return r
 		},
 	}
+}
+
+// staleNamespaceHints returns the commands for one reported namespace, one
+// per namespace with the real name substituted. A `<ns>` placeholder is not
+// pasteable: the shell reads `<` and `>` as redirection. kubectl also keeps
+// only the last -n it sees, so a joined command inspects only one namespace.
+//
+// Every kind is enumerated, not `get all`: that omits PVCs, Secrets,
+// ConfigMaps and custom resources, so after a partial teardown it reports
+// "No resources found" over the Cassandra volumes and the OpenBao unseal
+// Secret.
+func staleNamespaceHints(ns StaleNamespace, kctl, kubeContext string) []string {
+	inspect := fmt.Sprintf("%s api-resources --verbs=list --namespaced -o name | "+
+		"xargs -n1 %s get -n %s --show-kind --ignore-not-found", kctl, kctl, ns.Name)
+	conditions := fmt.Sprintf("%s get ns %s -o jsonpath='{.status.conditions}'", kctl, ns.Name)
+	switch ns.Reason {
+	case StaleStuckTerminating:
+		// Inspect first, force last. A namespace usually stays Terminating
+		// because an object inside it still has a finalizer; clearing the
+		// namespace's own finalizers skips that object's cleanup and can
+		// orphan what it manages, such as a cloud load balancer or volume.
+		// spec.finalizers is writable only through the /finalize
+		// subresource: a plain patch is silently reverted by the
+		// apiserver's namespace strategy.
+		return []string{
+			fmt.Sprintf("see why %s is held in Terminating: %s", ns.Name, conditions),
+			fmt.Sprintf("find what is holding %s in Terminating: %s", ns.Name, inspect),
+			fmt.Sprintf("only if nothing inside %s can be cleaned up, force-clear its finalizers: "+
+				"%s get ns %s -o json | jq '.spec.finalizers=[]' | "+
+				"%s replace --raw /api/v1/namespaces/%s/finalize -f -",
+				ns.Name, kctl, ns.Name, kctl, ns.Name),
+		}
+	case StaleTerminating:
+		return []string{fmt.Sprintf("%s is still being deleted; rerun the check once it is gone, "+
+			"or see what it is waiting on: %s", ns.Name, conditions)}
+	case StaleReleaseMidOperation:
+		// An install or teardown still running leaves the same records, so
+		// the hint reads the history before anything is changed.
+		helm := "helm" + helmContextArg(kubeContext)
+		var hints []string
+		for _, release := range ns.Releases {
+			hints = append(hints, fmt.Sprintf("if no install or teardown is running, read the history of %s "+
+				"with %s history %s -n %s, then finish it with helm rollback or helm uninstall",
+				release, helm, release, ns.Name))
+		}
+		return hints
+	default:
+		// An observation, not a remediation. A namespace with no Helm
+		// release is not necessarily stale: an operator who installs a
+		// gated component the documented upstream way, or via Argo, owns a
+		// healthy namespace with no owner=helm object.
+		return []string{fmt.Sprintf("%s holds volume claims or workload objects but no Helm release; inspect: %s",
+			ns.Name, inspect)}
+	}
+}
+
+// helmContextArg renders the probed context as a --kube-context flag, or ""
+// when no explicit context was given.
+func helmContextArg(kubeContext string) string {
+	if kubeContext == "" {
+		return ""
+	}
+	return " --kube-context " + shellQuoteArg(kubeContext)
 }
 
 // kubectlContextArg renders the probed context as a --context flag for the
@@ -1531,10 +1552,10 @@ func RunPreflight(ctx context.Context, cfg PreflightConfig) []CheckResult {
 // ControlPlaneStaleNamespaces and ComputePlaneStaleNamespaces expose each
 // role's stale-namespace list so the cmd layer can merge the two when a single
 // cluster hosts both roles and only one probe runs.
-func ControlPlaneStaleNamespaces(stackDir string) []string {
-	return resolveStackNamespaces(stackDir, nvcfControlPlaneNamespaces)
+func ControlPlaneStaleNamespaces(stackDir, env string) []string {
+	return resolveStackNamespaces(stackDir, env, nvcfControlPlaneNamespaces)
 }
 
-func ComputePlaneStaleNamespaces(stackDir string) []string {
-	return resolveStackNamespaces(stackDir, nvcfComputePlaneNamespaces)
+func ComputePlaneStaleNamespaces(stackDir, env string) []string {
+	return resolveStackNamespaces(stackDir, env, nvcfComputePlaneNamespaces)
 }
