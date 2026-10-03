@@ -1,30 +1,27 @@
 # Release terminology review
 
-Source: [P4 commit 0afec05e4](https://github.com/NVIDIA/nvcf/commit/0afec05e437006b29164fb3e28f9e2d3cead7bc9).
+Source: [P4 commit 61366f0e1](https://github.com/NVIDIA/nvcf/commit/61366f0e1c72fa98623764f8a68834db5a038e34).
 
-The requested documentation-set sentence and the three generated stack edition
-banners are removed. The generator leaves all four landing pages authored.
-The remaining excerpts below are unchanged and await wording review.
+The requested documentation-set sentence and three stack edition banners are
+removed. The two Archive passages and the three Image Mirroring qualification
+warnings are also removed. Image Mirroring now shares the Manifest sidebar
+with Artifact Manifest. Its code examples, headings, and other operating
+instructions remain unchanged.
 
 ## Current customer pages
 
-The audit follows all 95 Markdown pages in current navigation outside the
-Manifest and Release Notes tabs. Compatibility Matrix and upgrade guides are
-under Release Notes, so they are excluded regardless of their source directory.
-The search covers docs/documentation edition, edition selector, qualification,
-and qualified versions. Hardware product names such as Blackwell Server Edition
-are unrelated and excluded. Six relevant passages remain in three pages.
+The updated audit follows all 94 Markdown pages in current navigation outside
+the Manifest and Release Notes tabs. Compatibility Matrix and upgrade guides
+are under Release Notes and Image Mirroring is under Manifest, so they are
+excluded regardless of their source directories. One relevant passage remains:
 
 | Page | Remaining excerpt |
 | --- | --- |
-| [Overview](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/overview/index.md#L15-L16) | "Stack releases that are qualified to run together." |
-| [Documentation Archive: introduction](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/overview/documentation-archive.md#L3-L5) | "Earlier documentation uses stack versions. These archives preserve the original guides and their URLs. They are separate documentation snapshots, not docs editions or new combinations of stack releases." |
-| [Documentation Archive: selector](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/overview/documentation-archive.md#L16-L18) | "Use the compatibility matrix to check the documented stack combinations. The edition selector applies to the current tabbed guides; archive links open the selected historical snapshot." |
-| [Image Mirroring: control plane](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/overview/image-mirroring.md#L222-L223) | "Use the control-plane stack version shown in the artifact manifest. The stack and its listed artifact versions are QA-qualified together." |
-| [Image Mirroring: compute plane](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/overview/image-mirroring.md#L253-L254) | "Use the compute-plane stack version shown in the artifact manifest. The stack and its listed artifact versions are QA-qualified together." |
-| [Image Mirroring: observability](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/overview/image-mirroring.md#L287-L288) | "Use the observability stack version shown in the artifact manifest. The stack and its listed artifact versions are QA-qualified together." |
+| [Overview](https://github.com/NVIDIA/nvcf/blob/61366f0e1c72fa98623764f8a68834db5a038e34/docs/overview/index.md#L15-L16) | "Stack releases that are qualified to run together." |
 
-The current three stack tabs have no remaining relevant matches.
+This passage was not included in the requested removals. The three stack tabs
+have no remaining relevant matches. Hardware product names such as Blackwell
+Server Edition refer to hardware and are excluded.
 
 ## Historical sources
 
@@ -32,11 +29,14 @@ The archive navigation references 315 unique source pages, including some shared
 current pages already covered above. Outside manifests and release notes,
 [0.6.0 Image Mirroring](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/v0.6.0/image-mirroring.md#L216-L220)
 and [0.6.1 Image Mirroring](https://github.com/NVIDIA/nvcf/blob/0afec05e437006b29164fb3e28f9e2d3cead7bc9/docs/v0.6.1/image-mirroring.md#L216-L220)
-each repeat the control-plane and compute-plane warnings quoted above.
+each retain the control-plane and compute-plane warnings: "Use the control-plane
+stack version shown in the artifact manifest. The stack and its listed artifact
+versions are QA-qualified together." The compute-plane warning uses the same
+wording with its stack name.
 
 The retained self-managed 1.0.1 `image-mirroring.md` source also contains all
-three warnings. Its old customer URL redirects to the shared current Image
-Mirroring page; this retained file is not a separate current navigation page.
+three warnings. Its old customer URL redirects to Image Mirroring under Manifest;
+this retained file is not a separate current navigation page.
 No archived sources were edited.
 
 ## Maintainer documentation

@@ -355,3 +355,46 @@ Canonical validation passes against the updated protected ref. Final pin CI is
 running. The six remaining wording excerpts are unchanged for review.
 The two open OpenBao instruction findings and indexed staging search remain
 separate pre-merge work. No production publication or merge occurred.
+
+## Archive cleanup and Manifest mirroring navigation
+
+P4 source `61366f0e1c72fa98623764f8a68834db5a038e34` removes the two requested
+Archive passages and the three stack-qualification warnings from Image Mirroring.
+Image Mirroring moves from Overview to the Manifest sidebar beside Artifact
+Manifest. Redirects preserve the former current, Development, explicit-release,
+and shared historical aliases. Existing frozen archive pages remain unchanged.
+
+The corrected unpublished 1.0.1 candidate is
+`5091588255c9fb6fc2b307a9a8b2e511750c717b` on
+`docs/candidates/2214-p4-mirroring`. QA source
+`68ef0e0608ade7c111227f783e183f38033dee61` composes that candidate with
+Development 1.0.2. The approved stack versions and release manifest are unchanged.
+
+[Review the preview](https://nvidia-preview-nvcf-2214-p4-mirroring.docs.buildwithfern.com/nvcf/manifest/image-mirroring).
+[Run 37095765514](https://github.com/NVIDIA/nvcf/actions/runs/37095765514)
+passes Fern Check and Hosted Docs Preview. All 21 browser cases pass:
+
+- Stable and Development sidebar navigation, removed warnings, preserved other
+  operating instructions, image assets, Archive rows, and cross-tab links.
+- Eight former URL redirects with preserved section anchors.
+- Original Image Mirroring warnings in frozen 0.6.0 and 0.6.1 archive pages.
+- Mobile rendering without horizontal overflow and no browser page errors.
+
+Fern can use either its default-release alias or explicit `/1.0.1/` prefix for
+stable links. Browser checks accept these equivalent stable paths and require
+Development links to retain `/dev/`. Desktop and mobile screenshots were reviewed.
+Code blocks, headings, Archive table rows, and the release manifest are identical
+to the previous approved release. Exactly the three requested warnings are removed.
+
+Canonical, staged Development, and prepared-candidate Fern validation,
+generated-content checks, Markdown lint, and whitespace checks pass. This change
+only edits documentation and navigation; no tooling code or unit tests changed.
+The updated audit scans 94 current pages outside Manifest and Release Notes.
+Only the Overview compatibility description remains; see
+[the updated terminology report](./docs-terminology-review.md).
+
+The protected release branch and registry remain at `570d4a479`. Candidate
+`509158825` awaits explicit approval for the temporary single-branch exception,
+exact force-with-lease, and immediate restoration and verification of protection.
+No production publication or PR merge occurred. Existing OpenBao instruction
+findings and indexed staging search remain separate pre-merge work.
