@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func editionTestCatalog() *Catalog {
@@ -168,6 +170,83 @@ func TestEditionManifestDrift(t *testing.T) {
 	}
 }
 
+func TestEditionGeneratedStackLinksPreserveSelection(t *testing.T) {
+	for _, renderer := range []string{"manifest-artifact-registry-paths", "compatibility-matrix"} {
+		t.Run(renderer, func(t *testing.T) {
+			catalog := loadMainCatalog(t)
+			catalog.DocsEdition = &DocsEdition{Version: "1.0.0", Status: ReleaseSetDevelopment, Change: "initial"}
+			got, err := Render(renderer, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"../self-managed/installation.md", "../compute-plane/cluster-management/index.md", "../observability/observability.md"} {
+				if !strings.Contains(got, "]("+path+")") {
+					t.Errorf("edition output is missing relative stack link %s", path)
+				}
+			}
+			if strings.Contains(got, "](/nvcf/") {
+				t.Error("edition output links to the default edition")
+			}
+			catalog.DocsEdition = nil
+			got, err = Render(renderer, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, slug := range []string{"self-managed", "compute-plane", "observability"} {
+				if !strings.Contains(got, "](/nvcf/"+slug+"/)") {
+					t.Errorf("legacy output changed its %s product link", slug)
+				}
+			}
+		})
+	}
+}
+
+func TestEditionBranchRedirectsUseLocalDefault(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "fern", "docs.yml")
+	writeFile(t, path, `versions:
+  - display-name: Development
+    slug: dev
+    path: navigation.yml
+redirects:
+  - source: /nvcf/dev/manifest
+    destination: /nvcf/dev/overview/manifest
+  - source: /nvcf/self-managed/dev/:slug*
+    destination: /nvcf/dev/self-managed/:slug*
+  - source: /nvcf/v0.5/:slug*
+    destination: /nvcf/self-managed/v0.5/:slug*
+  - source: /external
+    destination: https://example.com/nvcf/dev/overview
+`)
+	if err := writeBranchConfiguration(root, editionPreparation{Version: "1.0.1", Navigation: "navigation.yml"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Redirects []struct{ Source, Destination string } `yaml:"redirects"`
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"/nvcf/dev/manifest":            "/nvcf/overview/manifest",
+		"/nvcf/self-managed/dev/:slug*": "/nvcf/self-managed/:slug*",
+		"/nvcf/v0.5/:slug*":             "/nvcf/self-managed/v0.5/:slug*",
+		"/external":                     "https://example.com/nvcf/dev/overview",
+	}
+	if len(config.Redirects) != len(want) {
+		t.Fatalf("redirect count = %d, want %d", len(config.Redirects), len(want))
+	}
+	for _, redirect := range config.Redirects {
+		if redirect.Destination != want[redirect.Source] {
+			t.Errorf("%s destination = %s, want %s", redirect.Source, redirect.Destination, want[redirect.Source])
+		}
+	}
+}
+
 func TestEditionCommandRejectsImplicitInputs(t *testing.T) {
 	for _, args := range [][]string{
 		{"prepare", "--repo", t.TempDir()},
@@ -217,5 +296,59 @@ func TestEditionSummaryUsesSelectedCombination(t *testing.T) {
 	summary, err = Render("edition-overview", catalog)
 	if err != nil || summary != "" {
 		t.Fatalf("legacy output changed: %q, %v", summary, err)
+	}
+}
+
+func TestSyncDefaultOutputsLeavesLandingPagesAuthored(t *testing.T) {
+	root := t.TempDir()
+	catalog := editionTestCatalog()
+	catalog.Outputs = defaultOutputs()
+	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
+		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.9.0"},
+		Artifact{Name: "nvcf-image-credential-helper", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "1.0.0"},
+	)
+	catalog.Manifest.Entries = append(catalog.Manifest.Entries,
+		ManifestEntry{ArtifactID: "helm-nvca-operator", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestRequired, Description: "NVCA operator chart."},
+		ManifestEntry{ArtifactID: "nvcf-image-credential-helper", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Image credential helper."},
+	)
+	inlineExamples := map[string]string{
+		"docs/overview/image-mirroring.md":                      "helm pull nvcf/helm-nvca-operator --version 0.1.0\n",
+		"docs/compute-plane/cluster-management/self-managed.md": "| Chart | `helm-nvca-operator` |\n| --- | --- |\n| Version | `0.1.0` |\n",
+		"docs/compute-plane/cluster-management/reference.md":    "imageCredHelper:\n  imageRepository: \"\"\n  imageTag: 0.1.0\n",
+	}
+	for _, output := range catalog.Outputs {
+		content := "# Guide\n\n" + inlineExamples[output.Path]
+		for _, block := range output.Blocks {
+			content += "\n{/*docs-version-sync:BEGIN " + block.Marker + "*/}\nstale\n{/*docs-version-sync:END " + block.Marker + "*/}\n"
+		}
+		writeFile(t, filepath.Join(root, output.Path), content)
+	}
+	landingPages := map[string]string{
+		"docs/overview/index.md":                         "# NVIDIA Cloud Functions\n\nDeployment and operation guides.\n",
+		"docs/self-managed/installation.md":              "# Deployment\n\nInstall the control plane.\n",
+		"docs/compute-plane/cluster-management/index.md": "# GPU Cluster Setup\n\nConnect a GPU cluster.\n",
+		"docs/observability/observability.md":            "# Observability Configuration\n\nConfigure metrics and logs.\n",
+	}
+	for path, content := range landingPages {
+		writeFile(t, filepath.Join(root, path), content)
+	}
+	if err := SyncDocs(root, catalog, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := SyncDocs(root, catalog, true); err != nil {
+		t.Fatalf("regenerated docs are inconsistent: %v", err)
+	}
+	for path, content := range landingPages {
+		got, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil || string(got) != content {
+			t.Fatalf("%s changed during regeneration: %q, %v", path, got, err)
+		}
+	}
+	matrix, err := os.ReadFile(filepath.Join(root, "docs/overview/compatibility-matrix.md"))
+	if err != nil || !strings.Contains(string(matrix), "`1.2.3`") {
+		t.Fatalf("compatibility matrix was not regenerated: %q, %v", matrix, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs/edition-manifest.json")); err != nil {
+		t.Fatalf("edition manifest was not generated: %v", err)
 	}
 }

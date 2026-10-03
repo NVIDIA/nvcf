@@ -418,16 +418,19 @@ a tag from `main` did before the version-file model.
   `docs/version-catalog/main.yaml`. A stack change that alters
   cross-stack compatibility updates that block in the same change.
 
-### Per-stack documentation
+### Docs editions
 
-Each stack is a Fern product with its own version list. After QA approves a
-release, freeze that stack's exact version alone:
+Documentation has one SemVer docs edition for the qualified combination of all
+three stacks. Stack artifacts keep their independent releases. A stack release
+does not qualify or publish a docs edition automatically.
 
-```bash
-./tools/scripts/cut-docs-version.sh --stack observability --version 1.1.0
-```
+Use `edition prepare` with a reviewed source commit and all three exact versions.
+After qualification, protect and register the full-version `docs/releases/X.Y.Z`
+branch. Do not create docs tags or per-stack snapshot folders. Corrections use a
+new patch edition; existing docs release branches remain unchanged.
 
-The other two stacks' documentation is untouched by that cut.
+See [the docs edition workflow](./docs-editions.md) for release and rollback
+commands.
 
 ## NVCA's cutover onto semantic-release
 
