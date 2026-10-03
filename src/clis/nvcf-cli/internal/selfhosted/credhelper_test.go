@@ -204,7 +204,7 @@ func TestRegistryCredentials_NGCKeyOrder(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "env-key", cred.pass, "without a docker login the key is the fallback")
 
-	for _, reg := range []string{"quay.io", "stg.nvcr.io", "nvcr.io:443@attacker.example", "nvcr.io.attacker.example"} {
+	for _, reg := range []string{"quay.io", "example.nvcr.io", "nvcr.io:443@attacker.example", "nvcr.io.attacker.example"} {
 		for _, prefer := range []bool{true, false} {
 			cred, _, _ := NewRegistryCredentials(prefer).lookup(ctx, reg)
 			assert.NotEqual(t, "env-key", cred.pass, "the NGC key is never sent to %s", reg)

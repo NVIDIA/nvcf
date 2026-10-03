@@ -169,7 +169,7 @@ api_keys_owner_id: svc@nvcf-api.local
 # for the run from this machine's credential for the image's registry: the
 # docker login, or NGC_API_KEY for nvcr.io only.
 #
-# Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator (docker login stg.nvcr.io)
+# Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # Prod:    nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # cluster_validator_image: nvcr.io/nvidia/nvcf-byoc/cluster-validator
 

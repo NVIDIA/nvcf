@@ -263,16 +263,16 @@ func TestResolveValidatorPullSecret_MintsTheCredentialTheRowChecked(t *testing.T
 	assert.Contains(t, note, "from NVCF_NGC_API_KEY")
 	assert.Equal(t, []string{"nvcr.io"}, mintedKeys(t, minted(t, client)))
 
-	dockerHome(t, inlineDockerConfig(t, "stg.nvcr.io", "robot", "pw", ""))
+	dockerHome(t, inlineDockerConfig(t, "example.nvcr.io", "robot", "pw", ""))
 	client = fake.NewSimpleClientset()
-	name, note, err = resolvePullSecret(t, client, "stg.nvcr.io/nvidia/cv:1")
+	name, note, err = resolvePullSecret(t, client, "example.nvcr.io/nvidia/cv:1")
 	require.NoError(t, err)
 	assert.Equal(t, runName, name, "a docker login reaches the Job the row approved it for")
 	assert.Contains(t, note, "docker config")
 	secret := minted(t, client)
 	assert.NotContains(t, string(secret.Data[corev1.DockerConfigKey]), "nvapi-fallback",
 		"the NGC key never goes to another registry")
-	assert.Equal(t, []string{"stg.nvcr.io"}, mintedKeys(t, secret))
+	assert.Equal(t, []string{"example.nvcr.io"}, mintedKeys(t, secret))
 }
 
 // The NGC key is minted for nvcr.io only. Another registry, staging NGC
@@ -280,7 +280,7 @@ func TestResolveValidatorPullSecret_MintsTheCredentialTheRowChecked(t *testing.T
 func TestResolveValidatorPullSecret_NGCKeyOnlyForNvcrIO(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "nvapi-test-123")
 	for _, image := range []string{
-		"stg.nvcr.io/a/b:1", "registry.example.nvidia.com:5000/a/b:1", "ghcr.io/a/b:1", "bareimage",
+		"example.nvcr.io/a/b:1", "registry.example.nvidia.com:5000/a/b:1", "ghcr.io/a/b:1", "bareimage",
 	} {
 		client := fake.NewSimpleClientset()
 		got, _, err := resolvePullSecret(t, client, image)

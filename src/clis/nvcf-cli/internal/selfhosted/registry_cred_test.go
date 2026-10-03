@@ -221,13 +221,13 @@ func TestEnumerateRegistries_StackValuesFile(t *testing.T) {
 	require.NoError(t, writeFile(valuesPath, []byte(`
 global:
   image:
-    registry: stg.nvcr.io
+    registry: example.nvcr.io
 `)))
 
 	entries := EnumerateRegistries("nvcr.io/some/image:1.0", LoadStackValues([]string{valuesPath}), nil)
 	found := false
 	for _, e := range entries {
-		if e.Registry == "stg.nvcr.io" {
+		if e.Registry == "example.nvcr.io" {
 			assert.True(t, e.Critical, "NGC staging registry must be critical")
 			found = true
 		}

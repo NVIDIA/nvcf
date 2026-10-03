@@ -45,9 +45,9 @@ func TestParseImageRef(t *testing.T) {
 		tag    string
 		wantOK bool
 	}{
-		{"full tag", "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26", "stg.nvcr.io", "nvidia/nvcf-byoc/cluster-validator", "3.0.0-rc.26", true},
+		{"full tag", "example.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26", "example.nvcr.io", "nvidia/nvcf-byoc/cluster-validator", "3.0.0-rc.26", true},
 		{"digest", "nvcr.io/foo/bar@sha256:abc", "nvcr.io", "foo/bar", "sha256:abc", true},
-		{"no tag", "stg.nvcr.io/foo/bar", "stg.nvcr.io", "foo/bar", "", true},
+		{"no tag", "example.nvcr.io/foo/bar", "example.nvcr.io", "foo/bar", "", true},
 		{"localhost with port", "localhost:5000/foo:latest", "localhost:5000", "foo", "latest", true},
 		{"docker hub shorthand", "foo/bar:latest", "registry-1.docker.io", "foo/bar", "latest", true},
 		{"docker hub library image", "busybox:1.36", "registry-1.docker.io", "library/busybox", "1.36", true},
@@ -55,8 +55,8 @@ func TestParseImageRef(t *testing.T) {
 		{"port and tag and digest", "reg.example.com:5000/a/b:1@sha256:abc", "reg.example.com:5000", "a/b",
 			"sha256:abc", true},
 		{"empty", "", "", "", "", false},
-		{"dotted single name is a Docker Hub name", "stg.nvcr.io", "registry-1.docker.io", "library/stg.nvcr.io", "", true},
-		{"only a registry", "stg.nvcr.io/", "", "", "", false},
+		{"dotted single name is a Docker Hub name", "example.nvcr.io", "registry-1.docker.io", "library/example.nvcr.io", "", true},
+		{"only a registry", "example.nvcr.io/", "", "", "", false},
 		{"userinfo moves the host", "nvcr.io@attacker.example/nvidia/cv", "", "", "", false},
 		{"fragment moves the host", "attacker.example#.nvcr.io/nvidia/cv", "", "", "", false},
 		{"bad port", "nvcr.io:44x/nvidia/cv", "", "", "", false},
@@ -134,7 +134,7 @@ func TestResolveLatestValidatorTag_HonorsPinnedTag(t *testing.T) {
 	// Pre-populate cache to prove discovery is short-circuited regardless.
 	// If the function ever consulted the cache for a tagged input, this
 	// test would fail by returning the cached-substituted value.
-	const baseImage = "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.5"
+	const baseImage = "example.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.5"
 	require.NoError(t, writeValidatorTagCache(baseImage, "3.0.0-rc.99"))
 
 	got, ok := ResolveLatestValidatorTag(context.Background(), baseImage)
@@ -147,12 +147,12 @@ func TestResolveLatestValidatorTag_TaglessTriggersDiscoveryFromCache(t *testing.
 	// Mirror of the test above for the tagless case: discovery (here
 	// from cache) should run and substitute the resolved tag.
 	withTempCacheDir(t)
-	const baseImage = "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator"
+	const baseImage = "example.nvcr.io/nvidia/nvcf-byoc/cluster-validator"
 	require.NoError(t, writeValidatorTagCache(baseImage, "3.0.0-rc.99"))
 
 	got, ok := ResolveLatestValidatorTag(context.Background(), baseImage)
 	require.True(t, ok)
-	assert.Equal(t, "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.99", got)
+	assert.Equal(t, "example.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.99", got)
 }
 
 // withTempCacheDir redirects HOME so the cache lives in a temp dir for the
@@ -167,7 +167,7 @@ func withTempCacheDir(t *testing.T) {
 func TestValidatorTagCache_RoundTrip(t *testing.T) {
 	withTempCacheDir(t)
 
-	const baseImage = "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26"
+	const baseImage = "example.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26"
 
 	_, ok := readValidatorTagCache(baseImage)
 	assert.False(t, ok, "empty cache must miss")
@@ -182,7 +182,7 @@ func TestValidatorTagCache_RoundTrip(t *testing.T) {
 func TestValidatorTagCache_TTLExpiry(t *testing.T) {
 	withTempCacheDir(t)
 
-	const baseImage = "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26"
+	const baseImage = "example.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26"
 	require.NoError(t, writeValidatorTagCache(baseImage, "3.0.0-rc.99"))
 
 	// Rewrite cache file with a stale fetched_at timestamp.
@@ -205,7 +205,7 @@ func TestValidatorTagCache_TTLExpiry(t *testing.T) {
 func TestValidatorTagCache_PerImageKeying(t *testing.T) {
 	withTempCacheDir(t)
 
-	const imgA = "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26"
+	const imgA = "example.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26"
 	const imgB = "nvcr.io/nvidia/other/cluster-validator:1.0.0"
 
 	require.NoError(t, writeValidatorTagCache(imgA, "3.0.0-rc.99"))
@@ -237,7 +237,7 @@ func TestCredsFromDockerConfig(t *testing.T) {
 
 	cfg := map[string]any{
 		"auths": map[string]any{
-			"stg.nvcr.io": map[string]any{
+			"example.nvcr.io": map[string]any{
 				// base64("$oauthtoken:fake-key")
 				"auth": "JG9hdXRodG9rZW46ZmFrZS1rZXk=",
 			},
@@ -246,7 +246,7 @@ func TestCredsFromDockerConfig(t *testing.T) {
 	body, _ := json.MarshalIndent(cfg, "", "  ")
 	require.NoError(t, os.WriteFile(filepath.Join(dockerDir, "config.json"), body, 0o600))
 
-	user, pass, ok := credsFor(t, "stg.nvcr.io")
+	user, pass, ok := credsFor(t, "example.nvcr.io")
 	require.True(t, ok)
 	assert.Equal(t, "$oauthtoken", user)
 	assert.Equal(t, "fake-key", pass)
@@ -278,7 +278,7 @@ func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "ngc-key")
 	login := base64.StdEncoding.EncodeToString([]byte("robot:own-login"))
 	auths := map[string]any{}
-	for _, host := range []string{"nvcr.io", "stg.nvcr.io", "registry.example.nvidia.com:5000"} {
+	for _, host := range []string{"nvcr.io", "example.nvcr.io", "registry.example.nvidia.com:5000"} {
 		auths[host] = map[string]string{"auth": login}
 	}
 	cfg, err := json.Marshal(map[string]any{"auths": auths})
@@ -289,7 +289,7 @@ func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
 	for host, wantPass := range map[string]string{
 		"nvcr.io":                          "ngc-key",
 		"NVCR.IO:443":                      "ngc-key",
-		"stg.nvcr.io":                      "own-login",
+		"example.nvcr.io":                  "own-login",
 		"registry.example.nvidia.com:5000": "own-login",
 	} {
 		cred, ok, _ := NewRegistryCredentials(true).lookup(context.Background(), host)
@@ -365,8 +365,8 @@ func TestParseWWWAuthenticate_CaseInsensitiveBearer(t *testing.T) {
 func TestIsNGCRegistry(t *testing.T) {
 	// Valid NGC registries.
 	assert.True(t, isNGCRegistry("nvcr.io"))
-	assert.True(t, isNGCRegistry("stg.nvcr.io"))
-	assert.True(t, isNGCRegistry("registry.nvidia.com"))
+	assert.True(t, isNGCRegistry("example.nvcr.io"))
+	assert.True(t, isNGCRegistry("registry.example.nvidia.com"))
 	assert.True(t, isNGCRegistry("nvcr.io:443"), "port must be stripped before matching")
 
 	// Non-NGC registries must be rejected.
@@ -509,7 +509,7 @@ func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
 	// guard fires before any network activity.
 	t.Setenv("NGC_API_KEY", "test-key") // configure a credential so a missing guard would reach the transport
 	client := &http.Client{Transport: &spyTransport{t: t}}
-	for _, reg := range []string{"harbor.company.internal", "stg.nvcr.io", "nvcr.io:443@attacker.example"} {
+	for _, reg := range []string{"harbor.company.internal", "example.nvcr.io", "nvcr.io:443@attacker.example"} {
 		_, err := exchangeNGCBearerToken(context.Background(), client, reg, "myrepo/image",
 			&registryCredential{user: "$oauthtoken", pass: "test-key", ngcKey: true})
 		require.Error(t, err, "%s must be rejected without issuing a request", reg)
@@ -527,7 +527,7 @@ func TestIsNGCRegistry_RejectsHostConfusion(t *testing.T) {
 		why      string
 	}{
 		{"nvcr.io", true, "the canonical host"},
-		{"stg.nvcr.io", true, "a real subdomain"},
+		{"example.nvcr.io", true, "a real subdomain"},
 		{"evil.com/x.nvcr.io", false, "path component: the request host is evil.com"},
 		{"evil.com@nvcr.io", false, "userinfo: not a bare host"},
 		{"nvcr.io?x=.nvcr.io", false, "query truncates the host"},
@@ -592,7 +592,7 @@ func TestExchangeBearerToken_NoNVIDIAWideRealmGrant(t *testing.T) {
 	client := &http.Client{Transport: rec}
 	for _, tc := range []struct{ registry, realm string }{
 		{"nvcr.io", "https://authn.nvidia.com/token"},
-		{"stg.nvcr.io", "https://nvcr.io/proxy_auth"},
+		{"example.nvcr.io", "https://nvcr.io/proxy_auth"},
 		{"nvcr.io", "https://x.ngc.nvidia/token"},
 		{"registry.example.nvidia.com:5000", "https://nvcr.io/proxy_auth"},
 	} {
@@ -649,7 +649,7 @@ func TestExchangeBearerToken_RefusesHTTPRealm(t *testing.T) {
 func TestIsNGCKeyRegistry(t *testing.T) {
 	for reg, want := range map[string]bool{
 		"nvcr.io": true, "NVCR.io:443": true, "nvcr.io:5000": true,
-		"stg.nvcr.io": false, "nvcr.io:443@attacker.example": false, "attacker.example/nvcr.io": false,
+		"example.nvcr.io": false, "nvcr.io:443@attacker.example": false, "attacker.example/nvcr.io": false,
 		"nvcr.io#.attacker.example": false, "nvcr.io.attacker.example": false,
 	} {
 		assert.Equal(t, want, isNGCKeyRegistry(reg), reg)
