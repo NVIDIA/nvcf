@@ -89,6 +89,11 @@ const (
 	LandingAnnotation = "nvsnap.io/model-landing"
 	// MarkerFile at the volume root says the download completed.
 	MarkerFile = ".nvsnap-complete"
+	// FailedMarkerFile sits next to MarkerFile on a primary whose download
+	// Job gave up; it carries the reason. Readers waiting on the marker see
+	// it through their views and fall back at once instead of waiting out
+	// their deadline. The next writer removes it before downloading.
+	FailedMarkerFile = ".nvsnap-failed"
 	// DownloadInitAnnotation on a writer names the init container whose
 	// exit 0 means the download completed.
 	DownloadInitAnnotation = "nvsnap.io/model-download-init"

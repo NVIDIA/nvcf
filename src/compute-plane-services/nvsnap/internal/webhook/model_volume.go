@@ -588,7 +588,8 @@ func writerScript(download, marker string) string {
 	// opens it; the Job runs as the function's user and waits rather than
 	// crash into the Job's backoff.
 	wait := fmt.Sprintf("d=0\nwhile [ ! -w %[1]s ]; do if [ $d -ge %[2]d ]; then echo 'nvsnap: landing %[1]s is not writable' >&2; break; fi; sleep 2; d=$((d+2)); done\n", shellQuote(dir), writableWaitSeconds)
-	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[4]s%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir), wait)
+	failed := shellQuote(path.Join(dir, modelvolume.FailedMarkerFile))
+	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[4]srm -f %[5]s\n%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir), wait, failed)
 }
 
 // readerScript waits for the marker; past the deadline it runs the
@@ -598,7 +599,8 @@ func readerScript(download, marker string, deadline int) string {
 	if download != "" {
 		fallback = download
 	}
-	return fmt.Sprintf("set -e\nd=0\nwhile [ ! -f %[1]s ]; do if [ $d -ge %[2]d ]; then echo 'nvsnap: marker deadline passed; downloading locally'; %[3]s; exit 0; fi; sleep 5; d=$((d+5)); done\necho 'nvsnap: model complete, skipping download'\n", shellQuote(marker), deadline, fallback)
+	failed := shellQuote(path.Join(path.Dir(marker), modelvolume.FailedMarkerFile))
+	return fmt.Sprintf("set -e\nd=0\nwhile [ ! -f %[1]s ]; do if [ -f %[4]s ]; then echo \"nvsnap: shared download failed: $(cat %[4]s 2>/dev/null)\"; %[3]s; exit 0; fi; if [ $d -ge %[2]d ]; then echo 'nvsnap: marker deadline passed; downloading locally'; %[3]s; exit 0; fi; sleep 5; d=$((d+5)); done\necho 'nvsnap: model complete, skipping download'\n", shellQuote(marker), deadline, fallback, failed)
 }
 
 func (m *Mutator) waitDeadlineSeconds() int {

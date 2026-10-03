@@ -664,5 +664,10 @@ primary's root (1777) through the Job pod's kubelet mount, the writer
 waits until its landing is writable instead of crashing into the
 backoff, and a failed Job is recorded with its reason and the download
 container's last words, with the writer view retired and the primary
-claim kept for the retry. The engine-capture path never saw this
-because the agent copies as root.
+claim kept for the retry. Readers already admitted hold views and wait
+on the completion marker; the Job's node now writes a failure marker
+next to it with the reason, the reader's wait init sees it through the
+view and runs its fallback at once instead of at its deadline, and the
+next writer removes the marker before it downloads. A successful retry
+clears the failure record. The engine-capture path never saw any of
+this because the agent copies as root.

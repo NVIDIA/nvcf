@@ -139,6 +139,10 @@ type ModelVolumeController struct {
 	stageSize   func(path string) (int64, error)
 	treeStat    func(path string) (bytes, files int64, err error)
 	copyStaging func(ctx context.Context, ns, claim, src string) error
+	// markFailed leaves the failure marker on the primary of a download Job
+	// that gave up, on storage that is shared while written; nil uses a
+	// mount holder on this node.
+	markFailed func(ctx context.Context, uri, sysNS, claim, reason string) error
 
 	mu       sync.Mutex
 	holders  map[string]*checkpointstore.MountHolder
@@ -203,6 +207,9 @@ func (c *ModelVolumeController) init() {
 	}
 	if c.treeStat == nil {
 		c.treeStat = treeStatFS
+	}
+	if c.markFailed == nil {
+		c.markFailed = c.markFailedThroughHolder
 	}
 	if c.copyStaging == nil {
 		c.copyStaging = c.copyThroughHolder
@@ -363,6 +370,9 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 	if err := c.Provisioner.ReleaseWriterView(ctx, uri, job.Namespace); err != nil {
 		log.WithError(err).Warn("model volume: release writer view failed; the reaper retires it with the namespace")
 	}
+	if err := c.Provisioner.ClearFailure(ctx, uri); err != nil {
+		log.WithError(err).Warn("model volume: clear failure record failed")
+	}
 	log.Info("model volume: download complete; readers read the primary through their views")
 }
 
@@ -404,6 +414,54 @@ func (c *ModelVolumeController) failJob(ctx context.Context, job *batchv1.Job, u
 	if err := c.Provisioner.ReleaseWriterView(ctx, uri, job.Namespace); err != nil {
 		log.WithError(err).Warn("model volume: release writer view failed; the reaper retires it with the namespace")
 	}
+	// Readers already admitted hold views of the primary and wait on the
+	// completion marker; the failure marker next to it sends them to their
+	// fallback now rather than at their deadline. One agent is enough:
+	// the Job's node writes it.
+	if c.Provisioner.Cfg.SharedWhileWriting() && c.jobRanHere(ctx, job) {
+		sysNS := c.Provisioner.Cfg.SystemNamespace()
+		if err := c.markFailed(ctx, uri, sysNS, c.Provisioner.Cfg.ClaimName(uri), reason); err != nil {
+			log.WithError(err).Warn("model volume: failure marker not written; readers fall back at their deadline")
+		} else {
+			log.Info("model volume: failure marker written; waiting readers fall back now")
+		}
+	}
+}
+
+// jobRanHere reports whether one of the Job's pods ran on this node. The
+// Job's pods are usually gone with the Job; with no pod left to decide,
+// the agent that first sees the failure writes the marker (markFailed is
+// idempotent, so a second writer is harmless).
+func (c *ModelVolumeController) jobRanHere(ctx context.Context, job *batchv1.Job) bool {
+	pods, err := c.Kube.CoreV1().Pods(job.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "batch.kubernetes.io/job-name=" + job.Name})
+	if err != nil || len(pods.Items) == 0 {
+		return true
+	}
+	for i := range pods.Items {
+		if pods.Items[i].Spec.NodeName == c.NodeName {
+			return true
+		}
+	}
+	return false
+}
+
+// markFailedThroughHolder mounts the primary on this node and writes the
+// failure marker with the reason.
+func (c *ModelVolumeController) markFailedThroughHolder(ctx context.Context, uri, sysNS, claim, reason string) error {
+	attach := c.collectAttach
+	if attach == nil {
+		attach = c.holderAttach
+	}
+	dst, release, err := attach(ctx, uri, sysNS, claim)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), checkpointstore.MountHolderDeleteTimeout+5*time.Second)
+		defer cancel()
+		_ = release(cleanup)
+	}()
+	return os.WriteFile(filepath.Join(dst, modelvolume.FailedMarkerFile), []byte(reason+"\n"), 0o644)
 }
 
 // jobPodLastWords is the exit code and message of the download container

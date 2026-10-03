@@ -575,11 +575,17 @@ func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T)
 	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, jobPod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	if err := p.RecordFailure(ctx, mvURI, "an earlier attempt"); err != nil {
+		t.Fatal(err)
+	}
 	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
 	c.HandleJob(ctx, downloadJob(1))
 	st, _ := p.Lookup(ctx, mvURI)
 	if !st.Complete || st.PrimaryPV != "pv-fs" {
 		t.Fatalf("the primary is complete on the retained PV: %+v", st)
+	}
+	if st.Failed {
+		t.Error("a successful retry clears the earlier failure record")
 	}
 	if st.PrimaryBytes != 65549091410 {
 		t.Errorf("the tree size from the marker is recorded on the primary and served by Lookup, got %d", st.PrimaryBytes)
@@ -1112,6 +1118,7 @@ func TestModelVolumeController_FailedJobRecordsFailureAndRetiresWriterView(t *te
 	jobPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI) + "-x1", Namespace: "sr-fn",
 			Labels: map[string]string{"batch.kubernetes.io/job-name": modelvolume.JobName(mvURI)}},
+		Spec: corev1.PodSpec{NodeName: "node-a"},
 		Status: corev1.PodStatus{Phase: corev1.PodFailed, ContainerStatuses: []corev1.ContainerStatus{{Name: modelvolume.DownloadContainer,
 			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", Message: "PermissionError: [Errno 13] Permission denied: '/model/hub'"}}}}},
 	}
@@ -1123,11 +1130,19 @@ func TestModelVolumeController_FailedJobRecordsFailureAndRetiresWriterView(t *te
 	job.Status.Failed = 6
 	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit"}}
 	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
+	var marked []string
+	c.markFailed = func(_ context.Context, uri, ns, claim, reason string) error {
+		marked = append(marked, ns+"/"+claim+": "+reason)
+		return nil
+	}
 	c.HandleJob(ctx, job)
 	c.HandleJob(ctx, job) // the same failure is handled once
 	st, _ := p.Lookup(ctx, mvURI)
 	if st.Complete || !st.Failed {
 		t.Fatalf("the failure is recorded and the primary is not complete: %+v", st)
+	}
+	if len(marked) != 1 || !strings.HasPrefix(marked[0], sysNS+"/"+modelvolume.ClaimName(mvURI)+": ") || !strings.Contains(marked[0], "Permission denied") {
+		t.Errorf("the failure marker is written once on the primary with the reason: %v", marked)
 	}
 	rec, err := kc.CoreV1().ConfigMaps(sysNS).Get(ctx, p.Cfg.FailureRecordName(mvURI), metav1.GetOptions{})
 	if err != nil {
@@ -1142,5 +1157,54 @@ func TestModelVolumeController_FailedJobRecordsFailureAndRetiresWriterView(t *te
 	}
 	if _, err := kc.CoreV1().PersistentVolumeClaims(sysNS).Get(ctx, modelvolume.ClaimName(mvURI), metav1.GetOptions{}); err != nil {
 		t.Error("the primary claim stays for the retry")
+	}
+}
+
+
+// The failure marker is written on the primary through a mount on this
+// node and carries the reason, so readers can log it.
+func TestModelVolumeController_FailureMarkerWrittenThroughTheMount(t *testing.T) {
+	ctx := context.Background()
+	kc, p, minter := sharedFilesystemFixture(t)
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
+	mount := t.TempDir()
+	released := false
+	c.collectAttach = func(context.Context, string, string, string) (string, func(context.Context) error, error) {
+		return mount, func(context.Context) error { released = true; return nil }, nil
+	}
+	c.init()
+	if err := c.markFailed(ctx, mvURI, p.Cfg.SystemNamespace(), modelvolume.ClaimName(mvURI), "BackoffLimitExceeded: exit 1"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(mount, modelvolume.FailedMarkerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(b)) != "BackoffLimitExceeded: exit 1" || !released {
+		t.Errorf("marker %q released=%v", string(b), released)
+	}
+}
+
+// A Job that fails elsewhere is marked only by the node it ran on; with
+// its pods gone, whichever agent sees the failure first marks it.
+func TestModelVolumeController_FailureMarkerWrittenByTheJobsNode(t *testing.T) {
+	ctx := context.Background()
+	kc, p, minter := sharedFilesystemFixture(t)
+	jobPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: modelvolume.JobName(mvURI) + "-x1", Namespace: "sr-fn",
+		Labels: map[string]string{"batch.kubernetes.io/job-name": modelvolume.JobName(mvURI)}}, Spec: corev1.PodSpec{NodeName: "node-z"}}
+	if _, err := kc.CoreV1().Pods("sr-fn").Create(ctx, jobPod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	job := downloadJob(0)
+	job.UID = "job-uid-2"
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded"}}
+	calls := 0
+	for _, node := range []string{"node-a", "node-z"} {
+		c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: node, Log: logrus.New()}
+		c.markFailed = func(context.Context, string, string, string, string) error { calls++; return nil }
+		c.HandleJob(ctx, job)
+	}
+	if calls != 1 {
+		t.Errorf("only the Job's node writes the marker, got %d writers", calls)
 	}
 }

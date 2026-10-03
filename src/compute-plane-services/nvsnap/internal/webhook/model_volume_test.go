@@ -1275,4 +1275,32 @@ func TestWriterScript_WaitsForWritableLanding(t *testing.T) {
 	if !strings.Contains(script, "if [ -f /model/.nvsnap-complete ]") || strings.Index(script, "if [ -f /model/.nvsnap-complete ]") > wait {
 		t.Errorf("the completed-marker check still comes first:\n%s", script)
 	}
+	// A retry after a failed Job clears the failure marker before it
+	// downloads, so readers admitted meanwhile wait for the new attempt.
+	rm := strings.Index(script, "rm -f /model/.nvsnap-failed")
+	if rm < 0 || rm > dl || rm < wait {
+		t.Errorf("the failure marker is removed after the landing is writable and before the download:\n%s", script)
+	}
+}
+
+// A reader waiting on the completion marker falls back the moment the
+// failure marker appears, with the reason in its log, instead of waiting
+// out its deadline; the deadline fallback stays as the last resort.
+func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
+	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800)
+	failed := strings.Index(script, "if [ -f /model/.nvsnap-failed ]")
+	deadline := strings.Index(script, "if [ $d -ge 1800 ]")
+	if failed < 0 || deadline < 0 || failed > deadline {
+		t.Fatalf("the failure check comes before the deadline check:\n%s", script)
+	}
+	if strings.Count(script, "hf download org/model") != 2 {
+		t.Errorf("both the failure and the deadline branch run the fallback download:\n%s", script)
+	}
+	if !strings.Contains(script, "cat /model/.nvsnap-failed") {
+		t.Errorf("the reader logs the recorded reason:\n%s", script)
+	}
+	none := readerScript("", "/model/.nvsnap-complete", 60)
+	if strings.Count(none, "no download step to fall back to") != 2 {
+		t.Errorf("without a download step both branches exit cleanly:\n%s", none)
+	}
 }
