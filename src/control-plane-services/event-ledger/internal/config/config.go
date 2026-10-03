@@ -58,6 +58,7 @@ type Config struct {
 	HTTP               HTTPClientConfig       `mapstructure:"http"`
 	Pagination         PaginationConfig       `mapstructure:"pagination"`
 	Stats              StatsConfig            `mapstructure:"stats"`
+	Cache              CacheConfig            `mapstructure:"cache"`
 	ID                 string                 `mapstructure:"id"`
 	Secret             string                 `mapstructure:"secret"`
 	DeprecateEndpoints bool                   `mapstructure:"deprecate-endpoints"`
@@ -273,6 +274,41 @@ type StatsConfig struct {
 	// FilteredStatsEnabledEventNames lists which event names should update the filtered stats view.
 	// The mapstructure key is retained for compatibility. If empty, the view is disabled (no writes).
 	FilteredStatsEnabledEventNames []string `mapstructure:"ngc-stats-enabled-event-names"`
+}
+
+// CacheConfig configures the local stats write cache. The inactivity TTL is
+// derived from the flush interval and is not configurable.
+type CacheConfig struct {
+	// Enabled turns the cache on. When false the service writes every stats
+	// event straight to the database.
+	Enabled bool `mapstructure:"enabled"`
+	// MaxSize is the maximum number of cached entries before LRU eviction.
+	MaxSize int `mapstructure:"max-size"`
+	// FlushIntervalSeconds is how long a pending entry waits before it is flushed.
+	FlushIntervalSeconds int `mapstructure:"flush-interval-seconds"`
+}
+
+// GetDefaultCacheConfig returns default cache configuration values
+func GetDefaultCacheConfig() CacheConfig {
+	return CacheConfig{
+		Enabled:              false,
+		MaxSize:              100_000, // Entries kept before LRU eviction
+		FlushIntervalSeconds: 60,      // Seconds a pending entry waits before it is flushed
+	}
+}
+
+// WithDefaults returns a CacheConfig with default values for unset fields
+func (c CacheConfig) WithDefaults() CacheConfig {
+	defaults := GetDefaultCacheConfig()
+
+	if c.MaxSize <= 0 {
+		c.MaxSize = defaults.MaxSize
+	}
+	if c.FlushIntervalSeconds <= 0 {
+		c.FlushIntervalSeconds = defaults.FlushIntervalSeconds
+	}
+
+	return c
 }
 
 // WithDefaults returns a PaginationConfig with default values for unset fields
