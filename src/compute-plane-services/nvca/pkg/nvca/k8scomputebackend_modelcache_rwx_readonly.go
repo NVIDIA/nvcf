@@ -315,8 +315,8 @@ func regularModelCacheKeepsSharedClaim(req *nvcav2beta1.ICMSRequest) bool {
 		selection.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly
 }
 
-// runSharedClaimWriterAsRoot makes every container of the writer Job run as
-// root on a shared (ReadWriteMany) claim. The translator relies on the pod
+// runSharedClaimWriterAsRoot makes the containers that write the shared
+// (ReadWriteMany) claim run as root. The translator relies on the pod
 // fsGroup to make the volume writable by the non-root writer, but Kubernetes
 // applies fsGroup only where the CSI driver's fsGroupPolicy allows it. Drivers
 // that declare ReadWriteOnceWithFSType, as OCI FSS does, skip ReadWriteMany
@@ -326,10 +326,12 @@ func regularModelCacheKeepsSharedClaim(req *nvcav2beta1.ICMSRequest) bool {
 // running it as root on this path keeps the read-only readers unprivileged.
 // Block-backed claims keep the translator's non-root identity.
 //
-// Init containers are included because validateSharedClaimWriterJob accepts
-// an init container as the writer. RunAsNonRoot is set to false explicitly:
-// the container value is what overrides a pod-level runAsNonRoot of true,
-// which would otherwise make the kubelet refuse to start a uid 0 container.
+// Only containers with a read-write mount of the claim are changed, init
+// containers included since validateSharedClaimWriterJob accepts one as the
+// writer; sidecars and other containers keep their identity. RunAsNonRoot is
+// set to false explicitly: the container value is what overrides a pod-level
+// runAsNonRoot of true, which would otherwise make the kubelet refuse to
+// start a uid 0 container.
 func runSharedClaimWriterAsRoot(job *batchv1.Job) {
 	root := int64(0)
 	notRequired := false
@@ -337,6 +339,9 @@ func runSharedClaimWriterAsRoot(job *batchv1.Job) {
 	for _, list := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
 		for i := range list {
 			c := &list[i]
+			if !mountsSharedClaimReadWrite(c) {
+				continue
+			}
 			if c.SecurityContext == nil {
 				c.SecurityContext = &corev1.SecurityContext{}
 			}
@@ -345,4 +350,15 @@ func runSharedClaimWriterAsRoot(job *batchv1.Job) {
 			c.SecurityContext.RunAsNonRoot = &notRequired
 		}
 	}
+}
+
+// mountsSharedClaimReadWrite reports whether a container mounts the model
+// volume read-write, the same test validateSharedClaimWriterJob applies.
+func mountsSharedClaimReadWrite(c *corev1.Container) bool {
+	for _, m := range c.VolumeMounts {
+		if m.Name == ModelVolumeName && !m.ReadOnly {
+			return true
+		}
+	}
+	return false
 }

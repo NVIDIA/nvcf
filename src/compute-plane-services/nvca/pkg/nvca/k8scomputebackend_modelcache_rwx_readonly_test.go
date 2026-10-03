@@ -151,6 +151,9 @@ func TestRWXReadOnly_FirstRequestCreatesSharedClaimAndWriter(t *testing.T) {
 	// container that also touches the claim.
 	job.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true)}
 	job.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "prepare", VolumeMounts: []corev1.VolumeMount{{Name: ModelVolumeName, MountPath: "/model"}}}}
+	// A sidecar that does not write the claim must keep its own identity.
+	job.Spec.Template.Spec.Containers = append(job.Spec.Template.Spec.Containers,
+		corev1.Container{Name: "sidecar", VolumeMounts: []corev1.VolumeMount{{Name: ModelVolumeName, MountPath: "/model", ReadOnly: true}}})
 
 	state, claim := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
 	assert.Equal(t, ModelCachingInProgress, state)
@@ -171,7 +174,12 @@ func TestRWXReadOnly_FirstRequestCreatesSharedClaimAndWriter(t *testing.T) {
 	// claim's root owned by root, so every writer container, init containers
 	// included, must run as root, and the container-level runAsNonRoot must
 	// be an explicit false so a pod-level true cannot veto uid 0.
+	// Only containers that write the claim are affected.
 	for _, c := range append(writer.Spec.Template.Spec.InitContainers, writer.Spec.Template.Spec.Containers...) {
+		if c.Name == "sidecar" {
+			assert.Nil(t, c.SecurityContext, "a container that does not write the claim keeps its identity")
+			continue
+		}
 		require.NotNil(t, c.SecurityContext, c.Name)
 		require.NotNil(t, c.SecurityContext.RunAsUser, c.Name)
 		assert.EqualValues(t, 0, *c.SecurityContext.RunAsUser, c.Name)
