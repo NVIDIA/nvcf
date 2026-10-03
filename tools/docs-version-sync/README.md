@@ -35,7 +35,7 @@ reads these source trees from its protected release branch:
 
 | Tree | Tab | Versioned |
 | --- | --- | --- |
-| `docs/overview/` | Overview guides, Manifest, and Release Notes (matrix and stack notes) | Yes |
+| `docs/overview/` | Overview guides, Manifest, and Release Notes (matrix and upgrade guides) | Yes |
 | `docs/self-managed/` | Self-Managed Stack (control plane) | Yes |
 | `docs/compute-plane/` | Compute Plane Stack | Yes |
 | `docs/observability/` | Observability Stack | Yes |
@@ -259,9 +259,9 @@ contain `fern/navigation.yml`. Then prepare a candidate outside the checkout:
 
 ```bash
 go run -C tools/docs-version-sync . edition prepare \
-  --source <full-reviewed-commit> --version 1.0.0 --change initial \
+  --source <full-reviewed-commit> --version 1.0.1 --change initial \
   --self-managed 1.0.1 --compute-plane 1.0.0 --observability 1.0.0 \
-  --out /tmp/nvcf-docs-edition-1.0.0
+  --out /tmp/nvcf-docs-edition-1.0.1
 ```
 
 Preparation verifies that the explicit stack versions match the reviewed
@@ -298,7 +298,7 @@ Register its exact branch commit from the canonical checkout:
 
 ```bash
 go run -C tools/docs-version-sync . edition register \
-  --version 1.0.0 --commit <full-docs-release-branch-commit>
+  --version 1.0.1 --commit <full-docs-release-branch-commit>
 ./tools/ci/check-doc-editions
 ```
 

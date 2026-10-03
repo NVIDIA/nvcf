@@ -26,9 +26,9 @@ navbar-links:
 
 # Docs editions share one selector. Released branches are pinned in editions.yml.
 versions:
-- display-name: "1.0.0"
-  slug: "1.0.0"
-  ref: docs/candidates/2214-p4-manifest
+- display-name: "1.0.1"
+  slug: "1.0.1"
+  ref: docs/candidates/2214-p4-release101
 - display-name: Development
   slug: dev
   path: navigation.yml
@@ -62,6 +62,32 @@ check:
     broken-links: error
 
 redirects:
+  - source: /nvcf/release-notes/1-0-1-release-notes
+    destination: /nvcf/release-notes/2026/9/22
+  - source: /nvcf/release-notes/legacy-0-6-1-release-notes
+    destination: /nvcf/release-notes/2026/7/31
+  - source: /nvcf/release-notes/legacy-0-6-0-release-notes
+    destination: /nvcf/release-notes/2026/7/14
+  - source: /nvcf/release-notes/2026/10/2
+    destination: /nvcf/release-notes/2026/9/22
+  - source: /nvcf/dev/release-notes/1-0-1-release-notes
+    destination: /nvcf/dev/release-notes/2026/9/22
+  - source: /nvcf/dev/release-notes/legacy-0-6-1-release-notes
+    destination: /nvcf/dev/release-notes/2026/7/31
+  - source: /nvcf/dev/release-notes/legacy-0-6-0-release-notes
+    destination: /nvcf/dev/release-notes/2026/7/14
+  - source: /nvcf/dev/release-notes/2026/10/2
+    destination: /nvcf/dev/release-notes/2026/9/22
+  - source: /nvcf/1.0.1/release-notes/1-0-1-release-notes
+    destination: /nvcf/1.0.1/release-notes/2026/9/22
+  - source: /nvcf/1.0.1/release-notes/legacy-0-6-1-release-notes
+    destination: /nvcf/1.0.1/release-notes/2026/7/31
+  - source: /nvcf/1.0.1/release-notes/legacy-0-6-0-release-notes
+    destination: /nvcf/1.0.1/release-notes/2026/7/14
+  - source: /nvcf/1.0.1/release-notes/2026/10/2
+    destination: /nvcf/1.0.1/release-notes/2026/9/22
+  - source: /nvcf/1.0.0/:path*
+    destination: /nvcf/1.0.1/:path*
   - source: /nvcf/overview/compatibility-matrix
     destination: /nvcf/release-notes/compatibility-matrix
   - source: /nvcf/release-notes/release-notes-overview
@@ -75,59 +101,59 @@ redirects:
   - source: /nvcf/dev/release-notes/2026/10/1
     destination: /nvcf/dev/release-notes
   - source: /nvcf/1.0.0/overview/compatibility-matrix
-    destination: /nvcf/1.0.0/release-notes/compatibility-matrix
+    destination: /nvcf/1.0.1/release-notes/compatibility-matrix
   - source: /nvcf/1.0.0/release-notes/release-notes-overview
-    destination: /nvcf/1.0.0/release-notes
+    destination: /nvcf/1.0.1/release-notes
   - source: /nvcf/1.0.0/release-notes/2026/10/1
-    destination: /nvcf/1.0.0/release-notes
+    destination: /nvcf/1.0.1/release-notes
   - source: /nvcf/overview/manifest
     destination: /nvcf/manifest/artifacts
   - source: /nvcf/dev/overview/manifest
     destination: /nvcf/dev/manifest/artifacts
   - source: /nvcf/1.0.0/overview/manifest
-    destination: /nvcf/1.0.0/manifest/artifacts
+    destination: /nvcf/1.0.1/manifest/artifacts
   - source: /nvcf/overview/release-notes-overview
     destination: /nvcf/release-notes
   - source: /nvcf/overview/1-0-1-release-notes
-    destination: /nvcf/release-notes/1-0-1-release-notes
+    destination: /nvcf/release-notes/2026/9/22
   - source: /nvcf/overview/0-6-1-to-1-0-1-upgrade
     destination: /nvcf/release-notes/0-6-1-to-1-0-1-upgrade
   - source: /nvcf/overview/legacy-0-6-1-release-notes
-    destination: /nvcf/release-notes/legacy-0-6-1-release-notes
+    destination: /nvcf/release-notes/2026/7/31
   - source: /nvcf/overview/legacy-0-6-0-to-0-6-1-upgrade
     destination: /nvcf/release-notes/legacy-0-6-0-to-0-6-1-upgrade
   - source: /nvcf/overview/legacy-0-6-0-release-notes
-    destination: /nvcf/release-notes/legacy-0-6-0-release-notes
+    destination: /nvcf/release-notes/2026/7/14
   - source: /nvcf/overview/legacy-0-5-0-to-0-6-0-upgrade
     destination: /nvcf/release-notes/legacy-0-5-0-to-0-6-0-upgrade
   - source: /nvcf/dev/overview/release-notes-overview
     destination: /nvcf/dev/release-notes
   - source: /nvcf/dev/overview/1-0-1-release-notes
-    destination: /nvcf/dev/release-notes/1-0-1-release-notes
+    destination: /nvcf/dev/release-notes/2026/9/22
   - source: /nvcf/dev/overview/0-6-1-to-1-0-1-upgrade
     destination: /nvcf/dev/release-notes/0-6-1-to-1-0-1-upgrade
   - source: /nvcf/dev/overview/legacy-0-6-1-release-notes
-    destination: /nvcf/dev/release-notes/legacy-0-6-1-release-notes
+    destination: /nvcf/dev/release-notes/2026/7/31
   - source: /nvcf/dev/overview/legacy-0-6-0-to-0-6-1-upgrade
     destination: /nvcf/dev/release-notes/legacy-0-6-0-to-0-6-1-upgrade
   - source: /nvcf/dev/overview/legacy-0-6-0-release-notes
-    destination: /nvcf/dev/release-notes/legacy-0-6-0-release-notes
+    destination: /nvcf/dev/release-notes/2026/7/14
   - source: /nvcf/dev/overview/legacy-0-5-0-to-0-6-0-upgrade
     destination: /nvcf/dev/release-notes/legacy-0-5-0-to-0-6-0-upgrade
   - source: /nvcf/1.0.0/overview/release-notes-overview
-    destination: /nvcf/1.0.0/release-notes
+    destination: /nvcf/1.0.1/release-notes
   - source: /nvcf/1.0.0/overview/1-0-1-release-notes
-    destination: /nvcf/1.0.0/release-notes/1-0-1-release-notes
+    destination: /nvcf/1.0.1/release-notes/2026/9/22
   - source: /nvcf/1.0.0/overview/0-6-1-to-1-0-1-upgrade
-    destination: /nvcf/1.0.0/release-notes/0-6-1-to-1-0-1-upgrade
+    destination: /nvcf/1.0.1/release-notes/0-6-1-to-1-0-1-upgrade
   - source: /nvcf/1.0.0/overview/legacy-0-6-1-release-notes
-    destination: /nvcf/1.0.0/release-notes/legacy-0-6-1-release-notes
+    destination: /nvcf/1.0.1/release-notes/2026/7/31
   - source: /nvcf/1.0.0/overview/legacy-0-6-0-to-0-6-1-upgrade
-    destination: /nvcf/1.0.0/release-notes/legacy-0-6-0-to-0-6-1-upgrade
+    destination: /nvcf/1.0.1/release-notes/legacy-0-6-0-to-0-6-1-upgrade
   - source: /nvcf/1.0.0/overview/legacy-0-6-0-release-notes
-    destination: /nvcf/1.0.0/release-notes/legacy-0-6-0-release-notes
+    destination: /nvcf/1.0.1/release-notes/2026/7/14
   - source: /nvcf/1.0.0/overview/legacy-0-5-0-to-0-6-0-upgrade
-    destination: /nvcf/1.0.0/release-notes/legacy-0-5-0-to-0-6-0-upgrade
+    destination: /nvcf/1.0.1/release-notes/legacy-0-5-0-to-0-6-0-upgrade
   - source: "/nvcf/observability/dev/:slug*"
     destination: "/nvcf/dev/observability/:slug*"
   - source: "/nvcf/compute-plane/dev/:slug*"
@@ -727,13 +753,13 @@ redirects:
   - source: "/nvcf/self-managed/1.0.0/release-notes-overview"
     destination: "/nvcf/release-notes"
   - source: "/nvcf/self-managed/1.0.0/0-20-6-release-notes"
-    destination: "/nvcf/release-notes/1-0-1-release-notes"
+    destination: "/nvcf/release-notes/2026/9/22"
   - source: "/nvcf/self-managed/1.0.0/0-6-1-to-0-20-6-upgrade"
     destination: "/nvcf/release-notes/0-6-1-to-1-0-1-upgrade"
   - source: "/nvcf/overview/1-0-0-release-notes"
-    destination: "/nvcf/release-notes/1-0-1-release-notes"
+    destination: "/nvcf/release-notes/2026/9/22"
   - source: "/nvcf/overview/1-0-release-notes"
-    destination: "/nvcf/release-notes/1-0-1-release-notes"
+    destination: "/nvcf/release-notes/2026/9/22"
   # Keep the old version URLs working after the in-place 1.0.1 rename.
   - source: "/nvcf/self-managed/1.0.1/api"
     destination: "/nvcf/overview/api"
@@ -878,7 +904,7 @@ redirects:
   - source: "/nvcf/self-managed/1.0.1/release-notes-overview"
     destination: "/nvcf/release-notes"
   - source: "/nvcf/self-managed/1.0.1/0-20-6-release-notes"
-    destination: "/nvcf/release-notes/1-0-1-release-notes"
+    destination: "/nvcf/release-notes/2026/9/22"
   - source: "/nvcf/self-managed/1.0.1/0-6-1-to-0-20-6-upgrade"
     destination: "/nvcf/release-notes/0-6-1-to-1-0-1-upgrade"
   - source: "/nvcf/self-managed/1.0.0/:slug*"
