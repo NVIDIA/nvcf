@@ -150,17 +150,24 @@ type ValidationState struct {
 	EnvoyGatewayOK        *bool
 	GatewayRoutesOK       *bool
 	ExternalLBOK          *bool
+	// EnvoyGatewayNotApplicable and ExternalLBNotApplicable hold the reason
+	// those rows do not apply: every NVCF Gateway is run by an implementation
+	// other than Envoy Gateway. Their pointers stay nil, as for the overlay.
+	EnvoyGatewayNotApplicable string
+	ExternalLBNotApplicable   string
 	// NodeToNodeOK is nil when the overlay was not observed, when the check
 	// does not apply (see NodeToNodeNotApplicable), or under the compute-plane
 	// role. true = overlay verified, false = failed.
 	NodeToNodeOK *bool
 	// Tier1DeploymentsOK is nil when the check did not run (compute-plane role)
-	// or nothing could be assessed. Finding no Deployments is false when
-	// PostInstall is set and true otherwise.
+	// or something could not be observed. Finding no NVCF Deployment outside
+	// the shared namespaces is false when PostInstall is set; finding nothing
+	// is true otherwise.
 	Tier1DeploymentsOK *bool
-	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role)
-	// or when a StatefulSet list call fails. No quorum StatefulSets found
-	// (pre-install or non-HA install) sets this to true, not nil.
+	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role),
+	// when a StatefulSet list call fails, or when, after install, a stack quorum
+	// component that is not declared external was not found. No quorum
+	// StatefulSet found before install sets this to true, not nil.
 	Tier2StatefulSetsOK *bool
 
 	// EndpointResults captures per-endpoint reachability outcomes for the
@@ -351,12 +358,13 @@ func Run(
 		// compute-plane concerns and are skipped.
 		checkStorageClass(ctx, client, state)
 		// Discover the Gateway API surface and decide which Gateways are
-		// NVCF's once, so the LoadBalancer row and Tier-1 judge the same set.
+		// NVCF's once, so the Envoy, LoadBalancer and Tier-1 rows judge the
+		// same set.
 		surface, surfaceErr := discoverGatewayAPIResources(ctx, client)
 		checkGatewayAPICRDsIn(state, surface, surfaceErr)
-		checkEnvoyGateway(ctx, client, state)
+		ownership := resolveGatewayOwnershipIn(ctx, client, surface, surfaceErr, routes)
+		checkEnvoyGatewayFor(ctx, client, ownership, state)
 		checkGatewayRoutesIn(state, surface, surfaceErr)
-		ownership := resolveGatewayOwnershipIn(ctx, surface, surfaceErr, routes)
 		checkExternalLoadBalancerFor(ctx, client, ownership, state)
 		checkNodeToNode(ctx, client, state, nodeToNodeProbeImage(netCfg))
 		checkTier1DeploymentsFor(ctx, client, ownership, state)
@@ -505,24 +513,30 @@ func printSummary(state *ValidationState) error {
 			}
 		}
 
+		// addOrNA renders a check this cluster's shape makes moot as Not
+		// Applicable: non-blocking, but not a pass, since nothing was judged.
+		addOrNA := func(na string, ptr *bool, label, passDetail, failDetail string, critical bool) {
+			if na == "" {
+				addCP(ptr, label, passDetail, failDetail, critical)
+				return
+			}
+			checks = append(checks, check{NotApplicable: true, NAMsg: label + ": Not Applicable (" + na + ")"})
+		}
+
 		addCP(state.DefaultStorageClassOK, "Default StorageClass", "Present", "Not Found", true)
 		addCP(state.GatewayAPICRDsOK, "Gateway API CRDs", "Installed", "Not Installed", true)
 		// Non-critical: Envoy Gateway is installed by nvcf-cli up, so it is
 		// expected to be absent on a fresh cluster before the first install.
 		// A missing Envoy is informative (tells the operator the stack is not
 		// yet deployed) but must not block a pre-install readiness check.
-		addCP(state.EnvoyGatewayOK, "Envoy Gateway", "Installed and Running", "Not Found or Not Running", false)
+		addOrNA(state.EnvoyGatewayNotApplicable, state.EnvoyGatewayOK, "Envoy Gateway",
+			"Installed and Running", "Not Found or Not Running", false)
 		addCP(state.GatewayRoutesOK, "Gateway Route CR Types", "Registered", "Not Registered", false)
-		addCP(state.ExternalLBOK, "External Load Balancer", "IP Assigned", "No IP Assigned", false)
-		if state.NodeToNodeNotApplicable != "" {
-			// Non-blocking, but not "Verified": no cross-node packet was sent.
-			checks = append(checks, check{
-				NotApplicable: true,
-				NAMsg:         "Node-to-Node Communication: Not Applicable (" + state.NodeToNodeNotApplicable + ")",
-			})
-		} else {
-			addCP(state.NodeToNodeOK, "Node-to-Node Communication", "Verified", "Failed", true)
-		}
+		addOrNA(state.ExternalLBNotApplicable, state.ExternalLBOK, "External Load Balancer",
+			"IP Assigned", "No IP Assigned", false)
+		// Non-blocking, but not "Verified": no cross-node packet was sent.
+		addOrNA(state.NodeToNodeNotApplicable, state.NodeToNodeOK, "Node-to-Node Communication",
+			"Verified", "Failed", true)
 		addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Under-replicated", true)
 		addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets",
 			"Quorum and Placement OK", "Quorum or Placement Failed", true)

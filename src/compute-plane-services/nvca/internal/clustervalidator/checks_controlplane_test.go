@@ -1145,6 +1145,7 @@ func TestCheckStorageClass_MultipleDefaultsFailBefore126(t *testing.T) {
 // Only NotFound is evidence Envoy is absent. A 403 or an apiserver 500 means we
 // never observed it, so the row must be unknown rather than a definite failure.
 func TestCheckEnvoyGateway_APIErrorIsUnknownNotFailure(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, envoyGatewayNamespace)
 	client := fake.NewSimpleClientset()
 	client.PrependReactor("get", "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(
@@ -1156,6 +1157,17 @@ func TestCheckEnvoyGateway_APIErrorIsUnknownNotFailure(t *testing.T) {
 	assert.Nil(t, state.EnvoyGatewayOK,
 		"a denial is not evidence that Envoy Gateway is missing")
 	assert.NotEmpty(t, state.Warnings)
+
+	// Unset, the controller is looked for in every namespace, and a failed
+	// lookup is unknown too.
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	client = fake.NewSimpleClientset()
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+	})
+	state = &ValidationState{Log: testLog()}
+	checkEnvoyGateway(context.Background(), client, state)
+	assert.Nil(t, state.EnvoyGatewayOK)
 }
 
 func TestCheckEnvoyGateway_NotFoundStillFails(t *testing.T) {
@@ -1190,7 +1202,7 @@ func TestCheckExternalLoadBalancer_PendingServiceIsNotAPass(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 	}
-	client := fake.NewSimpleClientset(assigned, pending)
+	client := fake.NewSimpleClientset(assigned, pending, envoyController(envoyGatewayNamespaceName()))
 	state := &ValidationState{Log: testLog()}
 	checkExternalLoadBalancer(context.Background(), client, nil, state)
 
@@ -1224,6 +1236,7 @@ func TestCheckExternalLoadBalancer_ForeignPendingGatewayIgnored(t *testing.T) {
 		lbService("envoy-team-b", "team-b-gw", "team-b", ""),
 		// Same Gateway name in another namespace: the namespace/name entry excludes it.
 		lbService("envoy-other-shared", "shared-gw", "other", ""),
+		envoyController(envoyGatewayNamespaceName()),
 	)
 	state := &ValidationState{Log: testLog()}
 	checkExternalLoadBalancer(context.Background(), client, nil, state)
@@ -1311,7 +1324,7 @@ func TestBuildNodeToNodeDaemonSet_ToleratesEveryTaint(t *testing.T) {
 // every pinned route pair and the hasPair lookup itself were uncovered: the
 // Gateway tests passed identically against a bare fake, which serves nothing.
 func gatewayDiscoveryClient(pairs ...string) *fake.Clientset {
-	client := fake.NewSimpleClientset()
+	client := fake.NewSimpleClientset(envoyController(envoyGatewayNamespace))
 	byGV := map[string][]metav1.APIResource{}
 	for _, p := range pairs {
 		i := strings.LastIndex(p, "/")
@@ -1326,6 +1339,27 @@ func gatewayDiscoveryClient(pairs ...string) *fake.Clientset {
 		})
 	}
 	return client
+}
+
+// envoyController is a Ready Envoy Gateway controller Deployment in ns. Proxies
+// and proxy Services are credited in its namespace or their Gateway's only.
+func envoyController(ns string) *appsv1.Deployment {
+	one := int32(1)
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway", Namespace: ns, Generation: 1,
+			Labels: map[string]string{"control-plane": "envoy-gateway"}},
+		Spec:   appsv1.DeploymentSpec{Replicas: &one},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 1, ReadyReplicas: 1},
+	}
+}
+
+// nvcfService is a healthy NVCF service Deployment, so an installed control
+// plane is not reported as missing.
+func nvcfService() *appsv1.Deployment {
+	two := int32(2)
+	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 1},
+		Spec:   appsv1.DeploymentSpec{Replicas: &two},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 2}}
 }
 
 // The full set the charts actually apply, at the versions the manifests pin.
@@ -1994,7 +2028,7 @@ func TestResolveNVCFGateways_ConfiguredReplacesDiscovery(t *testing.T) {
 	assert.Equal(t, gatewaySet{"gw/shared-gw": true}, got)
 
 	surface, surfaceErr := discoverGatewayAPIResources(context.Background(), routeDiscoveryClient())
-	own := resolveGatewayOwnershipIn(context.Background(), surface, surfaceErr, dyn)
+	own := resolveGatewayOwnershipIn(context.Background(), nil, surface, surfaceErr, dyn)
 	assert.Equal(t, []string{"nvcf/other"}, own.unlisted)
 	state := &ValidationState{Log: testLog()}
 	own.reportInvalid(state.Log, state)
@@ -2021,7 +2055,7 @@ func TestResolveNVCFGateways_ConfiguredWithoutRoutesWarnsAfterInstall(t *testing
 		"before install, no routes": {routeClient(), false, false},
 		"installed, routes":         {withRoutes, true, false},
 	} {
-		own := resolveGatewayOwnershipIn(context.Background(), surface, surfaceErr, tc.routes)
+		own := resolveGatewayOwnershipIn(context.Background(), nil, surface, surfaceErr, tc.routes)
 		state := &ValidationState{Log: testLog(), PostInstall: tc.postInstall}
 		own.reportInvalid(state.Log, state)
 		own.reportInvalid(state.Log, state)
@@ -2308,13 +2342,13 @@ func TestCheckTier1Deployments_OnlyNVCFEnvoyProxiesAreAssessed(t *testing.T) {
 	}
 
 	state := &ValidationState{Log: testLog()}
-	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(
+	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(envoyController(envoyGatewayNamespace),
 		proxy("envoy-nvcf", "shared-gw", 2), proxy("envoy-team-b", "team-b-gw", 1)), nil, state)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK, "another team's proxy is not NVCF's to fail on")
 
 	state = &ValidationState{Log: testLog()}
-	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(
+	checkTier1Deployments(context.Background(), fake.NewSimpleClientset(envoyController(envoyGatewayNamespace),
 		proxy("envoy-nvcf", "shared-gw", 1)), nil, state)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.False(t, *state.Tier1DeploymentsOK, "NVCF's own proxy is still assessed")
@@ -3228,32 +3262,94 @@ func TestCheckTier2StatefulSets_UnspreadStalledRolloutFails(t *testing.T) {
 	assert.False(t, *state.Tier2StatefulSetsOK)
 }
 
-// After install, finding no quorum StatefulSet at all is reported rather than
-// read as a pre-install pass.
-func TestCheckTier2StatefulSets_NoneFoundAfterInstallWarns(t *testing.T) {
+// After install, each stack quorum component must be found unless it is
+// declared external: a missing one leaves the row UNKNOWN with a warning
+// naming it, even beside healthy peers. Before install nothing is expected.
+func TestCheckTier2StatefulSets_MissingComponentAfterInstall(t *testing.T) {
+	t.Setenv(openBaoNamespaceEnv, "")
+	t.Setenv(externalComponentsEnv, "")
 	state := &ValidationState{Log: testLog(), PostInstall: true}
 	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(), state)
-	require.NotNil(t, state.Tier2StatefulSetsOK)
-	assert.True(t, *state.Tier2StatefulSetsOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "no quorum StatefulSet")
+	assert.Nil(t, state.Tier2StatefulSetsOK)
+	warnings := strings.Join(state.Warnings, "; ")
+	for _, c := range []string{"nats", "openbao", "cassandra"} {
+		assert.Contains(t, warnings, "quorum component "+c)
+	}
 
 	state = &ValidationState{Log: testLog()}
 	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(), state)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
 	assert.Empty(t, state.Warnings, "before install, nothing to report")
+
+	peers := append(makeQuorumSTS("openbao-server", "vault-system", 3, 3, []string{"n1", "n2", "n3"}),
+		makeQuorumSTS("cassandra", "cassandra-system", 3, 3, []string{"n1", "n2", "n3"})...)
+	state = &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(peers...), state)
+	assert.Nil(t, state.Tier2StatefulSetsOK, "NATS is gone though its peers are healthy")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "quorum component nats")
+
+	t.Setenv(externalComponentsEnv, " NATS ,bogus")
+	state = &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(peers...), state)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "NATS is declared external")
+	warnings = strings.Join(state.Warnings, "; ")
+	assert.Contains(t, warnings, "bogus")
+	assert.NotContains(t, warnings, "quorum component nats")
+
+	t.Setenv(externalComponentsEnv, "nats,openbao,cassandra")
+	state = &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(), state)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "everything runs outside the cluster")
+}
+
+// Another install's StatefulSet in a shared namespace is not assessed: it can
+// neither fail the row nor stand in for a missing NVCF component.
+func TestCheckTier2StatefulSets_SharedNamespaceForeignIsNotAssessed(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(openBaoNamespaceEnv, "")
+	t.Setenv(externalComponentsEnv, "")
+	nats := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"n1", "n2", "n3"})
+	redis := makeQuorumSTS("redis", envoyGatewayNamespace, 3, 2, []string{"n1", "n2"})
+	state := runTier2(append(nats, redis...))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "a foreign Redis at 2/3 is not NVCF's")
+
+	t.Setenv(externalComponentsEnv, "openbao,cassandra")
+	healthyRedis := makeQuorumSTS("redis", "cert-manager", 3, 3, []string{"n1", "n2", "n3"})
+	state = &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(healthyRedis...), state)
+	assert.Nil(t, state.Tier2StatefulSetsOK, "a healthy foreign StatefulSet does not hide a missing NATS")
 }
 
 // The rule matches the stack's own components only: by exact name, in their
 // own namespace. A same-prefixed workload, or a nats elsewhere, is not one.
 func TestIsKnownQuorumComponent(t *testing.T) {
-	assert.True(t, isKnownQuorumComponent("cassandra-system", "cassandra"))
-	assert.True(t, isKnownQuorumComponent("vault-system", "openbao-server"))
-	assert.True(t, isKnownQuorumComponent("nats-system", "nats"))
-	assert.False(t, isKnownQuorumComponent("cassandra-system", "cassandra-backup"))
-	assert.False(t, isKnownQuorumComponent("nvcf", "nvcf-nats"))
-	assert.False(t, isKnownQuorumComponent("nvcf", "nats"))
+	t.Setenv(openBaoNamespaceEnv, "")
+	isKnown := func(ns, name string) bool {
+		_, ok := knownQuorumComponent(ns, name)
+		return ok
+	}
+	assert.True(t, isKnown("cassandra-system", "cassandra"))
+	assert.True(t, isKnown("vault-system", "openbao-server"))
+	assert.True(t, isKnown("nats-system", "nats"))
+	assert.False(t, isKnown("cassandra-system", "cassandra-backup"))
+	assert.False(t, isKnown("nvcf", "nvcf-nats"))
+	assert.False(t, isKnown("nvcf", "nats"))
 
 	t.Setenv(openBaoNamespaceEnv, "openbao")
-	assert.True(t, isKnownQuorumComponent("openbao", "openbao-server"), "a relocated OpenBao is still OpenBao")
+	assert.True(t, isKnown("openbao", "openbao-server"), "a relocated OpenBao is still OpenBao")
+	assert.False(t, isKnown("vault-system", "openbao-server"), "the default namespace is no longer OpenBao's")
+
+	// Relocating OpenBao beside NATS keeps NATS a known component.
+	t.Setenv(openBaoNamespaceEnv, "nats-system")
+	for name, want := range map[string]string{"nats": "nats", "openbao-server": "openbao"} {
+		got, ok := knownQuorumComponent("nats-system", name)
+		assert.True(t, ok, name)
+		assert.Equal(t, want, got, name)
+	}
 }
 
 // proxyDeployment is an Envoy proxy Deployment for gwNS/gw at ready of 2.
@@ -3310,7 +3406,7 @@ func TestCheckTier1Deployments_ReadyProxiesOfUnknownOwnerPass(t *testing.T) {
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
 
-	state = runTier1(t, true, denied, proxies()...)
+	state = runTier1(t, true, denied, append(proxies(), nvcfService())...)
 	assert.Nil(t, state.Tier1DeploymentsOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not confirm every NVCF Gateway has a proxy")
 }
@@ -3321,9 +3417,9 @@ func TestCheckTier1Deployments_ReadyProxiesOfUnknownOwnerPass(t *testing.T) {
 func TestCheckTier1Deployments_PostInstallWithoutNVCFRoutesAssessesProxies(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "")
-	down := proxyDeployment("envoy-gateway", "gw", "shared-gw", 0)
+	down := proxyDeployment("envoy-gw-shared", "gw", "shared-gw", 0)
 
-	state := runTier1(t, true, routeClient(), down)
+	state := runTier1(t, true, routeClient(), down, nvcfService())
 	assert.Nil(t, state.Tier1DeploymentsOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "),
 		"no NVCF routes found although the control plane is installed")
@@ -3333,9 +3429,9 @@ func TestCheckTier1Deployments_PostInstallWithoutNVCFRoutesAssessesProxies(t *te
 	assert.True(t, *state.Tier1DeploymentsOK)
 }
 
-// Installed, every named NVCF Gateway that Envoy Gateway runs needs a proxy
-// with a Ready pod. A proxy run as a DaemonSet counts once one of its pods is
-// Ready; one with none serves nothing.
+// Installed, every named NVCF Gateway that Envoy Gateway runs needs a proxy,
+// judged on full readiness whatever its kind: a DaemonSet proxy with one of
+// three pods Ready is under-replicated, as a Deployment at 1/3 is.
 func TestCheckTier1Deployments_PostInstallNamedGatewayNeedsAProxy(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw,gw/nats-gw")
@@ -3346,18 +3442,20 @@ func TestCheckTier1Deployments_PostInstallNamedGatewayNeedsAProxy(t *testing.T) 
 	natsDS := func(ready int32) *appsv1.DaemonSet {
 		return &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "envoy-nats", Namespace: envoyGatewayNamespace,
 			Labels: map[string]string{owningGatewayNameLabel: "nats-gw", owningGatewayNamespaceLabel: "gw"}},
-			Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 3, NumberReady: ready}}
+			Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 3, UpdatedNumberScheduled: 3, NumberReady: ready}}
 	}
 
-	state := runTier1(t, true, gateways(), shared())
+	state := runTier1(t, true, gateways(), shared(), nvcfService())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.False(t, *state.Tier1DeploymentsOK, "gw/nats-gw has no proxy")
 
-	state = runTier1(t, true, gateways(), shared(), natsDS(0))
-	require.NotNil(t, state.Tier1DeploymentsOK)
-	assert.False(t, *state.Tier1DeploymentsOK, "a DaemonSet with no Ready pod serves nothing")
+	for _, ready := range []int32{0, 1} {
+		state = runTier1(t, true, gateways(), shared(), natsDS(ready), nvcfService())
+		require.NotNil(t, state.Tier1DeploymentsOK, ready)
+		assert.False(t, *state.Tier1DeploymentsOK, "a DaemonSet proxy at %d/3 is under-replicated", ready)
+	}
 
-	state = runTier1(t, true, gateways(), shared(), natsDS(1))
+	state = runTier1(t, true, gateways(), shared(), natsDS(3), nvcfService())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
 
@@ -3395,10 +3493,19 @@ func TestCheckTier1Deployments_GatewayCoverageByImplementation(t *testing.T) {
 
 	for _, ns := range []string{"nvcf", "custom-envoy-system"} {
 		state = runTier1(t, true, envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg")),
-			inNamespace(proxyDeployment("envoy-nvcf", "nvcf", "nvcf-gw", 2), ns), api())
+			inNamespace(proxyDeployment("envoy-nvcf", "nvcf", "nvcf-gw", 2), ns), api(),
+			envoyController("custom-envoy-system"))
 		require.NotNil(t, state.Tier1DeploymentsOK, ns)
 		assert.True(t, *state.Tier1DeploymentsOK, "a proxy in %s covers the Gateway", ns)
 	}
+
+	// Envoy Gateway never creates a Gateway's proxy outside its own
+	// namespace and the controller's, so a look-alike elsewhere covers
+	// nothing.
+	state = runTier1(t, true, envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg")),
+		inNamespace(proxyDeployment("pause", "nvcf", "nvcf-gw", 2), "team-x"), api())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "a labelled workload in team-x is not NVCF's proxy")
 }
 
 // GatewayNamespace mode puts a Gateway's proxy beside it, in a namespace
@@ -3428,7 +3535,7 @@ func TestCheckTier1Deployments_GatewayCoverageUndecidedIsUnknown(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(
 			schema.GroupResource{Group: gatewayAPIGroup, Resource: "gatewayclasses"}, "", fmt.Errorf("denied"))
 	})
-	state := runTier1(t, true, classesDenied)
+	state := runTier1(t, true, classesDenied, nvcfService())
 	assert.Nil(t, state.Tier1DeploymentsOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "could not tell which NVCF Gateways Envoy Gateway runs")
 
@@ -3436,6 +3543,8 @@ func TestCheckTier1Deployments_GatewayCoverageUndecidedIsUnknown(t *testing.T) {
 	client.PrependReactor("list", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 	})
+	_, err := client.AppsV1().Deployments("nvcf").Create(context.Background(), nvcfService(), metav1.CreateOptions{})
+	require.NoError(t, err)
 	state = &ValidationState{Log: testLog(), PostInstall: true}
 	checkTier1Deployments(context.Background(), client,
 		envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg")), state)
@@ -3488,27 +3597,67 @@ func TestNVCFGatewayNames_RequiresNamespace(t *testing.T) {
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "without a namespace")
 }
 
-// A Deployment parked at zero in a shared namespace may be another install's
-// controller, such as an external cert-manager, so it warns rather than fails.
-func TestCheckTier1Deployments_ScaledToZeroInSharedNamespaceWarns(t *testing.T) {
+// In a shared namespace only what a stack release installed is NVCF's. Another
+// install's Deployment there is not assessed at any readiness; the stack's own
+// fails at zero, as any NVCF service does.
+func TestCheckTier1Deployments_SharedNamespaceOwnership(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "")
-	zero, two := int32(0), int32(2)
-	parked := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "cm-webhook", Namespace: "cert-manager"},
-		Spec: appsv1.DeploymentSpec{Replicas: &zero}}
-	api := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "nvcf", Generation: 1},
-		Spec:   appsv1.DeploymentSpec{Replicas: &two},
-		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 2}}
-	state := runTier1(t, false, routeClient(), parked, api)
+	zero, one, two := int32(0), int32(1), int32(2)
+	foreign := func(name string, want int32) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cert-manager"},
+			Spec: appsv1.DeploymentSpec{Replicas: &want}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}}
+	}
+	state := runTier1(t, false, routeClient(), foreign("cm-webhook", zero), foreign("cm-cainjector", two),
+		nvcfService())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "another install's cert-manager is not NVCF's to judge")
+
+	stack := foreign("cert-manager", zero)
+	stack.Annotations = map[string]string{
+		"meta.helm.sh/release-name": "cert-manager", "meta.helm.sh/release-namespace": "cert-manager",
+	}
+	state = runTier1(t, false, routeClient(), stack, nvcfService())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "the stack's own cert-manager scaled to zero fails")
+
+	stack = stack.DeepCopy()
+	stack.Spec.Replicas = &one
+	state = runTier1(t, false, routeClient(), stack, nvcfService())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "cert-manager/cm-webhook is scaled to zero")
+}
 
-	nvcfZero := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "sis", Namespace: "sis"},
-		Spec: appsv1.DeploymentSpec{Replicas: &zero}}
-	state = runTier1(t, false, routeClient(), nvcfZero, api.DeepCopy())
-	require.NotNil(t, state.Tier1DeploymentsOK)
-	assert.False(t, *state.Tier1DeploymentsOK, "an NVCF service scaled to zero still fails")
+// After install, shared-namespace controllers and Envoy proxies outlive an
+// uninstall, so they do not stand in for the control plane: with no NVCF
+// Deployment the row fails, routes or not, and it is unknown when the NVCF
+// namespaces could not be read.
+func TestCheckTier1Deployments_PostInstallNeedsNVCFDeployments(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	certManager := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "cert-manager", Namespace: "cert-manager",
+		Annotations: map[string]string{
+			"meta.helm.sh/release-name": "cert-manager", "meta.helm.sh/release-namespace": "cert-manager",
+		}}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}}
+	routes := func() *dynamicfake.FakeDynamicClient {
+		return routeClient(route("HTTPRoute", "gw", "api", "nvcf-gateway-routes-1.0.0", parentRef("name", "shared-gw")))
+	}
+	for name, dyn := range map[string]*dynamicfake.FakeDynamicClient{"no routes": routeClient(), "routes": routes()} {
+		state := runTier1(t, true, dyn, certManager.DeepCopy(), proxyDeployment("envoy-shared", "gw", "shared-gw", 2))
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.False(t, *state.Tier1DeploymentsOK, name)
+	}
+
+	client := gatewayDiscoveryClient(gatewayAPIGroup + "/v1/httproutes")
+	client.PrependReactor("list", "deployments", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "nvcf" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "deployments"}, "", fmt.Errorf("x"))
+		}
+		return false, nil, nil
+	})
+	state := &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier1Deployments(context.Background(), client, routeClient(), state)
+	assert.Nil(t, state.Tier1DeploymentsOK, "an unreadable NVCF namespace is not an empty one")
 }
 
 // Installed with no NVCF Gateway named, a pending Service beside an addressed
@@ -3716,7 +3865,11 @@ func resolveGatewayOwnership(
 	ctx context.Context, client kubernetes.Interface, routes dynamic.Interface,
 ) *gatewayOwnership {
 	surface, err := discoverGatewayAPIResources(ctx, client)
-	return resolveGatewayOwnershipIn(ctx, surface, err, routes)
+	return resolveGatewayOwnershipIn(ctx, client, surface, err, routes)
+}
+
+func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	checkEnvoyGatewayFor(ctx, client, resolveGatewayOwnership(ctx, client, nil), state)
 }
 
 func checkExternalLoadBalancer(
@@ -3756,4 +3909,251 @@ func nvcfGatewayClasses(
 		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
 	}
 	return nvcfGatewayClassesIn(ctx, surface, routes, g)
+}
+
+// An explicit global.storageClass binds every claim to that class, so the row
+// requires it to exist and ignores whether the cluster has a default.
+func TestCheckStorageClass_NamedClassReplacesDefaultRule(t *testing.T) {
+	t.Setenv(storageClassEnv, "ceph-rbd")
+	ceph := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "ceph-rbd"}}
+	state := &ValidationState{Log: testLog()}
+	checkStorageClass(context.Background(), fake.NewSimpleClientset(ceph), state)
+	require.NotNil(t, state.DefaultStorageClassOK)
+	assert.True(t, *state.DefaultStorageClassOK, "no default class is needed when the class is named")
+
+	state = &ValidationState{Log: testLog()}
+	checkStorageClass(context.Background(), fake.NewSimpleClientset(), state)
+	require.NotNil(t, state.DefaultStorageClassOK)
+	assert.False(t, *state.DefaultStorageClassOK, "the named class does not exist")
+
+	client := fake.NewSimpleClientset(ceph)
+	client.PrependReactor("get", "storageclasses", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+	})
+	state = &ValidationState{Log: testLog()}
+	checkStorageClass(context.Background(), client, state)
+	assert.Nil(t, state.DefaultStorageClassOK, "a failed read is unknown")
+}
+
+// From 1.26 the apiserver binds to the newest default, ties broken by name, so
+// the warning names that class whatever order the list returns.
+func TestCheckStorageClass_MultipleDefaultsNameTheAdmittedClass(t *testing.T) {
+	t.Setenv(storageClassEnv, "")
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mk := func(name string, age time.Duration) *storagev1.StorageClass {
+		return &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{
+			Name: name, CreationTimestamp: metav1.NewTime(base.Add(-age)),
+			Annotations: map[string]string{defaultClassAnnotation: annotationTrue},
+		}}
+	}
+	for _, tc := range []struct {
+		classes []runtime.Object
+		winner  string
+	}{
+		{[]runtime.Object{mk("z-csi-gp3", 0), mk("a-legacy-gp2", time.Hour)}, "z-csi-gp3"},
+		{[]runtime.Object{mk("z-csi-gp3", time.Hour), mk("a-legacy-gp2", 0)}, "a-legacy-gp2"},
+		{[]runtime.Object{mk("b", 0), mk("a", 0)}, "a"},
+	} {
+		state := &ValidationState{Log: testLog(), K8sVersion: "v1.30.0"}
+		checkStorageClass(context.Background(), fake.NewSimpleClientset(tc.classes...), state)
+		assert.Contains(t, strings.Join(state.Warnings, "; "), "binds PVCs to "+tc.winner+",")
+		assert.Equal(t, tc.winner, admittedDefaultClass([]storagev1.StorageClass{
+			*tc.classes[0].(*storagev1.StorageClass), *tc.classes[1].(*storagev1.StorageClass)}))
+	}
+}
+
+// GRPCRoute is rendered only when a grpc route is enabled, so a cluster that
+// serves it only at v1alpha2 passes the critical row and is warned about in
+// the optional one.
+func TestCheckGatewayAPICRDs_GRPCRouteIsOptional(t *testing.T) {
+	var pairs []string
+	for _, p := range gatewayRequiredPairs() {
+		if strings.HasSuffix(p, "/grpcroutes") {
+			p = gatewayAPIGroup + "/v1alpha2/grpcroutes"
+		}
+		pairs = append(pairs, p)
+	}
+	client := gatewayDiscoveryClient(append(pairs, gatewayAPIGroup+"/v1alpha2/udproutes")...)
+	state := &ValidationState{Log: testLog()}
+	checkGatewayAPICRDs(context.Background(), client, state)
+	require.NotNil(t, state.GatewayAPICRDsOK)
+	assert.True(t, *state.GatewayAPICRDsOK)
+
+	checkGatewayRoutes(context.Background(), client, state)
+	require.NotNil(t, state.GatewayRoutesOK)
+	assert.False(t, *state.GatewayRoutesOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "grpcroutes (needed when nvcfGatewayRoutes.routes.nvcfApi")
+}
+
+// istioStack is an installed cluster whose only NVCF Gateway, gw/nvcf-gw, is
+// run by Istio, with a Ready Istio LoadBalancer Service that carries none of
+// the Envoy labels and no Envoy Gateway at all.
+func istioStack(t *testing.T) (*fake.Clientset, *gatewayOwnership) {
+	t.Helper()
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "gw/nvcf-gw")
+	client := fake.NewSimpleClientset(nvcfService(), &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvcf-gw-istio", Namespace: "gw"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+			Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}},
+		}},
+	})
+	disco := client.Discovery().(*fakediscovery.FakeDiscovery)
+	disco.Resources = append(disco.Resources, &metav1.APIResourceList{
+		GroupVersion: gatewayAPIGroup + "/v1",
+		APIResources: []metav1.APIResource{{Name: "httproutes"}, {Name: "gateways"}, {Name: "gatewayclasses"}},
+	})
+	dyn := envoyGatewayClient(t, gatewayObject("gw", "nvcf-gw", "istio"))
+	require.NoError(t, dyn.Tracker().Create(
+		schema.GroupVersionResource{Group: gatewayAPIGroup, Version: "v1", Resource: "httproutes"},
+		route("HTTPRoute", "gw", "api", "nvcf-gateway-routes-1.0.0", parentRef("name", "nvcf-gw")), "gw"))
+	return client, resolveGatewayOwnership(context.Background(), client, dyn)
+}
+
+// Every Envoy-specific row leaves a Gateway another implementation runs out of
+// scope, and they agree within one run: the Envoy and LoadBalancer rows are
+// Not Applicable, Tier-1 passes, and the verdict is Ready.
+func TestEnvoyRows_NonEnvoyGatewayIsOutOfScope(t *testing.T) {
+	client, own := istioStack(t)
+	state := &ValidationState{Log: testLog(), PostInstall: true, Role: RoleControlPlane}
+	checkEnvoyGatewayFor(context.Background(), client, own, state)
+	checkExternalLoadBalancerFor(context.Background(), client, own, state)
+	checkTier1DeploymentsFor(context.Background(), client, own, state)
+
+	assert.Nil(t, state.EnvoyGatewayOK)
+	assert.NotEmpty(t, state.EnvoyGatewayNotApplicable)
+	assert.Nil(t, state.ExternalLBOK)
+	assert.NotEmpty(t, state.ExternalLBNotApplicable)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK)
+	assert.Empty(t, state.Warnings, "nothing Envoy-specific to warn about")
+
+	ok := true
+	state.ControlPlaneHealthy, state.WebhooksSupported, state.NetworkPoliciesSupported = true, true, true
+	state.NodesAllReady = true
+	state.DefaultStorageClassOK, state.GatewayAPICRDsOK, state.NodeToNodeOK, state.Tier2StatefulSetsOK = &ok, &ok, &ok, &ok
+	assert.NoError(t, printSummary(state), "Not Applicable rows do not block the verdict")
+
+	// The same Gateway on an Envoy class with no controller anywhere still
+	// fails the Envoy row.
+	t.Setenv(nvcfGatewayNamesEnv, "gw/nvcf-gw")
+	dyn := envoyGatewayClient(t, gatewayObject("gw", "nvcf-gw", "eg"))
+	state = &ValidationState{Log: testLog()}
+	checkEnvoyGatewayFor(context.Background(), client, resolveGatewayOwnership(context.Background(), client, dyn),
+		state)
+	require.NotNil(t, state.EnvoyGatewayOK)
+	assert.False(t, *state.EnvoyGatewayOK)
+	assert.NotEmpty(t, state.Warnings)
+}
+
+// A named NVCF Gateway that nothing can run fails after install: one whose
+// GatewayClass does not exist, or that names none.
+func TestCheckTier1Deployments_DanglingGatewayClassFails(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+	for _, class := range []string{"eg-deleted", ""} {
+		state := runTier1(t, true, envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", class)), nvcfService())
+		require.NotNil(t, state.Tier1DeploymentsOK, class)
+		assert.False(t, *state.Tier1DeploymentsOK, class)
+	}
+}
+
+// Only launcher-named Gateways can fail Tier-1. A route anyone can label pulls
+// in a Gateway that does not exist, or one whose proxy is down: either leaves
+// the row unknown, never failed.
+func TestCheckTier1Deployments_DiscoveredGatewaysCannotFail(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	ghost := routeClient(route("HTTPRoute", "team-x", "r", "nvcf-gateway-routes-x", parentRef("name", "ghost")))
+	state := runTier1(t, true, ghost, nvcfService())
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "team-x/ghost does not exist")
+
+	tenant := func() *dynamicfake.FakeDynamicClient {
+		dyn := envoyGatewayClient(t, gatewayObject("team-x", "tenant-gw", "eg"))
+		require.NoError(t, dyn.Tracker().Create(
+			schema.GroupVersionResource{Group: gatewayAPIGroup, Version: "v1", Resource: "httproutes"},
+			route("HTTPRoute", "team-x", "r", "nvcf-gateway-routes-x", parentRef("name", "tenant-gw")), "team-x"))
+		return dyn
+	}
+	state = runTier1(t, true, tenant(), nvcfService(), proxyDeployment("envoy-tenant", "team-x", "tenant-gw", 0))
+	assert.Nil(t, state.Tier1DeploymentsOK, "a down proxy of a discovered Gateway is not a failure")
+
+	t.Setenv(nvcfGatewayNamesEnv, "team-x/tenant-gw")
+	state = runTier1(t, true, tenant(), nvcfService(), proxyDeployment("envoy-tenant", "team-x", "tenant-gw", 0))
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "a named Gateway's down proxy fails")
+}
+
+// A tolerated rollout is a pass with a warning whoever owns the proxy: one
+// mid-rollout at its readiness floor while ownership is undecided is not
+// UNKNOWN.
+func TestCheckTier1Deployments_UnattributedProxyRolloutIsTolerated(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	four := int32(4)
+	rolling := proxyDeployment("envoy-shared", "gw", "shared-gw", 3)
+	rolling.Generation, rolling.Spec.Replicas = 2, &four
+	rolling.Status = appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 5, UpdatedReplicas: 2,
+		ReadyReplicas: 3, Conditions: []appsv1.DeploymentCondition{rolloutProgressing()}}
+	state := runTier1(t, true, routeClient(), rolling, nvcfService())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK)
+}
+
+// A named Gateway's proxy outside the scanned namespaces, beside a controller
+// the validator was not told about, is judged on full readiness too.
+func TestCheckTier1Deployments_ProxyInUnscannedNamespaceIsJudged(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw")
+	proxy := proxyDeployment("envoy-shared", "gw", "shared-gw", 1)
+	proxy.Namespace = "custom-envoy-system"
+	state := runTier1(t, true, envoyGatewayClient(t, gatewayObject("gw", "shared-gw", "eg")),
+		proxy, envoyController("custom-envoy-system"), nvcfService())
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "1/2 Ready is under-replicated wherever it runs")
+}
+
+// With the Envoy namespace unset, the controller and the proxy Services are
+// found wherever Envoy Gateway runs, and a proxy Service is credited only
+// there or beside its Gateway.
+func TestEnvoyRows_FindTheControllerByLabel(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw")
+	pod := makeEnvoyControllerPod("envoy-gateway-abc", true)
+	pod.Namespace = "gateway"
+	client := fake.NewSimpleClientset(pod, envoyController("gateway"),
+		gatewayLBService("gateway", "envoy-shared", "gw", "shared-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"),
+		gatewayLBService("team-x", "look-alike", "gw", "shared-gw", corev1.ServiceTypeLoadBalancer, ""))
+	own := resolveGatewayOwnership(context.Background(), client, nil)
+	state := &ValidationState{Log: testLog()}
+	checkEnvoyGatewayFor(context.Background(), client, own, state)
+	checkExternalLoadBalancerFor(context.Background(), client, own, state)
+	require.NotNil(t, state.EnvoyGatewayOK)
+	assert.True(t, *state.EnvoyGatewayOK)
+	require.NotNil(t, state.ExternalLBOK)
+	assert.True(t, *state.ExternalLBOK, "the team-x look-alike is not NVCF's Service")
+}
+
+// An observed pending NVCF Service fails the LoadBalancer row even when
+// another Service list failed.
+func TestCheckExternalLoadBalancer_PendingSurvivesAListFailure(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "gw/shared-gw,gw/api-gw")
+	client := fake.NewSimpleClientset(envoyController(envoyGatewayNamespace),
+		gatewayLBService(envoyGatewayNamespace, "envoy-shared", "gw", "shared-gw", corev1.ServiceTypeLoadBalancer, ""))
+	client.PrependReactor("list", "services", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.(ktesting.ListAction).GetListRestrictions().Labels.String() == owningGatewayClassLabel {
+			return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+		}
+		return false, nil, nil
+	})
+	state := &ValidationState{Log: testLog()}
+	checkExternalLoadBalancer(context.Background(), client, nil, state)
+	require.NotNil(t, state.ExternalLBOK)
+	assert.False(t, *state.ExternalLBOK)
+	warnings := strings.Join(state.Warnings, "; ")
+	assert.Contains(t, warnings, envoyGatewayNamespace+"/envoy-shared")
+	assert.NotContains(t, warnings, "no proxy Service found", "api-gw is unknown, not missing")
 }

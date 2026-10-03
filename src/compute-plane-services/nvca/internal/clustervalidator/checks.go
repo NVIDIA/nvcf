@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"regexp"
@@ -911,14 +912,30 @@ func checkGPUOperator(ctx context.Context, client kubernetes.Interface, state *V
 	}
 }
 
-// checkStorageClass verifies that a default StorageClass is present. NVCF
-// workloads use PersistentVolumeClaims; without a default StorageClass those
-// claims remain unbound and workloads fail to start. Critical for both
-// control-plane (operator chart) and compute-plane (model cache), but surfaced
-// here for the control-plane validator role.
+// storageClassEnv names the StorageClass the stack binds its PVCs to
+// (global.storageClass). Set, it replaces the default-class rule: the stack
+// passes that class to every claim explicitly, so a cluster without a default
+// still binds them.
+const storageClassEnv = "NVCF_STORAGE_CLASS"
+
+const (
+	defaultClassAnnotation     = "storageclass.kubernetes.io/is-default-class"
+	betaDefaultClassAnnotation = "storageclass.beta.kubernetes.io/is-default-class"
+)
+
+// checkStorageClass verifies that the StorageClass the control plane's
+// PersistentVolumeClaims bind to exists: the class named by
+// NVCF_STORAGE_CLASS when set, otherwise the cluster default. Without it the
+// claims of NATS, OpenBao and Cassandra stay unbound and those components
+// never start. Runs under the control-plane role only.
 func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
 	log := state.Log
 	printHeader(log, "Default StorageClass")
+
+	if name := strings.TrimSpace(os.Getenv(storageClassEnv)); name != "" {
+		checkNamedStorageClass(ctx, client, state, name)
+		return
+	}
 
 	classes, err := observe(ctx, func(c context.Context) (*storagev1.StorageClassList, error) {
 		return client.StorageV1().StorageClasses().List(c, metav1.ListOptions{})
@@ -935,65 +952,120 @@ func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *
 	// annotated is-default-class reject all PVCs on Kubernetes <1.26, and on
 	// >=1.26 the apiserver picks the newest, which need not be the one listed
 	// first here.
-	var defaults []string
+	var defaults []storagev1.StorageClass
 	for _, sc := range classes.Items {
-		if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == annotationTrue ||
-			sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == annotationTrue {
-			defaults = append(defaults, sc.Name)
+		if sc.Annotations[defaultClassAnnotation] == annotationTrue ||
+			sc.Annotations[betaDefaultClassAnnotation] == annotationTrue {
+			defaults = append(defaults, sc)
 		}
 	}
 
 	if len(defaults) > 1 {
-		const multiDefaultTolerated = "1.26.0"
-		recommendation := "Exactly one StorageClass may be marked default. Clear the annotation on the extras with: " +
-			"kubectl patch storageclass <name> -p " +
-			`'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'`
-
-		// From 1.26 the apiserver resolves the ambiguity by picking the most
-		// recently created default, so PVCs still bind. Failing the critical
-		// check there would report NVCF-Not-Ready on a cluster that works,
-		// which mid-CSI-migration clusters (gp2 plus gp3) hit routinely.
-		if versionGTE(state.K8sVersion, multiDefaultTolerated) {
-			msg := fmt.Sprintf(
-				"Multiple default StorageClasses found (%s); Kubernetes >= %s binds PVCs with the newest, "+
-					"but the extras should be cleared",
-				strings.Join(defaults, ", "), multiDefaultTolerated)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "Default StorageClass: "+msg)
-			state.Recommendations = append(state.Recommendations, recommendation)
-			ok := true
-			state.DefaultStorageClassOK = &ok
-			return
-		}
-
-		printError(log, fmt.Sprintf("Multiple default StorageClasses found (%s); PVCs may fail to bind",
-			strings.Join(defaults, ", ")))
-		state.Recommendations = append(state.Recommendations, recommendation)
-		ok := false
-		state.DefaultStorageClassOK = &ok
+		judgeMultipleDefaultClasses(state, defaults)
 		return
 	}
 
-	var defaultClass string
-	if len(defaults) == 1 {
-		defaultClass = defaults[0]
-	}
-
-	if defaultClass == "" {
+	if len(defaults) == 0 {
 		printError(log, fmt.Sprintf("No default StorageClass found (%d classes present, none marked as default)",
 			len(classes.Items)))
 		state.Recommendations = append(state.Recommendations,
 			"Mark a StorageClass as default with: "+
 				"kubectl patch storageclass <name> -p "+
-				"'{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}'")
+				"'{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}', "+
+				"or name the class with clusterValidator.storageClass (env "+storageClassEnv+
+				") when the stack sets global.storageClass")
 		ok := false
 		state.DefaultStorageClassOK = &ok
 		return
 	}
 
-	printSuccess(log, fmt.Sprintf("Default StorageClass: %s", defaultClass))
+	printSuccess(log, fmt.Sprintf("Default StorageClass: %s", defaults[0].Name))
 	ok := true
 	state.DefaultStorageClassOK = &ok
+}
+
+// checkNamedStorageClass requires the class the stack names to exist. The
+// default class does not matter then: every claim names this one.
+func checkNamedStorageClass(ctx context.Context, client kubernetes.Interface, state *ValidationState, name string) {
+	log := state.Log
+	_, err := observe(ctx, func(c context.Context) (*storagev1.StorageClass, error) {
+		return client.StorageV1().StorageClasses().Get(c, name, metav1.GetOptions{})
+	})
+	switch {
+	case apierrors.IsNotFound(err):
+		printError(log, fmt.Sprintf("StorageClass %s, named by %s, does not exist", name, storageClassEnv))
+		state.Recommendations = append(state.Recommendations, fmt.Sprintf(
+			"Create StorageClass %s, or set global.storageClass and clusterValidator.storageClass to a class "+
+				"that exists (kubectl get storageclass)", name))
+		ok := false
+		state.DefaultStorageClassOK = &ok
+	case err != nil:
+		printWarning(log, readFailure("StorageClass "+name, err))
+		state.Warnings = append(state.Warnings, unknownWarning("Default StorageClass", "StorageClass "+name, err))
+	default:
+		printSuccess(log, fmt.Sprintf("StorageClass %s (named by %s) exists", name, storageClassEnv))
+		ok := true
+		state.DefaultStorageClassOK = &ok
+	}
+}
+
+// judgeMultipleDefaultClasses fails more than one default class below
+// Kubernetes 1.26, where it rejects every PVC without a class, and warns from
+// 1.26, where the apiserver binds such PVCs to the newest default.
+func judgeMultipleDefaultClasses(state *ValidationState, defaults []storagev1.StorageClass) {
+	log := state.Log
+	const multiDefaultTolerated = "1.26.0"
+	names := make([]string, 0, len(defaults))
+	for i := range defaults {
+		names = append(names, defaults[i].Name)
+	}
+	sort.Strings(names)
+	recommendation := "Exactly one StorageClass may be marked default. Clear the annotation on the extras with: " +
+		"kubectl patch storageclass <name> -p " +
+		`'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'`
+
+	// From 1.26 the apiserver resolves the ambiguity by picking the most
+	// recently created default, so PVCs still bind. Failing the critical
+	// check there would report NVCF-Not-Ready on a cluster that works,
+	// which mid-CSI-migration clusters (gp2 plus gp3) hit routinely.
+	if versionGTE(state.K8sVersion, multiDefaultTolerated) {
+		winner := admittedDefaultClass(defaults)
+		var extras []string
+		for _, n := range names {
+			if n != winner {
+				extras = append(extras, n)
+			}
+		}
+		msg := fmt.Sprintf("Multiple default StorageClasses found (%s); Kubernetes >= %s binds PVCs to %s, "+
+			"the newest; clear the default on %s",
+			strings.Join(names, ", "), multiDefaultTolerated, winner, strings.Join(extras, ", "))
+		printWarning(log, msg)
+		state.Warnings = append(state.Warnings, "Default StorageClass: "+msg)
+		state.Recommendations = append(state.Recommendations, recommendation)
+		ok := true
+		state.DefaultStorageClassOK = &ok
+		return
+	}
+
+	printError(log, fmt.Sprintf("Multiple default StorageClasses found (%s); PVCs may fail to bind",
+		strings.Join(names, ", ")))
+	state.Recommendations = append(state.Recommendations, recommendation)
+	ok := false
+	state.DefaultStorageClassOK = &ok
+}
+
+// admittedDefaultClass is the default class the DefaultStorageClass admission
+// plugin gives a PVC without one: the newest, ties broken by name.
+func admittedDefaultClass(defaults []storagev1.StorageClass) string {
+	best := &defaults[0]
+	for i := 1; i < len(defaults); i++ {
+		c := &defaults[i]
+		bt, ct := best.CreationTimestamp.UnixNano(), c.CreationTimestamp.UnixNano()
+		if ct > bt || (ct == bt && c.Name < best.Name) {
+			best = c
+		}
+	}
+	return best.Name
 }
 
 const (
@@ -1036,7 +1108,6 @@ const (
 // pass a cluster the stack cannot actually install on.
 var gatewayRouteRequirements = []struct{ groupVersion, resource string }{
 	{gatewayAPIGroup + "/v1", "httproutes"},
-	{gatewayAPIGroup + "/v1", "grpcroutes"},
 	// TCPRoute ships only in the Gateway API experimental channel, but the
 	// chart renders one by default (routes.grpc.enabled is true), so a
 	// standard-channel install genuinely cannot apply the stack.
@@ -1048,9 +1119,12 @@ var gatewayRouteRequirements = []struct{ groupVersion, resource string }{
 // an opt-in feature is enabled, so their absence is not a reason to fail a
 // cluster that never turns that feature on. Reported by the non-critical
 // checkGatewayRoutes with the feature named, rather than by the critical CRD
-// check: udproute-llm-worker.yaml and referencegrant-llm-worker.yaml render a
-// UDPRoute whenever routes.llmWorker.enabled, which defaults to false.
+// check: udproute-llm-worker.yaml renders a UDPRoute only when
+// routes.llmWorker.enabled, and the grpcroute-*.yaml templates render a
+// GRPCRoute only when a grpc route is enabled. All default to false.
 var gatewayOptionalRouteRequirements = []struct{ groupVersion, resource, enabledBy string }{
+	{gatewayAPIGroup + "/v1", "grpcroutes",
+		"nvcfGatewayRoutes.routes.nvcfApi.grpc.enabled or nvcfGatewayRoutes.routes.nvctApi.grpc.enabled"},
 	{gatewayAPIGroup + "/v1alpha2", "udproutes", "nvcfGatewayRoutes.routes.llmWorker.enabled"},
 }
 
@@ -1157,69 +1231,97 @@ func checkGatewayAPICRDsIn(state *ValidationState, surface gatewayAPISurface, er
 	state.GatewayAPICRDsOK = &ok
 }
 
-// checkEnvoyGateway verifies the Envoy Gateway controller is installed and has
-// at least one running pod in its namespace (envoyGatewayNamespaceName). Without a
-// running gateway controller, Gateway and HTTPRoute objects are never reconciled
-// and no traffic reaches NVCF services.
-func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+// checkEnvoyGatewayFor verifies the Envoy Gateway controller is installed and
+// has at least one Ready pod. Without a running gateway controller, Gateway
+// and HTTPRoute objects are never reconciled and no traffic reaches NVCF
+// services. The controller is looked for in NVCF_ENVOY_GATEWAY_NAMESPACE when
+// set, and by its label in every namespace otherwise. When every NVCF Gateway
+// is run by another implementation the row does not apply.
+func checkEnvoyGatewayFor(
+	ctx context.Context, client kubernetes.Interface, own *gatewayOwnership, state *ValidationState,
+) {
 	log := state.Log
 	printHeader(log, "Envoy Gateway")
 
-	envoyNS := envoyGatewayNamespaceName()
-	_, err := observe(ctx, func(c context.Context) (*corev1.Namespace, error) {
-		return client.CoreV1().Namespaces().Get(c, envoyNS, metav1.GetOptions{})
-	})
-	if err != nil {
-		// Only NotFound is evidence that Envoy is absent. A 403 or an apiserver
-		// 500 means we never observed it, so leave the pointer nil and warn,
-		// matching every sibling control-plane check.
-		if !apierrors.IsNotFound(err) {
-			printWarning(log, readFailure("namespace "+envoyNS, err))
-			state.Warnings = append(state.Warnings, unknownWarning("Envoy Gateway", "namespace "+envoyNS, err))
-			return
-		}
-		msg := fmt.Sprintf("Envoy Gateway namespace %s not found", envoyNS)
-		printError(log, msg)
-		// Envoy is non-critical, so without a warning the run prints the green
-		// "meets all requirements" banner above this failing row.
-		state.Warnings = append(state.Warnings, "Envoy Gateway: "+msg+
-			"; set clusterValidator.envoyGatewayNamespace if it is installed elsewhere")
-		state.Recommendations = append(state.Recommendations,
-			"Install Envoy Gateway via the NVCF self-managed stack (nvcf-cli up) or "+
-				"helm install eg oci://docker.io/envoyproxy/gateway-helm -n "+envoyNS+" --create-namespace")
-		ok := false
-		state.EnvoyGatewayOK = &ok
+	if reason := own.envoyNotApplicable(ctx); reason != "" {
+		printInfo(log, "  Not applicable: "+reason)
+		state.EnvoyGatewayNotApplicable = "no NVCF Gateway is run by Envoy Gateway"
 		return
 	}
 
-	// Select on the controller label: the same namespace also holds the
+	envoyNS := strings.TrimSpace(os.Getenv(envoyGatewayNamespaceEnv))
+	installNS := envoyNS
+	if installNS == "" {
+		installNS = envoyGatewayNamespace
+	}
+	recommendation := "Install Envoy Gateway via the NVCF self-managed stack (nvcf-cli up) or " +
+		"helm install eg oci://docker.io/envoyproxy/gateway-helm -n " + installNS + " --create-namespace"
+	if envoyNS != "" {
+		_, err := observe(ctx, func(c context.Context) (*corev1.Namespace, error) {
+			return client.CoreV1().Namespaces().Get(c, envoyNS, metav1.GetOptions{})
+		})
+		if err != nil {
+			// Only NotFound is evidence that Envoy is absent. A 403 or an
+			// apiserver 500 means we never observed it, so leave the pointer
+			// nil and warn, matching every sibling control-plane check.
+			if !apierrors.IsNotFound(err) {
+				printWarning(log, readFailure("namespace "+envoyNS, err))
+				state.Warnings = append(state.Warnings, unknownWarning("Envoy Gateway", "namespace "+envoyNS, err))
+				return
+			}
+			msg := fmt.Sprintf("Envoy Gateway namespace %s not found", envoyNS)
+			printError(log, msg)
+			// Envoy is non-critical, so without a warning the run prints the
+			// green "meets all requirements" banner above this failing row.
+			state.Warnings = append(state.Warnings, "Envoy Gateway: "+msg+
+				"; set clusterValidator.envoyGatewayNamespace to where it is installed")
+			state.Recommendations = append(state.Recommendations, recommendation)
+			ok := false
+			state.EnvoyGatewayOK = &ok
+			return
+		}
+	}
+
+	// Select on the controller label: its namespace also holds the
 	// envoy-<ns>-<gw>-<hash> data-plane proxies and the certgen Job pod, and
 	// counting those lets a dead controller pass.
-	pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
-		return client.CoreV1().Pods(envoyNS).List(c, metav1.ListOptions{LabelSelector: envoyGatewayControllerSelector})
-	})
+	pods, _, err := own.envoyControllers(ctx)
 	if err != nil {
-		// Same reasoning as the namespace Get above: a List failure is not
-		// evidence that no controller is running.
-		resource := "the Envoy Gateway controller pods in " + envoyNS
-		printWarning(log, readFailure(resource, err))
-		state.Warnings = append(state.Warnings, unknownWarning("Envoy Gateway", resource, err))
+		// A List failure is not evidence that no controller is running.
+		printWarning(log, readFailure("the Envoy Gateway controller", err))
+		state.Warnings = append(state.Warnings, unknownWarning("Envoy Gateway", "the Envoy Gateway controller", err))
+		return
+	}
+	where := envoyNS
+	if where == "" {
+		where = "any namespace"
+	}
+	if len(pods) == 0 {
+		msg := fmt.Sprintf("No Envoy Gateway controller pod (label %s) found in %s",
+			envoyGatewayControllerSelector, where)
+		printError(log, msg)
+		state.Warnings = append(state.Warnings, "Envoy Gateway: "+msg)
+		state.Recommendations = append(state.Recommendations, recommendation)
+		ok := false
+		state.EnvoyGatewayOK = &ok
 		return
 	}
 
 	// Require Ready, not Running: .status.phase stays Running throughout
 	// CrashLoopBackOff, so a crash-looping controller counts as healthy.
 	ready := 0
-	for i := range pods.Items {
-		if isPodReady(&pods.Items[i]) {
+	namespaces := map[string]bool{}
+	for i := range pods {
+		namespaces[pods[i].Namespace] = true
+		if isPodReady(&pods[i]) {
 			ready++
 		}
 	}
-	log.Infof("  Controller pods in %s: %d total, %d ready", envoyNS, len(pods.Items), ready)
+	found := strings.Join(slices.Sorted(maps.Keys(namespaces)), ", ")
+	log.Infof("  Controller pods in %s: %d total, %d ready", found, len(pods), ready)
 
 	if ready == 0 {
-		msg := fmt.Sprintf("No Ready Envoy Gateway controller pods in %s (%d found)",
-			envoyNS, len(pods.Items))
+		msg := fmt.Sprintf("No Ready Envoy Gateway controller pods in %s (%d found)", found, len(pods))
 		printError(log, msg)
 		// printSummary chooses the banner from len(state.Warnings), so without
 		// this a CrashLooping controller printed the green "meets all
@@ -1230,7 +1332,7 @@ func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *
 		return
 	}
 
-	printSuccess(log, fmt.Sprintf("Envoy Gateway: %d controller pod(s) Ready in %s", ready, envoyNS))
+	printSuccess(log, fmt.Sprintf("Envoy Gateway: %d controller pod(s) Ready in %s", ready, found))
 	ok := true
 	state.EnvoyGatewayOK = &ok
 }
@@ -1289,8 +1391,9 @@ func checkGatewayRoutesIn(state *ValidationState, surface gatewayAPISurface, err
 //
 // Envoy Gateway puts every Gateway's proxy Service in its own namespace by
 // default, including other teams', so the check first decides which Gateways
-// are NVCF's (gatewayOwnership, shared with Tier-1 so the rows agree) and judges only their Services. When that
-// cannot be decided it falls back to the whole namespace and says so.
+// are NVCF's (gatewayOwnership, shared with Tier-1 so the rows agree) and
+// judges only their Services. When that cannot be decided it falls back to
+// every LoadBalancer Service and says so.
 //
 // Non-critical: the passive form only detects an existing LB service; it does
 // not create a probe service, so absence means either no LB service exists yet
@@ -1301,7 +1404,6 @@ func checkExternalLoadBalancerFor(
 	log := state.Log
 	printHeader(log, "External Load Balancer")
 
-	envoyNS := envoyGatewayNamespaceName()
 	gateways, source, discoveryErr := own.gateways, own.source, own.err
 	own.reportInvalid(log, state)
 	switch {
@@ -1309,53 +1411,27 @@ func checkExternalLoadBalancerFor(
 		printWarning(log, fmt.Sprintf("Could not determine which Gateways belong to NVCF: %v", discoveryErr))
 	case len(gateways) > 0:
 		printInfo(log, fmt.Sprintf("  NVCF Gateways (%s): %s", source, gateways))
+		judgeNVCFGatewayServices(ctx, client, own, state)
+		return
 	case state.PostInstall:
 		// Installed, yet nothing names an NVCF Gateway: NVCF's own proxy may
 		// be among the Services, so none of them can vouch for it.
 		discoveryErr = errNoNVCFGatewaysPostInstall
 	}
 
-	// Default Envoy Gateway mode puts the proxy Services in the controller
-	// namespace; GatewayNamespace mode puts them beside each Gateway. Search
-	// both so either mode is covered once the Gateway namespaces are known.
-	namespaces := append([]string{envoyNS}, gateways.namespaces(envoyNS)...)
-	var services []corev1.Service
-	var unread []string
-	var unreadErrs []error
-	for _, ns := range namespaces {
-		list, err := observe(ctx, func(c context.Context) (*corev1.ServiceList, error) {
-			return client.CoreV1().Services(ns).List(c, metav1.ListOptions{})
-		})
-		if err != nil {
-			// Keep going: what the other namespaces show still counts, and a
-			// pending NVCF Service fails the row whatever was not read.
-			printWarning(log, readFailure("Services in "+ns, err))
-			unread = append(unread, fmt.Sprintf("%s (%v)", ns, err))
-			unreadErrs = append(unreadErrs, err)
-			continue
-		}
-		services = append(services, list.Items...)
-	}
-	gap := ""
-	if len(unread) > 0 {
-		gap = "could not read Services in " + readFailures(unread, unreadErrs)
-	}
-
-	if len(gateways) > 0 {
-		// Classes matter only to a merged-gateways proxy, so the Gateways are
-		// listed only when one is present.
-		var classes map[string][]string
-		var classErr error
-		for i := range services {
-			if l := services[i].Labels; l[owningGatewayNameLabel] == "" && l[owningGatewayClassLabel] != "" {
-				classes, classErr = own.gatewayClasses(ctx)
-				break
-			}
-		}
-		judgeNVCFGatewayServices(log, state, gateways, classes, classErr, services, gap)
+	// Before install, any addressed LoadBalancer Service shows a working LB
+	// controller, wherever it is.
+	list, err := observe(ctx, func(c context.Context) (*corev1.ServiceList, error) {
+		return client.CoreV1().Services(metav1.NamespaceAll).List(c, metav1.ListOptions{})
+	})
+	if err != nil {
+		// Leave the pointer nil: a List failure is not evidence that no
+		// LoadBalancer has an address.
+		printWarning(log, readFailure("Services", err))
+		state.Warnings = append(state.Warnings, unknownWarning("External Load Balancer", "Services", err))
 		return
 	}
-	judgeUnattributedServices(log, state, services, discoveryErr, gap)
+	judgeUnattributedServices(log, state, list.Items, discoveryErr)
 }
 
 // errNoNVCFGatewaysPostInstall stands in for a failed ownership lookup when the
@@ -1382,92 +1458,122 @@ func lbAddress(svc *corev1.Service) string {
 	return ""
 }
 
-// judgeNVCFGatewayServices is the strict path: every NVCF Gateway must have a
-// proxy Service, and every one exposed through a LoadBalancer must have an
-// address. Other Gateways' Services are ignored. gap names the namespaces
-// whose Services could not be read, or is empty.
-func judgeNVCFGatewayServices(
-	log *logrus.Entry, state *ValidationState, gateways gatewaySet,
-	classes map[string][]string, classErr error, services []corev1.Service, gap string,
-) {
-	var found []lbResult
-	var pending []string
+// listEnvoyProxyServices lists the Envoy proxy Services in every namespace by
+// the labels Envoy Gateway stamps on them. It returns what it could list and
+// the first error, so an observed pending Service is not lost to a failure
+// elsewhere.
+func listEnvoyProxyServices(ctx context.Context, client kubernetes.Interface) ([]corev1.Service, error) {
 	seen := map[string]bool{}
-	mergedProxies := 0
-	for i := range services {
-		svc := &services[i]
-		if svc.Labels[owningGatewayNameLabel] == "" && svc.Labels[owningGatewayClassLabel] != "" {
-			mergedProxies++
-		}
-		entries := gateways.entriesForProxy(svc.Labels, classes)
-		if len(entries) == 0 {
+	var out []corev1.Service
+	var firstErr error
+	for _, label := range []string{owningGatewayNameLabel, owningGatewayClassLabel} {
+		list, err := observe(ctx, func(c context.Context) (*corev1.ServiceList, error) {
+			return client.CoreV1().Services(metav1.NamespaceAll).List(c, metav1.ListOptions{LabelSelector: label})
+		})
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("listing Envoy proxy Services: %w", err)
+			}
 			continue
 		}
-		for _, e := range entries {
-			seen[e] = true
-		}
-		entry := strings.Join(entries, ", ")
-		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
-			// An EnvoyProxy can expose a Gateway as NodePort or ClusterIP on
-			// purpose; that Gateway has no external LB to check.
-			printInfo(log, fmt.Sprintf("  %s/%s (Gateway %s) is %s, not a LoadBalancer",
-				svc.Namespace, svc.Name, entry, svc.Spec.Type))
-			continue
-		}
-		if addr := lbAddress(svc); addr != "" {
-			found = append(found, lbResult{svc.Name, svc.Namespace, addr})
-		} else {
-			pending = append(pending, svc.Namespace+"/"+svc.Name)
+		for i := range list.Items {
+			if key := list.Items[i].Namespace + "/" + list.Items[i].Name; !seen[key] {
+				seen[key] = true
+				out = append(out, list.Items[i])
+			}
 		}
 	}
-	var missing []string
-	for _, entry := range gateways.sorted() {
-		if !seen[entry] {
+	return out, firstErr
+}
+
+// lbJudgement collects what the strict LoadBalancer path saw.
+type lbJudgement struct {
+	found   []lbResult
+	pending []string
+	seen    map[string]bool
+	// uncredited are Gateways with a proxy Service whose namespace could not
+	// be checked against the controller's.
+	uncredited    map[string]bool
+	mergedProxies int
+}
+
+// envoyRunGateways returns the NVCF Gateways the Envoy rows judge: all but
+// those another implementation is known to run, each named in an info line.
+func envoyRunGateways(ctx context.Context, log *logrus.Entry, own *gatewayOwnership) (gatewaySet, error) {
+	impls, err := own.implementations(ctx)
+	judged := gatewaySet{}
+	for _, e := range own.gateways.sorted() {
+		if err == nil {
+			if kind, detail := impls.kind(e); kind == gatewayOther {
+				printInfo(log, "  Not assessed: "+detail)
+				continue
+			}
+		}
+		judged[e] = true
+	}
+	return judged, err
+}
+
+// judgeNVCFGatewayServices is the strict path: every NVCF Gateway that Envoy
+// Gateway may run must have a proxy Service, and every one exposed through a
+// LoadBalancer must have an address. Other Gateways' Services are ignored.
+// An NVCF Service observed without an address fails the row whatever else
+// could not be decided.
+func judgeNVCFGatewayServices(
+	ctx context.Context, client kubernetes.Interface, own *gatewayOwnership, state *ValidationState,
+) {
+	log := state.Log
+	judged, implErr := envoyRunGateways(ctx, log, own)
+	if len(judged) == 0 {
+		printInfo(log, "  Not applicable: no NVCF Gateway is run by Envoy Gateway")
+		state.ExternalLBNotApplicable = "no NVCF Gateway is run by Envoy Gateway"
+		return
+	}
+	services, listErr := listEnvoyProxyServices(ctx, client)
+	// Classes matter only to a merged-gateways proxy, so they are read only
+	// when one is present.
+	var classes map[string][]string
+	var classErr error
+	for i := range services {
+		if l := services[i].Labels; l[owningGatewayNameLabel] == "" && l[owningGatewayClassLabel] != "" {
+			classes, classErr = own.gatewayClasses(ctx)
+			break
+		}
+	}
+	j := lbJudgement{seen: map[string]bool{}, uncredited: map[string]bool{}}
+	for i := range services {
+		j.add(ctx, log, own, judged, classes, &services[i])
+	}
+
+	var missing, undecided []string
+	for _, entry := range judged.sorted() {
+		switch {
+		case j.seen[entry]:
+		case listErr != nil || implErr != nil || j.uncredited[entry] || (classErr != nil && j.mergedProxies > 0):
+			undecided = append(undecided, entry)
+		default:
 			missing = append(missing, entry)
 		}
 	}
-
-	// A merged-gateways proxy may be serving the "missing" Gateways, but
-	// without their classes it cannot be attributed; and a proxy Service may
-	// sit in a namespace that could not be read. Either way they are unknown
-	// rather than missing. An NVCF proxy observed without an address still
-	// fails the row: that is a failure whatever the unobserved ones show.
-	var undecided []string
-	if len(missing) > 0 && classErr != nil && mergedProxies > 0 {
-		undecided = append(undecided, fmt.Sprintf("the merged-gateways proxy could not be attributed: %v", classErr))
+	var problems []string
+	if len(missing) > 0 {
+		problems = append(problems, fmt.Sprintf("no proxy Service found for Gateway(s) %s; "+
+			"check the Gateway exists and Envoy Gateway provisioned it", strings.Join(missing, ", ")))
 	}
-	if len(missing) > 0 && gap != "" {
-		undecided = append(undecided, gap)
+	if len(j.pending) > 0 {
+		problems = append(problems, strings.Join(j.pending, ", ")+
+			" have no external address; check the load balancer controller and its address pool")
 	}
-	switch {
-	case len(undecided) > 0 && len(pending) == 0:
-		msg := fmt.Sprintf("no proxy Service seen for %s, and %s", strings.Join(missing, ", "),
-			strings.Join(undecided, "; and "))
+	if len(undecided) > 0 {
+		msg := fmt.Sprintf("no proxy Service confirmed for %s: %s", strings.Join(undecided, ", "),
+			lbUndecidedCause(listErr, implErr, classErr, j.mergedProxies, own))
 		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
-		return
-	case len(undecided) > 0:
-		// The pending Service decides the row; the gap is still reported.
-		msg := fmt.Sprintf("not assessed for %s: %s", strings.Join(missing, ", "), strings.Join(undecided, "; and "))
-		printWarning(log, msg)
-		state.Warnings = append(state.Warnings, "External Load Balancer: "+msg)
-	case gap != "":
-		// Every NVCF Gateway's Service was seen, so the unread namespaces do
-		// not decide the row, but they are still reported.
-		printWarning(log, gap)
-		state.Warnings = append(state.Warnings, "External Load Balancer: "+gap)
+		if len(problems) == 0 {
+			state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
+			return
+		}
 	}
-
-	if (len(missing) > 0 && len(undecided) == 0) || len(pending) > 0 {
-		var problems []string
-		if len(missing) > 0 && len(undecided) == 0 {
-			problems = append(problems, fmt.Sprintf("no proxy Service found for Gateway(s) %s; "+
-				"check the Gateway exists and Envoy Gateway provisioned it", strings.Join(missing, ", ")))
-		}
-		if len(pending) > 0 {
-			problems = append(problems, strings.Join(pending, ", ")+
-				" have no external address; check the load balancer controller and its address pool")
-		}
+	if len(problems) > 0 {
 		msg := strings.Join(problems, ". ")
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "External Load Balancer: "+msg+".")
@@ -1476,7 +1582,7 @@ func judgeNVCFGatewayServices(
 		return
 	}
 
-	if len(found) == 0 {
+	if len(j.found) == 0 {
 		// Every NVCF Gateway is exposed some other way, so there is no LB to
 		// verify. Unknown rather than a failure or a pass.
 		msg := "no NVCF Gateway is exposed through a LoadBalancer Service"
@@ -1485,20 +1591,76 @@ func judgeNVCFGatewayServices(
 		return
 	}
 
-	printLBSuccess(log, found)
+	printLBSuccess(log, j.found)
 	ok := true
 	state.ExternalLBOK = &ok
 }
 
+// add records one proxy Service against the NVCF Gateways it serves. A
+// Service counts only where Envoy Gateway puts one: in the controller's
+// namespace or beside its Gateway.
+func (j *lbJudgement) add(
+	ctx context.Context, log *logrus.Entry, own *gatewayOwnership, judged gatewaySet,
+	classes map[string][]string, svc *corev1.Service,
+) {
+	if svc.Labels[owningGatewayNameLabel] == "" && svc.Labels[owningGatewayClassLabel] != "" {
+		j.mergedProxies++
+	}
+	served := judged.entriesForProxy(svc.Labels, classes)
+	entries, decided := own.creditedEntries(ctx, served, svc.Namespace)
+	if !decided {
+		for _, e := range served {
+			j.uncredited[e] = true
+		}
+	}
+	if len(entries) == 0 {
+		return
+	}
+	for _, e := range entries {
+		j.seen[e] = true
+	}
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		// An EnvoyProxy can expose a Gateway as NodePort or ClusterIP on
+		// purpose; that Gateway has no external LB to check.
+		printInfo(log, fmt.Sprintf("  %s/%s (Gateway %s) is %s, not a LoadBalancer",
+			svc.Namespace, svc.Name, strings.Join(entries, ", "), svc.Spec.Type))
+		return
+	}
+	if addr := lbAddress(svc); addr != "" {
+		j.found = append(j.found, lbResult{svc.Name, svc.Namespace, addr})
+	} else {
+		j.pending = append(j.pending, svc.Namespace+"/"+svc.Name)
+	}
+}
+
+// lbUndecidedCause says why a Gateway without a credited proxy Service is
+// unknown rather than missing.
+func lbUndecidedCause(listErr, implErr, classErr error, mergedProxies int, own *gatewayOwnership) string {
+	var causes []string
+	if listErr != nil {
+		causes = append(causes, fmt.Sprintf("%v; %s", listErr, readAdvice(listErr)))
+	}
+	if implErr != nil {
+		causes = append(causes, fmt.Sprintf("could not tell which NVCF Gateways Envoy Gateway runs: %v", implErr))
+	}
+	if classErr != nil && mergedProxies > 0 {
+		causes = append(causes, fmt.Sprintf("the merged-gateways proxy could not be attributed: %v", classErr))
+	}
+	if own.controllerErr != nil {
+		causes = append(causes, fmt.Sprintf("the Envoy Gateway controller namespace is unknown: %v", own.controllerErr))
+	}
+	return strings.Join(causes, "; ")
+}
+
 // judgeUnattributedServices is the fallback when the NVCF Gateways are not
-// known. A failed discovery is unknown whatever the Services show: NVCF's own
-// proxies may sit in a Gateway namespace that was not listed, or not use a
+// known, over every LoadBalancer Service in the cluster. A failed discovery is
+// unknown whatever the Services show: NVCF's own proxies may not use a
 // LoadBalancer at all, so neither a foreign address nor a foreign pending
 // Service says anything about NVCF's. With a known-empty route set (typically
 // before nvcf-cli up), nothing addressed fails and a pending Service beside an
 // addressed one only warns.
 func judgeUnattributedServices(
-	log *logrus.Entry, state *ValidationState, services []corev1.Service, discoveryErr error, gap string,
+	log *logrus.Entry, state *ValidationState, services []corev1.Service, discoveryErr error,
 ) {
 	var found []lbResult
 	var pending []string
@@ -1538,17 +1700,6 @@ func judgeUnattributedServices(
 					"(env "+nvcfGatewayNamesEnv+") so the NVCF Gateways need not be discovered.")
 		}
 		return
-	}
-
-	if gap != "" {
-		if len(found) == 0 {
-			// An addressed Service may be in a namespace that was not read.
-			msg := fmt.Sprintf("%d pending LoadBalancer Service(s) seen, and %s", len(pending), gap)
-			printWarning(log, msg)
-			state.Warnings = append(state.Warnings, "External Load Balancer: status unknown ("+msg+")")
-			return
-		}
-		state.Warnings = append(state.Warnings, "External Load Balancer: "+gap)
 	}
 
 	if len(found) == 0 && len(pending) > 0 {
@@ -2637,52 +2788,139 @@ func (g gatewaySet) entriesForProxy(labels map[string]string, classes map[string
 	return nil
 }
 
+// nvcfGatewayClassOf returns the GatewayClass of each NVCF Gateway that
+// exists, "" for one that names none. A cluster that does not serve Gateways
+// has none, and neither does one whose Gateway CRD went away between
+// discovery and the List.
+func nvcfGatewayClassOf(
+	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface, g gatewaySet,
+) (map[string]string, error) {
+	classOf := map[string]string{}
+	version := surface.servedVersion("gateways")
+	if len(g) == 0 || version == "" {
+		return classOf, nil
+	}
+	if routes == nil {
+		return nil, errors.New("no client available to list gateways")
+	}
+	gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gateways"}
+	list, err := listDynamic(ctx, routes, gvr, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return classOf, nil
+		}
+		return nil, fmt.Errorf("listing gateways: %w", err)
+	}
+	for i := range list.Items {
+		gw := &list.Items[i]
+		if entry := gw.GetNamespace() + "/" + gw.GetName(); g[entry] {
+			classOf[entry], _, _ = unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
+		}
+	}
+	return classOf, nil
+}
+
 // nvcfGatewayClassesIn maps each GatewayClass used by an NVCF Gateway to the
 // entries that use it, so merged-gateways proxies can be attributed.
 func nvcfGatewayClassesIn(
 	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface, g gatewaySet,
 ) (map[string][]string, error) {
-	if len(g) == 0 {
-		return nil, nil
-	}
-	version := surface.servedVersion("gateways")
-	if version == "" {
-		return nil, nil
-	}
-	if routes == nil {
-		return nil, fmt.Errorf("no client available to list gateways")
-	}
-	gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gateways"}
-	list, err := listDynamic(ctx, routes, gvr, metav1.ListOptions{})
+	classOf, err := nvcfGatewayClassOf(ctx, surface, routes, g)
 	if err != nil {
-		// The CRD can go between discovery and the List. No Gateways means no
-		// classes, the same as the resource not being served.
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("listing gateways: %w", err)
+		return nil, err
 	}
-	classes := map[string][]string{}
-	for i := range list.Items {
-		gw := &list.Items[i]
-		class, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
-		entry := gw.GetNamespace() + "/" + gw.GetName()
-		if !g[entry] {
-			continue
-		}
-		if class != "" {
-			classes[class] = append(classes[class], entry)
-		}
-	}
-	return classes, nil
+	return classEntries(classOf), nil
 }
 
-// namespaces returns the distinct Gateway namespaces in the set, excluding
-// skip, so the caller can search them for proxy Services.
-func (g gatewaySet) namespaces(skip string) []string {
+func classEntries(classOf map[string]string) map[string][]string {
+	entries := make([]string, 0, len(classOf))
+	for e := range classOf {
+		entries = append(entries, e)
+	}
+	sort.Strings(entries)
+	classes := map[string][]string{}
+	for _, e := range entries {
+		if class := classOf[e]; class != "" {
+			classes[class] = append(classes[class], e)
+		}
+	}
+	return classes
+}
+
+// gatewayClassControllers maps every GatewayClass to its controllerName.
+func gatewayClassControllers(
+	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface,
+) (map[string]string, error) {
+	controllers := map[string]string{}
+	version := surface.servedVersion("gatewayclasses")
+	if version == "" {
+		return controllers, nil
+	}
+	if routes == nil {
+		return nil, errors.New("no client available to list gatewayclasses")
+	}
+	gvr := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gatewayclasses"}
+	list, err := listDynamic(ctx, routes, gvr, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return controllers, nil
+		}
+		return nil, fmt.Errorf("listing gatewayclasses: %w", err)
+	}
+	for i := range list.Items {
+		c := &list.Items[i]
+		controllers[c.GetName()], _, _ = unstructured.NestedString(c.Object, "spec", "controllerName")
+	}
+	return controllers, nil
+}
+
+// gatewayKind says what runs an NVCF Gateway.
+type gatewayKind int
+
+const (
+	// gatewayEnvoy: Envoy Gateway runs it, so it has an Envoy proxy.
+	gatewayEnvoy gatewayKind = iota
+	// gatewayOther: another implementation runs it. No Envoy row judges it.
+	gatewayOther
+	// gatewayBroken: nothing can run it, because the Gateway or its
+	// GatewayClass does not exist, or it names no class.
+	gatewayBroken
+)
+
+// gatewayImpls holds what runs each NVCF Gateway.
+type gatewayImpls struct {
+	classOf      map[string]string
+	controllerOf map[string]string
+}
+
+// kind classifies entry and describes it unless Envoy Gateway runs it.
+func (i gatewayImpls) kind(entry string) (gatewayKind, string) {
+	class, exists := i.classOf[entry]
+	switch {
+	case !exists:
+		return gatewayBroken, "NVCF Gateway " + entry + " does not exist"
+	case class == "":
+		return gatewayBroken, "NVCF Gateway " + entry + " names no GatewayClass"
+	}
+	controller, ok := i.controllerOf[class]
+	switch {
+	case !ok:
+		return gatewayBroken, fmt.Sprintf("NVCF Gateway %s references GatewayClass %s, which does not exist",
+			entry, class)
+	case controller == envoyGatewayControllerName:
+		return gatewayEnvoy, ""
+	default:
+		return gatewayOther, fmt.Sprintf("NVCF Gateway %s uses GatewayClass %s (controller %s), not Envoy Gateway",
+			entry, class, controller)
+	}
+}
+
+// namespaces returns the distinct Gateway namespaces in the set, where
+// GatewayNamespace mode runs their proxies.
+func (g gatewaySet) namespaces() []string {
 	uniq := map[string]bool{}
 	for entry := range g {
-		if ns, _, ok := strings.Cut(entry, "/"); ok && ns != "" && ns != skip {
+		if ns, _, ok := strings.Cut(entry, "/"); ok && ns != "" {
 			uniq[ns] = true
 		}
 	}
@@ -2742,14 +2980,20 @@ func (s gatewayAPISurface) servedVersion(resource string) string {
 	return ""
 }
 
-// gatewayOwnership says which Envoy proxies are NVCF's. Run resolves it once
-// and hands it to the LoadBalancer check and Tier-1: resolved separately,
-// minutes apart, the two rows could judge different Gateways in one run.
+// gatewayOwnership says which Gateways, proxies and proxy Services are NVCF's.
+// Run resolves it once and hands it to the Envoy, LoadBalancer and Tier-1
+// rows, which share its Gateway, GatewayClass and controller lookups: resolved
+// separately, minutes apart, the rows could judge different Gateways in one
+// run.
 type gatewayOwnership struct {
 	// gateways are the NVCF Gateways as namespace/name, and source says where
 	// they came from. An empty set with a nil err means no NVCF route exists.
 	gateways gatewaySet
 	source   string
+	// configured is set when the launcher named the Gateways. Only those can
+	// fail a critical row: discovery trusts a route label that anyone who can
+	// create a route can set.
+	configured bool
 	// err means ownership is unknown and must not be read as an empty set.
 	err error
 	// invalid holds configured entries that were ignored, and unlisted the
@@ -2764,11 +3008,22 @@ type gatewayOwnership struct {
 	// would go unseen.
 	crossCheckErr error
 
-	surface         gatewayAPISurface
-	routes          dynamic.Interface
-	classesResolved bool
-	classes         map[string][]string
-	classErr        error
+	surface gatewayAPISurface
+	routes  dynamic.Interface
+	client  kubernetes.Interface
+
+	gatewaysListed bool
+	classOf        map[string]string
+	gatewayErr     error
+
+	classesListed bool
+	controllerOf  map[string]string
+	classErr      error
+
+	controllersListed bool
+	controllerPods    []corev1.Pod
+	controllerNS      map[string]bool
+	controllerErr     error
 }
 
 // resolveGatewayOwnershipIn resolves the NVCF Gateways over an already
@@ -2776,13 +3031,14 @@ type gatewayOwnership struct {
 // the stack's Gateways, and a list set by hand is set because discovery does
 // not describe the install.
 func resolveGatewayOwnershipIn(
-	ctx context.Context, surface gatewayAPISurface, surfaceErr error, routes dynamic.Interface,
+	ctx context.Context, client kubernetes.Interface, surface gatewayAPISurface, surfaceErr error,
+	routes dynamic.Interface,
 ) *gatewayOwnership {
-	own := &gatewayOwnership{surface: surface, routes: routes}
+	own := &gatewayOwnership{surface: surface, routes: routes, client: client}
 	configured, invalid := nvcfGatewayNames()
 	own.invalid = invalid
 	if len(configured) > 0 {
-		own.gateways, own.source = configured, nvcfGatewayNamesEnv
+		own.gateways, own.source, own.configured = configured, nvcfGatewayNamesEnv, true
 		// A configured list replaces discovery, so a Gateway it leaves out is
 		// not assessed. Discover anyway to say so, and say when that failed.
 		if surfaceErr != nil {
@@ -2852,15 +3108,135 @@ func (o *gatewayOwnership) reportInvalid(log *logrus.Entry, state *ValidationSta
 	o.routesMissing = false
 }
 
-// gatewayClasses lists the NVCF Gateways' classes on first use. Only a
-// merged-gateways proxy needs them, so an install without one never pays for
-// the list.
-func (o *gatewayOwnership) gatewayClasses(ctx context.Context) (map[string][]string, error) {
-	if !o.classesResolved {
-		o.classes, o.classErr = nvcfGatewayClassesIn(ctx, o.surface, o.routes, o.gateways)
-		o.classesResolved = true
+// gatewayClassOf lists the NVCF Gateways once per run.
+func (o *gatewayOwnership) gatewayClassOf(ctx context.Context) (map[string]string, error) {
+	if !o.gatewaysListed {
+		o.classOf, o.gatewayErr = nvcfGatewayClassOf(ctx, o.surface, o.routes, o.gateways)
+		o.gatewaysListed = true
 	}
-	return o.classes, o.classErr
+	return o.classOf, o.gatewayErr
+}
+
+// gatewayClasses maps each class an NVCF Gateway uses to those Gateways, for
+// attributing merged-gateways proxies. Proxy attribution asks for it only
+// when such a proxy is present.
+func (o *gatewayOwnership) gatewayClasses(ctx context.Context) (map[string][]string, error) {
+	classOf, err := o.gatewayClassOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return classEntries(classOf), nil
+}
+
+// implementations says what runs each NVCF Gateway, listing the GatewayClasses
+// once per run.
+func (o *gatewayOwnership) implementations(ctx context.Context) (gatewayImpls, error) {
+	classOf, err := o.gatewayClassOf(ctx)
+	if err != nil {
+		return gatewayImpls{}, err
+	}
+	if !o.classesListed {
+		o.controllerOf, o.classErr = gatewayClassControllers(ctx, o.surface, o.routes)
+		o.classesListed = true
+	}
+	if o.classErr != nil {
+		return gatewayImpls{}, o.classErr
+	}
+	return gatewayImpls{classOf: classOf, controllerOf: o.controllerOf}, nil
+}
+
+// envoyNotApplicable describes the NVCF Gateways when some exist and another
+// implementation runs every one that does, so the Envoy-specific rows have
+// nothing to judge. It is "" otherwise, including when that cannot be told.
+func (o *gatewayOwnership) envoyNotApplicable(ctx context.Context) string {
+	if o.err != nil || len(o.gateways) == 0 {
+		return ""
+	}
+	impls, err := o.implementations(ctx)
+	if err != nil {
+		return ""
+	}
+	var others []string
+	for _, e := range o.gateways.sorted() {
+		switch kind, detail := impls.kind(e); kind {
+		case gatewayEnvoy:
+			return ""
+		case gatewayOther:
+			others = append(others, detail)
+		}
+	}
+	return strings.Join(others, "; ")
+}
+
+// envoyControllers returns the Envoy Gateway controller pods and the
+// namespaces it runs in. NVCF_ENVOY_GATEWAY_NAMESPACE pins the namespace.
+// Unset, the controller is found by its label in every namespace: the stack
+// leaves controllerNamespace required with no default, so guessing one
+// misses an install that chose another.
+func (o *gatewayOwnership) envoyControllers(ctx context.Context) ([]corev1.Pod, map[string]bool, error) {
+	if o.controllersListed {
+		return o.controllerPods, o.controllerNS, o.controllerErr
+	}
+	o.controllersListed = true
+	ns := strings.TrimSpace(os.Getenv(envoyGatewayNamespaceEnv))
+	opts := metav1.ListOptions{LabelSelector: envoyGatewayControllerSelector}
+	// The Deployment marks the namespace even when no controller pod runs,
+	// so its proxies are still recognized while the controller is down.
+	deployments, err := observe(ctx, func(c context.Context) (*appsv1.DeploymentList, error) {
+		return o.client.AppsV1().Deployments(ns).List(c, opts)
+	})
+	if err != nil {
+		o.controllerErr = fmt.Errorf("listing Envoy Gateway controller Deployments: %w", err)
+		return nil, nil, o.controllerErr
+	}
+	pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+		return o.client.CoreV1().Pods(ns).List(c, opts)
+	})
+	if err != nil {
+		o.controllerErr = fmt.Errorf("listing Envoy Gateway controller pods: %w", err)
+		return nil, nil, o.controllerErr
+	}
+	o.controllerPods, o.controllerNS = pods.Items, map[string]bool{}
+	if ns != "" {
+		o.controllerNS[ns] = true
+	}
+	for i := range deployments.Items {
+		o.controllerNS[deployments.Items[i].Namespace] = true
+	}
+	for i := range pods.Items {
+		o.controllerNS[pods.Items[i].Namespace] = true
+	}
+	return o.controllerPods, o.controllerNS, nil
+}
+
+// credits reports whether a proxy workload or Service in ns can serve entry.
+// Envoy Gateway creates them in its controller namespace, or beside the
+// Gateway in GatewayNamespace mode; anything else only carries the labels.
+// decided is false when the controller namespaces could not be read.
+func (o *gatewayOwnership) credits(ctx context.Context, entry, ns string) (ok, decided bool) {
+	if gwNS, _, _ := strings.Cut(entry, "/"); gwNS == ns {
+		return true, true
+	}
+	_, controllerNS, err := o.envoyControllers(ctx)
+	if err != nil {
+		return false, false
+	}
+	return controllerNS[ns], true
+}
+
+// creditedEntries filters entries to those a proxy in ns can serve. decided
+// is false when one of them could not be decided.
+func (o *gatewayOwnership) creditedEntries(ctx context.Context, entries []string, ns string) ([]string, bool) {
+	var out []string
+	decided := true
+	for _, e := range entries {
+		ok, known := o.credits(ctx, e, ns)
+		if ok {
+			out = append(out, e)
+		}
+		decided = decided && known
+	}
+	return out, decided
 }
 
 // proxyOwner returns the NVCF entries a proxy with these labels serves, and
@@ -3085,15 +3461,30 @@ func deploymentRolloutStalled(d *appsv1.Deployment) bool {
 }
 
 // sharedTier1Namespaces hold third-party controllers NVCF installs beside, or
-// may find already installed. A Deployment there that is scaled to zero may be
-// someone else's parked controller, so it warns rather than failing the row.
+// may find already installed. Only workloads a stack release manages there
+// (stackOwned) are NVCF's to judge.
 func sharedTier1Namespaces() map[string]bool {
 	return map[string]bool{"cert-manager": true, envoyGatewayNamespaceName(): true}
 }
 
-// checkTier1DeploymentsFor verifies that every Deployment in the control-plane
-// namespaces has readyReplicas >= spec.replicas. Any under-replicated Deployment
-// means HA headroom is gone and a second failure causes a full outage.
+// sharedNamespaceReleases are the Helm releases the self-managed stack
+// installs into the namespaces it shares with other installs. The Envoy
+// Gateway controller is a prerequisite the stack does not install; the Envoy
+// row judges it.
+var sharedNamespaceReleases = map[string][]string{"cert-manager": {"cert-manager", "nvcf-pki"}}
+
+// stackOwned reports whether a stack release manages obj in the shared
+// namespace ns, by the annotations Helm stamps on every object it applies.
+func stackOwned(ns string, obj metav1.Object) bool {
+	a := obj.GetAnnotations()
+	return a["meta.helm.sh/release-namespace"] == ns &&
+		slices.Contains(sharedNamespaceReleases[ns], a["meta.helm.sh/release-name"])
+}
+
+// checkTier1DeploymentsFor verifies that every NVCF Deployment in the
+// control-plane namespaces, and every Envoy proxy of an NVCF Gateway wherever
+// it runs, has all its pods Ready. Any under-replicated one means HA headroom
+// is gone and a second failure causes a full outage.
 //
 // The check is generic; no hardcoded Deployment names. New services added to
 // those namespaces are automatically covered.
@@ -3109,8 +3500,9 @@ func checkTier1DeploymentsFor(
 	for _, ns := range scan.namespaces {
 		scan.scanNamespace(ctx, client, ns)
 	}
+	scan.assessProxies(ctx, client)
 	proxiesUnobserved := scan.reportProxyAttribution()
-	if scan.checkGatewayCoverage(ctx, client) {
+	if scan.checkGatewayCoverage(ctx) {
 		proxiesUnobserved = true
 	}
 	scan.verdict(proxiesUnobserved)
@@ -3122,15 +3514,12 @@ type tier1Scan struct {
 	state *ValidationState
 	own   *gatewayOwnership
 
-	// Envoy Gateway runs a proxy Deployment per Gateway, or one per class in
-	// merged-gateways mode, beside its controller, including for other
-	// teams' Gateways, so only NVCF's proxies are assessed. GatewayNamespace
-	// mode puts each proxy beside its Gateway, so the Gateway namespaces hold
-	// proxies too (gatewayNS); those not otherwise scanned are searched for
-	// proxies only (proxyOnly).
-	envoyNS    string
+	// Envoy proxies are assessed apart from the namespace scan, wherever they
+	// run, since Envoy Gateway runs them for other teams' Gateways too.
+	// GatewayNamespace mode puts each proxy beside its Gateway, so Gateway
+	// namespaces not otherwise scanned are searched for proxies only
+	// (proxyOnly).
 	namespaces []string
-	gatewayNS  map[string]bool
 	proxyOnly  map[string]bool
 	shared     map[string]bool
 	// noGatewaysPostInstall: installed with no NVCF Gateway named anywhere,
@@ -3140,6 +3529,7 @@ type tier1Scan struct {
 	underReplicated []string
 	scaledToZero    []string
 	gatewayGaps     []string
+	notAssessed     []string
 	checkedCount    int
 	// unread holds each namespace whose Deployments could not be read, with
 	// the cause, and unreadErrs the errors themselves.
@@ -3149,28 +3539,34 @@ type tier1Scan struct {
 	// rollingUnderReplicated counts tolerated rollouts that are below their
 	// replica target but still at or above their rollout floor.
 	rollingUnderReplicated int
+	// ownedCount counts NVCF Deployments outside the shared namespaces, and
+	// ownedDenied the such namespaces that could not be read. After install,
+	// none at all means the control plane is gone, whatever else is healthy.
+	ownedCount  int
+	ownedDenied int
 
+	proxies  []envoyProxy
+	proxyErr error
 	// skippedProxies are other teams' proxies. unattributedDown are proxies
 	// whose owner could not be decided and that are not Ready: a Ready proxy
 	// says nothing bad about the tier whoever owns it, so only these leave
-	// the row undecided.
+	// the row undecided. unconfirmedDown are proxies of Gateways found only
+	// from the NVCF routes, which cannot fail the row on their own.
 	skippedProxies   int
 	unattributed     int
 	unattributedDown []string
+	unconfirmedDown  []string
 }
 
 func newTier1Scan(own *gatewayOwnership, state *ValidationState) *tier1Scan {
 	scan := &tier1Scan{
 		log: state.Log, state: state, own: own,
-		envoyNS:               envoyGatewayNamespaceName(),
 		namespaces:            controlPlaneNamespaceSet(),
-		gatewayNS:             map[string]bool{},
 		proxyOnly:             map[string]bool{},
 		shared:                sharedTier1Namespaces(),
 		noGatewaysPostInstall: own.err == nil && len(own.gateways) == 0 && state.PostInstall,
 	}
-	for _, ns := range own.gateways.namespaces(scan.envoyNS) {
-		scan.gatewayNS[ns] = true
+	for _, ns := range own.gateways.namespaces() {
 		if !slices.Contains(scan.namespaces, ns) {
 			scan.namespaces = append(scan.namespaces, ns)
 			scan.proxyOnly[ns] = true
@@ -3182,6 +3578,11 @@ func newTier1Scan(own *gatewayOwnership, state *ValidationState) *tier1Scan {
 func (s *tier1Scan) warn(msg string) {
 	printWarning(s.log, msg)
 	s.state.Warnings = append(s.state.Warnings, "Tier-1 Deployments: "+msg)
+}
+
+// owns reports whether every Deployment in ns is NVCF's.
+func (s *tier1Scan) owns(ns string) bool {
+	return !s.shared[ns] && !s.proxyOnly[ns]
 }
 
 func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interface, ns string) {
@@ -3197,226 +3598,135 @@ func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 		printWarning(s.log, readFailure("Deployments in "+ns, err))
 		s.unread = append(s.unread, fmt.Sprintf("%s (%v)", ns, err))
 		s.unreadErrs = append(s.unreadErrs, err)
+		if s.owns(ns) {
+			s.ownedDenied++
+		}
 		return
 	}
 	for i := range deploys.Items {
-		s.assess(ctx, ns, &deploys.Items[i])
+		d := &deploys.Items[i]
+		switch {
+		case isEnvoyProxy(d.Labels), s.proxyOnly[ns]:
+			// Proxies are assessed with every other proxy, wherever they run.
+		case s.shared[ns] && !stackOwned(ns, d):
+			s.notAssessed = append(s.notAssessed, ns+"/"+d.Name)
+		default:
+			if s.owns(ns) {
+				s.ownedCount++
+			}
+			s.assess(deploymentReadiness(d))
+		}
 	}
 }
 
-func (s *tier1Scan) assess(ctx context.Context, ns string, d *appsv1.Deployment) {
+// workloadReadiness is what Tier-1 judges a Deployment or DaemonSet by.
+type workloadReadiness struct {
+	ref                  string
+	daemonSet            bool
+	want, ready, updated int32
+	// rolling: the controller is mid-rollout and has not given up on it.
+	rolling bool
+	// floor is the fewest Ready pods a healthy rollout leaves.
+	floor int32
+}
+
+func deploymentReadiness(d *appsv1.Deployment) workloadReadiness {
 	want := int32(1)
 	if d.Spec.Replicas != nil {
 		want = *d.Spec.Replicas
 	}
-	proxy := isEnvoyProxy(d.Labels) && (ns == s.envoyNS || s.gatewayNS[ns])
-	if s.proxyOnly[ns] && !proxy {
-		return
+	return workloadReadiness{
+		ref:  d.Namespace + "/" + d.Name,
+		want: want, ready: d.Status.ReadyReplicas, updated: d.Status.UpdatedReplicas,
+		rolling: deploymentRollingOut(d, want) && !deploymentRolloutStalled(d),
+		floor:   rolloutReadyFloor(d, want),
 	}
-	if proxy && s.settleProxy(ctx, ns, d, want) {
-		return
+}
+
+// daemonSetReadiness judges a DaemonSet on every node it should run on. A
+// RollingUpdate replaces up to maxUnavailable pods at a time (rounded up,
+// default 1), so that many may be down while updated pods are still missing.
+func daemonSetReadiness(ds *appsv1.DaemonSet) workloadReadiness {
+	want := ds.Status.DesiredNumberScheduled
+	r := workloadReadiness{
+		ref: ds.Namespace + "/" + ds.Name + " (DaemonSet)", daemonSet: true,
+		want: want, ready: ds.Status.NumberReady, updated: ds.Status.UpdatedNumberScheduled,
 	}
-	// A Deployment scaled to zero satisfies "ReadyReplicas >= want" with
-	// nothing running at all, so counting it as healthy lets a maintenance
+	if ds.Spec.UpdateStrategy.Type == appsv1.OnDeleteDaemonSetStrategyType {
+		return r
+	}
+	r.rolling = ds.Status.ObservedGeneration < ds.Generation || ds.Status.UpdatedNumberScheduled < want
+	maxUnavailable, maxSurge := intstr.FromInt32(1), intstr.FromInt32(0)
+	if ru := ds.Spec.UpdateStrategy.RollingUpdate; ru != nil {
+		if ru.MaxUnavailable != nil {
+			maxUnavailable = *ru.MaxUnavailable
+		}
+		if ru.MaxSurge != nil {
+			maxSurge = *ru.MaxSurge
+		}
+	}
+	unavailable, err := intstr.GetScaledValueFromIntOrPercent(&maxUnavailable, int(want), true)
+	if err != nil {
+		return r
+	}
+	if surge, err := intstr.GetScaledValueFromIntOrPercent(&maxSurge, int(want), true); err == nil &&
+		unavailable == 0 && surge == 0 {
+		unavailable = 1
+	}
+	if unavailable < int(want) {
+		r.floor = want - int32(unavailable) // #nosec G115 -- 0 <= unavailable < want, an int32
+	}
+	return r
+}
+
+// healthy reports whether r is fully Ready or a tolerated rollout.
+func (r workloadReadiness) healthy() bool {
+	return r.want > 0 && (r.ready >= r.want || (r.rolling && r.ready >= r.floor))
+}
+
+func (r workloadReadiness) String() string {
+	return fmt.Sprintf("%s (ready: %d, want: %d)", r.ref, r.ready, r.want)
+}
+
+// assess judges one NVCF workload.
+func (s *tier1Scan) assess(r workloadReadiness) {
+	// A workload scaled to zero satisfies "ready >= want" with nothing
+	// running at all, so counting it as healthy lets a maintenance
 	// scale-down or a replicaCount:0 values error publish the critical row as
-	// All Ready. It fails rather than warns: the same Deployment at 2/3
-	// already fails, and "fully down" must not score better than
-	// "degraded". In a shared namespace it may be another install's parked
-	// controller, such as an external cert-manager, so there it only warns.
-	if want == 0 {
-		if s.shared[ns] && !proxy {
-			s.warn(fmt.Sprintf("%s/%s is scaled to zero replicas", ns, d.Name))
+	// All Ready. It fails: the same workload at 2/3 already fails, and "fully
+	// down" must not score better than "degraded". A DaemonSet with no node
+	// to run on is down the same way.
+	if r.want == 0 {
+		if r.daemonSet {
+			s.underReplicated = append(s.underReplicated, r.ref+" (no node runs it)")
 			return
 		}
-		s.scaledToZero = append(s.scaledToZero, ns+"/"+d.Name)
+		s.scaledToZero = append(s.scaledToZero, r.ref)
 		return
 	}
-	// A rollout transiently drops readyReplicas below spec.replicas on a
-	// healthy cluster, so tolerate one that is moving (deploymentRollingOut),
-	// has not stalled (ProgressDeadlineExceeded), and is at or above the
-	// readiness floor no healthy RollingUpdate drops below.
-	if deploymentRollingOut(d, want) && !deploymentRolloutStalled(d) &&
-		d.Status.ReadyReplicas >= rolloutReadyFloor(d, want) {
-		s.warn(fmt.Sprintf("%s/%s: %s (updated: %d/%d); re-run check after rollout completes",
-			ns, d.Name, RolloutInProgressMarker, d.Status.UpdatedReplicas, want))
+	// A rollout transiently drops ready pods below the target on a healthy
+	// cluster, so tolerate one that is moving, has not stalled, and is at or
+	// above the readiness floor no healthy rollout drops below.
+	if r.rolling && r.ready >= r.floor {
+		s.warn(fmt.Sprintf("%s: %s (updated: %d/%d); re-run check after rollout completes",
+			r.ref, RolloutInProgressMarker, r.updated, r.want))
 		s.rollingCount++
-		if d.Status.ReadyReplicas < want {
+		if r.ready < r.want {
 			s.rollingUnderReplicated++
 		}
 		return
 	}
 	s.checkedCount++
-	if d.Status.ReadyReplicas < want {
-		s.underReplicated = append(s.underReplicated,
-			fmt.Sprintf("%s/%s (ready: %d, want: %d)", ns, d.Name, d.Status.ReadyReplicas, want))
+	if r.ready < r.want {
+		s.underReplicated = append(s.underReplicated, r.String())
 	}
 }
 
-// settleProxy handles an Envoy proxy that is not an NVCF proxy to assess like
-// any other Deployment, and reports whether it did.
-func (s *tier1Scan) settleProxy(ctx context.Context, ns string, d *appsv1.Deployment, want int32) bool {
-	entries, known := s.own.proxyOwner(ctx, d.Labels)
-	if !known || s.noGatewaysPostInstall {
-		s.unattributed++
-		if want == 0 || d.Status.ReadyReplicas < want {
-			s.unattributedDown = append(s.unattributedDown, fmt.Sprintf("%s/%s (ready: %d, want: %d)",
-				ns, d.Name, d.Status.ReadyReplicas, want))
-		} else {
-			// Assessed and Ready, whoever owns it.
-			s.checkedCount++
-		}
-		return true
-	}
-	if len(entries) == 0 {
-		s.skippedProxies++
-		return true
-	}
-	return false
-}
-
-// reportProxyAttribution warns about proxies whose owner could not be decided
-// and reports whether any of them leaves the row undecided. A proxy whose owner
-// is unknown was still assessed for readiness: only one that is not Ready
-// could be NVCF's own outage, and an observed failure still decides it first.
-func (s *tier1Scan) reportProxyAttribution() bool {
-	proxiesUnobserved := len(s.unattributedDown) > 0
-	switch why := s.own.err; {
-	case why == nil && s.noGatewaysPostInstall:
-		why = errNoNVCFGatewaysPostInstall
-		fallthrough
-	case why != nil:
-		if proxiesUnobserved {
-			s.warn(fmt.Sprintf("could not tell which Envoy proxies are NVCF's (%v), and %d are not Ready: %s",
-				why, len(s.unattributedDown), strings.Join(s.unattributedDown, ", ")))
-		} else if s.unattributed > 0 {
-			printInfo(s.log, fmt.Sprintf("  Envoy proxy ownership unknown (%v), but all %d proxies are Ready",
-				why, s.unattributed))
-		}
-	case proxiesUnobserved:
-		s.warn(fmt.Sprintf("could not read the NVCF Gateways' classes to attribute merged-gateways proxies, "+
-			"and %d are not Ready: %s", len(s.unattributedDown), strings.Join(s.unattributedDown, ", ")))
-	case s.skippedProxies > 0 && len(s.own.gateways) == 0:
-		s.warn(fmt.Sprintf("%d Envoy proxy Deployment(s) in %s not assessed: no NVCF routes found to identify "+
-			"the NVCF Gateways; set clusterValidator.gatewayNames (env %s) if they exist", s.skippedProxies, s.envoyNS,
-			nvcfGatewayNamesEnv))
-	}
-	return proxiesUnobserved
-}
-
-// checkGatewayCoverage fails an installed control plane with an NVCF Gateway
-// that does not exist, or that Envoy Gateway runs and that has no Ready
-// proxy: route discovery skipping a proxy-less Gateway is exactly the outage
-// the post-install signal is for. A Gateway another implementation runs is
-// not judged, since its data plane is not an Envoy proxy. It reports whether
-// coverage could not be decided, which leaves the row unknown: anything the
-// check could not look at is undecided, never a pass.
-func (s *tier1Scan) checkGatewayCoverage(ctx context.Context, client kubernetes.Interface) bool {
-	if !s.state.PostInstall {
-		return false
-	}
-	if s.own.err != nil {
-		// The NVCF Gateways are unknown, so a missing proxy would go unseen.
-		s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", s.own.err))
-		return true
-	}
-	if len(s.own.gateways) == 0 {
-		// No NVCF Gateway is named: reportProxyAttribution says so.
-		return false
-	}
-	classOf, err := nvcfGatewayClassOf(ctx, s.own.surface, s.own.routes, s.own.gateways)
-	if err != nil {
-		s.warn(fmt.Sprintf("could not confirm the NVCF Gateways exist and have a proxy: %v; %s",
-			err, readAdvice(err)))
-		return true
-	}
-	// Record the Gateways seen not to exist first: that finding stands
-	// whatever a later read says.
-	var existing []string
-	for _, e := range s.own.gateways.sorted() {
-		if _, exists := classOf[e]; exists {
-			existing = append(existing, e)
-		} else {
-			s.gatewayGaps = append(s.gatewayGaps, "NVCF Gateway "+e+" does not exist")
-		}
-	}
-	undecided := len(existing) > 0 && s.envoyCoverageUndecided(ctx, client, existing, classOf)
-	if len(s.gatewayGaps) > 0 {
-		s.checkedCount++
-	}
-	return undecided
-}
-
-// envoyCoverageUndecided adds a gap for each of existing, the NVCF Gateways
-// that exist, that Envoy Gateway runs and that has no Ready proxy, and
-// reports whether that could not be decided.
-func (s *tier1Scan) envoyCoverageUndecided(
-	ctx context.Context, client kubernetes.Interface, existing []string, classOf map[string]string,
-) bool {
-	envoyClasses, err := envoyGatewayClasses(ctx, s.own.surface, s.own.routes)
-	if err != nil {
-		s.warn(fmt.Sprintf("could not tell which NVCF Gateways Envoy Gateway runs, so the proxies of %s were "+
-			"not confirmed: %v; %s", strings.Join(existing, ", "), err, readAdvice(err)))
-		return true
-	}
-	var envoyEntries []string
-	envoyByClass := map[string][]string{}
-	for _, e := range existing {
-		if class := classOf[e]; envoyClasses[class] {
-			envoyEntries = append(envoyEntries, e)
-			envoyByClass[class] = append(envoyByClass[class], e)
-		}
-	}
-	if len(envoyEntries) == 0 {
-		return false
-	}
-	gaps, err := s.envoyProxyGaps(ctx, client, envoyEntries, envoyByClass)
-	s.gatewayGaps = append(s.gatewayGaps, gaps...)
-	if err != nil {
-		s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v; %s", err, readAdvice(err)))
-		return true
-	}
-	return false
-}
-
-// envoyProxyGaps returns a finding for each of entries, the NVCF Gateways
-// Envoy Gateway runs, that has no proxy with a Ready pod. byClass maps each of
-// their classes to its entries, for merged-gateways proxies.
-func (s *tier1Scan) envoyProxyGaps(
-	ctx context.Context, client kubernetes.Interface, entries []string, byClass map[string][]string,
-) ([]string, error) {
-	proxies, err := listEnvoyProxies(ctx, client)
-	if err != nil {
-		return nil, err
-	}
-	ready, found := map[string]bool{}, map[string][]string{}
-	for _, p := range proxies {
-		for _, e := range s.own.gateways.entriesForProxy(p.labels, byClass) {
-			found[e] = append(found[e], p.ref)
-			if p.ready {
-				ready[e] = true
-			}
-		}
-	}
-	var gaps []string
-	for _, e := range entries {
-		switch {
-		case ready[e]:
-		case len(found[e]) > 0:
-			gaps = append(gaps, fmt.Sprintf("NVCF Gateway %s has no Ready Envoy proxy (%s)",
-				e, strings.Join(found[e], ", ")))
-		default:
-			gaps = append(gaps, "NVCF Gateway "+e+" has no Envoy proxy")
-		}
-	}
-	return gaps, nil
-}
-
-// envoyProxy is an Envoy Gateway data-plane workload, and whether any of its
-// pods is Ready.
+// envoyProxy is an Envoy Gateway data-plane workload.
 type envoyProxy struct {
-	ref    string
-	labels map[string]string
-	ready  bool
+	namespace string
+	labels    map[string]string
+	readiness workloadReadiness
 }
 
 // listEnvoyProxies returns every Envoy proxy Deployment and DaemonSet in the
@@ -3426,11 +3736,10 @@ type envoyProxy struct {
 func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoyProxy, error) {
 	seen := map[string]bool{}
 	var out []envoyProxy
-	add := func(kind, ns, name string, labels map[string]string, ready bool) {
-		ref := kind + " " + ns + "/" + name
-		if !seen[ref] && isEnvoyProxy(labels) {
-			seen[ref] = true
-			out = append(out, envoyProxy{ref: ref, labels: labels, ready: ready})
+	add := func(ns string, labels map[string]string, r workloadReadiness) {
+		if !seen[r.ref] && isEnvoyProxy(labels) {
+			seen[r.ref] = true
+			out = append(out, envoyProxy{namespace: ns, labels: labels, readiness: r})
 		}
 	}
 	for _, label := range []string{owningGatewayNameLabel, owningGatewayClassLabel} {
@@ -3443,7 +3752,7 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 		}
 		for i := range deployments.Items {
 			d := &deployments.Items[i]
-			add("Deployment", d.Namespace, d.Name, d.Labels, d.Status.ReadyReplicas > 0)
+			add(d.Namespace, d.Labels, deploymentReadiness(d))
 		}
 		daemonSets, err := observe(ctx, func(c context.Context) (*appsv1.DaemonSetList, error) {
 			return client.AppsV1().DaemonSets(metav1.NamespaceAll).List(c, opts)
@@ -3453,66 +3762,205 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 		}
 		for i := range daemonSets.Items {
 			ds := &daemonSets.Items[i]
-			add("DaemonSet", ds.Namespace, ds.Name, ds.Labels, ds.Status.NumberReady > 0)
+			add(ds.Namespace, ds.Labels, daemonSetReadiness(ds))
 		}
 	}
 	return out, nil
 }
 
-// nvcfGatewayClassOf returns the class of each NVCF Gateway that exists. A
-// Gateway missing from the result was observed not to exist.
-func nvcfGatewayClassOf(
-	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface, g gatewaySet,
-) (map[string]string, error) {
-	version := surface.servedVersion("gateways")
-	if version == "" {
-		return nil, errors.New("the cluster does not serve the Gateway API gateways")
+// assessProxies judges every Envoy proxy of an NVCF Gateway on full readiness,
+// whatever its workload kind or namespace, with the same rollout tolerance as
+// any Deployment.
+func (s *tier1Scan) assessProxies(ctx context.Context, client kubernetes.Interface) {
+	s.proxies, s.proxyErr = listEnvoyProxies(ctx, client)
+	for i := range s.proxies {
+		s.assessProxy(ctx, &s.proxies[i])
 	}
-	if routes == nil {
-		return nil, errors.New("no client available to list gateways")
-	}
-	gateways, err := listDynamic(ctx, routes,
-		schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gateways"},
-		metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("listing gateways: %w", err)
-	}
-	classOf := map[string]string{}
-	for i := range gateways.Items {
-		gw := &gateways.Items[i]
-		if entry := gw.GetNamespace() + "/" + gw.GetName(); g[entry] {
-			classOf[entry], _, _ = unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
-		}
-	}
-	return classOf, nil
 }
 
-// envoyGatewayClasses returns the GatewayClasses Envoy Gateway runs.
-func envoyGatewayClasses(
-	ctx context.Context, surface gatewayAPISurface, routes dynamic.Interface,
-) (map[string]bool, error) {
-	version := surface.servedVersion("gatewayclasses")
-	if version == "" {
-		return nil, errors.New("the cluster does not serve the Gateway API gatewayclasses")
+func (s *tier1Scan) assessProxy(ctx context.Context, p *envoyProxy) {
+	entries, known := s.own.proxyOwner(ctx, p.labels)
+	if known && !s.noGatewaysPostInstall && len(entries) == 0 {
+		s.skippedProxies++
+		return
 	}
-	if routes == nil {
-		return nil, errors.New("no client available to list gatewayclasses")
+	credited, decided := s.own.creditedEntries(ctx, entries, p.namespace)
+	switch {
+	case !known || s.noGatewaysPostInstall || !decided:
+		// Ready, or a tolerated rollout, says nothing bad about the tier
+		// whoever owns it, so only a proxy that is down stays undecided.
+		s.unattributed++
+		if !p.readiness.healthy() {
+			s.unattributedDown = append(s.unattributedDown, p.readiness.String())
+			return
+		}
+	case len(credited) == 0:
+		// It carries an NVCF Gateway's labels where Envoy Gateway never
+		// puts that Gateway's proxy, so it serves nothing of NVCF's.
+		printInfo(s.log, fmt.Sprintf("  %s is labelled for %s but runs outside the Envoy Gateway "+
+			"controller's namespace and the Gateway's; not assessed", p.readiness.ref, strings.Join(entries, ", ")))
+		s.skippedProxies++
+		return
+	case !s.own.configured && !p.readiness.healthy():
+		s.unconfirmedDown = append(s.unconfirmedDown, p.readiness.String())
+		return
 	}
-	classes, err := listDynamic(ctx, routes,
-		schema.GroupVersionResource{Group: gatewayAPIGroup, Version: version, Resource: "gatewayclasses"},
-		metav1.ListOptions{})
+	s.assess(p.readiness)
+}
+
+// reportProxyAttribution warns about proxies whose owner could not be decided
+// and reports whether any of them leaves the row undecided. A proxy whose owner
+// is unknown was still assessed for readiness: only one that is not Ready
+// could be NVCF's own outage, and an observed failure still decides it first.
+func (s *tier1Scan) reportProxyAttribution() bool {
+	proxiesUnobserved := len(s.unattributedDown) > 0 || len(s.unconfirmedDown) > 0 || s.proxyErr != nil
+	if s.proxyErr != nil {
+		s.warn(fmt.Sprintf("could not list the Envoy proxies: %v", s.proxyErr))
+	}
+	if len(s.unconfirmedDown) > 0 {
+		s.warn(fmt.Sprintf("Envoy proxies of Gateways found from the NVCF routes are not Ready: %s; a route label "+
+			"cannot fail the row, so set clusterValidator.gatewayNames (env %s) to the stack's Gateways",
+			strings.Join(s.unconfirmedDown, ", "), nvcfGatewayNamesEnv))
+	}
+	switch why := s.own.err; {
+	case why == nil && s.noGatewaysPostInstall:
+		why = errNoNVCFGatewaysPostInstall
+		fallthrough
+	case why != nil:
+		if len(s.unattributedDown) > 0 {
+			s.warn(fmt.Sprintf("could not tell which Envoy proxies are NVCF's (%v), and %d are not Ready: %s",
+				why, len(s.unattributedDown), strings.Join(s.unattributedDown, ", ")))
+		} else if s.unattributed > 0 {
+			printInfo(s.log, fmt.Sprintf("  Envoy proxy ownership unknown (%v), but all %d proxies are Ready",
+				why, s.unattributed))
+		}
+	case len(s.unattributedDown) > 0:
+		s.warn(fmt.Sprintf("could not attribute merged-gateways proxies or tell where the Envoy Gateway "+
+			"controller runs, and %d proxies are not Ready: %s",
+			len(s.unattributedDown), strings.Join(s.unattributedDown, ", ")))
+	case s.skippedProxies > 0 && len(s.own.gateways) == 0:
+		s.warn(fmt.Sprintf("%d Envoy proxy workload(s) not assessed: no NVCF routes found to identify the NVCF "+
+			"Gateways; set clusterValidator.gatewayNames (env %s) if they exist", s.skippedProxies,
+			nvcfGatewayNamesEnv))
+	}
+	return proxiesUnobserved
+}
+
+// checkGatewayCoverage, after install, requires every NVCF Gateway to exist
+// with a GatewayClass that exists, and every one Envoy Gateway runs to have a
+// proxy: route discovery skipping a proxy-less Gateway is exactly the outage
+// the post-install signal is for. A Gateway another implementation runs is
+// named and not judged, since its data plane is not an Envoy proxy. Only
+// launcher-named Gateways can fail the row; gaps of Gateways found from the
+// NVCF routes leave it unknown. It reports whether coverage could not be
+// decided, which leaves the row unknown: anything the check could not look at
+// is undecided, never a pass.
+func (s *tier1Scan) checkGatewayCoverage(ctx context.Context) bool {
+	if !s.state.PostInstall {
+		return false
+	}
+	if s.own.err != nil {
+		// The NVCF Gateways are unknown, so a missing proxy would go unseen.
+		s.warn(fmt.Sprintf("could not confirm every NVCF Gateway has a proxy: %v", s.own.err))
+		return true
+	}
+	if len(s.own.gateways) == 0 {
+		// No NVCF Gateway is named: reportProxyAttribution says so.
+		return false
+	}
+	classOf, err := s.own.gatewayClassOf(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing gatewayclasses: %w", err)
+		s.warn(fmt.Sprintf("could not confirm the NVCF Gateways exist and have a proxy: %v; %s",
+			err, readAdvice(err)))
+		return true
 	}
-	envoyClasses := map[string]bool{}
-	for i := range classes.Items {
-		c := &classes.Items[i]
-		if controller, _, _ := unstructured.NestedString(c.Object, "spec", "controllerName"); controller ==
-			envoyGatewayControllerName {
-			envoyClasses[c.GetName()] = true
+	var gaps []string
+	var undecided bool
+	if impls, err := s.own.implementations(ctx); err != nil {
+		gaps, undecided = s.gapsWithoutClasses(classOf, err)
+	} else {
+		gaps, undecided = s.envoyGaps(ctx, impls)
+	}
+	if len(gaps) > 0 && !s.own.configured {
+		s.warn(fmt.Sprintf("%s. These Gateways were found from the NVCF routes, which cannot fail the row; set "+
+			"clusterValidator.gatewayNames (env %s) to the stack's Gateways", strings.Join(gaps, "; "),
+			nvcfGatewayNamesEnv))
+		return true
+	}
+	s.gatewayGaps = append(s.gatewayGaps, gaps...)
+	return undecided
+}
+
+// gapsWithoutClasses judges the NVCF Gateways when the GatewayClasses could
+// not be read: a Gateway seen not to exist, or naming no class, is a gap
+// whatever the class list says, and the others are undecided.
+func (s *tier1Scan) gapsWithoutClasses(classOf map[string]string, classErr error) (gaps []string, undecided bool) {
+	var unconfirmed []string
+	for _, e := range s.own.gateways.sorted() {
+		switch class, exists := classOf[e]; {
+		case !exists:
+			gaps = append(gaps, "NVCF Gateway "+e+" does not exist")
+		case class == "":
+			gaps = append(gaps, "NVCF Gateway "+e+" names no GatewayClass")
+		default:
+			unconfirmed = append(unconfirmed, e)
 		}
 	}
-	return envoyClasses, nil
+	if len(unconfirmed) > 0 {
+		s.warn(fmt.Sprintf("could not tell which NVCF Gateways Envoy Gateway runs, so the proxies of %s were "+
+			"not confirmed: %v; %s", strings.Join(unconfirmed, ", "), classErr, readAdvice(classErr)))
+	}
+	return gaps, len(unconfirmed) > 0
+}
+
+// envoyGaps returns a gap for each NVCF Gateway that nothing can run or that
+// Envoy Gateway runs without a proxy, and whether one could not be decided.
+func (s *tier1Scan) envoyGaps(ctx context.Context, impls gatewayImpls) (gaps []string, undecided bool) {
+	for _, e := range s.own.gateways.sorted() {
+		kind, detail := impls.kind(e)
+		switch {
+		case kind == gatewayOther:
+			printInfo(s.log, "  Not assessed: "+detail)
+		case kind == gatewayBroken:
+			gaps = append(gaps, detail)
+		case s.proxyErr != nil:
+			// reportProxyAttribution already warned.
+			undecided = true
+		default:
+			switch covered, decided := s.hasProxy(ctx, e); {
+			case covered:
+			case !decided:
+				s.warn(fmt.Sprintf("could not confirm NVCF Gateway %s has a proxy: the Envoy Gateway controller "+
+					"namespace is unknown (%v)", e, s.own.controllerErr))
+				undecided = true
+			default:
+				gaps = append(gaps, "NVCF Gateway "+e+" has no Envoy proxy")
+			}
+		}
+	}
+	return gaps, undecided
+}
+
+// hasProxy reports whether a proxy workload serving entry runs where Envoy
+// Gateway would have created it. Its readiness is assessProxy's to judge.
+func (s *tier1Scan) hasProxy(ctx context.Context, entry string) (covered, decided bool) {
+	classes, err := s.own.gatewayClasses(ctx)
+	if err != nil {
+		return false, false
+	}
+	decided = true
+	for i := range s.proxies {
+		p := &s.proxies[i]
+		if !slices.Contains(s.own.gateways.entriesForProxy(p.labels, classes), entry) {
+			continue
+		}
+		ok, known := s.own.credits(ctx, entry, p.namespace)
+		if ok {
+			return true, true
+		}
+		decided = decided && known
+	}
+	return false, decided
 }
 
 func (s *tier1Scan) setOK(ok bool) {
@@ -3527,6 +3975,13 @@ func (s *tier1Scan) deniedWarning() string {
 		len(s.unread), readFailures(s.unread, s.unreadErrs))
 }
 
+// controlPlaneMissing reports an installed control plane whose own
+// namespaces were all read and hold no NVCF Deployment. Shared-namespace
+// controllers and Envoy proxies do not count: they outlive an uninstall.
+func (s *tier1Scan) controlPlaneMissing() bool {
+	return s.state.PostInstall && s.ownedCount == 0 && s.ownedDenied == 0
+}
+
 // verdict decides the row. An observed failure wins over anything unobserved,
 // and a tolerated rollout is a pass with a warning, not UNKNOWN.
 func (s *tier1Scan) verdict(proxiesUnobserved bool) {
@@ -3535,15 +3990,27 @@ func (s *tier1Scan) verdict(proxiesUnobserved bool) {
 		// read is not first heard of once the failure beside it is fixed.
 		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
 	}
-	if s.checkedCount == 0 {
-		s.verdictNothingAssessed(proxiesUnobserved)
-		return
+	if len(s.notAssessed) > 0 {
+		printInfo(s.log, fmt.Sprintf("  Not assessed (in a shared namespace and not installed by the stack): %s",
+			strings.Join(s.notAssessed, ", ")))
 	}
 	failures := s.underReplicated
 	if len(s.scaledToZero) > 0 {
 		failures = append(failures, fmt.Sprintf("scaled to zero replicas: %s", strings.Join(s.scaledToZero, ", ")))
 	}
 	failures = append(failures, s.gatewayGaps...)
+	if s.controlPlaneMissing() {
+		var owned []string
+		for _, ns := range s.namespaces {
+			if s.owns(ns) {
+				owned = append(owned, ns)
+			}
+		}
+		failures = append(failures, "no NVCF Deployment found in "+strings.Join(owned, ", "))
+		s.state.Recommendations = append(s.state.Recommendations,
+			"Tier-1 found no NVCF Deployments although the control plane is installed. Check that it is "+
+				"installed in this cluster and that the kube context points at it.")
+	}
 	switch {
 	case len(failures) > 0:
 		printError(s.log, fmt.Sprintf("Under-replicated Deployments (%d):", len(failures)))
@@ -3555,19 +4022,29 @@ func (s *tier1Scan) verdict(proxiesUnobserved bool) {
 				"If a service is intentionally single-replica, raise its replicaCount in the "+
 				"self-managed stack values to keep HA headroom.")
 		s.setOK(false)
-	case proxiesUnobserved:
-		s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
-	case len(s.unread) > 0:
-		// Some namespaces were never observed, so "all ready" is not a claim we
-		// can make even though every Deployment we could see passed.
-		printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
-			s.checkedCount, len(s.unread)))
+	case proxiesUnobserved || len(s.unread) > 0:
+		// Something was never observed, so "all ready" is not a claim we can
+		// make even though everything we could see passed.
+		if len(s.unread) > 0 {
+			printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
+				s.checkedCount, len(s.unread)))
+		}
+		if proxiesUnobserved {
+			s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
+		}
 	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown. Rolling one pod at a time is what an upgrade
 		// looks like; reporting it as an unobserved critical check made every
 		// control-plane upgrade NVCF-Not-Ready with a non-zero exit.
 		s.warn(fmt.Sprintf("%d Deployment(s) ready, %d %s and below their replica target",
 			s.checkedCount, s.rollingUnderReplicated, MidRolloutMarker))
+		s.setOK(true)
+	case s.checkedCount == 0 && s.rollingCount > 0:
+		s.warn(fmt.Sprintf("all %d Deployment(s) are %s; re-run after the rollout completes",
+			s.rollingCount, MidRolloutMarker))
+		s.setOK(true)
+	case s.checkedCount == 0:
+		printInfo(s.log, "  No Deployments found in control-plane namespaces (pre-install state)")
 		s.setOK(true)
 	default:
 		if s.rollingCount > 0 {
@@ -3577,42 +4054,6 @@ func (s *tier1Scan) verdict(proxiesUnobserved bool) {
 		printSuccess(s.log, fmt.Sprintf("All %d assessed Deployment(s) in control-plane namespaces are fully ready",
 			s.checkedCount))
 		s.setOK(true)
-	}
-}
-
-func (s *tier1Scan) verdictNothingAssessed(proxiesUnobserved bool) {
-	switch {
-	case len(s.scaledToZero) > 0:
-		// An observed failure wins over unreadable namespaces and tolerated
-		// rollouts, as it does when something was assessed.
-		printError(s.log, fmt.Sprintf("%d Deployment(s) are scaled to zero replicas: %s",
-			len(s.scaledToZero), strings.Join(s.scaledToZero, ", ")))
-		s.setOK(false)
-	case proxiesUnobserved:
-		s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)
-	case len(s.unread) > 0:
-		// Leave nil: nothing was assessed and at least one namespace could not
-		// be read, so an empty result is not evidence of pre-install.
-		printWarning(s.log, fmt.Sprintf("Deployments not readable in %d control-plane namespace(s)", len(s.unread)))
-	case s.rollingCount > 0:
-		// A tolerated rollout is a pass with a warning. Stalled rollouts and
-		// those below their readiness floor never get here: they were assessed
-		// and reach the failure path instead.
-		s.warn(fmt.Sprintf("all %d Deployment(s) are %s; re-run after the rollout completes",
-			s.rollingCount, MidRolloutMarker))
-		s.setOK(true)
-	case !s.state.PostInstall:
-		printInfo(s.log, "  No Deployments found in control-plane namespaces (pre-install state)")
-		s.setOK(true)
-	default:
-		// The launcher says the control plane is installed, so finding nothing
-		// means the namespace list does not match the install (a relocated
-		// release, an override left unset) or the services are gone.
-		printError(s.log, "No Deployments found in any control-plane namespace")
-		s.state.Recommendations = append(s.state.Recommendations,
-			"Tier-1 found no Deployments. Check that the control plane is installed in this cluster, and set "+
-				"clusterValidator.openBaoNamespace / envoyGatewayNamespace if those components were relocated.")
-		s.setOK(false)
 	}
 }
 
@@ -3635,19 +4076,49 @@ func (s *tier1Scan) verdictNothingAssessed(proxiesUnobserved bool) {
 // steady state for the duration of any upgrade. More than one pod down, or a
 // rollout that stops making progress, fails.
 //
-// Any odd-sized StatefulSet of three or more in the control-plane namespaces
-// is assessed. The stack's own quorum components (knownQuorumComponents) are
-// also judged below three replicas and at even sizes.
+// Any odd-sized StatefulSet of three or more in the NVCF control-plane
+// namespaces is assessed; in a shared namespace only one a stack release
+// installed is. The stack's own quorum components (knownQuorumComponents) are
+// also judged below three replicas and at even sizes, and after install each
+// one must be found unless NVCF_EXTERNAL_COMPONENTS declares it external.
 //
 // Critical: broken quorum or co-located peers leave the stack one failure
 // away from a total control-plane outage.
 func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
 	printHeader(state.Log, "Tier-2 StatefulSet Quorum and Placement")
-	scan := &tier2Scan{log: state.Log, state: state}
+	external, invalid := externalComponents()
+	scan := &tier2Scan{log: state.Log, state: state, shared: sharedTier1Namespaces(), external: external,
+		seen: map[string]bool{}, denied: map[string]bool{}}
+	if len(invalid) > 0 {
+		scan.warn(fmt.Sprintf("ignoring %s entries %s; use %s", externalComponentsEnv,
+			strings.Join(invalid, ", "), strings.Join(quorumComponentNames(), ", ")))
+	}
 	for _, ns := range controlPlaneNamespaceSet() {
 		scan.scanNamespace(ctx, client, ns)
 	}
 	scan.verdict()
+}
+
+// externalComponentsEnv lists, comma-separated, the stack quorum components
+// that run outside this cluster (clusterValidator.externalComponents), so
+// their absence after install is expected rather than unknown.
+const externalComponentsEnv = "NVCF_EXTERNAL_COMPONENTS"
+
+// externalComponents parses NVCF_EXTERNAL_COMPONENTS. Entries that name no
+// quorum component are returned in invalid.
+func externalComponents() (set map[string]bool, invalid []string) {
+	set = map[string]bool{}
+	for _, entry := range strings.Split(os.Getenv(externalComponentsEnv), ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		switch {
+		case entry == "":
+		case slices.Contains(quorumComponentNames(), entry):
+			set[entry] = true
+		default:
+			invalid = append(invalid, entry)
+		}
+	}
+	return set, invalid
 }
 
 // minQuorumSize is the smallest replica count that holds a quorum through the
@@ -3658,9 +4129,18 @@ const minQuorumSize = int32(3)
 type tier2Scan struct {
 	log   *logrus.Entry
 	state *ValidationState
+	// shared are namespaces other installs use too; external are components
+	// declared to run outside the cluster; seen are the components found, and
+	// denied the namespaces whose StatefulSets could not be listed.
+	shared   map[string]bool
+	external map[string]bool
+	seen     map[string]bool
+	denied   map[string]bool
 
 	failures      []string
 	skippedParity []string
+	// notAssessed are another install's StatefulSets in a shared namespace.
+	notAssessed []string
 	// unspread holds assessed StatefulSets with no pod anti-affinity, whose
 	// placement is not judged: highAvailability.mode none renders none.
 	unspread     []string
@@ -3697,6 +4177,7 @@ func (s *tier2Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 		printWarning(s.log, readFailure("StatefulSets in "+ns, err))
 		s.unread = append(s.unread, fmt.Sprintf("%s (%v)", ns, err))
 		s.unreadErrs = append(s.unreadErrs, err)
+		s.denied[ns] = true
 		return
 	}
 	for i := range stsList.Items {
@@ -3705,11 +4186,17 @@ func (s *tier2Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 }
 
 func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet) {
+	component, known := knownQuorumComponent(ns, sts.Name)
+	if known {
+		s.seen[component] = true
+	} else if s.shared[ns] && !stackOwned(ns, sts) {
+		s.notAssessed = append(s.notAssessed, ns+"/"+sts.Name)
+		return
+	}
 	if sts.Spec.Replicas == nil {
 		return
 	}
 	want := *sts.Spec.Replicas
-	known := isKnownQuorumComponent(ns, sts.Name)
 	spread := spreadsAcrossNodes(sts)
 	switch {
 	case known && want == 0:
@@ -3877,6 +4364,23 @@ func (s *tier2Scan) deniedWarning() string {
 		len(s.unread), readFailures(s.unread, s.unreadErrs))
 }
 
+// missingComponents names, after install, each stack quorum component that
+// was not found, is not declared external, and whose namespace was read.
+func (s *tier2Scan) missingComponents() []string {
+	if !s.state.PostInstall {
+		return nil
+	}
+	var missing []string
+	for _, c := range knownQuorumComponents {
+		ns := c.namespaceName()
+		if s.seen[c.name] || s.external[c.name] || s.denied[ns] {
+			continue
+		}
+		missing = append(missing, fmt.Sprintf("%s (StatefulSet %s in %s)", c.name, strings.Join(c.sets, " or "), ns))
+	}
+	return missing
+}
+
 func (s *tier2Scan) verdict() {
 	if len(s.unread) > 0 {
 		// As in Tier-1: reported whatever decides the row.
@@ -3886,13 +4390,21 @@ func (s *tier2Scan) verdict() {
 		printInfo(s.log, fmt.Sprintf("  Placement not assessed (no pod anti-affinity, as highAvailability.mode "+
 			"none renders): %s", strings.Join(s.unspread, ", ")))
 	}
+	if len(s.notAssessed) > 0 {
+		printInfo(s.log, fmt.Sprintf("  Not assessed (in a shared namespace and not installed by the stack): %s",
+			strings.Join(s.notAssessed, ", ")))
+	}
 	if len(s.skippedParity) > 0 {
 		s.warn(fmt.Sprintf("%d StatefulSet(s) not assessed (not a quorum shape this check covers): %s",
 			len(s.skippedParity), strings.Join(s.skippedParity, ", ")))
 	}
-	if s.checkedCount == 0 {
-		s.verdictNothingAssessed()
-		return
+	missing := s.missingComponents()
+	for _, m := range missing {
+		// Installed, yet this component is not here. Unknown rather than a
+		// failure: it may run outside the cluster, which the launcher says
+		// through the external components setting.
+		s.warn(fmt.Sprintf("quorum component %s not found after install; set clusterValidator.externalComponents "+
+			"(env %s) if it runs outside this cluster", m, externalComponentsEnv))
 	}
 	switch {
 	case len(s.failures) > 0:
@@ -3912,6 +4424,14 @@ func (s *tier2Scan) verdict() {
 			s.checkedCount, strings.Join(s.unobserved, ", ")))
 		s.state.Warnings = append(s.state.Warnings, fmt.Sprintf(
 			"Tier-2 StatefulSets: status unknown (%s could not be observed)", strings.Join(s.unobserved, ", ")))
+	case len(missing) > 0:
+		// Each missing component already has its warning; the row is unknown.
+	case s.checkedCount == 0 && len(s.skippedParity) > 0:
+		// StatefulSets exist in the quorum namespaces but none was assessed.
+		// Claiming "Quorum and Placement OK" here would certify a ring this
+		// check never looked at.
+		s.state.Warnings = append(s.state.Warnings,
+			"Tier-2 StatefulSets: status unknown (no quorum-shaped StatefulSet was assessed)")
 	case s.rollingUnderReplicated > 0:
 		// Tolerated, not unknown: same rule as Tier-1. A NATS StatefulSet at
 		// 2/3 mid-RollingUpdate is what an upgrade looks like, and reporting
@@ -3920,6 +4440,13 @@ func (s *tier2Scan) verdict() {
 		s.warn(fmt.Sprintf("%d quorum StatefulSet(s) healthy, %d %s and below target",
 			s.checkedCount, s.rollingUnderReplicated, MidRolloutMarker))
 		s.setOK(true)
+	case s.checkedCount == 0 && s.state.PostInstall:
+		printInfo(s.log, "  No quorum StatefulSet runs in this cluster; every stack quorum component is declared "+
+			"external ("+externalComponentsEnv+")")
+		s.setOK(true)
+	case s.checkedCount == 0:
+		printInfo(s.log, "  No quorum StatefulSets found (pre-install state)")
+		s.setOK(true)
 	default:
 		if s.rollingCount > 0 {
 			printWarning(s.log, fmt.Sprintf(
@@ -3927,29 +4454,6 @@ func (s *tier2Scan) verdict() {
 				s.checkedCount, s.rollingCount, MidRolloutMarker))
 		}
 		printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", s.checkedCount))
-		s.setOK(true)
-	}
-}
-
-func (s *tier2Scan) verdictNothingAssessed() {
-	switch {
-	case len(s.unread) > 0:
-		printWarning(s.log, fmt.Sprintf("StatefulSets not readable in %d control-plane namespace(s)", len(s.unread)))
-	case len(s.skippedParity) > 0:
-		// StatefulSets exist in the quorum namespaces but none was assessed.
-		// Claiming "Quorum and Placement OK" here would certify a ring this
-		// check never looked at.
-		s.state.Warnings = append(s.state.Warnings,
-			"Tier-2 StatefulSets: status unknown (no quorum-shaped StatefulSet was assessed)")
-	case s.state.PostInstall:
-		// Installed, yet no quorum component is here. The stack can leave
-		// NATS, OpenBao and Cassandra to run elsewhere, so this is a warning
-		// rather than a failure, but it must not read as a clean pass.
-		s.warn("no quorum StatefulSet (NATS, OpenBao, Cassandra) found in the control-plane namespaces after " +
-			"install; expected only if they run outside this cluster")
-		s.setOK(true)
-	default:
-		printInfo(s.log, "  No quorum StatefulSets found (pre-install state)")
 		s.setOK(true)
 	}
 }
@@ -4125,14 +4629,42 @@ func parseVersion(v string) []int {
 	return result
 }
 
-// knownQuorumComponents are the Tier-2 StatefulSets whose whole purpose is a
-// quorum, by the names the stack's releases give them in their default
-// namespaces. Matching on the namespace as well keeps a same-prefixed
-// workload such as cassandra-backup, or a nats elsewhere, out of the rule.
-var knownQuorumComponents = map[string][]string{
-	"nats-system":      {"nats"},
-	"vault-system":     {"openbao", "openbao-server"},
-	"cassandra-system": {"cassandra"},
+// quorumComponent is one of the stack's Tier-2 StatefulSets whose whole purpose
+// is a quorum.
+type quorumComponent struct {
+	// name is how NVCF_EXTERNAL_COMPONENTS names it.
+	name string
+	// namespace is the stack's default namespace for it; sets are the
+	// StatefulSet names its release renders there.
+	namespace string
+	sets      []string
+}
+
+// knownQuorumComponents are matched by name in their own namespace, which
+// keeps a same-prefixed workload such as cassandra-backup, or a nats
+// elsewhere, out of the rule.
+var knownQuorumComponents = []quorumComponent{
+	{name: "nats", namespace: "nats-system", sets: []string{"nats"}},
+	{name: "openbao", namespace: "vault-system", sets: []string{"openbao", "openbao-server"}},
+	{name: "cassandra", namespace: "cassandra-system", sets: []string{"cassandra"}},
+}
+
+func quorumComponentNames() []string {
+	names := make([]string, 0, len(knownQuorumComponents))
+	for _, c := range knownQuorumComponents {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// namespaceName is where c runs. OpenBao follows its override.
+func (c quorumComponent) namespaceName() string {
+	if c.namespace == "vault-system" {
+		if v := strings.TrimSpace(os.Getenv(openBaoNamespaceEnv)); v != "" {
+			return v
+		}
+	}
+	return c.namespace
 }
 
 // stuckWaitingReasons are container waiting reasons that do not clear on their
@@ -4291,18 +4823,14 @@ func laterOf(a, b time.Time) time.Time {
 	return a
 }
 
-// isKnownQuorumComponent reports whether the StatefulSet ns/name is one of the
-// stack's quorum components. The OpenBao namespace follows its override.
-// A relocated OpenBao is looked up under vault-system; vault-system itself is
-// then not scanned (controlPlaneNamespaceSet replaces it).
-func isKnownQuorumComponent(ns, name string) bool {
-	if v := strings.TrimSpace(os.Getenv(openBaoNamespaceEnv)); v != "" && ns == v {
-		ns = "vault-system"
-	}
-	for _, c := range knownQuorumComponents[ns] {
-		if name == c {
-			return true
+// knownQuorumComponent returns the stack quorum component the StatefulSet
+// ns/name is. Each component matches its own names in its own namespace, so
+// relocating OpenBao next to NATS or Cassandra keeps both.
+func knownQuorumComponent(ns, name string) (string, bool) {
+	for _, c := range knownQuorumComponents {
+		if c.namespaceName() == ns && slices.Contains(c.sets, name) {
+			return c.name, true
 		}
 	}
-	return false
+	return "", false
 }
