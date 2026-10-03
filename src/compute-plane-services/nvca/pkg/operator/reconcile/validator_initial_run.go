@@ -31,7 +31,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
@@ -115,9 +114,10 @@ func (w *validatorRunWatcher) reconcile(ctx context.Context) (stop bool) {
 		return false
 	}
 
-	jobs, err := w.client.BatchV1().Jobs(w.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labels.SelectorFromSet(cronJob.Spec.JobTemplate.Labels).String(),
-	})
+	// Ownership, not the template's labels, identifies the CronJob's runs:
+	// an upgrade that changes the labels and a rollback that restores them
+	// would otherwise hide the newest run and skip the rollback's own.
+	jobs, err := w.client.BatchV1().Jobs(w.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return w.apiError("list the cluster-validator Jobs", err)
 	}

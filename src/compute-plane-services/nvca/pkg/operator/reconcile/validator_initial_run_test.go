@@ -169,6 +169,20 @@ func TestValidatorRun_RollbackRunsAgain(t *testing.T) {
 	assert.Len(t, validatorJobs(t, client), 3)
 }
 
+// A rollback that also restores the job template's labels still sees the
+// newest run, which carries the labels it is rolling back from.
+func TestValidatorRun_RollbackAcrossTemplateLabels(t *testing.T) {
+	older := pastValidatorJob("run-a", "a", 2*time.Hour)
+	older.Labels["app.kubernetes.io/version"] = "1"
+	newer := pastValidatorJob("run-b", "b", time.Hour)
+	newer.Labels["app.kubernetes.io/version"] = "2"
+	rolledBack := validatorCronJobWithSpec("a")
+	rolledBack.Spec.JobTemplate.Labels["app.kubernetes.io/version"] = "1"
+	client, creates := validatorClient(rolledBack, older, newer)
+	require.False(t, newValidatorWatcher(client).reconcile(context.Background()))
+	assert.Equal(t, int32(1), creates.Load())
+}
+
 // A scheduled run of the current spec counts, so once the history limits
 // prune the run the operator started, a restart still starts nothing.
 func TestValidatorRun_ScheduledRunOfTheSpecCounts(t *testing.T) {
