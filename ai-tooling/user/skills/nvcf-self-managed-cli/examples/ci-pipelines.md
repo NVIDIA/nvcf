@@ -25,6 +25,7 @@ Notes:
 - `check` reports its verdict in one `final` event, with `success: false` when any check failed at error severity or the run timed out (exit `5`, `verdict: "timeout"`). Gate on that event: `check` never emits `phase_failed`, so a condition on it always passes. Requiring the `final` event also fails the step when the command dies before emitting it.
 - Slurp with `jq -s` before testing a condition. Without it `jq -e` takes its exit status from the last event alone.
 - stderr also carries plain-text notices, so filter to JSON lines. Do not add `--show-logs` here: it appends a non-JSON transcript to the same stream.
+- The plain-text notice that says how to remove objects a validator run left in the cluster is filtered out with the rest. Read the same commands from the `final` event instead, for example `jq -r '.[] | select(.event == "final") | .cleanup[]?'` on the slurped stream.
 - Final status check gates downstream stages on `verdict == "healthy"`.
 
 ## GitOps (Argo / Flux) pattern

@@ -80,8 +80,8 @@ func TestMain(m *testing.M) {
 	// otherwise have every check test create RBAC, Secrets and Jobs in the
 	// current kube context and wait up to five minutes per role.
 	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
-		return func(context.Context, selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
-			return selfhosted.ClusterValidatorResult{Passed: true}
+		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			return selfhosted.ClusterValidatorResult{Passed: true, Logs: "Validator role: " + p.Role + "\nCluster is NVCF-Ready\n"}
 		}
 	}
 	for _, k := range []string{

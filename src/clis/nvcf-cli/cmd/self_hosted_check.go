@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -118,8 +119,9 @@ func init() {
 			"an NGC registry, it mints one from NGC_API_KEY. Set to force a specific name.")
 	selfHostedCheckCmd.Flags().BoolVar(&checkClusterValidatorNoCleanup, "no-cleanup", false,
 		"Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging instead of "+
-			"removing them after the run. They are reclaimed by a later check after 24 hours; the "+
-			"result prints the kubectl command that removes them now.")
+			"removing them after the run. A kept Job whose pod cannot pull its image is suspended, which "+
+			"deletes the pod. They are reclaimed by a later check after 24 hours; the result prints the "+
+			"kubectl command that removes them now.")
 	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorRegistries, "cluster-validator-registries", nil,
 		"Additional container registries to probe for reachability in the control-plane validator. "+
 			"Format: host:port (e.g. harbor.company.internal:443,ghcr.io:443). "+
@@ -212,18 +214,40 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			outerTimeout += waitDur
 		}
 	}
-	// Catch Ctrl-C and SIGTERM so an interrupted run unwinds through its
-	// deferred cleanup. Without this the process exits on the signal and the
-	// validator's cluster-wide ClusterRole, bound to a ServiceAccount in
-	// default, stays behind until a later check's orphan sweep.
-	sigCtx, stop := signal.NotifyContext(c.Context(), os.Interrupt, syscall.SIGTERM)
+	// Every validator run that may leave objects in a cluster registers its
+	// removal command here, across --wait polls, so every exit can print it.
+	ledger := &selfhosted.CleanupLedger{}
+	errOut := c.ErrOrStderr()
+
+	// Catch Ctrl-C, SIGTERM and SIGHUP (a closed terminal or a dropped SSH
+	// session) so an interrupted run unwinds through its deferred cleanup.
+	// Without this the process exits on the signal and the validator's
+	// cluster-wide ClusterRole, bound to a ServiceAccount in default, stays
+	// behind until a later check's orphan sweep.
+	sigCtx, stop := signal.NotifyContext(c.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	// Catch only the first signal. Restoring the default handler once it
-	// arrives lets a second Ctrl-C exit at once instead of waiting out the
-	// cleanup.
+	// After the first signal or quit key, say at once how to remove what the
+	// runs in progress may leave, before anything can end the process. A
+	// second Ctrl-C then exits at once, through the default handler. SIGTERM
+	// and SIGHUP stay caught until the bounded teardown ends: CI follows its
+	// SIGINT with a SIGTERM a few seconds later.
+	held := make(chan os.Signal, 1)
+	defer signal.Stop(held)
+	var noteOnce sync.Once
+	noteInterrupt := func() {
+		noteOnce.Do(func() { printInterruptCleanup(errOut, ledger.Outstanding()) })
+	}
+	returned := make(chan struct{})
+	defer close(returned)
 	go func() {
-		<-sigCtx.Done()
+		select {
+		case <-returned:
+			return
+		case <-sigCtx.Done():
+		}
+		signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP)
 		stop()
+		noteInterrupt()
 	}()
 	// interrupted is an explicit cancel, not the timeout below, which is a
 	// child of sigCtx and leaves it live.
@@ -286,141 +310,166 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		Tools:           checkPreflightTools(),
 		Registries:      credEntries,
 		RegistryChecker: registryChecker,
+		Interrupted:     interrupted,
 	}
 
 	// A quit key in the dashboard cancels the run the way a signal does.
-	sink, err := selectCheckRendererFn(c.ErrOrStderr(), selfHostedWait != "", stop)
+	sink, err := selectCheckRendererFn(errOut, selfHostedWait != "", stop)
 	if err != nil {
 		return err
 	}
-	defer sink.Close()
 	if starter, ok := sink.(interface{ Start() }); ok {
 		starter.Start()
 	}
-	// An interrupted run still ends the stream with a final event, marked
-	// cancelled as up marks its own, so a --json consumer is not left waiting
-	// for one. Emitted on a fresh ctx: the run's ctx is already cancelled.
-	// A check that kept objects in the cluster, the validator whose pod
-	// would not stop, says how to remove them; repeat it on stderr, since an
-	// interrupt may already have closed the dashboard.
-	exitInterrupted := func(results []selfhosted.CheckResult) error {
-		_ = sink.Emit(context.Background(), progress.Final{Cancelled: true})
-		for _, r := range results {
-			if r.Cleanup != "" {
-				fmt.Fprintf(c.ErrOrStderr(), "note: %s left objects in the cluster; %s\n", r.ID, r.Cleanup)
-			}
-		}
-		return &ExitCodeError{Code: 130, Msg: "interrupted"}
-	}
-
 	var lastResults []selfhosted.CheckResult
+	runErr := func() error {
+		// An interrupted run still ends the stream with a final event, marked
+		// cancelled as up marks its own, so a --json consumer is not left waiting
+		// for one. Emitted on a fresh ctx: the run's ctx is already cancelled.
+		exitInterrupted := func() error {
+			// The note goes first, whichever of this and the signal handler
+			// gets there first.
+			noteInterrupt()
+			_ = sink.Emit(context.Background(), progress.Final{Cancelled: true, Cleanup: ledger.Outstanding()})
+			return &ExitCodeError{Code: 130, Msg: "interrupted"}
+		}
 
-	runOnce := func() []selfhosted.CheckResult {
-		var results []selfhosted.CheckResult
-		if unresolvedImage != "" {
-			// Discovery fails transiently too, and each --wait poll is a new
-			// chance to run the validator.
-			clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(ctx)
+		runOnce := func() []selfhosted.CheckResult {
+			var results []selfhosted.CheckResult
+			if unresolvedImage != "" {
+				// Discovery fails transiently too, and each --wait poll is a new
+				// chance to run the validator.
+				clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(ctx)
+			}
+			if checkPre || checkAll || checkControlPlane || checkComputePlane {
+				results = append(results,
+					runPreflightByRole(ctx, cfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger)...)
+			}
+			// Inject force-fail seam for tests.
+			if os.Getenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL") != "" {
+				results = append([]selfhosted.CheckResult{{
+					ID:       "force-fail-test-seam",
+					Category: "test",
+					Severity: selfhosted.SeverityError,
+					Passed:   false,
+					Message:  "forced failure (test seam)",
+				}}, results...)
+			}
+			return results
 		}
-		if checkPre || checkAll || checkControlPlane || checkComputePlane {
-			results = append(results,
-				runPreflightByRole(ctx, cfg, sink, mode, clusterValidatorImage, unresolvedImage)...)
-		}
-		// Inject force-fail seam for tests.
-		if os.Getenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL") != "" {
-			results = append([]selfhosted.CheckResult{{
-				ID:       "force-fail-test-seam",
-				Category: "test",
-				Severity: selfhosted.SeverityError,
-				Passed:   false,
-				Message:  "forced failure (test seam)",
-			}}, results...)
-		}
-		return results
-	}
 
-	// The outer budget stopped a check: one never started, or ran out of time
-	// while it ran. Its row is no finding, so the verdict is a timeout rather
-	// than whatever the partial set would grade as. A budget that ran out
-	// only after every check had its result changes nothing.
-	exitBudgetSpent := func() error {
-		emitCheckTimeout(sink, lastResults)
-		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
-		return &ExitCodeError{Code: 5, Msg: "timed out: the check budget ran out before every check finished"}
-	}
+		// The outer budget stopped a check: one never started, or ran out of time
+		// while it ran. Its row is no finding, so the verdict is a timeout rather
+		// than whatever the partial set would grade as. A budget that ran out
+		// only after every check had its result changes nothing.
+		exitBudgetSpent := func() error {
+			emitCheckTimeout(sink, lastResults, ledger.Outstanding())
+			return &ExitCodeError{Code: 5, Msg: "timed out: the check budget ran out before every check finished"}
+		}
 
-	if selfHostedWait == "" {
-		// Single-shot mode.
-		lastResults = runOnce()
-		if interrupted() {
-			return exitInterrupted(lastResults)
-		}
-		if anyCutShort(lastResults) {
-			return exitBudgetSpent()
-		}
-		emitCheckFinal(ctx, sink, lastResults)
-		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
-		if anyFailed(lastResults) {
-			return &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
-		}
-		return nil
-	}
-
-	// --wait mode: poll every 5s until all checks pass or the duration elapses.
-	dur, err := time.ParseDuration(selfHostedWait)
-	if err != nil {
-		return fmt.Errorf("invalid --wait duration %q: %w", selfHostedWait, err)
-	}
-
-	deadline := time.After(dur)
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	// Every exit 5 reports success:false, so a gate on the final event agrees
-	// with the exit code: a run still waiting on a rollout has not passed.
-	waitTimeout := func() error {
-		emitCheckTimeout(sink, lastResults)
-		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
-		if anyFailed(lastResults) {
-			return &ExitCodeError{Code: 5, Msg: "wait timeout: checks still failing after " + selfHostedWait}
-		}
-		return &ExitCodeError{Code: 5, Msg: "wait timeout: a rollout was still in progress after " + selfHostedWait}
-	}
-	for {
-		lastResults = runOnce()
-		if interrupted() {
-			return exitInterrupted(lastResults)
-		}
-		// An iteration the budget cut short has incomplete results: never a
-		// pass.
-		if anyCutShort(lastResults) {
-			return exitBudgetSpent()
-		}
-		if !anyFailed(lastResults) && !anyWarningToWaitOn(lastResults) {
-			emitCheckFinal(ctx, sink, lastResults)
-			maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
+		if selfHostedWait == "" {
+			// Single-shot mode.
+			lastResults = runOnce()
+			if interrupted() {
+				return exitInterrupted()
+			}
+			if anyCutShort(lastResults) {
+				return exitBudgetSpent()
+			}
+			emitCheckFinal(ctx, sink, lastResults, ledger.Outstanding())
+			if anyFailed(lastResults) {
+				return &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
+			}
 			return nil
 		}
 
-		// The deadline is checked first: with several cases ready, select
-		// picks at random, and the ticker then re-ran the checks on a spent
-		// budget.
-		select {
-		case <-deadline:
-			return waitTimeout()
-		default:
+		// --wait mode: poll every 5s until all checks pass or the duration elapses.
+		dur, err := time.ParseDuration(selfHostedWait)
+		if err != nil {
+			return fmt.Errorf("invalid --wait duration %q: %w", selfHostedWait, err)
 		}
-		select {
-		case <-deadline:
-			return waitTimeout()
-		case <-ticker.C:
-			// continue polling
-		case <-ctx.Done():
-			if interrupted() {
-				return exitInterrupted(lastResults)
+
+		deadline := time.After(dur)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		// Every exit 5 reports success:false, so a gate on the final event agrees
+		// with the exit code: a run still waiting on a rollout has not passed.
+		waitTimeout := func() error {
+			emitCheckTimeout(sink, lastResults, ledger.Outstanding())
+			if anyFailed(lastResults) {
+				return &ExitCodeError{Code: 5, Msg: "wait timeout: checks still failing after " + selfHostedWait}
 			}
-			return waitTimeout()
+			return &ExitCodeError{Code: 5, Msg: "wait timeout: a rollout was still in progress after " + selfHostedWait}
 		}
+		for {
+			lastResults = runOnce()
+			if interrupted() {
+				return exitInterrupted()
+			}
+			// An iteration the budget cut short has incomplete results: never a
+			// pass.
+			if anyCutShort(lastResults) {
+				return exitBudgetSpent()
+			}
+			if !anyFailed(lastResults) && !anyWarningToWaitOn(lastResults) {
+				emitCheckFinal(ctx, sink, lastResults, ledger.Outstanding())
+				return nil
+			}
+
+			// The deadline is checked first: with several cases ready, select
+			// picks at random, and the ticker then re-ran the checks on a spent
+			// budget.
+			select {
+			case <-deadline:
+				return waitTimeout()
+			default:
+			}
+			select {
+			case <-deadline:
+				return waitTimeout()
+			case <-ticker.C:
+				// continue polling
+			case <-ctx.Done():
+				if interrupted() {
+					return exitInterrupted()
+				}
+				return waitTimeout()
+			}
+		}
+	}()
+	// Every exit closes the dashboard first, so nothing printed after it is
+	// wiped, then prints the transcripts --show-logs asks for and the
+	// commands that remove what the runs kept in the cluster.
+	_ = sink.Close()
+	maybeShowClusterValidatorLogs(errOut, lastResults)
+	printKeptValidatorObjects(errOut, ledger.Outstanding())
+	return runErr
+}
+
+// printInterruptCleanup says, as soon as a run is interrupted, how to remove
+// what its validator runs may leave in the cluster if the teardown is cut
+// short.
+func printInterruptCleanup(w io.Writer, commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "note: interrupted; stopping the cluster-validator and removing its objects. "+
+		"A second Ctrl-C exits at once and leaves them; remove them with:")
+	for _, cmd := range commands {
+		fmt.Fprintln(w, "  "+cmd)
+	}
+}
+
+// printKeptValidatorObjects prints, as the command ends, how to remove what
+// its validator runs kept in the cluster.
+func printKeptValidatorObjects(w io.Writer, commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "note: the cluster-validator left objects in the cluster; remove them with:")
+	for _, cmd := range commands {
+		fmt.Fprintln(w, "  "+cmd)
 	}
 }
 
@@ -660,9 +709,9 @@ func withoutHostLocalChecks(cfg selfhosted.PreflightConfig) selfhosted.Preflight
 //     no compute-plane category was selected),
 //   - the runner returned no Logs (Job never produced output).
 //
-// Runs after emitCheckFinal in every exit path so the transcript appears
-// after the structured events / table, regardless of which renderer was
-// selected.
+// Runs once the sink has closed, on every exit path, interrupt included, so
+// the transcript appears after the structured events or table, whichever
+// renderer was selected.
 func maybeShowClusterValidatorLogs(w io.Writer, results []selfhosted.CheckResult) {
 	if !checkShowLogs {
 		return
@@ -683,9 +732,17 @@ func maybeShowClusterValidatorLogs(w io.Writer, results []selfhosted.CheckResult
 // selectCheckRendererFn is a test seam over selectCheckRenderer.
 var selectCheckRendererFn = selectCheckRenderer
 
+// Test seams over the renderers selectCheckRenderer picks from.
+var (
+	selectProgressRenderer  = progress.SelectRenderer
+	newCheckOneShotRenderer = func(w io.Writer, opts progress.ModelOpts) progress.EventSink {
+		return progress.NewCheckOneShotRenderer(w, opts)
+	}
+)
+
 func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventSink, error) {
 	if !wait && !selfHostedJSON && !selfHostedPlain && !selfHostedAccessible && checkWriterIsTTY(w) {
-		return progress.NewCheckOneShotRenderer(w, progress.ModelOpts{
+		return newCheckOneShotRenderer(w, progress.ModelOpts{
 			Mode:                progress.ModeCheck,
 			Output:              w,
 			Cluster:             checkClusterName,
@@ -695,7 +752,7 @@ func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventS
 		}), nil
 	}
 
-	sink, _, err := progress.SelectRenderer(w, progress.RenderOpts{
+	sink, _, err := selectProgressRenderer(w, progress.RenderOpts{
 		JSON:                selfHostedJSON,
 		Plain:               selfHostedPlain,
 		Accessible:          selfHostedAccessible,
@@ -720,7 +777,7 @@ func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventS
 // is the already-resolved validator image (empty when not configured).
 func runPreflightByRole(
 	ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, mode kubectx.Mode,
-	clusterValidatorImage, unresolvedImage string,
+	clusterValidatorImage, unresolvedImage string, ledger *selfhosted.CleanupLedger,
 ) []selfhosted.CheckResult {
 	// LocalOnly: skip all cluster probes.
 	if cfg.LocalOnly {
@@ -815,6 +872,7 @@ func runPreflightByRole(
 					ClusterValidatorTolerations:     validatorTolerations,
 					ClusterValidatorUnresolvedImage: unresolvedImage,
 					ClusterValidatorRegistries:      registries,
+					ValidatorCleanup:                ledger,
 					StaleNamespaceProber:            staleNSProber,
 					StackDir:                        localStackDir(selfHostedControlPlaneStack),
 				}
@@ -835,6 +893,7 @@ func runPreflightByRole(
 					ClusterValidatorEnv:             gpuValidatorEnv,
 					ClusterValidatorTolerations:     validatorTolerations,
 					ClusterValidatorUnresolvedImage: unresolvedImage,
+					ValidatorCleanup:                ledger,
 					StaleNamespaceProber:            staleNSProber,
 					StackDir:                        localStackDir(selfHostedComputePlaneStack),
 				}
@@ -885,6 +944,7 @@ func runPreflightByRole(
 				ClusterValidatorTolerations:     validatorTolerations,
 				ClusterValidatorUnresolvedImage: unresolvedImage,
 				ClusterValidatorRegistries:      registries,
+				ValidatorCleanup:                ledger,
 				StaleNamespaceProber:            staleForControlPlane,
 				StackDir:                        localStackDir(selfHostedControlPlaneStack),
 				ExtraStaleNamespaces:            cpExtraNamespaces,
@@ -903,6 +963,7 @@ func runPreflightByRole(
 				ClusterValidatorEnv:             gpuValidatorEnv,
 				ClusterValidatorTolerations:     validatorTolerations,
 				ClusterValidatorUnresolvedImage: unresolvedImage,
+				ValidatorCleanup:                ledger,
 				StaleNamespaceProber:            staleForComputePlane,
 				StackDir:                        localStackDir(selfHostedComputePlaneStack),
 			}
@@ -1018,7 +1079,7 @@ func resolveClusterValidatorImage(ctx context.Context) (image string, unresolved
 
 // emitCheckFinal emits a Final event with check-mode verdict fields derived
 // from the result slice. Called once per run (or once per wait-loop exit).
-func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []selfhosted.CheckResult) {
+func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []selfhosted.CheckResult, cleanup []string) {
 	// Success and FailedCount must agree with the process exit code, which is
 	// driven by anyFailed. Counting every non-pass as a failure made a
 	// warning-severity result emit success:false / verdict:failed while the
@@ -1039,12 +1100,13 @@ func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []self
 		TotalChecks: len(results),
 		PassedCount: passed,
 		FailedCount: failed,
+		Cleanup:     cleanup,
 	})
 }
 
 // emitCheckTimeout emits the final event of a run that ended in a timeout,
 // exit 5. Nothing passed the gate, whatever the rows say, so success is false.
-func emitCheckTimeout(sink progress.EventSink, results []selfhosted.CheckResult) {
+func emitCheckTimeout(sink progress.EventSink, results []selfhosted.CheckResult, cleanup []string) {
 	passed, failed, _ := selfhosted.CountResults(results)
 	_ = sink.Emit(context.Background(), progress.Final{
 		Success:     false,
@@ -1052,6 +1114,7 @@ func emitCheckTimeout(sink progress.EventSink, results []selfhosted.CheckResult)
 		TotalChecks: len(results),
 		PassedCount: passed,
 		FailedCount: failed,
+		Cleanup:     cleanup,
 	})
 }
 

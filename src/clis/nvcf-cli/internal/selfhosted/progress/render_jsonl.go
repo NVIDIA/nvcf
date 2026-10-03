@@ -470,6 +470,7 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 			out.PassedCount = &passed
 			out.FailedCount = &failed
 		}
+		out.Cleanup = ev.Cleanup
 		return out
 	case Snapshot:
 		out := wireSnapshot{
@@ -545,6 +546,7 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 			Detail:    ev.Detail,
 			Transient: ev.Transient,
 			HintURL:   ev.HintURL,
+			Cleanup:   ev.Cleanup,
 		}
 	case CategoryCompleted:
 		return wireCategoryCompleted{
@@ -674,6 +676,8 @@ type wireFinal struct {
 	// goldens unchanged.
 	PassedCount *int `json:"passedCount,omitempty"`
 	FailedCount *int `json:"failedCount,omitempty"`
+	// Cleanup lists the commands that remove what a check left in the cluster.
+	Cleanup []string `json:"cleanup,omitempty"`
 }
 
 // Wire structs for status + check event types (M+8.3).
@@ -751,6 +755,8 @@ type wireCheckCompleted struct {
 	HintURL  string `json:"hintURL,omitempty"`
 	// Transient is set on a warning --wait keeps polling on.
 	Transient bool `json:"transient,omitempty"`
+	// Cleanup is the command that removes what the check left in the cluster.
+	Cleanup string `json:"cleanup,omitempty"`
 }
 
 type wireCategoryCompleted struct {

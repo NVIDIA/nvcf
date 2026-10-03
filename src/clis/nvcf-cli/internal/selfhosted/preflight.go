@@ -26,7 +26,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -252,6 +255,11 @@ type PreflightConfig struct {
 	// RegistryChecker validates credentials for one registry. Nil skips the
 	// category. Production wires NewRegistryCredentialChecker; tests pass fakes.
 	RegistryChecker RegistryCredentialChecker
+
+	// Interrupted reports an interrupt. The run's context cannot: once the
+	// check's budget has ended it, a later interrupt leaves it unchanged, and
+	// an interrupted run reports no rows for checks it never finished.
+	Interrupted func() bool
 }
 
 // DefaultTools returns the kubectl/helmfile/helm specs with version floors
@@ -388,6 +396,10 @@ type RoleConfig struct {
 	// a tag whose latest tag could not be discovered. The validator does not
 	// run, and the role reports that as a failed check rather than nothing.
 	ClusterValidatorUnresolvedImage string
+
+	// ValidatorCleanup records the removal command of every validator run
+	// that may leave objects in the cluster. Nil records nothing.
+	ValidatorCleanup *CleanupLedger
 }
 
 // categorySpec groups a set of checks under a named category. Categories run
@@ -485,17 +497,7 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 	// (Gateway API CRDs, Envoy Gateway, StorageClass, external LB,
 	// node-to-node overlay, and reachability to nvcr.io + extra registries).
 	if rc.ClusterValidator != nil {
-		cat.checks = append(cat.checks, clusterValidatorCheck(
-			rc.ClusterValidator,
-			rc.KubeContext,
-			rc.ClusterValidatorImage,
-			rc.ClusterValidatorPullSecret,
-			rc.ClusterValidatorNoCleanup,
-			validatorRoleControlPlane,
-			rc.ClusterValidatorRegistries,
-			rc.ClusterValidatorEnv,
-			rc.ClusterValidatorTolerations...,
-		))
+		cat.checks = append(cat.checks, clusterValidatorCheck(rc, validatorRoleControlPlane))
 	} else if rc.ClusterValidatorUnresolvedImage != "" {
 		cat.checks = append(cat.checks, unresolvedValidatorCheck(rc.ClusterValidatorUnresolvedImage))
 	}
@@ -530,17 +532,7 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 		cat.checks = append(cat.checks, nodeInotifyCheck(rc.InotifyProber, rc.KubeContext))
 	}
 	if rc.ClusterValidator != nil {
-		cat.checks = append(cat.checks, clusterValidatorCheck(
-			rc.ClusterValidator,
-			rc.KubeContext,
-			rc.ClusterValidatorImage,
-			rc.ClusterValidatorPullSecret,
-			rc.ClusterValidatorNoCleanup,
-			validatorRoleComputePlane,
-			nil, // registries: compute-plane doesn't use the ConfigMap reachability list
-			rc.ClusterValidatorEnv,
-			rc.ClusterValidatorTolerations...,
-		))
+		cat.checks = append(cat.checks, clusterValidatorCheck(rc, validatorRoleComputePlane))
 	} else if rc.ClusterValidatorUnresolvedImage != "" {
 		cat.checks = append(cat.checks, unresolvedValidatorCheck(rc.ClusterValidatorUnresolvedImage))
 	}
@@ -669,16 +661,17 @@ func unresolvedValidatorCheck(image string) binaryCheckSpec {
 	}
 }
 
-// clusterValidatorCheck runs the validator Job. A validator that could not run
-// (RBAC denied, image pull failure, timeout) is an error like a validator
-// failure: nothing was checked, and a readiness gate must not pass on that.
-// --skip-cluster-validation is the explicit opt-out. role selects the check
-// set via VALIDATOR_ROLE; registries extends the ConfigMap reachability list.
-func clusterValidatorCheck(
-	cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool, role string,
-	registries []RegistryEntry, env map[string]string, tolerations ...corev1.Toleration,
-) binaryCheckSpec {
+// clusterValidatorCheck runs the validator Job for role. A validator that
+// could not run (RBAC denied, image pull failure, timeout) is an error like a
+// validator failure: nothing was checked, and a readiness gate must not pass
+// on that. --skip-cluster-validation is the explicit opt-out. Only the
+// control-plane validator probes rc's registries.
+func clusterValidatorCheck(rc RoleConfig, role string) binaryCheckSpec {
 	const id = "cluster-validator"
+	registries := rc.ClusterValidatorRegistries
+	if role != validatorRoleControlPlane {
+		registries = nil
+	}
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: "running cluster-validator probe…",
@@ -687,30 +680,29 @@ func clusterValidatorCheck(
 				ID:      id,
 				HintURL: clusterValidatorHintURL,
 			}
-			result := cv(ctx, ClusterValidatorParams{
+			// Every hint names the context the run used, so it stays right
+			// after the current context changes.
+			kubeContext := effectiveKubeContext(rc.KubeContext)
+			result := rc.ClusterValidator(ctx, ClusterValidatorParams{
 				KubeContext: kubeContext,
-				Image:       image,
-				PullSecret:  pullSecret,
-				NoCleanup:   noCleanup,
+				Image:       rc.ClusterValidatorImage,
+				PullSecret:  rc.ClusterValidatorPullSecret,
+				NoCleanup:   rc.ClusterValidatorNoCleanup,
 				Role:        role,
 				Registries:  registries,
-				Env:         env,
-				Tolerations: tolerations,
+				Env:         rc.ClusterValidatorEnv,
+				Tolerations: rc.ClusterValidatorTolerations,
+				OnStart: func(runID string) {
+					rc.ValidatorCleanup.started(runID, validatorRemovalCommand(kubeContext, runID))
+				},
 			})
 			r.Logs = result.Logs
-			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)
-			switch {
-			case noCleanup:
-				r.Cleanup = validatorCleanupHint(kubeContext, result.RunID)
-			case result.LeftBehind:
-				// The pod could still be running, so its RBAC was kept rather
-				// than pulled out from under it. Say how to remove it once it
-				// ends, instead of leaving it for a later check's sweep.
-				r.Cleanup = validatorLeftBehindHint(kubeContext, result.RunID)
+			r.Detail = clusterValidatorDetail(kubeContext, result)
+			if why := validatorKeptReason(rc.ClusterValidatorNoCleanup, result); why != "" {
+				r.Cleanup = validatorRemovalCommand(kubeContext, result.RunID)
+				r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + why + ": " + r.Cleanup
 			}
-			if r.Cleanup != "" {
-				r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + r.Cleanup
-			}
+			rc.ValidatorCleanup.finished(result.RunID, r.Cleanup)
 
 			if errors.Is(result.Err, context.Canceled) {
 				r.Severity = SeverityWarning
@@ -725,55 +717,118 @@ func clusterValidatorCheck(
 				r.Err = result.Err
 				return r
 			}
-			// An image that predates role support ignores VALIDATOR_ROLE and runs
-			// the compute-plane GPU checks, which fail on a CPU-only control
-			// plane. The latest tag can be such an image until a release with
-			// role support is published, so report it as the image being too
-			// old rather than as the cluster failing. That needs positive
-			// evidence of the legacy check set, not just a missing role line: a
-			// role-aware image that fails before printing it (say, building its
-			// Kubernetes client) must still fail the run.
-			if role == validatorRoleControlPlane && isLegacyComputePlaneTranscript(result.Logs) {
-				// Downgrade only the failure the old image causes by itself: its
-				// GPU check on a CPU-only control plane. Its checks common to both
-				// roles (the control plane's /readyz, admission webhooks, critical
-				// registry reachability) still see real failures, and those fail.
-				if others := legacyCriticalFailures(result.Logs); len(others) > 0 {
-					r.Severity = SeverityError
-					r.Message = "cluster-validator reported failures (" + strings.Join(others, "; ") +
-						"); the image predates validator roles, so only its checks common to both roles ran"
-					return r
-				}
-				r.Severity = SeverityWarning
-				r.Message = "cluster-validator image does not support the control-plane checks (it ran the " +
-					"compute-plane set); use an image from an NVCA release that supports validator roles, " +
-					"or pass --skip-cluster-validation"
-				return r
-			}
-			r.Passed = result.Passed
-			if result.Passed && strings.Contains(result.Logs, validatorReadyWithWarnings) {
-				// The Job succeeding is not a clean pass when the validator
-				// itself reported warnings. A rollout in progress is expected
-				// to clear, so --wait keeps polling on it.
-				r.Passed = false
-				r.Severity = SeverityWarning
-				r.Transient = isRolloutTranscript(result.Logs)
-				r.Message = "cluster-validator passed with warnings; run with --show-logs for details"
-				if r.Transient {
-					r.Message = "cluster-validator passed with a rollout in progress; --wait polls until it completes"
-				}
-				return r
-			}
-			if result.Passed {
-				r.Severity = SeverityInfo
-				r.Message = "cluster passed cluster-validator built-in checks"
-				return r
-			}
-			r.Severity = SeverityError
-			r.Message = fmt.Sprintf("cluster-validator reported failures (exit code %d)", result.ExitCode)
+			gradeValidatorTranscript(&r, result, role, kubeContext)
 			return r
 		},
 	}
+}
+
+// gradeValidatorTranscript grades a validator that ran to its end on what its
+// transcript shows, not on the Job's status alone.
+func gradeValidatorTranscript(r *CheckResult, result ClusterValidatorResult, role, kubeContext string) {
+	// An image that predates role support ignores VALIDATOR_ROLE and runs
+	// the compute-plane GPU checks, which fail on a CPU-only control
+	// plane. The latest tag can be such an image until a release with
+	// role support is published, so report it as the image being too
+	// old rather than as the cluster failing. That needs positive
+	// evidence of the legacy check set, not just a missing role line: a
+	// role-aware image that fails before printing it (say, building its
+	// Kubernetes client) must still fail the run.
+	if role == validatorRoleControlPlane && isLegacyComputePlaneTranscript(result.Logs) {
+		// Downgrade only the failure the old image causes by itself: its
+		// GPU check on a CPU-only control plane. Its checks common to both
+		// roles (the control plane's /readyz, admission webhooks, critical
+		// registry reachability) still see real failures, and those fail.
+		if others := legacyCriticalFailures(result.Logs); len(others) > 0 {
+			r.Severity = SeverityError
+			r.Message = "cluster-validator reported failures (" + strings.Join(others, "; ") +
+				"); the image predates validator roles, so only its checks common to both roles ran"
+			return
+		}
+		r.Severity = SeverityWarning
+		r.Message = "cluster-validator image does not support the control-plane checks (it ran the " +
+			"compute-plane set); use an image from an NVCA release that supports validator roles, " +
+			"or pass --skip-cluster-validation"
+		return
+	}
+	if !result.Passed {
+		r.Severity = SeverityError
+		if !strings.Contains(result.Logs, validatorVerdictNotReady) {
+			// It ended before its verdict: a crash, an OOM kill or an
+			// eviction, not the cluster failing a check.
+			r.Message = "cluster-validator did not complete, so the cluster was not validated: " +
+				validatorEndedEarly(result)
+			return
+		}
+		r.Message = fmt.Sprintf("cluster-validator reported failures (exit code %d)", result.ExitCode)
+		if rows := failedValidatorRows(result.Logs, ""); len(rows) > 0 {
+			r.Message = "cluster-validator reported failures: " + strings.Join(rows, "; ")
+		}
+		return
+	}
+	// Info needs proof the requested checks ran and passed: the role line,
+	// and the verdict. A transcript that cannot be read, or stops short of
+	// its verdict, can hide warnings, so it is not a clean pass, and --wait
+	// polls again.
+	if why := unreadVerdict(result, role); why != "" {
+		r.Severity = SeverityWarning
+		r.Transient = true
+		r.Message = "cluster-validator Job succeeded but its verdict could not be read (" + why + ")"
+		if hint := kubectlLogsHint(kubeContext, result.JobName); hint != "" {
+			r.Message += "; read it with: " + hint
+		}
+		return
+	}
+	if strings.Contains(result.Logs, validatorReadyWithWarnings) {
+		// The Job succeeding is not a clean pass when the validator
+		// itself reported warnings. A rollout in progress is expected
+		// to clear, so --wait keeps polling on it.
+		r.Severity = SeverityWarning
+		r.Transient = isRolloutTranscript(result.Logs)
+		r.Message = "cluster-validator passed with warnings; run with --show-logs for details"
+		if r.Transient {
+			r.Message = "cluster-validator passed with a rollout in progress; --wait polls until it completes"
+		}
+		return
+	}
+	r.Passed = true
+	r.Severity = SeverityInfo
+	r.Message = "cluster passed cluster-validator built-in checks"
+}
+
+// unreadVerdict says why a successful run's transcript does not show the
+// requested check set reaching its verdict, or "" when it does. A validator
+// that predates roles always runs the compute-plane set.
+func unreadVerdict(result ClusterValidatorResult, role string) string {
+	logs := result.Logs
+	ranRole := strings.Contains(logs, validatorRoleMarker+role) ||
+		(role == validatorRoleComputePlane && isLegacyComputePlaneTranscript(logs))
+	switch {
+	case result.LogsErr != nil && !strings.Contains(logs, validatorVerdictReady):
+		return "its transcript could not be read: " + result.LogsErr.Error()
+	case strings.TrimSpace(logs) == "":
+		return "its transcript was empty"
+	case !ranRole:
+		return "the transcript does not show the " + role + " checks"
+	case !strings.Contains(logs, validatorVerdictReady):
+		return "the transcript has no verdict"
+	}
+	return ""
+}
+
+// validatorEndedEarly describes a validator that failed before its verdict.
+func validatorEndedEarly(result ClusterValidatorResult) string {
+	msg := "its pod ended before the validator printed a verdict"
+	if result.ExitCode >= 0 {
+		msg = fmt.Sprintf("the validator exited %d before printing a verdict", result.ExitCode)
+	}
+	if result.Reason != "" {
+		msg += " (" + result.Reason + ")"
+	}
+	if result.LogsErr != nil {
+		msg += "; its transcript could not be read: " + result.LogsErr.Error()
+	}
+	return msg
 }
 
 // validatorRoleMarker prefixes the line a role-aware validator prints naming
@@ -781,10 +836,13 @@ func clusterValidatorCheck(
 // nvca/internal/clustervalidator/validator.go.
 const validatorRoleMarker = "Validator role: "
 
-// validatorReadyWithWarnings is in the verdict line of a run that passed every
-// critical check with warnings. Must match printSummary in
-// nvca/internal/clustervalidator/validator.go.
-const validatorReadyWithWarnings = "NVCF-Ready (with warnings)"
+// The verdict lines printSummary prints. The with-warnings line contains the
+// plain one. Must match printSummary in nvca/internal/clustervalidator.
+const (
+	validatorVerdictReady      = "Cluster is NVCF-Ready"
+	validatorReadyWithWarnings = "NVCF-Ready (with warnings)"
+	validatorVerdictNotReady   = "Cluster is NVCF-Not-Ready"
+)
 
 // validatorRolloutMarkers are in the validator's warnings for a Deployment or
 // StatefulSet rollout in progress (checks.go, Tier-1 and Tier-2).
@@ -799,37 +857,53 @@ func isRolloutTranscript(logs string) bool {
 	return false
 }
 
-// validatorSummaryStart and validatorFailIcon locate the failed critical rows
-// the validator prints in its summary. Must match printSummary and printError
-// in nvca/internal/clustervalidator.
+// validatorSummaryStart, validatorFailIcon and validatorWarnIcon locate the
+// failed and unobserved rows the validator prints in its summary. Must match
+// printSummary and the print helpers in nvca/internal/clustervalidator.
 const (
-	validatorSummaryStart = "Check Results:"
-	validatorFailIcon     = "\u2717"
+	validatorSummaryStart  = "Check Results:"
+	validatorFailIcon      = "\u2717"
+	validatorWarnIcon      = "\u26a0"
+	validatorStatusUnknown = "Status Unknown"
 )
 
-// legacyCriticalFailures returns the failed critical summary rows of a
-// pre-role transcript other than GPU Resources, the one row the compute-plane
-// set fails on any CPU-only control plane. A transcript without a summary
-// returns a row saying so: nothing shows the run was otherwise clean.
-func legacyCriticalFailures(logs string) []string {
+// failedValidatorRows returns the summary rows of a transcript that failed a
+// critical check, or that report a check as Status Unknown, leaving out rows
+// that start with skip when skip is set. The rows end at the verdict: the line
+// after it carries the failure mark too.
+func failedValidatorRows(logs, skip string) []string {
 	i := strings.LastIndex(logs, validatorSummaryStart)
 	if i < 0 {
-		return []string{"the validator printed no summary"}
+		return nil
 	}
 	var out []string
 	for _, line := range strings.Split(logs[i:], "\n") {
 		if strings.Contains(line, "Cluster is") {
 			break
 		}
-		_, row, ok := strings.Cut(line, validatorFailIcon)
-		if !ok {
-			continue
+		_, row, failed := strings.Cut(line, validatorFailIcon)
+		if !failed {
+			if !strings.Contains(line, validatorStatusUnknown) {
+				continue
+			}
+			row = strings.TrimPrefix(strings.TrimSpace(line), validatorWarnIcon)
 		}
-		if row = strings.TrimSpace(row); row != "" && !strings.HasPrefix(row, "GPU Resources") {
+		if row = strings.TrimSpace(row); row != "" && (skip == "" || !strings.HasPrefix(row, skip)) {
 			out = append(out, row)
 		}
 	}
 	return out
+}
+
+// legacyCriticalFailures returns the failed critical summary rows of a
+// pre-role transcript other than GPU Resources, the one row the compute-plane
+// set fails on any CPU-only control plane. A transcript without a summary
+// returns a row saying so: nothing shows the run was otherwise clean.
+func legacyCriticalFailures(logs string) []string {
+	if !strings.Contains(logs, validatorSummaryStart) {
+		return []string{"the validator printed no summary"}
+	}
+	return failedValidatorRows(logs, legacyComputePlaneHeader)
 }
 
 // legacyComputePlaneHeader is a section header only the compute-plane check
@@ -843,36 +917,101 @@ func isLegacyComputePlaneTranscript(logs string) bool {
 	return !strings.Contains(logs, validatorRoleMarker) && strings.Contains(logs, legacyComputePlaneHeader)
 }
 
-// validatorCleanupHint is the command that removes everything one --no-cleanup
-// run kept. Everything it created carries the run label, so one selector
-// covers the namespaced objects and one the cluster-scoped RBAC.
-func validatorCleanupHint(kubeContext, runID string) string {
-	if runID == "" {
+// validatorKeptReason says why a run's objects are still in the cluster, or
+// "" when nothing it created was kept.
+func validatorKeptReason(noCleanup bool, result ClusterValidatorResult) string {
+	switch {
+	case result.RunID == "":
 		return ""
+	case result.SweepErr != nil:
+		return "removing the run's objects failed (" + result.SweepErr.Error() + "); remove them with"
+	case result.LeftBehind:
+		// The pod could still be running, so its RBAC was kept rather than
+		// pulled out from under it.
+		return "the validator pod may still be running, so its objects were kept; once it ends, remove them with"
+	case noCleanup && result.Created:
+		return "kept with --no-cleanup; remove with"
 	}
-	sel := clusterValidatorRunLabel + "=" + runID
-	ctx := kubectlContextArg(kubeContext)
-	return fmt.Sprintf("kept with --no-cleanup; remove with: kubectl%s delete -n %s job,serviceaccount,secret,configmap -l %s && "+
-		"kubectl%s delete clusterrole,clusterrolebinding -l %s",
-		ctx, clusterValidatorNamespace, sel, ctx, sel)
+	return ""
 }
 
-// validatorLeftBehindHint is the removal command for a run whose pod outlived
-// the wait, so its RBAC was kept.
-func validatorLeftBehindHint(kubeContext, runID string) string {
-	if runID == "" {
-		return ""
-	}
+// validatorRemovalCommand removes everything one validator run created, in an
+// order that is safe at any time: look at the pod, stop the Job in the
+// foreground so its pod ends while it still has its RBAC, revoke the
+// cluster-wide RBAC, then delete the rest. Joined with ';', so a failed step
+// does not skip the RBAC. Everything the run created carries its run label.
+func validatorRemovalCommand(kubeContext, runID string) string {
 	sel := clusterValidatorRunLabel + "=" + runID
-	ctx := kubectlContextArg(kubeContext)
-	return fmt.Sprintf("the validator pod was still running, so its objects were kept; once it ends remove them "+
-		"with: kubectl%s delete -n %s job,serviceaccount,secret,configmap -l %s && "+
-		"kubectl%s delete clusterrole,clusterrolebinding -l %s",
-		ctx, clusterValidatorNamespace, sel, ctx, sel)
+	kubectl := "kubectl" + kubectlContextArg(kubeContext)
+	return strings.Join([]string{
+		fmt.Sprintf("%s get pods -n %s -l %s", kubectl, clusterValidatorNamespace, sel),
+		fmt.Sprintf("%s delete -n %s job -l %s --cascade=foreground --wait", kubectl, clusterValidatorNamespace, sel),
+		fmt.Sprintf("%s delete clusterrolebinding,clusterrole -l %s", kubectl, sel),
+		fmt.Sprintf("%s delete -n %s serviceaccount,secret,configmap -l %s", kubectl, clusterValidatorNamespace, sel),
+	}, "; ")
 }
 
-func clusterValidatorDetail(kubeContext, jobName string) string {
-	hint := kubectlLogsHint(kubeContext, jobName)
+// CleanupLedger records, across the validator runs of one command, the
+// removal command of every run that may leave objects in a cluster: runs in
+// progress, and runs that kept objects. Safe for concurrent use; its methods
+// do nothing on a nil ledger.
+type CleanupLedger struct {
+	mu      sync.Mutex
+	running map[string]string
+	kept    []string
+}
+
+func (l *CleanupLedger) started(runID, command string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.running == nil {
+		l.running = map[string]string{}
+	}
+	l.running[runID] = command
+}
+
+// finished records that a run returned, keeping its removal command when it
+// left objects behind.
+func (l *CleanupLedger) finished(runID, command string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.running, runID)
+	if command != "" && !slices.Contains(l.kept, command) {
+		l.kept = append(l.kept, command)
+	}
+}
+
+// Outstanding returns the removal commands of the runs that kept objects,
+// then of the runs still in progress.
+func (l *CleanupLedger) Outstanding() []string {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := slices.Clone(l.kept)
+	running := make([]string, 0, len(l.running))
+	for _, c := range l.running {
+		running = append(running, c)
+	}
+	sort.Strings(running)
+	return append(out, running...)
+}
+
+// clusterValidatorDetail points at the validator's transcript, or for a kept
+// Job that was suspended, whose pod is gone, at the Job.
+func clusterValidatorDetail(kubeContext string, result ClusterValidatorResult) string {
+	if result.Suspended && result.JobName != "" {
+		return fmt.Sprintf("inspect: kubectl%s describe -n %s job/%s",
+			kubectlContextArg(kubeContext), clusterValidatorNamespace, result.JobName)
+	}
+	hint := kubectlLogsHint(kubeContext, result.JobName)
 	if hint == "" {
 		return ""
 	}
@@ -1184,6 +1323,9 @@ func RunPreflightStreaming(ctx context.Context, cfg PreflightConfig, sink progre
 
 func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc RoleConfig, sink progress.EventSink) []CheckResult {
 	var all []CheckResult
+	interrupted := func() bool {
+		return errors.Is(ctx.Err(), context.Canceled) || (cfg.Interrupted != nil && cfg.Interrupted())
+	}
 
 	categories := buildCategories(cfg, role, rc)
 	for _, cat := range categories {
@@ -1192,7 +1334,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 		for _, spec := range cat.checks {
 			var res CheckResult
 			switch {
-			case errors.Is(ctx.Err(), context.Canceled):
+			case interrupted():
 				// Interrupted: the command reports the interrupt, not rows.
 				return all
 			case ctx.Err() != nil:
@@ -1211,7 +1353,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 					Message:  spec.HumanLabel,
 				})
 				res = spec.Run(ctx)
-				if errors.Is(ctx.Err(), context.Canceled) {
+				if interrupted() {
 					// Cut short by the interrupt, so its result is not a
 					// finding; the cancelled final event says what happened.
 					// A row that says how to remove what the check left in
@@ -1260,6 +1402,7 @@ func emitCheckCompleted(sink progress.EventSink, category string, res CheckResul
 		Detail:    res.Detail,
 		HintURL:   res.HintURL,
 		Transient: res.Transient,
+		Cleanup:   res.Cleanup,
 	})
 }
 

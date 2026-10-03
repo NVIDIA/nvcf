@@ -125,6 +125,10 @@ func NewInotifyProber() NodeInotifyProber {
 // shorten it.
 var inotifyProbeBudget = 100 * time.Second
 
+// InotifyProbeBudget is the longest the node inotify probe runs, which the
+// check command's time budget must cover.
+func InotifyProbeBudget() time.Duration { return inotifyProbeBudget }
+
 // probeAllNodes is the testable core: it takes a kubernetes.Interface so
 // callers can inject fake.NewSimpleClientset. It probes nodes in parallel
 // with a small concurrency cap so image-pull latency doesn't blow the

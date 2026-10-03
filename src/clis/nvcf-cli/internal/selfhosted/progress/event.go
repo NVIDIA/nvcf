@@ -188,6 +188,9 @@ type Final struct {
 	TotalChecks int
 	PassedCount int
 	FailedCount int
+	// Cleanup lists the commands that remove what the checks left in the
+	// cluster, on every outcome, interrupt included.
+	Cleanup []string
 }
 
 func (Final) kind() eventKind { return "final" }
@@ -282,6 +285,9 @@ type CheckCompleted struct {
 	// Transient marks a warning expected to clear by itself, such as a
 	// rollout in progress; --wait keeps polling while one remains.
 	Transient bool
+	// Cleanup is the command that removes what the check left in the
+	// cluster, when it left anything.
+	Cleanup string
 }
 
 func (CheckCompleted) kind() eventKind { return "check_completed" }

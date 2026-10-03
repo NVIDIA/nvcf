@@ -85,8 +85,10 @@ func podListReactor(waitingReason string) ktesting.ReactionFunc {
 				Namespace: clusterValidatorNamespace,
 				Labels:    map[string]string{"job-name": jobName},
 			},
+			Status: corev1.PodStatus{Phase: corev1.PodSucceeded},
 		}
 		if waitingReason != "" {
+			pod.Status.Phase = corev1.PodPending
 			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
 				Name: clusterValidatorContainer,
 				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
@@ -117,7 +119,7 @@ func TestClusterValidatorCheck_OrchestratorErrorFails(t *testing.T) {
 	cv := func(_ context.Context, _ ClusterValidatorParams) ClusterValidatorResult {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: forbidden")}
 	}
-	r := clusterValidatorCheck(cv, "", "", "", false, "", nil, nil).Run(context.Background())
+	r := clusterValidatorCheck(RoleConfig{ClusterValidator: cv}, "").Run(context.Background())
 	assert.False(t, r.Passed)
 	assert.Equal(t, SeverityError, r.Severity)
 	assert.True(t, r.IsBlockingFailure())
@@ -805,37 +807,33 @@ func TestSweepClusterValidatorConfig_DeletesOwnAndSparesOperators(t *testing.T) 
 }
 
 // --no-cleanup must preserve the whole run, not just the Job: an operator who
-// keeps the Job and re-runs the pod needs its pull secret to still exist.
+// keeps the Job and re-runs the pod needs its pull secret to still exist. A
+// later run, with or without --no-cleanup, leaves an earlier kept run alone.
 func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
-	prior := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-		Name: clusterValidatorName + "-earlier", Namespace: clusterValidatorNamespace,
-		Labels:            clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
-		CreationTimestamp: metav1.NewTime(time.Now()),
-	}}
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid"),
-			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
-			// The fake clientset leaves this zero, which the orphan sweeper
-			// reads as older than any TTL. A real apiserver stamps it.
-			CreationTimestamp: metav1.NewTime(time.Now()),
-		},
-		Type: corev1.SecretTypeDockerConfigJson,
+	t.Setenv("NGC_API_KEY", "key")
+	for _, later := range []bool{true, false} {
+		client := lifecycleClient(succeeded, "")
+		// The fake leaves creation times zero, which the orphan sweep reads
+		// as older than any TTL. A real apiserver stamps them.
+		client.PrependReactor("create", "*", func(a ktesting.Action) (bool, runtime.Object, error) {
+			if o, ok := a.(ktesting.CreateAction).GetObject().(metav1.Object); ok {
+				o.SetCreationTimestamp(metav1.Now())
+			}
+			return false, nil, nil
+		})
+		first := runClusterValidator(context.Background(), client, "nvcr.io/x/validator:1",
+			"", true, clusterValidatorControlPlaneRole, nil, nil)
+		require.NoError(t, first.Err)
+		kept := leftovers(t, client, first.RunID)
+		require.Len(t, kept["Secret"], 1, "the first run keeps its pull secret")
+
+		runClusterValidator(context.Background(), client, "nvcr.io/x/validator:1",
+			"", later, clusterValidatorControlPlaneRole, nil, nil)
+		assert.Equal(t, kept, leftovers(t, client, first.RunID), "later --no-cleanup=%v", later)
+		_, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(context.Background(), first.JobName,
+			metav1.GetOptions{})
+		assert.NoError(t, err, "the kept Job survives a later run")
 	}
-	client := fake.NewSimpleClientset(prior, secret)
-	driveJobToSuccess(client)
-
-	runClusterValidator(context.Background(), client, "nvcr.io/x/validator:1",
-		"", true /* noCleanup */, clusterValidatorControlPlaneRole, nil, nil)
-
-	_, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(
-		context.Background(), prior.Name, metav1.GetOptions{})
-	assert.NoError(t, err, "--no-cleanup must not destroy a deliberately preserved Job")
-
-	_, err = client.CoreV1().Secrets(clusterValidatorNamespace).Get(
-		context.Background(), secret.Name, metav1.GetOptions{})
-	assert.NoError(t, err, "--no-cleanup must keep the pull secret the preserved pod needs")
 }
 
 // The Job runs the same image as the chart's CronJob, so it needs the same pod

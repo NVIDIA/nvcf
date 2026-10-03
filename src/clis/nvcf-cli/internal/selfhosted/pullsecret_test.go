@@ -590,3 +590,34 @@ func TestScanAndMirrorPullSecret_NeverAdoptsAReleasedCLIsSecret(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+// A --no-cleanup run's Secret carries the preserve marker on both the mirror
+// and the mint path, so the orphan sweep keeps it for a day rather than
+// 30 minutes, and a re-run of the kept Job can still pull.
+func TestPullSecret_PreservedRunIsMarkedOnBothPaths(t *testing.T) {
+	for _, name := range ngcAPIKeyEnvNames {
+		t.Setenv(name, "")
+	}
+	t.Setenv("NGC_API_KEY", "nvapi-test-123")
+	runName := validatorPullSecretRunName(clusterValidatorControlPlaneRole, "runid")
+	for _, preserve := range []bool{false, true} {
+		mirror := fake.NewSimpleClientset(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "chart-owned-creds", Namespace: "nvcf"},
+			Type:       corev1.SecretTypeDockerConfigJson,
+			Data: map[string][]byte{corev1.DockerConfigJsonKey: dockerConfigBlob(t, "private.registry.test",
+				"$oauthtoken", "key")},
+		})
+		_, err := scanAndMirrorPullSecret(context.Background(), mirror, "private.registry.test",
+			clusterValidatorControlPlaneRole, "runid", preserve)
+		require.NoError(t, err)
+		mint := fake.NewSimpleClientset()
+		_, err = autoCreatePullSecretFromEnv(context.Background(), mint, "nvcr.io", clusterValidatorControlPlaneRole,
+			"runid", preserve)
+		require.NoError(t, err)
+		for path, client := range map[string]*fake.Clientset{"mirror": mirror, "mint": mint} {
+			s, err := client.CoreV1().Secrets("default").Get(context.Background(), runName, metav1.GetOptions{})
+			require.NoError(t, err, path)
+			assert.Equal(t, preserve, s.Labels[clusterValidatorPreserveLabel] == "true", "%s, preserve=%v", path, preserve)
+		}
+	}
+}

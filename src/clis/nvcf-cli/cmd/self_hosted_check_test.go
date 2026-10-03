@@ -672,22 +672,36 @@ func TestCheck_HostLocalChecksRunOnce(t *testing.T) {
 	rootCmd.SetOut(&bytes.Buffer{})
 
 	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--skip-cluster-validation", "--json"})
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--skip-cluster-validation", "--json",
+		"--cluster-validator-registries", "harbor.example.com:443"})
 	_ = rootCmd.Execute()
 
 	lines := parseJSONLLines(t, stderr.String())
 	require.NotEmpty(t, lines, "expected at least one JSONL line")
 
 	counts := map[string]int{}
+	registryRows := 0
 	for _, l := range lines {
 		if l["event"] != "check_completed" {
 			continue
 		}
-		if id, ok := l["id"].(string); ok && strings.HasPrefix(id, "local-host-tools-") {
+		id, _ := l["id"].(string)
+		if strings.HasPrefix(id, "local-host-tools-") || strings.HasPrefix(id, "registry-cred-") {
 			counts[id]++
+		}
+		if strings.HasPrefix(id, "registry-cred-") {
+			registryRows++
 		}
 	}
 	require.NotEmpty(t, counts, "expected local-host-tools checks in the stream")
+	require.Positive(t, registryRows, "expected registry-credentials checks in the stream")
+	harbor := 0
+	for id, n := range counts {
+		if strings.Contains(id, "harbor.example.com") {
+			harbor += n
+		}
+	}
+	assert.Equal(t, 1, harbor, "the extra registry is checked once: %v", counts)
 	for id, n := range counts {
 		assert.Equal(t, 1, n, "check %s emitted %d times", id, n)
 	}
@@ -706,7 +720,7 @@ func TestEmitCheckFinal_WarningIsNotAFailure(t *testing.T) {
 
 	var buf bytes.Buffer
 	sink := progress.NewJSONLRenderer(&buf)
-	emitCheckFinal(context.Background(), sink, results)
+	emitCheckFinal(context.Background(), sink, results, nil)
 
 	line := buf.String()
 	assert.Contains(t, line, `"verdict":"warnings"`)
@@ -724,7 +738,7 @@ func TestEmitCheckFinal_ErrorIsAFailure(t *testing.T) {
 
 	var buf bytes.Buffer
 	sink := progress.NewJSONLRenderer(&buf)
-	emitCheckFinal(context.Background(), sink, results)
+	emitCheckFinal(context.Background(), sink, results, nil)
 	assert.Contains(t, buf.String(), `"verdict":"failed"`)
 	assert.Contains(t, buf.String(), `"success":false`)
 }

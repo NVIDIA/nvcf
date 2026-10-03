@@ -22,12 +22,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -148,25 +152,51 @@ func TestCheck_InterruptExits130(t *testing.T) {
 func runCheckWithBudget(t *testing.T, budget time.Duration, validator func(context.Context) selfhosted.ClusterValidatorResult,
 	args ...string) (error, string) {
 	t.Helper()
+	return runCheckWith(t, budget, func(ctx context.Context, _ selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+		return validator(ctx)
+	}, &syncBuffer{}, args...)
+}
+
+// runCheckWith is runCheckWithBudget with a validator stub that sees its
+// parameters, writing stderr to out.
+func runCheckWith(t *testing.T, budget time.Duration, validator selfhosted.ClusterValidator, out *syncBuffer,
+	args ...string) (error, string) {
+	t.Helper()
 	resetCheckFlags(t)
 	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	// Hints name the current context; keep the developer's out of them.
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "none"))
 	prevBudget, prevCV, prevTools := checkBudget, newClusterValidatorForSelfHosted, checkPreflightTools
 	checkBudget = func(d time.Duration) time.Duration { requestedBudget = d; return budget }
 	checkPreflightTools = passingPreflightTools
 	t.Cleanup(func() { checkPreflightTools = prevTools })
-	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
-		return func(ctx context.Context, _ selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
-			return validator(ctx)
-		}
-	}
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator { return validator }
 	t.Cleanup(func() { checkBudget, newClusterValidatorForSelfHosted = prevBudget, prevCV })
-	var stderr bytes.Buffer
-	rootCmd.SetErr(&stderr)
+	rootCmd.SetErr(out)
 	rootCmd.SetOut(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil); rootCmd.SetOut(nil) })
 	rootCmd.SetArgs(append([]string{"self-hosted", "check", "--control-plane", "--json",
 		"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"}, args...))
-	return rootCmd.Execute(), stderr.String()
+	return rootCmd.Execute(), out.String()
+}
+
+// syncBuffer is a bytes.Buffer safe to write from the interrupt handler while
+// the run writes its events.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // requestedBudget is the outer budget the last runCheckWithBudget run asked for.
@@ -310,10 +340,12 @@ func TestCheck_WaitTimeoutOnARolloutIsNotASuccess(t *testing.T) {
 }
 
 // The dashboard's quit key interrupts the run as a signal does: exit 130. A
-// validator that kept objects in the cluster still says how to remove them,
-// on stderr too, as the dashboard may already be gone. Wiring the key to the
-// budget's cancel instead read as a finished run.
+// validator that kept objects in the cluster still says how to remove them:
+// at once, before its teardown, and again on stderr once the dashboard is
+// closed. Wiring the key to the budget's cancel instead read as a finished
+// run.
 func TestCheck_QuitKeyInterruptsAndPrintsTheCleanupCommand(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "none"))
 	prev := selectCheckRendererFn
 	t.Cleanup(func() { selectCheckRendererFn = prev })
 	quit := make(chan func(), 1)
@@ -321,17 +353,28 @@ func TestCheck_QuitKeyInterruptsAndPrintsTheCleanupCommand(t *testing.T) {
 		quit <- onQuit
 		return prev(w, wait, onQuit)
 	}
-	err, stderr := runCheckWithBudget(t, time.Minute, func(ctx context.Context) selfhosted.ClusterValidatorResult {
+	err, stderr := runCheckWith(t, time.Minute, func(ctx context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+		p.OnStart("run1")
 		(<-quit)()
 		<-ctx.Done()
 		return selfhosted.ClusterValidatorResult{Err: ctx.Err(), RunID: "run1", LeftBehind: true}
-	})
+	}, &syncBuffer{})
 	var exitErr *ExitCodeError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 130, exitErr.Code)
 	assert.Equal(t, true, finalEvent(t, stderr)["cancelled"])
-	assert.Contains(t, stderr, "note: cluster-validator left objects in the cluster; the validator pod was still running")
-	assert.Contains(t, stderr, "nvcf.nvidia.com/validator-run=run1")
+	cmd := "kubectl get pods -n default -l nvcf.nvidia.com/validator-run=run1; " +
+		"kubectl delete -n default job -l nvcf.nvidia.com/validator-run=run1 --cascade=foreground --wait; " +
+		"kubectl delete clusterrolebinding,clusterrole -l nvcf.nvidia.com/validator-run=run1; " +
+		"kubectl delete -n default serviceaccount,secret,configmap -l nvcf.nvidia.com/validator-run=run1"
+	assert.Equal(t, []any{cmd}, finalEvent(t, stderr)["cleanup"])
+	interruptNote := strings.Index(stderr, "note: interrupted; ")
+	require.GreaterOrEqual(t, interruptNote, 0, "the interrupt says at once how to remove the run's objects")
+	assert.Less(t, interruptNote, strings.Index(stderr, `"event":"final"`), "the note comes before the final event")
+	assert.Equal(t, cmd, validatorRow(t, stderr)["cleanup"])
+	kept := strings.Index(stderr, "note: the cluster-validator left objects in the cluster; remove them with:\n  "+cmd+"\n")
+	require.Positive(t, kept, "the removal command is repeated once the stream has ended")
+	assert.Greater(t, kept, strings.Index(stderr, `"event":"final"`))
 }
 
 // Each --wait poll is a new validator run, so --no-cleanup would keep a full
@@ -451,5 +494,293 @@ func TestCheck_BudgetCoversEachValidatorsFullRun(t *testing.T) {
 	} {
 		_, _ = runCheckWithBudget(t, time.Minute, passNow, tc.args...)
 		assert.GreaterOrEqual(t, requestedBudget, tc.validators*ceiling+checkProbeShare, "args %v", tc.args)
+	}
+}
+
+// removalCommand is the command that removes validator run runID's objects,
+// with no context pinned.
+func removalCommand(runID string) string {
+	sel := "nvcf.nvidia.com/validator-run=" + runID
+	return "kubectl get pods -n default -l " + sel + "; " +
+		"kubectl delete -n default job -l " + sel + " --cascade=foreground --wait; " +
+		"kubectl delete clusterrolebinding,clusterrole -l " + sel + "; " +
+		"kubectl delete -n default serviceaccount,secret,configmap -l " + sel
+}
+
+// keptNote is what the command prints last when runs kept objects.
+func keptNote(commands ...string) string {
+	return "note: the cluster-validator left objects in the cluster; remove them with:\n  " +
+		strings.Join(commands, "\n  ") + "\n"
+}
+
+// On an interrupt, the removal command of every run in progress is printed at
+// once, before the teardown that may not finish: a second Ctrl-C or CI's
+// follow-up SIGTERM can end the process at any time.
+func TestCheck_InterruptPrintsTheRemovalCommandBeforeTheTeardown(t *testing.T) {
+	prev := selectCheckRendererFn
+	t.Cleanup(func() { selectCheckRendererFn = prev })
+	quit := make(chan func(), 1)
+	selectCheckRendererFn = func(w io.Writer, wait bool, onQuit func()) (progress.EventSink, error) {
+		quit <- onQuit
+		return prev(w, wait, onQuit)
+	}
+	out := &syncBuffer{}
+	note := "note: interrupted; stopping the cluster-validator and removing its objects. A second Ctrl-C " +
+		"exits at once and leaves them; remove them with:\n  " + removalCommand("run1") + "\n"
+	printedFirst := false
+	err, stderr := runCheckWith(t, time.Minute, func(ctx context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+		p.OnStart("run1")
+		(<-quit)()
+		<-ctx.Done()
+		// The teardown takes a while; the note must not wait for it.
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), note) }, 5*time.Second, 10*time.Millisecond)
+		printedFirst = true
+		return selfhosted.ClusterValidatorResult{Err: ctx.Err(), RunID: "run1", Created: true}
+	}, out)
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 130, exitErr.Code)
+	assert.True(t, printedFirst)
+	assert.Equal(t, 1, strings.Count(stderr, note), "printed once")
+	assert.NotContains(t, stderr, keptNote(removalCommand("run1")), "the teardown removed everything")
+}
+
+// A closed terminal or a dropped SSH session sends SIGHUP. It goes through
+// the same teardown as Ctrl-C, instead of killing the process with the run's
+// cluster-wide RBAC and NGC-key Secret in place.
+func TestCheck_SIGHUPGoesThroughTheTeardown(t *testing.T) {
+	err, stderr := runCheckWithBudget(t, time.Minute, func(ctx context.Context) selfhosted.ClusterValidatorResult {
+		require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGHUP))
+		<-ctx.Done()
+		return selfhosted.ClusterValidatorResult{Err: ctx.Err()}
+	})
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 130, exitErr.Code)
+	assert.Equal(t, true, finalEvent(t, stderr)["cancelled"])
+}
+
+// Every exit that leaves objects behind says how to remove them: in the row,
+// in the final event, and on stderr after the stream ends, where no dashboard
+// can wipe it and a pipe into jq does not swallow it.
+func TestCheck_KeptObjectsAreReportedOnEveryExit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		budget time.Duration
+		result func(ctx context.Context) selfhosted.ClusterValidatorResult
+		args   []string
+		code   int
+	}{
+		"no-cleanup pass": {budget: time.Minute, args: []string{"--no-cleanup"},
+			result: func(context.Context) selfhosted.ClusterValidatorResult {
+				return selfhosted.ClusterValidatorResult{Passed: true, RunID: "run1", Created: true,
+					Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
+			}},
+		"failed, pod kept": {budget: time.Minute, code: 2,
+			result: func(context.Context) selfhosted.ClusterValidatorResult {
+				return selfhosted.ClusterValidatorResult{Err: errors.New("did not finish"), RunID: "run1", LeftBehind: true}
+			}},
+		"budget spent": {budget: 300 * time.Millisecond, code: 5,
+			result: func(ctx context.Context) selfhosted.ClusterValidatorResult {
+				<-ctx.Done()
+				return selfhosted.ClusterValidatorResult{Err: ctx.Err(), RunID: "run1", LeftBehind: true}
+			}},
+	} {
+		err, stderr := runCheckWithBudget(t, tc.budget, tc.result, tc.args...)
+		if tc.code == 0 {
+			require.NoError(t, err, name)
+		} else {
+			var exitErr *ExitCodeError
+			require.ErrorAs(t, err, &exitErr, name)
+			assert.Equal(t, tc.code, exitErr.Code, name)
+		}
+		cmd := removalCommand("run1")
+		assert.Equal(t, cmd, validatorRow(t, stderr)["cleanup"], name)
+		assert.Contains(t, validatorRow(t, stderr)["detail"], ": "+cmd, name)
+		if name == "no-cleanup pass" {
+			assert.Contains(t, validatorRow(t, stderr)["detail"], "kept with --no-cleanup; remove with: "+cmd)
+		}
+		assert.Equal(t, []any{cmd}, finalEvent(t, stderr)["cleanup"], name)
+		assert.True(t, strings.HasSuffix(strings.TrimSuffix(stderr, "Error: "+errText(err)+"\n"), keptNote(cmd)),
+			"%s: the command is printed last:\n%s", name, stderr)
+	}
+}
+
+// errText is err's message, or "" for nil.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// Under --wait, a poll whose run kept objects is not forgotten when a later
+// poll passes: its command is still printed and still in the final event.
+func TestCheck_WaitKeepsEarlierPollsRemovalCommands(t *testing.T) {
+	calls := 0
+	err, stderr := runCheckWithBudget(t, time.Minute, func(context.Context) selfhosted.ClusterValidatorResult {
+		calls++
+		if calls == 1 {
+			return selfhosted.ClusterValidatorResult{Err: errors.New("did not finish"), RunID: "run1", LeftBehind: true}
+		}
+		return selfhosted.ClusterValidatorResult{Passed: true, RunID: "run2", Created: true,
+			Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
+	}, "--wait", "30s")
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, []any{removalCommand("run1")}, finalEvent(t, stderr)["cleanup"])
+	assert.True(t, strings.HasSuffix(stderr, keptNote(removalCommand("run1"))), stderr)
+}
+
+// An interrupt ends --wait with exit 130 and one cancelled final event,
+// whether it lands during a poll that then passes, or between polls.
+func TestCheck_WaitInterrupt(t *testing.T) {
+	ready := selfhosted.ClusterValidatorResult{Passed: true, Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
+	prev := selectCheckRendererFn
+	t.Cleanup(func() { selectCheckRendererFn = prev })
+	for name, validator := range map[string]func(quit func()) func(context.Context) selfhosted.ClusterValidatorResult{
+		"during a poll": func(quit func()) func(context.Context) selfhosted.ClusterValidatorResult {
+			return func(context.Context) selfhosted.ClusterValidatorResult {
+				quit()
+				return ready
+			}
+		},
+		"between polls": func(quit func()) func(context.Context) selfhosted.ClusterValidatorResult {
+			return func(context.Context) selfhosted.ClusterValidatorResult {
+				time.AfterFunc(100*time.Millisecond, quit)
+				return selfhosted.ClusterValidatorResult{Err: errors.New("did not finish")}
+			}
+		},
+	} {
+		var onQuit atomic.Value
+		selectCheckRendererFn = func(w io.Writer, wait bool, q func()) (progress.EventSink, error) {
+			onQuit.Store(q)
+			return prev(w, wait, q)
+		}
+		quit := func() { onQuit.Load().(func())() }
+		start := time.Now()
+		err, stderr := runCheckWithBudget(t, time.Minute, validator(quit), "--wait", "10m")
+		var exitErr *ExitCodeError
+		require.ErrorAs(t, err, &exitErr, name)
+		assert.Equal(t, 130, exitErr.Code, name)
+		final := finalEvent(t, stderr)
+		assert.Equal(t, true, final["cancelled"], name)
+		assert.Less(t, time.Since(start), 5*time.Second, "%s: no further poll runs", name)
+	}
+}
+
+// An interrupt after the budget ran out reports the interrupt only: no
+// synthetic cut-short or not-run rows ahead of the cancelled final event.
+func TestCheck_InterruptAfterTheBudgetEmitsNoSyntheticRows(t *testing.T) {
+	prev := selectCheckRendererFn
+	t.Cleanup(func() { selectCheckRendererFn = prev })
+	var onQuit atomic.Value
+	selectCheckRendererFn = func(w io.Writer, wait bool, q func()) (progress.EventSink, error) {
+		onQuit.Store(q)
+		return prev(w, wait, q)
+	}
+	err, stderr := runCheckWithBudget(t, 300*time.Millisecond, func(ctx context.Context) selfhosted.ClusterValidatorResult {
+		<-ctx.Done()
+		onQuit.Load().(func())()
+		return selfhosted.ClusterValidatorResult{Err: ctx.Err()}
+	}, "--all")
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 130, exitErr.Code)
+	for _, row := range checkEvents(t, stderr, "check_completed") {
+		msg, _ := row["message"].(string)
+		assert.NotContains(t, msg, "cut short", row["id"])
+		assert.NotContains(t, msg, "not run:", row["id"])
+	}
+	assert.Equal(t, true, finalEvent(t, stderr)["cancelled"])
+}
+
+// --show-logs prints the kept transcript on an interrupt too.
+func TestCheck_ShowLogsOnInterrupt(t *testing.T) {
+	prev := selectCheckRendererFn
+	t.Cleanup(func() { selectCheckRendererFn = prev })
+	quit := make(chan func(), 1)
+	selectCheckRendererFn = func(w io.Writer, wait bool, onQuit func()) (progress.EventSink, error) {
+		quit <- onQuit
+		return prev(w, wait, onQuit)
+	}
+	err, stderr := runCheckWithBudget(t, time.Minute, func(ctx context.Context) selfhosted.ClusterValidatorResult {
+		(<-quit)()
+		<-ctx.Done()
+		return selfhosted.ClusterValidatorResult{Err: ctx.Err(), RunID: "run1", LeftBehind: true,
+			Logs: "Validator role: control-plane\nTier-1: checking\n"}
+	}, "--show-logs")
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 130, exitErr.Code)
+	assert.Contains(t, stderr, "--- cluster-validator logs ---\nValidator role: control-plane\nTier-1: checking\n")
+}
+
+// A check's own timeout under a live budget is its result: exit 2, not 5.
+func TestCheck_ACheckOwnTimeoutIsAFailure(t *testing.T) {
+	err, stderr := runCheckWithBudget(t, time.Minute, func(context.Context) selfhosted.ClusterValidatorResult {
+		return selfhosted.ClusterValidatorResult{Err: fmt.Errorf("reading the Job: %w", context.DeadlineExceeded)}
+	})
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 2, exitErr.Code)
+	assert.Equal(t, "failed", finalEvent(t, stderr)["verdict"])
+}
+
+// Both TTY renderers get the quit key: in raw mode it is the only Ctrl-C the
+// run sees, and without it the dashboard closes while the Jobs keep running.
+func TestSelectCheckRenderer_TTYCarriesOnQuit(t *testing.T) {
+	resetCheckFlags(t)
+	prevTTY, prevSelect, prevOneShot := checkWriterIsTTY, selectProgressRenderer, newCheckOneShotRenderer
+	t.Cleanup(func() {
+		checkWriterIsTTY, selectProgressRenderer, newCheckOneShotRenderer = prevTTY, prevSelect, prevOneShot
+	})
+	checkWriterIsTTY = func(io.Writer) bool { return true }
+	var got func()
+	selectProgressRenderer = func(w io.Writer, opts progress.RenderOpts) (progress.EventSink, progress.RendererKind, error) {
+		got = opts.OnQuit
+		return progress.NewPlainRenderer(w), progress.RendererTTYFull, nil
+	}
+	newCheckOneShotRenderer = func(w io.Writer, opts progress.ModelOpts) progress.EventSink {
+		got = opts.OnQuit
+		return progress.NewPlainRenderer(w)
+	}
+	for _, wait := range []bool{false, true} {
+		got = nil
+		quits := 0
+		_, err := selectCheckRenderer(&bytes.Buffer{}, wait, func() { quits++ })
+		require.NoError(t, err)
+		require.NotNil(t, got, "wait=%v", wait)
+		got()
+		assert.Equal(t, 1, quits, "wait=%v", wait)
+	}
+}
+
+// The budget is exact: the probes' share, plus each validator's longest run
+// for the validators that run in turn, plus the --wait duration. The inotify
+// probe fits in the probes' share.
+func TestCheck_BudgetComposition(t *testing.T) {
+	assert.Less(t, selfhosted.InotifyProbeBudget(), checkProbeShare)
+	perRole := checkProbeShare + selfhosted.ClusterValidatorRunCeiling()
+	passNow := func(context.Context) selfhosted.ClusterValidatorResult {
+		return selfhosted.ClusterValidatorResult{Passed: true}
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want time.Duration
+	}{
+		"no validator": {args: []string{"--cluster-validator-image", ""}, want: checkProbeShare},
+		"one role":     {want: perRole},
+		"split, both roles": {args: []string{"--all", "--control-plane-context", "a", "--compute-plane-context", "b"},
+			want: perRole},
+		"unresolved image":     {args: []string{"--cluster-validator-image", "nvcr.io/nvidia/validator"}, want: perRole},
+		"single, both roles":   {args: []string{"--pre"}, want: 2 * perRole},
+		"one role, --wait":     {args: []string{"--wait", "10m"}, want: perRole + 10*time.Minute},
+		"single, both, --wait": {args: []string{"--all", "--wait", "10m"}, want: 2*perRole + 10*time.Minute},
+		"no validator, --wait 1m": {args: []string{"--cluster-validator-image", "", "--wait", "1m"},
+			want: checkProbeShare + time.Minute},
+	} {
+		requestedBudget = 0
+		_, _ = runCheckWithBudget(t, time.Second, passNow, tc.args...)
+		assert.Equal(t, tc.want, requestedBudget, name)
 	}
 }
