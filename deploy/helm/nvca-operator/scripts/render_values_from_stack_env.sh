@@ -131,6 +131,20 @@ if [ -n "${STORAGE_CLASS}" ]; then
   yq eval -i '.clusterValidator.storageClass = strenv(STORAGE_CLASS)' "${output_file}"
 fi
 
+# A quorum dependency the stack does not install runs outside the cluster,
+# so after install the validator must not expect its StatefulSet.
+external_components=()
+for component in nats openbao cassandra; do
+  if [ "$(stack_value ".${component}.enabled")" = "false" ]; then
+    external_components+=("${component}")
+  fi
+done
+if [ "${#external_components[@]}" -gt 0 ]; then
+  EXTERNAL_COMPONENTS="$(IFS=,; echo "${external_components[*]}")"
+  export EXTERNAL_COMPONENTS
+  yq eval -i '.clusterValidator.externalComponents = (strenv(EXTERNAL_COMPONENTS) | split(","))' "${output_file}"
+fi
+
 if [ -n "${NVCA_OPERATOR_VERSION:-}" ]; then
   export NVCA_OPERATOR_VERSION
   yq eval -i '.image.tag = strenv(NVCA_OPERATOR_VERSION)' "${output_file}"

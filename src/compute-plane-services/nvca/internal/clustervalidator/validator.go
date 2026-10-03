@@ -146,8 +146,7 @@ type ValidationState struct {
 	// or a tolerated state (a rollout in progress, several default
 	// StorageClasses on Kubernetes >= 1.26) with a warning saying so. false =
 	// observed broken. nil = not run for this role, not fully observed, or not
-	// applicable; state.Warnings says which reads failed, and the
-	// *NotApplicable fields say why a row does not apply.
+	// assessed; state.Warnings says why.
 	DefaultStorageClassOK *bool
 	// StorageClassFailure names why DefaultStorageClassOK is false, for the
 	// summary row: "Not Found", "Multiple Defaults" or "<name> Not Found".
@@ -156,13 +155,6 @@ type ValidationState struct {
 	EnvoyGatewayOK      *bool
 	GatewayRoutesOK     *bool
 	ExternalLBOK        *bool
-	// EnvoyGatewayNotApplicable and ExternalLBNotApplicable hold the reason
-	// those rows do not apply: every NVCF Gateway is run by an implementation
-	// other than Envoy Gateway, or, for the LoadBalancer row, none is exposed
-	// through a LoadBalancer Service. Their pointers stay nil, as for the
-	// overlay.
-	EnvoyGatewayNotApplicable string
-	ExternalLBNotApplicable   string
 	// NodeToNodeOK is nil when the overlay was not observed, when the check
 	// does not apply (see NodeToNodeNotApplicable), or under the compute-plane
 	// role. true = overlay verified, false = failed.
@@ -264,6 +256,12 @@ var ErrNotReady = errors.New("cluster is NVCF-Not-Ready")
 // ErrSummaryNotPublished is the error Run returns when RequireSummaryEnv is
 // set and the summary could not be written.
 var ErrSummaryNotPublished = errors.New("the validation summary was not published")
+
+// ErrInterrupted is the error Run returns when the run was cancelled, for
+// example by SIGTERM on a node drain, before it finished. Its rows are not
+// evidence about the cluster, so nothing is published and the exit code lets
+// the Job retry.
+var ErrInterrupted = errors.New("the validation run was interrupted")
 
 // NotReadyError is an NVCF-Not-Ready verdict. Failed counts the critical
 // checks that ran and failed; Unobserved counts those that could not run.
@@ -407,6 +405,13 @@ func Run(
 	}
 
 	summaryErr := printSummary(state)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		// Reads cut short by a cancel leave rows unknown or failed for no
+		// reason in the cluster. Only the run's own deadline (VALIDATOR_TIMEOUT)
+		// publishes what the checks found by then.
+		log.Warn("cluster-validator: the run was interrupted; the summary was not written")
+		return ErrInterrupted
+	}
 	if err := publishSummary(ctx, client, state, startedAt, summaryErr, summaryNamespace, emitMetrics); err != nil {
 		if envTrue(RequireSummaryEnv) {
 			return fmt.Errorf("%w: %w", ErrSummaryNotPublished, err)
@@ -420,6 +425,7 @@ func Run(
 // namespace, for the agent to publish as metrics. Preflight runs
 // (emitMetrics=false) write nothing. The write gets its own budget: a run
 // that spent its deadline on the checks must still publish what they found.
+// Run does not call it for an interrupted run.
 func publishSummary(
 	ctx context.Context, client kubernetes.Interface, state *ValidationState, startedAt time.Time,
 	summaryErr error, summaryNamespace string, emitMetrics bool,
@@ -504,10 +510,10 @@ func controlPlaneRows(state *ValidationState) []summaryRow {
 	// before the stack (the gateway-routing guide), so it may be absent on
 	// a cluster checked before install. A missing Envoy is reported, but
 	// must not block a pre-install readiness check.
-	addOrNA(state.EnvoyGatewayNotApplicable, state.EnvoyGatewayOK, "Envoy Gateway",
+	addCP(state.EnvoyGatewayOK, "Envoy Gateway",
 		"Installed and Running", "Not Found or Not Running", false)
 	addCP(state.GatewayRoutesOK, "Optional Gateway Route CR Types", "Registered", "Missing", false)
-	addOrNA(state.ExternalLBNotApplicable, state.ExternalLBOK, "External Load Balancer",
+	addCP(state.ExternalLBOK, "External Load Balancer",
 		"Address Assigned", "Not Exposed or Pending", false)
 	// Non-blocking, but not "Verified": no cross-node packet was sent.
 	addOrNA(state.NodeToNodeNotApplicable, state.NodeToNodeOK, "Node-to-Node Communication",

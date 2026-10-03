@@ -25,6 +25,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -708,4 +711,33 @@ func TestCheckNetworkPolicyEnforcement_DeletesOnlyItsOwnNamespace(t *testing.T) 
 	assert.Equal(t, "nvcf-cluster-validator", created.Labels["app.kubernetes.io/managed-by"])
 	_, err := client.CoreV1().Namespaces().Get(context.Background(), created.Name, metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(err), "the namespace the run created is cleaned up")
+}
+
+// The checker retries a dial that the run's allow policy may not have reached
+// yet, but not one the server refused.
+func TestNodeToNodeCheckerScript_RetriesUnrefusedDials(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh to run the checker script")
+	}
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen")
+	// The fake nc passes the loopback self-test, refuses 10.0.0.3, and times
+	// out only the first dial to 10.0.0.2.
+	fake := "#!/bin/sh\ncase \"$*\" in\n" +
+		"*-l*|*127.0.0.1*) exit 0 ;;\n" +
+		"*10.0.0.3*) echo 'Connection refused'; exit 1 ;;\n" +
+		"*10.0.0.2*) [ -f " + seen + " ] && exit 0; : > " + seen + "; echo 'timed out'; exit 1 ;;\n" +
+		"esac\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nc"), []byte(fake), 0o700))
+	cmd := exec.Command(sh, "-c", nodeToNodeCheckerScript([]string{"10.0.0.2", "10.0.0.3"}))
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, string(out))
+	assert.Equal(t, nodeToNodeRefusedExit, exitErr.ExitCode(), string(out))
+	assert.Contains(t, string(out), "refused: 10.0.0.3")
+	assert.NotContains(t, string(out), "unreachable")
+	assert.NotContains(t, string(out), "10.0.0.2:", "the retried dial succeeded")
 }

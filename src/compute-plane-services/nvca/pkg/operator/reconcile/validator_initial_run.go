@@ -224,7 +224,10 @@ func jobFinished(job *batchv1.Job) bool {
 // does: the CronJob's job template, controlled by the CronJob, so its history
 // limits and an uninstall clean it up like any scheduled run. The CronJob
 // controller did not create it, so while it runs the controller records an
-// UnexpectedJob event on the CronJob; that event is expected.
+// UnexpectedJob event on the CronJob; that event is expected. For the same
+// reason the CronJob's concurrencyPolicy does not see it: a scheduled run that
+// falls due meanwhile runs beside it. Each run probes in namespaces of its
+// own, and the summary is whichever run writes last.
 func validatorRunJob(cronJob *batchv1.CronJob, spec, newest string) *batchv1.Job {
 	annotations := map[string]string{"cronjob.kubernetes.io/instantiate": "manual"}
 	for k, v := range cronJob.Spec.JobTemplate.Annotations {

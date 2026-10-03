@@ -494,7 +494,8 @@ func nvcfAPI() *appsv1.Deployment {
 func TestCheckTier1Deployments_MergedProxyCoversItsClassAfterInstall(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "nvcf/shared-gw")
-	merged := envoyProxyAt(envoyGatewayNamespace, "envoy-merged", map[string]string{owningGatewayClassLabel: "eg"}, 2, 2)
+	merged := envoyProxyAt(envoyGatewayNamespace, "envoy-merged",
+		map[string]string{owningGatewayClassLabel: "eg"}, 2, 2)
 	state := runTier1(t, true, envoyGatewayClient(t, gatewayObject("nvcf", "shared-gw", "eg")), merged, nvcfAPI())
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)

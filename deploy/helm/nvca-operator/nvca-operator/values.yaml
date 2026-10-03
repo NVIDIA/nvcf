@@ -527,8 +527,10 @@ clusterValidator:
   # Instead, the operator starts a run from the CronJob whenever the newest
   # one did not use the current validator spec: at install, and after each
   # upgrade or rollback that changes the Job spec or networkChecks. A change
-  # to the validator alone does not restart the operator, and the install
-  # does not wait for the run.
+  # to the schedule, the Job spec or networkChecks alone does not restart the
+  # operator, and the install does not wait for the run. The init container
+  # uses enabled, image, configMapName, resources and role, so changing any of
+  # them restarts the operator.
   role: ""
   # Set when OpenBao or Envoy Gateway are installed outside their default
   # namespaces, so the control-plane checks look in the right place.
@@ -552,6 +554,7 @@ clusterValidator:
   # Quorum components the stack runs outside this cluster: any of nats,
   # openbao and cassandra. After install the Tier-2 check reports a known
   # quorum component it cannot find, unless it is listed here.
+  # make render-values-from-stack lists each one the stack disables.
   externalComponents: []
   # The stack's global.storageClass, when it sets one. The stack passes it to
   # every PVC, so the StorageClass check requires that class to exist instead

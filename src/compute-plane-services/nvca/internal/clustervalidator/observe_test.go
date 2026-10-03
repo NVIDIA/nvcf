@@ -308,9 +308,31 @@ func TestRun_UnloadableNetworkChecksAreACriticalUnknown(t *testing.T) {
 }
 
 // The checks may use up the run's deadline, but the summary is still
-// published: its write does not inherit the ended context.
-func TestRun_PublishesTheSummaryAfterItsDeadline(t *testing.T) {
-	var published atomic.Bool
+// published: its write does not inherit the ended context. A run cancelled
+// before it finished, as on SIGTERM, publishes nothing and exits so the Job
+// retries it, not with the Not-Ready code the Job is failed on.
+func TestRun_PublishesTheSummaryAfterItsDeadlineOnly(t *testing.T) {
+	t.Setenv(RequireSummaryEnv, "true")
+	client, published := summaryRecordingClient(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_ = Run(ctx, client, nil, "", "", "nvca-system", true, RoleComputePlane)
+	assert.True(t, published.Load(), "the summary must be written after the checks' deadline")
+
+	client, published = summaryRecordingClient(t)
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	err := Run(ctx, client, nil, "", "", "nvca-system", true, RoleComputePlane)
+	require.ErrorIs(t, err, ErrInterrupted)
+	assert.False(t, published.Load(), "an interrupted run must not publish")
+	assert.Equal(t, 1, ExitCode(err))
+}
+
+// summaryRecordingClient serves the version and records whether a summary
+// ConfigMap was created.
+func summaryRecordingClient(t *testing.T) (kubernetes.Interface, *atomic.Bool) {
+	t.Helper()
+	published := &atomic.Bool{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -328,11 +350,7 @@ func TestRun_PublishesTheSummaryAfterItsDeadline(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
 	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_ = Run(ctx, client, nil, "", "", "nvca-system", true, RoleComputePlane)
-	assert.True(t, published.Load(), "the summary must be written after the checks' deadline")
+	return client, published
 }
 
 // An unobserved GPU count is a critical unknown, and its key is not published.
@@ -391,9 +409,12 @@ func TestCheckTier1Deployments_MissingGatewayOutlivesAClassListError(t *testing.
 		routes.PrependReactor("list", "gatewayclasses", func(ktesting.Action) (bool, runtime.Object, error) {
 			return true, nil, err
 		})
-		state := runTier1(t, true, routes, nvcfService())
+		log, buf := bufferLog()
+		state := &ValidationState{Log: log, PostInstall: true}
+		runTier1On(t, state, routes, nvcfService())
 		require.NotNil(t, state.Tier1DeploymentsOK, name)
 		assert.False(t, *state.Tier1DeploymentsOK, name)
+		assert.Contains(t, buf.String(), "NVCF Gateway nvcf/nvcf-gw does not exist", name)
 	}
 
 	// A Gateway that exists, with its class unreadable, stays undecided.
@@ -406,13 +427,32 @@ func TestCheckTier1Deployments_MissingGatewayOutlivesAClassListError(t *testing.
 	assert.Contains(t, strings.Join(state.Warnings, "; "), "check apiserver health")
 }
 
+// A proxy Service outside the Gateway's namespace is credited only in the
+// controller's namespace, so with the controller unreadable its Gateway is
+// unknown, not missing.
+func TestCheckExternalLoadBalancer_UncreditedProxyIsUnknown(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/a-gw")
+	client := routeDiscoveryClient()
+	addServices(t, client,
+		gatewayLBService("gateway-proxies", "envoy-a", "nvcf", "a-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"))
+	client.PrependReactor("list", "deployments", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
+	})
+	state := &ValidationState{Log: testLog(), PostInstall: true}
+	checkExternalLoadBalancer(context.Background(), client, routeClient(), state)
+	assert.Nil(t, state.ExternalLBOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "the Envoy Gateway controller namespace is unknown")
+}
+
 // A Gateway whose proxy Service a failed list may hold is unknown, not
 // missing, and the warning names the cause and what to do about it.
 func TestCheckExternalLoadBalancer_FailedProxyListLeavesUnseenGatewaysUnknown(t *testing.T) {
 	t.Setenv(envoyGatewayNamespaceEnv, "")
 	t.Setenv(nvcfGatewayNamesEnv, "nvcf/a-gw,nvcf/b-gw")
 	client := fake.NewSimpleClientset(envoyController(envoyGatewayNamespace),
-		gatewayLBService(envoyGatewayNamespace, "envoy-a", "nvcf", "a-gw", corev1.ServiceTypeLoadBalancer, "203.0.113.1"))
+		gatewayLBService(envoyGatewayNamespace, "envoy-a", "nvcf", "a-gw", corev1.ServiceTypeLoadBalancer,
+			"203.0.113.1"))
 	client.PrependReactor("list", "services", func(a ktesting.Action) (bool, runtime.Object, error) {
 		if a.(ktesting.ListAction).GetListRestrictions().Labels.String() == owningGatewayClassLabel {
 			return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
@@ -423,7 +463,8 @@ func TestCheckExternalLoadBalancer_FailedProxyListLeavesUnseenGatewaysUnknown(t 
 	checkExternalLoadBalancer(context.Background(), client, nil, state)
 	assert.Nil(t, state.ExternalLBOK, "b-gw's proxy Service may be in the list that failed")
 	joined := strings.Join(state.Warnings, "; ")
-	assert.Contains(t, joined, "status unknown (no proxy Service confirmed for nvcf/b-gw: listing Envoy proxy Services:")
+	assert.Contains(t, joined,
+		"status unknown (no proxy Service confirmed for nvcf/b-gw: listing Envoy proxy Services:")
 	assert.Contains(t, joined, "check apiserver health")
 	assert.NotContains(t, joined, "no proxy Service found")
 }
@@ -676,7 +717,7 @@ func TestLauncherContractStrings(t *testing.T) {
 	assert.Equal(t, "NVCF-Ready", VerdictReady)
 	assert.Equal(t, "NVCF-Ready (with warnings)", VerdictReadyWithWarnings)
 	assert.Equal(t, "NVCF-Not-Ready", VerdictNotReady)
-	assert.Equal(t, "✗", FailIcon)
+	assert.Equal(t, "\u2717", FailIcon)
 	assert.Equal(t, FailIcon, iconCross, "failed rows are printed with the fail icon")
 	assert.Equal(t, "GPU Resources", GPUResourcesLabel)
 	assert.Equal(t, "rollout in progress", RolloutInProgressMarker)
@@ -752,9 +793,10 @@ func TestCheckEnvoyGateway_UsesTheConfiguredNamespace(t *testing.T) {
 	assert.True(t, *state.EnvoyGatewayOK)
 }
 
-// NVCF Gateways exposed only through NodePort have no LB to verify: the row is
-// not applicable, which the cluster's shape decides, rather than unknown.
-func TestCheckExternalLoadBalancer_NodePortOnlyIsNotApplicable(t *testing.T) {
+// NVCF Gateways exposed only through NodePort have no LB to verify: the row has
+// no result, and the warning says the cluster's shape decided that, not a
+// failed read.
+func TestCheckExternalLoadBalancer_NodePortOnlyIsNotAssessed(t *testing.T) {
 	envoyNS := envoyGatewayNamespaceName()
 	t.Setenv(nvcfGatewayNamesEnv, "nvcf/a-gw")
 	client := routeDiscoveryClient()
@@ -762,8 +804,8 @@ func TestCheckExternalLoadBalancer_NodePortOnlyIsNotApplicable(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkExternalLoadBalancer(context.Background(), client, routeClient(), state)
 	assert.Nil(t, state.ExternalLBOK)
-	assert.Equal(t, "no NVCF Gateway is exposed through a LoadBalancer Service", state.ExternalLBNotApplicable)
-	assert.NotContains(t, strings.Join(state.Warnings, "; "), "External Load Balancer: status unknown")
+	assert.Equal(t, []string{"External Load Balancer: not assessed (no NVCF Gateway is exposed through a " +
+		"LoadBalancer Service)"}, state.Warnings)
 }
 
 // GRPCRoute and UDPRoute parents are NVCF Gateways too.

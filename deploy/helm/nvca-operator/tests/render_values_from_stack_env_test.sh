@@ -35,6 +35,12 @@ global:
     registry: nvcr.io
     repository: <your-org>
   storageClass: ceph-rbd
+nats:
+  enabled: true
+openbao:
+  enabled: false
+cassandra:
+  enabled: false
 ingress:
   gatewayApi:
     routes:
@@ -101,6 +107,12 @@ fi
 actual_storage_class="$(yq -r '.clusterValidator.storageClass' "${output_file}")"
 if [[ "${actual_storage_class}" != "ceph-rbd" ]]; then
   echo "expected clusterValidator.storageClass from global.storageClass, got ${actual_storage_class}" >&2
+  exit 1
+fi
+
+actual_external="$(yq -r '.clusterValidator.externalComponents | join(",")' "${output_file}")"
+if [[ "${actual_external}" != "openbao,cassandra" ]]; then
+  echo "expected the components the stack disables in clusterValidator.externalComponents, got ${actual_external}" >&2
   exit 1
 fi
 

@@ -239,7 +239,7 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
 | `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; set it for role `control-plane` (`make render-values-from-stack` fills it in). Only named Gateways can fail Tier-1, and a Gateway left out is not assessed | `[]` (discovered from NVCF routes)     |
 | `clusterValidator.storageClass`                       | The stack's `global.storageClass`; when set, that class must exist instead of a default class | `""`                                   |
-| `clusterValidator.externalComponents`                 | Quorum components (`nats`, `openbao`, `cassandra`) the stack runs outside the cluster, so Tier-2 does not report them missing after install | `[]`                                   |
+| `clusterValidator.externalComponents`                 | Quorum components (`nats`, `openbao`, `cassandra`) the stack runs outside the cluster, so Tier-2 does not report them missing after install (`make render-values-from-stack` lists each one the stack disables) | `[]`                                   |
 | `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets` | `""` (`networkChecks.enforcement.testImage` if set, else `busybox:1.36`) |
 | `clusterValidator.tolerations`                        | Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's `tolerations` and `nodeSelector` | `[]`                                   |
 | `clusterValidator.schedule`                           | CronJob schedule (cron expression)                                                | `0 */3 * * *`                          |
@@ -267,6 +267,9 @@ With `clusterValidator.enabled`, the validator runs in three ways:
 - Under role `control-plane` the init container writes no summary. The
   operator instead starts a Job from the CronJob whenever the newest run did
   not use the current validator spec: at install, and after each upgrade or
-  rollback that changes the Job spec or `networkChecks`. A validator-only
-  change does not restart the operator, and the install does not wait for
-  the run.
+  rollback that changes the Job spec or `networkChecks`. The install does not
+  wait for the run.
+- A change to the schedule, the Job spec or `networkChecks` alone does not
+  restart the operator. The init container uses `enabled`, `image`,
+  `configMapName`, `resources` and `role`, so changing any of them restarts
+  the operator.

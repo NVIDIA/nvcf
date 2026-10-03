@@ -2771,7 +2771,7 @@ func TestBuildNodeToNodeCheckerPod_ExitCodesSeparateNetworkFailures(t *testing.T
 	assert.Contains(t, cmd, fmt.Sprintf("nc -l -p %d >/dev/null 2>&1 &", nodeToNodeTestPort))
 	assert.Contains(t, cmd, fmt.Sprintf("until nc -v -z -w 5 127.0.0.1 %d", nodeToNodeTestPort))
 	assert.Contains(t, cmd, "for ip in 10.0.0.2 10.0.0.3; do")
-	assert.Contains(t, cmd, fmt.Sprintf("out=$(nc -v -z -w 5 $ip %d 2>&1) && continue", nodeToNodeTestPort))
+	assert.Contains(t, cmd, fmt.Sprintf("out=$(nc -v -z -w 5 $ip %d 2>&1) && ok=1", nodeToNodeTestPort))
 	assert.Contains(t, cmd, fmt.Sprintf("if [ $n -ge %d ]; then stopped=1; break; fi", nodeToNodeMaxUnreachable))
 	assert.Contains(t, cmd, "*refused*)")
 	assert.Contains(t, cmd, fmt.Sprintf(`echo "unreachable:$unreachable"; exit %d;`, nodeToNodeUnreachableExit))
@@ -3448,6 +3448,10 @@ func TestCheckTier2StatefulSets_MissingComponentAfterInstall(t *testing.T) {
 	for _, c := range []string{"nats", "openbao", "cassandra"} {
 		assert.Contains(t, warnings, "quorum component "+c)
 	}
+	// OpenBao may only have moved namespace, so its warning names that setting.
+	assert.Contains(t, warnings, "quorum component openbao (StatefulSet openbao or openbao-server in "+
+		"vault-system) not found after install; set clusterValidator.openBaoNamespace")
+	assert.NotContains(t, warnings, "nats-system) not found after install; set clusterValidator.openBaoNamespace")
 
 	state = &ValidationState{Log: testLog()}
 	checkTier2StatefulSets(context.Background(), fake.NewSimpleClientset(), state)
@@ -3538,6 +3542,14 @@ func proxyDeployment(name, gwNS, gw string, ready int32) *appsv1.Deployment {
 
 func runTier1(t *testing.T, postInstall bool, routes dynamic.Interface, objs ...runtime.Object) *ValidationState {
 	t.Helper()
+	state := &ValidationState{Log: testLog(), PostInstall: postInstall}
+	runTier1On(t, state, routes, objs...)
+	return state
+}
+
+// runTier1On runs Tier-1 over objs into state, so a test can read its log.
+func runTier1On(t *testing.T, state *ValidationState, routes dynamic.Interface, objs ...runtime.Object) {
+	t.Helper()
 	client := gatewayDiscoveryClient(
 		gatewayAPIGroup+"/v1/httproutes",
 		gatewayAPIGroup+"/v1/grpcroutes",
@@ -3555,9 +3567,7 @@ func runTier1(t *testing.T, postInstall bool, routes dynamic.Interface, objs ...
 		}
 		require.NoError(t, err)
 	}
-	state := &ValidationState{Log: testLog(), PostInstall: postInstall}
 	checkTier1Deployments(context.Background(), client, routes, state)
-	return state
 }
 
 // A failed ownership lookup leaves a Ready proxy nothing to say against the
@@ -3851,6 +3861,43 @@ func TestCheckTier1Deployments_PostInstallNeedsNVCFDeployments(t *testing.T) {
 	state := &ValidationState{Log: testLog(), PostInstall: true}
 	checkTier1Deployments(context.Background(), client, routeClient(), state)
 	assert.Nil(t, state.Tier1DeploymentsOK, "an unreadable NVCF namespace is not an empty one")
+}
+
+// The dependency releases run Deployments of their own, such as the OpenBao
+// agent injector, so a Ready one does not stand in for the NVCF services.
+func TestCheckTier1Deployments_DependencyDeploymentsDoNotStandInForServices(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	two := int32(2)
+	injector := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "openbao-server-agent-injector", Namespace: "vault-system", Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: &two},
+		Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 2},
+	}
+	state := runTier1(t, true, routeClient(), injector)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK)
+	assert.Contains(t, strings.Join(state.Recommendations, "; "), "Tier-1 found no NVCF Deployments")
+}
+
+// A configured Gateway list over a failed Gateway API discovery could not be
+// listed, so whether those Gateways exist is unknown: the read error is not
+// evidence that they are gone.
+func TestCheckTier1Deployments_DiscoveryErrorLeavesConfiguredGatewaysUnknown(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/shared-gw")
+	client := fake.NewSimpleClientset(envoyController(envoyGatewayNamespace), nvcfService(),
+		proxyDeployment("envoy-shared", "nvcf", "shared-gw", 2))
+	routes := envoyGatewayClient(t, gatewayObject("nvcf", "shared-gw", "eg"))
+	own := resolveGatewayOwnershipIn(context.Background(), client, gatewayAPISurface{},
+		apierrors.NewServiceUnavailable("discovery unavailable"), routes)
+	state := &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier1DeploymentsFor(context.Background(), client, own, state)
+
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	warnings := strings.Join(state.Warnings, "; ")
+	assert.NotContains(t, warnings, "does not exist")
+	assert.Contains(t, warnings, "could not confirm the NVCF Gateways exist")
 }
 
 // Installed with no NVCF Gateway named, a pending Service beside an addressed
@@ -4148,7 +4195,11 @@ func nvcfGatewayClasses(
 	if err != nil {
 		return nil, fmt.Errorf("discovering Gateway API resources: %w", err)
 	}
-	return nvcfGatewayClassesIn(ctx, surface, routes, g)
+	classOf, err := nvcfGatewayClassOf(ctx, surface, routes, g)
+	if err != nil {
+		return nil, err
+	}
+	return classEntries(classOf), nil
 }
 
 // An explicit global.storageClass binds every claim to that class, so the row
@@ -4252,8 +4303,9 @@ func istioStack(t *testing.T) (*fake.Clientset, *gatewayOwnership) {
 }
 
 // Every Envoy-specific row leaves a Gateway another implementation runs out of
-// scope, and they agree within one run: the Envoy and LoadBalancer rows are
-// Not Applicable, Tier-1 passes, and the verdict is Ready.
+// scope, and they agree within one run: the Envoy and LoadBalancer rows have
+// no result and a warning each saying why, Tier-1 passes, and the verdict is
+// Ready.
 func TestEnvoyRows_NonEnvoyGatewayIsOutOfScope(t *testing.T) {
 	client, own := istioStack(t)
 	state := &ValidationState{Log: testLog(), PostInstall: true, Role: RoleControlPlane}
@@ -4262,18 +4314,19 @@ func TestEnvoyRows_NonEnvoyGatewayIsOutOfScope(t *testing.T) {
 	checkTier1DeploymentsFor(context.Background(), client, own, state)
 
 	assert.Nil(t, state.EnvoyGatewayOK)
-	assert.NotEmpty(t, state.EnvoyGatewayNotApplicable)
 	assert.Nil(t, state.ExternalLBOK)
-	assert.NotEmpty(t, state.ExternalLBNotApplicable)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	assert.True(t, *state.Tier1DeploymentsOK)
-	assert.Empty(t, state.Warnings, "nothing Envoy-specific to warn about")
+	require.Len(t, state.Warnings, 2, "each row without a result says why")
+	assert.Contains(t, state.Warnings[0], "Envoy Gateway: not assessed (no NVCF Gateway is run by Envoy Gateway: ")
+	assert.Contains(t, state.Warnings[1], "External Load Balancer: not assessed (no NVCF Gateway is run by Envoy")
 
 	ok := true
 	state.ControlPlaneHealthy, state.WebhooksSupported, state.NetworkPoliciesSupported = true, true, true
 	state.NodesAllReady = true
-	state.DefaultStorageClassOK, state.GatewayAPICRDsOK, state.NodeToNodeOK, state.Tier2StatefulSetsOK = &ok, &ok, &ok, &ok
-	assert.NoError(t, printSummary(state), "Not Applicable rows do not block the verdict")
+	state.DefaultStorageClassOK, state.GatewayAPICRDsOK = &ok, &ok
+	state.NodeToNodeOK, state.Tier2StatefulSetsOK = &ok, &ok
+	assert.NoError(t, printSummary(state), "rows that are not critical do not block the verdict")
 
 	// The same Gateway on an Envoy class with no controller anywhere still
 	// fails the Envoy row.
@@ -4285,6 +4338,20 @@ func TestEnvoyRows_NonEnvoyGatewayIsOutOfScope(t *testing.T) {
 	require.NotNil(t, state.EnvoyGatewayOK)
 	assert.False(t, *state.EnvoyGatewayOK)
 	assert.NotEmpty(t, state.Warnings)
+}
+
+// One NVCF Gateway that Envoy Gateway runs keeps the Envoy row in scope
+// whatever runs the others, so a missing controller still fails it.
+func TestEnvoyRows_OneEnvoyGatewayKeepsTheRowInScope(t *testing.T) {
+	client, _ := istioStack(t)
+	t.Setenv(nvcfGatewayNamesEnv, "gw/nvcf-gw,gw/envoy-gw")
+	dyn := envoyGatewayClient(t, gatewayObject("gw", "nvcf-gw", "istio"), gatewayObject("gw", "envoy-gw", "eg"))
+	own := resolveGatewayOwnership(context.Background(), client, dyn)
+	state := &ValidationState{Log: testLog(), PostInstall: true}
+	checkEnvoyGatewayFor(context.Background(), client, own, state)
+	require.NotNil(t, state.EnvoyGatewayOK)
+	assert.False(t, *state.EnvoyGatewayOK)
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "not assessed")
 }
 
 // A named NVCF Gateway that nothing can run fails after install: one whose

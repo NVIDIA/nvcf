@@ -89,7 +89,8 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
   fail Tier-1. `make render-values-from-stack` fills it in.
 - List stack quorum components that run outside the cluster (`nats`,
   `openbao`, `cassandra`) in `clusterValidator.externalComponents`, or Tier-2
-  reports them missing after install.
+  reports them missing after install. `make render-values-from-stack` lists
+  each one the stack environment disables.
 - Use `yq` carefully for nested keys and quoted strings.
 - `Chart.yaml` name stays in git and must match the subproject's service_name;
   the release refuses to publish when they differ. Only the version is set at
