@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::runtime_state::PylonRuntimeState;
 use crate::stats::PylonMetrics;
 use stargate_auth::AuthTokenProvider;
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
@@ -120,7 +121,13 @@ pub(super) async fn run_router_registration_stream(
                 reverse_connected,
             )
         };
-        let initial_registration = current_registration(reverse_state_rx.borrow().is_connected());
+        // Routers act on these stats, so publish request state changes as
+        // they happen. Coalescing bounds the update rate under load; the
+        // heartbeat interval below remains the liveness signal.
+        let (mut registration_changes, initial_registration) =
+            subscribe_then_snapshot(&config.forwarding.runtime_state, || {
+                current_registration(reverse_state_rx.borrow().is_connected())
+            });
         let mut advertised_status =
             RouterAdvertisedStatusTracker::new(config.forwarding.metrics.as_deref(), &router_addr);
         advertised_status.record_reverse_tunnel_connected(false);
@@ -144,14 +151,6 @@ pub(super) async fn run_router_registration_stream(
 
         let mut tick_interval = tokio::time::interval(config.min_update_interval);
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // Routers act on these stats, so publish request state changes as
-        // they happen. Coalescing bounds the update rate under load; the
-        // interval above remains the liveness heartbeat.
-        let mut registration_changes = config
-            .forwarding
-            .runtime_state
-            .subscribe_registration_changes();
-        registration_changes.mark_unchanged();
         let mut changes_open = true;
         let mut coalesced_send_at: Option<Instant> = None;
 
@@ -259,6 +258,16 @@ pub(super) async fn run_router_registration_stream(
             return;
         }
     }
+}
+
+/// Subscribes before taking the snapshot, so a change that lands after the
+/// snapshot read is still pending on the returned receiver.
+pub(super) fn subscribe_then_snapshot<T>(
+    runtime_state: &PylonRuntimeState,
+    snapshot: impl FnOnce() -> T,
+) -> (watch::Receiver<u64>, T) {
+    let changes = runtime_state.subscribe_registration_changes();
+    (changes, snapshot())
 }
 
 pub(super) async fn send_registration_update(

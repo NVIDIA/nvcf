@@ -137,7 +137,7 @@ struct Args {
     /// Fallback maximum engine concurrency for every model until the engine reports a limit
     #[arg(long, value_name = "N")]
     max_engine_concurrency: Option<NonZeroU64>,
-    /// Minimum interval between registration/stat updates to stargate
+    /// Heartbeat interval: the longest gap between registration updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
     /// Minimum interval between stat updates triggered by request state changes

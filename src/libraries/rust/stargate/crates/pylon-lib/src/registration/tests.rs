@@ -956,6 +956,42 @@ async fn stats_changes_publish_before_the_heartbeat_and_coalesce() {
     server.shutdown().await;
 }
 
+#[test]
+fn change_after_initial_snapshot_stays_pending() {
+    type RuntimeChange = fn(&PylonRuntimeState);
+    let cases: [(&str, RuntimeChange); 2] = [
+        ("status", |state| {
+            state.set_status(InferenceServerStatus::Inactive)
+        }),
+        ("stats", |state| {
+            state.set_model_stats(
+                "model-a",
+                CurrentModelStats {
+                    queued_input_size: 1,
+                    ..CurrentModelStats::default()
+                },
+            )
+        }),
+    ];
+    for (name, change) in cases {
+        let runtime_state =
+            PylonRuntimeState::new(InferenceServerStatus::Active, &["model-a".to_string()]);
+
+        let (changes, _) = subscribe_then_snapshot(&runtime_state, || {
+            let snapshot = runtime_state.advertised_models();
+            change(&runtime_state);
+            snapshot
+        });
+
+        assert!(
+            changes
+                .has_changed()
+                .expect("runtime state should keep the change sender"),
+            "{name} change after the initial snapshot should stay pending"
+        );
+    }
+}
+
 #[tokio::test]
 async fn https_without_custom_ca_uses_configured_native_roots() {
     if let Ok(dial_url) = std::env::var(DEFAULT_ROOT_TEST_DIAL_URL_ENV) {
