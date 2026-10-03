@@ -100,19 +100,21 @@ func init() {
 		"Run compute-plane health checks. Requires --cluster-name.")
 	selfHostedCheckCmd.Flags().BoolVar(&checkAll, "all", false, "Run all check categories")
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterName, "cluster-name", "", "Cluster name for compute-plane checks")
-	selfHostedCheckCmd.Flags().BoolVar(&checkLocalOnly, "local-only", false, "Run local-host checks only (no kubectl contact)")
+	selfHostedCheckCmd.Flags().BoolVar(&checkLocalOnly, "local-only", false,
+		"Run local-host checks only (no cluster or registry contact); the skipped checks are reported as skipped rows")
 	selfHostedCheckCmd.Flags().BoolVar(&checkSkipInotifyCheck, "skip-inotify-check", false,
-		"Disable the per-node inotify-limits probe. Required when the kubeconfig user "+
-			"cannot create pods in 'default', or when the probe image comes from a registry that "+
-			"needs credentials: the probe pods get no pull secret. Env: NVCF_CLI_SELFHOSTED_SKIP_INOTIFY")
+		"Disable the per-node inotify-limits probe; its row says it was skipped. Required when the "+
+			"kubeconfig user cannot create pods in 'default', or when the probe image comes from a registry "+
+			"that needs credentials: the probe pods get no pull secret. Env: NVCF_CLI_SELFHOSTED_SKIP_INOTIFY")
 	selfHostedCheckCmd.Flags().BoolVar(&checkSkipClusterValidation, "skip-cluster-validation", false,
-		"Disable the in-cluster cluster-validator probe. "+
+		"Disable the in-cluster cluster-validator probe; its row says it was skipped. "+
 			"Env: NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION")
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorImage, "cluster-validator-image", "",
 		"Cluster-validator container image. Resolved from --cluster-validator-image > "+
 			"NVCF_CLI_CLUSTER_VALIDATOR_IMAGE > nvcf-cli config (cluster_validator_image). "+
-			"If unset everywhere, the validator probe is skipped with a warning. "+
-			"When the value has no tag, the latest is discovered from the registry.")
+			"If unset everywhere, the validator does not run and its row is a warning. "+
+			"When the value has no tag, the latest is discovered from the registry; "+
+			"if none is found, the validator does not run and its row fails the check.")
 	_ = viper.BindPFlag("cluster_validator_image",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-image"))
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorPullSecret, "cluster-validator-pull-secret", "",
@@ -170,7 +172,11 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if !checkPre && !checkControlPlane && !checkComputePlane && !checkAll {
 		return fmt.Errorf("at least one of --pre, --control-plane, --compute-plane, or --all is required")
 	}
-	if checkClusterValidatorNoCleanup && selfHostedWait != "" {
+	waitDur, err := parseCheckWait(selfHostedWait)
+	if err != nil {
+		return err
+	}
+	if checkClusterValidatorNoCleanup && waitDur > 0 {
 		// Each poll is a new validator run, so --no-cleanup would keep a full
 		// set of RBAC, Secret, ConfigMap and Job for every poll.
 		return fmt.Errorf("--no-cleanup keeps one run's objects for debugging and cannot be combined with --wait")
@@ -191,7 +197,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	runCtx := selfhosted.WithRegistryCredentials(c.Context(), selfhosted.NewRegistryCredentials(preferNGCKey()))
 
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
-	skipClusterValidation := checkSkipClusterValidation || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION") != ""
+	skipClusterValidation := clusterValidationSkipped()
 
 	// Mode is needed before image resolution so computePlaneIsTargeted can
 	// gate the registry round trip. ValidateFlags in PersistentPreRunE
@@ -199,10 +205,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	mode := kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext)
 
 	// Resolve the validator image up-front so we can right-size the
-	// outer timeout (only when the validator actually runs) and emit a
-	// one-shot stderr note up-front explaining why no validator row
-	// appears in the output. Empty == not configured anywhere.
-	// One image covers both roles (VALIDATOR_ROLE selects the check set).
+	// outer timeout (only when the validator actually runs). Empty == not
+	// configured anywhere. One image covers both roles (VALIDATOR_ROLE
+	// selects the check set).
 	// *IsVisited, matching the dispatch below. --pre in ModeSplit visits both
 	// clusters but targets neither role, so gating image resolution on
 	// *IsTargeted left the validator unresolved and both probes nil, with no
@@ -217,30 +222,6 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// it again on every poll, and the validator runs once it does.
 	clusterValidatorConfigured := anyValidatorIsTargeted && (clusterValidatorImage != "" || unresolvedImage != "")
 
-	outerTimeout := checkProbeShare
-	if clusterValidatorConfigured {
-		// A role's share is the time for the probes that run first, plus the
-		// longest a validator can take, which includes the wait after its own
-		// timeout for the Job's deadline to end the pod. Sizing on the
-		// validator's timeout alone ran the budget out while that wait was
-		// still in progress, reporting "not every check ran" in place of the
-		// validator's own failure. ModeSingle runs both validators in turn;
-		// ModeSplit runs them in parallel, so one share covers both.
-		perRole := checkProbeShare + selfhosted.ClusterValidatorRunCeiling()
-		if mode == kubectx.ModeSingle && controlPlaneIsTargeted(mode) && computePlaneIsTargeted(mode) {
-			outerTimeout = 2 * perRole
-		} else {
-			outerTimeout = perRole
-		}
-	}
-	// --wait polls for the declared duration. The outer ctx has to outlive
-	// the last iteration, so add waitDur on top of a single iteration's
-	// worth.
-	if selfHostedWait != "" {
-		if waitDur, err := time.ParseDuration(selfHostedWait); err == nil {
-			outerTimeout += waitDur
-		}
-	}
 	// Every validator run that may leave objects in a cluster registers its
 	// removal command here, across --wait polls, so every exit can print it.
 	ledger := &selfhosted.CleanupLedger{}
@@ -279,7 +260,8 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// interrupted is an explicit cancel, not the timeout below, which is a
 	// child of sigCtx and leaves it live.
 	interrupted := func() bool { return sigCtx.Err() != nil }
-	ctx, cancel := context.WithTimeout(sigCtx, checkBudget(outerTimeout))
+	ctx, cancel := context.WithTimeout(sigCtx,
+		checkBudget(checkRunBudget(mode, localOnly, clusterValidatorConfigured, waitDur)))
 	defer cancel()
 
 	// Legacy --output=json: warn and treat as --json.
@@ -288,30 +270,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		selfHostedJSON = true
 	}
 
-	// Surface the skip as a stderr note so operators don't conflate "no
-	// validator row" with "validator silently dropped". Print at most one
-	// reason; --skip-cluster-validation takes precedence over missing
-	// config since it's the explicit operator choice.
-	// --local-only overrides the required scope flag, so say which checks
-	// that drops rather than print a clean host-only result for --all.
-	if localOnly {
-		fmt.Fprintln(c.ErrOrStderr(), "note: --local-only runs the local host checks only; cluster checks for the requested scope are skipped")
-	}
-	if !localOnly && (computePlaneIsVisited() || controlPlaneIsVisited()) {
-		switch {
-		case skipClusterValidation:
-			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (--skip-cluster-validation)")
-		case unresolvedImage != "":
-			// Reported as a failed check row instead: a note on stderr is
-			// lost to a consumer of the JSON stream.
-		case clusterValidatorImage == "":
-			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (cluster_validator_image not set in nvcf-cli config)")
-		}
-	}
-
-	// Enumerate registries for the local credential check. Skipped when
-	// local-only (no network) or when no validator image is configured.
-	// Uses the same extras list as the in-cluster ConfigMap reachability check.
+	// Enumerate registries for the local credential check. --local-only
+	// skips it and reports a skipped row instead. Uses the same extras list
+	// as the in-cluster ConfigMap reachability check.
 	var (
 		credEntries     []selfhosted.RegistryEntry
 		registryChecker selfhosted.RegistryCredentialChecker
@@ -332,8 +293,11 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 
 	cfg := selfhosted.PreflightConfig{
-		LocalOnly:           localOnly,
-		Tools:               checkPreflightTools(),
+		LocalOnly: localOnly,
+		Tools:     checkPreflightTools(),
+		// The tools are what `up` runs; checking an installed stack does
+		// not use them.
+		ToolsAdvisory:       !checkPre,
 		Registries:          credEntries,
 		RegistryChecker:     registryChecker,
 		RegistryPostInstall: checkScopeIsPostInstall(),
@@ -341,7 +305,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 
 	// A quit key in the dashboard cancels the run the way a signal does.
-	sink, err := selectCheckRendererFn(errOut, selfHostedWait != "", stop)
+	sink, err := selectCheckRendererFn(errOut, waitDur > 0, stop)
 	if err != nil {
 		return err
 	}
@@ -372,29 +336,28 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 				results = append(results,
 					runPreflightByRole(ctx, cfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger)...)
 			}
-			// Inject force-fail seam for tests.
-			if os.Getenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL") != "" {
-				results = append([]selfhosted.CheckResult{{
-					ID:       "force-fail-test-seam",
-					Category: "test",
-					Severity: selfhosted.SeverityError,
-					Passed:   false,
-					Message:  "forced failure (test seam)",
-				}}, results...)
-			}
 			return results
 		}
 
+		exitFailed := func() error {
+			emitCheckFinal(context.Background(), sink, lastResults, ledger.Outstanding())
+			return &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
+		}
 		// The outer budget stopped a check: one never started, or ran out of time
 		// while it ran. Its row is no finding, so the verdict is a timeout rather
 		// than whatever the partial set would grade as. A budget that ran out
-		// only after every check had its result changes nothing.
+		// only after every check had its result changes nothing. A blocking
+		// failure in a row the budget did not cut short is still exit 2: no retry
+		// with more time passes it.
 		exitBudgetSpent := func() error {
+			if anyFindingFailed(lastResults) {
+				return exitFailed()
+			}
 			emitCheckTimeout(sink, lastResults, ledger.Outstanding())
 			return &ExitCodeError{Code: 5, Msg: "timed out: the check budget ran out before every check finished"}
 		}
 
-		if selfHostedWait == "" {
+		if waitDur == 0 {
 			// Single-shot mode.
 			lastResults = runOnce()
 			if interrupted() {
@@ -403,21 +366,16 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			if anyCutShort(lastResults) {
 				return exitBudgetSpent()
 			}
-			emitCheckFinal(ctx, sink, lastResults, ledger.Outstanding())
 			if anyFailed(lastResults) {
-				return &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
+				return exitFailed()
 			}
+			emitCheckFinal(ctx, sink, lastResults, ledger.Outstanding())
 			return nil
 		}
 
-		// --wait mode: poll every 5s until all checks pass or the duration elapses.
-		dur, err := time.ParseDuration(selfHostedWait)
-		if err != nil {
-			return fmt.Errorf("invalid --wait duration %q: %w", selfHostedWait, err)
-		}
-
-		deadline := time.After(dur)
-		ticker := time.NewTicker(5 * time.Second)
+		// --wait mode: poll until all checks pass or the duration elapses.
+		deadline := time.After(waitDur)
+		ticker := time.NewTicker(checkPollInterval)
 		defer ticker.Stop()
 
 		// Every exit 5 reports success:false, so a gate on the final event agrees
@@ -874,34 +832,48 @@ func runPreflightByRole(
 	ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, mode kubectx.Mode,
 	clusterValidatorImage, unresolvedImage string, ledger *selfhosted.CleanupLedger,
 ) []selfhosted.CheckResult {
-	// LocalOnly: skip all cluster probes.
+	// LocalOnly: skip all cluster probes, and say so in a row for each.
 	if cfg.LocalOnly {
-		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
+		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly,
+			selfhosted.RoleConfig{Skipped: localOnlySkips()}, sink)
 	}
 
 	// SIS reachability is a compute-plane, post-install concern: only an
 	// explicit --all or --compute-plane asks for it. A bare --pre skips it
 	// because SIS is not up before install, and --control-plane does not
-	// target the compute plane.
+	// target the compute plane. It probes only a URL the operator configured.
 	icmsURL := ""
+	var computeSkips []selfhosted.SkippedCheck
 	if checkAll || checkComputePlane {
-		icmsURL = resolveICMSURL(selfHostedICMSURL)
+		if icmsURL = resolveCheckSISURL(selfHostedICMSURL); icmsURL == "" {
+			computeSkips = append(computeSkips, selfhosted.SkippedCheck{
+				Category: selfhosted.CategoryComputePlane, ID: "sis-reachability", Warn: true,
+				Message: "SIS reachability not checked: no ICMS URL is configured; pass --icms-url or set NVCF_ICMS_URL",
+			})
+		}
 	}
 
-	skipInotify := checkSkipInotifyCheck || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY") != ""
 	var inotifyProber selfhosted.NodeInotifyProber
 	// Visited, not targeted: the inotify limit is exactly what --pre exists to
 	// catch before NVCA bootstrap, so it must run for --pre in ModeSplit too.
-	if computePlaneIsVisited() && !skipInotify {
-		inotifyProber = newInotifyProberForSelfHosted(configuredProbeImage())
+	if computePlaneIsVisited() {
+		if inotifyCheckSkipped() {
+			computeSkips = append(computeSkips, selfhosted.SkippedCheck{
+				Category: selfhosted.CategoryComputePlane, ID: "node-inotify-limits",
+				Message: "node inotify limits skipped (--skip-inotify-check)",
+			})
+		} else {
+			inotifyProber = newInotifyProberForSelfHosted(configuredProbeImage())
+		}
 	}
+	computeSkips = append(computeSkips,
+		validatorSkip(selfhosted.CategoryComputePlane, clusterValidatorImage, unresolvedImage)...)
+	cpSkips := validatorSkip(selfhosted.CategoryControlPlane, clusterValidatorImage, unresolvedImage)
 
 	// clusterValidatorImage is resolved by the caller. Empty value means
 	// either the operator explicitly opted out (--skip-cluster-validation /
 	// env) or no image is configured (no flag / env / config-file value).
-	// Either way, leave clusterValidator nil so the validator row is
-	// omitted from the check stream; the caller already emitted a
-	// one-line stderr notice explaining which case applies.
+	// Either way the validator is nil and the role's Skipped row says which.
 	// Gate on the role predicate as well as the image, mirroring
 	// cpClusterValidator below. Without this, --control-plane in ModeSplit
 	// still creates a ServiceAccount, cluster-wide ClusterRole/CRB, pull secret
@@ -970,6 +942,7 @@ func runPreflightByRole(
 					ValidatorCleanup:                ledger,
 					StaleNamespaceProber:            staleNSProber,
 					StackDir:                        localStackDir(selfHostedControlPlaneStack),
+					Skipped:                         cpSkips,
 				}
 				cpResults = selfhosted.RunPreflightForRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
 				return nil
@@ -991,6 +964,7 @@ func runPreflightByRole(
 					ValidatorCleanup:                ledger,
 					StaleNamespaceProber:            staleNSProber,
 					StackDir:                        localStackDir(selfHostedComputePlaneStack),
+					Skipped:                         computeSkips,
 				}
 				gpuResults = selfhosted.RunPreflightForRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
 				return nil
@@ -1043,6 +1017,7 @@ func runPreflightByRole(
 				StaleNamespaceProber:            staleForControlPlane,
 				StackDir:                        localStackDir(selfHostedControlPlaneStack),
 				ExtraStaleNamespaces:            cpExtraNamespaces,
+				Skipped:                         cpSkips,
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, cpCfg, selfhosted.RoleControlPlane, cpRC, sink)...)
@@ -1061,6 +1036,7 @@ func runPreflightByRole(
 				ValidatorCleanup:                ledger,
 				StaleNamespaceProber:            staleForComputePlane,
 				StackDir:                        localStackDir(selfHostedComputePlaneStack),
+				Skipped:                         computeSkips,
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
@@ -1224,26 +1200,28 @@ func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []self
 		verdict = "warnings"
 	}
 	_ = sink.Emit(ctx, progress.Final{
-		Success:     failed == 0,
-		Verdict:     verdict,
-		TotalChecks: len(results),
-		PassedCount: passed,
-		FailedCount: failed,
-		Cleanup:     cleanup,
+		Success:      failed == 0,
+		Verdict:      verdict,
+		TotalChecks:  len(results),
+		PassedCount:  passed,
+		FailedCount:  failed,
+		WarningCount: warned,
+		Cleanup:      cleanup,
 	})
 }
 
 // emitCheckTimeout emits the final event of a run that ended in a timeout,
 // exit 5. Nothing passed the gate, whatever the rows say, so success is false.
 func emitCheckTimeout(sink progress.EventSink, results []selfhosted.CheckResult, cleanup []string) {
-	passed, failed, _ := selfhosted.CountResults(results)
+	passed, failed, warned := selfhosted.CountResults(results)
 	_ = sink.Emit(context.Background(), progress.Final{
-		Success:     false,
-		Verdict:     "timeout",
-		TotalChecks: len(results),
-		PassedCount: passed,
-		FailedCount: failed,
-		Cleanup:     cleanup,
+		Success:      false,
+		Verdict:      "timeout",
+		TotalChecks:  len(results),
+		PassedCount:  passed,
+		FailedCount:  failed,
+		WarningCount: warned,
+		Cleanup:      cleanup,
 	})
 }
 
@@ -1272,10 +1250,117 @@ var checkPreflightTools = selfHostedPreflightTools
 // checkBudget is a test seam over the command's outer time budget.
 var checkBudget = func(d time.Duration) time.Duration { return d }
 
-// checkProbeShare is the budget for the checks that run before a validator,
-// and the whole budget of a run without one. The slowest of them, the node
-// inotify probe, is bounded inside it.
-const checkProbeShare = 2 * time.Minute
+// checkPollInterval is how often --wait runs the checks again. A var so tests
+// can shorten it.
+var checkPollInterval = 5 * time.Second
+
+// parseCheckWait parses --wait. Empty is a single run. A malformed or
+// non-positive duration is a usage error, reported before any work starts.
+func parseCheckWait(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --wait duration %q: %w", raw, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid --wait duration %q: must be positive", raw)
+	}
+	return d, nil
+}
+
+// checkRunBudget is the command's outer time budget. Each role invocation gets
+// the probe share, which it enforces on the checks before its validator, plus
+// the validator's longest run when one is configured: its own timeout, the
+// wait after it for the Job's deadline to end the pod, the reads that grade
+// it and the sweeps. Sizing on the validator's timeout alone ran the budget
+// out during that wait, reporting a spent budget in place of the validator's
+// own failure. ModeSingle runs the two roles in turn, so each needs a share;
+// ModeSplit runs them in parallel. --wait polls for its duration on top.
+func checkRunBudget(mode kubectx.Mode, localOnly, validatorConfigured bool, wait time.Duration) time.Duration {
+	perRole := selfhosted.CheckProbeShare()
+	if validatorConfigured {
+		perRole += selfhosted.ClusterValidatorRunCeiling()
+	}
+	roles := time.Duration(1)
+	if !localOnly && mode == kubectx.ModeSingle && controlPlaneIsVisited() && computePlaneIsVisited() {
+		roles = 2
+	}
+	return roles*perRole + wait
+}
+
+func clusterValidationSkipped() bool {
+	return checkSkipClusterValidation || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION") != ""
+}
+
+func inotifyCheckSkipped() bool {
+	return checkSkipInotifyCheck || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY") != ""
+}
+
+// resolveCheckSISURL returns the SIS URL to probe, or "" when none was
+// configured. Unlike resolveICMSURL it does not fall back to the client's
+// built-in base_http_url, which names NVIDIA's hosted service rather than
+// this install.
+func resolveCheckSISURL(flagValue string) string {
+	if flagValue == "" && os.Getenv("NVCF_ICMS_URL") == "" && os.Getenv("NVCF_SIS_URL") == "" &&
+		!viper.IsSet("icms_url") && !viper.IsSet("base_http_url") {
+		return ""
+	}
+	return resolveICMSURL(flagValue)
+}
+
+// validatorSkip is the row for a role whose validator does not run: none when
+// it runs, or when the role reports its own unresolved image.
+func validatorSkip(category, image, unresolvedImage string) []selfhosted.SkippedCheck {
+	switch {
+	case clusterValidationSkipped():
+		return []selfhosted.SkippedCheck{{
+			Category: category, ID: "cluster-validator",
+			Message: "cluster-validator skipped (--skip-cluster-validation)",
+		}}
+	case image == "" && unresolvedImage == "":
+		return []selfhosted.SkippedCheck{{
+			Category: category, ID: "cluster-validator", Warn: true,
+			Message: "cluster-validator not run: cluster_validator_image is not set; set it in the nvcf-cli " +
+				"config, NVCF_CLI_CLUSTER_VALIDATOR_IMAGE or --cluster-validator-image to validate the cluster",
+		}}
+	}
+	return nil
+}
+
+// localOnlySkips are the rows for what --local-only leaves out: the registry
+// credential check, and the cluster checks of each role the scope selects.
+func localOnlySkips() []selfhosted.SkippedCheck {
+	skips := []selfhosted.SkippedCheck{{
+		Category: selfhosted.CategoryRegistryCredentials, ID: "registry-credentials",
+		Message: "registry credentials skipped (--local-only)",
+	}}
+	if controlPlaneIsVisited() {
+		skips = append(skips, selfhosted.SkippedCheck{
+			Category: selfhosted.CategoryControlPlane, ID: "control-plane-cluster",
+			Message: "control-plane cluster checks skipped (--local-only)",
+		})
+	}
+	if computePlaneIsVisited() {
+		skips = append(skips, selfhosted.SkippedCheck{
+			Category: selfhosted.CategoryComputePlane, ID: "compute-plane-cluster",
+			Message: "compute-plane cluster checks skipped (--local-only)",
+		})
+	}
+	return skips
+}
+
+// anyFindingFailed reports a blocking failure the cluster or host caused, not
+// the budget.
+func anyFindingFailed(results []selfhosted.CheckResult) bool {
+	for _, r := range results {
+		if r.IsBlockingFailure() && !r.CutShort {
+			return true
+		}
+	}
+	return false
+}
 
 // anyWarningToWaitOn reports a warning expected to clear by itself, such as a
 // rollout the validator saw in progress. --wait keeps polling on it; a single

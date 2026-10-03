@@ -213,7 +213,7 @@ func TestStaleNamespaceCheck_ProberErrorDegradestoWarning(t *testing.T) {
 	}
 	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
 	assert.False(t, r.Passed)
-	assert.Equal(t, "warning", r.Severity,
+	assert.Equal(t, SeverityWarning, r.Severity,
 		"prober errors must degrade to warning so transient failures do not block the operator")
 	assert.Contains(t, r.Message, "cluster unreachable")
 }
@@ -227,7 +227,7 @@ func TestStaleNamespaceCheck_StaleIsError(t *testing.T) {
 	}
 	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
 	assert.False(t, r.Passed)
-	assert.Equal(t, "error", r.Severity,
+	assert.Equal(t, SeverityError, r.Severity,
 		"detected stale namespaces must use error severity so the exit code is non-zero")
 	assert.Contains(t, r.Message, "nvcf")
 	assert.Contains(t, r.Message, "/api/v1/namespaces/nvcf/finalize",

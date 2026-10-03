@@ -121,6 +121,7 @@ go_test(
         "main_test.go",
         "registry_test.go",
         "root_test.go",
+        "self_hosted_check_rows_test.go",
         "self_hosted_check_scope_test.go",
         "self_hosted_check_stackvalues_test.go",
         "self_hosted_check_test.go",

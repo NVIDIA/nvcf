@@ -107,19 +107,6 @@ func TestCheck_SISReachabilityScope(t *testing.T) {
 	assert.Zero(t, hits, "--pre visits the compute plane but --control-plane does not ask for SIS")
 }
 
-// --local-only overrides the required scope flag; the run says so on stderr.
-func TestCheck_LocalOnlyNotesSkippedClusterChecks(t *testing.T) {
-	resetCheckFlags(t)
-	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
-	var stderr bytes.Buffer
-	rootCmd.SetErr(&stderr)
-	rootCmd.SetOut(&bytes.Buffer{})
-	t.Cleanup(func() { rootCmd.SetErr(nil); rootCmd.SetOut(nil) })
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--local-only", "--json"})
-	_ = rootCmd.Execute()
-	assert.Contains(t, stderr.String(), "--local-only runs the local host checks only")
-}
-
 // An interrupted run reports the interrupt, not a verdict: with the validator
 // cut short the results would otherwise read as a failure, or as a pass.
 func TestCheck_InterruptExits130(t *testing.T) {
@@ -462,27 +449,6 @@ func TestImageRefIsPinned(t *testing.T) {
 	}
 }
 
-// The budget covers each validator's longest run, including the wait after its
-// own timeout for the Job's deadline to end the pod, so a validator that times
-// out is graded as its own failure and not as a spent budget. Both roles on one
-// cluster run in turn and need a share each.
-func TestCheck_BudgetCoversEachValidatorsFullRun(t *testing.T) {
-	ceiling := selfhosted.ClusterValidatorRunCeiling()
-	passNow := func(context.Context) selfhosted.ClusterValidatorResult {
-		return selfhosted.ClusterValidatorResult{Passed: true}
-	}
-	for _, tc := range []struct {
-		args       []string
-		validators time.Duration
-	}{
-		{args: nil, validators: 1},
-		{args: []string{"--pre"}, validators: 2},
-	} {
-		_, _ = runCheckWithBudget(t, time.Minute, passNow, tc.args...)
-		assert.GreaterOrEqual(t, requestedBudget, tc.validators*ceiling+checkProbeShare, "args %v", tc.args)
-	}
-}
-
 // removalCommand is the command that removes validator run runID's objects,
 // with no context pinned.
 func removalCommand(runID string) string {
@@ -617,43 +583,6 @@ func TestCheck_WaitKeepsEarlierPollsRemovalCommands(t *testing.T) {
 	assert.True(t, strings.HasSuffix(stderr, keptNote(removalCommand("run1"))), stderr)
 }
 
-// An interrupt ends --wait with exit 130 and one cancelled final event,
-// whether it lands during a poll that then passes, or between polls.
-func TestCheck_WaitInterrupt(t *testing.T) {
-	ready := selfhosted.ClusterValidatorResult{Passed: true, Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
-	prev := selectCheckRendererFn
-	t.Cleanup(func() { selectCheckRendererFn = prev })
-	for name, validator := range map[string]func(quit func()) func(context.Context) selfhosted.ClusterValidatorResult{
-		"during a poll": func(quit func()) func(context.Context) selfhosted.ClusterValidatorResult {
-			return func(context.Context) selfhosted.ClusterValidatorResult {
-				quit()
-				return ready
-			}
-		},
-		"between polls": func(quit func()) func(context.Context) selfhosted.ClusterValidatorResult {
-			return func(context.Context) selfhosted.ClusterValidatorResult {
-				time.AfterFunc(100*time.Millisecond, quit)
-				return selfhosted.ClusterValidatorResult{Err: errors.New("did not finish")}
-			}
-		},
-	} {
-		var onQuit atomic.Value
-		selectCheckRendererFn = func(w io.Writer, wait bool, q func()) (progress.EventSink, error) {
-			onQuit.Store(q)
-			return prev(w, wait, q)
-		}
-		quit := func() { onQuit.Load().(func())() }
-		start := time.Now()
-		err, stderr := runCheckWithBudget(t, time.Minute, validator(quit), "--wait", "10m")
-		var exitErr *ExitCodeError
-		require.ErrorAs(t, err, &exitErr, name)
-		assert.Equal(t, 130, exitErr.Code, name)
-		final := finalEvent(t, stderr)
-		assert.Equal(t, true, final["cancelled"], name)
-		assert.Less(t, time.Since(start), 5*time.Second, "%s: no further poll runs", name)
-	}
-}
-
 // An interrupt after the budget ran out reports the interrupt only: no
 // synthetic cut-short or not-run rows ahead of the cancelled final event.
 func TestCheck_InterruptAfterTheBudgetEmitsNoSyntheticRows(t *testing.T) {
@@ -738,35 +667,5 @@ func TestSelectCheckRenderer_TTYCarriesOnQuit(t *testing.T) {
 		require.NotNil(t, got, "wait=%v", wait)
 		got()
 		assert.Equal(t, 1, quits, "wait=%v", wait)
-	}
-}
-
-// The budget is exact: the probes' share, plus each validator's longest run
-// for the validators that run in turn, plus the --wait duration. The inotify
-// probe fits in the probes' share.
-func TestCheck_BudgetComposition(t *testing.T) {
-	assert.Less(t, selfhosted.InotifyProbeBudget(), checkProbeShare)
-	perRole := checkProbeShare + selfhosted.ClusterValidatorRunCeiling()
-	passNow := func(context.Context) selfhosted.ClusterValidatorResult {
-		return selfhosted.ClusterValidatorResult{Passed: true}
-	}
-	for name, tc := range map[string]struct {
-		args []string
-		want time.Duration
-	}{
-		"no validator": {args: []string{"--cluster-validator-image", ""}, want: checkProbeShare},
-		"one role":     {want: perRole},
-		"split, both roles": {args: []string{"--all", "--control-plane-context", "a", "--compute-plane-context", "b"},
-			want: perRole},
-		"unresolved image":     {args: []string{"--cluster-validator-image", "nvcr.io/nvidia/validator"}, want: perRole},
-		"single, both roles":   {args: []string{"--pre"}, want: 2 * perRole},
-		"one role, --wait":     {args: []string{"--wait", "10m"}, want: perRole + 10*time.Minute},
-		"single, both, --wait": {args: []string{"--all", "--wait", "10m"}, want: 2*perRole + 10*time.Minute},
-		"no validator, --wait 1m": {args: []string{"--cluster-validator-image", "", "--wait", "1m"},
-			want: checkProbeShare + time.Minute},
-	} {
-		requestedBudget = 0
-		_, _ = runCheckWithBudget(t, time.Second, passNow, tc.args...)
-		assert.Equal(t, tc.want, requestedBudget, name)
 	}
 }

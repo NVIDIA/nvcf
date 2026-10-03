@@ -288,7 +288,7 @@ func TestRenderJSONL_CheckStream(t *testing.T) {
 		CheckStarted{Category: "pre-kubernetes-setup", ID: "gateway-api"},
 		CheckCompleted{Category: "pre-kubernetes-setup", ID: "gateway-api", Passed: false, Severity: "error", Message: "Gateway API CRDs not installed", HintURL: "https://docs.nvidia.com/nvcf/self-hosted/gateway-api"},
 		CategoryCompleted{Category: "pre-kubernetes-setup", PassedCount: 13, FailedCount: 1, DurationSec: 2.4},
-		Final{Success: false, Verdict: "failed", TotalChecks: 14, PassedCount: 13, FailedCount: 1},
+		Final{Success: false, Verdict: "failed", TotalChecks: 15, PassedCount: 13, FailedCount: 1, WarningCount: 1},
 	}
 
 	got := runEmit(t, clock, events)

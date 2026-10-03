@@ -292,7 +292,7 @@ func TestRunPreflightStreaming_EmitsEvents(t *testing.T) {
 	require.True(t, ok, "event[3] must be CheckCompleted")
 	assert.Equal(t, "local-host-tools-helmfile", cc1.ID)
 	assert.False(t, cc1.Passed)
-	assert.Equal(t, "error", cc1.Severity)
+	assert.Equal(t, SeverityError, cc1.Severity)
 	assert.Equal(t, "https://github.com/helmfile/helmfile#installation", cc1.HintURL)
 
 	catDone, ok := sink.events[4].(progress.CategoryCompleted)
@@ -408,12 +408,12 @@ func TestRunPreflightForRole_LocalOnly(t *testing.T) {
 	assert.Len(t, res, 4, "expected 3 tool results plus helm runtime compatibility")
 }
 
-func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
+// A category with no rows would report a clean tally for nothing checked, so
+// it is not reported. A role always has rows: its probes, or the skipped rows
+// that say why they did not run.
+func TestRunPreflightForRole_EmptyCategoryIsNotReported(t *testing.T) {
 	sink := &captureSink{}
 	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
-	// No StaleNamespaceProber and no ClusterValidator: the control-plane
-	// category is empty but the category itself still fires (CategoryCompleted
-	// is always emitted).
 	RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{KubeContext: "admin@cp"}, sink)
 
 	seen := map[string]bool{}
@@ -423,7 +423,7 @@ func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
 		}
 	}
 	assert.True(t, seen["local-host-tools"], "expected local-host-tools category")
-	assert.True(t, seen["control-plane-cluster"], "expected control-plane-cluster category even with no checks configured")
+	assert.False(t, seen["control-plane-cluster"], "an empty category must not report a tally")
 }
 
 func TestRunPreflightForRole_ControlPlaneWithValidatorAddsClusterValidatorCheck(t *testing.T) {
@@ -455,8 +455,9 @@ func TestRunPreflightForRole_ComputePlaneWithoutSISURL(t *testing.T) {
 	for _, r := range res {
 		gotIDs = append(gotIDs, r.ID)
 	}
-	assert.Contains(t, gotIDs, "gpu-operator")
-	assert.Contains(t, gotIDs, "gpu-node-labels")
+	// No row passes for a check that does not run.
+	assert.NotContains(t, gotIDs, "gpu-operator")
+	assert.NotContains(t, gotIDs, "gpu-node-labels")
 	assert.NotContains(t, gotIDs, "sis-reachability") // no SISURL → not added
 }
 
@@ -556,7 +557,7 @@ func TestNodeInotifyCheck_OneNodeBelowMinimum(t *testing.T) {
 	got := findResult(res, "node-inotify-limits")
 	require.NotNil(t, got)
 	assert.False(t, got.Passed, "below-minimum node must fail the check")
-	assert.Equal(t, "error", got.Severity)
+	assert.Equal(t, SeverityError, got.Severity)
 	assert.Contains(t, got.Message, "node-b")
 	assert.Contains(t, got.Message, "max_user_instances=128/8192")
 	assert.NotContains(t, got.Message, "node-a", "node above minimum should not be listed")
@@ -598,7 +599,7 @@ func TestNodeInotifyCheck_LimitViolationsBeatProbeErrors(t *testing.T) {
 	got := findResult(res, "node-inotify-limits")
 	require.NotNil(t, got)
 	assert.False(t, got.Passed, "limit violation must fail the check")
-	assert.Equal(t, "error", got.Severity,
+	assert.Equal(t, SeverityError, got.Severity,
 		"limit violations outrank probe errors and must surface as error, not warning")
 	assert.Contains(t, got.Message, "node-b", "non-compliant node must appear in message")
 	assert.Contains(t, got.Message, "max_user_instances=128/8192")
@@ -621,7 +622,7 @@ func TestNodeInotifyCheck_PerNodeProbeError(t *testing.T) {
 	got := findResult(res, "node-inotify-limits")
 	require.NotNil(t, got)
 	assert.False(t, got.Passed, "per-node probe error must not silently pass")
-	assert.Equal(t, "warning", got.Severity, "probe failures degrade to warning, not error")
+	assert.Equal(t, SeverityWarning, got.Severity, "probe failures degrade to warning, not error")
 	assert.Contains(t, got.Message, "node-b")
 	assert.Contains(t, got.Message, "forbidden")
 }
@@ -638,7 +639,7 @@ func TestNodeInotifyCheck_ClusterWideProbeError(t *testing.T) {
 	got := findResult(res, "node-inotify-limits")
 	require.NotNil(t, got)
 	assert.False(t, got.Passed)
-	assert.Equal(t, "warning", got.Severity)
+	assert.Equal(t, SeverityWarning, got.Severity)
 	assert.ErrorIs(t, got.Err, probeErr)
 }
 
@@ -854,5 +855,245 @@ func TestRunPreflight_UnresolvedValidatorImageFailsEachRole(t *testing.T) {
 		assert.True(t, row.IsBlockingFailure(), role)
 		assert.Contains(t, row.Message, "could not resolve a tag for nvcr.io/nvidia/nvcf-byoc/cluster-validator", role)
 		assert.Contains(t, row.Message, "--skip-cluster-validation", role)
+	}
+}
+
+// completedRows returns the CheckCompleted events a sink received.
+func completedRows(sink *captureSink) []progress.CheckCompleted {
+	var out []progress.CheckCompleted
+	for _, e := range sink.events {
+		if cc, ok := e.(progress.CheckCompleted); ok {
+			out = append(out, cc)
+		}
+	}
+	return out
+}
+
+// Every passing row is info on the wire, whatever severity the check set
+// before it knew the outcome: a consumer that triages on severity error must
+// not flag a healthy run.
+func TestRunPreflight_PassingRowsAreInfo(t *testing.T) {
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0"), passingToolSpec("helm", "3.15.0")}}
+	rc := RoleConfig{
+		InotifyProber: func(context.Context, string) ([]NodeInotifyLimits, error) {
+			return []NodeInotifyLimits{{NodeName: "n1", MaxUserInstances: 8192, MaxUserWatches: 524288}}, nil
+		},
+	}
+	RunPreflightForRole(context.Background(), cfg, RoleComputePlane, rc, sink)
+	rows := completedRows(sink)
+	require.Len(t, rows, 3)
+	for _, row := range rows {
+		assert.True(t, row.Passed, row.ID)
+		assert.Equal(t, SeverityInfo, row.Severity, row.ID)
+	}
+}
+
+// A probe that checked no node is not a pass.
+func TestNodeInotifyCheck_NothingProbedIsNotAPass(t *testing.T) {
+	spec := nodeInotifyCheck(func(context.Context, string) ([]NodeInotifyLimits, error) { return nil, nil }, "")
+	r := spec.Run(context.Background())
+	assert.False(t, r.Passed)
+	assert.Equal(t, SeverityWarning, r.Severity)
+	assert.Contains(t, r.Message, "no schedulable nodes were probed")
+}
+
+// A SIS request the spent budget stopped is cut short, not graded as SIS being
+// unreachable.
+func TestRunPreflight_SISStoppedByTheBudgetIsCutShort(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	res := RunPreflightForRole(ctx, PreflightConfig{}, RoleComputePlane, RoleConfig{SISURL: srv.URL}, &captureSink{})
+	sis := findResult(res, "sis-reachability")
+	require.NotNil(t, sis)
+	assert.True(t, sis.CutShort)
+	assert.True(t, strings.HasPrefix(sis.Message, "cut short: "), sis.Message)
+}
+
+// The checks before a validator run inside the probe share, so a probe that
+// hangs cannot eat into the validator's time: the validator still runs on the
+// run's budget, and the hung probe is cut short.
+func TestRunPreflight_ProbeShareBoundsTheChecksBeforeTheValidator(t *testing.T) {
+	prevShare, prevCleanup := checkProbeShare, probePodCleanupTimeout
+	checkProbeShare, probePodCleanupTimeout = 400*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { checkProbeShare, probePodCleanupTimeout = prevShare, prevCleanup })
+
+	var validatorCtxErr error
+	ran := false
+	rc := RoleConfig{
+		StaleNamespaceProber: func(ctx context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		ClusterValidatorImage: "nvcr.io/nvidia/validator:1",
+		ClusterValidator: func(ctx context.Context, _ ClusterValidatorParams) ClusterValidatorResult {
+			ran, validatorCtxErr = true, ctx.Err()
+			return ClusterValidatorResult{Passed: true, Logs: validatorRoleMarker + "control-plane\n"}
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	res := RunPreflightForRole(ctx, PreflightConfig{}, RoleControlPlane, rc, &captureSink{})
+	assert.Less(t, time.Since(start), checkProbeShare, "the probes end inside the share")
+
+	stale := findResult(res, "stale-namespaces")
+	require.NotNil(t, stale)
+	assert.True(t, stale.CutShort)
+	require.True(t, ran, "the validator still runs")
+	assert.NoError(t, validatorCtxErr, "on the run's budget, not the spent share")
+	validator := findResult(res, "cluster-validator")
+	require.NotNil(t, validator)
+	assert.True(t, validator.Passed)
+}
+
+// The inotify probe's own bound, and the cleanup of its pods after it, fit in
+// the probe share, so a slow cluster is reported as nodes not probed rather
+// than cut short.
+func TestCheckProbeShare_CoversTheInotifyProbe(t *testing.T) {
+	assert.Less(t, inotifyProbeBudget, checkProbeShare-probePodCleanupTimeout)
+}
+
+// A missing tool fails pre-install, where the install runs it, and only warns
+// when an installed stack is checked, which runs no local tool.
+func TestRunPreflight_ToolsAdvisoryWarns(t *testing.T) {
+	missing := BinarySpec{
+		Name: "helmfile", MinVer: semver.MustParse("1.0.0"),
+		LookPath: func(string) (string, error) { return "", errors.New("not found") },
+	}
+	for advisory, want := range map[bool]Severity{false: SeverityError, true: SeverityWarning} {
+		res := RunPreflightForRole(context.Background(),
+			PreflightConfig{Tools: []BinarySpec{missing}, ToolsAdvisory: advisory}, RoleLocalOnly, RoleConfig{}, &captureSink{})
+		require.Len(t, res, 1)
+		assert.False(t, res[0].Passed)
+		assert.Equal(t, want, res[0].Severity, "advisory=%v", advisory)
+	}
+}
+
+// A check the flags or configuration leave out is still a row: an opt-out
+// passes at info, a missing input warns. Neither is cut short by a spent
+// budget, since neither has work to do, and its category is reported even
+// when the role runs no other check in it.
+func TestRunPreflight_SkippedChecksAreRows(t *testing.T) {
+	rc := RoleConfig{Skipped: []SkippedCheck{
+		{Category: CategoryControlPlane, ID: "cluster-validator", Message: "skipped (--skip-cluster-validation)"},
+		{Category: CategoryComputePlane, ID: "cluster-validator", Message: "not set", Warn: true},
+	}}
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	for _, ctx := range []context.Context{context.Background(), expired} {
+		sink := &captureSink{}
+		res := RunPreflightForRole(ctx, PreflightConfig{LocalOnly: true}, RoleLocalOnly, rc, sink)
+		require.Len(t, res, 2)
+		assert.Equal(t, CategoryControlPlane, res[0].Category)
+		assert.True(t, res[0].Passed)
+		assert.Equal(t, SeverityInfo, res[0].Severity)
+		assert.Equal(t, CategoryComputePlane, res[1].Category)
+		assert.False(t, res[1].Passed)
+		assert.Equal(t, SeverityWarning, res[1].Severity)
+		for _, r := range res {
+			assert.False(t, r.CutShort)
+		}
+		assert.Len(t, completedRows(sink), 2)
+	}
+}
+
+// category_completed counts by the one rule: an error is a failure, a warning
+// is not, and a pass is a pass.
+func TestRunPreflight_CategoryCountsFollowTheOneRule(t *testing.T) {
+	sink := &captureSink{}
+	rc := RoleConfig{
+		StaleNamespaceProber: func(context.Context, string, []string) ([]StaleNamespace, error) { return nil, nil },
+		InotifyProber: func(context.Context, string) ([]NodeInotifyLimits, error) {
+			return []NodeInotifyLimits{{NodeName: "n1", MaxUserInstances: 128, MaxUserWatches: 8192}}, nil
+		},
+		Skipped: []SkippedCheck{{Category: CategoryComputePlane, ID: "cluster-validator", Message: "not set", Warn: true}},
+	}
+	RunPreflightForRole(context.Background(), PreflightConfig{}, RoleComputePlane, rc, sink)
+	var cats []progress.CategoryCompleted
+	for _, e := range sink.events {
+		if cc, ok := e.(progress.CategoryCompleted); ok {
+			cats = append(cats, cc)
+		}
+	}
+	require.Len(t, cats, 1)
+	assert.Equal(t, 1, cats[0].PassedCount)
+	assert.Equal(t, 1, cats[0].FailedCount)
+	assert.Equal(t, 1, cats[0].WarningCount)
+}
+
+// A registry this CLI cannot probe, or one that allows anonymous access, is a
+// skip: a passing row at info on the wire, never a warning or a failure.
+func TestRunPreflight_RegistrySkipsPassAtInfo(t *testing.T) {
+	cfg := PreflightConfig{
+		Registries: []RegistryEntry{
+			{Registry: "123456789012.dkr.ecr.us-west-2.amazonaws.com", Critical: true},
+			{Registry: "basic.example.com", Critical: true},
+			{Registry: "anon.example.com", Critical: true},
+		},
+		RegistryChecker: func(_ context.Context, registry, _ string, _ bool) error {
+			switch registry {
+			case "anon.example.com":
+				return registryProbeOutcome{kind: probeAnonymous, detail: "reachable anonymously"}
+			default:
+				return registryProbeOutcome{kind: probeSkipped, detail: "this probe cannot speak to it"}
+			}
+		},
+	}
+	sink := &captureSink{}
+	RunPreflightForRole(context.Background(), cfg, RoleLocalOnly, RoleConfig{}, sink)
+	rows := completedRows(sink)
+	require.Len(t, rows, 3)
+	for _, row := range rows {
+		assert.True(t, row.Passed, row.ID)
+		assert.Equal(t, SeverityInfo, row.Severity, row.ID)
+	}
+}
+
+// A cluster that cannot be contacted at all fails its role: nothing about it
+// was checked. A failure part way through the probe stays a warning.
+func TestStaleNamespaceCheck_UnreachableClusterIsAnError(t *testing.T) {
+	unreachable := staleNamespaceCheck(func(context.Context, string, []string) ([]StaleNamespace, error) {
+		return nil, &ClusterUnreachableError{Context: "ctx-a", Err: errors.New("connection refused")}
+	}, "ctx-a", []string{"nvcf"}).Run(context.Background())
+	assert.True(t, unreachable.IsBlockingFailure())
+	assert.Contains(t, unreachable.Message, "cannot reach ctx-a")
+
+	midProbe := staleNamespaceCheck(func(context.Context, string, []string) ([]StaleNamespace, error) {
+		return nil, errors.New("list Helm secrets in nvcf: stream error")
+	}, "ctx-a", []string{"nvcf"}).Run(context.Background())
+	assert.False(t, midProbe.Passed)
+	assert.Equal(t, SeverityWarning, midProbe.Severity)
+}
+
+// Each term of the validator's run ceiling counts as often as one run can
+// spend it. Bumping a term by one second grows the ceiling by its count.
+func TestClusterValidatorRunCeiling_CountsEveryTerm(t *testing.T) {
+	for name, tc := range map[string]struct {
+		term  *time.Duration
+		count time.Duration
+	}{
+		"its own timeout":         {&clusterValidatorTimeout, 1},
+		"the deadline grace":      {&validatorDeadlineGrace, 1},
+		"the reads that grade it": {&clusterValidatorLogFetchTimeout, 4},
+		"the deferred sweeps":     {&validatorCleanupTimeout, 3},
+		"the margin":              {&validatorRunMargin, 1},
+	} {
+		before := ClusterValidatorRunCeiling()
+		prev := *tc.term
+		*tc.term += time.Second
+		after := ClusterValidatorRunCeiling()
+		*tc.term = prev
+		assert.Equal(t, tc.count*time.Second, after-before, name)
 	}
 }

@@ -31,6 +31,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"nvcf-cli/internal/selfhosted/severity"
 )
 
 // RenderMode discriminates the layout the bubbletea Model produces.
@@ -218,7 +220,7 @@ type checkRow struct {
 	started  bool
 	finished bool
 	passed   bool
-	severity string
+	severity severity.Severity
 	message  string
 	startMsg string // human label from CheckStarted.Message, shown while in-flight
 	detail   string
@@ -288,13 +290,16 @@ type Model struct {
 	recentEvents []RecentEvent
 
 	// check mode (mode == ModeCheck)
-	checkCategories  []checkCategoryState
-	checkCategoryIdx map[string]int
-	totalChecks      int // hint from ModelOpts; 0 means derive from accumulated rows
-	checkFinalTotal  int
-	checkFinalPassed int
-	checkFinalFailed int
-	checkCancelled   bool // final event came from SIGINT/SIGTERM, not a verdict
+	checkCategories   []checkCategoryState
+	checkCategoryIdx  map[string]int
+	totalChecks       int // hint from ModelOpts; 0 means derive from accumulated rows
+	checkFinalTotal   int
+	checkFinalPassed  int
+	checkFinalFailed  int
+	checkFinalWarned  int
+	checkFinalVerdict string
+	checkFinalSuccess bool
+	checkCancelled    bool // final event came from SIGINT/SIGTERM, not a verdict
 
 	// log tail (LogLine ring buffer; rendered as a "Recent" panel during
 	// long phases like apply-cp). Capacity is fixed; new lines push older
@@ -704,16 +709,7 @@ func (m Model) applyStatusEvent(e Event) (tea.Model, tea.Cmd) {
 func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 	switch ev := e.(type) {
 	case CheckStarted:
-		i, ok := m.checkCategoryIdx[ev.Category]
-		if !ok {
-			i = len(m.checkCategories)
-			m.checkCategories = append(m.checkCategories, checkCategoryState{
-				name: ev.Category,
-				keys: map[string]int{},
-			})
-			m.checkCategoryIdx[ev.Category] = i
-		}
-		cat := &m.checkCategories[i]
+		cat := m.checkCategory(ev.Category)
 		if _, exists := cat.keys[ev.ID]; !exists {
 			cat.keys[ev.ID] = len(cat.checks)
 			cat.checks = append(cat.checks, checkRow{id: ev.ID, started: true, startMsg: ev.Message})
@@ -721,11 +717,9 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CheckCompleted:
-		ci, ok := m.checkCategoryIdx[ev.Category]
-		if !ok {
-			return m, nil
-		}
-		cat := &m.checkCategories[ci]
+		// A row the budget stopped before it started has no CheckStarted, and
+		// may be the first of its category: it still needs a place.
+		cat := m.checkCategory(ev.Category)
 		ri, exists := cat.keys[ev.ID]
 		if !exists {
 			// CheckStarted may have been suppressed; insert a row in finished state.
@@ -744,11 +738,7 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CategoryCompleted:
-		ci, ok := m.checkCategoryIdx[ev.Category]
-		if !ok {
-			return m, nil
-		}
-		cat := &m.checkCategories[ci]
+		cat := m.checkCategory(ev.Category)
 		cat.duration = time.Duration(ev.DurationSec * float64(time.Second))
 		cat.final = true
 		return m, nil
@@ -758,10 +748,25 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 		m.checkFinalTotal = ev.TotalChecks
 		m.checkFinalPassed = ev.PassedCount
 		m.checkFinalFailed = ev.FailedCount
+		m.checkFinalWarned = ev.WarningCount
+		m.checkFinalVerdict = ev.Verdict
+		m.checkFinalSuccess = ev.Success
 		m.checkCancelled = ev.Cancelled
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// checkCategory returns the named category, adding it in arrival order when
+// it is new. The pointer is valid until the next category is added.
+func (m *Model) checkCategory(name string) *checkCategoryState {
+	i, ok := m.checkCategoryIdx[name]
+	if !ok {
+		i = len(m.checkCategories)
+		m.checkCategories = append(m.checkCategories, checkCategoryState{name: name, keys: map[string]int{}})
+		m.checkCategoryIdx[name] = i
+	}
+	return &m.checkCategories[i]
 }
 
 // percentOf returns done/total clamped to [0, 1]. A zero Total renders an
@@ -1778,20 +1783,22 @@ func humanCategoryName(raw string) string {
 
 // checkGlyph returns the bracketed glyph for a check row. Matches install-mode
 // convention: bracket + unicode, unchanged in ASCII-only mode (AsciiOnly only
-// strips ANSI color codes, not unicode characters). A miss below error
-// severity is a warning, tallied and exited on as one, so it gets its own mark.
+// strips ANSI color codes, not unicode characters). A warning, tallied and
+// exited on as one, gets its own mark.
 func checkGlyph(row checkRow) string {
 	switch {
-	case row.finished && row.passed:
-		return "[✓]"
-	case row.finished && row.severity == "error":
-		return "[✘]"
-	case row.finished:
-		return "[!]"
-	case row.started && !row.finished:
-		return "[▶]"
-	default:
+	case !row.finished && row.started:
+		return "[\u25b6]"
+	case !row.finished:
 		return "[ ]"
+	}
+	switch severity.Of(row.passed, row.severity) {
+	case severity.Pass:
+		return "[\u2713]"
+	case severity.Warn:
+		return "[!]"
+	default:
+		return "[\u2718]"
 	}
 }
 
@@ -1841,6 +1848,7 @@ func (m Model) viewCheck(now time.Time) string {
 	if m.finished && m.checkFinalTotal > 0 {
 		passed = m.checkFinalPassed
 		failed = m.checkFinalFailed
+		warned = m.checkFinalWarned
 		total = m.checkFinalTotal
 	}
 	if total < m.totalChecks {
@@ -1860,26 +1868,27 @@ func (m Model) viewCheck(now time.Time) string {
 		}
 	}
 
-	allFinished := !anyInFlight && m.finished
 	tally := fmt.Sprintf("%d/%d passed, %d failed", passed, total, failed)
 	if warned > 0 {
 		tally += fmt.Sprintf(", %d warning(s)", warned)
 	}
+	// Once finished, the final event's verdict decides, as it does the exit
+	// code and the JSON and plain output.
 	var statusLine string
 	switch {
 	case m.finished && m.checkCancelled:
 		// Checks cut short by the interrupt are neither passed nor failed.
 		statusLine = fmt.Sprintf("Status: cancelled  (%s)", tally)
-	case anyInFlight || (!m.finished && len(m.checkCategories) > 0 && !allFinished):
+	case anyInFlight || !m.finished:
 		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
-	case m.finished && failed > 0:
+	case m.checkFinalVerdict == "timeout":
+		statusLine = fmt.Sprintf("Status: \u2718 timed out  (%s)", tally)
+	case !m.checkFinalSuccess || failed > 0:
 		statusLine = fmt.Sprintf("Status: ✘ failed  (%s)", tally)
-	case m.finished && warned > 0:
+	case warned > 0:
 		statusLine = fmt.Sprintf("Status: ✓ ok with warnings  (%s)", tally)
-	case m.finished:
-		statusLine = fmt.Sprintf("Status: ✓ ok  (%s)", tally)
 	default:
-		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
+		statusLine = fmt.Sprintf("Status: \u2713 ok  (%s)", tally)
 	}
 
 	b.WriteString("\n")
@@ -1889,9 +1898,8 @@ func (m Model) viewCheck(now time.Time) string {
 	return b.String()
 }
 
-// checkTally returns (passed, failed, total) counts from all accumulated check rows.
-// checkTally counts finished rows by the same rule as the final event: only an
-// error-severity miss is a failure, any other miss is a warning.
+// checkTally counts finished rows by the rule the final event uses,
+// severity.Of, and every row toward the total.
 func (m Model) checkTally() (passed, failed, warned, total int) {
 	for _, cat := range m.checkCategories {
 		for _, row := range cat.checks {
@@ -1899,10 +1907,10 @@ func (m Model) checkTally() (passed, failed, warned, total int) {
 			if !row.finished {
 				continue
 			}
-			switch {
-			case row.passed:
+			switch severity.Of(row.passed, row.severity) {
+			case severity.Pass:
 				passed++
-			case row.severity == "error":
+			case severity.Fail:
 				failed++
 			default:
 				warned++

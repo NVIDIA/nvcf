@@ -279,7 +279,7 @@ func TestRegistryCredentialCheck_PassWhenNoError(t *testing.T) {
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false)
 	r := spec.Run(context.Background())
 	assert.True(t, r.Passed)
-	assert.Equal(t, "info", r.Severity)
+	assert.Equal(t, SeverityInfo, r.Severity)
 	assert.Contains(t, r.Message, "nvcr.io")
 }
 
@@ -290,7 +290,7 @@ func TestRegistryCredentialCheck_CriticalSeverityOnFailure(t *testing.T) {
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false)
 	r := spec.Run(context.Background())
 	assert.False(t, r.Passed)
-	assert.Equal(t, "error", r.Severity, "critical registry failure must be error severity")
+	assert.Equal(t, SeverityError, r.Severity, "critical registry failure must be error severity")
 }
 
 func TestRegistryCredentialCheck_WarningSeverityOnNonCriticalFailure(t *testing.T) {
@@ -300,7 +300,7 @@ func TestRegistryCredentialCheck_WarningSeverityOnNonCriticalFailure(t *testing.
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "quay.io", Critical: false}, "quay.io", false)
 	r := spec.Run(context.Background())
 	assert.False(t, r.Passed)
-	assert.Equal(t, "warning", r.Severity, "non-critical registry failure must be warning severity")
+	assert.Equal(t, SeverityWarning, r.Severity, "non-critical registry failure must be warning severity")
 }
 
 // helpers
@@ -728,7 +728,7 @@ func TestRegistryCredentialCheck_Grading(t *testing.T) {
 
 	type want struct {
 		passed   bool
-		severity string
+		severity Severity
 		message  string
 	}
 	for name, tc := range map[string]struct {
@@ -901,7 +901,7 @@ func TestRegistryCredentialCheck_RejectedNGCKeyAfterInstall(t *testing.T) {
 	for _, tc := range []struct {
 		checker     RegistryCredentialChecker
 		postInstall bool
-		want        string
+		want        Severity
 	}{
 		{rejectedKey, true, SeverityWarning},
 		{rejectedKey, false, SeverityError},

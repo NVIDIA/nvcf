@@ -116,14 +116,13 @@ func TestCheck_NewJSON(t *testing.T) {
 
 // TestCheck_WaitTimesOutCleanly verifies that --wait honors the timeout duration.
 func TestSelfHostedCheck_WaitTimesOutCleanly(t *testing.T) {
-	resetCheckFlags(t)
-	t.Setenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY", "1")
-	t.Setenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL", "1") // seam: forces a failing check
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--wait", "2s"})
+	stuck := func(context.Context) ([]selfhosted.StaleNamespace, error) {
+		return []selfhosted.StaleNamespace{{Name: "nvcf", Reason: "stuck Terminating"}}, nil
+	}
 	start := time.Now()
-	err := rootCmd.Execute()
+	run := runCheck(t, checkStubs{stale: stuck}, "--control-plane", "--skip-cluster-validation", "--wait", "2s")
 	elapsed := time.Since(start)
-	assert.Error(t, err)
+	assert.Equal(t, 5, run.code())
 	assert.True(t, elapsed >= 2*time.Second && elapsed < 5*time.Second,
 		"wait should have honored 2s timeout, got %s", elapsed)
 }
@@ -253,9 +252,14 @@ func TestCheck_LocalOnlyFlag(t *testing.T) {
 		}
 	}
 	assert.Contains(t, categories, "local-host-tools", "expected local-host-tools category")
-	for _, cat := range categories {
-		assert.NotEqual(t, "control-plane-cluster", cat, "control-plane-cluster must not appear with --local-only")
-		assert.NotEqual(t, "compute-plane-cluster", cat, "compute-plane-cluster must not appear with --local-only")
+	// The cluster categories hold only the row that says they were skipped.
+	for _, l := range lines[1:] {
+		if l["event"] != "check_completed" {
+			continue
+		}
+		if cat := l["category"]; cat == "control-plane-cluster" || cat == "compute-plane-cluster" {
+			assert.Contains(t, l["message"], "skipped (--local-only)", "%s/%s", cat, l["id"])
+		}
 	}
 }
 
@@ -495,66 +499,18 @@ func TestCheck_ControlPlaneFlagRunsChecks(t *testing.T) {
 		"--control-plane must produce control-plane-cluster events")
 }
 
-// TestCheck_ValidatorSkipNoteAppearsOnComputePlane verifies that the
-// "cluster-validator skipped" note appears on stderr when --compute-plane is
-// used with --skip-cluster-validation (compute plane is targeted, validator is
-// suppressed).
-func TestCheck_ValidatorSkipNoteAppearsOnComputePlane(t *testing.T) {
-	resetCheckFlags(t)
-	t.Cleanup(func() {
-		selfHostedJSON = false
-		selfHostedOutput = "text"
-		checkComputePlane = false
-		checkSkipClusterValidation = false
-	})
-	// --skip-cluster-validation does not gate the inotify prober, which lists
-	// every node and creates a privileged pod on each. Without this the test
-	// writes to whatever cluster is in the developer's current kubecontext.
-	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
-
-	var stderr bytes.Buffer
-	rootCmd.SetErr(&stderr)
-	rootCmd.SetOut(&bytes.Buffer{})
-
-	rootCmd.SetArgs([]string{
-		"self-hosted", "check", "--compute-plane",
-		"--skip-cluster-validation", "--json",
-	})
-	_ = rootCmd.Execute()
-
-	assert.Contains(t, stderr.String(), "cluster-validator skipped",
-		"expected skip note when compute plane is targeted and --skip-cluster-validation is set")
-}
-
-// --pre in ModeSplit visits both clusters, so when the validator is skipped the
-// operator must be told why. This previously asserted silence, which is the
-// "no validator row vs validator silently dropped" confusion the note exists
-// to prevent.
-func TestCheck_ValidatorSkipNotePresentForPreInSplitMode(t *testing.T) {
-	resetCheckFlags(t)
-	t.Cleanup(func() {
-		selfHostedJSON = false
-		selfHostedOutput = "text"
-		checkPre = false
-		checkSkipClusterValidation = false
-		selfHostedControlPlaneContext = ""
-		selfHostedComputePlaneContext = ""
-	})
-
-	var stderr bytes.Buffer
-	rootCmd.SetErr(&stderr)
-	rootCmd.SetOut(&bytes.Buffer{})
-
-	rootCmd.SetArgs([]string{
-		"self-hosted", "check", "--pre",
-		"--skip-cluster-validation", "--json",
-		"--control-plane-context", "admin@cp",
-		"--compute-plane-context", "admin@gpu1",
-	})
-	_ = rootCmd.Execute()
-
-	assert.Contains(t, stderr.String(), "cluster-validator skipped",
-		"--pre in split mode visits both clusters, so an explicit skip must be explained")
+// --pre in ModeSplit visits both clusters, so a skipped validator is a row in
+// each: a consumer of the stream must not read "no validator row" as
+// "validated".
+func TestCheck_SkippedValidatorIsARowForPreInSplitMode(t *testing.T) {
+	run := runCheck(t, checkStubs{}, "--pre", "--skip-cluster-validation",
+		"--control-plane-context", "admin@cp", "--compute-plane-context", "admin@gpu1")
+	for _, category := range []string{"control-plane-cluster", "compute-plane-cluster"} {
+		row := run.row(t, category, "cluster-validator")
+		require.NotNil(t, row, category)
+		assert.Contains(t, row["message"], "skipped (--skip-cluster-validation)", category)
+	}
+	assert.Empty(t, run.validators)
 }
 
 func parseJSONLLines(t *testing.T, s string) []map[string]any {

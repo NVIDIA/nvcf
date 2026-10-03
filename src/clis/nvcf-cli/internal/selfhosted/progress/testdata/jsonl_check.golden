@@ -6,4 +6,4 @@
 {"event":"check_started","ts":"2026-04-29T03:45:08Z","category":"pre-kubernetes-setup","id":"gateway-api"}
 {"event":"check_completed","ts":"2026-04-29T03:45:08Z","category":"pre-kubernetes-setup","id":"gateway-api","passed":false,"severity":"error","message":"Gateway API CRDs not installed","hintURL":"https://docs.nvidia.com/nvcf/self-hosted/gateway-api"}
 {"event":"category_completed","ts":"2026-04-29T03:45:08Z","category":"pre-kubernetes-setup","passedCount":13,"failedCount":1,"warningCount":0,"durationSec":2.4}
-{"event":"final","ts":"2026-04-29T03:45:09Z","success":false,"durationSec":0,"droppedProgressEvents":0,"verdict":"failed","totalChecks":14,"passedCount":13,"failedCount":1}
+{"event":"final","ts":"2026-04-29T03:45:09Z","success":false,"durationSec":0,"droppedProgressEvents":0,"verdict":"failed","totalChecks":15,"passedCount":13,"failedCount":1,"warningCount":1}

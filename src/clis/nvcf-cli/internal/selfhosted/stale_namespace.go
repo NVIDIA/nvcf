@@ -73,13 +73,11 @@ type StaleNamespaceProber func(ctx context.Context, kubeContext string, namespac
 // operator's kubeconfig context to talk to the target cluster.
 func NewStaleNamespaceProber() StaleNamespaceProber {
 	return func(ctx context.Context, kubeContext string, namespaces []string) ([]StaleNamespace, error) {
-		restCfg, err := loadKubeConfig(kubeContext)
+		// The first contact with each visited cluster, so a cluster that
+		// cannot be reached at all is reported here.
+		client, err := connectCluster(ctx, kubeContext)
 		if err != nil {
-			return nil, fmt.Errorf("building kubeconfig: %w", err)
-		}
-		client, err := kubernetes.NewForConfig(restCfg)
-		if err != nil {
-			return nil, fmt.Errorf("building kubernetes client: %w", err)
+			return nil, err
 		}
 		return probeStaleNamespaces(ctx, client, namespaces)
 	}

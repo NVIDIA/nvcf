@@ -31,6 +31,8 @@ import (
 	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"nvcf-cli/internal/selfhosted/severity"
 )
 
 // ansiRE matches CSI/OSC ANSI escape sequences so tests can verify the
@@ -587,11 +589,85 @@ func TestCheckOneShotRenderer_CancelledIsNotOK(t *testing.T) {
 	assert.NotContains(t, out, "Status: ✓ ok")
 }
 
-// A warning row is not marked as a failure: it does not fail the run.
-func TestCheckGlyph_WarningIsNotAFailure(t *testing.T) {
-	assert.Equal(t, "[✓]", checkGlyph(checkRow{finished: true, passed: true}))
-	assert.Equal(t, "[✘]", checkGlyph(checkRow{finished: true, severity: "error"}))
-	assert.Equal(t, "[!]", checkGlyph(checkRow{finished: true, severity: "warning"}))
+// The dashboard's glyph and tally grade a row as the final event does. A miss
+// at a severity other than info or warning, a misspelled or empty one
+// included, is a failure.
+func TestCheckGlyphAndTally_GradeLikeTheFinalEvent(t *testing.T) {
+	for _, tc := range []struct {
+		passed bool
+		sev    severity.Severity
+		glyph  string
+		tally  [3]int // passed, failed, warned
+	}{
+		{true, "info", "[\u2713]", [3]int{1, 0, 0}},
+		{true, "error", "[\u2713]", [3]int{1, 0, 0}},
+		{false, "info", "[!]", [3]int{0, 0, 1}},
+		{false, "warning", "[!]", [3]int{0, 0, 1}},
+		{false, "error", "[\u2718]", [3]int{0, 1, 0}},
+		{false, "Error", "[\u2718]", [3]int{0, 1, 0}},
+		{false, "", "[\u2718]", [3]int{0, 1, 0}},
+	} {
+		row := checkRow{id: "x", started: true, finished: true, passed: tc.passed, severity: tc.sev}
+		assert.Equal(t, tc.glyph, checkGlyph(row), "%v %q", tc.passed, tc.sev)
+		m := Model{checkCategories: []checkCategoryState{{checks: []checkRow{row}}}}
+		p, f, w, total := m.checkTally()
+		assert.Equal(t, tc.tally, [3]int{p, f, w}, "%v %q", tc.passed, tc.sev)
+		assert.Equal(t, 1, total)
+	}
+}
+
+// A row the budget stopped before it started arrives with no CheckStarted, and
+// can be the first of its category. It is still shown, so the rows that
+// explain a timeout are on the dashboard.
+func TestTTY_CheckRowOfAnUnseenCategoryIsShown(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	var buf bytes.Buffer
+	r := NewCheckOneShotRenderer(&buf, ModelOpts{Mode: ModeCheck, Output: &buf, AsciiOnly: true})
+	ctx := context.Background()
+	require.NoError(t, r.Emit(ctx, CheckCompleted{
+		Category: "compute-plane-cluster", ID: "cluster-validator", Severity: "error",
+		Message: "not run: the check's time budget ran out before it started",
+	}))
+	require.NoError(t, r.Emit(ctx, CategoryCompleted{Category: "compute-plane-cluster", FailedCount: 1}))
+	require.NoError(t, r.Emit(ctx, Final{Verdict: "timeout", TotalChecks: 1, FailedCount: 1}))
+	out := buf.String()
+	assert.Contains(t, out, "[\u2718] not run: the check's time budget ran out before it started")
+	assert.Contains(t, out, "Status: \u2718 timed out  (0/1 passed, 1 failed)")
+}
+
+// Once finished, the status line follows the final event's verdict, as the
+// exit code does: a timeout or an unsuccessful run never reads as ok.
+func TestTTY_CheckStatusFollowsTheFinalVerdict(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	for name, tc := range map[string]struct {
+		final Final
+		want  string
+	}{
+		"timeout with only warnings": {
+			final: Final{Verdict: "timeout", TotalChecks: 2, PassedCount: 1, WarningCount: 1},
+			want:  "Status: \u2718 timed out  (1/2 passed, 0 failed, 1 warning(s))",
+		},
+		"unsuccessful with nothing failed": {
+			final: Final{Verdict: "failed", TotalChecks: 2, PassedCount: 1, WarningCount: 1},
+			want:  "Status: \u2718 failed  (1/2 passed, 0 failed, 1 warning(s))",
+		},
+		"warnings": {
+			final: Final{Success: true, Verdict: "warnings", TotalChecks: 2, PassedCount: 1, WarningCount: 1},
+			want:  "Status: \u2713 ok with warnings  (1/2 passed, 0 failed, 1 warning(s))",
+		},
+		"ok": {
+			final: Final{Success: true, Verdict: "ok", TotalChecks: 2, PassedCount: 2},
+			want:  "Status: \u2713 ok  (2/2 passed, 0 failed)",
+		},
+	} {
+		var buf bytes.Buffer
+		r := NewCheckOneShotRenderer(&buf, ModelOpts{Mode: ModeCheck, Output: &buf, AsciiOnly: true})
+		ctx := context.Background()
+		require.NoError(t, r.Emit(ctx, CheckCompleted{Category: "c", ID: "a", Passed: true, Severity: "info"}))
+		require.NoError(t, r.Emit(ctx, CheckCompleted{Category: "c", ID: "b", Severity: "warning", Transient: true}))
+		require.NoError(t, r.Emit(ctx, tc.final))
+		assert.Contains(t, buf.String(), tc.want, name)
+	}
 }
 
 func TestCheckOneShotRenderer_UsesFinalTallyForStatus(t *testing.T) {
@@ -922,7 +998,7 @@ func TestTTY_CheckCompleteWithWarning(t *testing.T) {
 		CheckCompleted{Category: "local-host-tools", ID: "b", Passed: true, Severity: "info", Message: "b"},
 		CheckStarted{Category: "registry-credentials", ID: "c"},
 		CheckCompleted{Category: "registry-credentials", ID: "c", Passed: false, Severity: "warning", Message: "c"},
-		Final{Success: true, TotalChecks: 3, PassedCount: 2, FailedCount: 0},
+		Final{Success: true, Verdict: "warnings", TotalChecks: 3, PassedCount: 2, FailedCount: 0, WarningCount: 1},
 	}
 	var model tea.Model = m
 	for _, e := range events {

@@ -465,10 +465,10 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 		if ev.Verdict != "" {
 			out.Verdict = ev.Verdict
 			out.TotalChecks = ev.TotalChecks
-			passed := ev.PassedCount
-			failed := ev.FailedCount
+			passed, failed, warned := ev.PassedCount, ev.FailedCount, ev.WarningCount
 			out.PassedCount = &passed
 			out.FailedCount = &failed
+			out.WarningCount = &warned
 		}
 		out.Cleanup = ev.Cleanup
 		return out
@@ -541,7 +541,7 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 			Category:  ev.Category,
 			ID:        ev.ID,
 			Passed:    ev.Passed,
-			Severity:  ev.Severity,
+			Severity:  string(ev.Severity),
 			Message:   ev.Message,
 			Detail:    ev.Detail,
 			Transient: ev.Transient,
@@ -654,7 +654,7 @@ type wireLastProgress struct {
 //   - PlanOnly: omitempty — omit when false; include when true (plan-only short-circuit).
 //   - DurationSec: NO omitempty — 0 is a valid value for very fast installs.
 //   - DroppedProgressEvents: NO omitempty — consumers need the backpressure count.
-//   - Verdict/TotalChecks/PassedCount/FailedCount: omitempty — check-mode only (M+8.11).
+//   - Verdict/TotalChecks/PassedCount/FailedCount/WarningCount: omitempty, check-mode only (M+8.11).
 type wireFinal struct {
 	Event                 string `json:"event"`
 	TS                    string `json:"ts"`
@@ -674,8 +674,9 @@ type wireFinal struct {
 	// downstream tooling that asserts the field is always present on a
 	// check-typed Final. Nil on non-check Final keeps install/up/down
 	// goldens unchanged.
-	PassedCount *int `json:"passedCount,omitempty"`
-	FailedCount *int `json:"failedCount,omitempty"`
+	PassedCount  *int `json:"passedCount,omitempty"`
+	FailedCount  *int `json:"failedCount,omitempty"`
+	WarningCount *int `json:"warningCount,omitempty"`
 	// Cleanup lists the commands that remove what a check left in the cluster.
 	Cleanup []string `json:"cleanup,omitempty"`
 }

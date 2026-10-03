@@ -23,6 +23,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"nvcf-cli/internal/selfhosted/severity"
 )
 
 // RenderText writes linkerd-style green/red/warn checkmarks grouped by category
@@ -64,7 +66,7 @@ func RenderJSON(w io.Writer, results []CheckResult) {
 	}
 	for _, r := range results {
 		out.Checks = append(out.Checks, checkOut{
-			ID: r.ID, Category: r.Category, Severity: r.Severity,
+			ID: r.ID, Category: r.Category, Severity: string(r.Severity),
 			Passed: r.Passed, Message: r.Message, HintURL: r.HintURL,
 		})
 	}
@@ -74,10 +76,10 @@ func RenderJSON(w io.Writer, results []CheckResult) {
 }
 
 func mark(r CheckResult) string {
-	switch {
-	case r.Passed:
+	switch severity.Of(r.Passed, r.Severity) {
+	case severity.Pass:
 		return "✓"
-	case r.Severity == SeverityWarning:
+	case severity.Warn:
 		return "‼"
 	default:
 		return "×"
@@ -99,7 +101,7 @@ func overallStatus(results []CheckResult) string {
 	hasWarn := false
 	for _, r := range results {
 		if r.IsBlockingFailure() {
-			return SeverityError
+			return string(SeverityError)
 		}
 		if r.IsWarning() {
 			hasWarn = true

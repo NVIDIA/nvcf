@@ -36,6 +36,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"nvcf-cli/internal/selfhosted/progress"
+	"nvcf-cli/internal/selfhosted/severity"
 )
 
 const (
@@ -49,34 +50,34 @@ const (
 	binaryVersionMessage = "%s %s on PATH (%s required)"
 )
 
-// Severity values for CheckResult. Typed constants rather than bare strings:
-// a typo'd "Error" silently downgraded a hard failure to a warning, and the
-// exit code keys off an exact match.
+// Severity is a CheckResult's severity, graded by severity.Of.
+type Severity = severity.Severity
+
 const (
-	SeverityInfo    = "info"
-	SeverityWarning = "warning"
-	SeverityError   = "error"
+	SeverityInfo    = severity.Info
+	SeverityWarning = severity.Warning
+	SeverityError   = severity.Error
 )
 
-// IsBlockingFailure reports whether the result fails the run: a miss at error
-// severity. The exit code, the final event, the category counts and the
-// summaries all derive from this one rule so they cannot disagree.
+// IsBlockingFailure reports whether the result fails the run. The exit code,
+// the final event, the category counts, the summaries and the dashboard all
+// grade with severity.Of, so they cannot disagree.
 func (r CheckResult) IsBlockingFailure() bool {
-	return !r.Passed && r.Severity == SeverityError
+	return severity.Of(r.Passed, r.Severity) == severity.Fail
 }
 
 // IsWarning reports a miss that does not fail the run.
 func (r CheckResult) IsWarning() bool {
-	return !r.Passed && !r.IsBlockingFailure()
+	return severity.Of(r.Passed, r.Severity) == severity.Warn
 }
 
 // CountResults tallies results by the one rule every count uses.
 func CountResults(results []CheckResult) (passed, failed, warned int) {
 	for _, r := range results {
-		switch {
-		case r.Passed:
+		switch severity.Of(r.Passed, r.Severity) {
+		case severity.Pass:
 			passed++
-		case r.IsBlockingFailure():
+		case severity.Fail:
 			failed++
 		default:
 			warned++
@@ -91,7 +92,7 @@ func CountResults(results []CheckResult) (passed, failed, warned int) {
 type CheckResult struct {
 	ID       string
 	Category string
-	Severity string // "info" | "warning" | "error"
+	Severity Severity
 	Passed   bool
 	Message  string
 	Detail   string // optional: short version string or extra context (M+8.11)
@@ -246,6 +247,10 @@ func runVersionCmdOnce(ctx context.Context, path string, args []string, re *rege
 type PreflightConfig struct {
 	LocalOnly bool
 	Tools     []BinarySpec
+	// ToolsAdvisory grades a missing or unsupported local tool as a warning.
+	// Checking an installed stack runs no helm, helmfile or kubectl binary;
+	// only the install does.
+	ToolsAdvisory bool
 
 	// Registries is the list of container registries to credential-check.
 	// When empty, the registry-credentials category is omitted entirely.
@@ -323,7 +328,7 @@ type Role int
 const (
 	RoleLocalOnly    Role = iota // shared local-host tools only; no kubectl contact
 	RoleControlPlane             // shared + gateway/StorageClass/LB checks via cluster-validator
-	RoleComputePlane             // shared + GPU operator + GPU node labels + (optional) SIS reachability
+	RoleComputePlane             // shared + SIS reachability, node inotify limits and the validator, each opt-in
 )
 
 // Validator role strings passed as VALIDATOR_ROLE to the cluster-validator Job.
@@ -359,10 +364,8 @@ type RoleConfig struct {
 	// constructed). Production wires NewInotifyProber; tests pass fakes.
 	InotifyProber NodeInotifyProber
 
-	// Nil skips the cluster-validator check. The cmd layer emits a stderr
-	// notice when the operator explicitly opted out; the check schema
-	// stays clean so JSON consumers don't see a misleading "passed=true"
-	// row for a probe that never actually ran.
+	// Nil skips the cluster-validator check; the caller reports why in
+	// Skipped.
 	ClusterValidator           ClusterValidator
 	ClusterValidatorImage      string
 	ClusterValidatorPullSecret string
@@ -405,7 +408,44 @@ type RoleConfig struct {
 	// ValidatorCleanup records the removal command of every validator run
 	// that may leave objects in the cluster. Nil records nothing.
 	ValidatorCleanup *CleanupLedger
+
+	// Skipped are the checks the run's flags or configuration leave out. Each
+	// is still reported as a row, so the stream says what was not checked.
+	Skipped []SkippedCheck
 }
+
+// SkippedCheck is a check the run does not make.
+type SkippedCheck struct {
+	Category string
+	ID       string
+	Message  string
+	// Warn reports a check the run was expected to make but lacked an input
+	// for. An explicit opt-out passes at info, as a registry this CLI cannot
+	// probe does.
+	Warn bool
+}
+
+func skippedCheck(s SkippedCheck) binaryCheckSpec {
+	return binaryCheckSpec{
+		ID:         s.ID,
+		HumanLabel: s.Message,
+		static:     true,
+		Run: func(context.Context) CheckResult {
+			if s.Warn {
+				return CheckResult{ID: s.ID, Severity: SeverityWarning, Message: s.Message}
+			}
+			return CheckResult{ID: s.ID, Severity: SeverityInfo, Passed: true, Message: s.Message}
+		},
+	}
+}
+
+// The check categories a run reports.
+const (
+	CategoryLocalHostTools      = "local-host-tools"
+	CategoryRegistryCredentials = "registry-credentials"
+	CategoryControlPlane        = "control-plane-cluster"
+	CategoryComputePlane        = "compute-plane-cluster"
+)
 
 // categorySpec groups a set of checks under a named category. Categories run
 // in declaration order so the bubbletea ModeCheck dashboard renders them
@@ -422,6 +462,12 @@ type binaryCheckSpec struct {
 	ID         string
 	HumanLabel string
 	Run        func(ctx context.Context) CheckResult
+	// ownBudget runs the check on the run's budget, which sizes it by its own
+	// ceiling, instead of inside the probe share.
+	ownBudget bool
+	// static marks a row whose result is known without any work, so the
+	// budget cannot cut it short.
+	static bool
 }
 
 // buildCategories converts a PreflightConfig into the ordered list of
@@ -444,18 +490,25 @@ func buildCategories(cfg PreflightConfig, role Role, rc RoleConfig) []categorySp
 		out = append(out, buildRegistryCredentialCategory(cfg))
 	}
 
-	if cfg.LocalOnly || role == RoleLocalOnly {
-		return out
+	if !cfg.LocalOnly {
+		switch role {
+		case RoleControlPlane:
+			out = append(out, controlPlaneCheckCategory(rc))
+		case RoleComputePlane:
+			out = append(out, computePlaneCheckCategory(rc))
+		}
 	}
 
-	switch role {
-	case RoleControlPlane:
-		out = append(out, controlPlaneCheckCategory(rc))
-	case RoleComputePlane:
-		out = append(out, computePlaneCheckCategory(rc))
+	for _, s := range rc.Skipped {
+		i := slices.IndexFunc(out, func(c categorySpec) bool { return c.name == s.Category })
+		if i < 0 {
+			i = len(out)
+			out = append(out, categorySpec{name: s.Category, role: role})
+		}
+		out[i].checks = append(out[i].checks, skippedCheck(s))
 	}
-
-	return out
+	// A category with no rows would report a clean tally for nothing checked.
+	return slices.DeleteFunc(out, func(c categorySpec) bool { return len(c.checks) == 0 })
 }
 
 // buildLocalHostCategory builds the shared local-host-tools category from cfg.
@@ -477,7 +530,24 @@ func buildLocalHostCategory(cfg PreflightConfig) *categorySpec {
 	if len(checks) == 0 {
 		return nil
 	}
-	return &categorySpec{name: "local-host-tools", role: RoleLocalOnly, checks: checks}
+	if cfg.ToolsAdvisory {
+		for i := range checks {
+			checks[i].Run = advisoryTool(checks[i].Run)
+		}
+	}
+	return &categorySpec{name: CategoryLocalHostTools, role: RoleLocalOnly, checks: checks}
+}
+
+// advisoryTool grades a tool check's miss as a warning.
+func advisoryTool(run func(context.Context) CheckResult) func(context.Context) CheckResult {
+	return func(ctx context.Context) CheckResult {
+		r := run(ctx)
+		if !r.Passed {
+			r.Severity = SeverityWarning
+			r.Message += "; only an install needs it"
+		}
+		return r
+	}
 }
 
 // controlPlaneCheckCategory returns the cluster-side checks for the control
@@ -486,7 +556,7 @@ func buildLocalHostCategory(cfg PreflightConfig) *categorySpec {
 // Gateway API CRD and StorageClass probes are placeholders pending M3.
 func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 	cat := categorySpec{
-		name:   "control-plane-cluster",
+		name:   CategoryControlPlane,
 		role:   RoleControlPlane,
 		checks: []binaryCheckSpec{},
 	}
@@ -514,21 +584,16 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 // or empty field omits the corresponding check from the category.
 func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 	cat := categorySpec{
-		name: "compute-plane-cluster",
+		name: CategoryComputePlane,
 		role: RoleComputePlane,
-		checks: []binaryCheckSpec{
-			placeholderCheck("gpu-operator", "checking GPU operator…", "GPU operator probe — pending M+10 cluster-side preflight"),
-			placeholderCheck("gpu-node-labels", "checking GPU node labels…", "GPU node-label probe — pending M+10 cluster-side preflight"),
-		},
 	}
 	// Stale namespace check runs first so leftover namespaces from a prior
 	// partial teardown surface before any other cluster work.
 	if rc.StaleNamespaceProber != nil {
-		cat.checks = append([]binaryCheckSpec{
+		cat.checks = append(cat.checks,
 			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
 				mergeNamespaces(resolveStackNamespaces(rc.StackDir, nvcfComputePlaneNamespaces),
-					rc.ExtraStaleNamespaces)),
-		}, cat.checks...)
+					rc.ExtraStaleNamespaces)))
 	}
 	if rc.SISURL != "" {
 		cat.checks = append(cat.checks, sisReachabilityCheck(rc.SISURL))
@@ -593,9 +658,9 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 				return r
 			}
 			if len(limits) == 0 {
+				// A probe that checked nothing is not a pass.
 				r.Severity = SeverityWarning
-				r.Passed = true
-				r.Message = "no nodes returned by inotify probe; skipping"
+				r.Message = "no schedulable nodes were probed for inotify limits"
 				return r
 			}
 			var failing, probeErrs []string
@@ -654,6 +719,7 @@ func unresolvedValidatorCheck(image string) binaryCheckSpec {
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: "resolving the cluster-validator image…",
+		static:     true,
 		Run: func(context.Context) CheckResult {
 			return CheckResult{
 				ID:       id,
@@ -680,6 +746,7 @@ func clusterValidatorCheck(rc RoleConfig, role string) binaryCheckSpec {
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: "running cluster-validator probe…",
+		ownBudget:  true,
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{
 				ID:      id,
@@ -1030,7 +1097,7 @@ func clusterValidatorDetail(kubeContext string, result ClusterValidatorResult) s
 // A registry listed twice, for two repository scopes, gets one row per scope.
 func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 	cat := categorySpec{
-		name:   "registry-credentials",
+		name:   CategoryRegistryCredentials,
 		role:   RoleLocalOnly, // runs regardless of cluster role
 		checks: make([]binaryCheckSpec, 0, len(cfg.Registries)),
 	}
@@ -1140,6 +1207,13 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 			// in a cluster other than the one that was read.
 			probedContext := effectiveKubeContext(kubeContext)
 			stale, err := prober(ctx, probedContext, namespaces)
+			var unreachable *ClusterUnreachableError
+			if errors.As(err, &unreachable) {
+				// Nothing about this cluster was checked, so nothing passes.
+				r.Message = unreachable.Error()
+				r.Err = err
+				return r
+			}
 			if err != nil {
 				r.Severity = SeverityWarning
 				r.Message = "stale namespace probe failed: " + err.Error()
@@ -1264,23 +1338,6 @@ func shellQuoteArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
-// placeholderCheck returns a binaryCheckSpec that emits a passing "info"
-// CheckResult with the given message. Used until M3/M+10 cluster-side probes ship.
-func placeholderCheck(id, label, message string) binaryCheckSpec {
-	return binaryCheckSpec{
-		ID:         id,
-		HumanLabel: label,
-		Run: func(_ context.Context) CheckResult {
-			return CheckResult{
-				ID:       id,
-				Severity: SeverityInfo,
-				Passed:   true,
-				Message:  message,
-			}
-		},
-	}
-}
-
 // sisReachabilityCheck does an HTTP GET on /v1/health and asserts < 5xx.
 // Tagged so the renderer groups it under "compute-plane-cluster".
 func sisReachabilityCheck(sisURL string) binaryCheckSpec {
@@ -1303,6 +1360,7 @@ func sisReachabilityCheck(sisURL string) binaryCheckSpec {
 					ID: "sis-reachability", Severity: SeverityError, Passed: false,
 					Message: "SIS unreachable: " + err.Error(),
 					HintURL: "https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#sis-reachability",
+					Err:     err,
 				}
 			}
 			defer resp.Body.Close()
@@ -1338,30 +1396,47 @@ func RunPreflightStreaming(ctx context.Context, cfg PreflightConfig, sink progre
 	return runPreflightImpl(ctx, cfg, RoleLocalOnly, RoleConfig{}, sink)
 }
 
+// checkProbeShare bounds the checks a role runs before its validator, and is
+// the whole budget of a role without one. A var so tests can shorten it.
+var checkProbeShare = 2 * time.Minute
+
+// CheckProbeShare is the time each role sets aside for the checks before its
+// validator. RunPreflightForRole enforces it, so however slow those probes are
+// the validator still gets the time the run's budget sized it for.
+func CheckProbeShare() time.Duration { return checkProbeShare }
+
 func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc RoleConfig, sink progress.EventSink) []CheckResult {
 	var all []CheckResult
 	interrupted := func() bool {
 		return errors.Is(ctx.Err(), context.Canceled) || (cfg.Interrupted != nil && cfg.Interrupted())
 	}
+	// The probes end early enough for a probe pod's cleanup, which outlives
+	// its probe, to finish inside the share.
+	probeCtx, cancelProbes := context.WithTimeout(ctx, checkProbeShare-probePodCleanupTimeout)
+	defer cancelProbes()
 
 	categories := buildCategories(cfg, role, rc)
 	for _, cat := range categories {
 		catStart := time.Now()
 		var catResults []CheckResult
 		for _, spec := range cat.checks {
+			checkCtx := probeCtx
+			if spec.ownBudget {
+				checkCtx = ctx
+			}
 			var res CheckResult
 			switch {
 			case interrupted():
 				// Interrupted: the command reports the interrupt, not rows.
 				return all
-			case ctx.Err() != nil:
+			case checkCtx.Err() != nil && !spec.static:
 				// The budget ran out before this check started. Dropping it
 				// let the partial set grade as the verdict, so a validator
 				// that never ran could pass the gate.
 				res = CheckResult{
 					ID: spec.ID, Severity: SeverityError, CutShort: true,
 					Message: "not run: the check's time budget ran out before it started",
-					Err:     ctx.Err(),
+					Err:     checkCtx.Err(),
 				}
 			default:
 				_ = sink.Emit(ctx, progress.CheckStarted{
@@ -1369,7 +1444,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 					ID:       spec.ID,
 					Message:  spec.HumanLabel,
 				})
-				res = spec.Run(ctx)
+				res = spec.Run(checkCtx)
 				if interrupted() {
 					// Cut short by the interrupt, so its result is not a
 					// finding; the cancelled final event says what happened.
@@ -1382,13 +1457,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 					}
 					return all
 				}
-				if !res.Passed && errors.Is(ctx.Err(), context.DeadlineExceeded) &&
-					errors.Is(res.Err, context.DeadlineExceeded) {
-					// The budget ran out while it ran: no finding either way.
-					res.CutShort = true
-					res.Severity = SeverityError
-					res.Message = "cut short: the check's time budget ran out before it finished (" + res.Message + ")"
-				}
+				res = normaliseResult(checkCtx, res)
 			}
 			res.Category = cat.name
 			all = append(all, res)
@@ -1405,6 +1474,25 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 		})
 	}
 	return all
+}
+
+// normaliseResult applies the rules every row shares. A pass is info, whatever
+// severity the check set before it knew the outcome. A miss caused by the
+// spent budget, which ctx carries, is cut short: no finding either way. A
+// check whose own bound fired keeps its result.
+func normaliseResult(ctx context.Context, res CheckResult) CheckResult {
+	if res.Passed {
+		res.Severity = SeverityInfo
+		return res
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(res.Err, context.DeadlineExceeded) {
+		res.CutShort = true
+		res.Severity = SeverityError
+		// Replaced, not wrapped: the check's own advice is about a failure
+		// it did not get to observe.
+		res.Message = "cut short: the check's time budget ran out before it finished"
+	}
+	return res
 }
 
 // emitCheckCompleted reports one check's result. It uses a fresh context: the

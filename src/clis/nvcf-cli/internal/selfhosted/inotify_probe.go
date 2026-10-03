@@ -142,6 +142,10 @@ var inotifyProbeBudget = 100 * time.Second
 // check command's time budget must cover.
 func InotifyProbeBudget() time.Duration { return inotifyProbeBudget }
 
+// probePodCleanupTimeout bounds the deletion of a probe pod, which runs after
+// the probe's own deadline. The probe share leaves room for it.
+var probePodCleanupTimeout = 10 * time.Second
+
 // probeAllNodes is the testable core: it takes a kubernetes.Interface so
 // callers can inject fake.NewSimpleClientset. It probes nodes in parallel
 // with a small concurrency cap so image-pull latency doesn't blow the
@@ -393,7 +397,7 @@ func fetchPodLogs(ctx context.Context, client kubernetes.Interface, podName stri
 // to its UID. Uses a background context so the pod is cleaned up even when
 // the caller's context was canceled mid-probe.
 func cleanupProbePod(client kubernetes.Interface, pod *corev1.Pod) {
-	delCtx, cancel := context.WithTimeout(context.Background(), validatorCleanupTimeout)
+	delCtx, cancel := context.WithTimeout(context.Background(), probePodCleanupTimeout)
 	defer cancel()
 	deleteProbePod(delCtx, client, pod)
 }
