@@ -8,7 +8,9 @@
 #     that is not listed here, or when a listed request is never made.
 #   - deploy/helm/nvca-operator/tests/cluster_validator_test.sh renders the
 #     chart and requires its validator RBAC to grant exactly these rules.
-#   - The nvcf-cli per-run ClusterRole is tested against the same rules.
+#   - nvcf-cli launches the compute-plane and control-plane sets with
+#     VALIDATOR_PREFLIGHT, enforcement off and no networkPolicies pairs, so its
+#     per-run roles grant the subset of these rules that launch makes.
 #
 # scope: cluster rules belong in a ClusterRole. scope: namespace rules only
 # touch the validator's own namespace (its config and summary ConfigMaps), so a
