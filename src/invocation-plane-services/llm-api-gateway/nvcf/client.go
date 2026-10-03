@@ -256,13 +256,15 @@ func (c *GRPCClient) AuthorizeInvocation(
 
 	authContext := resp.GetAuthContext()
 	return &InvocationAuthResponse{
-		RoutingKey:   resp.GetRoutingKey(),
-		ClientAuthID: resp.GetClientAuthSubject(),
-		ProjectID:    deriveProjectID(authContext),
-		AuthContext:  authContext,
-		RateLimitKey: deriveRateLimitKey(authContext),
-		ModelSpecs:   modelSpecsFromProto(resp.GetModelSpecs()),
-		Priority:     priorityFromProto(resp),
+		RoutingKey:               resp.GetRoutingKey(),
+		ClientAuthID:             resp.GetClientAuthSubject(),
+		ProjectID:                deriveProjectID(authContext),
+		AuthContext:              authContext,
+		RateLimitKey:             deriveRateLimitKey(authContext),
+		ModelSpecs:               modelSpecsFromProto(resp.GetModelSpecs()),
+		Priority:                 priorityFromProto(resp),
+		AccountInputTokenRateLimit:  resp.GetAccountInputTokenRateLimit(),
+		AccountOutputTokenRateLimit: resp.GetAccountOutputTokenRateLimit(),
 	}, nil
 }
 

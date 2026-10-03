@@ -700,7 +700,7 @@ func parseLLMModelString(s string) (ArtifactConfig, error) {
 	if err != nil {
 		return ArtifactConfig{}, err
 	}
-	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", fields["tokenRateLimit"]); err != nil {
 		return ArtifactConfig{}, err
 	}
 
@@ -744,7 +744,7 @@ func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
 	if err != nil {
 		return ModelUpdateConfig{}, err
 	}
-	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", fields["tokenRateLimit"]); err != nil {
 		return ModelUpdateConfig{}, err
 	}
 
@@ -802,7 +802,7 @@ func validateLLMModelURIs(uris []string) error {
 	return nil
 }
 
-func validateLLMTokenRateLimit(raw string) error {
+func validateLLMTokenRateLimit(fieldName, raw string) error {
 	if raw == "" {
 		return nil
 	}
@@ -811,31 +811,31 @@ func validateLLMTokenRateLimit(raw string) error {
 	for _, fragment := range strings.Split(raw, ",") {
 		fragment = strings.TrimSpace(fragment)
 		if fragment == "" {
-			return fmt.Errorf("invalid tokenRateLimit: empty fragment")
+			return fmt.Errorf("invalid %s: empty fragment", fieldName)
 		}
 
 		separator := strings.LastIndex(fragment, "-")
 		if separator <= 0 || separator == len(fragment)-1 {
-			return fmt.Errorf("invalid tokenRateLimit fragment %q: expected <positive-int>-<unit>", fragment)
+			return fmt.Errorf("invalid %s fragment %q: expected <positive-int>-<unit>", fieldName, fragment)
 		}
 		valuePart := strings.TrimSpace(fragment[:separator])
 		unit := strings.TrimSpace(fragment[separator+1:])
 
 		value, err := strconv.ParseInt(valuePart, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid tokenRateLimit value %q: must be a positive integer", valuePart)
+			return fmt.Errorf("invalid %s value %q: must be a positive integer", fieldName, valuePart)
 		}
 		if value <= 0 {
-			return fmt.Errorf("invalid tokenRateLimit value %q: must be positive", valuePart)
+			return fmt.Errorf("invalid %s value %q: must be positive", fieldName, valuePart)
 		}
 
 		switch unit {
-		case "S", "M", "H", "D", "W":
+		case "S", "M", "H", "D", "W", "MO":
 		default:
-			return fmt.Errorf("invalid tokenRateLimit unit %q: expected S, M, H, D, or W", unit)
+			return fmt.Errorf("invalid %s unit %q: expected S, M, H, D, W, or MO", fieldName, unit)
 		}
 		if seenUnits[unit] {
-			return fmt.Errorf("invalid tokenRateLimit: duplicate %s unit", unit)
+			return fmt.Errorf("invalid %s: duplicate %s unit", fieldName, unit)
 		}
 		seenUnits[unit] = true
 	}
@@ -915,7 +915,7 @@ func llmConfigInputToClient(input *LLMConfigInput) (*client.LLMConfigDto, error)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateLLMTokenRateLimit(optionalStringValue(input.TokenRateLimit)); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", optionalStringValue(input.TokenRateLimit)); err != nil {
 		return nil, err
 	}
 
@@ -938,7 +938,7 @@ func modelUpdateConfigToClient(update ModelUpdateConfig) (client.ModelUpdateDto,
 	if err != nil {
 		return client.ModelUpdateDto{}, err
 	}
-	if err := validateLLMTokenRateLimit(optionalStringValue(update.LLMConfig.TokenRateLimit)); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", optionalStringValue(update.LLMConfig.TokenRateLimit)); err != nil {
 		return client.ModelUpdateDto{}, err
 	}
 
