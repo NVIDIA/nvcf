@@ -35,9 +35,6 @@ navigation:
   - page: Quickstart
     path: ../docs/overview/quickstart.md
     slug: quickstart
-  - page: Documentation Archive
-    path: ../docs/overview/documentation-archive.md
-    slug: documentation-archive
   - section: Before You Deploy
     skip-slug: true
     contents:
@@ -134,9 +131,12 @@ navigation:
       - page: Multi-cluster (Helmfile)
         path: ../docs/overview/local-development/multi-cluster-helmfile.md
         slug: multi-cluster-helmfile
-  - section: Managed (Legacy)
+  - section: Legacy
     skip-slug: true
     contents:
+    - page: Documentation Archive
+      path: ../docs/overview/documentation-archive.md
+      slug: documentation-archive
     - section: Cluster Management
       skip-slug: true
       contents:

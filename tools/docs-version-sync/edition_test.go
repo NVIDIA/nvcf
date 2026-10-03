@@ -298,3 +298,49 @@ func TestEditionSummaryUsesSelectedCombination(t *testing.T) {
 		t.Fatalf("legacy output changed: %q, %v", summary, err)
 	}
 }
+
+func TestSyncDefaultOutputsLeavesOverviewAuthored(t *testing.T) {
+	root := t.TempDir()
+	catalog := editionTestCatalog()
+	catalog.Outputs = defaultOutputs()
+	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
+		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.9.0"},
+		Artifact{Name: "nvcf-image-credential-helper", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "1.0.0"},
+	)
+	catalog.Manifest.Entries = append(catalog.Manifest.Entries,
+		ManifestEntry{ArtifactID: "helm-nvca-operator", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestRequired, Description: "NVCA operator chart."},
+		ManifestEntry{ArtifactID: "nvcf-image-credential-helper", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Image credential helper."},
+	)
+	inlineExamples := map[string]string{
+		"docs/overview/image-mirroring.md":                      "helm pull nvcf/helm-nvca-operator --version 0.1.0\n",
+		"docs/compute-plane/cluster-management/self-managed.md": "| Chart | `helm-nvca-operator` |\n| --- | --- |\n| Version | `0.1.0` |\n",
+		"docs/compute-plane/cluster-management/reference.md":    "imageCredHelper:\n  imageRepository: \"\"\n  imageTag: 0.1.0\n",
+	}
+	for _, output := range catalog.Outputs {
+		content := "# Guide\n\n" + inlineExamples[output.Path]
+		for _, block := range output.Blocks {
+			content += "\n{/*docs-version-sync:BEGIN " + block.Marker + "*/}\nstale\n{/*docs-version-sync:END " + block.Marker + "*/}\n"
+		}
+		writeFile(t, filepath.Join(root, output.Path), content)
+	}
+	overview := "# NVIDIA Cloud Functions\n\nDeployment and operation guides.\n"
+	overviewPath := filepath.Join(root, "docs/overview/index.md")
+	writeFile(t, overviewPath, overview)
+	if err := SyncDocs(root, catalog, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := SyncDocs(root, catalog, true); err != nil {
+		t.Fatalf("regenerated docs are inconsistent: %v", err)
+	}
+	got, err := os.ReadFile(overviewPath)
+	if err != nil || string(got) != overview {
+		t.Fatalf("overview changed during regeneration: %q, %v", got, err)
+	}
+	summary, err := os.ReadFile(filepath.Join(root, "docs/self-managed/installation.md"))
+	if err != nil || !strings.Contains(string(summary), "Docs edition `1.0.0`") {
+		t.Fatalf("stack summary was not regenerated: %q, %v", summary, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs/edition-manifest.json")); err != nil {
+		t.Fatalf("edition manifest was not generated: %v", err)
+	}
+}

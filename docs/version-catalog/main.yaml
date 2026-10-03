@@ -1691,10 +1691,6 @@ outputs:
         renderer: image-mirroring-cli-snippet
   - path: docs/compute-plane/cluster-management/self-managed.md
   - path: docs/compute-plane/cluster-management/reference.md
-  - path: docs/overview/index.md
-    blocks:
-      - marker: edition-overview
-        renderer: edition-overview
   - path: docs/self-managed/installation.md
     blocks:
       - marker: edition-control-plane

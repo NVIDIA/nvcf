@@ -1,19 +1,5 @@
 # NVIDIA Cloud Functions
 
-{/*docs-version-sync:BEGIN edition-overview*/}
-
-Docs edition `1.0.2`. Development candidate.
-
-| Stack | Artifact version |
-| --- | --- |
-| Self-managed (control plane) | `1.0.1` |
-| Compute plane | `1.0.0` |
-| Observability | `1.0.0` |
-
-The docs edition versions this documented combination. Each stack keeps its own artifact version.
-
-{/*docs-version-sync:END edition-overview*/}
-
 ![NVIDIA Cloud Functions banner](images/nvcf-banner.svg)
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
