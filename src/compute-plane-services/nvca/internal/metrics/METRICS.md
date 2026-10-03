@@ -1432,10 +1432,10 @@ A check is absent when:
 2. The run's role does not run it. `smb_csi`, `gpu_resources` and `gpu_operator` run only under the compute-plane role. `default_storage_class`, `gateway_api_crds`, `envoy_gateway`, `gateway_routes`, `external_lb`, `node_to_node`, `tier1_deployments` and `tier2_statefulsets` run only under the control-plane role. `control_plane`, `worker_nodes_all_ready`, `webhooks` and `network_policies_supported` run under both.
 3. The check is not configured. `endpoint_reachability`, `configurable_netpol` and `netpol_enforcement` run only when the network-checks ConfigMap configures them and loads.
 4. The check could not be observed: an RBAC denial, an apiserver error, a probe that could not run, or, after install, an expected component that was not found. When the check is critical, the run also reports `nvca_cluster_validator_ready` as `0`.
-5. The check does not apply to the cluster. `node_to_node` does not apply with exactly one eligible node (Ready, not cordoned, not fenced); with zero eligible nodes it could not be observed, which is cause 4.
-6. `external_lb` has no load balancer to judge. This happens by design when every NVCF Gateway is exposed by NodePort or ClusterIP, when no NVCF Gateway is named or discovered, and when a merged-gateways proxy cannot be attributed to the NVCF Gateways. `external_lb` is not critical, so none of these affect `ready`.
+5. The check does not apply to the cluster. `node_to_node` does not apply with exactly one eligible node (Ready, not cordoned, not fenced); with zero eligible nodes it could not be observed, which is cause 4. `envoy_gateway` and `external_lb` do not apply when no NVCF Gateway is run by Envoy Gateway, and `external_lb` does not apply when every NVCF Gateway is exposed by NodePort or ClusterIP.
+6. `external_lb` has no load balancer it can attribute to NVCF: no NVCF Gateway is named or discovered, or a merged-gateways proxy cannot be attributed to the NVCF Gateways. `envoy_gateway` and `external_lb` are not critical, so neither cause 5 nor cause 6 affects `ready`.
 
-The run's `warnings` list and log say which cause applies to each absent check.
+The run's log says which cause applies to each absent check, and the summary's `warnings` list names each check that could not be observed.
 
 The critical checks are `control_plane`, `webhooks`, `gpu_resources` (compute-plane), `default_storage_class`, `gateway_api_crds`, `node_to_node`, `tier1_deployments` and `tier2_statefulsets` (control-plane), and each configured network check whose entries are marked critical. A critical check that fails, or that could not be observed, makes the run NVCF-Not-Ready.
 
@@ -1542,7 +1542,7 @@ nvca_cluster_validator_endpoint_reachable{critical="true"} == 0
 nvca_cluster_validator_last_run_timestamp_seconds == 0
 ```
 
-Do not alert on `absent()` of `external_lb` or `node_to_node`: both are absent on healthy clusters by design (a NodePort-exposed NVCF Gateway, a single eligible node), so such an alert fires forever. No series carries the validator's role, so an `absent()` on any role-specific or configured check cannot be scoped by role either. If you need one, scope it with `nvca_cluster_name` to the clusters where you know the check runs. For critical checks, `ready == 0` already covers absence.
+Do not alert on `absent()` of `envoy_gateway`, `external_lb` or `node_to_node`: each is absent on healthy clusters by design (NVCF Gateways another implementation runs, a NodePort-exposed NVCF Gateway, a single eligible node), so such an alert fires forever. No series carries the validator's role, so an `absent()` on any role-specific or configured check cannot be scoped by role either. If you need one, scope it with `nvca_cluster_name` to the clusters where you know the check runs. For critical checks, `ready == 0` already covers absence.
 
 ### Edge cases
 
