@@ -74,6 +74,11 @@ func runService(cfg config.Config) error {
 	// Replace zap's global logger so libraries/components using zap.L() (like nvkit) can also output logs correctly.
 	zap.ReplaceGlobals(logger.Logger)
 
+	if err := config.ValidateCacheConfig(cfg.Cache); err != nil {
+		logger.Error("invalid cache configuration", zap.Error(err))
+		return err
+	}
+
 	// Log HTTP configuration being used
 	logger.Warn("http transport configuration",
 		zap.Int("max_idle_conns", cfg.HTTP.MaxIdleConns),

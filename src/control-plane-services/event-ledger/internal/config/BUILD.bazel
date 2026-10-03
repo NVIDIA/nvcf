@@ -12,6 +12,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config",
     visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
     deps = [
+        "//src/control-plane-services/event-ledger/internal/cache",
         "//src/control-plane-services/event-ledger/internal/observability/common",
         "//src/control-plane-services/event-ledger/internal/observability/logging",
         "//src/control-plane-services/event-ledger/internal/observability/tracing",

@@ -42,6 +42,8 @@ var (
 	ErrMissingIntrospectionURL             = errors.New("auth: introspection.url is required when introspection is enabled")
 	ErrIntrospectionRequiresSelfManaged    = errors.New("auth: introspection is only supported in self-managed deployments")
 	ErrIntrospectionRequiresPolicyProvider = errors.New("auth: introspection is only supported with the policy provider")
+	ErrInvalidCacheMaxSize                 = errors.New("cache: max-size must be greater than 0")
+	ErrInvalidCacheFlushInterval           = errors.New("cache: flush-interval-seconds must be greater than 0")
 )
 
 // Top-level config
@@ -58,6 +60,7 @@ type Config struct {
 	HTTP               HTTPClientConfig       `mapstructure:"http"`
 	Pagination         PaginationConfig       `mapstructure:"pagination"`
 	Stats              StatsConfig            `mapstructure:"stats"`
+	Cache              CacheConfig            `mapstructure:"cache"`
 	ID                 string                 `mapstructure:"id"`
 	Secret             string                 `mapstructure:"secret"`
 	DeprecateEndpoints bool                   `mapstructure:"deprecate-endpoints"`
@@ -273,6 +276,33 @@ type StatsConfig struct {
 	// FilteredStatsEnabledEventNames lists which event names should update the filtered stats view.
 	// The mapstructure key is retained for compatibility. If empty, the view is disabled (no writes).
 	FilteredStatsEnabledEventNames []string `mapstructure:"ngc-stats-enabled-event-names"`
+}
+
+// CacheConfig configures the local stats write cache. The inactivity TTL is
+// derived from the flush interval and is not configurable.
+type CacheConfig struct {
+	// Enabled turns the cache on. When false the service writes every stats
+	// event straight to the database.
+	Enabled bool `mapstructure:"enabled"`
+	// MaxSize is the maximum number of cached entries before LRU eviction.
+	MaxSize int `mapstructure:"max-size"`
+	// FlushIntervalSeconds is how long a pending entry waits before it is flushed.
+	FlushIntervalSeconds int `mapstructure:"flush-interval-seconds"`
+}
+
+// ValidateCacheConfig rejects non-positive sizes and intervals. A disabled
+// cache is not validated, so unused values cannot stop the service.
+func ValidateCacheConfig(cfg CacheConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	if cfg.MaxSize <= 0 {
+		return ErrInvalidCacheMaxSize
+	}
+	if cfg.FlushIntervalSeconds <= 0 {
+		return ErrInvalidCacheFlushInterval
+	}
+	return nil
 }
 
 // WithDefaults returns a PaginationConfig with default values for unset fields
