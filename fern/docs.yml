@@ -62,6 +62,14 @@ check:
     broken-links: error
 
 redirects:
+  - source: /nvcf/overview/image-mirroring
+    destination: /nvcf/manifest/image-mirroring
+  - source: /nvcf/dev/overview/image-mirroring
+    destination: /nvcf/dev/manifest/image-mirroring
+  - source: /nvcf/1.0.1/overview/image-mirroring
+    destination: /nvcf/1.0.1/manifest/image-mirroring
+  - source: /nvcf/1.0.0/overview/image-mirroring
+    destination: /nvcf/1.0.1/manifest/image-mirroring
   - source: /nvcf/release-notes/1-0-1-release-notes
     destination: /nvcf/release-notes/2026/9/22
   - source: /nvcf/release-notes/legacy-0-6-1-release-notes
@@ -213,9 +221,9 @@ redirects:
   - source: "/nvcf/dev/manifest"
     destination: "/nvcf/dev/manifest/artifacts"
   - source: "/nvcf/image-mirroring"
-    destination: "/nvcf/overview/image-mirroring"
+    destination: "/nvcf/manifest/image-mirroring"
   - source: "/nvcf/dev/image-mirroring"
-    destination: "/nvcf/dev/overview/image-mirroring"
+    destination: "/nvcf/dev/manifest/image-mirroring"
   - source: "/nvcf/architecture-overview"
     destination: "/nvcf/overview/architecture-overview"
   - source: "/nvcf/dev/architecture-overview"
@@ -683,7 +691,7 @@ redirects:
   - source: "/nvcf/self-managed/1.0.0/helm-managed-clusters"
     destination: "/nvcf/overview/helm-managed-clusters"
   - source: "/nvcf/self-managed/1.0.0/image-mirroring"
-    destination: "/nvcf/overview/image-mirroring"
+    destination: "/nvcf/manifest/image-mirroring"
   - source: "/nvcf/self-managed/1.0.0/infrastructure-sizing"
     destination: "/nvcf/overview/infrastructure-sizing"
   - source: "/nvcf/self-managed/1.0.0/init-container"
@@ -834,7 +842,7 @@ redirects:
   - source: "/nvcf/self-managed/1.0.1/helm-managed-clusters"
     destination: "/nvcf/overview/helm-managed-clusters"
   - source: "/nvcf/self-managed/1.0.1/image-mirroring"
-    destination: "/nvcf/overview/image-mirroring"
+    destination: "/nvcf/manifest/image-mirroring"
   - source: "/nvcf/self-managed/1.0.1/infrastructure-sizing"
     destination: "/nvcf/overview/infrastructure-sizing"
   - source: "/nvcf/self-managed/1.0.1/init-container"

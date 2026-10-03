@@ -3,7 +3,7 @@
 All required self-hosted NVCF artifacts (see [self-hosted-artifact-manifest](./manifest.md)) must be available to be pulled by pods in your Kubernetes cluster. The deployment bundles are `nvcf-self-managed-stack` for the control plane, `nvcf-compute-plane-stack` for the compute plane, and `nvcf-observability-stack` for standalone shared observability. This page provides examples on how to pull artifacts from NGC and push them to your desired registry.
 
 <Note>
-**Mirroring images is not the same as configuring image pull secrets.** This page covers how to copy NVCF artifacts into your registry. If your registry is private, Kubernetes also needs credentials to pull those images at runtime. For instructions on configuring image pull secrets for the NVCF control plane pods, see [control-plane-image-pull-secrets](../self-managed/helmfile-installation.md) in the installation guide.
+Mirroring images is not the same as configuring image pull secrets. This page covers how to copy NVCF artifacts into your registry. If your registry is private, Kubernetes also needs credentials to pull those images at runtime. For instructions on configuring image pull secrets for the NVCF control plane pods, see [control-plane-image-pull-secrets](../self-managed/helmfile-installation.md) in the installation guide.
 
 </Note>
 
@@ -35,17 +35,17 @@ export NGC_API_KEY="nvapi-xxxxxxxxxxxxx"  # Replace with your NGC API key
 
 ## LLS-Specific Artifacts
 
-If you plan to deploy **Low Latency Streaming (LLS)**, you must mirror the following additional artifacts beyond the core NVCF control plane:
+If you plan to deploy Low Latency Streaming (LLS), you must mirror the following additional artifacts beyond the core NVCF control plane:
 
-**Container Images:**
+Container Images:
 
 - `streaming-proxy` - Streaming Proxy container for streaming
 
-**Helm Charts:**
+Helm Charts:
 
 - `gdn-streaming` - GDN Streaming Proxy Helm chart
 
-**Optional (for streaming workloads):**
+Optional (for streaming workloads):
 
 - Streaming application images (e.g., `usd-composer`)
 
@@ -54,9 +54,9 @@ See [self-hosted-lls-installation](../self-managed/lls-installation.md) for LLS 
 ## Pulling Artifacts from NGC
 
 <Warning>
-**Important:** The examples below show how to pull individual artifacts. You must pull **each image, chart, and resource** listed in the [self-hosted-artifact-manifest](./manifest.md) individually. These examples demonstrate the process for one artifact of each type - you will need to repeat these steps for every artifact required for your deployment.
+Important: The examples below show how to pull individual artifacts. You must pull each image, chart, and resource listed in the [self-hosted-artifact-manifest](./manifest.md) individually. These examples demonstrate the process for one artifact of each type - you will need to repeat these steps for every artifact required for your deployment.
 
-**Complete the following for each artifact:**
+Complete the following for each artifact:
 
 - Pull each container image from NGC
 - Pull each Helm chart from NGC
@@ -70,9 +70,9 @@ See the [self-hosted-artifact-manifest](./manifest.md) for the complete list of 
 ### Pulling Images
 
 <Warning>
-**Platform Architecture Mismatch**
+Platform Architecture Mismatch
 
-When pulling images, Docker pulls the architecture matching your local machine by default. If you're running on an Apple Silicon Mac (arm64) but deploying to an amd64 cluster (most EKS/GKE clusters), you **must** specify the target platform:
+When pulling images, Docker pulls the architecture matching your local machine by default. If you're running on an Apple Silicon Mac (arm64) but deploying to an amd64 cluster (most EKS/GKE clusters), you must specify the target platform:
 
 ```bash
 # Pull for amd64 clusters (most common)
@@ -111,7 +111,7 @@ charts. They are not public OCI artifacts. Pull them from
 
 </Warning>
 
-**Public NVCF Helm Charts**
+Public NVCF Helm Charts
 
 ```bash
 # Add and update the public NVCF Helm repository
@@ -125,7 +125,7 @@ helm pull nvcf/helm-nvca-operator --version 1.28.0
 helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
 ```
 
-**Other Repository-based Helm Charts (Non-OCI)**
+Other Repository-based Helm Charts (Non-OCI)
 
 The GPU Operator and the Omniverse DDCS, UCC, storage-service, and
 discovery-service charts are also available from traditional Helm repositories
@@ -159,7 +159,7 @@ You can either:
 
 </Note>
 
-**Converting Non-OCI Charts for ECR**
+Converting Non-OCI Charts for ECR
 
 To push repository-based Helm charts to Amazon ECR (which requires OCI format), you must convert them:
 
@@ -187,7 +187,7 @@ ECR will properly track both container images and Helm charts under the same rep
 
 ### Pulling Resources from NGC
 
-**Using NGC CLI**
+Using NGC CLI
 
 First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nvidia.com/setup/installers/cli) using the Personal API key you created.
 
@@ -218,13 +218,7 @@ ngc registry resource download-version \
 
 The `nvcf-self-managed-stack` repository contains Helmfile configurations for deploying the NVCF control plane components.
 
-<Warning>
-Use the control-plane stack version shown in the artifact manifest. The stack
-and its listed artifact versions are QA-qualified together.
-
-</Warning>
-
-**Download and extract:**
+Download and extract:
 
 {/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
@@ -248,12 +242,6 @@ If you don't have access to this repository, contact your NVIDIA representative.
 ### Downloading `nvcf-compute-plane-stack`
 
 The `nvcf-compute-plane-stack` repository contains Helmfile configurations for deploying compute-plane components.
-
-<Warning>
-Use the compute-plane stack version shown in the artifact manifest. The stack
-and its listed artifact versions are QA-qualified together.
-
-</Warning>
 
 Download and extract:
 
@@ -282,12 +270,6 @@ Use both core stack bundles for split-stack local and self-managed installs:
 
 The `nvcf-observability-stack` repository contains Helmfile configurations for
 deploying shared observability components as a standalone stack.
-
-<Warning>
-Use the observability stack version shown in the artifact manifest. The stack
-and its listed artifact versions are QA-qualified together.
-
-</Warning>
 
 Download and extract:
 
@@ -320,7 +302,7 @@ Use the CLI version shown in the artifact manifest for this stack release.
 
 </Warning>
 
-**Download and extract:**
+Download and extract:
 
 {/*docs-version-sync:BEGIN image-mirroring-cli-snippet*/}
 
@@ -366,7 +348,7 @@ Ensure all artifacts listed in the [self-hosted-artifact-manifest](./manifest.md
 This example assumes you're configured and authenticated using the AWS CLI.
 
 <Note>
-**Identify Your AWS Account ID**
+Identify Your AWS Account ID
 
 The examples below use `<aws-account-id>` as a placeholder. To get your AWS account ID, run:
 
@@ -377,7 +359,7 @@ aws sts get-caller-identity --query Account --output text
 </Note>
 
 <Info>
-**ECR Repository Naming Convention**
+ECR Repository Naming Convention
 
 The Helm templates expect images at: `{{ registry }}/{{ repository }}/image-name:tag`
 
@@ -392,11 +374,11 @@ global:
 
 The resulting image path would be: `<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/nats-box:0.19.7-nonroot`
 
-In ECR, you must create repositories with the **full path** including the prefix, e.g., `nvcf-self-hosted/notary-service`, `nvcf-self-hosted/nats-box`, etc.
+In ECR, you must create repositories with the full path including the prefix, e.g., `nvcf-self-hosted/notary-service`, `nvcf-self-hosted/nats-box`, etc.
 
 </Info>
 
-**Initial Setup**
+Initial Setup
 
 ```bash
 # Set your repository prefix (must match global.image.repository in your environment config)
@@ -407,7 +389,7 @@ aws ecr get-login-password --region us-east-1 | \
   docker login --username AWS --password-stdin <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com
 ```
 
-**Push an Image to ECR**
+Push an Image to ECR
 
 ```bash
 # Create ECR repository with the full path (including prefix)
@@ -421,7 +403,7 @@ docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
 docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.19.7-nonroot
 ```
 
-**Push a Helm Chart to ECR**
+Push a Helm Chart to ECR
 
 ```bash
 # 1. Add and update the public NVCF Helm repository
@@ -453,7 +435,7 @@ Replace `<aws-account-id>` with your AWS account ID (run `aws sts get-caller-ide
 This example shows how to push images and Helm charts to Volcano Engine Container Registry (CR) using the web console, Docker commands and Helm commands.
 
 <Info>
-**Volcano Engine CR Repository Naming Convention**
+Volcano Engine CR Repository Naming Convention
 
 The Helm templates expect images at: `{{ registry }}/{{ repository }}/image-name:tag`
 
@@ -470,7 +452,7 @@ The resulting image path would be: `cr-example-cn-beijing.cr.volces.com/nvcf-sel
 
 </Info>
 
-**Docker Authentication**
+Docker Authentication
 
 ```bash
 # Set your Volcano Engine CR endpoint
@@ -489,7 +471,7 @@ Navigate to your Volcano Engine Container Registry instance web console to get t
 
 </Note>
 
-**Push an Image to Volcano Engine CR**
+Push an Image to Volcano Engine CR
 
 ```bash
 # Set your registry endpoint and namespace
@@ -504,7 +486,7 @@ docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
 docker push ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 ```
 
-**Push a Helm Chart to Volcano Engine CR**
+Push a Helm Chart to Volcano Engine CR
 
 ```bash
 # Set your registry endpoint and namespace
@@ -534,7 +516,7 @@ helm push helm-nvca-operator-1.28.0.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
 
 ### exec format error
 
-**Symptom:** Pods fail to start with `Init:CrashLoopBackOff` or `CrashLoopBackOff` status. Checking the logs shows:
+Symptom: Pods fail to start with `Init:CrashLoopBackOff` or `CrashLoopBackOff` status. Checking the logs shows:
 
 ```text
 exec /bin/sh: exec format error
@@ -546,14 +528,14 @@ or
 exec /usr/local/bin/docker-entrypoint.sh: exec format error
 ```
 
-**Cause:** This error occurs when container images were pulled/pushed with an architecture that doesn't match your cluster's node architecture. This commonly happens when:
+Cause: This error occurs when container images were pulled/pushed with an architecture that doesn't match your cluster's node architecture. This commonly happens when:
 
 - Mirroring from an Apple Silicon Mac (arm64) to an amd64 EKS/GKE cluster
 - Mirroring from an Intel/AMD machine (amd64) to an arm64 cluster (e.g., AWS Graviton)
 
-**Solution:**
+Solution:
 
-1. **Delete the incorrectly mirrored images from your registry** (e.g., ECR):
+1. Delete the incorrectly mirrored images from your registry (e.g., ECR):
 
    ```bash
    # Delete all repositories with your prefix
@@ -564,7 +546,7 @@ exec /usr/local/bin/docker-entrypoint.sh: exec format error
    done
    ```
 
-2. **Clean local Docker cache** to ensure fresh pulls:
+2. Clean local Docker cache to ensure fresh pulls:
 
    ```bash
    # Remove all NGC and ECR images from local cache
@@ -576,7 +558,7 @@ exec /usr/local/bin/docker-entrypoint.sh: exec format error
    docker image prune -f
    ```
 
-3. **Re-mirror images with the correct platform**:
+3. Re-mirror images with the correct platform:
 
    When pulling images, explicitly specify the target platform:
 
@@ -590,7 +572,7 @@ exec /usr/local/bin/docker-entrypoint.sh: exec format error
 
    Then re-tag and push to your registry.
 
-4. **Force Kubernetes to re-pull images** by either:
+4. Force Kubernetes to re-pull images by either:
 
    - Setting `imagePullPolicy: Always` temporarily in your Helm values
    - Deleting and redeploying the affected StatefulSets/Deployments
