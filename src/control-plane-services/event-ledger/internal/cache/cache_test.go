@@ -226,6 +226,193 @@ func TestLookup_ConcurrentInsertsOfDistinctKeys(t *testing.T) {
 	assert.Len(t, h.entries, writers*keysPerWriter)
 }
 
+var (
+	testKey  = key{namespace: "ns", context: "ctx", eventName: "evt"}
+	testBase = time.Date(2026, 9, 19, 14, 32, 10, 0, time.UTC)
+)
+
+func TestProcessEvent_MissStoresCleanEntry(t *testing.T) {
+	h := newTestHandler(t)
+	now := testBase.Add(time.Hour)
+	ev := event{timestamp: testBase, source: "nvidia-cluster-agent", details: json.RawMessage(`{"downloadProgress":0.75}`)}
+
+	got := h.processEvent(testKey, ev, now)
+
+	assert.Equal(t, outcomeMiss, got)
+	e, ok := h.lookup(testKey)
+	require.True(t, ok)
+	assert.Equal(t, entry{
+		timestamp:   testBase,
+		source:      "nvidia-cluster-agent",
+		details:     json.RawMessage(`{"downloadProgress":0.75}`),
+		pending:     false,
+		lastWritten: now,
+		lastUpdated: now,
+	}, e)
+}
+
+func TestProcessEvent_NewerEventReplacesCleanEntryAndMarksPending(t *testing.T) {
+	h := newTestHandler(t)
+	firstSeen := testBase.Add(time.Hour)
+	h.processEvent(testKey, event{timestamp: testBase, source: "old", details: json.RawMessage(`{"p":1}`)}, firstSeen)
+	now := firstSeen.Add(time.Second)
+	newer := testBase.Add(time.Second)
+
+	got := h.processEvent(testKey, event{timestamp: newer, source: "new", details: json.RawMessage(`{"p":2}`)}, now)
+
+	assert.Equal(t, outcomeBecamePending, got)
+	e, ok := h.lookup(testKey)
+	require.True(t, ok)
+	assert.Equal(t, entry{
+		timestamp:   newer,
+		source:      "new",
+		details:     json.RawMessage(`{"p":2}`),
+		pending:     true,
+		lastWritten: firstSeen,
+		lastUpdated: now,
+	}, e)
+}
+
+func TestProcessEvent_NewerEventOnPendingEntryKeepsItPending(t *testing.T) {
+	h := newTestHandler(t)
+	h.processEvent(testKey, event{timestamp: testBase}, testBase)
+	h.processEvent(testKey, event{timestamp: testBase.Add(time.Second)}, testBase)
+	now := testBase.Add(time.Minute)
+
+	got := h.processEvent(testKey, event{
+		timestamp: testBase.Add(2 * time.Second),
+		source:    "latest",
+		details:   json.RawMessage(`{"p":3}`),
+	}, now)
+
+	assert.Equal(t, outcomeAlreadyPending, got)
+	e, ok := h.lookup(testKey)
+	require.True(t, ok)
+	assert.Equal(t, entry{
+		timestamp:   testBase.Add(2 * time.Second),
+		source:      "latest",
+		details:     json.RawMessage(`{"p":3}`),
+		pending:     true,
+		lastWritten: testBase,
+		lastUpdated: now,
+	}, e)
+}
+
+func TestProcessEvent_OlderOrEqualEventIsDiscarded(t *testing.T) {
+	tests := []struct {
+		name    string
+		pending bool
+		ts      time.Time
+	}{
+		{name: "older on clean entry", pending: false, ts: testBase.Add(-time.Second)},
+		{name: "equal on clean entry", pending: false, ts: testBase},
+		{name: "older on pending entry", pending: true, ts: testBase.Add(-time.Second)},
+		{name: "equal on pending entry", pending: true, ts: testBase},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newTestHandler(t)
+			h.insert(testKey, entry{
+				timestamp:   testBase,
+				source:      "kept",
+				details:     json.RawMessage(`{"kept":true}`),
+				pending:     tt.pending,
+				lastWritten: testBase,
+				lastUpdated: testBase,
+			})
+			before, _ := h.lookup(testKey)
+
+			got := h.processEvent(testKey, event{timestamp: tt.ts, source: "dropped", details: json.RawMessage(`{}`)}, testBase.Add(time.Hour))
+
+			assert.Equal(t, outcomeStale, got)
+			after, ok := h.lookup(testKey)
+			require.True(t, ok)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
+func TestProcessEvent_KeysAreIndependent(t *testing.T) {
+	h := newTestHandler(t)
+	other := key{namespace: "ns", context: "ctx", eventName: "other"}
+	h.processEvent(testKey, event{timestamp: testBase}, testBase)
+
+	// An event for another key is a miss even if it is older than the first.
+	got := h.processEvent(other, event{timestamp: testBase.Add(-time.Hour)}, testBase)
+
+	assert.Equal(t, outcomeMiss, got)
+}
+
+// Run with -race. Concurrent first events for one key must produce exactly one
+// miss, and the newest event must win.
+func TestProcessEvent_ConcurrentFirstEventsProduceOneMiss(t *testing.T) {
+	const goroutines = 64
+	h := newTestHandler(t)
+	results := make([]outcome, goroutines)
+
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ev := event{timestamp: testBase.Add(time.Duration(i) * time.Second), source: strconv.Itoa(i)}
+			results[i] = h.processEvent(testKey, ev, testBase)
+		}()
+	}
+	wg.Wait()
+
+	misses := 0
+	for _, r := range results {
+		if r == outcomeMiss {
+			misses++
+		}
+	}
+	assert.Equal(t, 1, misses)
+	e, ok := h.lookup(testKey)
+	require.True(t, ok)
+	assert.Equal(t, testBase.Add((goroutines-1)*time.Second), e.timestamp)
+	assert.Equal(t, strconv.Itoa(goroutines-1), e.source)
+}
+
+// Run with -race. Of many concurrent newer events on a clean entry, exactly one
+// must see the clean to pending transition, so a flush is scheduled once.
+func TestProcessEvent_ConcurrentNewerEventsBecomePendingOnce(t *testing.T) {
+	const goroutines = 64
+	h := newTestHandler(t)
+	h.processEvent(testKey, event{timestamp: testBase}, testBase)
+	results := make([]outcome, goroutines)
+
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ev := event{
+				timestamp: testBase.Add(time.Duration(i+1) * time.Second),
+				source:    strconv.Itoa(i + 1),
+				details:   json.RawMessage(strconv.Itoa(i + 1)),
+			}
+			results[i] = h.processEvent(testKey, ev, testBase)
+		}()
+	}
+	wg.Wait()
+
+	counts := map[outcome]int{}
+	for _, r := range results {
+		counts[r]++
+	}
+	assert.Equal(t, 1, counts[outcomeBecamePending])
+	assert.Equal(t, 0, counts[outcomeMiss])
+	assert.Equal(t, goroutines, counts[outcomeBecamePending]+counts[outcomeAlreadyPending]+counts[outcomeStale])
+
+	e, ok := h.lookup(testKey)
+	require.True(t, ok)
+	assert.True(t, e.pending)
+	assert.Equal(t, testBase.Add(goroutines*time.Second), e.timestamp)
+	assert.Equal(t, strconv.Itoa(goroutines), e.source)
+	assert.Equal(t, strconv.Itoa(goroutines), string(e.details))
+}
+
 func TestInactiveTTL_IsFlushIntervalPlusTenPercent(t *testing.T) {
 	tests := []struct {
 		name          string

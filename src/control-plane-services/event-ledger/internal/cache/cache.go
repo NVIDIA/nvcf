@@ -137,3 +137,64 @@ func (h *CachingDBHandler) lookup(k key) (entry, bool) {
 	}
 	return *e, true
 }
+
+// event is an incoming event to record in the cache. processEvent stores details
+// without copying it, so the caller must not mutate it afterwards.
+type event struct {
+	timestamp time.Time
+	source    string
+	details   json.RawMessage
+}
+
+// outcome reports what processEvent did with an incoming event, and so what the
+// caller must do next.
+type outcome int
+
+const (
+	// outcomeMiss means no entry existed. The event was stored as clean, so the
+	// caller must write it to the database now.
+	outcomeMiss outcome = iota
+	// outcomeBecamePending means a newer event replaced a clean entry. The
+	// caller must schedule a flush.
+	outcomeBecamePending
+	// outcomeAlreadyPending means a newer event replaced a pending entry. A flush
+	// is already scheduled and will pick up the latest value.
+	outcomeAlreadyPending
+	// outcomeStale means the event was not newer than the cached one and was
+	// discarded.
+	outcomeStale
+)
+
+// processEvent records ev for k and reports what the caller must do. It compares and
+// updates under one write lock so concurrent events for a key cannot both
+// decide they are the newest. It never writes to the database.
+func (h *CachingDBHandler) processEvent(k key, ev event, now time.Time) outcome {
+	h.entriesMu.Lock()
+	defer h.entriesMu.Unlock()
+
+	e, ok := h.entries[k]
+	if !ok {
+		h.entries[k] = &entry{
+			timestamp:   ev.timestamp,
+			source:      ev.source,
+			details:     ev.details,
+			lastWritten: now,
+			lastUpdated: now,
+		}
+		return outcomeMiss
+	}
+	if !ev.timestamp.After(e.timestamp) {
+		return outcomeStale
+	}
+
+	wasPending := e.pending
+	e.timestamp = ev.timestamp
+	e.source = ev.source
+	e.details = ev.details
+	e.pending = true
+	e.lastUpdated = now
+	if wasPending {
+		return outcomeAlreadyPending
+	}
+	return outcomeBecamePending
+}
