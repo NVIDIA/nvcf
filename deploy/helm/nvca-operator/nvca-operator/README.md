@@ -237,7 +237,8 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.role`                               | Check set: `control-plane`, or `compute-plane` or empty for the GPU checks        | `""`                                   |
 | `clusterValidator.openBaoNamespace`                   | Namespace holding OpenBao when it is not `vault-system`                           | `""`                                   |
 | `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
-| `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; replaces discovery for the LB and Tier-1 checks | `[]` (discovered from NVCF routes)     |
+| `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; set it for role `control-plane` (`make render-values-from-stack` fills it in). Only named Gateways can fail Tier-1 | `[]` (discovered from NVCF routes)     |
+| `clusterValidator.storageClass`                       | The stack's `global.storageClass`; when set, that class must exist instead of a default class | `""`                                   |
 | `clusterValidator.externalComponents`                 | Quorum components (`nats`, `openbao`, `cassandra`) the stack runs outside the cluster, so Tier-2 does not report them missing after install | `[]`                                   |
 | `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets` | `""` (`busybox:1.36`)                  |
 | `clusterValidator.tolerations`                        | Extra tolerations for the validator Job pods, added to the control-plane ones     | `[]`                                   |

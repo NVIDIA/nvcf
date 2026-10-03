@@ -41,7 +41,10 @@ make render-values-from-stack \
   stack_repo=../../../deploy/stacks/self-managed
 ```
 
-Inspect the generated file under `bin/`, then install or upgrade:
+Inspect the generated file under `bin/`, then install or upgrade. The render
+also sets `clusterValidator.gatewayNames` from the stack's wired
+`ingress.gatewayApi.gateways` and `clusterValidator.storageClass` from
+`global.storageClass`, which the control-plane validator role needs:
 
 ```bash
 make install-from-stack \

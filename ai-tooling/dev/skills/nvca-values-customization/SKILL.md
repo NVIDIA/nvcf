@@ -80,6 +80,10 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
 ## Gotchas
 
 - Install-time values are layered after generated stack-aware values.
+- With `clusterValidator.role: control-plane`, set
+  `clusterValidator.gatewayNames` to every stack Gateway as `namespace/name`.
+  Unset, the validator finds Gateways from route labels, and those can never
+  fail Tier-1. `make render-values-from-stack` fills it in.
 - Use `yq` carefully for nested keys and quoted strings.
 - `Chart.yaml` name stays in git and must match the subproject's service_name;
   the release refuses to publish when they differ. Only the version is set at

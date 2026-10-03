@@ -90,6 +90,47 @@ yq eval -i '
   .fullnameOverride = "nvca-operator"
 ' "${output_file}"
 
+# The control-plane validator judges only the NVCF Gateways, so name them as
+# the stack wires its routes (base.yaml defaults: gatewayApi enabled, optional
+# routes off): shared and grpc always, nats and the LLM worker Gateways only
+# with their routes on. Route-label discovery would otherwise stand in.
+stack_value() {
+  yq -r "$1" "${stack_env_file}"
+}
+gateway_names=()
+add_gateway() {
+  local ns name
+  ns="$(stack_value ".ingress.gatewayApi.gateways.$1.namespace // \"\"")"
+  name="$(stack_value ".ingress.gatewayApi.gateways.$1.name // \"\"")"
+  if [ -n "${ns}" ] && [ -n "${name}" ]; then
+    gateway_names+=("${ns}/${name}")
+  fi
+}
+if [ "$(stack_value '.ingress.gatewayApi.enabled')" != "false" ]; then
+  add_gateway shared
+  add_gateway grpc
+  if [ "$(stack_value '.ingress.gatewayApi.routes.nats.enabled // false')" = "true" ]; then
+    add_gateway nats
+  fi
+  if [ "$(stack_value '.ingress.gatewayApi.routes.llmWorker.enabled // false')" = "true" ]; then
+    add_gateway llmGrpc
+    add_gateway llmQuic
+  fi
+fi
+if [ "${#gateway_names[@]}" -gt 0 ]; then
+  GATEWAY_NAMES="$(printf '%s\n' "${gateway_names[@]}" | sort -u | paste -sd, -)"
+  export GATEWAY_NAMES
+  yq eval -i '.clusterValidator.gatewayNames = (strenv(GATEWAY_NAMES) | split(","))' "${output_file}"
+fi
+
+# global.storageClass binds every control-plane PVC to that class, so the
+# validator checks it instead of requiring a default class.
+STORAGE_CLASS="$(stack_value '.global.storageClass // ""')"
+if [ -n "${STORAGE_CLASS}" ]; then
+  export STORAGE_CLASS
+  yq eval -i '.clusterValidator.storageClass = strenv(STORAGE_CLASS)' "${output_file}"
+fi
+
 if [ -n "${NVCA_OPERATOR_VERSION:-}" ]; then
   export NVCA_OPERATOR_VERSION
   yq eval -i '.image.tag = strenv(NVCA_OPERATOR_VERSION)' "${output_file}"

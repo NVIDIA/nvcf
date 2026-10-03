@@ -34,6 +34,17 @@ global:
   image:
     registry: nvcr.io
     repository: <your-org>
+  storageClass: ceph-rbd
+ingress:
+  gatewayApi:
+    routes:
+      nats:
+        enabled: true
+    gateways:
+      shared: {name: nvcf-gateway, namespace: envoy-gateway}
+      grpc: {name: nvcf-gateway, namespace: envoy-gateway}
+      nats: {name: nats-gateway, namespace: envoy-gateway}
+      llmGrpc: {name: llm-grpc-gateway, namespace: envoy-gateway}
 EOF
 
 cat > "${stub_bin_dir}/helm" <<'EOF'
@@ -78,6 +89,18 @@ fi
 
 if [[ "${actual_nvca_version}" != "3.2.7" ]]; then
   echo "expected selfManaged.nvcaVersion to use the requested NVCA version, got ${actual_nvca_version}" >&2
+  exit 1
+fi
+
+actual_gateway_names="$(yq -r '.clusterValidator.gatewayNames | join(",")' "${output_file}")"
+if [[ "${actual_gateway_names}" != "envoy-gateway/nats-gateway,envoy-gateway/nvcf-gateway" ]]; then
+  echo "expected the wired stack Gateways in clusterValidator.gatewayNames, got ${actual_gateway_names}" >&2
+  exit 1
+fi
+
+actual_storage_class="$(yq -r '.clusterValidator.storageClass' "${output_file}")"
+if [[ "${actual_storage_class}" != "ceph-rbd" ]]; then
+  echo "expected clusterValidator.storageClass from global.storageClass, got ${actual_storage_class}" >&2
   exit 1
 fi
 

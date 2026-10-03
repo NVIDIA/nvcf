@@ -434,6 +434,7 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "envoyGatewayNamespace" ""
     "gatewayNames" (list)
     "externalComponents" (list)
+    "storageClass" ""
     "nodeToNodeProbeImage" ""
     "tolerations" (list)
     "networkChecks" (dict)
@@ -579,6 +580,11 @@ template:
           # Replaces route-based discovery of the NVCF Gateways.
           - name: NVCF_GATEWAY_NAMES
             value: {{ join "," . | quote }}
+          {{- end }}
+          {{- if $cv.storageClass }}
+          # The stack's global.storageClass: the class every PVC names.
+          - name: NVCF_STORAGE_CLASS
+            value: {{ $cv.storageClass | quote }}
           {{- end }}
           {{- if $cv.nodeToNodeProbeImage }}
           - name: NVCF_N2N_PROBE_IMAGE

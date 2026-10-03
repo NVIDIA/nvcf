@@ -1259,7 +1259,7 @@
                         "type": "string",
                         "pattern": "^[^/\\s]+/[^/\\s]+$"
                     },
-                    "description": "Every NVCF Gateway as namespace/name; replaces discovery from the NVCF routes for the LoadBalancer and Tier-1 checks",
+                    "description": "Every NVCF Gateway as namespace/name (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1",
                     "default": []
                 },
                 "externalComponents": {
@@ -1275,6 +1275,11 @@
                     "uniqueItems": true,
                     "description": "Quorum components the stack runs outside this cluster, so the Tier-2 check does not report them missing after install",
                     "default": []
+                },
+                "storageClass": {
+                    "type": "string",
+                    "description": "StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required",
+                    "default": ""
                 },
                 "nodeToNodeProbeImage": {
                     "type": "string",

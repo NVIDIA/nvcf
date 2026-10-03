@@ -500,7 +500,8 @@ networkPolicy:
 ## @param clusterValidator.role Check set to run: "control-plane" for gateway, storage, overlay and HA checks; "compute-plane" or "" for the compute-plane GPU checks. Case-insensitive; other values fail schema validation
 ## @param clusterValidator.openBaoNamespace Namespace holding OpenBao, when it is not vault-system; without it the Tier-2 quorum check skips its StatefulSet
 ## @param clusterValidator.envoyGatewayNamespace Namespace holding Envoy Gateway, when it is not envoy-gateway-system
-## @param clusterValidator.gatewayNames Every NVCF Gateway as "namespace/name"; replaces discovery from the NVCF routes for the LoadBalancer and Tier-1 checks
+## @param clusterValidator.gatewayNames Every NVCF Gateway as "namespace/name" (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1
+## @param clusterValidator.storageClass StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required
 ## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. Defaults to busybox:1.36 from Docker Hub
 ## @param clusterValidator.tolerations Extra tolerations for the validator CronJob pods, added to the control-plane ones
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
@@ -521,22 +522,29 @@ clusterValidator:
   # namespaces, so the control-plane checks look in the right place.
   openBaoNamespace: ""
   envoyGatewayNamespace: ""
-  # The LoadBalancer and Tier-1 checks find the NVCF Gateways from the
-  # parentRefs of the NVCF routes, so another team's proxy is not blamed on
-  # NVCF. Setting this replaces that discovery for both checks, so list every
-  # NVCF Gateway (the stack's ingress.gatewayApi.gateways), each as
-  # namespace/name. A Gateway left out is not assessed (one the NVCF routes
-  # attach to is reported), and a bare name is ignored because it could match
-  # another team's Gateway. After install, each listed Gateway must exist. The
+  # Set this for role control-plane: list every NVCF Gateway (the stack's
+  # ingress.gatewayApi.gateways), each as namespace/name.
+  # make render-values-from-stack fills it in from the stack environment.
+  # Unset, the Envoy, LoadBalancer and Tier-1 checks find the NVCF Gateways
+  # from the parentRefs of routes labelled by the NVCF routes chart. Anyone
+  # who can create a route can set that label, so a Gateway found that way
+  # can leave Tier-1 unknown but never fail it. A Gateway left out is not
+  # assessed (one the NVCF routes attach to is reported), and a bare name is
+  # ignored because it could match another team's Gateway. After install,
+  # each listed Gateway must exist with a GatewayClass that exists. The
   # LoadBalancer check needs an address on each one exposed through a
   # LoadBalancer, and reports no value when all are exposed by NodePort or
-  # ClusterIP. Tier-1 needs each one Envoy Gateway runs to have a proxy with a
-  # Ready pod.
+  # ClusterIP. Tier-1 needs each one Envoy Gateway runs to have a fully Ready
+  # proxy.
   gatewayNames: []
   # Quorum components the stack runs outside this cluster: any of nats,
   # openbao and cassandra. After install the Tier-2 check reports a known
   # quorum component it cannot find, unless it is listed here.
   externalComponents: []
+  # The stack's global.storageClass, when it sets one. The stack passes it to
+  # every PVC, so the StorageClass check requires that class to exist instead
+  # of a default class.
+  storageClass: ""
   # Set for air-gapped or registry-mirrored clusters. Without it every probe
   # pod pulls busybox from Docker Hub and the overlay row reports UNKNOWN.
   # The probe runs in a fresh namespace with no imagePullSecrets, so the image
