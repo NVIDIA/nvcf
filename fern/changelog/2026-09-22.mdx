@@ -29,12 +29,16 @@ every GPU cluster must be re-registered against the upgraded control plane
 without deleting its registration. Read the upgrade guide before starting.
 </Warning>
 
+<a id="self-managed-stack-101"></a>
+
 ### Self-Managed Stack 1.0.1
 
 - Release: `nvcf-self-managed-stack` 1.0.1
 - Git tag: `deploy/stacks/self-managed/v1.0.1`
 
 1.0.1 is a patch release on top of 1.0.0. It includes the fixes listed in [Fixes in 1.0.1](#fixes-in-101).
+
+<a id="what-is-new"></a>
 
 #### What is new
 
@@ -81,6 +85,8 @@ Documentation Update: This release adds two new guides:
   installation, such as the maximum number of functions or tasks. See
   [Quota Management](../../docs/self-managed/runbooks/update-nvcf-account-quota-limits.md).
 
+<a id="changes-that-can-affect-an-existing-install"></a>
+
 #### Changes that can affect an existing install
 
 - Observability is no longer bundled in the control-plane stack. It is a
@@ -111,6 +117,8 @@ Documentation Update: This release adds two new guides:
   sites must mirror them and set the per-chart `chartRepository` overrides.
 - `alpine-k8s` is no longer a customer-mirrored artifact in the manifest.
 
+<a id="fixes-in-101"></a>
+
 #### Fixes in 1.0.1
 
 - Worker discovery targets the backend router endpoint when backend routing is
@@ -124,6 +132,8 @@ default installs, Stargate readiness gated on Pylon registration, aligned
 Cassandra application credentials, and the Function Autoscaler honoring its
 configured runtime settings.
 
+<a id="compute-plane-stack-100"></a>
+
 ### Compute Plane Stack 1.0.0
 
 - Release: `nvcf-compute-plane-stack` 1.0.0
@@ -132,6 +142,8 @@ configured runtime settings.
 This release ships NVCA and the NVCA operator 3.10.0, up from 3.0.3 in 0.6.1.
 It also includes the `nvca-operator` chart 1.28.0 and a new required chart,
 `nvcf-cluster-topology`.
+
+<a id="what-is-new-1"></a>
 
 #### What is new
 
@@ -184,6 +196,8 @@ Documentation Update: This release adds the following guides:
 - Consolidated cache documentation covers the model, container, GX, and
   simulation caches. See [Caches Overview](../../docs/compute-plane/runbooks/caches.md).
 
+<a id="changes-that-can-affect-an-existing-cluster"></a>
+
 #### Changes that can affect an existing cluster
 
 - Every GPU cluster must be re-registered against the upgraded control plane
@@ -205,6 +219,8 @@ Documentation Update: This release adds the following guides:
 - Clusters on NVCA 2.51.0 or earlier must follow the 0.6.0 version-specific
   guidance before moving to 1.0.0.
 
+<a id="notable-fixes"></a>
+
 #### Notable fixes
 
 Operator upgrades from 3.0.x no longer hit a nil pointer or lose self-managed
@@ -214,6 +230,8 @@ certificate is no longer regenerated on every rollout; workload configuration
 persists across Helm updates; and queue credentials refresh after
 registration.
 
+<a id="observability-stack-100"></a>
+
 ### Observability Stack 1.0.0
 
 - Release: `nvcf-observability-stack` 1.0.0
@@ -222,6 +240,8 @@ registration.
 Observability is now a separate stack that is installed and versioned on its
 own. In 0.6.1, it shipped inside the control plane stack as the
 `nvcf-observability-reference-stack` chart.
+
+<a id="what-is-new-2"></a>
 
 #### What is new
 
@@ -252,6 +272,8 @@ containers, and datastores. Each page lists metric names, types, descriptions,
 and labels for use in queries and dashboards. See
 [Metrics Overview](../../docs/observability/metrics/metrics-index.md).
 
+<a id="changes-that-can-affect-an-existing-install-1"></a>
+
 #### Changes that can affect an existing install
 
 - Install the observability stack once per cluster and pick a profile. Do not
@@ -265,6 +287,8 @@ and labels for use in queries and dashboards. See
 - The stack is Early Access. Customers own long-term storage, log collection,
   dashboards, and alerting. Kubernetes support covers the latest minor version
   and the two before it.
+
+<a id="notable-fixes-1"></a>
 
 #### Notable fixes
 

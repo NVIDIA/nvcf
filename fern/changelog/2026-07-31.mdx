@@ -10,12 +10,16 @@ security issues in the runtime and migration images. It also replaces the
 archived Bitnami Cassandra runtime with the official Apache Cassandra 5.0.8
 image and an in-house Cassandra Helm chart.
 
+<a id="highlights"></a>
+
 ### Highlights
 
 | Change | Status | Summary |
 | --- | --- | --- |
 | OpenBao security update | GA | OpenBao uses the remediated runtime and migration images. Existing installations require a controlled server pod rotation after the Helm upgrade. |
 | Cassandra off Bitnami | GA | Cassandra runs on the official Apache Cassandra 5.0.8 image, deployed by an in-house Helm chart, replacing the Bitnami image and subchart. |
+
+<a id="cassandra-runtime-and-chart"></a>
 
 ### Cassandra runtime and chart
 
@@ -30,6 +34,8 @@ schema migrations.
 The chart runs the nodes with `storage_compatibility_mode: NONE` to match the
 existing fleet's on-disk and streaming format.
 
+<a id="upgrade-notes"></a>
+
 ### Upgrade Notes
 
 Fresh installs need no special handling; Cassandra comes up on the official
@@ -42,6 +48,8 @@ new stack. Follow the
 [0.6.0 to 0.6.1 Upgrade](../../docs/overview/release-notes/0.6.0-to-0.6.1-upgrade.md) procedure, which describes
 the supported migration methods (datacenter expansion, in-place volume
 adoption, backup and restore) and their trade-offs.
+
+<a id="openbao-security-update"></a>
 
 ### OpenBao security update
 
@@ -71,6 +79,8 @@ downloaded the 0.6.1 stack, and that you run `make` from the extracted
 export HELMFILE_ENV=<your-environment>
 ```
 
+<a id="prepare-the-061-configuration"></a>
+
 #### Prepare the 0.6.1 configuration
 
 Return to the extracted 0.6.1 stack before running any 0.6.1 sync command.
@@ -95,6 +105,8 @@ for file in \
   [ -f "$file" ] || { echo "missing required file: $file"; exit 1; }
 done
 ```
+
+<a id="check-openbao-before-the-patch"></a>
 
 #### Check OpenBao before the patch
 
@@ -130,6 +142,8 @@ In the command output, the active pod reports `HA Mode active`. Standby pods
 report `HA Mode standby` and include the active node address.
 
 Do not continue if any pod is sealed, uninitialized, or not ready.
+
+<a id="step-1-sync-openbao-from-the-061-stack"></a>
 
 #### Step 1: sync OpenBao from the 0.6.1 stack
 
@@ -176,6 +190,8 @@ At this point the OpenBao Helm release and StatefulSet template are updated, but
 existing OpenBao server pods can still be running the previous OpenBao image.
 This is expected because the StatefulSet uses `OnDelete`.
 </Info>
+
+<a id="step-2-rotate-openbao-server-pods"></a>
 
 #### Step 2: rotate OpenBao server pods
 
@@ -256,6 +272,8 @@ If a recreated pod does not become ready before the timeout, or if it reports
 `Sealed true` or `Initialized false`, stop the procedure and resolve that pod
 before rotating any other OpenBao server pod.
 
+<a id="verify-openbao-after-rotation"></a>
+
 #### Verify OpenBao after rotation
 
 Confirm that all OpenBao server pods are ready and use the updated OpenBao image
@@ -297,6 +315,8 @@ done
 
 Do not continue if any pod is sealed, uninitialized, not ready, or still running
 the previous OpenBao image.
+
+<a id="sync-the-remaining-061-stack"></a>
 
 #### Sync the remaining 0.6.1 stack
 
