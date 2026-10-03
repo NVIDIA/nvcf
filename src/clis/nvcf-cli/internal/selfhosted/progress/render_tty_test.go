@@ -586,7 +586,7 @@ func TestCheckOneShotRenderer_CancelledIsNotOK(t *testing.T) {
 
 	out := buf.String()
 	assert.Contains(t, out, "Status: cancelled")
-	assert.NotContains(t, out, "Status: ✓ ok")
+	assert.NotContains(t, out, "Status: \u2713 ok")
 }
 
 // The dashboard's glyph and tally grade a row as the final event does. A miss

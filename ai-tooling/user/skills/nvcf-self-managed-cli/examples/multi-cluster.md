@@ -37,9 +37,10 @@ The operator has kubectl access to ONE compute plane only — the control plane 
 # service is reachable via api.nvcf.example.com — no kubectl access needed):
 nvcf-cli init --api-url=https://api.nvcf.example.com
 
-# Run pre-flight scoped to the compute plane only:
-nvcf-cli self-hosted check --pre \
-  --compute-plane-context=admin@gpu1 \
+# Run pre-flight scoped to the compute plane only. check takes both context
+# flags or neither, so select the compute cluster as the current context:
+kubectl config use-context admin@gpu1
+nvcf-cli self-hosted check --compute-plane \
   --icms-url=https://icms.nvcf.example.com \
   --json
 

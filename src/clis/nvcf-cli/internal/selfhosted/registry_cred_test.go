@@ -422,10 +422,9 @@ func TestEnumerateRegistries_FallbackDoesNotDuplicateNamedNGC(t *testing.T) {
 	assert.Equal(t, 1, n, "nvcr.io must appear exactly once")
 }
 
-// parseRegistryHostPort returns its input verbatim when SplitHostPort fails,
-// and it fails on an already-bracketed literal with missingPort. Without a
-// prefix guard that arrives here still bracketed and becomes "[[fd00::1]]",
-// which http.NewRequest rejects. The documented bracketed form must work.
+// An IPv6 literal, bracketed or not, is listed once with one pair of
+// brackets. A value that arrived still bracketed and was bracketed again
+// became "[[fd00::1]]", which http.NewRequest rejects.
 func TestEnumerateRegistries_DoesNotDoubleBracketIPv6(t *testing.T) {
 	for _, in := range []string{"[fd00::1]", "fd00::1"} {
 		got := EnumerateRegistries("", StackValues{}, parseExtras(t, in))

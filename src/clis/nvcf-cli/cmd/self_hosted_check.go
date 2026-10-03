@@ -94,12 +94,18 @@ var selfHostedCheckCmd = &cobra.Command{
 
 func init() {
 	selfHostedCmd.AddCommand(selfHostedCheckCmd)
-	selfHostedCheckCmd.Flags().BoolVar(&checkPre, "pre", false, "Run pre-flight (local-host + cluster readiness)")
-	selfHostedCheckCmd.Flags().BoolVar(&checkControlPlane, "control-plane", false, "Run control-plane health checks")
+	selfHostedCheckCmd.Flags().BoolVar(&checkPre, "pre", false,
+		"Run pre-flight before an install: local tools (a missing one fails), registry credentials, and "+
+			"both roles' cluster checks for a cluster not yet installed, without SIS reachability. With --all "+
+			"or a role flag, that role is checked as installed")
+	selfHostedCheckCmd.Flags().BoolVar(&checkControlPlane, "control-plane", false,
+		"Check the installed control plane")
 	selfHostedCheckCmd.Flags().BoolVar(&checkComputePlane, "compute-plane", false,
-		"Run compute-plane health checks. Requires --cluster-name.")
-	selfHostedCheckCmd.Flags().BoolVar(&checkAll, "all", false, "Run all check categories")
-	selfHostedCheckCmd.Flags().StringVar(&checkClusterName, "cluster-name", "", "Cluster name for compute-plane checks")
+		"Check the installed compute plane, including SIS reachability at a configured ICMS URL")
+	selfHostedCheckCmd.Flags().BoolVar(&checkAll, "all", false,
+		"Check the installed control plane and compute plane")
+	selfHostedCheckCmd.Flags().StringVar(&checkClusterName, "cluster-name", "",
+		"Cluster name shown in the check output header; no check uses it")
 	selfHostedCheckCmd.Flags().BoolVar(&checkLocalOnly, "local-only", false,
 		"Run local-host checks only (no cluster or registry contact); the skipped checks are reported as skipped rows")
 	selfHostedCheckCmd.Flags().BoolVar(&checkSkipInotifyCheck, "skip-inotify-check", false,
@@ -127,8 +133,9 @@ func init() {
 	selfHostedCheckCmd.Flags().BoolVar(&checkClusterValidatorNoCleanup, "no-cleanup", false,
 		"Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging instead of "+
 			"removing them after the run. A kept Job whose pod cannot pull its image is suspended, which "+
-			"deletes the pod. They are reclaimed by a later check after 24 hours; the result prints the "+
-			"kubectl command that removes them now.")
+			"deletes the pod. The result prints the kubectl command that removes them now; otherwise a later "+
+			"check that runs the validator removes them once they are 24 hours old. Cannot be combined "+
+			"with --wait.")
 	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorRegistries, "cluster-validator-registries", nil,
 		"Additional container registries to check: their credentials from this machine, and their "+
 			"reachability from a pod of the control-plane validator. Format: host[:port][/path] "+
@@ -164,8 +171,8 @@ func init() {
 	_ = viper.BindPFlag("cluster_validator_external_components",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-external-components"))
 	selfHostedCheckCmd.Flags().BoolVar(&checkShowLogs, "show-logs", false,
-		"Print the cleaned cluster-validator transcript to stderr after the check events. "+
-			"Useful when piping --json output to a script that also wants the transcript.")
+		"Print each cluster-validator transcript to stderr after the check output, framed with the check "+
+			"category it ran for. The transcript is not JSON, so leave this off when a parser reads --json.")
 }
 
 func runSelfHostedCheck(c *cobra.Command, _ []string) error {
@@ -199,28 +206,24 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
 	skipClusterValidation := clusterValidationSkipped()
 
-	// Mode is needed before image resolution so computePlaneIsTargeted can
-	// gate the registry round trip. ValidateFlags in PersistentPreRunE
-	// guarantees mode is ModeSingle or ModeSplit here.
+	// ValidateFlags in PersistentPreRunE guarantees mode is ModeSingle or
+	// ModeSplit here.
 	mode := kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext)
 
 	// Resolve the validator image up-front so we can right-size the
 	// outer timeout (only when the validator actually runs). Empty == not
 	// configured anywhere. One image covers both roles (VALIDATOR_ROLE
-	// selects the check set).
-	// *IsVisited, matching the dispatch below. --pre in ModeSplit visits both
-	// clusters but targets neither role, so gating image resolution on
-	// *IsTargeted left the validator unresolved and both probes nil, with no
-	// note explaining why.
-	anyValidatorIsTargeted := !localOnly && !skipClusterValidation &&
+	// selects the check set). Gated on the clusters the dispatch below
+	// visits, so every visited role that runs a validator has its image.
+	anyValidatorRuns := !localOnly && !skipClusterValidation &&
 		(computePlaneIsVisited() || controlPlaneIsVisited())
 	clusterValidatorImage, unresolvedImage := "", ""
-	if anyValidatorIsTargeted {
+	if anyValidatorRuns {
 		clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(runCtx)
 	}
 	// An image whose tag did not resolve is still sized for: --wait resolves
 	// it again on every poll, and the validator runs once it does.
-	clusterValidatorConfigured := anyValidatorIsTargeted && (clusterValidatorImage != "" || unresolvedImage != "")
+	clusterValidatorConfigured := anyValidatorRuns && (clusterValidatorImage != "" || unresolvedImage != "")
 
 	// Every validator run that may leave objects in a cluster registers its
 	// removal command here, across --wait polls, so every exit can print it.
@@ -712,28 +715,9 @@ func parseToleration(entry string) (corev1.Toleration, error) {
 	return t, nil
 }
 
-// computePlaneIsTargeted reports whether the compute-plane validator should run:
-// --compute-plane, --all, or --pre in ModeSingle. --pre in ModeSplit does not
-// target it because separate clusters have no implicit compute-plane role.
-func computePlaneIsTargeted(mode kubectx.Mode) bool {
-	return checkComputePlane || checkAll || (checkPre && mode == kubectx.ModeSingle)
-}
-
-// controlPlaneIsTargeted mirrors computePlaneIsTargeted but for the control
-// plane. Runs when: --control-plane, --all, or --pre in ModeSingle.
-func controlPlaneIsTargeted(mode kubectx.Mode) bool {
-	return checkControlPlane || checkAll || (checkPre && mode == kubectx.ModeSingle)
-}
-
-// The *IsVisited pair reports whether a cluster should be contacted at all,
-// which is broader than whether its role-specific check set runs. --pre in
-// ModeSplit visits both clusters for the shared pre-install checks (stale
-// namespaces) without targeting either role, so the targeting predicates alone
-// cannot gate the dispatch.
-//
-// No mode parameter, unlike *IsTargeted: "(X || (pre && single)) || pre"
-// absorbs to "X || pre", so the mode cannot change the answer. Taking one
-// would imply a mode-dependence that does not exist.
+// The *IsVisited pair reports whether a role's checks run: its own flag,
+// --all, or --pre, which checks both roles before an install in either mode.
+// They gate the dispatch, the validators, the inotify probe and the budget.
 func computePlaneIsVisited() bool {
 	return checkComputePlane || checkAll || checkPre
 }
@@ -754,13 +738,13 @@ func withoutHostLocalChecks(cfg selfhosted.PreflightConfig) selfhosted.Preflight
 	return cfg
 }
 
-// maybeShowClusterValidatorLogs prints the cleaned cluster-validator transcript
-// to the given writer when --show-logs is set, framed by markers so operators
-// can find it in mixed CLI output. Silent no-op when:
-//   - --show-logs is not set,
-//   - the cluster-validator check did not run (--skip-cluster-validation, or
-//     no compute-plane category was selected),
-//   - the runner returned no Logs (Job never produced output).
+// maybeShowClusterValidatorLogs prints each cleaned cluster-validator
+// transcript to w when --show-logs is set, framed by markers that name the
+// check category it ran for, so operators can find it in mixed CLI output and
+// tell the two roles apart: both report under the same check ID, and a
+// validator image that predates roles prints no role line of its own. Nothing
+// is printed for a validator that did not run (skipped, no image, a role not
+// visited) or produced no output.
 //
 // Runs once the sink has closed, on every exit path, interrupt included, so
 // the transcript appears after the structured events or table, whichever
@@ -773,12 +757,9 @@ func maybeShowClusterValidatorLogs(w io.Writer, results []selfhosted.CheckResult
 		if r.ID != "cluster-validator" || r.Logs == "" {
 			continue
 		}
-		fmt.Fprintln(w, "--- cluster-validator logs ---")
+		fmt.Fprintf(w, "--- cluster-validator logs (%s) ---\n", r.Category)
 		fmt.Fprint(w, r.Logs)
-		fmt.Fprintln(w, "--- end cluster-validator logs ---")
-		// No early return: both roles produce a cluster-validator result under
-		// the same ID, so stopping at the first drops the other transcript
-		// entirely from --all --show-logs.
+		fmt.Fprintf(w, "--- end cluster-validator logs (%s) ---\n", r.Category)
 	}
 }
 
@@ -818,12 +799,14 @@ func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventS
 	return sink, err
 }
 
-// runPreflightByRole dispatches RunPreflightForRole using the role(s) derived
-// from the context-flag combination per SRD/SDD §5.4:
+// runPreflightByRole dispatches RunPreflightForRole for the roles the scope
+// flags visit (see the *IsVisited pair):
 //
-//   - --local-only or cfg.LocalOnly          → RoleLocalOnly only
-//   - ModeSingle (no context flags)           → RoleControlPlane + RoleComputePlane sequentially
-//   - ModeSplit  (both context flags set)     → RoleControlPlane + RoleComputePlane in parallel
+//   - --local-only (cfg.LocalOnly): RoleLocalOnly only, with a skipped row for
+//     each cluster check left out;
+//   - ModeSingle (no context flags): the visited roles in turn, on one cluster;
+//   - ModeSplit (both context flags): the visited roles in parallel, each on
+//     its own context.
 //
 // mode is the already-resolved kubectx.Mode (hoisted to the caller so image
 // resolution and timeout sizing share the same answer). clusterValidatorImage
@@ -1010,7 +993,6 @@ func runPreflightByRole(
 
 		if runControlPlane {
 			cpRC := selfhosted.RoleConfig{
-				SISURL:                          icmsURL,
 				ClusterValidator:                cpClusterValidator,
 				ClusterValidatorImage:           clusterValidatorImage,
 				ClusterValidatorPullSecret:      checkClusterValidatorPullSecret,
@@ -1243,14 +1225,6 @@ func anyCutShort(results []selfhosted.CheckResult) bool {
 	return false
 }
 
-func isBlockingFailure(r selfhosted.CheckResult) bool {
-	return r.IsBlockingFailure()
-}
-
-// anyFailed returns true if any check failed at error severity. Warnings do
-// not trigger non-zero exit per spec §6.3.
-// isBlockingFailure is the single definition of "this fails the run". Both the
-// exit code and the JSON verdict derive from it, so they cannot disagree.
 // checkPreflightTools is a test seam over the local tool checks, so command
 // tests do not depend on what is installed on the machine running them.
 var checkPreflightTools = selfHostedPreflightTools
@@ -1382,9 +1356,12 @@ func anyWarningToWaitOn(results []selfhosted.CheckResult) bool {
 	return false
 }
 
+// anyFailed reports a result that fails the run. Warnings do not. The exit
+// code and the final event's verdict both grade with IsBlockingFailure, so
+// they cannot disagree.
 func anyFailed(results []selfhosted.CheckResult) bool {
 	for _, r := range results {
-		if isBlockingFailure(r) {
+		if r.IsBlockingFailure() {
 			return true
 		}
 	}

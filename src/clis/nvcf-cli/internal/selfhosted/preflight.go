@@ -371,9 +371,10 @@ type RoleConfig struct {
 	ClusterValidatorPullSecret string
 	ClusterValidatorNoCleanup  bool
 
-	// StaleNamespaceProber detects NVCF stack namespaces that are stuck
-	// Terminating or exist as empty shells after a partial teardown. Nil skips
-	// the check; production wires NewStaleNamespaceProber; tests pass fakes.
+	// StaleNamespaceProber detects NVCF stack namespaces that are being
+	// deleted, hold a Helm release left mid-operation, or hold what a removed
+	// install leaves behind. Nil skips the check; production wires
+	// NewStaleNamespaceProber; tests pass fakes.
 	StaleNamespaceProber StaleNamespaceProber
 
 	// StackDir is the resolved stack checkout. When set, the namespaces to
@@ -558,7 +559,6 @@ func advisoryTool(run func(context.Context) CheckResult) func(context.Context) C
 // controlPlaneCheckCategory returns the cluster-side checks for the control
 // plane. The stale-namespace check runs first so a leftover namespace from a
 // prior partial teardown is surfaced before any other cluster work.
-// Gateway API CRD and StorageClass probes are placeholders pending M3.
 func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 	cat := categorySpec{
 		name:   CategoryControlPlane,
@@ -575,7 +575,7 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 	}
 	// Containerized cluster-validator probe for control-plane checks
 	// (Gateway API CRDs, Envoy Gateway, StorageClass, external LB,
-	// node-to-node overlay, and reachability to nvcr.io + extra registries).
+	// node-to-node overlay, and reachability to rc's registries).
 	if rc.ClusterValidator != nil {
 		cat.checks = append(cat.checks, clusterValidatorCheck(rc, validatorRoleControlPlane))
 	} else if rc.ClusterValidatorUnresolvedImage != "" {
@@ -723,7 +723,7 @@ func unresolvedValidatorCheck(image string) binaryCheckSpec {
 	const id = "cluster-validator"
 	return binaryCheckSpec{
 		ID:         id,
-		HumanLabel: "resolving the cluster-validator image…",
+		HumanLabel: "resolving the cluster-validator image...",
 		static:     true,
 		Run: func(context.Context) CheckResult {
 			return CheckResult{
@@ -1540,11 +1540,11 @@ type noopSink struct{}
 func (*noopSink) Emit(context.Context, progress.Event) error { return nil }
 func (*noopSink) Close() error                               { return nil }
 
-// RunPreflight executes local-host (and optionally cluster-side) pre-flight
-// checks and returns the result slice. It is a thin wrapper around
-// RunPreflightStreaming with a no-op sink, kept for orchestrator callers
-// (runUpPreflight in cmd/self_hosted_up.go) that do not need streaming.
-// Cluster-side checks land in M3 (need a kubectl client wired up).
+// RunPreflight executes the role-independent pre-flight checks (local tools
+// and registry credentials) and returns the result slice. It is a thin
+// wrapper around RunPreflightStreaming with a no-op sink, kept for
+// orchestrator callers (runUpPreflight in cmd/self_hosted_up.go) that do not
+// need streaming.
 func RunPreflight(ctx context.Context, cfg PreflightConfig) []CheckResult {
 	return RunPreflightStreaming(ctx, cfg, &noopSink{})
 }

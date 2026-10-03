@@ -6,10 +6,10 @@ Stable across subcommands. Use these to drive agent retry / surfacing logic.
 |---|---|---|
 | `0` | Success | All checks passed; install completed; deployment ACTIVE |
 | `1` | Generic error | Helm render failed; network unreachable; file not found; YAML parse error |
-| `2` | Pre-flight check failed | A `check` result at error severity: Gateway API CRDs missing; kubectl not on PATH with `--pre`; default StorageClass absent; a cluster the CLI cannot reach (missing kubeconfig or context, refused connection, rejected credentials); a cluster-validator that could not run (RBAC denied, image pull failure, its own timeout, no tag found for an untagged image); a `stale-namespaces` row naming a namespace `stuck Terminating`. Such a result is exit `2` even when the time budget cut another check short. Warning-severity results exit `0`, including a namespace still deleting, a Helm release left mid-operation, and a namespace with no Helm release |
+| `2` | Pre-flight check failed | A `check` result at error severity: Gateway API CRDs missing; kubectl not on PATH with `--pre`; default StorageClass absent; a cluster the CLI cannot reach (missing kubeconfig or context, refused connection, rejected credentials); a cluster-validator that could not run (RBAC denied, image pull failure, its own timeout, no tag found for an untagged image); a `stale-namespaces` row naming a namespace `stuck Terminating`. Such a result is exit `2` even when the time budget cut another check short. Warning-severity results exit `0`, including a namespace still deleting, a Helm release left mid-operation, a namespace with no Helm release, and a `cluster-validator` row saying no `cluster_validator_image` is set |
 | `3` | Admin auth failed | No token + `--non-interactive` set; ICMS rejected JWT; init endpoint unreachable |
 | `5` | Manifest apply or `--wait` timed out | Helm install timeout; check polled but did not pass before DURATION, including a rollout still in progress; the check's time budget stopped a check before it finished (its row says not run or cut short) and no other check failed. A check that already had its result keeps it, so a validator's own failure is exit `2` |
-| `130` | Cancelled by SIGINT, SIGTERM or SIGHUP | User Ctrl-C; CI budget exceeded; pod evicted; terminal or SSH session closed |
+| `130` | Cancelled by SIGINT, SIGTERM or SIGHUP, or by a quit key in the `check --wait` dashboard | User Ctrl-C; `q`, `Esc` or `Ctrl-C` in the dashboard; CI budget exceeded; pod evicted; terminal or SSH session closed |
 
 ## How an agent should react
 

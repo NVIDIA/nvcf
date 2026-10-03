@@ -11,24 +11,35 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 
 ## Steps
 
-1. **Ask for inputs:**
+1. Ask for inputs:
    - `--cluster-name=<unique>` — must be unique within the control plane's NCA scope
    - `--compute-plane-context=<context>` — the new GPU cluster's kubectl context
    - `--icms-url=<https://icms.nvcf.example.com>` — control plane's public ICMS URL
    - GPU type? (default `H100`, but ask)
 
-2. **Pre-flight just the compute plane:**
+2. Pre-flight just the compute plane. `check` takes both context flags or
+   neither, so point the current context at the new GPU cluster and select
+   only the compute plane:
 
    ```sh
-   nvcf-cli self-hosted check --pre \
-     --compute-plane-context=$CTX \
+   kubectl config use-context "$CTX"
+   nvcf-cli self-hosted check --compute-plane \
      --icms-url=$ICMS \
-     --json | jq -c .
+     --json 2>&1 >/dev/null | grep '^{' > check.jsonl
+   jq -se 'any(.[]; .event == "final" and .success)' check.jsonl
    ```
 
-   This validates the GPU operator is installed, GPU node labels are present, and ICMS is reachable via HTTP. Address any failures before proceeding.
+   This checks this machine's registry credentials and the compute cluster
+   only: leftover NVCF namespaces, node inotify limits, SIS reachability at
+   `--icms-url`, and the compute-plane cluster-validator (GPU resources, GPU
+   Operator, SMB CSI driver) when `cluster_validator_image` is set. `--pre`
+   would also run the control-plane checks against this cluster, so leave it
+   off. A missing `helm`, `helmfile` or `kubectl` is a warning here, although
+   `add-compute-plane` needs them. If the gate fails, show the user the
+   `check_completed` events with `passed: false` and `severity: "error"`, and
+   address them before proceeding.
 
-3. **Run `add-compute-plane`:**
+3. Run `add-compute-plane`:
 
    ```sh
    nvcf-cli self-hosted add-compute-plane \
@@ -42,9 +53,9 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 
    This is a separate subcommand from `up`. It runs only the compute-plane-relevant phases: 1 (compute-plane preflight), 5 (register), 6 (compute-plane apply), 8 (final health on the new compute plane). It does NOT touch the control plane and does NOT accept `--control-plane-context` — the control plane is reached over HTTPS at `--icms-url`. `--token` is required because there's no kubectl path to mint one from.
 
-4. **Verify.** `nvcf-cli self-hosted status --cluster-name=$NAME --json | jq` — expect `verdict: "healthy"`. The Registered Compute Planes panel from ICMS should now list the new cluster.
+4. Verify. `nvcf-cli self-hosted status --cluster-name=$NAME --json | jq`: expect `verdict: "healthy"`. The Registered Compute Planes panel from ICMS should now list the new cluster.
 
-5. **Smoke.** [deploy-and-invoke.md](deploy-and-invoke.md) — deploy a small function to the new compute plane to confirm scheduling works.
+5. Smoke. [deploy-and-invoke.md](deploy-and-invoke.md): deploy a small function to the new compute plane to confirm scheduling works.
 
 ## What if a cluster with the same name already exists?
 

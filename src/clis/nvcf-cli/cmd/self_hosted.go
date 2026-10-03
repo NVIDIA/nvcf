@@ -96,7 +96,8 @@ func init() {
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedComputePlaneStack, "compute-plane-stack", "",
 		"Compute-plane stack source: local path, git URL, or oci:// URL (default: built-in OCI URL pinned to this CLI version)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedEnv, "env", "local",
-		"Helmfile environment (e.g. local, prd)")
+		"Helmfile environment (e.g. local, prd). check reads the stack's environments/<env>.yaml only when "+
+			"this or HELMFILE_ENV names it, so pass the install's --env")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedNoApply, "no-apply", false,
 		"Emit YAML to stdout without invoking kubectl (install only)")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedNonInter, "non-interactive", false,
@@ -106,9 +107,9 @@ func init() {
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedOutput, "output", "text",
 		"Output format for check: text or json")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedWait, "wait", "",
-		"Block on check until pass or duration elapses (e.g. 5m). "+
-			"With --pre --compute-plane the cluster-validator's 5m budget dominates the 5s poll; "+
-			"pair with --skip-cluster-validation for a tight retry cadence.")
+		"check only: run the checks again, 5s apart, until they pass or the duration elapses (e.g. 15m), "+
+			"then exit 5. Each run includes the cluster-validator Job, which can take up to 5m; "+
+			"--skip-cluster-validation makes each run fast. Cannot be combined with --no-cleanup.")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedICMSURL, "icms-url", "",
 		"ICMS endpoint for cluster register (default: derived from base_http_url; env: NVCF_ICMS_URL)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedICMSURL, "sis-url", "",

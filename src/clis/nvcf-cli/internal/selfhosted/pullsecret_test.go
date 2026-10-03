@@ -278,7 +278,9 @@ func TestResolveValidatorPullSecret_MintsTheCredentialTheRowChecked(t *testing.T
 // included, never gets it.
 func TestResolveValidatorPullSecret_NGCKeyOnlyForNvcrIO(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "nvapi-test-123")
-	for _, image := range []string{"stg.nvcr.io/a/b:1", "registry.nvidia.com:5005/a/b:1", "ghcr.io/a/b:1", "bareimage"} {
+	for _, image := range []string{
+		"stg.nvcr.io/a/b:1", "registry.example.nvidia.com:5000/a/b:1", "ghcr.io/a/b:1", "bareimage",
+	} {
 		client := fake.NewSimpleClientset()
 		got, _, err := resolvePullSecret(t, client, image)
 		require.NoError(t, err)

@@ -196,26 +196,29 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    EOF
    ```
 
-3. Run pre-flight. Choose the flavor matching the topology:
+3. Run pre-flight. Choose the flavor matching the topology. `--json` writes
+   JSONL to stderr, so redirect it to the parser and keep only JSON lines:
 
    ```sh
    # Single-cluster
-   nvcf-cli self-hosted check --pre --json | jq -c .
+   nvcf-cli self-hosted check --pre --json 2>&1 >/dev/null | grep '^{' > check.jsonl
 
-   # Split
+   # Split: pass both context flags
    nvcf-cli self-hosted check --pre \
      --control-plane-context=admin@cp \
      --compute-plane-context=admin@gpu1 \
-     --json | jq -c .
+     --json 2>&1 >/dev/null | grep '^{' > check.jsonl
 
-   # Compute-only (operator with kubectl on compute plane only)
-   nvcf-cli self-hosted check --pre \
-     --compute-plane-context=admin@gpu1 \
-     --icms-url=https://icms.nvcf.example.com \
-     --json | jq -c .
+   # Gate on the final event. A missing final event also fails the gate.
+   jq -se 'any(.[]; .event == "final" and .success)' check.jsonl
    ```
 
-   Parse the JSONL stream. If any check fails (`"passed":false`) with `severity: error`, surface `message` + `hintURL` to the user and stop. Don't proceed to install with broken prereqs.
+   If the gate fails, show the user each `check_completed` event with
+   `passed: false` and `severity: "error"` (its `message` and `hintURL`), and
+   stop. Don't proceed to install with broken prereqs. Rows at
+   `severity: "warning"` do not fail the gate; mention them. For an operator
+   with kubectl access to the compute plane only, use the compute-only form in
+   [add-compute-plane.md](add-compute-plane.md) instead.
 
 4. Mint an admin token if needed. `nvcf-cli init` is idempotent. Call it if the
    user does not have a session yet. Init talks to API Keys through the public

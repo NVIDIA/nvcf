@@ -20,7 +20,7 @@
 | `--no-apply` | `install` only - emit YAML, do not kubectl apply | `false` |
 | `--output=text\|json` | Legacy alias for `--json` (deprecated, removed in next major) | `text` |
 | `--plain` | Force plain streaming output | auto-detect |
-| `--wait DURATION` | `check` only; poll until the check passes or DURATION runs out (exit `5`, `final` with `success: false`). A warning that is expected to clear, such as a rollout in progress, keeps it polling, and its `check_completed` event carries `transient: true`. Cannot be combined with `--no-cleanup`. A malformed or non-positive DURATION is a usage error (exit `1`, no events) | - |
+| `--wait DURATION` | `check` only; run the checks again, 5s apart, until they pass or DURATION runs out (exit `5`, `final` with `success: false`). Each run includes the cluster-validator Job, which can take up to 5m, so allow for it or pass `--skip-cluster-validation`. A warning that is expected to clear, such as a rollout in progress, keeps it polling, and its `check_completed` event carries `transient: true`. Cannot be combined with `--no-cleanup`. A malformed or non-positive DURATION is a usage error (exit `1`, no events) | - |
 | `--control-plane-context CTX` | kubectl context for control plane (REQ-20) | current context |
 | `--compute-plane-context CTX` | kubectl context for compute plane (REQ-20) | current context |
 | `--icms-url URL` | Public ICMS URL; required when contexts differ. `check` probes SIS only at a URL set here, in `NVCF_ICMS_URL` or `NVCF_SIS_URL`, or in the config as `icms_url` or `base_http_url`; with none, its `sis-reachability` row is a warning | derived from `base_http_url` |
@@ -29,15 +29,17 @@
 ## `check`-specific
 
 At least one of `--pre`, `--control-plane`, `--compute-plane`, or `--all` is
-required. Each selects a role; only the selected roles contact a cluster.
+required. `--pre` selects both roles; each other flag selects its own. Only
+the selected roles contact a cluster. Pass both context flags or neither:
+without them every selected role checks the current kubeconfig context.
 
 | Flag | Purpose | Default |
 |---|---|---|
 | `--pre` | Pre-flight: local-host tools plus cluster readiness. Skips SIS reachability, since SIS is not installed yet, unless `--all` or `--compute-plane` is also passed. With `--all`, or with a role's own flag, that role's validator checks the cluster as installed. A missing or unsupported `kubectl`, `helmfile` or `helm` fails only with `--pre`; other scopes check an installed stack, which runs none of them, so it warns | `false` |
-| `--control-plane` | Control-plane checks | `false` |
-| `--compute-plane` | Compute-plane checks | `false` |
-| `--all` | Every category, including SIS reachability when combined with `--pre` | `false` |
-| `--cluster-name NAME` | Cluster name for compute-plane checks | - |
+| `--control-plane` | Check the installed control plane: leftover namespaces and the control-plane cluster-validator. Never probes SIS | `false` |
+| `--compute-plane` | Check the installed compute plane: leftover namespaces, node inotify limits, SIS reachability at a configured ICMS URL, and the compute-plane cluster-validator | `false` |
+| `--all` | Both `--control-plane` and `--compute-plane`, SIS reachability included, with or without `--pre` | `false` |
+| `--cluster-name NAME` | Cluster name shown in the output header. No check uses it, and `check` does not require it | - |
 | `--skip-inotify-check` | Skip the per-node inotify-limits probe. Needed when the kubeconfig user cannot create pods in `default`, or when the probe image is on a registry that needs credentials, since the probe pods get no pull secret. Its `node-inotify-limits` row passes at info and says it was skipped. Env: `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY` | `false` |
 
 ### Cluster-validator flags
@@ -59,8 +61,8 @@ and deleting test namespaces an earlier validator run left behind.
 | `--cluster-validator-tolerations key[=value][:effect],...` | Tolerations added to the validator Job, beside the control-plane ones it always carries, for clusters whose nodes use other taints. Effect is `NoSchedule`, `PreferNoSchedule` or `NoExecute`. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS`; config key `cluster_validator_tolerations` | - |
 | `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI uses a Secret an operator created in `default` for the image's registry. Failing that, it copies the registry's entry, and only that entry, from a Secret in the NVCF namespaces into `default` for the run. Failing that, it creates one for the run from this machine's credential for the registry, the one the `registry-credentials` row checks. The validator row's detail says what was copied or created, and from where | auto-detect |
 | `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. A validator that is configured but cannot run fails the check, so use this to opt out explicitly, for example when the cluster cannot pull the image. Each role's `cluster-validator` row then passes at info and says it was skipped. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |
-| `--no-cleanup` | Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging. A kept Job whose pod cannot pull its image is suspended, so its pod is deleted rather than retrying forever; inspect it with `kubectl describe job`. A later check reclaims them after 24 hours. The row, the `final` event's `cleanup` list and the last stderr lines print the command that removes them now | `false` |
-| `--show-logs` | Print the validator transcript to stderr after the check events. The transcript is not JSON, and `--json` also writes to stderr, so leave this off when a parser is reading the stream | `false` |
+| `--no-cleanup` | Keep the validator Job, its pod, RBAC, pull secret and ConfigMap for debugging. A kept Job whose pod cannot pull its image is suspended, so its pod is deleted rather than retrying forever; inspect it with `kubectl describe job`. A later check that runs the validator removes them once they are 24 hours old. The row, the `final` event's `cleanup` list and the last stderr lines print the command that removes them now. Cannot be combined with `--wait` | `false` |
+| `--show-logs` | Print each validator transcript to stderr after the check events, framed by `--- cluster-validator logs (<category>) ---` and a matching end line, where the category is `control-plane-cluster` or `compute-plane-cluster`. The transcript is not JSON, and `--json` also writes to stderr, so leave this off when a parser is reading the stream | `false` |
 
 ### Registry credentials
 

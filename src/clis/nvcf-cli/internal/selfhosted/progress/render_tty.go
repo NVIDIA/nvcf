@@ -1884,9 +1884,9 @@ func (m Model) viewCheck(now time.Time) string {
 	case m.checkFinalVerdict == "timeout":
 		statusLine = fmt.Sprintf("Status: \u2718 timed out  (%s)", tally)
 	case !m.checkFinalSuccess || failed > 0:
-		statusLine = fmt.Sprintf("Status: ✘ failed  (%s)", tally)
+		statusLine = fmt.Sprintf("Status: \u2718 failed  (%s)", tally)
 	case warned > 0:
-		statusLine = fmt.Sprintf("Status: ✓ ok with warnings  (%s)", tally)
+		statusLine = fmt.Sprintf("Status: \u2713 ok with warnings  (%s)", tally)
 	default:
 		statusLine = fmt.Sprintf("Status: \u2713 ok  (%s)", tally)
 	}

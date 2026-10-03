@@ -135,7 +135,7 @@ After `init`, the credentials live in `~/.nvcf-cli.state`, so later commands wor
 
 | Subcommand | What it does | When to use |
 |---|---|---|
-| `nvcf-cli self-hosted check --pre [--local-only \| --control-plane-context=X \| --compute-plane-context=Y]` | Pre-flight: local-host tools + cluster-side prerequisites | Always run first on a new environment |
+| `nvcf-cli self-hosted check --pre [--local-only \| --control-plane-context=X --compute-plane-context=Y]` | Pre-flight: local-host tools, registry credentials, and cluster-side prerequisites for both planes. Pass both context flags or neither | Always run first on a new environment |
 | `nvcf-cli self-hosted install --control-plane \| kubectl apply -f -` | Render + apply the control plane | When you want manual control over apply (GitOps-friendly) |
 | `nvcf-cli self-hosted install --compute-plane --cluster-name=X \| kubectl apply -f -` | Register cluster + render compute plane | Same — manual apply path |
 | `nvcf-cli self-hosted up --cluster-name=X` | One-shot first install: pre-flight → control plane → register → compute plane | Standard install path (both planes from scratch) |
@@ -250,16 +250,21 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 
 `nvcf-cli` subcommands that long-run (`up`, `status`, `check`) accept four output modes:
 
-- **`--json`** — JSONL events on stderr; one event per line; stable schema (`schemaVersion: 2`). **Use this when running under an agent.** Parse line-by-line with `jq -c .` or `json.loads()`.
-- **`--plain`** — Plain timestamped lines, RFC3339 UTC, `[NN/8]` phase prefix; grep-friendly. Default in non-TTY.
-- **`--accessible`** — Plain output without spinners, with verbose state markers (`[completed]`, `[running]`, `[pending]`, `[failed]`). For screen readers and constrained terminals.
-- **(no flag)** — Bubbletea TTY dashboard. Default in TTY ≥100×30. Don't use under an agent (cursor-up sequences are noisy).
+- `--json`: JSONL events on stderr, one event per line, stable schema (`schemaVersion: 1`). Use this when running under an agent. Redirect stderr to the parser (`2>&1 >/dev/null`), keep only lines that start with `{`, and parse line-by-line with `jq -c .` or `json.loads()`.
+- `--plain`: plain timestamped lines, RFC3339 UTC, `[NN/8]` phase prefix; grep-friendly. Default in non-TTY.
+- `--accessible`: plain output without spinners, with verbose state markers (`[completed]`, `[running]`, `[pending]`, `[failed]`). For screen readers and constrained terminals.
+- (no flag): Bubbletea TTY dashboard. Default in a TTY of at least 100x30. Don't use under an agent (cursor-up sequences are noisy).
 
 Auto-detect picks the right mode for whatever stdout/stderr is. The CLI also honors `NO_COLOR` (any value → forces plain), `TERM=dumb` (forces plain), and `CI=truthy` (forces plain even on a fake TTY). When the terminal is smaller than 100×30, the bubbletea renderer falls back to a compact layout. Explicit `--json` is the right call for agent piping.
 
 ## On failure
 
-`nvcf-cli` failures emit structured `phase_failed` events in JSON:
+`check` never emits `phase_failed`. It ends with one `final` event: gate on
+`success`, and treat a missing `final` event as a failure. See
+[examples/ci-pipelines.md](examples/ci-pipelines.md) and
+[reference/exit-codes.md](reference/exit-codes.md).
+
+Other `nvcf-cli` failures emit structured `phase_failed` events in JSON:
 
 ```json
 {"event":"phase_failed","phaseNum":4,"phase":"apply-cp",

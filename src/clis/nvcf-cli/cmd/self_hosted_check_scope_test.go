@@ -623,7 +623,8 @@ func TestCheck_ShowLogsOnInterrupt(t *testing.T) {
 	var exitErr *ExitCodeError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 130, exitErr.Code)
-	assert.Contains(t, stderr, "--- cluster-validator logs ---\nValidator role: control-plane\nTier-1: checking\n")
+	assert.Contains(t, stderr,
+		"--- cluster-validator logs (control-plane-cluster) ---\nValidator role: control-plane\nTier-1: checking\n")
 }
 
 // A check's own timeout under a live budget is its result: exit 2, not 5.

@@ -278,7 +278,7 @@ func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "ngc-key")
 	login := base64.StdEncoding.EncodeToString([]byte("robot:own-login"))
 	auths := map[string]any{}
-	for _, host := range []string{"nvcr.io", "stg.nvcr.io", "registry.nvidia.com:5005"} {
+	for _, host := range []string{"nvcr.io", "stg.nvcr.io", "registry.example.nvidia.com:5000"} {
 		auths[host] = map[string]string{"auth": login}
 	}
 	cfg, err := json.Marshal(map[string]any{"auths": auths})
@@ -287,10 +287,10 @@ func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".docker", "config.json"), cfg, 0o600))
 
 	for host, wantPass := range map[string]string{
-		"nvcr.io":                  "ngc-key",
-		"NVCR.IO:443":              "ngc-key",
-		"stg.nvcr.io":              "own-login",
-		"registry.nvidia.com:5005": "own-login",
+		"nvcr.io":                          "ngc-key",
+		"NVCR.IO:443":                      "ngc-key",
+		"stg.nvcr.io":                      "own-login",
+		"registry.example.nvidia.com:5000": "own-login",
 	} {
 		cred, ok, _ := NewRegistryCredentials(true).lookup(context.Background(), host)
 		require.True(t, ok, host)
@@ -594,7 +594,7 @@ func TestExchangeBearerToken_NoNVIDIAWideRealmGrant(t *testing.T) {
 		{"nvcr.io", "https://authn.nvidia.com/token"},
 		{"stg.nvcr.io", "https://nvcr.io/proxy_auth"},
 		{"nvcr.io", "https://x.ngc.nvidia/token"},
-		{"registry.nvidia.com:5005", "https://nvcr.io/proxy_auth"},
+		{"registry.example.nvidia.com:5000", "https://nvcr.io/proxy_auth"},
 	} {
 		_, err := exchangeBearerToken(context.Background(), client, tc.registry, "repo",
 			`Bearer realm="`+tc.realm+`"`, &registryCredential{user: "$oauthtoken", pass: "k"})

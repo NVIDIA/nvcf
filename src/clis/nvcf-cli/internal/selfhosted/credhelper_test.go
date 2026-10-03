@@ -40,9 +40,6 @@ func TestSelectAuthChallenge(t *testing.T) {
 	assert.Equal(t, "", selectAuthChallenge(nil))
 }
 
-// dockerHome writes ~/.docker/config.json under a temporary HOME and puts a
-// fake docker-credential-<name> for each helper on PATH, each answering with
-// its own secret.
 // inlineDockerConfig builds a config.json with one inline credential at run
 // time. A literal auths blob trips secret scanners even with fake values.
 func inlineDockerConfig(t *testing.T, registry, user, pass, credsStore string) string {
@@ -58,6 +55,9 @@ func inlineDockerConfig(t *testing.T, registry, user, pass, credsStore string) s
 	return string(b)
 }
 
+// dockerHome writes ~/.docker/config.json under a temporary HOME and puts a
+// fake docker-credential-<name> for each helper on PATH, each answering with
+// its own secret.
 func dockerHome(t *testing.T, config string, helpers ...string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

@@ -358,80 +358,6 @@ func TestCheck_SplitClusterMode(t *testing.T) {
 	assert.Contains(t, categories, "compute-plane-cluster", "expected compute-plane-cluster in split mode")
 }
 
-// TestComputePlaneIsTargeted tests the predicate that gates the cluster-validator
-// probe. The validator should run when the compute plane is explicitly targeted
-// (--compute-plane, --all) or implicitly targeted by ModeSingle + --pre.
-// It must NOT run for --pre alone in ModeSplit, where the two context flags
-// identify separate clusters and --pre does not constitute targeting the compute plane.
-func TestComputePlaneIsTargeted(t *testing.T) {
-	t.Cleanup(func() {
-		checkPre = false
-		checkComputePlane = false
-		checkAll = false
-	})
-
-	tests := []struct {
-		name string
-		pre  bool
-		cp   bool
-		all  bool
-		mode kubectx.Mode
-		want bool
-	}{
-		{"--compute-plane single", false, true, false, kubectx.ModeSingle, true},
-		{"--compute-plane split", false, true, false, kubectx.ModeSplit, true},
-		{"--all single", false, false, true, kubectx.ModeSingle, true},
-		{"--all split", false, false, true, kubectx.ModeSplit, true},
-		{"--pre single - implicit compute plane", true, false, false, kubectx.ModeSingle, true},
-		{"--pre split - must not target compute plane", true, false, false, kubectx.ModeSplit, false},
-		{"--control-plane only", false, false, false, kubectx.ModeSingle, false},
-		{"no relevant flag", false, false, false, kubectx.ModeSingle, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			checkPre = tt.pre
-			checkComputePlane = tt.cp
-			checkAll = tt.all
-			assert.Equal(t, tt.want, computePlaneIsTargeted(tt.mode))
-		})
-	}
-}
-
-func TestControlPlaneIsTargeted(t *testing.T) {
-	t.Cleanup(func() {
-		checkPre = false
-		checkControlPlane = false
-		checkAll = false
-	})
-
-	tests := []struct {
-		name string
-		pre  bool
-		cp   bool
-		all  bool
-		mode kubectx.Mode
-		want bool
-	}{
-		{"--control-plane single", false, true, false, kubectx.ModeSingle, true},
-		{"--control-plane split", false, true, false, kubectx.ModeSplit, true},
-		{"--all single", false, false, true, kubectx.ModeSingle, true},
-		{"--all split", false, false, true, kubectx.ModeSplit, true},
-		{"--pre single -- implicit control plane", true, false, false, kubectx.ModeSingle, true},
-		{"--pre split -- must not target control plane", true, false, false, kubectx.ModeSplit, false},
-		{"--compute-plane only", false, false, false, kubectx.ModeSingle, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			checkPre = tt.pre
-			checkControlPlane = tt.cp
-			checkAll = tt.all
-			assert.Equal(t, tt.want, controlPlaneIsTargeted(tt.mode))
-		})
-	}
-}
-
 // TestCheck_ComputePlaneFlagRunsChecks verifies that --compute-plane alone
 // produces compute-plane-cluster category events. Before the gating fix this
 // flag was a complete no-op and produced no check events at all.
@@ -531,14 +457,11 @@ func parseJSONLLines(t *testing.T, s string) []map[string]any {
 	return out
 }
 
-// TestPlaneIsVisited covers the dispatch predicates, which are broader than
-// the targeting predicates: --pre in ModeSplit visits both clusters for the
-// shared pre-install checks without targeting either role. Gating the split
-// dispatch on the targeting predicates alone would make --pre a no-op there.
+// TestPlaneIsVisited covers the dispatch predicates: --pre visits both roles
+// in either mode, and a role flag alone visits only its own role.
 //
 // The mode column is kept to document that the answer is the same in both
-// modes: the predicate is mode-independent by absorption, so a table that
-// varied only the mode would be asserting a dependence that does not exist.
+// modes.
 func TestPlaneIsVisited(t *testing.T) {
 	t.Cleanup(func() {
 		checkPre = false
@@ -701,20 +624,22 @@ func TestEmitCheckFinal_ErrorIsAFailure(t *testing.T) {
 }
 
 // Both roles emit a cluster-validator result under the same ID, so stopping at
-// the first drops the other transcript entirely from --all --show-logs.
-func TestMaybeShowClusterValidatorLogs_PrintsBothRoles(t *testing.T) {
+// the first drops the other transcript entirely from --all --show-logs. Each
+// is framed with its category: a validator image that predates roles prints
+// no role line, so the frame is all that tells the two apart.
+func TestMaybeShowClusterValidatorLogs_PrintsBothRolesLabelled(t *testing.T) {
 	prev := checkShowLogs
 	checkShowLogs = true
 	t.Cleanup(func() { checkShowLogs = prev })
 
 	var buf bytes.Buffer
 	maybeShowClusterValidatorLogs(&buf, []selfhosted.CheckResult{
-		{ID: "cluster-validator", Logs: "control-plane transcript\n"},
-		{ID: "cluster-validator", Logs: "compute-plane transcript\n"},
+		{ID: "cluster-validator", Category: selfhosted.CategoryControlPlane, Logs: "first transcript\n"},
+		{ID: "cluster-validator", Category: selfhosted.CategoryComputePlane, Logs: "second transcript\n"},
 	})
 
-	out := buf.String()
-	assert.Contains(t, out, "control-plane transcript")
-	assert.Contains(t, out, "compute-plane transcript")
-	assert.Equal(t, 2, strings.Count(out, "--- cluster-validator logs ---"))
+	assert.Equal(t, "--- cluster-validator logs (control-plane-cluster) ---\nfirst transcript\n"+
+		"--- end cluster-validator logs (control-plane-cluster) ---\n"+
+		"--- cluster-validator logs (compute-plane-cluster) ---\nsecond transcript\n"+
+		"--- end cluster-validator logs (compute-plane-cluster) ---\n", buf.String())
 }

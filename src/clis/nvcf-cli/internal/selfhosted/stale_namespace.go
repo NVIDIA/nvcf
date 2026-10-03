@@ -34,8 +34,8 @@ import (
 // nvcfControlPlaneNamespaces lists namespaces that a helmfile release deploys
 // into on the control-plane cluster, per deploy/stacks/self-managed/helmfile.d,
 // with the condition: that gates their releases and its base.yaml default.
-// Any of these that exist without an active Helm release, or that are stuck
-// Terminating, are leftover from a failed or partial teardown.
+// probeStaleNamespaces says which of them are left over from a failed or
+// partial teardown.
 //
 // Only namespaces that actually host a release belong here: a namespace
 // populated by something other than Helm (nvcf-backend, created at runtime by
@@ -370,8 +370,9 @@ func terminatingNamespace(ns *corev1.Namespace, now time.Time) StaleNamespace {
 //     by terminatingNamespace;
 //   - a Helm release in it was left pending or uninstalling; or
 //   - it holds no live Helm release, runs no workload, and still holds what a
-//     removed install leaves (volume claims, hook Jobs): a partial helm
-//     uninstall or a teardown that removed the release but not its data.
+//     removed install leaves (volume claims, or Jobs, StatefulSets,
+//     Deployments or DaemonSets): a partial helm uninstall or a teardown that
+//     removed the release but not its data.
 //
 // One namespace that cannot be read does not stop the others from being
 // probed: every error is returned, joined and naming its namespace, next to
