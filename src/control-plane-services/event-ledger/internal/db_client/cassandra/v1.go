@@ -223,19 +223,33 @@ func (c *CassandraHandler) eventsInsert(traceCtx context.Context, ste types.Stag
 	}
 	logger.DebugContext(traceCtx, "query", zap.String("query_statement", query))
 
-	var applied bool
+	var inserted bool
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
-		previous := make(map[string]interface{})
-		casApplied, err := c.session.Query(query, args...).WithContext(traceCtx).MapScanCAS(previous)
-		applied = casApplied
-		if err != nil {
-			logger.ErrorContext(traceCtx, "failed to write message to cassandra", zap.Error(err))
-			return err
-		}
-		logger.DebugContext(traceCtx, "successfully inserted event", zap.String("event", ste.Event))
-		return nil
+		// Check the V1 event key before writing. Concurrent writers may both
+		// observe an absent row; Cassandra cannot enforce uniqueness without LWT.
+		lookup, lookupArgs := buildEventsExistenceSelect(ste)
+		return insertEventIfAbsent(
+			func() error {
+				var existing string
+				return c.session.Query(lookup, lookupArgs...).WithContext(traceCtx).Scan(&existing)
+			},
+			func() error {
+				return c.session.Query(query, args...).WithContext(traceCtx).Exec()
+			},
+			&inserted,
+		)
 	}, "eventsInsert")
-	return applied, err
+	if err != nil {
+		logger.ErrorContext(traceCtx, "failed to insert event", zap.Error(err))
+	} else if inserted {
+		logger.DebugContext(traceCtx, "successfully inserted event", zap.String("event", ste.Event))
+	}
+	return inserted, err
+}
+
+func buildEventsExistenceSelect(ste types.StageTransitionEvent) (string, []interface{}) {
+	return `SELECT event FROM events WHERE function_version_id = ? AND instance_id = ? AND event = ?`,
+		[]interface{}{gocql.UUID(ste.FunctionVersionId), ste.InstanceId, ste.Event}
 }
 
 func buildEventsInsert(ste types.StageTransitionEvent) (string, []interface{}, error) {
@@ -254,7 +268,7 @@ func buildEventsInsert(ste types.StageTransitionEvent) (string, []interface{}, e
 		time.Now().UnixMilli(),
 		false,
 	}
-	queryBuilder := sq.Insert("events").Columns(columns...).Values(values...).Suffix("IF NOT EXISTS")
+	queryBuilder := sq.Insert("events").Columns(columns...).Values(values...)
 
 	// Generate the CQL query
 	query, args, err := queryBuilder.ToSql()

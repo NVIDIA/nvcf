@@ -19,24 +19,88 @@ package cassandra
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/gocql/gocql"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
 )
 
-func TestBuildEventsInsertUsesConditionalWrite(t *testing.T) {
+func TestBuildEventsInsertUsesUnconditionalWrite(t *testing.T) {
 	query, _, err := buildEventsInsert(types.StageTransitionEvent{})
 	require.NoError(t, err)
-	require.True(t, strings.HasSuffix(query, "IF NOT EXISTS"))
+	require.False(t, strings.Contains(query, "IF NOT EXISTS"))
 }
 
-func TestBuildDeploymentEventsInsertUsesConditionalWrite(t *testing.T) {
+func TestBuildDeploymentEventsInsertUsesUnconditionalWrite(t *testing.T) {
 	query, _, err := buildDeploymentEventsInsert(types.DeploymentStageTransitionEvent{})
 	require.NoError(t, err)
-	require.True(t, strings.HasSuffix(query, "IF NOT EXISTS"))
+	require.False(t, strings.Contains(query, "IF NOT EXISTS"))
+}
+
+func TestV1EventLookupDoesNotUseDeploymentID(t *testing.T) {
+	versionID := uuid.New()
+	query, args := buildEventsExistenceSelect(types.StageTransitionEvent{
+		FunctionVersionId: versionID,
+		InstanceId:        "instance-1",
+		Event:             "ready",
+	})
+	require.Equal(t, "SELECT event FROM events WHERE function_version_id = ? AND instance_id = ? AND event = ?", query)
+	require.Equal(t, []interface{}{gocql.UUID(versionID), "instance-1", "ready"}, args)
+}
+
+func TestV2EventLookupIncludesDeploymentID(t *testing.T) {
+	versionID, deploymentID := uuid.New(), uuid.New()
+	query, args := buildDeploymentEventsExistenceSelect(types.DeploymentStageTransitionEvent{
+		FunctionVersionId: versionID,
+		DeploymentId:      deploymentID,
+		InstanceId:        "instance-1",
+		Event:             "ready",
+	})
+	require.Equal(t, "SELECT event FROM events_v2 WHERE function_version_id = ? AND deployment_id = ? AND instance_id = ? AND event = ?", query)
+	require.Equal(t, []interface{}{gocql.UUID(versionID), gocql.UUID(deploymentID), "instance-1", "ready"}, args)
+}
+
+func TestInsertEventIfAbsent(t *testing.T) {
+	readFailure := errors.New("lookup unavailable")
+	writeFailure := errors.New("write unavailable")
+	for _, tc := range []struct {
+		name       string
+		readErr    error
+		writeErr   error
+		wantWrite  bool
+		wantInsert bool
+		wantErr    error
+	}{
+		{name: "existing row is a duplicate"},
+		{name: "missing row is inserted", readErr: gocql.ErrNotFound, wantWrite: true, wantInsert: true},
+		{name: "read error does not write", readErr: readFailure, wantErr: readFailure},
+		{name: "failed write does not claim success", readErr: gocql.ErrNotFound, writeErr: writeFailure, wantWrite: true, wantErr: writeFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inserted := true // A retry must clear a previous attempt's result.
+			writes := 0
+			err := insertEventIfAbsent(func() error { return tc.readErr }, func() error {
+				writes++
+				return tc.writeErr
+			}, &inserted)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			if tc.wantWrite {
+				require.Equal(t, 1, writes)
+			} else {
+				require.Zero(t, writes)
+			}
+			require.Equal(t, tc.wantInsert, inserted)
+		})
+	}
 }
 
 func TestExtractInstanceType(t *testing.T) {
