@@ -104,7 +104,7 @@ jobs:
         env:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
           PREVIEW: ${{ inputs.preview }}
-          DOCS_PREVIEW_ID: nvcf-2214-p4-stack-intros
+          DOCS_PREVIEW_ID: nvcf-2214-p4-mirroring
           DOCS_PREVIEW_SKIP_COMMENT: '1'
         run: |
           set -euo pipefail

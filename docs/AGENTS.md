@@ -16,8 +16,8 @@ An edition records one qualified combination; stack artifact versions remain
 independent.
 
 - `docs/overview/`: shared customer guides, compatibility matrix, manifest,
-  images, and samples. These belong to the selected edition. The manifest has
-  its own tab; the compatibility matrix and upgrade guides use Release Notes.
+  images, and samples. These belong to the selected edition. Manifest and Image
+  Mirroring share the Manifest tab; compatibility and upgrade guides use Release Notes.
 - `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/`: current
   stack sources, published under Development from `main`.
 - `docs/dev/`: contributor guides. Only pages reached through navigation or

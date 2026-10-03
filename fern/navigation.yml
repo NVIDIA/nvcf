@@ -41,9 +41,6 @@ navigation:
     - page: Infrastructure Sizing
       path: ../docs/overview/infrastructure-sizing.md
       slug: infrastructure-sizing
-    - page: Image Mirroring
-      path: ../docs/overview/image-mirroring.md
-      slug: image-mirroring
     - page: Multi-Tenancy
       path: ../docs/overview/multi-tenancy.md
       slug: multi-tenancy
@@ -430,6 +427,9 @@ navigation:
   - page: Artifact Manifest
     path: ../docs/overview/manifest.md
     slug: artifacts
+  - page: Image Mirroring
+    path: ../docs/overview/image-mirroring.md
+    slug: image-mirroring
 - tab: release-notes
   layout:
   - changelog: ./changelog
