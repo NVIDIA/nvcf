@@ -206,7 +206,9 @@ broken-link validation. The Published Docs Links CI job checks the live site
 with the pinned Fern CLI after publication and weekly. It also runs manually
 through Fern Docs CI with `live_links=true`. Its report includes external URLs
 and source pages. Broken links or incomplete scans fail; blocked destinations
-are reported separately for review.
+are reported separately for review. Fern can classify authentication responses
+as broken links; verify protected destinations and stale source references
+before changing customer links.
 
 With a Fern token, run the same live check locally:
 
