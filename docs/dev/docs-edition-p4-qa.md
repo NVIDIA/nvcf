@@ -296,9 +296,20 @@ Current P4 checks have no failures; root Bazel is still running. CodeRabbit has
 automatically paused reviews after repeated commits. Its coverage ends at
 `1acb89c91`, so its passing status does not cover this follow-up.
 
-The protected `docs/releases/1.0.1` and canonical registry remain at `23d40a346`.
-Replacing that unpublished ref with the tested candidate awaits explicit approval
-for a temporary exception limited to this branch, an exact force-with-lease,
-and immediate restoration and verification of the Frozen docs editions ruleset.
-Indexed staging search remains a separate merge gate. No production publication
-or PR merge occurred.
+The maintainer approved replacing the unpublished `docs/releases/1.0.1` ref
+from `23d40a346` to `d4fa180b10723aa220d52a18a3094fb3e15f050b`.
+An exception limited to that branch allowed one exact force-with-lease.
+Protection was immediately restored and verified: active, no exclusions or
+bypass actors, and effective rules blocking updates, deletion, and force pushes.
+P4 head `2403bd0f7dea8c805558bb41439abd7fba0a7394` pins that exact commit.
+Canonical docs validation passes against the corrected protected ref.
+Final pin CI is running. Indexed staging search remains a separate merge gate.
+No production publication or PR merge occurred.
+
+The final review check identified five comments from the earlier changelog
+migration review. The registry-mismatch claim uses a superseded 1.0.0 QA record;
+the current release ref and pin match, verified by API. Relative upgrade links
+retain the selected edition in the earlier browser checks. The pod-creation
+wait, final pod-status wording, and redirect-order comments require separate
+follow-up review before merge; the completed Overview change does not resolve
+those findings.
