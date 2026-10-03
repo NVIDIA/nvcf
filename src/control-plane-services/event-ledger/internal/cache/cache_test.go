@@ -42,9 +42,13 @@ func (h *CachingDBHandler) insert(k key, e entry) {
 	h.entries[k] = &e
 }
 
+func testConfig() Config {
+	return Config{MaxSize: 100, FlushInterval: 60 * time.Second}
+}
+
 func newTestHandler(t *testing.T) *CachingDBHandler {
 	t.Helper()
-	h, err := NewCachingDBHandler(&fakeDB{}, DefaultConfig())
+	h, err := NewCachingDBHandler(&fakeDB{}, testConfig())
 	require.NoError(t, err)
 	return h
 }
@@ -222,13 +226,6 @@ func TestLookup_ConcurrentInsertsOfDistinctKeys(t *testing.T) {
 	assert.Len(t, h.entries, writers*keysPerWriter)
 }
 
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-
-	assert.Equal(t, 100_000, cfg.MaxSize)
-	assert.Equal(t, 60*time.Second, cfg.FlushInterval)
-}
-
 func TestInactiveTTL_IsFlushIntervalPlusTenPercent(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -247,7 +244,7 @@ func TestInactiveTTL_IsFlushIntervalPlusTenPercent(t *testing.T) {
 }
 
 func TestNewCachingDBHandler_NilInnerHandlerFails(t *testing.T) {
-	h, err := NewCachingDBHandler(nil, DefaultConfig())
+	h, err := NewCachingDBHandler(nil, testConfig())
 
 	require.ErrorIs(t, err, errNilInnerHandler)
 	assert.Nil(t, h)
@@ -256,24 +253,39 @@ func TestNewCachingDBHandler_NilInnerHandlerFails(t *testing.T) {
 func TestNewCachingDBHandler_KeepsInnerHandler(t *testing.T) {
 	inner := &fakeDB{}
 
-	h, err := NewCachingDBHandler(inner, DefaultConfig())
+	h, err := NewCachingDBHandler(inner, testConfig())
 
 	require.NoError(t, err)
 	assert.Same(t, inner, h.DBHandlerV2)
 }
 
-func TestNewCachingDBHandler_FillsZeroConfigWithDefaults(t *testing.T) {
-	h, err := NewCachingDBHandler(&fakeDB{}, Config{})
-
-	require.NoError(t, err)
-	assert.Equal(t, DefaultConfig(), h.cfg)
-}
-
-func TestNewCachingDBHandler_KeepsExplicitConfig(t *testing.T) {
+func TestNewCachingDBHandler_KeepsConfig(t *testing.T) {
 	cfg := Config{MaxSize: 10, FlushInterval: 5 * time.Second}
 
 	h, err := NewCachingDBHandler(&fakeDB{}, cfg)
 
 	require.NoError(t, err)
 	assert.Equal(t, cfg, h.cfg)
+}
+
+func TestNewCachingDBHandler_RejectsNonPositiveConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr error
+	}{
+		{name: "zero value", cfg: Config{}, wantErr: errInvalidMaxSize},
+		{name: "zero max size", cfg: Config{MaxSize: 0, FlushInterval: time.Second}, wantErr: errInvalidMaxSize},
+		{name: "negative max size", cfg: Config{MaxSize: -1, FlushInterval: time.Second}, wantErr: errInvalidMaxSize},
+		{name: "zero flush interval", cfg: Config{MaxSize: 1, FlushInterval: 0}, wantErr: errInvalidFlushInterval},
+		{name: "negative flush interval", cfg: Config{MaxSize: 1, FlushInterval: -time.Second}, wantErr: errInvalidFlushInterval},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, err := NewCachingDBHandler(&fakeDB{}, tt.cfg)
+
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Nil(t, h)
+		})
+	}
 }

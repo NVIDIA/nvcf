@@ -53,8 +53,8 @@ The namespace defaults to the Helm release namespace. Set `eventLedger.namespace
 - `eventLedger.config.database.cassandra.hosts`: defaults to `cassandra.cassandra-system.svc.cluster.local`
 - `eventLedger.config.auth.policy.policy-evaluator-addr`: set to the api-keys-api address in your stack
 - `eventLedger.config.cache.enabled`: defaults to `false`. Turns on the local stats write cache. It has no effect until the cache is applied to writes.
-- `eventLedger.config.cache.max-size`: defaults to `100000`. Must be greater than 0 when the cache is enabled.
-- `eventLedger.config.cache.flush-interval-seconds`: defaults to `60`. Must be greater than 0 when the cache is enabled.
+- `eventLedger.config.cache.max-size`: defaults to `100000`. A value of 0 or less uses the default.
+- `eventLedger.config.cache.flush-interval-seconds`: defaults to `60`. A value of 0 or less uses the default.
 
 ## API Keys policy evaluator
 

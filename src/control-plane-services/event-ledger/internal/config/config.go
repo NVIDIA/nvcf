@@ -42,8 +42,6 @@ var (
 	ErrMissingIntrospectionURL             = errors.New("auth: introspection.url is required when introspection is enabled")
 	ErrIntrospectionRequiresSelfManaged    = errors.New("auth: introspection is only supported in self-managed deployments")
 	ErrIntrospectionRequiresPolicyProvider = errors.New("auth: introspection is only supported with the policy provider")
-	ErrInvalidCacheMaxSize                 = errors.New("cache: max-size must be greater than 0")
-	ErrInvalidCacheFlushInterval           = errors.New("cache: flush-interval-seconds must be greater than 0")
 )
 
 // Top-level config
@@ -290,19 +288,27 @@ type CacheConfig struct {
 	FlushIntervalSeconds int `mapstructure:"flush-interval-seconds"`
 }
 
-// ValidateCacheConfig rejects non-positive sizes and intervals. A disabled
-// cache is not validated, so unused values cannot stop the service.
-func ValidateCacheConfig(cfg CacheConfig) error {
-	if !cfg.Enabled {
-		return nil
+// GetDefaultCacheConfig returns default cache configuration values
+func GetDefaultCacheConfig() CacheConfig {
+	return CacheConfig{
+		Enabled:              false,
+		MaxSize:              100_000, // Entries kept before LRU eviction
+		FlushIntervalSeconds: 60,      // Seconds a pending entry waits before it is flushed
 	}
-	if cfg.MaxSize <= 0 {
-		return ErrInvalidCacheMaxSize
+}
+
+// WithDefaults returns a CacheConfig with default values for unset fields
+func (c CacheConfig) WithDefaults() CacheConfig {
+	defaults := GetDefaultCacheConfig()
+
+	if c.MaxSize <= 0 {
+		c.MaxSize = defaults.MaxSize
 	}
-	if cfg.FlushIntervalSeconds <= 0 {
-		return ErrInvalidCacheFlushInterval
+	if c.FlushIntervalSeconds <= 0 {
+		c.FlushIntervalSeconds = defaults.FlushIntervalSeconds
 	}
-	return nil
+
+	return c
 }
 
 // WithDefaults returns a PaginationConfig with default values for unset fields

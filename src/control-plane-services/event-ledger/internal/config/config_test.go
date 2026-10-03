@@ -38,21 +38,46 @@ func TestStatsConfigLegacyFilteredEventNamesKey(t *testing.T) {
 	assert.Equal(t, []string{"ready", "destroyed"}, cfg.Stats.FilteredStatsEnabledEventNames)
 }
 
+func TestGetDefaultCacheConfig(t *testing.T) {
+	assert.Equal(t, CacheConfig{Enabled: false, MaxSize: 100_000, FlushIntervalSeconds: 60}, GetDefaultCacheConfig())
+}
+
+func TestCacheConfigWithDefaults(t *testing.T) {
+	defaults := GetDefaultCacheConfig()
+	tests := []struct {
+		name string
+		in   CacheConfig
+		want CacheConfig
+	}{
+		{name: "zero value gets defaults", in: CacheConfig{}, want: defaults},
+		{name: "only max size set", in: CacheConfig{MaxSize: 5}, want: CacheConfig{MaxSize: 5, FlushIntervalSeconds: defaults.FlushIntervalSeconds}},
+		{name: "only interval set", in: CacheConfig{FlushIntervalSeconds: 9}, want: CacheConfig{MaxSize: defaults.MaxSize, FlushIntervalSeconds: 9}},
+		{name: "explicit values kept", in: CacheConfig{Enabled: true, MaxSize: 5, FlushIntervalSeconds: 9}, want: CacheConfig{Enabled: true, MaxSize: 5, FlushIntervalSeconds: 9}},
+		{name: "negative values get defaults", in: CacheConfig{Enabled: true, MaxSize: -1, FlushIntervalSeconds: -1}, want: CacheConfig{Enabled: true, MaxSize: defaults.MaxSize, FlushIntervalSeconds: defaults.FlushIntervalSeconds}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.in.WithDefaults())
+		})
+	}
+}
+
 func TestCacheConfiguration(t *testing.T) {
+	defaults := GetDefaultCacheConfig()
 	tests := []struct {
 		name string
 		args []string
 		want CacheConfig
 	}{
 		{
-			name: "defaults: disabled with cache package defaults",
+			name: "defaults come from GetDefaultCacheConfig",
 			args: nil,
-			want: CacheConfig{Enabled: false, MaxSize: 100_000, FlushIntervalSeconds: 60},
+			want: defaults,
 		},
 		{
 			name: "enabled via CLI flag",
 			args: []string{"--cache.enabled=true"},
-			want: CacheConfig{Enabled: true, MaxSize: 100_000, FlushIntervalSeconds: 60},
+			want: CacheConfig{Enabled: true, MaxSize: defaults.MaxSize, FlushIntervalSeconds: defaults.FlushIntervalSeconds},
 		},
 		{
 			name: "size and interval overridden",
@@ -89,33 +114,6 @@ func TestCacheConfigurationFromConfigFileKeys(t *testing.T) {
 	require.NoError(t, v.Unmarshal(&cfg))
 
 	assert.Equal(t, CacheConfig{Enabled: true, MaxSize: 42, FlushIntervalSeconds: 7}, cfg.Cache)
-}
-
-func TestValidateCacheConfig(t *testing.T) {
-	tests := []struct {
-		name    string
-		cfg     CacheConfig
-		wantErr error
-	}{
-		{name: "disabled ignores invalid values", cfg: CacheConfig{Enabled: false, MaxSize: -1, FlushIntervalSeconds: -1}},
-		{name: "disabled zero value", cfg: CacheConfig{}},
-		{name: "enabled valid", cfg: CacheConfig{Enabled: true, MaxSize: 1, FlushIntervalSeconds: 1}},
-		{name: "enabled zero max size", cfg: CacheConfig{Enabled: true, MaxSize: 0, FlushIntervalSeconds: 60}, wantErr: ErrInvalidCacheMaxSize},
-		{name: "enabled negative max size", cfg: CacheConfig{Enabled: true, MaxSize: -5, FlushIntervalSeconds: 60}, wantErr: ErrInvalidCacheMaxSize},
-		{name: "enabled zero flush interval", cfg: CacheConfig{Enabled: true, MaxSize: 10, FlushIntervalSeconds: 0}, wantErr: ErrInvalidCacheFlushInterval},
-		{name: "enabled negative flush interval", cfg: CacheConfig{Enabled: true, MaxSize: 10, FlushIntervalSeconds: -1}, wantErr: ErrInvalidCacheFlushInterval},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateCacheConfig(tt.cfg)
-
-			if tt.wantErr == nil {
-				assert.NoError(t, err)
-				return
-			}
-			assert.ErrorIs(t, err, tt.wantErr)
-		})
-	}
 }
 
 func TestIndexerConfiguration(t *testing.T) {

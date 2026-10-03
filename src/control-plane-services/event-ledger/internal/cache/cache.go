@@ -28,16 +28,15 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
 )
 
-const (
-	defaultMaxSize       = 100_000
-	defaultFlushInterval = 60 * time.Second
+// inactiveTTLBufferPercent is added on top of FlushInterval to form the
+// inactivity TTL, so an entry outlives its scheduled flush.
+const inactiveTTLBufferPercent = 10
 
-	// inactiveTTLBufferPercent is added on top of FlushInterval to form the
-	// inactivity TTL, so an entry outlives its scheduled flush.
-	inactiveTTLBufferPercent = 10
+var (
+	errNilInnerHandler      = errors.New("cache: inner DBHandlerV2 must not be nil")
+	errInvalidMaxSize       = errors.New("cache: MaxSize must be greater than 0")
+	errInvalidFlushInterval = errors.New("cache: FlushInterval must be greater than 0")
 )
-
-var errNilInnerHandler = errors.New("cache: inner DBHandlerV2 must not be nil")
 
 // key identifies one cached event stream.
 type key struct {
@@ -63,7 +62,8 @@ type entry struct {
 	lastUpdated time.Time
 }
 
-// Config holds the cache tunables. Non-positive fields fall back to defaults.
+// Config holds the cache tunables. Both fields must be positive. The service
+// config owns the defaults.
 type Config struct {
 	// MaxSize is the maximum number of entries before LRU eviction.
 	MaxSize int
@@ -71,29 +71,10 @@ type Config struct {
 	FlushInterval time.Duration
 }
 
-// DefaultConfig returns a Config populated with the documented defaults.
-func DefaultConfig() Config {
-	return Config{
-		MaxSize:       defaultMaxSize,
-		FlushInterval: defaultFlushInterval,
-	}
-}
-
 // inactiveTTL is how long an entry may go without an update before it is
 // eligible for eviction: FlushInterval plus a 10% buffer.
 func (c Config) inactiveTTL() time.Duration {
 	return c.FlushInterval + c.FlushInterval*inactiveTTLBufferPercent/100
-}
-
-func (c Config) withDefaults() Config {
-	d := DefaultConfig()
-	if c.MaxSize <= 0 {
-		c.MaxSize = d.MaxSize
-	}
-	if c.FlushInterval <= 0 {
-		c.FlushInterval = d.FlushInterval
-	}
-	return c
 }
 
 // CachingDBHandler wraps a DBHandlerV2 with a local write cache. Methods that
@@ -108,14 +89,20 @@ type CachingDBHandler struct {
 }
 
 // NewCachingDBHandler wraps inner with an empty cache. It returns an error if
-// inner is nil.
+// inner is nil or cfg has a non-positive field.
 func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config) (*CachingDBHandler, error) {
 	if inner == nil {
 		return nil, errNilInnerHandler
 	}
+	if cfg.MaxSize <= 0 {
+		return nil, errInvalidMaxSize
+	}
+	if cfg.FlushInterval <= 0 {
+		return nil, errInvalidFlushInterval
+	}
 	return &CachingDBHandler{
 		DBHandlerV2: inner,
-		cfg:         cfg.withDefaults(),
+		cfg:         cfg,
 		entries:     make(map[key]*entry),
 	}, nil
 }

@@ -21,8 +21,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
-
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/cache"
 )
 
 type CliArgs struct {
@@ -149,10 +147,10 @@ func (c *CliArgs) SetupIndexer() {
 }
 
 func (c *CliArgs) SetupCache() {
-	defaults := cache.DefaultConfig()
-	c.bool("cache.enabled", false, "Enable the local stats write cache", true)
+	defaults := GetDefaultCacheConfig()
+	c.bool("cache.enabled", defaults.Enabled, "Enable the local stats write cache", true)
 	c.int("cache.max-size", defaults.MaxSize, "Maximum number of entries in the stats write cache", true)
-	c.int("cache.flush-interval-seconds", int(defaults.FlushInterval.Seconds()), "Seconds a pending stats entry waits before it is flushed", true)
+	c.int("cache.flush-interval-seconds", defaults.FlushIntervalSeconds, "Seconds a pending stats entry waits before it is flushed", true)
 }
 
 func (c *CliArgs) SetupPublisher() {
