@@ -39,6 +39,13 @@ go_library(
     ],
 )
 
+# The validator's RBAC inventory: the nvcf-cli tests check its per-run role
+# against the same file.
+exports_files(
+    ["rbac_inventory.yaml"],
+    visibility = ["//src/clis/nvcf-cli:__subpackages__"],
+)
+
 alias(
     name = "go_default_library",
     actual = ":clustervalidator",
@@ -56,9 +63,12 @@ go_test(
         "netpol_test.go",
         "observe_test.go",
         "output_test.go",
+        "rbac_inventory_test.go",
         "summary_test.go",
         "validator_test.go",
     ],
+    # The RBAC contract the chart and nvcf-cli validator roles are tested against.
+    data = ["rbac_inventory.yaml"],
     embed = [":clustervalidator"],
     deps = [
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
@@ -71,6 +81,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/networking/v1:networking",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
@@ -84,5 +95,6 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
     ],
 )
