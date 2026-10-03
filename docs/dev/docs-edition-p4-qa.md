@@ -264,3 +264,41 @@ Current PR CI is in progress; completed checks pass. The earlier CodeRabbit
 placement findings were resolved against the explicit requirements. Indexed
 staging search remains a separate merge gate. Production publication and P4
 merge remain pending maintainer review.
+
+## Overview and Legacy follow-up
+
+P4 source `94163c1719cf9816a0016746ac14e07cd9cd49f5` removes the generated
+edition/stack summary from Overview, removes the independent-release-train
+introduction from Compatibility Matrix, and moves Documentation Archive under
+Legacy. The archive URL remains `/nvcf/overview/documentation-archive`.
+The catalog and generator no longer add the Overview summary. Existing renderer
+support remains available when validating previously frozen catalogs.
+
+The corrected unpublished 1.0.1 candidate is
+`d4fa180b10723aa220d52a18a3094fb3e15f050b` on
+`docs/candidates/2214-p4-overview`. Its approved stack versions and manifest are
+unchanged. QA source `f3fe4864d7b71f46a0c0994bfc28833399c27d4c` composes that
+candidate with Development 1.0.2.
+
+[Review this preview](https://nvidia-preview-nvcf-2214-p4-overview.docs.buildwithfern.com/nvcf/overview/overview).
+[Hosted preview and Fern checks](https://github.com/NVIDIA/nvcf/actions/runs/37092643299)
+pass. Browser validation covers 29 cases: stable and Development Overview,
+Legacy grouping and archive clicks, all six historical archive destinations,
+Compatibility Matrix content and redirects, Manifest, current tab links, and
+mobile overflow. No page errors occurred; desktop and mobile screenshots were
+reviewed. The removed summary is absent in both editions.
+
+Go tests and vet, canonical and staged-development Fern checks, generated-content
+checks, candidate Fern checks, Markdown lint, and whitespace checks pass.
+The regeneration regression test confirms that default outputs leave authored
+Overview content unchanged while generating stack summaries and the manifest.
+Current P4 checks have no failures; root Bazel is still running. CodeRabbit has
+automatically paused reviews after repeated commits. Its coverage ends at
+`1acb89c91`, so its passing status does not cover this follow-up.
+
+The protected `docs/releases/1.0.1` and canonical registry remain at `23d40a346`.
+Replacing that unpublished ref with the tested candidate awaits explicit approval
+for a temporary exception limited to this branch, an exact force-with-lease,
+and immediate restoration and verification of the Frozen docs editions ruleset.
+Indexed staging search remains a separate merge gate. No production publication
+or PR merge occurred.
