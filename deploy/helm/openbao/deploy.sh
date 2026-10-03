@@ -34,7 +34,8 @@ if ! check_kubernetes; then
     exit 1
 fi
 
-if ! check_helm; then
+# The chart has already installed OpenBao before this hook starts.
+if [ "${install_method}" = "$INSTALL_METHOD_SCRIPT" ] && ! check_helm; then
     log_error "helm check failed"
     exit 1
 fi
