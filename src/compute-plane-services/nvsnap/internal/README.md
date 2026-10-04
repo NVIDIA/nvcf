@@ -13,7 +13,7 @@ nvsnap's logic lives here; `cmd/` binaries wire these together.
 
 - [`agent/`](agent/) — checkpoint & restore orchestration; capture-path
   selection and backend detection.
-- [`criu/`](criu/) — go-criu RPC wrapper (dump/restore, RPC field plumbing).
+- [`criu/mountinfo/`](criu/mountinfo/) — /proc mountinfo parsing shared by capture and restore.
 - [`cuda/`](cuda/) — cuda-checkpoint integration.
 - [`rootfsonly/`](rootfsonly/) — rootfs/cachedir capture orchestrator + the
   warm-pod watcher.

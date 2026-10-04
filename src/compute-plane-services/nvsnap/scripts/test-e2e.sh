@@ -366,8 +366,8 @@ print_summary() {
 # Usage: pod_curl <pod> <container> <method> <path> [data] [timeout]
 #
 # Tries curl first; falls back to python3 urllib for containers that
-# don't ship curl (e.g. NIM images). Clears LD_PRELOAD so the nvsnap
-# intercept library doesn't load into the probe binary.
+# don't ship curl (e.g. NIM images). Clears LD_PRELOAD so a workload's own
+# preloads don't load into the probe binary.
 pod_curl() {
     local pod="$1" container="$2" method="$3" path="$4" data="${5:-}" timeout="${6:-10}"
 
@@ -553,8 +553,8 @@ if [ "$CAPTURE_PATH" = "rootfs" ]; then
 fi
 
 # On the rootfs/cachedir path, prefer a dedicated <workload>-rootfs-restore.yaml
-# if one exists: the CRIU restore template chains restore-entrypoint and waits
-# for a CRIU dump that never appears on the rootfs path. The rootfs variant is a
+# if one exists: the CRIU restore template is a placeholder pod that waits for
+# the agent's in-namespace restore, which never comes on the rootfs path. The rootfs variant is a
 # plain pod with a nvsnap.io/restore-from annotation the webhook acts on.
 if [ "$CAPTURE_PATH" = "rootfs" ]; then
     _rootfs_tmpl="${RESTORE_MANIFEST_TEMPLATE%-restore.yaml}-rootfs-restore.yaml"
@@ -711,7 +711,7 @@ else
     log_info "Step 7: Creating checkpoint..."
     # criu-v2 must be requested explicitly per checkpoint — the agent only
     # takes the in-namespace engine via capturePath (or its own
-    # NVSNAP_CRIU_V2=1 env). Plain criu keeps the no-override behavior.
+    # criu-v2 engine). Plain criu keeps the no-override behavior.
     # The `|| CHECKPOINT_RC=$?` guard matters: under set -e a plain failing
     # command substitution kills the whole script before any diagnostics
     # below can print (first criu-v2 run died silently this way).
@@ -916,7 +916,7 @@ fi
 echo ""
 log_info "Key restore events:"
 kubectl logs $RESTORE_POD_NAME -n $NAMESPACE -c $RESTORE_CONTAINER_NAME 2>&1 | \
-    grep -E "wakeRestoredThreads|uv_loop_fork|libzmq.*CRIU|ETERM|reinit completed|RESTORE_COMPLETE" | head -10 || true
+    grep -E "Restoring FAILED|Tasks resumed|restore.*complete|RESTORE_COMPLETE" | head -10 || true
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 echo ""

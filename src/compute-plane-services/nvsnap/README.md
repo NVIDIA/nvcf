@@ -44,7 +44,7 @@ workload:
 A node-level **agent** (DaemonSet) performs capture/restore using
 `/proc` + cgroup inspection — runtime-agnostic, not tied to any container
 runtime API. A **server** provides a REST API, web UI, and checkpoint
-catalog. An optional **admission webhook** auto-injects restore plumbing
+catalog. An optional **admission webhook** injects restore plumbing
 into workload pods.
 
 Deeper design docs:
@@ -166,14 +166,13 @@ optional webhook). Full guide, options, and troubleshooting:
 │  nvsnap-server   │     │            GPU Node                   │
 │  REST API + UI   │◄───►│  nvsnap-agent (DaemonSet)             │
 │  catalog (SQLite)│     │   ├─ process discovery (/proc+cgroup) │
-│  metrics + audit │     │   ├─ CRIU orchestration (go-criu RPC) │
+│  metrics + audit │     │   ├─ CRIU orchestration (criu-v2)     │
 └──────────────────┘     │   ├─ cuda-checkpoint integration      │
                          │   ├─ cachedir capture watcher           │
                          │   └─ peer-cascade HTTP server         │
                          │                                       │
                          │  GPU Pod (unmodified image)           │
-                         │   ├─ NIM / vLLM / SGLang / TRT-LLM    │
-                         │   └─ libnvsnap_intercept.so (PRELOAD) │
+                         │   └─ NIM / vLLM / SGLang / TRT-LLM    │
                          └───────────────────────────────────────┘
                                         │
               L1 same-node ─► L2 shared PVC ─► L3 object store
@@ -187,14 +186,12 @@ tiers are present. See
 **Why the moving parts exist** (details in
 [docs/architecture/](docs/architecture/)):
 
-- **go-criu RPC, not CLI CRIU** — engines like vLLM run 900+ threads; CLI
-  CRIU's per-thread ptrace detach takes minutes and often hangs, while RPC
-  is seconds regardless of thread count.
-- **`libnvsnap_intercept.so` (LD_PRELOAD)** — `io_uring` (via uvloop/libuv)
-  and `libzmq` epoll don't survive CRIU restore cleanly. Rather than fork
-  every engine, the library reinitializes them on a restore marker.
-- **Forked CRIU** — 26 patches for Kubernetes container support, io_uring,
-  and the CUDA plugin. See [docs/THIRD-PARTY-FORKS.md](docs/THIRD-PARTY-FORKS.md).
+- **In-namespace CRIU (criu-v2)** — the agent stages the CRIU bundle into
+  the workload's mount namespace and runs dump and restore there, so the
+  dump sees the container's own paths and no userspace interception is
+  injected into the engine.
+- **Forked CRIU** — io_uring checkpoint and restore, portable ghost files
+  and CUDA plugin fixes on top of upstream criu-dev. See [docs/THIRD-PARTY-FORKS.md](docs/THIRD-PARTY-FORKS.md).
 
 ---
 
@@ -255,9 +252,8 @@ The full endpoint list (including agent-side cascade endpoints) is in
 ## Project layout
 
 ```text
-cmd/                    binary entry points (agent, server, restore-entrypoint, gpu-restore, CLI)
+cmd/                    binary entry points (agent, server, mount-prep, rootfs-restore, l2-wait, CLI)
 internal/               agent, server, webhook, CRIU, checkpointstore (Go)
-lib/nvsnap_intercept/   LD_PRELOAD interception library (C)
 deploy/helm/nvsnap/     Helm chart
 deploy/k8s/             manifests + sample workloads
 docker/                 Dockerfiles

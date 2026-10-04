@@ -21,7 +21,7 @@ limitations under the License.
 // workload is a pair of files:
 //
 //	<id>.yaml          source Pod (has nvsnap.io/* annotations on metadata)
-//	<id>-restore.yaml  restore Pod (CRIU path: same image, /nvsnap/restore-entrypoint;
+//	<id>-restore.yaml  restore Pod (CRIU path: placeholder the agent restores into;
 //	                                rootfs path: customer-shape with
 //	                                nvsnap.io/restore-from annotation placeholder)
 //

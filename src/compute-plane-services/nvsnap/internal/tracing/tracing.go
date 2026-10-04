@@ -119,9 +119,9 @@ func Tracer() trace.Tracer {
 // unset (or malformed) the original context is returned unchanged — the
 // caller's spans become independent roots.
 //
-// Used to bridge the agent → restore-entrypoint process boundary: the
+// Used to bridge the agent → restore-pod process boundary: the
 // agent stamps `OTEL_TRACE_PARENT=<traceparent>` into the placeholder
-// pod's env, restore-entrypoint extracts it on startup so its spans
+// pod's env, the restored side extracts it on startup so its spans
 // nest under the agent's `restore.full` span.
 func ContextFromEnv(ctx context.Context) context.Context {
 	tp := os.Getenv("OTEL_TRACE_PARENT")
