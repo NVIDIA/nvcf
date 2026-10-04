@@ -23,12 +23,27 @@ checkpoint or restore path.
 
 ## Per-fork detail
 
-### criu (`$HOME/personal/criu`, branch `criu-dev`)
+### criu (`https://github.com/balajinvda/criu`, branch `criu-dev`)
 
 **Upstream:** `https://github.com/checkpoint-restore/criu` ref `criu-dev`.
 Tracking is by manual cherry-pick / rebase, not a long-running merge.
 
-**Patches we carry** (commit prefixes are local; not yet upstreamed):
+The fork of record is `github.com/balajinvda/criu`; the base image is built
+from the commit `scripts/versions.sh` pins in `NVSNAP_CRIU_REF` (tagged
+`nvsnap-base-<base version>` in the fork), and `scripts/build-agent.sh base`
+refuses any other source. The line carries: io_uring checkpoint and restore
+for quiesced rings including SQPOLL, worker threads and the SQ-array
+identity map, so stock libuv and uvloop restore without changes; opt-in
+`--ghost-links` for portable images; CUDA plugin restore and unlock in one
+`cuda-checkpoint` spawn with feature-detected resume, and character-device
+fd and VMA claims; tolerance for an epoll fd shared across fork-inherited
+processes; a late device resume failure fails the restore instead of being
+logged at debug level. An earlier line of this fork that restored io_uring
+from the PIE restorer and needed patched libuv and uvloop is archived under
+`archive/*` tags in its old repository and is no longer built.
+
+**Patches the earlier line carried** (kept here until the per-patch list
+below is rewritten against the fork of record):
 
 1. `082956b...d2f0c906f...082956b...df6749d5c` — **Generic character-device
    handling for NVIDIA**. Upstream's CRIU CUDA plugin only recognises a

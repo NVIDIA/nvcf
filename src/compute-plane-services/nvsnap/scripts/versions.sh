@@ -42,7 +42,7 @@ NVSNAP_CRIU_SRC="${NVSNAP_CRIU_SRC:-}"
 
 # Core images — reset to a v0.0.1 baseline on 2026-05-21 and bumped from
 # there per CLAUDE.md rule 19 (never reuse a tag on rebuild).
-NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.19}"
+NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.21}"
 NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.43}"
 NVSNAP_SERVER_VERSION="${NVSNAP_SERVER_VERSION:-v0.0.31}"
 NVSNAP_BLOBSTORE_VERSION="${NVSNAP_BLOBSTORE_VERSION:-v0.0.1}"
@@ -74,7 +74,7 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 #   fatal: couldn't find remote ref 169595fd8
 # Only the clean-checkout path fetches, so a developer with a local ../criu
 # checkout never sees this; it breaks OSS clone-and-build only.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-169595fd8ff115690c35d70c1fae90a8d03a7321}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-74b4170aa9f336235657a8a5edd38855ae9d92bd}"
 NVSNAP_LIBZMQ_REPO="${NVSNAP_LIBZMQ_REPO:-https://github.com/balajinvda/libzmq.git}"
 NVSNAP_LIBZMQ_REF="${NVSNAP_LIBZMQ_REF:-checkpoint-restore-v1}"
 NVSNAP_LIBUV_REPO="${NVSNAP_LIBUV_REPO:-https://github.com/balajinvda/libuv.git}"
