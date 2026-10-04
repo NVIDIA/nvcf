@@ -1160,7 +1160,6 @@ func TestModelVolumeController_FailedJobRecordsFailureAndRetiresWriterView(t *te
 	}
 }
 
-
 // The failure marker is written on the primary through a mount on this
 // node and carries the reason, so readers can log it.
 func TestModelVolumeController_FailureMarkerWrittenThroughTheMount(t *testing.T) {

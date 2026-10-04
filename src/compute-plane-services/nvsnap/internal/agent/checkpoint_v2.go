@@ -58,6 +58,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -266,15 +267,21 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// so --compress only touches sparse CPU-side pages. Not worth the dump-time
 	// CPU by default. Opt in per node via NVSNAP_CRIU_V2_COMPRESS:
 	//   "page"          per-page LZ4
-	//   "region[:SIZE]" region LZ4 (SIZE default 256K, max 4M)
+	//   "block[:SIZE]"  block LZ4 (SIZE default 256K, max 4M); "region" is
+	//                   the same thing under the flag's earlier name
 	//   "" / "off"      no compression (default)
+	// Upstream CRIU renamed --compress-region to --compress-block when it
+	// unified the two modes; the bundled binary decides which spelling the
+	// dump gets (see criuCompressBlockFlag).
 	switch mode := os.Getenv("NVSNAP_CRIU_V2_COMPRESS"); {
 	case mode == "page":
 		args = append(args, "--compress")
-	case mode == "region" || mode == "region:":
-		args = append(args, "--compress-region", "256K")
+	case mode == "region" || mode == "region:" || mode == "block" || mode == "block:":
+		args = append(args, bundledCompressBlockFlag(), "256K")
 	case strings.HasPrefix(mode, "region:"):
-		args = append(args, "--compress-region", strings.TrimPrefix(mode, "region:"))
+		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "region:"))
+	case strings.HasPrefix(mode, "block:"):
+		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "block:"))
 	default: // "" / "off": no compression
 	}
 	if leaveRunning {
@@ -502,4 +509,30 @@ func tailOfFile(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
+}
+
+// criuCompressBlockFlag returns the block-compression option the given
+// `criu --help` text advertises: "--compress-block" on CRIU with the unified
+// compression mode, "--compress-region" on the earlier spelling.
+func criuCompressBlockFlag(help string) string {
+	if strings.Contains(help, "--compress-block") {
+		return "--compress-block"
+	}
+	return "--compress-region"
+}
+
+var (
+	bundledCompressFlagOnce sync.Once
+	bundledCompressFlag     string
+)
+
+// bundledCompressBlockFlag probes the bundled criu once for the spelling it
+// understands. A failed probe falls back to the earlier name, which the
+// binaries shipped before the upstream rename accept.
+func bundledCompressBlockFlag() string {
+	bundledCompressFlagOnce.Do(func() {
+		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
+		bundledCompressFlag = criuCompressBlockFlag(string(out))
+	})
+	return bundledCompressFlag
 }
