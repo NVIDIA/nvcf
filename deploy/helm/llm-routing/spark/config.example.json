@@ -27,7 +27,6 @@
   "containerd": {
     "socketPath": "/run/k3s/containerd/containerd.sock",
     "archiveNode": "spark-control",
-    "archiveDirectory": "/var/tmp/llm-poc-images",
     "runAsUser": 1000,
     "nodeNames": [
       "spark-control",

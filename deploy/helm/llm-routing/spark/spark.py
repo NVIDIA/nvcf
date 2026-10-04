@@ -17,9 +17,13 @@ import secrets
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import gateway_access
+import cluster_setup
 LOCK = json.loads((HERE/'source.lock.json').read_text())
 MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
@@ -63,6 +67,187 @@ def validate(c):
     require(c.get('caConfigMap'), 'caConfigMap is required for verified QUIC and client TLS.')
     require(not c.get('retainedModels'), 'Verification targets GLM. Remove retainedModels from the configuration.')
     require(not c.get('testFixture'), 'The recipe deploys GLM. Remove testFixture from the configuration.')
+
+
+
+def default_work_dir(context):
+    require(isinstance(context, str) and bool(context.strip()),
+            'Set SPARK_CONTEXT or --context. The current kubectl context is not selected automatically.')
+    xdg = os.environ.get('XDG_STATE_HOME')
+    if xdg:
+        root = pathlib.Path(xdg)
+        require(root.is_absolute(), 'XDG_STATE_HOME must be an absolute directory.')
+    else:
+        root = pathlib.Path.home()/'.local/state'
+    scope = hashlib.sha256(context.encode()).hexdigest()[:20]
+    return (root/'nvcf/llm-routing'/scope).resolve()
+
+
+class ContextSelectionError(RuntimeError):
+    pass
+
+
+class DockerUnavailableError(RuntimeError):
+    pass
+
+
+def kubeconfig_context():
+    """Choose a sole local context without using current-context or reading raw credentials."""
+    try:
+        config = json.loads(output(['kubectl', 'config', 'view', '-o', 'json'], stderr=subprocess.PIPE))
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        raise ContextSelectionError('Could not read kubeconfig. Set KUBECONFIG or pass --context NAME.') from None
+    contexts = config.get('contexts') or []
+    names = {item.get('name') for item in contexts if isinstance(item, dict)}
+    names = {name for name in names if isinstance(name, str) and name.strip()}
+    if not names:
+        raise ContextSelectionError('No Kubernetes context found. Set KUBECONFIG or pass --context NAME.')
+    if len(names) != 1:
+        raise ContextSelectionError('Multiple Kubernetes contexts found. Pass --context NAME or set SPARK_CONTEXT.')
+    return names.pop()
+
+
+def cli_settings(args):
+    """Resolve local paths and context without changing files or the cluster."""
+    config = None
+    if args.config:
+        path = args.config.expanduser()
+        require(path.exists() or args.phase == 'init', 'Configuration file does not exist. Run init or attach-existing first.')
+        if path.exists():
+            config = json.loads(path.read_text())
+    work = args.work_dir.expanduser().resolve() if args.work_dir else None
+    if config is None and work and not args.config and (work/'config.json').exists():
+        config = json.loads((work/'config.json').read_text())
+    context = args.context or os.environ.get('SPARK_CONTEXT') or (config.get('context') if config else None)
+    if not context:
+        context = kubeconfig_context()
+    work = work or default_work_dir(context)
+    require(not work.is_relative_to(HERE.parents[3]), 'Keep generated work and credentials outside the checkout.')
+    config_path = args.config.expanduser().resolve() if args.config else work/'config.json'
+    if config is None and config_path.exists():
+        config = json.loads(config_path.read_text())
+    if config is not None:
+        require(config.get('context') == context, 'Selected context differs from the saved deployment configuration.')
+        require(not args.namespace or config.get('namespace') == args.namespace,
+                'Selected namespace differs from the saved deployment. Use a separate --work-dir for another installation.')
+    require(isinstance(context, str) and bool(context.strip()), 'Set --context NAME or SPARK_CONTEXT.')
+    return context, work, config_path, config
+
+
+def discover_config(context, namespace=None):
+    """Read one installed recipe and return only reusable deployment settings."""
+    require(context, 'Set --context to the Kubernetes context for the existing installation.')
+    kc = ['kubectl', '--context', context, '--request-timeout=30s']
+    scope = ['-n', namespace] if namespace else ['--all-namespaces']
+    deployments = json.loads(output(kc+['get', 'deployments']+scope+['-o', 'json']))['items']
+    candidates = [d for d in deployments if d['metadata']['name'] == 'llm-api-gateway'
+                  and d['metadata'].get('annotations', {}).get('meta.helm.sh/release-name')]
+    require(candidates, 'No Helm-managed LLM gateway found. Check --context and --namespace.')
+    require(len(candidates) == 1, 'Multiple LLM installations found. Select one with --namespace: '+
+            ', '.join(sorted(d['metadata']['namespace'] for d in candidates)))
+    gateway = candidates[0]
+    namespace = gateway['metadata']['namespace']
+    kc += ['-n', namespace]
+    hm = ['helm', '--kube-context', context, '-n', namespace]
+
+    def get(kind, name):
+        return json.loads(output(kc+['get', kind, name, '-o', 'json']))
+
+    def owner(obj):
+        annotations = obj['metadata'].get('annotations', {})
+        require(annotations.get('meta.helm.sh/release-namespace') == namespace,
+                'Unexpected Helm namespace for '+obj['metadata']['name'])
+        release = annotations.get('meta.helm.sh/release-name')
+        require(release, 'Missing Helm ownership for '+obj['metadata']['name'])
+        return release
+
+    def values(name):
+        return json.loads(output(hm+['get', 'values', name, '--all', '-o', 'json']))
+
+    def placement(obj):
+        node = obj['spec']['template']['spec'].get('nodeSelector', {}).get('kubernetes.io/hostname')
+        require(node, 'Expected explicit node placement for '+obj['metadata']['name'])
+        return node
+
+    stack = owner(gateway)
+    v = values(stack)
+    require(v.get('sparkRecipeSource') == {k: LOCK[k] for k in ('repository', 'revision')},
+            'Installed source differs from source.lock.json. Use the matching recipe checkout.')
+    router = get('deployment', 'llm-request-router')
+    require(owner(router) == stack, 'Gateway and router belong to different releases.')
+    control = placement(gateway)
+    require(placement(router) == control, 'This recipe requires gateway and router on the same control node.')
+    endpoint = get('inferenceendpoint', 'glm53-iq2')
+    glm = owner(endpoint)
+    require(endpoint['spec']['service']['name'] == glm and endpoint['spec']['modelName'] == 'GLM-5.3-UD-IQ2_M',
+            'Existing endpoint is not the GLM deployment supported by this recipe.')
+    leader = get('deployment', glm)
+    worker = get('deployment', glm+'-rpc-worker')
+    service = get('service', glm)
+    require(all(owner(d) == glm for d in (leader, worker, service)), 'Unexpected GLM resource ownership.')
+    backend = values(glm)
+    nodes = {'control': control, 'leader': placement(leader), 'worker': placement(worker)}
+    targets = {t['id']: t['node'] for t in backend['targets']}
+    require(all(targets.get(role) == nodes[role] for role in ('leader', 'worker')), 'GLM placement differs from Helm values.')
+    releases = json.loads(output(hm+['list', '-o', 'json']))
+    operators = []
+    for release in releases:
+        if not release['chart'].startswith('pylon-operator-'):
+            continue
+        config = values(release['name'])
+        if (config.get('clusterId') == v.get('clusterId')
+                and namespace in config.get('watchNamespaces', [])
+                and config.get('router', {}).get('grpcAddress') == 'http://llm-request-router.'+namespace+'.svc.cluster.local:50071'):
+            operators.append((release['name'], config))
+    require(len(operators) == 1, 'Expected one Pylon Operator for the selected cluster and namespace.')
+    operator, op = operators[0]
+    require(op.get('fullnameOverride') == operator, 'Operator Deployment name must match its Helm release for this recipe.')
+    operator_deployment = get('deployment', operator)
+    require(owner(operator_deployment) == operator and placement(operator_deployment) == control,
+            'Operator ownership or placement differs from this recipe.')
+    ca = op['trustBundle']['configMap']
+    auth = v['llm-api-gateway']['llmApiGateway']['auth']
+    require(auth.get('mode') == 'staticKeys' and auth.get('staticKeys', {}).get('existingSecret'),
+            'Automatic test keys require staticKeys gateway authentication.')
+    images = {}
+    for component, chart, field in [('gateway', 'llm-api-gateway', 'llmApiGateway'),
+                                     ('router', 'llm-request-router', 'llmRequestRouter')]:
+        im = v[chart][field]['image']
+        images[component] = im['registry']+'/'+im['repository']
+        obj = gateway if component == 'gateway' else router
+        expected = images[component]+':'+im['tag']
+        require(any(c['image'] == expected for c in obj['spec']['template']['spec']['containers']),
+                'Live '+component+' image differs from its Helm values.')
+    images['operator'] = op['image']['repository']
+    images['pylon'] = op['pylon']['image']['repository']
+    importers = []
+    for release in releases:
+        if release['chart'].startswith('pylon-image-loader-'):
+            config = values(release['name'])
+            if config.get('archiveNode') == control and control in config.get('nodeNames', []):
+                importers.append((release['name'], config))
+    require(len(importers) <= 1, 'Multiple image import configurations match the control node.')
+    containerd = None
+    prefix = glm.removesuffix('-glm')[:30]
+    if importers:
+        name, config = importers[0]
+        require(name.endswith('-images'), 'Image importer release must end in -images.')
+        prefix = name.removesuffix('-images')
+        containerd = {k: config[k] for k in ('archiveNode', 'runAsUser', 'socketPath', 'nodeNames')}
+    image = v['llm-api-gateway']['llmApiGateway']['image']
+    image_prefix = images['gateway'].rsplit('/', 1)[0]
+    if '/' not in image_prefix:
+        image_prefix += '/attached'
+    # TLS private material and existing caller/cluster key hashes are intentionally omitted.
+    config = {'context': context, 'namespace': namespace, 'releasePrefix': prefix, 'clusterId': v['clusterId'],
+              'releases': {'stack': stack, 'operator': operator, 'glm': glm}, 'nodes': nodes,
+              'storageClass': backend['artifacts']['storageClassName'], 'runtimeClass': backend['runtimeClassName'],
+              'images': {'prefix': image_prefix, 'tag': image['tag'], 'pullPolicy': image['pullPolicy'],
+                         'pullSecrets': [], 'repositories': images},
+              'runtimeImage': backend['image'], 'tls': {'selfSigned': {'enabled': True}},
+              'caConfigMap': ca, 'apiKeyFile': None, 'containerd': containerd}
+    validate(config)
+    return config
 
 
 class Recipe:
@@ -201,9 +386,10 @@ class Recipe:
 
     def attach_existing(self):
         require(not self.state or self.state.get('attachedExisting'), 'Use a separate work directory for an existing installation.')
+        if self.state:
+            self.bound_cluster()
         require(set(self.c.get('releases', {})) >= {'stack', 'operator', 'glm'}, 'Set explicit releases.stack, releases.operator and releases.glm.')
-        require(self.c.get('apiKeyFile'), 'Existing installation access requires an approved apiKeyFile.')
-        key = pathlib.Path(self.c['apiKeyFile']).expanduser().resolve(strict=True)
+        key = pathlib.Path(self.c['apiKeyFile']).expanduser().resolve(strict=True) if self.c.get('apiKeyFile') else None
         nodes = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
         names = {n['metadata']['name'] for n in nodes}
         require(set(self.c['nodes'].values()) <= names, 'Configured placement nodes do not exist.')
@@ -224,7 +410,7 @@ class Recipe:
         save(self.work/'ca.crt', ca)
         self.stamp('attachedExisting')
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
-        self.stamp('stack', {'apiKeyFile': str(key), 'source': values.get('sparkRecipeSource')})
+        self.stamp('stack', {'apiKeyFile': str(key) if key else None, 'source': values.get('sparkRecipeSource')})
         self.stamp('serve')
         print('Existing installation inspected without changing it. Run verify-gateway next.')
         if values.get('sparkRecipeSource') != self.source_identity():
@@ -294,6 +480,106 @@ class Recipe:
         self.stamp('qualify', False)
         print('Saved previous qualification evidence:', evidence)
 
+    def resume_load(self):
+        """Recover the local load checkpoint without changing an already deployed model."""
+        def release():
+            item = json.loads(output(self.hm+['status', self.glm, '-o', 'json'], timeout=45))
+            require(item.get('name') == self.glm and item.get('namespace') == self.c['namespace'],
+                    'Unexpected GLM Helm release identity.')
+            require(item.get('info', {}).get('status') == 'deployed',
+                    'GLM Helm release is '+str(item.get('info', {}).get('status'))+
+                    '. Resolve the Helm operation, then rerun load.')
+            return item['version']
+
+        revision = release()
+        values = json.loads(output(self.hm+['get', 'values', self.glm, '--revision', str(revision), '-o', 'json'], timeout=45))
+        if values.get('phase') != 'serve':
+            require(values.get('phase') == 'download', 'GLM Helm release is not at the completed download or serve phase.')
+            existing = output(self.kc+['get', 'deployment', self.glm, '--ignore-not-found', '-o', 'json'], timeout=45)
+            require(not existing.strip(), 'A model Deployment already exists outside the expected serve phase.')
+            require(release() == revision, 'GLM Helm revision changed while checking load. Retry after the operation completes.')
+            return False
+        require(values == self.backend_values('serve'), 'Deployed GLM values differ from this load configuration.')
+        expected = {
+            ('Deployment', self.glm): ('leader', 'llama', 'model-server'),
+            ('Deployment', self.glm+'-rpc-worker'): ('worker', 'rpc', 'rpc-worker'),
+            ('Deployment', self.glm+'-artifacts'): ('leader', 'artifacts', 'artifacts'),
+            ('PersistentVolumeClaim', self.glm+'-artifacts'): None,
+            ('PersistentVolumeClaim', self.glm+'-rpc-cache'): None,
+        }
+        names = [('deployment/' if kind == 'Deployment' else 'pvc/')+name for kind, name in expected]
+
+        def ready_resources():
+            items = json.loads(output(self.kc+['get', *names, '-o', 'json'], timeout=45))['items']
+            require({(item.get('kind'), item['metadata']['name']) for item in items} == set(expected)
+                    and len(items) == len(expected), 'Missing GLM resources while resuming load.')
+            identities = {}
+            for item in items:
+                meta, spec, status = item['metadata'], item['spec'], item.get('status', {})
+                name, kind = meta['name'], item['kind']
+                owner = meta.get('annotations', {})
+                require(meta.get('namespace') == self.c['namespace'] and not meta.get('deletionTimestamp')
+                        and owner.get('meta.helm.sh/release-name') == self.glm
+                        and owner.get('meta.helm.sh/release-namespace') == self.c['namespace']
+                        and meta.get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm',
+                        'Unexpected GLM resource ownership: '+name)
+                require(meta.get('uid'), 'Missing GLM resource identity: '+name)
+                if kind == 'PersistentVolumeClaim':
+                    require(status.get('phase') == 'Bound' and spec.get('volumeName')
+                            and spec.get('storageClassName') == self.c['storageClass'],
+                            'GLM storage is not bound as configured: '+name)
+                    identities[kind+'/'+name] = [meta['uid'], spec['volumeName']]
+                    continue
+                generation = meta.get('generation')
+                require(generation and status.get('observedGeneration') == generation
+                        and spec.get('replicas') == 1
+                        and all(status.get(field, 0) == 1 for field in
+                                ('replicas', 'updatedReplicas', 'readyReplicas', 'availableReplicas'))
+                        and not status.get('unavailableReplicas', 0),
+                        'GLM Deployment is not ready at its current generation: '+name+'. Wait, then rerun load.')
+                role, container, component = expected[(kind, name)]
+                template = spec['template']
+                labels = {'app.kubernetes.io/instance': self.glm, 'app.kubernetes.io/component': component}
+                require(all(template['metadata'].get('labels', {}).get(key) == value for key, value in labels.items())
+                        and spec.get('selector', {}).get('matchLabels') == labels,
+                        'Unexpected GLM Deployment selector: '+name)
+                pod = template['spec']
+                require(pod.get('nodeSelector', {}).get('kubernetes.io/hostname') == self.c['nodes'][role],
+                        'GLM Deployment targets another node: '+name)
+                containers = pod.get('containers', [])
+                require(len(containers) == 1 and containers[0].get('name') == container
+                        and containers[0].get('image') == self.c['runtimeImage'],
+                        'GLM Deployment image differs: '+name)
+                volume = 'rpc-cache' if component == 'rpc-worker' else 'artifacts'
+                volumes = {item['name']: item for item in pod.get('volumes', [])}
+                mounts = {item['name']: item for item in containers[0].get('volumeMounts', [])}
+                require(volumes.get(volume, {}).get('persistentVolumeClaim', {}).get('claimName') == self.glm+'-'+volume
+                        and mounts.get(volume, {}).get('mountPath') == '/'+volume,
+                        'GLM Deployment storage differs: '+name)
+                if component == 'model-server':
+                    env = {item['name']: item.get('value') for item in containers[0].get('env', [])}
+                    require(env.get('FIRST_SHARD') == values['model']['firstShard']
+                            and env.get('SERVED_MODEL') == values['model']['servedName']
+                            and env.get('RPC_ENDPOINT') == self.glm+'-rpc-worker:50052'
+                            and json.loads(env.get('SERVER_ARGS') or 'null') == values['model']['args'],
+                            'GLM model or RPC connection differs: '+name)
+                if component != 'artifacts':
+                    require(pod.get('runtimeClassName') == self.c['runtimeClass']
+                            and template['metadata'].get('annotations', {}).get('checksum/runtime') == self.state['runtimeSha256']
+                            and all(str(containers[0].get('resources', {}).get(field, {}).get('nvidia.com/gpu')) == '1'
+                                    for field in ('requests', 'limits')),
+                            'GLM GPU or runtime configuration differs: '+name)
+                identities[kind+'/'+name] = [meta['uid'], generation]
+            return identities
+
+        identities = ready_resources()
+        require(ready_resources() == identities and release() == revision,
+                'GLM resources or Helm revision changed while resuming load. Retry after the operation completes.')
+        save(self.work/'evidence'/'load-resume.json', {'release': self.glm, 'revision': revision, 'resources': identities})
+        self.stamp('serve')
+        print('Resumed completed GLM load without changing the deployment. Run verify-direct next.')
+        return True
+
     def backend_phase(self, phase, retry=False):
         self.bound_cluster()
         require(not self.state.get('serve'), 'The model has already been loaded. Use the update or explicit recovery commands, not preparation phases.')
@@ -301,6 +587,8 @@ class Recipe:
         prerequisites = {'preflight': 'inventory', 'build': 'preflight', 'qualify': 'runtimeSha256', 'download': 'qualify', 'serve': 'download'}
         require(self.state.get(prerequisites[phase]), 'Missing successful '+prerequisites[phase]+' phase.')
         if phase == 'serve':
+            if self.resume_load():
+                return
             for role in ('leader', 'worker'):
                 raw = output(self.kc+['exec', 'deploy/'+self.glm+'-rpc-'+role, '-c', 'rpc', '--', 'cat', '/proc/meminfo'])
                 available = next(int(line.split()[1])*1024 for line in raw.splitlines() if line.startswith('MemAvailable:'))
@@ -385,22 +673,56 @@ class Recipe:
                 proc.terminate()
                 proc.wait(timeout=10)
 
+    def chat(self, prompt, stream, port):
+        require(prompt is None or (isinstance(prompt, str) and bool(prompt.strip())), 'Provide a nonempty chat prompt.')
+        self.bound_cluster()
+        require(self.state.get('stack'), 'Attach to or deploy the stack first.')
+        url = 'https://127.0.0.1:' + str(port)
+        command = [sys.executable, str(HERE/'client.py'), '--mode', 'chat', '--url', url,
+                   '--ca-file', str(self.work/'ca.crt')]
+        with self.forward(True, port):
+            existing_key = self.state['stack'].get('apiKeyFile')
+            access = contextlib.nullcontext(existing_key) if existing_key else gateway_access.temporary_gateway_key(self, url)
+            with access as key_path:
+                command += ['--api-key-file', str(key_path)]
+                if stream:
+                    command += ['--stream']
+                run(command + (['--', prompt] if prompt is not None else []))
+
     def verify(self, gateway, port):
         self.bound_cluster()
         if gateway:
-            require(self.state.get('stack'), 'Deploy the stack first.')
-        command = [sys.executable, str(HERE/'client.py'), '--mode', 'verify', '--url', ('https' if gateway else 'http')+'://127.0.0.1:'+str(port),
+            require(self.state.get('stack'), 'Deploy or attach to the stack first.')
+        url = ('https' if gateway else 'http')+'://127.0.0.1:'+str(port)
+        command = [sys.executable, str(HERE/'client.py'), '--mode', 'verify', '--url', url,
                    '--output', str(self.work/'evidence'/('gateway.json' if gateway else 'direct.json'))]
         if gateway:
-            command += ['--ca-file', str(self.work/'ca.crt'), '--api-key-file', self.state['stack']['apiKeyFile'],
-                        '--cluster-id', self.c['clusterId']]
+            command += ['--ca-file', str(self.work/'ca.crt'), '--cluster-id', self.c['clusterId']]
         self.stamp('gateway' if gateway else 'direct', False)
         with self.forward(gateway, port):
-            run(command)
+            if gateway:
+                existing_key = self.state['stack'].get('apiKeyFile')
+                access = contextlib.nullcontext(existing_key) if existing_key else gateway_access.temporary_gateway_key(self, url)
+                with access as key:
+                    run(command+['--api-key-file', str(key)])
+            else:
+                run(command)
+        # Temporary key removal and rejection must pass before verification passes.
         self.stamp('gateway' if gateway else 'direct')
+
+    def cleanup_key(self, port):
+        self.bound_cluster()
+        require(self.state.get('stack'), 'Attach to the stack first.')
+        with self.forward(True, port):
+            gateway_access.cleanup_gateway_key(self, 'https://127.0.0.1:'+str(port))
+        print('Temporary gateway key cleanup completed.')
 
     def build_images(self, component=None, tag=None):
         self.source_check()
+        try:
+            run(['docker', 'info'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            raise DockerUnavailableError('Start Docker, then rerun build-images.') from None
         for name in ([component] if component else self.components()):
             command = ['docker', 'buildx', 'build', '--platform', 'linux/arm64', '--load', '--tag', self.image(name, tag)]
             if name in ('router', 'pylon'):
@@ -408,6 +730,20 @@ class Recipe:
             if name == 'operator':
                 command += ['-f', str(HERE/'operator.Dockerfile'), '--build-arg', 'SOURCE_REVISION='+LOCK['revision']]
             run(command+[str(self.source/COMPONENTS[name])])
+
+    def export_images(self, component=None, tag=None):
+        self.source_check()
+        images = [self.image(name, tag) for name in ([component] if component else self.components())]
+        fd, temporary = tempfile.mkstemp(prefix='.arm64-images-', suffix='.tar', dir=self.work)
+        os.close(fd)
+        archive = self.work/'arm64-images.tar'
+        try:
+            run(['docker', 'save', '--output', temporary] + images)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, archive)
+        finally:
+            pathlib.Path(temporary).unlink(missing_ok=True)
+        print('Image archive:', archive)
 
     def components(self):
         return list(COMPONENTS)
@@ -425,15 +761,105 @@ class Recipe:
         for image in expected:
             aliases = {image, image.removeprefix('docker.io/'), image.removeprefix('docker.io/library/')}
             require(bool(tags & aliases), 'Archive is missing the configured image: '+image)
-        cfg = self.c['containerd']
+        cfg = self.c.get('containerd')
+        require(cfg, 'No image importer was discovered. Use registry distribution or configure containerd import settings.')
         nodes = [self.c['nodes']['control']] if component in ('gateway', 'router') else cfg.get('nodeNames', sorted(set(self.c['nodes'].values())))
         with archive.open('rb') as stream:
             archive_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
-        values = {'enabled': True, 'nodeNames': nodes, 'archiveNode': cfg['archiveNode'],
-                  'archiveDirectory': cfg['archiveDirectory'], 'archiveName': archive.name,
-                  'archiveSha256': archive_hash,
-                  'runAsUser': cfg['runAsUser'], 'socketPath': cfg['socketPath']}
-        self.helm_apply(self.c['releasePrefix']+'-images', HERE/'charts/image-loader', values, '10m', jobs=True)
+        release = self.c['releasePrefix']+'-images'
+        existing = json.loads(output(self.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled',
+                                              '--superseded', '--uninstalling', '--filter', '^'+re.escape(release)+'$', '-o', 'json']))
+        require(all(item['chart'].startswith('pylon-image-loader-') for item in existing),
+                'The image import release belongs to another chart.')
+        prior_jobs = json.loads(output(self.kc+['get', 'jobs', '-o', 'json']))['items']
+        owned = [job for job in prior_jobs if job['metadata'].get('annotations', {}).get('meta.helm.sh/release-name') == release]
+        active = [job for job in owned if not any(c.get('type') in ('Complete', 'Failed') and c.get('status') == 'True'
+                                                  for c in job.get('status', {}).get('conditions', []))]
+        attempt_path = self.work/'image-import-attempt.json'
+        if active:
+            previous = json.loads(attempt_path.read_text()) if attempt_path.exists() else {}
+            require(previous.get('failed') and previous.get('release') == release
+                    and previous.get('context') == self.c['context'] and previous.get('namespace') == self.c['namespace']
+                    and all(previous.get('jobs', {}).get(job['metadata']['name']) == job['metadata']['uid'] for job in active),
+                    'Another image import is active. Wait for it to finish.')
+            status = json.loads(output(self.hm+['status', release, '-o', 'json']))
+            require(status.get('version') == previous.get('revision'), 'Image import revision changed. Do not replace another attempt.')
+        values = {'enabled': True, 'nodeNames': nodes, 'archiveNode': cfg.get('archiveNode', self.c['nodes']['control']),
+                  'archiveName': 'arm64-images.tar', 'archiveSha256': archive_hash,
+                  'runAsUser': cfg.get('runAsUser', 1000), 'socketPath': cfg['socketPath']}
+        self.helm_apply(release, HERE/'charts/image-loader', values, wait=False)
+        status = json.loads(output(self.hm+['status', release, '-o', 'json']))
+        revision = status['version']
+        require(isinstance(revision, int) and revision > 0, 'Image import release has no valid revision.')
+        base = release+'-'+str(revision)
+        names = [base+'-server']+[base+'-'+node for node in nodes]
+        jobs = json.loads(output(self.kc+['get', 'jobs']+names+['-o', 'json']))['items']
+        job_uids = {}
+        for job in jobs:
+            metadata = job['metadata']
+            annotations = metadata.get('annotations', {})
+            require(annotations.get('meta.helm.sh/release-name') == release
+                    and annotations.get('meta.helm.sh/release-namespace') == self.c['namespace'],
+                    'Image import Job has different Helm ownership.')
+            job_uids[metadata['name']] = metadata['uid']
+        require(set(job_uids) == set(names), 'Image import Jobs differ from the installed revision.')
+        server = base+'-server'
+        try:
+            deadline = time.monotonic() + 180
+            while True:
+                pods = json.loads(output(self.kc+['get', 'pods', '-l', 'job-name='+server, '-o', 'json']))['items']
+                if pods:
+                    break
+                require(time.monotonic() < deadline, 'Archive server pod was not created within 180 seconds.')
+                time.sleep(2)
+            require(len(pods) == 1 and not pods[0]['metadata'].get('deletionTimestamp'), 'Expected one active archive server pod.')
+            pod = pods[0]
+            require(any(owner.get('kind') == 'Job' and owner.get('uid') == job_uids[server]
+                        for owner in pod['metadata'].get('ownerReferences', [])), 'Archive server pod has different Job ownership.')
+            pod_name = pod['metadata']['name']
+            run(self.kc+['wait', 'pod/'+pod_name, '--for=condition=Ready', '--timeout=180s'])
+            ready = json.loads(output(self.kc+['get', 'pod', pod_name, '-o', 'json']))
+            require(ready['metadata']['uid'] == pod['metadata']['uid'] and not ready['metadata'].get('deletionTimestamp')
+                    and ready.get('spec', {}).get('nodeName') == values['archiveNode'],
+                    'Archive server pod changed or has different placement.')
+            upload = """import hashlib, os, sys
+path, expected_hash, expected_size = sys.argv[1:]
+expected_size = int(expected_size)
+partial = path + '.upload'
+size = 0
+checksum = hashlib.sha256()
+try:
+    with open(partial, 'xb') as target:
+        os.chmod(partial, 0o600)
+        while chunk := sys.stdin.buffer.read(1024 * 1024):
+            size += len(chunk)
+            if size > expected_size or size >= 1024**3:
+                raise RuntimeError('Uploaded archive exceeds its expected size')
+            checksum.update(chunk)
+            target.write(chunk)
+    if size != expected_size or checksum.hexdigest() != expected_hash:
+        raise RuntimeError('Uploaded archive size or SHA-256 differs')
+    os.replace(partial, path)
+finally:
+    if os.path.exists(partial):
+        os.unlink(partial)
+"""
+            print('Uploading image archive through Kubernetes:', archive.stat().st_size, 'bytes')
+            with archive.open('rb') as stream:
+                run(self.kc+['exec', '-i', pod['metadata']['name'], '-c', 'server', '--', 'python3', '-c', upload,
+                             '/images/arm64-images.tar', archive_hash, str(archive.stat().st_size)], stdin=stream, timeout=1200)
+            run(self.kc+['wait', '--for=condition=complete', '--timeout=15m']+['job/'+name for name in names])
+            completed = json.loads(output(self.kc+['get', 'jobs']+names+['-o', 'json']))['items']
+            require({job['metadata']['name']: job['metadata']['uid'] for job in completed} == job_uids,
+                    'Image import Jobs changed during verification.')
+        except BaseException:
+            save(attempt_path, {'failed': True, 'release': release, 'revision': revision, 'jobs': job_uids,
+                                'context': self.c['context'], 'namespace': self.c['namespace']})
+            raise
+        attempt_path.unlink(missing_ok=True)
+        save(self.work/'evidence/image-import.json', {'release': release, 'revision': revision,
+             'archiveSha256': archive_hash, 'nodeNames': nodes, 'jobs': job_uids})
+        print('Images imported on:', ', '.join(nodes))
 
     def update(self, component, tag):
         self.bound_cluster()
@@ -528,12 +954,16 @@ class Recipe:
         print('Offline Helm lint/render passed for', len(renders), 'configurations. No deployment was performed.')
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', required=True, type=pathlib.Path)
-    parser.add_argument('--work-dir', required=True, type=pathlib.Path)
+    parser.add_argument('--config', type=pathlib.Path)
+    parser.add_argument('--context', help='Kubernetes context; defaults to SPARK_CONTEXT, saved settings, or the sole kubeconfig context.')
+    parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
+    parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path)
-    parser.add_argument('phase', choices=['prepare', 'render', 'inventory', 'attach-existing', 'build-images', 'push-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'update', 'rollback', 'recover'])
+    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover'])
+    parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
+    parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
     parser.add_argument('--component', choices=list(COMPONENTS))
     parser.add_argument('--tag')
     parser.add_argument('--archive', type=pathlib.Path)
@@ -542,26 +972,71 @@ def main():
     parser.add_argument('--port', type=int, default=18443)
     parser.add_argument('--confirm-model-interruption', action='store_true')
     parser.add_argument('--retry', action='store_true', help='Archive an unsuccessful qualification and run new qualification and chain Jobs.')
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args(argv)
+    require(args.phase == 'chat' or (args.prompt is None and not args.stream), 'Prompt and --stream are supported only for chat.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
-    recipe = Recipe(json.loads(args.config.read_text()), args.work_dir, args.source_dir)
+    try:
+        context, work, config_path, config = cli_settings(args)
+    except ContextSelectionError as error:
+        parser.exit(2, 'error: ' + str(error) + '\n')
+    if args.phase == 'context':
+        print(context)
+        return
+    if args.phase == 'init':
+        require(config is None and not config_path.exists() and not (work/'state.json').exists(),
+                'Configuration or deployment state already exists. Init does not overwrite an installation.')
+        require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
+        try:
+            config = cluster_setup.discover_config(context, args.namespace)
+        except cluster_setup.ClusterSetupError as error:
+            parser.exit(2, 'error: ' + str(error) + '\n')
+        validate(config)
+        config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as file:
+            file.write(json.dumps(config, indent=2) + '\n')
+        print('Configuration:', config_path)
+        print('Model GPUs:', config['nodes']['leader'], 'and', config['nodes']['worker'])
+        print('Routing node:', config['nodes']['control'])
+        return
+    if args.phase == 'paths':
+        source = args.source_dir.expanduser().resolve() if args.source_dir else work/'source'
+        print(json.dumps({'workDir': str(work), 'config': str(config_path), 'source': str(source)}, indent=2))
+        return
+    discovered = config is None
+    if discovered:
+        require(args.phase == 'attach-existing', 'Run attach-existing first, or provide --config for a new installation.')
+        require(not (work/'state.json').exists(), 'Saved state is missing its configuration. Use a new work directory.')
+        config = discover_config(context, args.namespace)
+    recipe = Recipe(config, work, args.source_dir)
     if args.phase == 'prepare': recipe.prepare()
     elif args.phase == 'render': recipe.render()
     elif args.phase == 'inventory': recipe.inventory()
-    elif args.phase == 'attach-existing': recipe.attach_existing()
-    elif args.phase == 'build-images': recipe.build_images(args.component, args.tag)
+    elif args.phase == 'attach-existing':
+        recipe.attach_existing()
+        if discovered:
+            save(config_path, config)
+            print('Discovered configuration:', config_path)
+        print('Run verify-gateway next. Run prepare before editing or building application images.')
+    elif args.phase == 'build-images':
+        try:
+            recipe.build_images(args.component, args.tag)
+        except DockerUnavailableError as error:
+            parser.exit(2, 'error: ' + str(error) + '\n')
+    elif args.phase == 'export-images': recipe.export_images(args.component, args.tag)
     elif args.phase == 'push-images':
         for name in ([args.component] if args.component else recipe.components()):
             run(['docker', 'push', recipe.image(name, args.tag)])
     elif args.phase == 'import-images':
-        require(args.archive, '--archive is required.')
-        recipe.import_images(args.archive, args.allow_containerd_import, args.component, args.tag)
+        recipe.import_images(args.archive or recipe.work/'arm64-images.tar', args.allow_containerd_import, args.component, args.tag)
     elif args.phase == 'stack': recipe.deploy_stack()
     elif args.phase in ('preflight', 'build-runtime', 'qualify', 'download', 'load'):
         recipe.backend_phase({'build-runtime': 'build', 'load': 'serve'}.get(args.phase, args.phase), retry=args.retry)
     elif args.phase == 'verify-direct': recipe.verify(False, args.port)
     elif args.phase == 'register': recipe.register()
     elif args.phase == 'verify-gateway': recipe.verify(True, args.port)
+    elif args.phase == 'chat': recipe.chat(args.prompt, args.stream, args.port)
+    elif args.phase == 'cleanup-key': recipe.cleanup_key(args.port)
     elif args.phase == 'update':
         require(args.component in ('gateway', 'router') and args.tag, 'Update requires --component gateway|router and --tag.')
         recipe.update(args.component, args.tag)

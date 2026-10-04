@@ -25,7 +25,7 @@ metadata:
   name: {{ $base }}-server
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 660
+  activeDeadlineSeconds: 1800
   template:
     metadata:
       labels:
@@ -38,6 +38,7 @@ spec:
       securityContext:
         runAsUser: {{ .Values.runAsUser }}
         runAsGroup: {{ .Values.runAsUser }}
+        fsGroup: {{ .Values.runAsUser }}
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
       containers:
@@ -50,17 +51,19 @@ spec:
               pending = set(os.environ['EXPECTED_NODES'].split(','))
               class Handler(http.server.SimpleHTTPRequestHandler):
                   def do_GET(self):
-                      if self.path.startswith('/done/'):
+                      if self.path.startswith('/done/') and os.path.isfile(os.environ['ARCHIVE_NAME']):
                           pending.discard(self.path.removeprefix('/done/'))
                           self.send_response(200)
                           self.end_headers()
                           self.wfile.write(b'OK')
-                      else:
+                      elif self.path == '/' + os.environ['ARCHIVE_NAME']:
                           super().do_GET()
+                      else:
+                          self.send_error(404)
               os.chdir('/images')
               server = http.server.HTTPServer(('0.0.0.0', 8080), Handler)
               server.timeout = 1
-              deadline = time.monotonic() + 600
+              deadline = time.monotonic() + 1740
               while pending and time.monotonic() < deadline:
                   server.handle_request()
               server.server_close()
@@ -68,6 +71,7 @@ spec:
                   raise SystemExit('Import acknowledgement missing for: ' + ','.join(sorted(pending)))
           env:
             - {name: EXPECTED_NODES, value: {{ join "," .Values.nodeNames | quote }}}
+            - {name: ARCHIVE_NAME, value: {{ .Values.archiveName | quote }}}
           ports: [{containerPort: 8080}]
           resources:
             requests: {cpu: 100m, memory: 32Mi}
@@ -77,12 +81,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           volumeMounts:
-            - {name: images, mountPath: /images, readOnly: true}
+            - {name: images, mountPath: /images}
       volumes:
         - name: images
-          hostPath:
-            path: {{ required "archiveDirectory is required" .Values.archiveDirectory | quote }}
-            type: Directory
+          emptyDir: {sizeLimit: 1Gi}
 {{- range $node := required "nodeNames is required" .Values.nodeNames }}
 ---
 apiVersion: batch/v1
@@ -91,7 +93,7 @@ metadata:
   name: {{ $base }}-{{ $node }}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 540
+  activeDeadlineSeconds: 1800
   template:
     spec:
       nodeSelector:
@@ -110,10 +112,9 @@ spec:
           command: [/bin/sh, -ec]
           args:
             - |
-              attempt=0
+              deadline=$(($(date +%s) + 1500))
               until wget -q -T 60 -O /cache/images.tar "$ARCHIVE_URL"; do
-                attempt=$((attempt + 1))
-                test "$attempt" -lt 30
+                test "$(date +%s)" -lt "$deadline"
                 sleep 3
               done
               printf '%s  /cache/images.tar\n' "$ARCHIVE_SHA256" | sha256sum -c -

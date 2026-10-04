@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 import copy
+import contextlib
 import hashlib
 import io
 import importlib.util
@@ -66,7 +67,7 @@ class RecipeTests(unittest.TestCase):
             self.recipe.build_images('gateway', 'edited-build')
         self.assertEqual(edited.read_text(), 'local gateway change\n')
         self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
-        self.assertEqual([call.args[0][0] for call in run.call_args_list], ['helm', 'docker'])
+        self.assertEqual([call.args[0][0] for call in run.call_args_list], ['helm', 'docker', 'docker'])
         self.assertIn(self.recipe.image('gateway', 'edited-build'), run.call_args.args[0])
 
     def test_wrong_or_mutable_source_revision_is_rejected_before_prepare_or_build(self):
@@ -78,6 +79,27 @@ class RecipeTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'source revision'):
                         action()
                     run.assert_not_called()
+
+    def test_missing_or_unreachable_docker_fails_before_build_with_clear_action(self):
+        failures = (FileNotFoundError('docker'), subprocess.CalledProcessError(1, ['docker', 'info']),
+                    subprocess.TimeoutExpired(['docker', 'info'], 15))
+        for error in failures:
+            with self.subTest(error=type(error).__name__), patch.object(self.recipe, 'source_check'), \
+                 patch.object(spark, 'run', side_effect=error) as run, self.assertRaises(spark.DockerUnavailableError) as result:
+                self.recipe.build_images('gateway')
+            self.assertEqual(str(result.exception), 'Start Docker, then rerun build-images.')
+            run.assert_called_once_with(['docker', 'info'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+
+    def test_docker_probe_uses_existing_environment_and_does_not_hide_build_failures(self):
+        failure = subprocess.CalledProcessError(1, ['docker', 'buildx', 'build'])
+        with patch.dict(os.environ, {'DOCKER_HOST': 'unix:///custom/docker.sock', 'DOCKER_CONFIG': '/custom/config'}), \
+             patch.object(self.recipe, 'source_check'), patch.object(spark, 'run', side_effect=[None, failure]) as run, \
+             self.assertRaises(subprocess.CalledProcessError):
+            self.recipe.build_images('gateway')
+        self.assertEqual(run.call_args_list[0].args[0], ['docker', 'info'])
+        self.assertNotIn('env', run.call_args_list[0].kwargs)
+        self.assertEqual(run.call_args_list[1].args[0][:3], ['docker', 'buildx', 'build'])
+        self.assertNotIn('env', run.call_args_list[1].kwargs)
 
     def test_operator_build_identifies_the_exact_pinned_revision(self):
         with patch.object(self.recipe, 'source_check'), patch.object(spark, 'run') as run:
@@ -157,6 +179,23 @@ class RecipeTests(unittest.TestCase):
                 self.assertEqual(command[command.index('--url')+1], ('https' if gateway else 'http')+'://127.0.0.1:18443')
                 forward.assert_called_once_with(gateway, 18443)
                 self.assertTrue(self.recipe.state['gateway' if gateway else 'direct'])
+
+    def test_automatic_key_verification_does_not_pass_until_key_revocation(self):
+        self.recipe.state = {'stack': {'apiKeyFile': None}, 'gateway': True}
+
+        @contextlib.contextmanager
+        def incomplete_cleanup(*args):
+            yield pathlib.Path(self.tmp.name)/'temporary-gateway-key'
+            raise RuntimeError('revocation failed')
+
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward'), \
+                patch.object(spark.gateway_access, 'temporary_gateway_key', side_effect=incomplete_cleanup), \
+                patch.object(spark, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'revocation failed'):
+                self.recipe.verify(True, 18443)
+        run.assert_called_once()
+        self.assertFalse(self.recipe.state['gateway'])
+        self.assertFalse(spark.Recipe(self.config, self.tmp.name).state['gateway'])
 
     def test_failed_verification_invalidates_previous_success(self):
         self.recipe.state = {'stack': {'apiKeyFile': '/unused'}, 'gateway': True, 'direct': True}
@@ -419,13 +458,6 @@ class RecipeTests(unittest.TestCase):
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
         return path
-
-    def test_gateway_image_import_targets_only_control_node(self):
-        archive = self.archive('new-tag')
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply') as helm:
-            self.recipe.import_images(archive, True, 'gateway', 'new-tag')
-        self.assertEqual(helm.call_args.args[2]['nodeNames'], [self.config['nodes']['control']])
-        self.assertEqual(helm.call_args.args[2]['archiveSha256'], hashlib.sha256(archive.read_bytes()).hexdigest())
 
     def test_image_import_rejects_wrong_tag_before_cluster_mutation(self):
         archive = self.archive('old-tag')

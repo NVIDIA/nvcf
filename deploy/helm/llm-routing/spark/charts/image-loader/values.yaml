@@ -3,7 +3,6 @@
 enabled: false
 nodeNames: []
 archiveNode: ""
-archiveDirectory: ""
 archiveName: arm64-images.tar
 archiveSha256: ""
 serverImage: python:3.12-alpine
