@@ -112,7 +112,7 @@ func TestReplayMountAllowlist(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
 		_ = os.Unsetenv("NVSNAP_REPLAY_MOUNTS")
 		got := ReplayMountAllowlist()
-		want := []string{"/dev/shm"}
+		want := []string{"/dev/shm", "/opt/nvsnap"}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("default: got %v, want %v", got, want)
 		}
@@ -139,7 +139,7 @@ func TestReplayMountAllowlist(t *testing.T) {
 	t.Run("env empty falls back to default", func(t *testing.T) {
 		_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", "")
 		got := ReplayMountAllowlist()
-		want := []string{"/dev/shm"}
+		want := []string{"/dev/shm", "/opt/nvsnap"}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("empty env: got %v, want %v", got, want)
 		}
@@ -148,7 +148,7 @@ func TestReplayMountAllowlist(t *testing.T) {
 	t.Run("env whitespace-only falls back to default", func(t *testing.T) {
 		_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", "   ")
 		got := ReplayMountAllowlist()
-		want := []string{"/dev/shm"}
+		want := []string{"/dev/shm", "/opt/nvsnap"}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("whitespace env: got %v, want %v", got, want)
 		}
@@ -180,5 +180,21 @@ func TestMountIsRW(t *testing.T) {
 		if got := mountIsRW(tc.opts); got != tc.want {
 			t.Errorf("mountIsRW(%q) = %v; want %v", tc.opts, got, tc.want)
 		}
+	}
+}
+
+// The default allowlist carries the nvsnap cachedir alongside /dev/shm:
+// engines keep JIT artefacts open there and a placeholder has no copy.
+func TestDefaultReplayAllowlistCoversTheCachedir(t *testing.T) {
+	t.Setenv("NVSNAP_REPLAY_MOUNTS", "")
+	al := ReplayMountAllowlist()
+	if got := classifyMount("/opt/nvsnap", "tmpfs", "rw", al); got != MountClassReplay {
+		t.Errorf("writable cachedir mount must be replayed, got %v", got)
+	}
+	if got := classifyMount("/opt/nvsnap", "tmpfs", "ro", al); got != MountClassSkip {
+		t.Errorf("a read-only cachedir mount is left alone, got %v", got)
+	}
+	if got := classifyMount("/dev/shm", "tmpfs", "rw", al); got != MountClassReplay {
+		t.Errorf("/dev/shm stays on the default allowlist, got %v", got)
 	}
 }
