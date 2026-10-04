@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
-mkdir -p "$workdir/bin" "$workdir/source/tools/ci" "$workdir/source/fern" "$workdir/source/docs"
+mkdir -p "$workdir/bin" "$workdir/source/tools/ci" "$workdir/source/fern" "$workdir/source/docs" "$workdir/source/tools/docs-version-sync"
 cp "$repo_root/tools/ci/preview-docs" "$workdir/source/tools/ci/preview-docs"
 printf 'legacy\n' > "$workdir/source/fern/docs.yml"
 printf 'candidate\n' > "$workdir/source/fern/candidate.yml"
@@ -13,11 +13,15 @@ printf 'source content\n' > "$workdir/source/docs/page.md"
 cat > "$workdir/source/tools/ci/run-fern" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "$(pwd)" != "$SOURCE_REPO" ]
+[ "$(git remote get-url origin)" = 'https://github.com/example/docs.git' ]
+[ "$(git rev-parse HEAD)" = "$EXPECT_SHA" ]
 if [ -n "${EXPECT_CANDIDATE:-}" ]; then
   [ "$(cat fern/docs.yml)" = candidate ]
   [ "$(cat docs/page.md)" = 'uncommitted candidate content' ]
-  [ "$(git remote get-url origin)" = 'https://github.com/example/docs.git' ]
-  [ "$(git rev-parse HEAD)" = "$EXPECT_SHA" ]
+else
+  [ "$(cat fern/docs.yml)" = derived ]
+  [ "$(cat docs/page.md)" = 'normalized links' ]
 fi
 if [ "${EXPECT_CHECK:-0}" = 1 ]; then
   [ "$#" -eq 1 ] && [ "$1" = check ]
@@ -32,7 +36,24 @@ cat > "$workdir/bin/curl" <<'SH'
 #!/usr/bin/env bash
 exit 22
 SH
-chmod +x "$workdir/source/tools/ci/"* "$workdir/bin/curl"
+# Go owns configuration semantics; this mock verifies wrapper orchestration.
+cat > "$workdir/bin/go" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$#" -eq 8 ]
+[ "$1" = run ] && [ "$2" = -C ]
+[ "$3" = "$SOURCE_REPO/tools/docs-version-sync" ]
+[ "$4" = . ] && [ "$5" = edition ] && [ "$6" = preview ] && [ "$7" = --repo ]
+[ "$8" != "$SOURCE_REPO" ]
+[ "$(cat "$8/fern/docs.yml")" = legacy ]
+[ "$(cat "$8/docs/page.md")" = "$(cat "$SOURCE_REPO/docs/page.md")" ]
+if [ "${TEST_GO_EXIT:-0}" -ne 0 ]; then
+  exit "$TEST_GO_EXIT"
+fi
+printf 'derived\n' > "$8/fern/docs.yml"
+printf 'normalized links\n' > "$8/docs/page.md"
+SH
+chmod +x "$workdir/source/tools/ci/"* "$workdir/bin/"*
 cd "$workdir/source"
 git init --quiet
 git -c user.name=Test -c user.email=test@example.com add .
@@ -40,6 +61,9 @@ git -c user.name=Test -c user.email=test@example.com commit --quiet -m fixture
 git remote add origin https://github.com/example/docs.git
 export PATH="$workdir/bin:$PATH"
 export DOCS_PREVIEW_ID=nvcf-test
+export SOURCE_REPO="$PWD"
+EXPECT_SHA="$(git rev-parse HEAD)"
+export EXPECT_SHA
 CI_MERGE_REQUEST_IID=320 CI_MERGE_REQUEST_PROJECT_ID=123 \
   CI_API_V4_URL=https://example.com/api/v4 FERN_BOT=fake-token \
   tools/ci/preview-docs > "$workdir/comment.txt" 2>&1
@@ -51,9 +75,7 @@ if OMIT_URL=1 tools/ci/preview-docs > "$workdir/missing.txt" 2>&1; then
   echo 'expected missing preview URL to fail'; exit 1
 fi
 printf 'uncommitted candidate content\n' > docs/page.md
-EXPECT_SHA="$(git rev-parse HEAD)"
-export EXPECT_SHA
-EXPECT_CANDIDATE=1 DOCS_PREVIEW_CONFIG=fern/candidate.yml DOCS_PREVIEW_SKIP_COMMENT=1 \
+EXPECT_CANDIDATE=1 TEST_GO_EXIT=43 DOCS_PREVIEW_CONFIG=fern/candidate.yml DOCS_PREVIEW_SKIP_COMMENT=1 \
   tools/ci/preview-docs > "$workdir/candidate.txt" 2>&1
 [ "$(cat fern/docs.yml)" = legacy ]
 [ "$(cat docs/page.md)" = 'uncommitted candidate content' ]
@@ -65,4 +87,12 @@ EXPECT_CHECK=1 TEST_FERN_EXIT=17 tools/ci/preview-docs --check > "$workdir/check
 if DOCS_PREVIEW_CONFIG=fern/../outside.yml tools/ci/preview-docs > "$workdir/invalid.txt" 2>&1; then
   echo 'expected an invalid candidate path to fail'; exit 1
 fi
+status=0
+TEST_GO_EXIT=43 tools/ci/preview-docs > "$workdir/derive-failure.txt" 2>&1 || status=$?
+[ "$status" -eq 43 ] || { echo "Preview derivation failure was hidden: $status"; exit 1; }
+# Default previews also include uncommitted edits without modifying the source.
+DOCS_PREVIEW_SKIP_COMMENT=1 tools/ci/preview-docs > "$workdir/default.txt" 2>&1
+[ "$(cat fern/docs.yml)" = legacy ]
+[ "$(cat docs/page.md)" = 'uncommitted candidate content' ]
+EXPECT_CHECK=1 DOCS_PREVIEW_ID='' tools/ci/preview-docs --check > "$workdir/default-check.txt" 2>&1
 echo 'test-preview-docs: PASS'

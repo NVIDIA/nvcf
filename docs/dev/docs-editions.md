@@ -102,12 +102,14 @@ Run both configurations and the tooling tests:
 ```bash
 go test -C tools/docs-version-sync ./...
 ./tools/ci/check-docs
-DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
+tools/ci/preview-docs --check
 ```
 
-Generate a hosted preview of the canonical configuration as well as the
-Development-first preview. Local Fern previews cannot prove remote-ref
-composition. Verify edition switching, all six tabs, manifest versions,
+The default preview derives Development-first ordering from `fern/docs.yml`
+in a temporary clone. Generate a hosted preview of the canonical configuration
+as well by setting `DOCS_PREVIEW_CONFIG=fern/docs.yml`. Overrides are used as
+supplied, without reordering or link normalization. Local Fern previews cannot
+prove remote-ref composition. Verify edition switching, all six tabs, manifest versions,
 changelog links, archives, anchors, downloads, and mobile/light/dark rendering.
 Use an isolated staging instance for indexed search. Record source commits,
 resolved refs, preview URLs, CI results, and the last validated production
@@ -121,8 +123,8 @@ registry. Smoke-test production immediately after the publisher completes.
 ## Correct or roll back an edition
 
 Fix content in Development, then prepare a new patch edition. Keep the old
-branch and its recorded commit intact. Per-stack folder cuts are disabled for
-edition catalogs.
+branch and its recorded commit intact. The per-stack folder-cut commands have
+been removed. Existing archive folders remain available for historical URLs.
 
 Before a cutover, retain the previous production commit and toolchain pins.
 Rehearse restoring it on an isolated preview. If production regresses, prepare

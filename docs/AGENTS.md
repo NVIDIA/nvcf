@@ -155,20 +155,22 @@ DOCS_PREVIEW_ID=nvcf-candidate DOCS_PREVIEW_SKIP_COMMENT=1 \
   DOCS_PREVIEW_CONFIG=fern/candidate.yml tools/ci/preview-docs
 ```
 
-The file must exist directly under `fern/`. The helper stages `docs/` and
-`fern/` in a temporary clone with the original Git remote for branch refs.
+The optional override must exist directly under `fern/` and is used as supplied.
+The helper always stages `docs/` and `fern/` in a temporary clone with the
+original Git remote for branch refs.
 CI and local helpers use the pin in `fern/fern.config.json`; CI uses the
 Node version in `fern/.node-version`.
 
-The edition preview also requires Go. It validates and normalizes current
-cross-tab links in a temporary workspace. Keep explicit page slugs in
-`fern/navigation.yml`. Never run `edition links` against frozen documentation
-trees. `fern/edition-preview.yml` makes Development the default for PR previews.
+Without an override, the helper uses Go to derive a Development-first preview
+from `fern/docs.yml` and normalize current cross-tab links. A prepared release
+branch uses its local default instead. Keep explicit page slugs in
+`fern/navigation.yml`. Run `edition preview` and `edition links` only in a
+disposable clone, never against frozen documentation trees.
 
 Check the staged candidate without publishing a preview:
 
 ```bash
-DOCS_PREVIEW_CONFIG=fern/edition-preview.yml tools/ci/preview-docs --check
+tools/ci/preview-docs --check
 ```
 
 Native release notes live in `fern/changelog/YYYY-MM-DD.mdx`. Keep full release
@@ -196,6 +198,23 @@ Run full docs validation before finishing docs changes:
 
 ```bash
 ./tools/ci/check-docs
+```
+
+The required `docs` PR check validates canonical and Development links with
+Fern, then checks public HTTP links in every added or modified `.md` and `.mdx`
+file under `docs/` and `fern/`. The same check runs in the merge queue. Failed
+links fail the required check. Previews and publication also use Fern's strict
+broken-link validation.
+
+External checks use checksum-pinned Lychee 0.24.2. Results appear in the `docs`
+job log and its `docs-link-report` artifact. There is no recurring audit. Code
+examples are excluded; exact NGC login-page exceptions are documented in
+`tools/ci/docs-links.toml`. Do not suppress whole domains or all 401/403 errors.
+
+Run the external check against a base ref:
+
+```bash
+./tools/ci/check-doc-links origin/main /tmp/docs-link-report.md
 ```
 
 For pure routing or AGENTS.md-only changes, `git diff --check` plus targeted `rg` checks are usually sufficient.
