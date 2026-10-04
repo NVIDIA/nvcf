@@ -72,6 +72,7 @@ usage() {
     echo "  build-and-deploy - sync-versions + build app + push + deploy"
     echo "  full-cycle       - sync + build base + verify + push + build app + push + deploy"
     echo "  show-versions    - Display current versions from versions.sh"
+    echo "  check-criu-ref   - Verify the CRIU checkout and the last base build match NVSNAP_CRIU_REF"
     echo ""
     echo "Environment (override via env vars or versions.sh):"
     echo "  BASE_VERSION=${BASE_VERSION}"
@@ -107,6 +108,48 @@ record_criu_commit() {
     git -C "${CRIU_SRC}" rev-parse HEAD > "$CRIU_BASE_COMMIT_FILE" 2>/dev/null || true
 }
 
+# The CRIU the base image is built from must be the pinned ref. Two forks
+# drifted apart once (2026-10-03): a local sibling checkout on one line
+# built the shipped base while versions.sh pointed the OSS build at the
+# other. The pin is the fork of record (github.com/balajinvda/criu); a
+# local checkout is only an optimisation and has to be at the same commit.
+# NVSNAP_CRIU_ALLOW_REF_MISMATCH=1 overrides for a deliberate experiment.
+check_criu_ref() {
+    local head pinned
+    head=$(git -C "${CRIU_SRC}" rev-parse HEAD 2>/dev/null || echo "unknown")
+    pinned=$(git -C "${CRIU_SRC}" rev-parse --verify --quiet "${NVSNAP_CRIU_REF}^{commit}" 2>/dev/null || echo "${NVSNAP_CRIU_REF}")
+    case "$head" in
+        "$pinned"|"${pinned}"*) ;;
+        *)
+            if [ "${NVSNAP_CRIU_ALLOW_REF_MISMATCH:-0}" = "1" ]; then
+                echo "WARNING: CRIU source ${CRIU_SRC} is at ${head:0:12}, pinned ref is ${NVSNAP_CRIU_REF:0:12}; building anyway (NVSNAP_CRIU_ALLOW_REF_MISMATCH=1)"
+                return 0
+            fi
+            echo "ERROR: CRIU source ${CRIU_SRC} is at ${head:0:12} but versions.sh pins NVSNAP_CRIU_REF=${NVSNAP_CRIU_REF:0:12}"
+            echo "  The base image must be built from the fork of record at the pinned ref."
+            echo "  Fix: check out ${NVSNAP_CRIU_REF:0:12} from ${NVSNAP_CRIU_REPO} in ${CRIU_SRC}, or bump NVSNAP_CRIU_REF in scripts/versions.sh."
+            echo "  Override for an experiment only: NVSNAP_CRIU_ALLOW_REF_MISMATCH=1"
+            return 1
+            ;;
+    esac
+    echo "  CRIU source at pinned ref ${head:0:12}"
+}
+
+# The recorded base commit must be the pinned ref too, or the app image
+# would be layered on a base nobody can reproduce from versions.sh.
+warn_base_commit_drift() {
+    [ -f "$CRIU_BASE_COMMIT_FILE" ] || return 0
+    local last
+    last=$(cat "$CRIU_BASE_COMMIT_FILE")
+    case "$last" in
+        "${NVSNAP_CRIU_REF}"*|"${NVSNAP_CRIU_REF%%[!0-9a-f]*}") ;;
+        *)
+            echo "WARNING: the last base build used CRIU ${last:0:12}, versions.sh pins ${NVSNAP_CRIU_REF:0:12}."
+            echo "  Rebuild the base from the pinned ref before shipping this app image."
+            ;;
+    esac
+}
+
 build_base() {
     echo "=== Building BASE image (CRIU, system deps) ==="
     echo "This takes ~5 minutes but caches well"
@@ -131,6 +174,8 @@ build_base() {
             git -C "${CRIU_SRC}" checkout -q FETCH_HEAD || {
                 echo "ERROR: fetch ${NVSNAP_CRIU_REF} from ${NVSNAP_CRIU_REPO} failed"; exit 1; }
     fi
+
+    check_criu_ref || exit 1
 
     # Smart --no-cache: auto-detect if CRIU source changed
     local cache_flag=""
@@ -227,6 +272,7 @@ build_app() {
     echo "Base: ${BASE_IMAGE}"
     echo "Image: ${APP_IMAGE}"
     echo ""
+    warn_base_commit_drift
 
     # Warn about untracked .c files in intercept library
     local untracked
@@ -631,6 +677,11 @@ case "${1:-help}" in
         ;;
     show-versions)
         show_versions
+        ;;
+    check-criu-ref)
+        [ -d "${CRIU_SRC}" ] || { echo "No local CRIU checkout (CRIU_SRC=${CRIU_SRC:-unset}); the base build fetches ${NVSNAP_CRIU_REPO} at ${NVSNAP_CRIU_REF:0:12}"; exit 0; }
+        check_criu_ref
+        warn_base_commit_drift
         ;;
     help|--help|-h)
         usage
