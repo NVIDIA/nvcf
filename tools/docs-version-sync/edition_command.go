@@ -34,7 +34,7 @@ type editionPreparation struct {
 
 func runEdition(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: docs-version-sync edition <prepare|check|register|manifest|links> [flags]")
+		return fmt.Errorf("usage: docs-version-sync edition <prepare|check|register|manifest|links|preview> [flags]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet("edition "+command, flag.ContinueOnError)
@@ -59,7 +59,7 @@ func runEdition(args []string) error {
 	}
 	allowed := map[string]string{
 		"prepare": "repo version source previous-version change self-managed compute-plane observability navigation qualification out",
-		"check":   "repo local-refs", "register": "repo version commit local-refs", "manifest": "repo", "links": "repo navigation",
+		"check":   "repo local-refs", "register": "repo version commit local-refs", "manifest": "repo", "links": "repo navigation", "preview": "repo",
 	}
 	fields, ok := allowed[command]
 	if !ok {
@@ -87,6 +87,8 @@ func runEdition(args []string) error {
 		return err
 	}
 	switch command {
+	case "preview":
+		return stageEditionPreview(root)
 	case "links":
 		return stageEditionLinks(root, *nav)
 	case "prepare":
