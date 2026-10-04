@@ -6,7 +6,7 @@ default: 1.0.3
 editions:
     - version: 1.0.3
       ref: docs/releases/1.0.3
-      commit: 6443f718df3808177eb151a67576b75c939044e9
+      commit: 4890d84c89d0cfb0bc313a54afc3ecee02a098f9
     - version: 1.0.2
       ref: docs/releases/1.0.2
       commit: 579af18f6fef76356a78a609b0017bb9125684c1
