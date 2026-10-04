@@ -5,7 +5,11 @@ go_library(
     srcs = ["cache.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/cache",
     visibility = ["//:__subpackages__"],
-    deps = ["//src/control-plane-services/event-ledger/internal/data_access"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/data_access",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "@org_uber_go_zap//:zap",
+    ],
 )
 
 alias(

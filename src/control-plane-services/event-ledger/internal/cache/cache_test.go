@@ -18,9 +18,12 @@ limitations under the License.
 package cache
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,10 +39,54 @@ type fakeDB struct {
 	data_access.DBHandlerV2
 }
 
-func (h *CachingDBHandler) insert(k key, e entry) {
+func (h *CachingDBHandler) insert(cachedKey key, e entry) {
 	h.entriesMu.Lock()
 	defer h.entriesMu.Unlock()
-	h.entries[k] = &e
+	if old, ok := h.entries[cachedKey]; ok {
+		h.recency.Remove(old.recencyNode)
+	}
+	cachedEntry := &cached{entry: e}
+	cachedEntry.recencyNode = h.recency.PushFront(cachedKey)
+	h.entries[cachedKey] = cachedEntry
+}
+
+// discardFlush is a FlushFunc that drops what it is given, for tests that do not
+// look at what is written.
+func discardFlush(context.Context, data_access.EventV3UpsertRecord) error { return nil }
+
+// flushRecorder is a FlushFunc that records what it is asked to write.
+type flushRecorder struct {
+	mu   sync.Mutex
+	recs []data_access.EventV3UpsertRecord
+	err  error
+}
+
+func (r *flushRecorder) flush(_ context.Context, rec data_access.EventV3UpsertRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recs = append(r.recs, rec)
+	return r.err
+}
+
+func (r *flushRecorder) records() []data_access.EventV3UpsertRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]data_access.EventV3UpsertRecord(nil), r.recs...)
+}
+
+// assertConsistent checks that the map and the recency list describe the same
+// entries and that the cache is within max size.
+func assertConsistent(t *testing.T, h *CachingDBHandler) {
+	t.Helper()
+	h.entriesMu.RLock()
+	defer h.entriesMu.RUnlock()
+	require.Equal(t, len(h.entries), h.recency.Len())
+	assert.LessOrEqual(t, len(h.entries), h.cfg.MaxSize)
+	for node := h.recency.Front(); node != nil; node = node.Next() {
+		cachedEntry, ok := h.entries[node.Value.(key)]
+		require.True(t, ok)
+		assert.Same(t, node, cachedEntry.recencyNode)
+	}
 }
 
 func testConfig() Config {
@@ -48,9 +95,16 @@ func testConfig() Config {
 
 func newTestHandler(t *testing.T) *CachingDBHandler {
 	t.Helper()
-	h, err := NewCachingDBHandler(&fakeDB{}, testConfig())
-	require.NoError(t, err)
+	h, _ := newTestHandlerWith(t, testConfig())
 	return h
+}
+
+func newTestHandlerWith(t *testing.T, cfg Config) (*CachingDBHandler, *flushRecorder) {
+	t.Helper()
+	rec := &flushRecorder{}
+	h, err := NewCachingDBHandler(&fakeDB{}, cfg, rec.flush)
+	require.NoError(t, err)
+	return h, rec
 }
 
 func TestLookup_EmptyCacheMisses(t *testing.T) {
@@ -431,7 +485,7 @@ func TestInactiveTTL_IsFlushIntervalPlusTenPercent(t *testing.T) {
 }
 
 func TestNewCachingDBHandler_NilInnerHandlerFails(t *testing.T) {
-	h, err := NewCachingDBHandler(nil, testConfig())
+	h, err := NewCachingDBHandler(nil, testConfig(), discardFlush)
 
 	require.ErrorIs(t, err, errNilInnerHandler)
 	assert.Nil(t, h)
@@ -440,16 +494,23 @@ func TestNewCachingDBHandler_NilInnerHandlerFails(t *testing.T) {
 func TestNewCachingDBHandler_TypedNilInnerHandlerFails(t *testing.T) {
 	var typedNilHandler *fakeDB
 
-	handler, err := NewCachingDBHandler(typedNilHandler, testConfig())
+	handler, err := NewCachingDBHandler(typedNilHandler, testConfig(), discardFlush)
 
 	require.ErrorIs(t, err, errNilInnerHandler)
 	assert.Nil(t, handler)
 }
 
+func TestNewCachingDBHandler_NilFlushFails(t *testing.T) {
+	h, err := NewCachingDBHandler(&fakeDB{}, testConfig(), nil)
+
+	require.ErrorIs(t, err, errNilFlush)
+	assert.Nil(t, h)
+}
+
 func TestNewCachingDBHandler_KeepsInnerHandler(t *testing.T) {
 	inner := &fakeDB{}
 
-	h, err := NewCachingDBHandler(inner, testConfig())
+	h, err := NewCachingDBHandler(inner, testConfig(), discardFlush)
 
 	require.NoError(t, err)
 	assert.Same(t, inner, h.DBHandlerV2)
@@ -458,7 +519,7 @@ func TestNewCachingDBHandler_KeepsInnerHandler(t *testing.T) {
 func TestNewCachingDBHandler_KeepsConfig(t *testing.T) {
 	cfg := Config{MaxSize: 10, FlushInterval: 5 * time.Second}
 
-	h, err := NewCachingDBHandler(&fakeDB{}, cfg)
+	h, err := NewCachingDBHandler(&fakeDB{}, cfg, discardFlush)
 
 	require.NoError(t, err)
 	assert.Equal(t, cfg, h.cfg)
@@ -478,10 +539,409 @@ func TestNewCachingDBHandler_RejectsNonPositiveConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, err := NewCachingDBHandler(&fakeDB{}, tt.cfg)
+			h, err := NewCachingDBHandler(&fakeDB{}, tt.cfg, discardFlush)
 
 			require.ErrorIs(t, err, tt.wantErr)
 			assert.Nil(t, h)
 		})
 	}
+}
+
+func keyN(i int) key {
+	return key{namespace: "ns", context: "ctx", eventName: "evt-" + strconv.Itoa(i)}
+}
+
+func at(seconds int) time.Time {
+	return testBase.Add(time.Duration(seconds) * time.Second)
+}
+
+// evictionConfig has a flush interval of 10s, so the inactivity TTL is 11s.
+func evictionConfig(maxSize int) Config {
+	return Config{MaxSize: maxSize, FlushInterval: 10 * time.Second}
+}
+
+func requireKeys(t *testing.T, h *CachingDBHandler, present []int, absent []int) {
+	t.Helper()
+	for _, i := range present {
+		_, ok := h.lookup(keyN(i))
+		assert.True(t, ok, "key %d should be cached", i)
+	}
+	for _, i := range absent {
+		_, ok := h.lookup(keyN(i))
+		assert.False(t, ok, "key %d should be evicted", i)
+	}
+}
+
+func TestProcessEvent_InsertBeyondMaxSizeEvictsLeastRecentlyUpdated(t *testing.T) {
+	h, _ := newTestHandlerWith(t, evictionConfig(3))
+	for i := 1; i <= 3; i++ {
+		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+	}
+
+	got := h.processEvent(keyN(4), event{timestamp: at(4)}, at(4))
+
+	assert.Equal(t, outcomeMiss, got)
+	requireKeys(t, h, []int{2, 3, 4}, []int{1})
+	assertConsistent(t, h)
+}
+
+func TestProcessEvent_NewerEventRefreshesRecency(t *testing.T) {
+	h, _ := newTestHandlerWith(t, evictionConfig(3))
+	for i := 1; i <= 3; i++ {
+		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+	}
+	h.processEvent(keyN(1), event{timestamp: at(10)}, at(10))
+
+	h.processEvent(keyN(4), event{timestamp: at(11)}, at(11))
+
+	requireKeys(t, h, []int{1, 3, 4}, []int{2})
+	assertConsistent(t, h)
+}
+
+func TestProcessEvent_StaleEventDoesNotRefreshRecency(t *testing.T) {
+	h, _ := newTestHandlerWith(t, evictionConfig(3))
+	for i := 1; i <= 3; i++ {
+		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+	}
+	assert.Equal(t, outcomeStale, h.processEvent(keyN(1), event{timestamp: at(0)}, at(10)))
+
+	h.processEvent(keyN(4), event{timestamp: at(11)}, at(11))
+
+	requireKeys(t, h, []int{2, 3, 4}, []int{1})
+}
+
+func TestProcessEvent_MaxSizeOneKeepsNewestEntry(t *testing.T) {
+	h, _ := newTestHandlerWith(t, evictionConfig(1))
+	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+
+	h.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+
+	requireKeys(t, h, []int{2}, []int{1})
+	assertConsistent(t, h)
+}
+
+func TestProcessEvent_CacheStaysAtMaxSizeOverManyInserts(t *testing.T) {
+	h, _ := newTestHandlerWith(t, evictionConfig(5))
+
+	for i := 1; i <= 100; i++ {
+		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+	}
+
+	requireKeys(t, h, []int{96, 97, 98, 99, 100}, []int{1, 50, 95})
+	assertConsistent(t, h)
+	assert.Len(t, h.entries, 5)
+}
+
+func TestProcessEvent_EvictedPendingEntryIsFlushedWithLatestEvent(t *testing.T) {
+	h, rec := newTestHandlerWith(t, evictionConfig(2))
+	h.processEvent(keyN(1), event{timestamp: at(1), source: "s1", details: json.RawMessage(`{"p":1}`)}, at(1))
+	h.processEvent(keyN(1), event{timestamp: at(2), source: "s2", details: json.RawMessage(`{"p":2}`)}, at(2))
+	h.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+
+	h.processEvent(keyN(3), event{timestamp: at(4)}, at(4))
+
+	assert.Equal(t, []data_access.EventV3UpsertRecord{{
+		Namespace: "ns",
+		Context:   "ctx",
+		EventName: "evt-1",
+		Source:    "s2",
+		Details:   json.RawMessage(`{"p":2}`),
+		Timestamp: at(2),
+	}}, rec.records())
+}
+
+func TestProcessEvent_EvictedCleanEntryIsNotFlushed(t *testing.T) {
+	h, rec := newTestHandlerWith(t, evictionConfig(1))
+	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+
+	h.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+
+	assert.Empty(t, rec.records())
+}
+
+func TestProcessEvent_FailedEvictionFlushStillEvicts(t *testing.T) {
+	h, rec := newTestHandlerWith(t, evictionConfig(1))
+	rec.err = errors.New("database unavailable")
+	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	h.processEvent(keyN(1), event{timestamp: at(2)}, at(2))
+
+	got := h.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+
+	assert.Equal(t, outcomeMiss, got)
+	assert.Len(t, rec.records(), 1)
+	requireKeys(t, h, []int{2}, []int{1})
+	assertConsistent(t, h)
+}
+
+func TestProcessEvent_EvictionFlushRunsWithoutTheLock(t *testing.T) {
+	var h *CachingDBHandler
+	var lockWasFree, entryWasGone bool
+	flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
+		// Checking the lock first keeps a regression from deadlocking the lookup.
+		if lockWasFree = h.entriesMu.TryLock(); !lockWasFree {
+			return nil
+		}
+		h.entriesMu.Unlock()
+		_, inCache := h.lookup(key{namespace: rec.Namespace, context: rec.Context, eventName: rec.EventName})
+		entryWasGone = !inCache
+		return nil
+	}
+	h, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush)
+	require.NoError(t, err)
+	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	h.processEvent(keyN(1), event{timestamp: at(2)}, at(2))
+
+	h.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+
+	assert.True(t, lockWasFree, "flush must not run while the cache lock is held")
+	assert.True(t, entryWasGone, "the evicted entry must already be removed when it is flushed")
+}
+
+func TestEvictInactive_UsesInactivityTTL(t *testing.T) {
+	tests := []struct {
+		name        string
+		age         time.Duration
+		wantEvicted int
+	}{
+		{name: "younger than ttl", age: 10 * time.Second, wantEvicted: 0},
+		{name: "exactly ttl", age: 11 * time.Second, wantEvicted: 0},
+		{name: "older than ttl", age: 12 * time.Second, wantEvicted: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _ := newTestHandlerWith(t, evictionConfig(10))
+			h.processEvent(keyN(1), event{timestamp: testBase}, testBase)
+
+			got := h.evictInactive(testBase.Add(tt.age))
+
+			assert.Equal(t, tt.wantEvicted, got)
+			_, ok := h.lookup(keyN(1))
+			assert.Equal(t, tt.wantEvicted == 0, ok)
+		})
+	}
+}
+
+func TestEvictInactive_KeepsActiveEntries(t *testing.T) {
+	h, _ := newTestHandlerWith(t, evictionConfig(10))
+	h.processEvent(keyN(1), event{timestamp: at(0)}, at(0))
+	h.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+	h.processEvent(keyN(3), event{timestamp: at(20)}, at(20))
+
+	got := h.evictInactive(at(25))
+
+	assert.Equal(t, 2, got)
+	requireKeys(t, h, []int{3}, []int{1, 2})
+	assertConsistent(t, h)
+}
+
+func TestEvictInactive_NewerEventRefreshesTTL(t *testing.T) {
+	h, _ := newTestHandlerWith(t, evictionConfig(10))
+	h.processEvent(keyN(1), event{timestamp: at(0)}, at(0))
+	h.processEvent(keyN(1), event{timestamp: at(10)}, at(10))
+
+	got := h.evictInactive(at(15))
+
+	assert.Zero(t, got)
+	requireKeys(t, h, []int{1}, nil)
+}
+
+func TestEvictInactive_FlushesPendingEntriesOnly(t *testing.T) {
+	h, rec := newTestHandlerWith(t, evictionConfig(10))
+	h.processEvent(keyN(1), event{timestamp: at(0)}, at(0))
+	h.processEvent(keyN(1), event{timestamp: at(1), source: "latest"}, at(1))
+	h.processEvent(keyN(2), event{timestamp: at(0)}, at(0))
+
+	got := h.evictInactive(at(100))
+
+	assert.Equal(t, 2, got)
+	records := rec.records()
+	require.Len(t, records, 1)
+	assert.Equal(t, "evt-1", records[0].EventName)
+	assert.Equal(t, "latest", records[0].Source)
+	assert.Equal(t, at(1), records[0].Timestamp)
+	assertConsistent(t, h)
+}
+
+func TestEvictInactive_EmptyCache(t *testing.T) {
+	h, rec := newTestHandlerWith(t, evictionConfig(10))
+
+	assert.Zero(t, h.evictInactive(at(100)))
+	assert.Empty(t, rec.records())
+}
+
+// persistedEvent identifies one event that reached the database.
+type persistedEvent struct {
+	cachedKey key
+	nanos     int64
+}
+
+func persistedOf(rec data_access.EventV3UpsertRecord) persistedEvent {
+	return persistedEvent{
+		cachedKey: key{namespace: rec.Namespace, context: rec.Context, eventName: rec.EventName},
+		nanos:     rec.Timestamp.UnixNano(),
+	}
+}
+
+// Run with -race. Writers share a small pool of keys and a cache far smaller
+// than the pool, while evictInactive runs concurrently with `now` values that
+// arrive out of order. However the goroutines interleave, the newest event sent
+// for a key must never be lost: it is either still cached or it reached the
+// database, as a miss the caller writes or as a flush when it was evicted.
+func TestProcessEvent_ConcurrentEvictionNeverLosesTheLatestEvent(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxSize    int
+		evictEvery int // run evictInactive after every n-th event of a writer; 0 never
+	}{
+		// Fewer slots than keys, so entries leave by size. Most keys still fit, so
+		// events often hit a cached key and leave it pending.
+		{name: "size eviction only", maxSize: stressKeyCount * 3 / 4, evictEvery: 0},
+		// Room for every key, so entries only leave by expiring.
+		{name: "inactivity eviction only", maxSize: stressKeyCount, evictEvery: 10},
+		{name: "both", maxSize: stressKeyCount * 3 / 4, evictEvery: 10},
+		// Very few slots, so almost every event is a miss and evictions are constant.
+		{name: "heavy size pressure", maxSize: stressKeyCount / 5, evictEvery: 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkConcurrentEviction(t, tt.maxSize, tt.evictEvery)
+		})
+	}
+}
+
+// stressKeyCount is the size of the key pool the concurrent eviction test shares.
+const stressKeyCount = 40
+
+func checkConcurrentEviction(t *testing.T, maxSize, evictEvery int) {
+	t.Helper()
+	const (
+		writers    = 8
+		iterations = 300
+	)
+	handler, flushed := newTestHandlerWith(t, evictionConfig(maxSize))
+
+	var (
+		clock      atomic.Int64
+		mu         sync.Mutex
+		missWrites []data_access.EventV3UpsertRecord
+		latestSent = map[key]time.Time{}
+		recordFor  = func(cachedKey key, ev event) data_access.EventV3UpsertRecord {
+			return data_access.EventV3UpsertRecord{
+				Namespace: cachedKey.namespace,
+				Context:   cachedKey.context,
+				EventName: cachedKey.eventName,
+				Source:    ev.source,
+				Details:   ev.details,
+				Timestamp: ev.timestamp,
+			}
+		}
+	)
+
+	var wg sync.WaitGroup
+	for writer := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for iteration := range iterations {
+				sequence := int(clock.Add(1))
+				cachedKey := keyN((writer*7 + iteration) % stressKeyCount)
+				timestamp := at(sequence)
+				ev := event{
+					timestamp: timestamp,
+					source:    "writer-" + strconv.Itoa(writer),
+					details:   json.RawMessage(strconv.Itoa(sequence)),
+				}
+
+				mu.Lock()
+				if timestamp.After(latestSent[cachedKey]) {
+					latestSent[cachedKey] = timestamp
+				}
+				mu.Unlock()
+
+				// A miss is written by the caller, so the test records it here.
+				if handler.processEvent(cachedKey, ev, timestamp) == outcomeMiss {
+					mu.Lock()
+					missWrites = append(missWrites, recordFor(cachedKey, ev))
+					mu.Unlock()
+				}
+				if evictEvery > 0 && iteration%evictEvery == 0 {
+					handler.evictInactive(timestamp)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	assertConsistent(t, handler)
+
+	persisted := map[persistedEvent]bool{}
+	for _, rec := range append(missWrites, flushed.records()...) {
+		id := persistedOf(rec)
+		assert.False(t, persisted[id], "event %v was written twice", id)
+		persisted[id] = true
+		// The payload must belong to the timestamp it was written with.
+		assert.Equal(t, strconv.Itoa(int(rec.Timestamp.Sub(testBase)/time.Second)), string(rec.Details))
+	}
+
+	for cachedKey, newest := range latestSent {
+		lookedUpEntry, inCache := handler.lookup(cachedKey)
+		stillCached := inCache && lookedUpEntry.timestamp.Equal(newest)
+		wasWritten := persisted[persistedEvent{cachedKey: cachedKey, nanos: newest.UnixNano()}]
+		assert.True(t, stillCached || wasWritten, "the newest event for %v was lost", cachedKey)
+	}
+}
+
+// A newer event for a key can arrive while the flush of that key's evicted
+// entry is still in flight. The cache keeps no record of an evicted key, so the
+// newer event is an ordinary miss and the caller writes it right away, possibly
+// before the older flush lands. The cache cannot order those two writes; the
+// database must, which the stats table does with its timestamp guard.
+func TestProcessEvent_NewerEventDuringEvictionFlushIsAMiss(t *testing.T) {
+	flushStarted := make(chan struct{})
+	releaseFlush := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFlush) }) }
+	t.Cleanup(release)
+
+	var inFlight data_access.EventV3UpsertRecord
+	flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
+		inFlight = rec
+		close(flushStarted)
+		<-releaseFlush
+		return nil
+	}
+	handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush)
+	require.NoError(t, err)
+	handler.processEvent(keyN(1), event{timestamp: at(1), details: json.RawMessage(`{"progress":1}`)}, at(1))
+	handler.processEvent(keyN(1), event{timestamp: at(2), details: json.RawMessage(`{"progress":2}`)}, at(2))
+
+	evictionDone := make(chan struct{})
+	go func() {
+		defer close(evictionDone)
+		// This miss overflows the cache and evicts key 1, whose flush then blocks.
+		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+	}()
+	<-flushStarted
+
+	newerOutcome := make(chan outcome, 1)
+	go func() {
+		newerOutcome <- handler.processEvent(keyN(1), event{timestamp: at(10), details: json.RawMessage(`{"progress":10}`)}, at(10))
+	}()
+	select {
+	case got := <-newerOutcome:
+		assert.Equal(t, outcomeMiss, got, "an evicted key has no entry, so its next event is a miss")
+	case <-time.After(5 * time.Second):
+		t.Fatal("a newer event was blocked by an in-flight eviction flush")
+	}
+
+	release()
+	<-evictionDone
+
+	assert.Equal(t, at(2), inFlight.Timestamp, "the in-flight flush carries the value that was evicted")
+	assert.JSONEq(t, `{"progress":2}`, string(inFlight.Details))
+	cachedEntry, ok := handler.lookup(keyN(1))
+	require.True(t, ok)
+	assert.Equal(t, at(10), cachedEntry.timestamp)
+	assert.False(t, cachedEntry.pending, "the newer event was stored as a clean miss")
+	assertConsistent(t, handler)
 }

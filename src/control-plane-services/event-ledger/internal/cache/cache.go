@@ -20,24 +20,39 @@ limitations under the License.
 package cache
 
 import (
+	"container/list"
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 )
 
-// inactiveTTLBufferPercent is added on top of FlushInterval to form the
-// inactivity TTL, so an entry outlives its scheduled flush.
-const inactiveTTLBufferPercent = 10
+const (
+	// inactiveTTLBufferPercent is added on top of FlushInterval to form the
+	// inactivity TTL, so an entry outlives its scheduled flush.
+	inactiveTTLBufferPercent = 10
+
+	// evictionFlushTimeout bounds the database writes made for the entries one
+	// eviction pass removes.
+	evictionFlushTimeout = 10 * time.Second
+)
 
 var (
 	errNilInnerHandler      = errors.New("cache: inner DBHandlerV2 must not be nil")
+	errNilFlush             = errors.New("cache: flush function must not be nil")
 	errInvalidMaxSize       = errors.New("cache: MaxSize must be greater than 0")
 	errInvalidFlushInterval = errors.New("cache: FlushInterval must be greater than 0")
 )
+
+// FlushFunc writes one pending event to the database.
+type FlushFunc func(ctx context.Context, rec data_access.EventV3UpsertRecord) error
 
 // key identifies one cached event stream.
 type key struct {
@@ -63,10 +78,19 @@ type entry struct {
 	lastUpdated time.Time
 }
 
+// cached is an entry together with its node in the handler's recency list. The
+// node lets an update move the key to the front of the list, and eviction
+// remove the least recently updated key, without scanning the map.
+type cached struct {
+	entry
+	recencyNode *list.Element
+}
+
 // Config holds the cache tunables. Both fields must be positive. The service
 // config owns the defaults.
 type Config struct {
-	// MaxSize is the maximum number of entries before LRU eviction.
+	// MaxSize is the maximum number of entries before the least recently
+	// updated one is evicted.
 	MaxSize int
 	// FlushInterval is the delay between an entry becoming pending and its flush.
 	FlushInterval time.Duration
@@ -74,8 +98,8 @@ type Config struct {
 
 // inactiveTTL is how long an entry may go without an update before it is
 // eligible for eviction: FlushInterval plus a 10% buffer.
-func (c Config) inactiveTTL() time.Duration {
-	return c.FlushInterval + c.FlushInterval*inactiveTTLBufferPercent/100
+func (cfg Config) inactiveTTL() time.Duration {
+	return cfg.FlushInterval + cfg.FlushInterval*inactiveTTLBufferPercent/100
 }
 
 // CachingDBHandler wraps a DBHandlerV2 with a local write cache. Methods that
@@ -83,10 +107,13 @@ func (c Config) inactiveTTL() time.Duration {
 type CachingDBHandler struct {
 	data_access.DBHandlerV2
 
-	cfg Config
+	cfg   Config
+	flush FlushFunc
 
 	entriesMu sync.RWMutex
-	entries   map[key]*entry
+	entries   map[key]*cached
+	// recency lists keys by last update, most recent first. Its values are keys.
+	recency *list.List
 }
 
 // isNilHandler reports whether handler is nil, including a nil pointer stored
@@ -104,11 +131,15 @@ func isNilHandler(handler data_access.DBHandlerV2) bool {
 	}
 }
 
-// NewCachingDBHandler wraps inner with an empty cache. It returns an error if
-// inner is nil, including a typed nil, or cfg has a non-positive field.
-func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config) (*CachingDBHandler, error) {
+// NewCachingDBHandler wraps inner with an empty cache. flush writes the pending
+// entries that eviction removes. It returns an error if inner, including a typed
+// nil, or flush is nil or cfg has a non-positive field.
+func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config, flush FlushFunc) (*CachingDBHandler, error) {
 	if isNilHandler(inner) {
 		return nil, errNilInnerHandler
+	}
+	if flush == nil {
+		return nil, errNilFlush
 	}
 	if cfg.MaxSize <= 0 {
 		return nil, errInvalidMaxSize
@@ -119,23 +150,25 @@ func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config) (*CachingDBH
 	return &CachingDBHandler{
 		DBHandlerV2: inner,
 		cfg:         cfg,
-		entries:     make(map[key]*entry),
+		flush:       flush,
+		entries:     make(map[key]*cached),
+		recency:     list.New(),
 	}, nil
 }
 
-// lookup returns a copy of the entry for k, and whether it exists. It returns
+// lookup returns a copy of the entry for cachedKey, and whether it exists. It returns
 // a copy because the read lock is released on return; a pointer would let the
 // caller read fields while a writer mutates them, which is a data race. The
 // copy is cheap because details is a slice header, not a copy of the payload,
 // and cheaper than holding a lock for the caller.
-func (h *CachingDBHandler) lookup(k key) (entry, bool) {
-	h.entriesMu.RLock()
-	defer h.entriesMu.RUnlock()
-	e, ok := h.entries[k]
+func (handler *CachingDBHandler) lookup(cachedKey key) (entry, bool) {
+	handler.entriesMu.RLock()
+	defer handler.entriesMu.RUnlock()
+	cachedEntry, ok := handler.entries[cachedKey]
 	if !ok {
 		return entry{}, false
 	}
-	return *e, true
+	return cachedEntry.entry, true
 }
 
 // event is an incoming event to record in the cache. processEvent stores details
@@ -165,36 +198,140 @@ const (
 	outcomeStale
 )
 
-// processEvent records ev for k and reports what the caller must do. It compares and
+// processEvent records ev for cachedKey and reports what the caller must do. It compares and
 // updates under one write lock so concurrent events for a key cannot both
-// decide they are the newest. It never writes to the database.
-func (h *CachingDBHandler) processEvent(k key, ev event, now time.Time) outcome {
-	h.entriesMu.Lock()
-	defer h.entriesMu.Unlock()
+// decide they are the newest. It does not write ev itself to the database, but
+// a miss can push the cache over MaxSize, and the pending entry evicted to make
+// room is written before processEvent returns.
+func (handler *CachingDBHandler) processEvent(cachedKey key, ev event, now time.Time) outcome {
+	out, evicted := handler.recordEvent(cachedKey, ev, now)
+	handler.flushEvicted(evicted)
+	return out
+}
 
-	e, ok := h.entries[k]
+// recordEvent updates the cache under the write lock. It returns the pending
+// entries it evicted, which the caller writes once the lock is released.
+func (handler *CachingDBHandler) recordEvent(cachedKey key, ev event, now time.Time) (outcome, []data_access.EventV3UpsertRecord) {
+	handler.entriesMu.Lock()
+	defer handler.entriesMu.Unlock()
+
+	cachedEntry, ok := handler.entries[cachedKey]
 	if !ok {
-		h.entries[k] = &entry{
+		cachedEntry = &cached{entry: entry{
 			timestamp:   ev.timestamp,
 			source:      ev.source,
 			details:     ev.details,
 			lastWritten: now,
 			lastUpdated: now,
-		}
-		return outcomeMiss
+		}}
+		cachedEntry.recencyNode = handler.recency.PushFront(cachedKey)
+		handler.entries[cachedKey] = cachedEntry
+		// Cache miss causes an immediate flush to the database. This will be implemented in a later PR
+		return outcomeMiss, handler.evictOverflow()
 	}
-	if !ev.timestamp.After(e.timestamp) {
-		return outcomeStale
+	if !ev.timestamp.After(cachedEntry.timestamp) {
+		return outcomeStale, nil
 	}
 
-	wasPending := e.pending
-	e.timestamp = ev.timestamp
-	e.source = ev.source
-	e.details = ev.details
-	e.pending = true
-	e.lastUpdated = now
+	wasPending := cachedEntry.pending
+	cachedEntry.timestamp = ev.timestamp
+	cachedEntry.source = ev.source
+	cachedEntry.details = ev.details
+	cachedEntry.pending = true
+	cachedEntry.lastUpdated = now
+	handler.recency.MoveToFront(cachedEntry.recencyNode)
 	if wasPending {
-		return outcomeAlreadyPending
+		return outcomeAlreadyPending, nil
 	}
-	return outcomeBecamePending
+	// Event has to be added to the timing wheel. This will be implemented in a later PR
+	return outcomeBecamePending, nil
+}
+
+// evictOverflow removes the least recently updated entries until the cache fits
+// in MaxSize and returns the pending ones. The caller holds entriesMu.
+func (handler *CachingDBHandler) evictOverflow() []data_access.EventV3UpsertRecord {
+	var pending []data_access.EventV3UpsertRecord
+	for len(handler.entries) > handler.cfg.MaxSize {
+		if rec, ok := handler.remove(handler.recency.Back()); ok {
+			pending = append(pending, rec)
+		}
+	}
+	return pending
+}
+
+// evictInactive removes the entries that have not been updated within the
+// inactivity TTL as of now, writes the pending ones, and returns how many it
+// evicted. Nothing calls it yet. A background goroutine must call it on a ticker,
+// not in a busy loop; the timing wheel's per-slot tick can drive it, and a pass
+// with nothing expired is cheap because the list is ordered by last update.
+func (handler *CachingDBHandler) evictInactive(now time.Time) int {
+	evicted, pending := handler.removeInactive(now)
+	handler.flushEvicted(pending)
+	return evicted
+}
+
+// removeInactive removes the expired entries under the write lock and returns
+// how many there were along with the pending ones. The recency list is ordered
+// by last update, so it stops at the first entry that has not expired.
+func (handler *CachingDBHandler) removeInactive(now time.Time) (int, []data_access.EventV3UpsertRecord) {
+	handler.entriesMu.Lock()
+	defer handler.entriesMu.Unlock()
+
+	ttl := handler.cfg.inactiveTTL()
+	evicted := 0
+	var pending []data_access.EventV3UpsertRecord
+	for node := handler.recency.Back(); node != nil; node = handler.recency.Back() {
+		if now.Sub(handler.entries[node.Value.(key)].lastUpdated) <= ttl {
+			break
+		}
+		if rec, ok := handler.remove(node); ok {
+			pending = append(pending, rec)
+		}
+		evicted++
+	}
+	return evicted, pending
+}
+
+// remove deletes the entry at node. It reports the entry as a record only when
+// it is pending, since a clean entry is already in the database. The caller
+// holds entriesMu.
+func (handler *CachingDBHandler) remove(node *list.Element) (data_access.EventV3UpsertRecord, bool) {
+	cachedKey := handler.recency.Remove(node).(key)
+	cachedEntry := handler.entries[cachedKey]
+	delete(handler.entries, cachedKey)
+	if !cachedEntry.pending {
+		return data_access.EventV3UpsertRecord{}, false
+	}
+	return data_access.EventV3UpsertRecord{
+		Namespace: cachedKey.namespace,
+		Context:   cachedKey.context,
+		EventName: cachedKey.eventName,
+		Source:    cachedEntry.source,
+		Details:   cachedEntry.details,
+		Timestamp: cachedEntry.timestamp,
+	}, true
+}
+
+// flushEvicted writes recs to the database. The entries are already gone from
+// the cache, so a failed write is logged and not retried. The write is made
+// without the lock held, and a newer event for the same key can reach the
+// database before it.
+func (handler *CachingDBHandler) flushEvicted(recs []data_access.EventV3UpsertRecord) {
+	if len(recs) == 0 {
+		return
+	}
+	// The write flushes another key's data, so it must not be tied to the
+	// context of the request that triggered the eviction.
+	ctx, cancel := context.WithTimeout(context.Background(), evictionFlushTimeout)
+	defer cancel()
+	logger := logging.GetLogger(ctx)
+	for _, rec := range recs {
+		if err := handler.flush(ctx, rec); err != nil {
+			logger.ErrorContext(ctx, "failed to flush evicted cache entry",
+				zap.Error(err),
+				zap.String("namespace", rec.Namespace),
+				zap.String("context", rec.Context),
+				zap.String("event_name", rec.EventName))
+		}
+	}
 }
