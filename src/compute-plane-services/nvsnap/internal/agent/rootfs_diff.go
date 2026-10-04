@@ -363,6 +363,15 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, log *logrus.Entry) e
 	}
 	defer func() { _ = f.Close() }()
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
+	// The placeholder only has the mountpoints its own spec declares. A
+	// replayed mount that was a volume on the source (the nvsnap cachedir at
+	// /opt/nvsnap) has no directory here yet, and tar -C refuses a missing
+	// one ("Cannot open: No such file or directory", 2026-10-04). Create
+	// it on the placeholder's rootfs first; /dev/shm already exists.
+	mkdir := exec.Command("nsenter", "--mount="+mntnsPath, "--", "mkdir", "-p", mp) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	if out, err := mkdir.CombinedOutput(); err != nil {
+		return fmt.Errorf("nsenter+mkdir (pid=%d, mp=%s): %w (output: %s)", placeholderPID, mp, err, strings.TrimSpace(string(out)))
+	}
 	cmd := exec.Command("nsenter", "--mount="+mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 		"tar",
 		"-C", mp,
