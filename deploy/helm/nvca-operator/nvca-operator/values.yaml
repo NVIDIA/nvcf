@@ -337,7 +337,7 @@ webhook:
 ## @section NGC Configuration
 
 ## @param ngcConfig.username Username for the registry authentication
-## @param ngcConfig.serviceKey ServiceKey (password) for authentication. If unset, a Secret with name set to ngcConfig.serviceKeySecretName is expected to exist in the cluster in the release namespace.
+## @param ngcConfig.serviceKey ServiceKey (password) for authentication. It defaults to empty, so an install must set it while generateImagePullSecret is true: the generated pull secret is built from this value and the render fails with "NGC service key is required to create a pull secret" without it. To pull with pre-existing Secrets instead, set generateImagePullSecret=false and list them in imagePullSecrets; the workloads get no pull secret at all if that list is empty. imagePullSecretName must stay non-empty either way, because the chart validates it, though it is only used when generation is on. Setting ngcConfig.clusterSource=self-managed does not exempt an install; only disabling generation does, which is what the compute-plane stack supplies. This is a different Secret from ngcConfig.serviceKeySecretName, which the Deployment mounts for the agent.
 ## @param ngcConfig.serviceKeySecretName Secret containing NGC ServiceKey (password) for authentication (default: ngc-service-key). If the ngcConfig.serviceKey is not set, the secret with this name must be created manually in the release namespace.
 ## @param ngcConfig.serviceKeySecretKeyName Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).
 ## @param ngcConfig.apiURL NGC API URL for requesting auth tokens
@@ -347,7 +347,7 @@ webhook:
 ##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
-  serviceKey: "dummy-api-key"
+  serviceKey: ""
   serviceKeySecretName: "ngc-service-key"
   serviceKeySecretKeyName: "ngcServiceKey"
   apiURL: https://api.ngc.nvidia.com
@@ -403,7 +403,7 @@ helmManaged:
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: "3.12.7"
+  nvcaVersion: ""
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.
@@ -424,20 +424,20 @@ selfManaged:
     enabled: false
     imageRepository: ""
     imageTag: 0.160.0-nv-0.2.5
-  ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  icmsServiceURL: "http://icms.example.invalid:8080"
+  ## @param selfManaged.icmsServiceURL (REQUIRED for self-managed clusters) URL of the ICMS service. Set the endpoint generated during cluster registration.
+  icmsServiceURL: ""
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
   icmsServiceHostHeaderOverride: ""
-  ## @param selfManaged.revalServiceURL URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  revalServiceURL: "http://reval.example.invalid:8080"
+  ## @param selfManaged.revalServiceURL (REQUIRED for self-managed clusters) URL of the ReVal service. Set the endpoint generated during cluster registration.
+  revalServiceURL: ""
   ## @param selfManaged.revalServiceHostHeaderOverride Optional Host header override for selfManaged.revalServiceURL.
   revalServiceHostHeaderOverride: ""
-  ## @param selfManaged.natsURL URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  natsURL: "nats://nats.example.invalid:4222"
+  ## @param selfManaged.natsURL (REQUIRED for self-managed clusters) URL of the NATS service. Set the endpoint generated during cluster registration.
+  natsURL: ""
   ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.
   natsHostOverride: ""
   sharedStorage:
-    imageTag: 1.0.5
+    imageTag: ""
 ## @section Node Selector Configuration
 ## @param nodeSelector.key Node-selector Label key
 ## @param nodeSelector.value Node-selector Label value
@@ -573,5 +573,5 @@ clusterValidator:
     limits:
       cpu: 200m
       memory: 128Mi
-nameOverride: nvca-operator
-fullnameOverride: nvca-operator
+nameOverride: ""
+fullnameOverride: ""

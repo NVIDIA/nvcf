@@ -193,8 +193,12 @@ api:
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
+# Remote config is passed to the NVCT API chart and overrides its packaged
+# application profile, mirroring api.remoteConfig.
 nvctApi:
   essBaseURL: ""
+  remoteConfig:
+    configData: {}
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to

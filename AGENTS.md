@@ -17,6 +17,8 @@ Useful pointers:
 - `BAZEL.md` for the contributor-facing Bazel build path
 - `docs/AGENTS.md` for in-repo user and developer documentation
 - `tools/AGENTS.md` for repo tooling
+- `src/libraries/rust/stargate/AGENTS.md` for Stargate deployment invariants,
+  including router transport assumptions to use during implementation and review
 - `imports.yaml` for subtree ownership and commit pins
 - `.cursor/skills/documentation-style/SKILL.md` for docs style
 - `.cursor/skills/` for root dev-skill symlink fanout
@@ -217,7 +219,6 @@ public snapshot; still follow OSS Snapshot Hygiene manually before finishing.
 |-------|----------|---------|
 | `documentation-style` | `ai-tooling/dev/skills/` | Public docs, AGENTS, and skill-writing style |
 | `nvcf-explore-stack` | `ai-tooling/dev/skills/` | Navigate the self-hosted stack topology and dependency graph |
-| `nvca-chart-release` | `ai-tooling/dev/skills/` | Release NVCA Operator chart changes from monorepo source to the vendored Helm chart |
 | `nvca-self-managed-install` | `ai-tooling/dev/skills/` | Install or validate the NVCA Operator chart against a self-managed control plane |
 | `nvca-values-customization` | `ai-tooling/dev/skills/` | Customize NVCA Operator Helm chart values in the monorepo |
 | `nvcf-self-managed-cli` | `ai-tooling/user/skills/` | Install, operate, and manage self-managed NVCF through `nvcf-cli` |
