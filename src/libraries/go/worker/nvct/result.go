@@ -39,6 +39,7 @@ type StreamingClient struct {
 	streamer        pb.Worker_SendResultMetadataClient
 	nvctClient      pb.WorkerClient
 	tokenSource     oauth2.TokenSource
+	requireTLS      bool
 }
 
 // ------------------------------------------------------------------------
@@ -50,7 +51,8 @@ type Flusher interface {
 // ------------------------------------------------------------------------
 
 // Constructor
-func NewStreamingClient(ctx context.Context, nvctClient pb.WorkerClient, ts oauth2.TokenSource) *StreamingClient {
+// requireTLS must be true when ts serves a mounted projected ServiceAccount token.
+func NewStreamingClient(ctx context.Context, nvctClient pb.WorkerClient, ts oauth2.TokenSource, requireTLS bool) *StreamingClient {
 	// For gracefully shut down the streaming client in case the parent context is cancelled
 	ctx = context.WithoutCancel(ctx)
 
@@ -58,6 +60,7 @@ func NewStreamingClient(ctx context.Context, nvctClient pb.WorkerClient, ts oaut
 		globalCtx:   ctx,
 		nvctClient:  nvctClient,
 		tokenSource: ts,
+		requireTLS:  requireTLS,
 	}
 }
 
@@ -104,7 +107,7 @@ func (c *StreamingClient) getStreamer(ctx context.Context) (pb.Worker_SendResult
 		return c.streamer, nil
 	}
 
-	streamer, err := c.nvctClient.SendResultMetadata(ctx, auth.GrpcTokenFromSource(c.tokenSource))
+	streamer, err := c.nvctClient.SendResultMetadata(ctx, auth.GrpcTokenFromSource(c.tokenSource, c.requireTLS))
 	if err != nil {
 		zap.L().Error("failed to create streaming request for sending results", zap.Error(err))
 		return nil, err
