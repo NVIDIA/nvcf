@@ -441,7 +441,7 @@ navigation:
   - section: Upgrade Notes
     skip-slug: true
     contents:
-    - page: 0.6.1 to 1.0.1 Upgrade
+    - page: 0.6.2 to 1.0.1 Upgrade
       path: ../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
       slug: 0-6-1-to-1-0-1-upgrade
     - page: (Legacy) 0.6.1 to 0.6.2 Upgrade
