@@ -1261,7 +1261,6 @@ func TestModelVolume_SharedFilesystem_PrimaryNotBoundYet(t *testing.T) {
 	}
 }
 
-
 // The writer waits for its landing to become writable before downloading:
 // a fresh shared filesystem is root-owned until the agent on the Job's
 // node opens it, and the Job runs as the function's user.
