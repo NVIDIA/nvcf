@@ -69,14 +69,12 @@ python3 spark.py verify-gateway
 1. `preflight`: Check GPU calculations and available memory on both model nodes.
 2. `stack`: Install the gateway, router and Pylon Operator.
 3. `build-runtime`: Build llama.cpp with CUDA and remote procedure call (RPC) support.
-4. `qualify`: Test calculations and data transfer across both GPUs.
+4. `qualify`: Test calculations and data transfer across both GPUs. (After fixing a failed qualification Job, run `python3 spark.py qualify --retry`.)
 5. `download`: Download the six GLM files and verify their sizes and SHA256 checksums. See the [model and runtime licenses](spark/NOTICE).
 6. `load`: Load GLM across both GPUs and wait for the model server.
 7. `verify-direct`: Test model answers and streaming directly.
 8. `register`: Register GLM with Pylon and wait for readiness.
 9. `verify-gateway`: Test GLM through the gateway, including authentication and discovery.
-
-After fixing a failed qualification Job, run `python3 spark.py qualify --retry`.
 
 Pinned runtime:
 
