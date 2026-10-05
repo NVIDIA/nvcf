@@ -474,9 +474,11 @@ func TestCheckNodeToNode_SandboxFaultShowsItsEvidence(t *testing.T) {
 	assert.Contains(t, state.Recommendations[0], "(CNI or container runtime)")
 }
 
-// An events list that cannot be read leaves a pod with no IP undecided, end to
-// end: the nodes that did start are probed, and no CNI advice is given.
-func TestCheckNodeToNode_EventsListErrorIsAGap(t *testing.T) {
+// An events list that cannot be read leaves a scheduled pod with no IP
+// undecided, end to end: the nodes that did start are probed, but the row
+// cannot pass, as it could not had the events shown no sandbox event. No CNI
+// advice is given, since nothing was seen to go wrong.
+func TestCheckNodeToNode_EventsListErrorLeavesTheRowUnknown(t *testing.T) {
 	stuck := probePod("node-3", "Pending", "", "ContainerCreating")
 	stuck.Name = "s-3"
 	f := newN2NFixture(t, readyNodes(3), append(runningServers("node-1", "node-2"), stuck),
@@ -488,9 +490,11 @@ func TestCheckNodeToNode_EventsListErrorIsAGap(t *testing.T) {
 	})
 	state := runN2N(f)
 
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.True(t, *state.NodeToNodeOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: pod events could not be read")
+	assert.Nil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
+	warnings := strings.Join(state.Warnings, "; ")
+	assert.Contains(t, warnings, "node-3: pod events could not be read")
+	assert.Contains(t, warnings, "the overlay was verified from")
+	assert.Contains(t, warnings, "the probe pod on node-3 was scheduled and got no pod IP")
 	assert.Empty(t, state.Recommendations)
 	assert.Greater(t, calls, 1, "the events list is retried before it is given up")
 }

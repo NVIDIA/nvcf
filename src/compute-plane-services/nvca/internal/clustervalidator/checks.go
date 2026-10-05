@@ -2215,7 +2215,9 @@ type n2nProbe struct {
 	// silent are the nodes whose probe pod was scheduled but showed no
 	// sandbox event when the wait ended, or whose events could not be read.
 	// The row cannot pass while any of them is still one to probe.
-	silent []string
+	// eventsErr is why the events could not be read.
+	silent    []string
+	eventsErr error
 }
 
 func newN2NProbe(client kubernetes.Interface, state *ValidationState, image string) *n2nProbe {
@@ -2318,7 +2320,7 @@ func (p *n2nProbe) run(ctx context.Context, probeNodes []string) {
 
 	sandboxes, eventsErr := probeSandboxEvents(ctx, p.client, p.ns)
 	outcome := classifyProbeNodes(pods, probeNodes, sandboxes, eventsErr)
-	p.silent = outcome.silent
+	p.silent, p.eventsErr = outcome.silent, eventsErr
 	if len(outcome.networkFaults) > 0 && p.failOnSandboxFaults(ctx, &outcome) {
 		return
 	}
@@ -2605,10 +2607,16 @@ func (p *n2nProbe) judgeUnnamed(ctx context.Context, run checkerRun, report chec
 // the row.
 func (p *n2nProbe) verified(ctx context.Context, node string, reached int) {
 	if silent := p.stillSilent(ctx); len(silent) > 0 {
+		if p.eventsErr != nil {
+			p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
+				"scheduled and got no pod IP within %s, and its events, which would say why, were not read: %s",
+				node, reached, strings.Join(silent, ", "), nodeToNodeDSTimeout,
+				readFailure("the probe pod events", p.eventsErr)), "")
+			return
+		}
 		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
 			"scheduled and showed no pod sandbox event within %s, as when the CNI plugin hangs setting up the "+
-			"pod network, or its events could not be read", node, reached, strings.Join(silent, ", "),
-			nodeToNodeDSTimeout),
+			"pod network", node, reached, strings.Join(silent, ", "), nodeToNodeDSTimeout),
 			nodeToNodeSilentSandboxRecommendation)
 		return
 	}

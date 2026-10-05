@@ -1892,18 +1892,6 @@ func TestCheckNodeToNode_SilentSandboxLeavesTheRowUnknown(t *testing.T) {
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.False(t, *state.NodeToNodeOK)
 
-	// Events that could not be read show no sandbox event either, so the
-	// row is unknown as well, not a pass on the nodes that were reached.
-	f = newN2NFixture(t, readyNodes(3), servers, events, checkerExit(0))
-	f.client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(corev1.Resource("events"), "", fmt.Errorf("denied"))
-	})
-	state = runN2N(f)
-	assert.Nil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
-	warnings = strings.Join(state.Warnings, "; ")
-	assert.Contains(t, warnings, "node-3: pod events could not be read")
-	assert.Contains(t, warnings, "the probe pod on node-3 was scheduled and showed no pod sandbox event")
-
 	// A node that went NotReady while the probe waited explains its own pod,
 	// so it is a coverage gap and the others pass.
 	f = newN2NFixture(t, readyNodes(3), servers, events, checkerExit(0))
