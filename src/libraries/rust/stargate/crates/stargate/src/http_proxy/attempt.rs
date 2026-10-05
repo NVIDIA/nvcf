@@ -43,6 +43,14 @@ use super::upstream::{
 const HEADER_CHOSEN_INFERENCE_SERVER_URL: &str = "x-inference-server-url";
 const HEADER_CHOSEN_CLUSTER_ID: &str = "x-stargate-cluster-id";
 
+fn clamp_routing_reservation_ttl(
+    rtt: std::time::Duration,
+    min: std::time::Duration,
+    max: std::time::Duration,
+) -> std::time::Duration {
+    rtt.clamp(min, max)
+}
+
 #[derive(Default)]
 pub(super) struct ProxyAttemptCounters {
     pub(super) attempt: u32,
@@ -112,10 +120,20 @@ impl ProxyRequestRun<'_> {
             }
         }
 
-        let reservation: Option<RoutingReservation> = selected.cluster.reserve_backend(
+        let reservation: Option<RoutingReservation> = selected.cluster.reserve_backend_with_ttl(
             &chosen.registration,
             self.request.request_inputs.input_tokens,
             self.request.request_inputs.priority,
+            clamp_routing_reservation_ttl(
+                chosen.rtt,
+                self.app.routing_reservation_ttl_min,
+                self.app.routing_reservation_ttl_max,
+            ),
+            self.app.metrics.clone(),
+            &crate::routing_state::RoutingTargetKey::new(
+                self.routing_key().map(str::to_owned),
+                self.model_id(),
+            ),
         );
         record_proxy_attempt_start(self, selected, chosen);
 
@@ -544,6 +562,22 @@ mod tests {
     use crate::routing_state::{
         RegistrationIdentity, RoutingTargetKey, test_registration_generation,
     };
+
+    #[test]
+    fn reservation_ttl_is_clamped_to_the_configured_bounds() {
+        let min = Duration::from_millis(1);
+        let max = Duration::from_millis(1000);
+
+        assert_eq!(clamp_routing_reservation_ttl(Duration::ZERO, min, max), min);
+        assert_eq!(
+            clamp_routing_reservation_ttl(Duration::from_millis(60), min, max),
+            Duration::from_millis(60)
+        );
+        assert_eq!(
+            clamp_routing_reservation_ttl(Duration::from_secs(5), min, max),
+            max
+        );
+    }
 
     fn finish_response(
         disposition: FinalRetryDisposition,

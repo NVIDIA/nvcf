@@ -151,8 +151,9 @@ forwarded health RTT + queue delay + request prefill time
 
 Queue delay is zero when the reported engine concurrency limit is positive and
 the active request count is below that limit. Active requests include prefill,
-decode, and pending routing reservations. The new request's own prefill time
-still contributes to TTFT.
+decode, and pending routing reservations. Reservations expire after the selected
+backend's health-check RTT, not on its next registration update. The new
+request's own prefill time still contributes to TTFT.
 
 At or above the limit, or when the limit is unknown, queue delay uses the
 backend's priority-aware queue estimate when present. Otherwise it divides

@@ -129,6 +129,7 @@ impl SelectedRoutedCluster {
         self.owner.select_backend(failed_backend_ids)
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_backend(
         &self,
         registration: &Arc<RegistrationGeneration>,
@@ -137,6 +138,35 @@ impl SelectedRoutedCluster {
     ) -> Option<RoutingReservation> {
         self.owner
             .reserve_backend(registration, input_tokens, priority)
+    }
+
+    pub(crate) fn reserve_backend_with_ttl(
+        &self,
+        registration: &Arc<RegistrationGeneration>,
+        input_tokens: u64,
+        priority: u32,
+        ttl: Duration,
+        metrics: Arc<StargateMetrics>,
+        target: &RoutingTargetKey,
+    ) -> Option<RoutingReservation> {
+        self.owner.reserve_backend_with_ttl(
+            registration,
+            input_tokens,
+            priority,
+            ttl,
+            metrics,
+            target,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn routing_snapshot_at(&self, now: Instant) -> Option<RoutedClusterSnapshot> {
+        self.owner.routing_snapshot_at(now)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_reservation_count(&self) -> usize {
+        self.owner.pending_reservation_count()
     }
 }
 

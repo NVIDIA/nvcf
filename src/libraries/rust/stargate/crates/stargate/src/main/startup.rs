@@ -173,6 +173,10 @@ pub(super) fn runtime_config_from_args(
     args: &Args,
     proxy_transport: ProxyTransportConfig,
 ) -> Result<StargateRuntimeConfig> {
+    ensure!(
+        args.routing_reservation_ttl_min_ms <= args.routing_reservation_ttl_max_ms,
+        "routing reservation TTL minimum must not exceed maximum"
+    );
     let millis = Duration::from_millis;
     Ok(StargateRuntimeConfig {
         stargate_id: args.stargate_id.clone(),
@@ -188,6 +192,8 @@ pub(super) fn runtime_config_from_args(
         watch_heartbeat_interval: millis(args.watch_heartbeat_ms),
         registration_update_idle_timeout: millis(args.registration_update_idle_timeout_ms),
         registration_update_max_idle_timeout: millis(args.registration_update_max_idle_timeout_ms),
+        routing_reservation_ttl_min: millis(args.routing_reservation_ttl_min_ms),
+        routing_reservation_ttl_max: millis(args.routing_reservation_ttl_max_ms),
         proxy_transport,
         lb_config_path: args.lb_config_path.clone(),
         metrics_prefix: args.metrics_prefix.clone(),

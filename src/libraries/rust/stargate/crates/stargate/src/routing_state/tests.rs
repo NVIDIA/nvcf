@@ -866,7 +866,7 @@ async fn active_registration_keeps_connection_rtt_in_snapshot() {
 }
 
 #[tokio::test]
-async fn reservation_updates_local_snapshot_until_next_registration_update() {
+async fn reservation_survives_registration_update_until_expiry() {
     let scenario = RegistrationScenario::new(Some("rk-res"));
     let running = scenario.start("inst-res", 8888);
     let mut stats = priority_stats(100.0, [(4, 5)]);
@@ -887,10 +887,131 @@ async fn reservation_updates_local_snapshot_until_next_registration_update() {
     scenario.publish_connected(&running, &update).await;
 
     let candidates = scenario.clusters("model-res").await;
-    assert_queue_stats(&candidates[0].stats, 0, 0, 0, 0, 4, 5);
+    assert_queue_stats(&candidates[0].stats, 1, 1, 37, 37, 4, 375);
 
     let clusters = scenario.clusters("model-res").await;
-    assert_queue_stats(&clusters[0].stats, 0, 0, 0, 0, 4, 5);
+    assert_queue_stats(&clusters[0].stats, 1, 1, 37, 37, 4, 375);
+}
+
+#[tokio::test]
+async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
+    let scenario = RegistrationScenario::new(Some("rk-res-expiry"));
+    let running = scenario.start("inst-res-expiry", 8888);
+    let update = scenario.update(
+        &running,
+        "model-res-expiry",
+        Active,
+        priority_stats(100.0, [(4, 5)]),
+    );
+    scenario.publish_connected(&running, &update).await;
+
+    let selected_cluster = scenario.selected_cluster("model-res-expiry").await;
+    let target = scenario.target("model-res-expiry");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let reservation = selected_cluster
+        .reserve_backend_with_ttl(
+            &running.generation(),
+            37,
+            4,
+            Duration::from_millis(60),
+            metrics,
+            &target,
+        )
+        .expect("active backend should accept reservation");
+    let expires_at = reservation.0.expires_at();
+
+    scenario.publish_connected(&running, &update).await;
+    assert_eq!(
+        selected_cluster
+            .routing_snapshot_at(expires_at - Duration::from_millis(1))
+            .expect("cluster should remain routable")
+            .stats
+            .queue_size,
+        1,
+        "a registration update must not clear the reservation"
+    );
+    assert_eq!(
+        selected_cluster
+            .routing_snapshot_at(expires_at)
+            .expect("cluster should remain routable")
+            .stats
+            .queue_size,
+        0,
+        "reservation should not count at its expiry boundary"
+    );
+    assert_eq!(selected_cluster.pending_reservation_count(), 0);
+
+    reservation.release();
+}
+
+#[tokio::test]
+async fn snapshot_read_prunes_ten_thousand_idle_expired_reservations() {
+    let scenario = RegistrationScenario::new(Some("rk-res-prune"));
+    let running = scenario.start("inst-res-prune", 8888);
+    let update = scenario.update(
+        &running,
+        "model-res-prune",
+        Active,
+        priority_stats(100.0, [(4, 5)]),
+    );
+    scenario.publish_connected(&running, &update).await;
+
+    let selected_cluster = scenario.selected_cluster("model-res-prune").await;
+    let target = scenario.target("model-res-prune");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let mut last_expiry = Instant::now();
+    for _ in 0..10_000 {
+        let reservation = selected_cluster
+            .reserve_backend_with_ttl(
+                &running.generation(),
+                1,
+                0,
+                Duration::from_millis(1),
+                metrics.clone(),
+                &target,
+            )
+            .expect("active backend should accept reservation");
+        last_expiry = last_expiry.max(reservation.0.expires_at());
+    }
+
+    assert_eq!(selected_cluster.pending_reservation_count(), 10_000);
+    selected_cluster
+        .routing_snapshot_at(last_expiry + Duration::from_millis(1))
+        .expect("cluster should remain routable");
+    assert_eq!(selected_cluster.pending_reservation_count(), 0);
+}
+
+#[tokio::test]
+async fn removing_backend_drops_its_reservations_immediately() {
+    let scenario = RegistrationScenario::new(Some("rk-res-remove"));
+    let running = scenario.start("inst-res-remove", 8888);
+    let update = scenario.update(
+        &running,
+        "model-res-remove",
+        Active,
+        priority_stats(100.0, [(4, 5)]),
+    );
+    scenario.publish_connected(&running, &update).await;
+
+    let selected_cluster = scenario.selected_cluster("model-res-remove").await;
+    let target = scenario.target("model-res-remove");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let reservation = selected_cluster
+        .reserve_backend_with_ttl(
+            &running.generation(),
+            37,
+            4,
+            Duration::from_secs(1),
+            metrics,
+            &target,
+        )
+        .expect("active backend should accept reservation");
+    assert_eq!(selected_cluster.pending_reservation_count(), 1);
+
+    scenario.state.end_registration(running).await;
+
+    assert_eq!(selected_cluster.pending_reservation_count(), 0);
+    reservation.release();
 }
 
 #[tokio::test]

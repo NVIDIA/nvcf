@@ -16,12 +16,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use stargate_proto::pb::ModelStats;
 use stargate_protocol::common::valid_last_mean_input_tps;
 
+use crate::metrics::StargateMetrics;
+
+use super::keys::RoutingTargetKey;
 use super::registration::{RegistrationClusterGeneration, RegistrationGeneration};
 use super::reservations::{
     PendingClusterReservation, RoutingReservation, apply_pending_cluster_reservations,
@@ -249,7 +252,13 @@ impl ClusterRoutingGeneration {
     }
 
     fn refresh_snapshot(&mut self, updated_backend_id: Option<&str>) {
+        let now = Instant::now();
         let Some((backend_stats, rtt, active_backend_count)) = self.backend_aggregate() else {
+            if let Some(state) = self.snapshot_state.take() {
+                for pending in state.pending_cluster_reservations {
+                    pending.deactivate();
+                }
+            }
             self.snapshot_state = None;
             return;
         };
@@ -279,13 +288,17 @@ impl ClusterRoutingGeneration {
             .map(|state| state.pending_cluster_reservations)
             .unwrap_or_default();
         pending_cluster_reservations.retain(|pending| {
-            pending.is_active()
-                && backend_index(&self.backends, &pending.inference_server_id).is_ok()
+            let backend_active = backend_index(&self.backends, &pending.inference_server_id)
+                .is_ok_and(|index| {
+                    pending.registration.as_ref().is_none_or(|registration| {
+                        Arc::ptr_eq(&self.backends[index].registration, registration)
+                    })
+                });
+            if !backend_active {
+                pending.deactivate();
+            }
+            pending.is_active_at(now) && backend_active
         });
-        if let Some(updated_backend_id) = updated_backend_id {
-            pending_cluster_reservations
-                .retain(|pending| pending.inference_server_id != updated_backend_id);
-        }
         let mut stats = backend_stats;
         set_shared_engine_stats(&mut stats, &source_backend.stats);
         let base_snapshot = RoutedClusterSnapshot {
@@ -305,10 +318,14 @@ impl ClusterRoutingGeneration {
     }
 
     fn routing_snapshot(&mut self) -> Option<RoutedClusterSnapshot> {
+        self.routing_snapshot_at(Instant::now())
+    }
+
+    pub(super) fn routing_snapshot_at(&mut self, now: Instant) -> Option<RoutedClusterSnapshot> {
         let snapshot_state = self.snapshot_state.as_mut()?;
         snapshot_state
             .pending_cluster_reservations
-            .retain(|pending| pending.is_active());
+            .retain(|pending| pending.is_active_at(now));
         let mut snapshot = snapshot_state.base_snapshot.clone();
         apply_pending_cluster_reservations(
             &mut snapshot.stats,
@@ -322,15 +339,21 @@ impl ClusterRoutingGeneration {
         registration: &Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
+        ttl: Duration,
+        metrics: Option<Arc<StargateMetrics>>,
+        target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
         if !self.contains_registration(registration) {
             return None;
         }
         let snapshot_state = self.snapshot_state.as_mut()?;
         let pending = PendingClusterReservation::new(
-            registration.inference_server_id().to_string(),
+            registration.clone(),
             input_tokens,
             priority,
+            ttl,
+            metrics,
+            target,
         );
         snapshot_state
             .pending_cluster_reservations
@@ -387,6 +410,20 @@ impl RoutedClusterState {
         self.generation.lock().routing_snapshot()
     }
 
+    #[cfg(test)]
+    pub(super) fn routing_snapshot_at(&self, now: Instant) -> Option<RoutedClusterSnapshot> {
+        self.generation.lock().routing_snapshot_at(now)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_reservation_count(&self) -> usize {
+        self.generation
+            .lock()
+            .snapshot_state
+            .as_ref()
+            .map_or(0, |state| state.pending_cluster_reservations.len())
+    }
+
     pub(super) fn backend_snapshot_values(&self) -> Vec<RoutedInferenceServerSnapshot> {
         let backends = self.generation.lock().backends.clone();
         backends
@@ -421,15 +458,40 @@ impl RoutedClusterState {
         eligible.nth(index).map(Arc::clone)
     }
 
+    #[cfg(test)]
     pub(super) fn reserve_backend(
         &self,
         registration: &Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
     ) -> Option<RoutingReservation> {
-        self.generation
-            .lock()
-            .reserve_backend(registration, input_tokens, priority)
+        self.generation.lock().reserve_backend(
+            registration,
+            input_tokens,
+            priority,
+            Duration::from_secs(1),
+            None,
+            &RoutingTargetKey::new(None, ""),
+        )
+    }
+
+    pub(super) fn reserve_backend_with_ttl(
+        &self,
+        registration: &Arc<RegistrationGeneration>,
+        input_tokens: u64,
+        priority: u32,
+        ttl: Duration,
+        metrics: Arc<StargateMetrics>,
+        target: &RoutingTargetKey,
+    ) -> Option<RoutingReservation> {
+        self.generation.lock().reserve_backend(
+            registration,
+            input_tokens,
+            priority,
+            ttl,
+            Some(metrics),
+            target,
+        )
     }
 
     #[cfg(test)]

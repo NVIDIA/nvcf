@@ -111,9 +111,11 @@ define_stargate_metrics! {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
         proxy_duration_seconds("proxy_duration_seconds", "Time to first byte from upstream", ["routing_key", "model", "inference_server_id"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
         routing_duration_seconds("routing_duration_seconds", "Time spent selecting an inference server", ["routing_key", "model"], [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
+        routing_reservation_ttl_seconds("routing_reservation_ttl_seconds", "Configured lifetime of routing reservations", ["routing_key", "model"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]);
     }
     gauges {
         active_inference_servers("active_inference_servers", "Active inference servers available for a routing target", ["routing_key", "model"]);
+        routing_reservations_active("routing_reservations_active", "Active in-flight routing reservations", ["routing_key", "model"]);
         tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
 }
@@ -200,6 +202,19 @@ impl StargateMetrics {
         Histogram, proxy_replay_buffer_bytes(model: &str) => [model];
         Histogram, proxy_duration_seconds(routing_key: Option<&str>, model: &str, inference_server_id: &str) => [routing_key.unwrap_or(""), model, inference_server_id];
         Histogram, routing_duration_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];
+        Histogram, routing_reservation_ttl_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];
+    }
+
+    pub(crate) fn inc_routing_reservations_active(&self, routing_key: Option<&str>, model: &str) {
+        self.routing_reservations_active
+            .with_label_values(&[routing_key.unwrap_or(""), model])
+            .inc();
+    }
+
+    pub(crate) fn dec_routing_reservations_active(&self, routing_key: Option<&str>, model: &str) {
+        self.routing_reservations_active
+            .with_label_values(&[routing_key.unwrap_or(""), model])
+            .dec();
     }
 
     #[inline]
@@ -320,6 +335,21 @@ mod tests {
             !body.contains("stargate_requests_total"),
             "default stargate prefix leaked into custom metric output:\n{body}"
         );
+    }
+
+    #[test]
+    fn routing_reservation_metrics_use_routing_target_labels() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        metrics.inc_routing_reservations_active(Some("routing-a"), "model-a");
+        metrics
+            .routing_reservation_ttl_seconds(Some("routing-a"), "model-a")
+            .observe(0.06);
+
+        let body = metrics.gather_text().expect("metrics should encode");
+        assert!(body.contains(
+            "stargate_routing_reservations_active{model=\"model-a\",routing_key=\"routing-a\"} 1"
+        ));
+        assert!(body.contains("stargate_routing_reservation_ttl_seconds_count{model=\"model-a\",routing_key=\"routing-a\"} 1"));
     }
 
     #[test]

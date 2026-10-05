@@ -120,6 +120,8 @@ pub struct ProxyAppState {
     pub readiness: ReadinessState,
     pub lb_router: Arc<LoadBalancerRouter>,
     pub metrics: Arc<StargateMetrics>,
+    pub routing_reservation_ttl_min: std::time::Duration,
+    pub routing_reservation_ttl_max: std::time::Duration,
     pub retry: ProxyRetryConfig,
     pub debug_config: DebugConfig,
 }
@@ -286,6 +288,8 @@ mod test_support {
                     .expect("load balancer should initialize"),
             ),
             metrics,
+            routing_reservation_ttl_min: std::time::Duration::from_millis(1),
+            routing_reservation_ttl_max: std::time::Duration::from_millis(1000),
             retry: ProxyRetryConfig::default(),
             debug_config: DebugConfig::default(),
         }
