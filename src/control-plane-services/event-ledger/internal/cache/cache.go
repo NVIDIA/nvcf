@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
@@ -57,6 +58,7 @@ const (
 var (
 	errNilInnerHandler      = errors.New("cache: inner DBHandlerV2 must not be nil")
 	errNilFlush             = errors.New("cache: flush function must not be nil")
+	errNilMeter             = errors.New("cache: meter must not be nil")
 	errInvalidMaxSize       = errors.New("cache: MaxSize must be greater than 0")
 	errInvalidFlushInterval = errors.New("cache: FlushInterval must be greater than 0")
 	errFlushIntervalTooLong = errors.New("cache: FlushInterval must not exceed one hour")
@@ -129,8 +131,9 @@ func (cfg Config) inactiveTTL() time.Duration {
 type CachingDBHandler struct {
 	data_access.DBHandlerV2
 
-	cfg   Config
-	flush FlushFunc
+	cfg     Config
+	flush   FlushFunc
+	metrics *cacheMetrics
 	// wheel schedules the flush of each pending entry. It is called with entriesMu
 	// held, so its own lock is always taken after entriesMu, never before, and it
 	// must never call into the cache while holding that lock.
@@ -158,15 +161,19 @@ func isNilHandler(handler data_access.DBHandlerV2) bool {
 }
 
 // NewCachingDBHandler wraps inner with an empty cache. flush writes the pending
-// entries that eviction removes. It returns an error if inner, including a typed
-// nil, or flush is nil or cfg has a non-positive field, or FlushInterval is over
-// one hour. The handler's timing wheel does not run until Start is called.
-func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config, flush FlushFunc) (*CachingDBHandler, error) {
+// entries that eviction removes, and the cache's metrics are created on meter.
+// It returns an error if inner, including a typed nil, flush, or meter is nil,
+// cfg has a non-positive field, or FlushInterval is over one hour. The handler's
+// timing wheel does not run until Start is called.
+func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config, flush FlushFunc, meter metric.Meter) (*CachingDBHandler, error) {
 	if isNilHandler(inner) {
 		return nil, errNilInnerHandler
 	}
 	if flush == nil {
 		return nil, errNilFlush
+	}
+	if meter == nil {
+		return nil, errNilMeter
 	}
 	if cfg.MaxSize <= 0 {
 		return nil, errInvalidMaxSize
@@ -194,7 +201,18 @@ func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config, flush FlushF
 		return nil, fmt.Errorf("cache: failed to create the timing wheel: %w", err)
 	}
 	handler.wheel = wheel
+	handler.metrics, err = newCacheMetrics(meter, handler.entryCount)
+	if err != nil {
+		return nil, err
+	}
 	return handler, nil
+}
+
+// entryCount returns the number of entries in the cache.
+func (handler *CachingDBHandler) entryCount() int64 {
+	handler.entriesMu.RLock()
+	defer handler.entriesMu.RUnlock()
+	return int64(len(handler.entries))
 }
 
 // Start begins advancing the timing wheel in a background goroutine.
@@ -267,6 +285,7 @@ const (
 // room is written before processEvent returns.
 func (handler *CachingDBHandler) processEvent(cachedKey key, ev event, now time.Time) outcome {
 	out, evicted := handler.recordEvent(cachedKey, ev, now)
+	handler.metrics.recordOutcome(out)
 	handler.flushEvicted(evicted)
 	return out
 }
@@ -317,7 +336,7 @@ func (handler *CachingDBHandler) recordEvent(cachedKey key, ev event, now time.T
 func (handler *CachingDBHandler) evictOverflow() []data_access.EventV3UpsertRecord {
 	var pending []data_access.EventV3UpsertRecord
 	for len(handler.entries) > handler.cfg.MaxSize {
-		if rec, ok := handler.remove(handler.recency.Back()); ok {
+		if rec, ok := handler.remove(handler.recency.Back(), evictedForSize); ok {
 			pending = append(pending, rec)
 		}
 	}
@@ -350,7 +369,7 @@ func (handler *CachingDBHandler) removeInactive(now time.Time) (int, []data_acce
 		if now.Sub(handler.entries[node.Value.(key)].lastUpdated) <= ttl {
 			break
 		}
-		if rec, ok := handler.remove(node); ok {
+		if rec, ok := handler.remove(node, evictedForInactive); ok {
 			pending = append(pending, rec)
 		}
 		evicted++
@@ -361,13 +380,14 @@ func (handler *CachingDBHandler) removeInactive(now time.Time) (int, []data_acce
 // remove deletes the entry at node. It reports the entry as a record only when
 // it is pending, since a clean entry is already in the database. The caller
 // holds entriesMu.
-func (handler *CachingDBHandler) remove(node *list.Element) (data_access.EventV3UpsertRecord, bool) {
+func (handler *CachingDBHandler) remove(node *list.Element, reason evictionReason) (data_access.EventV3UpsertRecord, bool) {
 	cachedKey := handler.recency.Remove(node).(key)
 	cachedEntry := handler.entries[cachedKey]
 	delete(handler.entries, cachedKey)
 	// A pending entry has a scheduled flush, which an eviction replaces by writing
 	// the entry now.
 	handler.wheel.unschedule(cachedKey)
+	handler.metrics.recordEviction(reason)
 	if !cachedEntry.pending {
 		return data_access.EventV3UpsertRecord{}, false
 	}
@@ -396,11 +416,14 @@ func (handler *CachingDBHandler) flushEvicted(recs []data_access.EventV3UpsertRe
 	logger := logging.GetLogger(ctx)
 	for _, rec := range recs {
 		if err := handler.flush(ctx, rec); err != nil {
+			handler.metrics.recordFlush(flushFailed)
 			logger.ErrorContext(ctx, "failed to flush evicted cache entry",
 				zap.Error(err),
 				zap.String("namespace", rec.Namespace),
 				zap.String("context", rec.Context),
 				zap.String("event_name", rec.EventName))
+			continue
 		}
+		handler.metrics.recordFlush(flushSucceeded)
 	}
 }
