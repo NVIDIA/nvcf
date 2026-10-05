@@ -20,17 +20,21 @@ package operator
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 const (
@@ -305,6 +309,46 @@ func hasOTelCollectorConfigChangedCheck(ctx context.Context,
 		}
 		if newCfg.ImageConfig.Tag != prev.ImageConfig.Tag {
 			log.Infof("OTel collector image tag changed from %q to %q", prev.ImageConfig.Tag, newCfg.ImageConfig.Tag)
+			return true
+		}
+		return false
+	}
+}
+
+// hasClusterValidatorEnabledChangedCheck compares the cluster-validator
+// setting the running agent was given with the operator's own. The setting is
+// stored nowhere else, so without this a validator enabled or disabled by a
+// chart upgrade would restart only the operator, and the agent would keep
+// publishing, or keep omitting, the validator metrics. Only the operator's
+// own entry is compared, not a later override of the same name, so an override
+// does not roll the agent on every sync.
+func hasClusterValidatorEnabledChangedCheck(ctx context.Context, enabled bool,
+	getDeployment func(ctx context.Context, name string, opts metav1.GetOptions) (*appsv1.Deployment, error),
+) func() bool {
+	return func() bool {
+		log := core.GetLogger(ctx)
+		dep, err := getDeployment(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+		if err != nil {
+			if !k8serrors.IsNotFound(err) {
+				log.WithError(err).Warn("failed to read the agent Deployment to compare its cluster-validator setting")
+			}
+			return false
+		}
+		want := strconv.FormatBool(enabled)
+		for _, c := range dep.Spec.Template.Spec.Containers {
+			if c.Name != agentContainerName {
+				continue
+			}
+			for _, env := range c.Env {
+				if env.Name == clustervalidator.EnabledEnv {
+					if env.Value == want {
+						return false
+					}
+					log.Infof("Agent %s changed from %q to %q", clustervalidator.EnabledEnv, env.Value, want)
+					return true
+				}
+			}
+			log.Infof("Agent has no %s, setting it to %q", clustervalidator.EnabledEnv, want)
 			return true
 		}
 		return false

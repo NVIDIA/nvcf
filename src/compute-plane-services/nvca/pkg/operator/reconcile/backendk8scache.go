@@ -1261,6 +1261,8 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 		hasAgentDeploymentConfigChanged(ctx, effectiveConfigForComparison.DeploymentConfig, nbMerged.Status),
 		hasAgentWorkerConfigOptionsChanged(ctx, effectiveConfigForComparison.NVCFWorkerConfig, nbMerged.Status),
 		hasEnvOverridesChangedCheck(ctx, bc.functionEnvOverridesB64, bc.taskEnvOverridesB64, nbMerged.Status),
+		hasClusterValidatorEnabledChangedCheck(ctx, bc.clusterValidatorEnabled,
+			bc.clients.K8s.AppsV1().Deployments(getSystemNamespace(nbMerged)).Get),
 	}
 
 	// Only check NGC service API key for NGC-managed clusters (or empty, which defaults to NGC-managed)

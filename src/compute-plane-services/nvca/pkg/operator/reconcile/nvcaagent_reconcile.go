@@ -100,6 +100,8 @@ const (
 	nvcfBackendSelfManagedConfigMapName    = "nvcfbackend-self-managed"
 	nvcfBackendChartDefaultsConfigMapName  = "nvcfbackend-chart-defaults"
 
+	agentContainerName = "agent"
+
 	//nolint:gosec // G101: This is a ConfigMap name, not a credential
 	nvcfCustomAnnotationsConfigMapName = "nvca-namespace-pod-annotations"
 
@@ -2009,7 +2011,7 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 	}
 
 	nvcaContainer := corev1.Container{
-		Name:            "agent",
+		Name:            agentContainerName,
 		Image:           bc.getNVCAImagePathFromConfig(nb),
 		ImagePullPolicy: getImagePullPolicyFromConfig(nb.Spec.NVCAImageConfig),
 		Args:            []string{"/usr/bin/nvca", "--config", agentConfigFilePath},
