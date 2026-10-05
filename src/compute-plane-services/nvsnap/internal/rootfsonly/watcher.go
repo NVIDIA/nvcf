@@ -93,6 +93,10 @@ type Watcher struct {
 	// internal state
 	sem      chan struct{}
 	captured sync.Map // map[types.UID]struct{} — pods already scheduled this lifetime
+
+	// captureDone, when set, runs after each runCapture exits with the
+	// scheduled UID and whether the capture committed. Test hook only.
+	captureDone func(uid types.UID, committed bool)
 }
 
 // Run starts the informer and blocks until ctx is cancelled. Returns
@@ -248,10 +252,17 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 	// the pod is never retried and every later event returns silently.
 	// Previously only the capture-error path released it, so an abort left
 	// the UID poisoned for the life of the agent.
+	// Release the UID that was marked at scheduling time: refreshPodForCapture
+	// below may replace pod (or nil it when the pod was recreated), so the
+	// defer must not read pod.UID.
+	scheduledUID := pod.UID
 	committed := false
 	defer func() {
 		if !committed {
-			w.captured.Delete(pod.UID)
+			w.captured.Delete(scheduledUID)
+		}
+		if w.captureDone != nil {
+			w.captureDone(scheduledUID, committed)
 		}
 	}()
 	log := w.logger().WithFields(logrus.Fields{

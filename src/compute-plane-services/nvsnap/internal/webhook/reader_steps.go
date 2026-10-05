@@ -112,14 +112,23 @@ func harden(c *corev1.Container, res corev1.ResourceRequirements, posture reader
 // off: NVSNAP_PREWARM on the engine container wins, then the storage
 // profile, and with no profile the sweep is on.
 func (m *Mutator) sweepStep(name string, main *corev1.Container, src volumeAt, posture readerPosture) (corev1.Container, bool) {
-	if !m.prewarmWanted(*main) {
+	want, gate := m.prewarmPolicy(*main)
+	if !want {
 		return corev1.Container{}, false
 	}
+	cmd := prewarmCommand(src.Path, m.prewarmWorkers())
 	c := corev1.Container{
 		Name:         name,
 		Image:        main.Image,
-		Command:      []string{"sh", "-c", prewarmCommand(src.Path, m.prewarmWorkers())},
+		Command:      []string{"sh", "-c", cmd},
 		VolumeMounts: []corev1.VolumeMount{{Name: src.Volume, MountPath: src.Path, ReadOnly: true}},
+	}
+	if gate != nil {
+		// NVSNAP_PREWARM comes from a ConfigMap or Secret the webhook cannot
+		// resolve at admission; hand the same reference to the step and let
+		// it decide at run time.
+		c.Env = []corev1.EnvVar{*gate}
+		c.Command = []string{"sh", "-c", `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0; ` + cmd}
 	}
 	harden(&c, sweepResources, posture, main)
 	return c, true
@@ -155,20 +164,27 @@ func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir strin
 	return c
 }
 
-// prewarmWanted decides whether a reader gets the sweep. An explicit
+// prewarmPolicy decides whether a reader gets the sweep step. An explicit
 // NVSNAP_PREWARM on the workload container wins ("0" off, anything else
-// on); otherwise the storage profile decides, and with no profile the
-// answer is on.
-func (m *Mutator) prewarmWanted(main corev1.Container) bool {
+// on). When that variable is a ValueFrom reference its value is only known
+// inside the pod, so the step is added and the reference is returned for
+// it to evaluate at run time. Otherwise the storage profile decides, and
+// with no profile the answer is on.
+func (m *Mutator) prewarmPolicy(main corev1.Container) (want bool, gate *corev1.EnvVar) {
 	for _, e := range main.Env {
-		if e.Name == "NVSNAP_PREWARM" {
-			return e.Value != "0"
+		if e.Name != "NVSNAP_PREWARM" {
+			continue
 		}
+		if e.ValueFrom != nil {
+			ref := e
+			return true, &ref
+		}
+		return e.Value != "0", nil
 	}
 	if m.StorageProfile == nil {
-		return true
+		return true, nil
 	}
-	return m.StorageProfile.PrewarmEnabled()
+	return m.StorageProfile.PrewarmEnabled(), nil
 }
 
 // prewarmLimit is the largest volume the sweep is applied to, from the

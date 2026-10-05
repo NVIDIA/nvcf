@@ -232,3 +232,65 @@ func TestPrewarmCommand_RangeParallelAndSelective(t *testing.T) {
 		t.Error("reader count must come from the argument")
 	}
 }
+
+// NVSNAP_PREWARM supplied through ValueFrom cannot be read at admission: the
+// sweep step must still be added, carry the same reference, and gate the
+// sweep on the resolved value at run time.
+func TestTryL2CacheDir_PrewarmValueFromGatesAtRuntime(t *testing.T) {
+	m := &Mutator{
+		CacheDir: "/opt/nvsnap", MainContainer: 0,
+		L2Backend: &stubL2Backend{mountResult: checkpointstore.PodMount{
+			Volume:      corev1.Volume{Name: "x", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "rox-abc"}}},
+			VolumeMount: corev1.VolumeMount{Name: "x", MountPath: "/opt/nvsnap"},
+		}},
+	}
+	ref := corev1.EnvVar{Name: "NVSNAP_PREWARM", ValueFrom: &corev1.EnvVarSource{
+		ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "tuning"}, Key: "prewarm"},
+	}}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "reuse", Namespace: "ns"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "vllm", Image: "img", Command: []string{"serve"}, Env: []corev1.EnvVar{ref},
+		}}},
+	}
+	patches, err := m.tryL2CacheDir(context.Background(), pod, "abc", checkpointstore.Manifest{Hash: "abc", CaptureMethod: "cachedir"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range patches {
+		for _, c := range containersIn(p.Value) {
+			if c.Name != "nvsnap-prewarm" {
+				continue
+			}
+			cmd := strings.Join(c.Command, " ")
+			if !strings.Contains(cmd, `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0`) {
+				t.Errorf("prewarm command must gate on the resolved NVSNAP_PREWARM, got %q", cmd)
+			}
+			if len(c.Env) != 1 || c.Env[0].Name != "NVSNAP_PREWARM" || c.Env[0].ValueFrom == nil || c.Env[0].ValueFrom.ConfigMapKeyRef == nil || c.Env[0].ValueFrom.ConfigMapKeyRef.Name != "tuning" {
+				t.Errorf("prewarm step must carry the workload's NVSNAP_PREWARM reference, got %+v", c.Env)
+			}
+			return
+		}
+	}
+	t.Fatal("a ValueFrom NVSNAP_PREWARM must still add the prewarm step")
+}
+
+// containersIn returns the containers a patch value adds, whether it is a
+// single container or a list.
+func containersIn(v any) []corev1.Container {
+	switch x := v.(type) {
+	case corev1.Container:
+		return []corev1.Container{x}
+	case []corev1.Container:
+		return x
+	case []any:
+		var out []corev1.Container
+		for _, e := range x {
+			if c, ok := e.(corev1.Container); ok {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	return nil
+}
