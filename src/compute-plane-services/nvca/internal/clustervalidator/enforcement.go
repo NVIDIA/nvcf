@@ -129,15 +129,17 @@ func checkNetworkPolicyEnforcement(
 		podTimeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
 
-	ns := "netpol-validation-" + rand.String(6)
+	instance := rand.String(6)
+	ns := "netpol-validation-" + instance
 	log.Info("Phase 1: Setting up test environment")
 	printInfo(log, fmt.Sprintf("Creating namespace %s", ns))
-	if err := createTestNamespace(ctx, client, ns); err != nil {
+	if err := createTestNamespace(ctx, client, ns, instance); err != nil {
 		enforcementNotRun(log, state, fmt.Sprintf("could not create the test namespace %s: %v", ns, err))
 		return
 	}
-	// Registered only once the create succeeded: a namespace this run did not
-	// create belongs to another run, whose test this would otherwise delete.
+	// Registered only once the create succeeded or adopted a namespace with
+	// this run's label: a namespace this run did not create belongs to another
+	// run, whose test this would otherwise delete.
 	defer cleanupTestNamespace(log, client, ns)
 	printSuccess(log, "Namespace created")
 
@@ -444,15 +446,23 @@ func runEgressPhase(env *enforcementEnv) bool {
 // Namespace helpers
 // ---------------------------------------------------------------------------
 
-func createTestNamespace(ctx context.Context, client kubernetes.Interface, ns string) error {
-	_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+// createTestNamespace creates the run's test namespace, labelled with the
+// run's instance so a retried create can adopt it.
+func createTestNamespace(ctx context.Context, client kubernetes.Interface, ns, instance string) error {
+	namespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: ns,
 			Labels: map[string]string{
 				"app": "netpol-validation", "purpose": "enforcement-test", managedByLabel: validatorManager,
+				instanceLabel: instance,
 			},
 		},
-	}, metav1.CreateOptions{})
+	}
+	_, err := createOrAdopt(ctx, instance, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Create(c, namespace, metav1.CreateOptions{})
+	}, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Get(c, ns, metav1.GetOptions{})
+	})
 	return err
 }
 
@@ -555,8 +565,16 @@ func buildServerPod(ns, image string) *corev1.Pod {
 }
 
 func createServerPod(ctx context.Context, client kubernetes.Interface, ns, image string) error {
-	_, err := client.CoreV1().Pods(ns).Create(ctx, buildServerPod(ns, image), metav1.CreateOptions{})
-	return err
+	pod := buildServerPod(ns, image)
+	return observeErr(ctx, func(c context.Context) error {
+		_, err := client.CoreV1().Pods(ns).Create(c, pod, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			// The test namespace is this run's own, so an earlier attempt
+			// that timed out created it.
+			return nil
+		}
+		return err
+	})
 }
 
 // buildProbePod constructs a short-lived pod that runs wget to test

@@ -461,13 +461,14 @@ func TestNextProbe(t *testing.T) {
 
 func TestCreateTestNamespace(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	err := createTestNamespace(context.Background(), client, "test-enforcement-ns")
+	err := createTestNamespace(context.Background(), client, "test-enforcement-ns", "abc123")
 	assert.NoError(t, err)
 
 	ns, err := client.CoreV1().Namespaces().Get(context.Background(), "test-enforcement-ns", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "netpol-validation", ns.Labels["app"])
 	assert.Equal(t, "enforcement-test", ns.Labels["purpose"])
+	assert.Equal(t, "abc123", ns.Labels[instanceLabel], "a retried create adopts only its own run's namespace")
 }
 
 func TestCreateServerPod(t *testing.T) {

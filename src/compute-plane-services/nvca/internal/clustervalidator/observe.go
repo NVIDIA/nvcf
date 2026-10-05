@@ -19,12 +19,17 @@ package clustervalidator
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 )
 
 // Every check reads the cluster through observe, and every read that still
@@ -40,17 +45,19 @@ var (
 	observeRetryInterval = 2 * time.Second
 )
 
-// retryable reports whether a failed call may succeed if repeated. Throttling,
-// timeouts, apiserver or webhook unavailability and transport errors may
-// clear. A denial, a rejected token, and answers about the object itself
-// (absent, already present, invalid) will not.
+// retryable reports whether a failed call may succeed if repeated: what
+// k8sutil.IsTransientK8sError calls transient, any other 5xx, such as a 502
+// from a proxy in front of the apiserver, and an error that is no apiserver
+// answer at all, such as a response body cut off mid-read. Any other answer,
+// such as a denial or one about the object itself (absent, already present,
+// invalid), will not change.
 func retryable(err error) bool {
-	switch {
-	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err),
-		apierrors.IsNotFound(err), apierrors.IsAlreadyExists(err),
-		apierrors.IsInvalid(err), apierrors.IsBadRequest(err),
-		apierrors.IsMethodNotSupported(err):
-		return false
+	if k8sutil.IsTransientK8sError(err) {
+		return true
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return status.Status().Code >= http.StatusInternalServerError
 	}
 	return true
 }
@@ -75,6 +82,31 @@ func observe[T any](ctx context.Context, fn func(context.Context) (T, error)) (T
 			return v, err
 		}
 	}
+}
+
+// createOrAdopt creates, with create, an object named for this run. A create
+// the apiserver applied after the client gave up on it is answered
+// AlreadyExists when retried, so on AlreadyExists the object is read back with
+// get and adopted when it carries this run's instance label. One without it is
+// not this run's, and the AlreadyExists stands.
+func createOrAdopt[T metav1.Object](
+	ctx context.Context, instance string, create, get func(context.Context) (T, error),
+) (T, error) {
+	return observe(ctx, func(c context.Context) (T, error) {
+		obj, err := create(c)
+		if !apierrors.IsAlreadyExists(err) {
+			return obj, err
+		}
+		existing, getErr := get(c)
+		switch {
+		case getErr == nil && existing.GetLabels()[instanceLabel] == instance:
+			return existing, nil
+		case getErr != nil && retryable(getErr):
+			return obj, getErr
+		default:
+			return obj, err
+		}
+	})
 }
 
 // observeErr is observe for a call that returns only an error.

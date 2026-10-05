@@ -1909,9 +1909,14 @@ const nodeToNodeSilentSandboxRecommendation = "A probe pod on the listed nodes g
 // are what sweepOrphanN2NNamespaces matches on, and are deliberately distinct
 // from the netpol-validation labels so the two sweeps cannot cross-delete.
 func createNodeToNodeNamespace(ctx context.Context, client kubernetes.Interface, ns, instance string) error {
-	_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+	namespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: n2nLabels(n2nNamespaceComponent, instance)},
-	}, metav1.CreateOptions{})
+	}
+	_, err := createOrAdopt(ctx, instance, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Create(c, namespace, metav1.CreateOptions{})
+	}, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Get(c, ns, metav1.GetOptions{})
+	})
 	return err
 }
 
@@ -2178,8 +2183,9 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	}
 
 	p := newN2NProbe(client, state, image)
-	// AlreadyExists is an error too: the cleanup deletes this namespace, so it
-	// must be one this run created, and the cleanup is registered only then.
+	// A namespace of this name without the run's label is an error: the
+	// cleanup deletes this namespace, so it must be one this run created, and
+	// the cleanup is registered only then.
 	if err := createNodeToNodeNamespace(ctx, client, p.ns, p.instance); err != nil {
 		p.notObserved(fmt.Sprintf("could not create the probe namespace %s: %v", p.ns, err), "")
 		return
@@ -2280,9 +2286,9 @@ func (p *n2nProbe) run(ctx context.Context, probeNodes []string) {
 	}
 
 	ds := buildNodeToNodeDaemonSet(p.dsName, p.ns, n2nLabels(n2nServerComponent, p.instance), p.image, probeNodes)
-	if _, err := observe(ctx, func(c context.Context) (*appsv1.DaemonSet, error) {
+	if _, err := createOrAdopt(ctx, p.instance, func(c context.Context) (*appsv1.DaemonSet, error) {
 		return p.client.AppsV1().DaemonSets(p.ns).Create(c, ds, metav1.CreateOptions{})
-	}); err != nil {
+	}, p.probeDaemonSet); err != nil {
 		// Any create error means the probe never ran, which says nothing
 		// about the overlay. Classifying by status code split one cause
 		// across two verdicts: RBAC, a ResourceQuota and Gatekeeper return
@@ -2338,6 +2344,23 @@ func (p *n2nProbe) run(ctx context.Context, probeNodes []string) {
 		return
 	}
 	p.judge(ctx, run)
+}
+
+// probeDaemonSet reads the run's probe DaemonSet back. It lists, since the
+// validator is granted no get on DaemonSets.
+func (p *n2nProbe) probeDaemonSet(ctx context.Context) (*appsv1.DaemonSet, error) {
+	list, err := p.client.AppsV1().DaemonSets(p.ns).List(ctx, metav1.ListOptions{
+		LabelSelector: n2nSelector(n2nServerComponent, p.instance),
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range list.Items {
+		if list.Items[i].Name == p.dsName {
+			return &list.Items[i], nil
+		}
+	}
+	return nil, apierrors.NewNotFound(appsv1.Resource("daemonsets"), p.dsName)
 }
 
 // failOnSandboxFaults fails the row for the nodes whose probe pod sandbox
@@ -2446,8 +2469,10 @@ func (p *n2nProbe) runChecker(ctx context.Context, servers []corev1.Pod) (checke
 		}
 		name := fmt.Sprintf("%s-%s-%d", nodeToNodeCheckerName, p.instance, len(refusals))
 		pod := buildNodeToNodeCheckerPod(name, p.ns, run.node, labels, targetIPs, p.image)
-		if _, err := observe(ctx, func(c context.Context) (*corev1.Pod, error) {
+		if _, err := createOrAdopt(ctx, p.instance, func(c context.Context) (*corev1.Pod, error) {
 			return p.client.CoreV1().Pods(p.ns).Create(c, pod, metav1.CreateOptions{})
+		}, func(c context.Context) (*corev1.Pod, error) {
+			return p.client.CoreV1().Pods(p.ns).Get(c, name, metav1.GetOptions{})
 		}); err != nil {
 			// As for the DaemonSet: a checker that was never created says
 			// nothing about the overlay.

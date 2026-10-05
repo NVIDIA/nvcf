@@ -268,6 +268,105 @@ func TestCheckNodeToNode_NodeReReadRetriesATransientError(t *testing.T) {
 	assert.Contains(t, strings.Join(state.Warnings, "; "), lost+": removed during the probe")
 }
 
+// Retries follow k8sutil.IsTransientK8sError, plus any other 5xx and errors
+// that are no apiserver answer at all. Every other answer is final.
+func TestRetryable_FollowsTheSharedTransientClassification(t *testing.T) {
+	pods := schema.GroupResource{Resource: "pods"}
+	for name, err := range map[string]error{
+		"conflict":     apierrors.NewConflict(pods, "p", errors.New("changed")),
+		"throttled":    apierrors.NewTooManyRequestsError("slow down"),
+		"timeout":      apierrors.NewTimeoutError("took too long", 1),
+		"proxy 502":    apierrors.NewGenericServerResponse(http.StatusBadGateway, "get", pods, "p", "", 0, true),
+		"body cut off": errors.New("unexpected error when reading response body. Please retry."),
+		"deadline":     context.DeadlineExceeded,
+	} {
+		assert.True(t, retryable(err), name)
+	}
+	for name, err := range map[string]error{
+		"already exists": apierrors.NewAlreadyExists(pods, "p"),
+		"bad request":    apierrors.NewBadRequest("malformed"),
+		"too large":      apierrors.NewRequestEntityTooLargeError("too big"),
+		"gone":           apierrors.NewGone("expired"),
+	} {
+		assert.False(t, retryable(err), name)
+	}
+}
+
+// A create the apiserver applied after the client gave up on it is answered
+// AlreadyExists when retried. The probe adopts its own namespace and DaemonSet,
+// which carry its run's label, rather than leaving the row unknown; a
+// throttled create is retried. Either way the run removes what it created.
+func TestCheckNodeToNode_RetriedCreatesAdoptWhatTheyApplied(t *testing.T) {
+	for _, tc := range []struct {
+		name, resource string
+		applied        bool
+	}{
+		{"namespace applied but timed out", "namespaces", true},
+		{"namespace throttled", "namespaces", false},
+		{"DaemonSet applied but timed out", "daemonsets", true},
+		{"DaemonSet throttled", "daemonsets", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newN2NFixture(t, readyNodes(2), runningServers("node-1", "node-2"), nil, checkerExit(0))
+			var creates atomic.Int32
+			f.client.PrependReactor("create", tc.resource, func(a ktesting.Action) (bool, runtime.Object, error) {
+				if creates.Add(1) > 1 {
+					return false, nil, nil
+				}
+				if !tc.applied {
+					return true, nil, apierrors.NewTooManyRequestsError("slow down")
+				}
+				obj := a.(ktesting.CreateAction).GetObject()
+				if err := f.client.Tracker().Create(a.GetResource(), obj, a.GetNamespace()); err != nil {
+					return true, nil, err
+				}
+				return true, nil, apierrors.NewTimeoutError("the request did not complete in time", 1)
+			})
+			state := runN2N(f)
+
+			require.NotNil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
+			assert.True(t, *state.NodeToNodeOK)
+			assert.Empty(t, f.leftovers(t))
+		})
+	}
+}
+
+// Only an object carrying the run's instance label is adopted: a namespace of
+// the same name without it is not this run's to use or delete.
+func TestCreateOrAdopt_AdoptsOnlyTheRunsOwnObject(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "probe-mine", Labels: n2nLabels(n2nNamespaceComponent, "mine")}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "probe-other", Labels: n2nLabels(n2nNamespaceComponent, "other")}},
+	)
+	require.NoError(t, createNodeToNodeNamespace(ctx, client, "probe-mine", "mine"))
+	err := createNodeToNodeNamespace(ctx, client, "probe-other", "mine")
+	assert.True(t, apierrors.IsAlreadyExists(err), "got %v", err)
+
+	require.NoError(t, createTestNamespace(ctx, client, "netpol-validation-abc", "abc"))
+	require.NoError(t, createTestNamespace(ctx, client, "netpol-validation-abc", "abc"), "a retry adopts it")
+	err = createTestNamespace(ctx, client, "netpol-validation-abc", "xyz")
+	assert.True(t, apierrors.IsAlreadyExists(err), "got %v", err)
+}
+
+// The enforcement server pod's create is retried, and a pod of its name is the
+// run's own, since the namespace is.
+func TestCreateServerPod_RetriesAndAdopts(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var creates atomic.Int32
+	client.PrependReactor("create", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		if creates.Add(1) == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	require.NoError(t, createServerPod(context.Background(), client, "ns", "busybox:1.36"))
+	require.NoError(t, createServerPod(context.Background(), client, "ns", "busybox:1.36"))
+	assert.Equal(t, int32(3), creates.Load())
+}
+
 // Discovery takes no context in client-go. A stalled aggregated API must not
 // hold the run past its deadline.
 func TestDiscoverGatewayAPIResources_EndsWithItsContext(t *testing.T) {
