@@ -574,44 +574,67 @@ func checkedBeforeInstall(planeFlag bool) bool {
 //
 // Otherwise nothing is read, and every stack-derived input is left out.
 func stackValuesForRun(t stackTarget) ([]string, bool) {
-	env, ok := explicitStackEnv()
-	if !ok && t.beforeInstall {
-		env, ok = resolveStackEnv(), true
-	}
+	env, ok := stackEnvForRun(t)
 	if !ok {
 		return nil, false
 	}
-	var envDirs []string
-	if src := cmp.Or(t.source, t.builtIn); src != "" {
-		dir := cmp.Or(localStackDir(src), selfhosted.ExtractedOCIStack(src))
-		if dir == "" {
-			return nil, false
-		}
-		envDirs = []string{filepath.Join(dir, "environments")}
-	} else {
-		envDirs = checkoutEnvironmentDirs(t.name)
+	dir := stackDirForRun(t)
+	if dir == "" {
+		return nil, false
 	}
-	for _, dir := range envDirs {
-		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-			continue
-		}
-		envFile := filepath.Join(dir, env+".yaml")
-		if !isRegularFile(envFile) {
-			return nil, false
-		}
-		var files []string
-		if base := filepath.Join(dir, "base.yaml"); isRegularFile(base) {
-			files = append(files, base)
-		}
-		return append(files, envFile), true
+	envFile := filepath.Join(dir, "environments", env+".yaml")
+	if !isRegularFile(envFile) {
+		return nil, false
 	}
-	return nil, false
+	var files []string
+	if base := filepath.Join(dir, "environments", "base.yaml"); isRegularFile(base) {
+		files = append(files, base)
+	}
+	return append(files, envFile), true
 }
 
-// checkoutEnvironmentDirs lists where a stack's environments directory can
-// sit at or above the working directory: deploy/stacks/<name>/environments
-// in a repository checkout, or environments in the stack directory itself.
-func checkoutEnvironmentDirs(name string) []string {
+// stackEnvForRun returns the environment the install of t's plane used, and
+// false when it is not known: the one the operator named, or, before the
+// install, the one up installs with.
+func stackEnvForRun(t stackTarget) (string, bool) {
+	if env, ok := explicitStackEnv(); ok {
+		return env, true
+	}
+	if t.beforeInstall {
+		return resolveStackEnv(), true
+	}
+	return "", false
+}
+
+// stackDirForRun returns the root of the stack the install commands resolve
+// for t, or "" when it cannot be read here: the stack flag, else the built-in
+// stack, as a local directory or an extracted oci:// stack; with neither, the
+// first stack checkout at or above the working directory with an
+// environments directory.
+func stackDirForRun(t stackTarget) string {
+	if src := cmp.Or(t.source, t.builtIn); src != "" {
+		return cmp.Or(localStackDir(src), selfhosted.ExtractedOCIStack(src))
+	}
+	for _, dir := range checkoutStackDirs(t.name) {
+		if fi, err := os.Stat(filepath.Join(dir, "environments")); err == nil && fi.IsDir() {
+			return dir
+		}
+	}
+	return ""
+}
+
+// namespaceGateStack returns the stack directory and environment a plane's
+// stale-namespace scan reads the gates of the stack's releases from. env is
+// empty when the install's environment is not known.
+func namespaceGateStack(t stackTarget) (dir, env string) {
+	env, _ = stackEnvForRun(t)
+	return stackDirForRun(t), env
+}
+
+// checkoutStackDirs lists where a stack can sit at or above the working
+// directory: deploy/stacks/<name> in a repository checkout, or the stack
+// directory itself.
+func checkoutStackDirs(name string) []string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil
@@ -619,9 +642,9 @@ func checkoutEnvironmentDirs(name string) []string {
 	var dirs []string
 	for i, dir := 0, cwd; i < 6; i++ {
 		if filepath.Base(dir) == name {
-			dirs = append(dirs, filepath.Join(dir, "environments"))
+			dirs = append(dirs, dir)
 		}
-		dirs = append(dirs, filepath.Join(dir, "deploy", "stacks", name, "environments"))
+		dirs = append(dirs, filepath.Join(dir, "deploy", "stacks", name))
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			break
@@ -680,8 +703,7 @@ func checkScopeIsPostInstall() bool {
 
 // localStackDir returns src when it points at a readable local directory.
 // Remote sources (oci://, git@, https://...git, file://) are not fetched
-// here: the stale-namespace check falls back to its static list rather than
-// making preflight depend on a network round trip. file:// is a git source:
+// here, so no check depends on a network round trip. file:// is a git source:
 // the install clones its committed HEAD, which the working tree can differ
 // from.
 func localStackDir(src string) string {
@@ -922,10 +944,11 @@ func runPreflightByRole(
 	}
 
 	staleNSProber := newStaleNamespaceProberForSelfHosted()
-	// Only a named environment decides the stack's gates, as for the other
-	// stack values: a defaulted one may not be the install's. Without one the
-	// stack's base.yaml defaults decide.
-	stackEnv, _ := explicitStackEnv()
+	// Each plane's stale-namespace scan reads the gates of its stack's
+	// releases from the stack and environment the other stack values come
+	// from. Without a known environment the stack's base.yaml defaults decide.
+	cpStackDir, cpStackEnv := namespaceGateStack(controlPlaneStackTarget())
+	gpuStackDir, gpuStackEnv := namespaceGateStack(computePlaneStackTarget())
 
 	// The control-plane validator probes the hosts the local credential check
 	// probes, extras included, each as a warning only.
@@ -983,9 +1006,9 @@ func runPreflightByRole(
 					ClusterValidatorRegistries:      registries,
 					ValidatorCleanup:                ledger,
 					StaleNamespaceProber:            staleNSProber,
-					StackDir:                        localStackDir(selfHostedControlPlaneStack),
+					StackDir:                        cpStackDir,
 					Skipped:                         cpSkips,
-					StackEnv:                        stackEnv,
+					StackEnv:                        cpStackEnv,
 				}
 				cpResults = checkRunRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
 				return nil
@@ -1006,9 +1029,9 @@ func runPreflightByRole(
 					ClusterValidatorUnresolvedImage: unresolvedImage,
 					ValidatorCleanup:                ledger,
 					StaleNamespaceProber:            staleNSProber,
-					StackDir:                        localStackDir(selfHostedComputePlaneStack),
+					StackDir:                        gpuStackDir,
 					Skipped:                         computeSkips,
-					StackEnv:                        stackEnv,
+					StackEnv:                        gpuStackEnv,
 				}
 				gpuResults = checkRunRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
 				return nil
@@ -1039,8 +1062,7 @@ func runPreflightByRole(
 		if runControlPlane {
 			staleForComputePlane = nil
 			if runComputePlane {
-				cpExtraNamespaces = selfhosted.ComputePlaneStaleNamespaces(
-					localStackDir(selfHostedComputePlaneStack), stackEnv)
+				cpExtraNamespaces = selfhosted.ComputePlaneStaleNamespaces(gpuStackDir, gpuStackEnv)
 			}
 		} else {
 			staleForControlPlane = nil
@@ -1058,8 +1080,8 @@ func runPreflightByRole(
 				ClusterValidatorRegistries:      registries,
 				ValidatorCleanup:                ledger,
 				StaleNamespaceProber:            staleForControlPlane,
-				StackDir:                        localStackDir(selfHostedControlPlaneStack),
-				StackEnv:                        stackEnv,
+				StackDir:                        cpStackDir,
+				StackEnv:                        cpStackEnv,
 				ExtraStaleNamespaces:            cpExtraNamespaces,
 				Skipped:                         cpSkips,
 			}
@@ -1079,9 +1101,9 @@ func runPreflightByRole(
 				ClusterValidatorUnresolvedImage: unresolvedImage,
 				ValidatorCleanup:                ledger,
 				StaleNamespaceProber:            staleForComputePlane,
-				StackDir:                        localStackDir(selfHostedComputePlaneStack),
+				StackDir:                        gpuStackDir,
 				Skipped:                         computeSkips,
-				StackEnv:                        stackEnv,
+				StackEnv:                        gpuStackEnv,
 			}
 			results = append(results,
 				checkRunRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)

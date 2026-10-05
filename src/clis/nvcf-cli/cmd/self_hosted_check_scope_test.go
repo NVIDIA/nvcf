@@ -94,6 +94,35 @@ func TestCheck_StaleNamespacesFollowTheRequestedRoles(t *testing.T) {
 	assert.Contains(t, ns, "nvca-operator", "--all scans both")
 }
 
+// The stale-namespace scan reads each plane's gates from the stack the
+// install used, an extracted built-in oci:// stack included, and from the
+// environment the install used: prod turns kai-scheduler on here.
+func TestCheck_StaleNamespaceGatesFollowTheInstallsStack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("HELMFILE_ENV", "")
+	cache, err := os.UserCacheDir()
+	require.NoError(t, err)
+	const ref = "oci://registry.example.com/nvcf/compute-plane:1.0.0@sha256:0123456789abcdef"
+	extracted := filepath.Join(cache, "nvcf-cli", "stacks", "oci-0123456789ab")
+	envDir := filepath.Join(extracted, "environments")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	for name, enabled := range map[string]string{"base": "false", "prod": "true"} {
+		require.NoError(t, os.WriteFile(filepath.Join(envDir, name+".yaml"),
+			[]byte("addons:\n  kaiScheduler:\n    enabled: "+enabled+"\n"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(extracted, ".extraction-complete"), nil, 0o644))
+	t.Setenv("NVCF_CLI_DEFAULT_COMPUTE_PLANE_STACK", ref)
+
+	ns, _ := runCheckRecording(t, "--compute-plane", "--env", "prod")
+	assert.Contains(t, ns, "kai-scheduler")
+	ns, _ = runCheckRecording(t, "--all", "--env", "prod")
+	assert.Contains(t, ns, "kai-scheduler", "merged into the one scan of a shared cluster")
+	ns, _ = runCheckRecording(t, "--compute-plane")
+	assert.NotContains(t, ns, "kai-scheduler", "with no environment named, base.yaml decides")
+}
+
 // A bare --pre skips SIS, which is not up before install; an explicit --all or
 // --compute-plane still asks for it; --control-plane never contacts it.
 func TestCheck_SISReachabilityScope(t *testing.T) {
