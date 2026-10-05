@@ -403,17 +403,25 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	// count come from the L2 StorageClass's StorageProfile, editable per
 	// cluster through the nvsnap-storage-profiles ConfigMap. A pod's own
 	// NVSNAP_PREWARM=0/1 still wins, the same knob the shim honoured.
-	if m.prewarmWanted(main) {
+	if want, gate := m.prewarmPolicy(main); want {
+		sweep := fmt.Sprintf(
+			"find %s -type f -print0 2>/dev/null | xargs -0 -r -P %d -n 16 cat > /dev/null 2>&1 || true",
+			cacheSeedSrcPath, m.prewarmWorkers())
 		prewarmInit := corev1.Container{
-			Name:  "nvsnap-prewarm",
-			Image: main.Image,
-			Command: []string{"sh", "-c", fmt.Sprintf(
-				"find %s -type f -print0 2>/dev/null | xargs -0 -r -P %d -n 16 cat > /dev/null 2>&1 || true",
-				cacheSeedSrcPath, m.prewarmWorkers())},
+			Name:    "nvsnap-prewarm",
+			Image:   main.Image,
+			Command: []string{"sh", "-c", sweep},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: cacheDirVolumeName, MountPath: cacheSeedSrcPath, ReadOnly: true},
 			},
 			SecurityContext: &corev1.SecurityContext{RunAsUser: &seedRoot},
+		}
+		if gate != nil {
+			// NVSNAP_PREWARM comes from a ConfigMap or Secret the webhook
+			// cannot resolve at admission; hand the same reference to the
+			// init container and let it decide at run time.
+			prewarmInit.Env = []corev1.EnvVar{*gate}
+			prewarmInit.Command = []string{"sh", "-c", `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0; ` + sweep}
 		}
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: prewarmInit})
 	}
@@ -454,20 +462,27 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 	return patches, nil
 }
 
-// prewarmWanted decides whether the cachedir restore gets the nvsnap-prewarm
+// prewarmPolicy decides whether the cachedir restore gets the nvsnap-prewarm
 // init container. An explicit NVSNAP_PREWARM on the workload container wins
-// ("0" off, anything else on); otherwise the storage profile decides, and
-// with no profile the answer is on.
-func (m *Mutator) prewarmWanted(main corev1.Container) bool {
+// ("0" off, anything else on). When that variable is a ValueFrom reference
+// its value is only known inside the pod, so the init container is added
+// and the reference is returned for it to evaluate at run time. Otherwise
+// the storage profile decides, and with no profile the answer is on.
+func (m *Mutator) prewarmPolicy(main corev1.Container) (want bool, gate *corev1.EnvVar) {
 	for _, e := range main.Env {
-		if e.Name == "NVSNAP_PREWARM" {
-			return e.Value != "0"
+		if e.Name != "NVSNAP_PREWARM" {
+			continue
 		}
+		if e.ValueFrom != nil {
+			ref := e
+			return true, &ref
+		}
+		return e.Value != "0", nil
 	}
 	if m.StorageProfile == nil {
-		return true
+		return true, nil
 	}
-	return m.StorageProfile.PrewarmEnabled()
+	return m.StorageProfile.PrewarmEnabled(), nil
 }
 
 // prewarmWorkers is the sweep's reader count from the storage profile, or
