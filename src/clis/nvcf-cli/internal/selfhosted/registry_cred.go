@@ -678,6 +678,13 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	stackNamedRegistry := false
 	if host, path, _ := strings.Cut(stack.ImageRegistry, "/"); host != "" {
 		scope := strings.Trim(strings.Join([]string{strings.Trim(path, "/"), stack.ImageRepository}, "/"), "/")
+		// One segment is an org with no team, which is no repository, and
+		// nvcr.io answers that scope with 400 "malformed token scope": a
+		// probe that could then only report it unverifiable, a revoked key
+		// included. With no scope the token endpoint still judges the key.
+		if !strings.Contains(scope, "/") {
+			scope = ""
+		}
 		// If it's an NGC registry, mark critical; customer mirrors are non-critical.
 		stackNamedRegistry = add(host, scope, isNGCRegistry(host))
 	}

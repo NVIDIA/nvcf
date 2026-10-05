@@ -529,7 +529,37 @@ certManager:
 	got := EnumerateRegistries("", LoadStackValues([]string{values}), nil)
 	require.Len(t, got, 1)
 	assert.Equal(t, "harbor.corp.example", got[0].Registry)
-	assert.Equal(t, "nvcf", got[0].RepoHint)
+	assert.Empty(t, got[0].RepoHint, "one segment is no repository, so no scope")
+
+	require.NoError(t, writeFile(values, []byte(`
+global:
+  image:
+    registry: harbor.corp.example/nvcf
+    repository: org
+`)))
+	got = EnumerateRegistries("", LoadStackValues([]string{values}), nil)
+	require.NotEmpty(t, got)
+	assert.Equal(t, "nvcf/org", got[0].RepoHint)
+}
+
+// An org with no team is no repository: nvcr.io answers that scope with 400
+// "malformed token scope", which could only be graded unverifiable. The
+// stack's row sends no scope then, so a revoked key still fails the run.
+func TestEnumerateRegistries_OrgOnlyStackRepositoryIsNoScope(t *testing.T) {
+	stack := StackValues{Found: true, ImageRegistry: "nvcr.io", ImageRepository: "myorg"}
+	got := EnumerateRegistries("", stack, nil)
+	require.Len(t, got, 1)
+	assert.Equal(t, RegistryEntry{Registry: "nvcr.io", Critical: true}, got[0])
+
+	ngc := newFakeNGC(t, "good-key")
+	dockerHome(t, `{}`)
+	t.Setenv("NGC_API_KEY", "revoked-key")
+	ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(true))
+	r := registryCredentialCheck(probeRegistryCredential, got[0], "nvcr.io", false).Run(ctx)
+	assert.False(t, r.Passed)
+	assert.Equal(t, SeverityError, r.Severity, r.Message)
+	assert.Contains(t, r.Message, "credentials from NGC_API_KEY rejected")
+	assert.Equal(t, []string{"revoked-key"}, ngc.passwords())
 }
 
 // A rejected registry value must not count as a source naming a registry:
@@ -715,8 +745,9 @@ func newFakeRegistry(
 }
 
 // fakeNGC stands in for nvcr.io: every registry request the test makes,
-// whatever its host, reaches it. Its token endpoint accepts only the password
-// goodPass, and a token it issued lists the tags of any repository.
+// whatever its host, reaches it. Its token endpoint refuses a one-segment
+// repository scope with 400, as nvcr.io does, and accepts only the password
+// goodPass. A token it issued lists the tags of any repository.
 type fakeNGC struct {
 	mu   sync.Mutex
 	sent []string
@@ -739,6 +770,12 @@ func newFakeNGC(t *testing.T, goodPass string) *fakeNGC {
 			f.mu.Lock()
 			f.sent = append(f.sent, pass)
 			f.mu.Unlock()
+			scope := r.URL.Query().Get("scope")
+			if repo := strings.TrimSuffix(strings.TrimPrefix(scope, "repository:"), ":pull"); scope != "" &&
+				!strings.Contains(repo, "/") {
+				http.Error(w, "malformed token scope", http.StatusBadRequest)
+				return
+			}
 			if pass != goodPass {
 				w.WriteHeader(http.StatusUnauthorized)
 				return

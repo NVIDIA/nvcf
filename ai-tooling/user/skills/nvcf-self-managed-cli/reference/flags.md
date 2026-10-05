@@ -80,6 +80,11 @@ secret too, and the row says how to renew the login `docker` still sends.
 Each `--wait` poll reads the credentials again, so a login renewed while the
 run waits counts on the next poll.
 
+The probe asks for pull access to the validator image's repository and to the
+stack's image path: any path in `global.image.registry`, then
+`global.image.repository`. A stack path of one segment, such as an org with no
+team, is not sent as the scope, since `nvcr.io` refuses it.
+
 Only a credential the registry rejects fails the run, and only for an NVIDIA
 registry the image or the stack names. After install a rejected credential is
 a warning, since the cluster pulls with its own pull secret. A registry this
