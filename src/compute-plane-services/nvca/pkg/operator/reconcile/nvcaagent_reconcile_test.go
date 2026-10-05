@@ -45,6 +45,10 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	fakek8sclient "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
@@ -5705,4 +5709,67 @@ func TestMergeMapsNoOverwrites(t *testing.T) {
 			assert.ElementsMatch(t, tt.expectedCols, cols)
 		})
 	}
+}
+
+// TestSetupNVCAAgentInfra_RBACFailureLeavesAgentConfigConfigMapUnwritten is a
+// regression test for a bug where a transient RBAC update failure (for
+// example Kubernetes rejecting a self-granted permission escalation before
+// the operator's own freshly-applied ClusterRoleBinding has propagated)
+// permanently stalled the agent rollout. setupNVCAAgentInfra used to write
+// the agent config ConfigMap before setting up RBAC. Because
+// newAgentConfigChangedCheck detects pending changes by diffing the desired
+// config against the live ConfigMap in the cluster (not against
+// NVCFBackend.Status), an early ConfigMap write made the ConfigMap already
+// match desired state even though RBAC and the Deployment rollout never
+// completed. Every later periodic sync then saw "no change" and skipped
+// retrying RBAC and the Deployment rollout entirely.
+//
+// This test asserts the fix: when RBAC setup fails, the agent config
+// ConfigMap must not have been written, so the next sync's
+// newAgentConfigChangedCheck still reports a pending change and retries the
+// whole rollout, including RBAC.
+func TestSetupNVCAAgentInfra_RBACFailureLeavesAgentConfigConfigMapUnwritten(t *testing.T) {
+	ctx := newTestContext()
+
+	clients := mockKubeClients()
+
+	// Pre-seed an existing "nvca" ClusterRole so createOrUpdateClusterRole
+	// takes the Update path, matching the real failure mode: Kubernetes
+	// rejects the update because the operator's own ServiceAccount does not
+	// yet hold the permissions it is trying to grant.
+	_, err := clients.K8s.RbacV1().ClusterRoles().Create(ctx, &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcaoptypes.NVCAModuleName},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	fakeK8s := clients.K8s.(*fakek8sclient.Clientset)
+	fakeK8s.PrependReactor("update", "clusterroles", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, k8serr.NewForbidden(
+			rbacv1.Resource("clusterroles"), nvcaoptypes.NVCAModuleName,
+			fmt.Errorf("attempting to grant RBAC permissions not currently held"))
+	})
+
+	b := NewBackendK8sCacheBuilder().
+		WithSystemNamespace(NVCAOperatorNamespace).
+		WithClients(clients).
+		WithNGCServiceKeyFetcher(&mockTokenFetcher{token: "randomkey"}).
+		WithClusterSource(nvcaoptypes.ClusterSourceNGCManaged)
+
+	bc, _, err := b.Start(ctx)
+	require.NoError(t, err)
+
+	nb := getTestNVCFBackendMinimal()
+
+	desiredCM, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+
+	err = bc.setupNVCAAgentInfra(ctx, nb, desiredCM)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to setup RBAC")
+
+	_, err = clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
+	assert.True(t, k8serr.IsNotFound(err),
+		"agent config ConfigMap must not be written when RBAC setup fails, "+
+			"otherwise newAgentConfigChangedCheck will see no pending change on the next sync "+
+			"and never retry RBAC or the Deployment rollout: got err=%v", err)
 }
