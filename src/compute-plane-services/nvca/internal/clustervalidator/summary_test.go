@@ -287,6 +287,44 @@ func TestWriteSummaryConfigMap_ConcurrentCreateFallsBackToUpdate(t *testing.T) {
 		"after AlreadyExists, this run's payload must be written via Update")
 }
 
+// A write that may succeed if repeated is retried in the run rather than left
+// to the Job's retry, which reruns every check inside the same deadline: an
+// update that lost a race to a concurrent run, and a throttled or failed
+// request.
+func TestWriteSummaryConfigMap_RetriesWhatMayClear(t *testing.T) {
+	gr := corev1.Resource("configmaps")
+	existing := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: SummaryConfigMapName, Namespace: "nvca-operator"}}
+	for name, tc := range map[string]struct {
+		objs []runtime.Object
+		verb string
+		err  error
+	}{
+		"update conflict": {objs: []runtime.Object{existing}, verb: "update",
+			err: apierrors.NewConflict(gr, SummaryConfigMapName, errors.New("stale"))},
+		"read throttled": {verb: "get", err: apierrors.NewTooManyRequestsError("slow down")},
+		"create 503":     {verb: "create", err: apierrors.NewServiceUnavailable("etcd leader change")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(tc.objs...)
+			calls := 0
+			client.PrependReactor(tc.verb, "configmaps", func(ktesting.Action) (bool, runtime.Object, error) {
+				calls++
+				if calls == 1 {
+					return true, nil, tc.err
+				}
+				return false, nil, nil
+			})
+			require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator",
+				&ValidatorSummary{SchemaVersion: SummarySchemaVersion, Verdict: VerdictReady}))
+
+			cm, err := client.CoreV1().ConfigMaps("nvca-operator").
+				Get(context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Contains(t, cm.Data[SummaryConfigMapKey], `"verdict": "NVCF-Ready"`)
+		})
+	}
+}
+
 // Every way the write can fail is returned, so a launcher's Job can retry a
 // run that did not publish instead of completing without a summary.
 func TestWriteSummaryConfigMap_ReturnsEveryFailure(t *testing.T) {

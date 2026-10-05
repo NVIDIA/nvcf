@@ -320,7 +320,10 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 // ConfigMap, creating it if it doesn't exist and otherwise updating the data
 // in place. The caller decides whether a failed write fails the run: for a
 // launcher's Job the summary is the run's output, for the operator's init
-// container it is not.
+// container it is not. A write that may succeed if repeated, such as one that
+// lost an update race to a concurrent run or was throttled, is retried here:
+// the Job's own retry reruns every check inside the same
+// activeDeadlineSeconds, and may be killed before it publishes anything.
 func writeSummaryConfigMap(
 	ctx context.Context,
 	client kubernetes.Interface,
@@ -331,10 +334,15 @@ func writeSummaryConfigMap(
 	if err != nil {
 		return fmt.Errorf("marshal summary: %w", err)
 	}
+	return observeErr(ctx, func(c context.Context) error {
+		return putSummaryConfigMap(c, client, namespace, payload)
+	})
+}
 
-	writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
+// putSummaryConfigMap makes one attempt at the write.
+func putSummaryConfigMap(
+	writeCtx context.Context, client kubernetes.Interface, namespace string, payload []byte,
+) error {
 	existing, err := client.CoreV1().ConfigMaps(namespace).Get(writeCtx, SummaryConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		cm := &corev1.ConfigMap{
