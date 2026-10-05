@@ -35,11 +35,6 @@ global:
   nvcaOperator:
     imageTag: "3.10.0"
     selfManaged:
-      # The chart ships no tag for this image, only the stack knows which samba
-      # build pairs with the operator it is pinning, so supply the whole
-      # reference here alongside the repository below.
-      sharedStorage:
-        imageTag: "1.0.5"
       nvcaVersion: "3.10.0"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.

@@ -5,6 +5,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+source_chart="${repo_root}/../../../src/compute-plane-services/nvca/deployments/nvca-operator"
 vendored_chart="${repo_root}/nvca-operator"
 tmp_dir="$(mktemp -d)"
 test_service_key="test-service-key"
@@ -26,8 +27,12 @@ assert_render_fails() {
   fi
 }
 
-for chart in "${vendored_chart}"; do
-  chart_name="vendored"
+for chart in "${source_chart}" "${vendored_chart}"; do
+  if [[ "${chart}" == "${source_chart}" ]]; then
+    chart_name="source"
+  else
+    chart_name="vendored"
+  fi
   default_manifest="${tmp_dir}/${chart_name}-default.yaml"
   reused_values_chart="${tmp_dir}/${chart_name}-reused-values"
   reused_values_manifest="${tmp_dir}/${chart_name}-reused-values.yaml"

@@ -28,7 +28,7 @@ go test ./internal/miniservice/... \
 - `internal/miniservice/` - MiniService controller
 - `internal/gc/` - Garbage collection cleaners
 - `internal/metrics/` - Prometheus metrics
-- Operator Helm chart: `deploy/helm/nvca-operator/nvca-operator/`
+- `deployments/nvca-operator/` - Operator Helm chart
 - `test/` - E2E and integration tests
 
 ## Dev Environment Tips
@@ -214,7 +214,7 @@ internal/               - Private packages
   gc/                   - Garbage collection
   metrics/              - Prometheus metrics
   util/                 - Shared utilities
-(chart lives in deploy/helm/nvca-operator/nvca-operator/)
+deployments/nvca-operator/ - Operator Helm chart
 ```
 
 ## Commit & PR Instructions

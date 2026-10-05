@@ -29,18 +29,12 @@ manifest_self_managed="${tmp_dir}/manifest-self-managed.yaml"
 
 # Render with default values (ngc-managed)
 helm template nvca-operator "${repo_root}/nvca-operator" \
-  --set-string "ngcConfig.serviceKey=test-service-key" \
-  --set-string "nameOverride=nvca-operator" \
-  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --values "${repo_root}/nvca-operator/values.yaml" \
   > "${manifest_ngc_managed}"
 
 # Render with self-managed clusterSource
 helm template nvca-operator "${repo_root}/nvca-operator" \
-  --set-string "ngcConfig.serviceKey=test-service-key" \
-  --set-string "nameOverride=nvca-operator" \
-  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --values "${repo_root}/nvca-operator/values.yaml" \
   --set-string ngcConfig.clusterSource=self-managed \

@@ -20,9 +20,6 @@ config="${tmp_dir}/config.yaml"
 token_file="${tmp_dir}/service-api-key"
 
 helm template nvca-operator "${chart_root}/nvca-operator" \
-  --set-string "ngcConfig.serviceKey=test-service-key" \
-  --set-string "nameOverride=nvca-operator" \
-  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --values "${chart_root}/nvca-operator/values.yaml" \
   --values "${chart_root}/values.release-sbom.yaml" \
