@@ -1246,6 +1246,30 @@ func TestRunPreflight_CutShortRowsKeepTheirWorstSeverity(t *testing.T) {
 	}
 }
 
+// After install a critical registry's rejection only warns, so a cut-short or
+// not-run row for it warns too and cannot fail the run.
+func TestRunPreflight_CutShortCriticalRegistryAfterInstallWarns(t *testing.T) {
+	prevLocal := localCheckShare
+	localCheckShare = 200 * time.Millisecond
+	t.Cleanup(func() { localCheckShare = prevLocal })
+	hang := func(ctx context.Context, _, _ string, _ bool) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	res := RunPreflightForRole(context.Background(), PreflightConfig{
+		Registries: []RegistryEntry{
+			{Registry: "nvcr.io", Critical: true}, {Registry: "harbor.example.com", Critical: true},
+		},
+		RegistryChecker:     hang,
+		RegistryPostInstall: true,
+	}, RoleLocalOnly, RoleConfig{}, &captureSink{})
+	require.Len(t, res, 2)
+	for _, r := range res {
+		assert.True(t, r.CutShort, r.ID)
+		assert.Equal(t, SeverityWarning, r.Severity, r.ID+": "+r.Message)
+	}
+}
+
 // Each term of the validator's run ceiling counts as often as one run can
 // spend it. Bumping a term by one second grows the ceiling by its count.
 func TestClusterValidatorRunCeiling_CountsEveryTerm(t *testing.T) {

@@ -1162,10 +1162,14 @@ func registryCredentialCheck(
 	if entry.Critical {
 		severity = SeverityError
 	}
+	worst := severity
+	if postInstall {
+		worst = SeverityWarning
+	}
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: fmt.Sprintf("checking credentials for %s...", label),
-		worst:      severity,
+		worst:      worst,
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: severity}
 			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical)
