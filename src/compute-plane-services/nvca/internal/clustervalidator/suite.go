@@ -34,15 +34,54 @@ var recheckDelay = 10 * time.Second
 
 // check is one check of the suite. run records the check's rows on the state
 // it is given, with their warnings and recommendations, and adopt copies those
-// rows to another state. blocks reports whether a critical row of the check
-// failed or was not observed; it is nil for a check with no critical row.
-// configured marks a check the network-checks ConfigMap drives.
+// rows to another state. critical reports how the check's critical rows came
+// out; it is nil for a check with no critical row. configured marks a check
+// the network-checks ConfigMap drives. reads names the earlier check whose
+// result run reads.
 type check struct {
 	name       string
 	run        func(ctx context.Context, s *ValidationState)
 	adopt      func(dst, src *ValidationState)
-	blocks     func(s *ValidationState) bool
+	critical   func(s *ValidationState) outcome
 	configured bool
+	reads      string
+}
+
+// outcome is how the critical rows of a check came out: all passed (or did
+// not apply), one failed on what the check observed, or one was not observed.
+type outcome int
+
+const (
+	passed outcome = iota
+	failed
+	unobserved
+)
+
+// blocks reports whether a critical row of c failed or was not observed in r.
+func (c check) blocks(r *ValidationState) bool {
+	return c.critical != nil && c.critical(r) != passed
+}
+
+// rowOutcome is the outcome of a tri-state row.
+func rowOutcome(ok *bool) outcome {
+	switch {
+	case ok == nil:
+		return unobserved
+	case !*ok:
+		return failed
+	}
+	return passed
+}
+
+// flagOutcome is the outcome of a row held as a flag and an unobserved key.
+func flagOutcome(ok, unknown bool) outcome {
+	switch {
+	case unknown:
+		return unobserved
+	case !ok:
+		return failed
+	}
+	return passed
 }
 
 // suite is the checks of one run and what they share.
@@ -76,18 +115,20 @@ func (su *suite) gatewayView(ctx context.Context) *gatewayView {
 	return su.gateways
 }
 
-// run runs the role's checks, each on a state of its own, and records their
-// results on state, which holds none until then. With recheck set, each check
-// whose critical rows did not pass first runs once more, and its second result
-// is the one recorded: a published verdict stands until the next run, so one
-// transient error must not decide it. A preflight run is graded by its
-// launcher, which can run it again.
+// run runs the role's checks, each on a state of its own that carries the
+// results of the checks before it, and records their results on state, which
+// holds none until then. With recheck set, each check whose critical rows did
+// not pass first runs once more, and its second result is the one recorded: a
+// published verdict stands until the next run, so one transient error must not
+// decide it. A preflight run is graded by its launcher, which can run it again.
 func (su *suite) run(ctx context.Context, state *ValidationState, recheck bool) {
 	checks := su.checks(state.Role)
 	results := make([]*ValidationState, len(checks))
+	facts := state.fork()
 	for i, c := range checks {
-		results[i] = state.fork()
+		results[i] = facts.fork()
 		c.run(ctx, results[i])
+		c.adopt(facts, results[i])
 	}
 	if recheck {
 		su.recheck(ctx, state, checks, results)
@@ -98,13 +139,15 @@ func (su *suite) run(ctx context.Context, state *ValidationState, recheck bool) 
 }
 
 // recheck runs again each check in checks whose result in results has a
-// critical row that did not pass, and replaces that result. A check cut short
-// by the run's deadline would report the deadline rather than the cluster, so
-// it, and every check after it, keeps its first result.
+// critical row that did not pass, and replaces that result, along with the
+// result of a check that reads a replaced one. A recheck that could not observe
+// a check its first pass saw fail keeps the failure. A check cut short by the
+// run's deadline would report the deadline rather than the cluster, so it, and
+// every check after it, keeps its first result.
 func (su *suite) recheck(ctx context.Context, state *ValidationState, checks []check, results []*ValidationState) {
 	var names []string
 	for i, c := range checks {
-		if c.blocks != nil && c.blocks(results[i]) {
+		if c.blocks(results[i]) {
 			names = append(names, c.name)
 		}
 	}
@@ -121,24 +164,32 @@ func (su *suite) recheck(ctx context.Context, state *ValidationState, checks []c
 	}
 	hadConfig := su.netCfg != nil
 	su.gateways = nil
+	facts := state.fork()
+	replaced := map[string]bool{}
 	for i, c := range checks {
-		again := c.blocks != nil && c.blocks(results[i])
+		again := c.blocks(results[i]) || (c.reads != "" && replaced[c.reads])
 		// A check the ConfigMap drives did not run when only the recheck could
 		// load it.
 		if c.configured && !hadConfig && su.netCfg != nil {
 			again = true
 		}
-		if !again {
-			continue
+		if again {
+			r := facts.fork()
+			c.run(ctx, r)
+			if ctx.Err() != nil {
+				printWarning(log, fmt.Sprintf("The run ended during the recheck of %s; it and the checks after it "+
+					"keep their first results", c.name))
+				return
+			}
+			if c.critical != nil && c.critical(results[i]) == failed && c.critical(r) == unobserved {
+				printWarning(log, fmt.Sprintf("The recheck could not observe %s; the failure its first run "+
+					"observed stands", c.name))
+			} else {
+				results[i] = r
+				replaced[c.name] = true
+			}
 		}
-		r := state.fork()
-		c.run(ctx, r)
-		if ctx.Err() != nil {
-			printWarning(log, fmt.Sprintf("The run ended during the recheck of %s; it and the checks after it "+
-				"keep their first results", c.name))
-			return
-		}
-		results[i] = r
+		c.adopt(facts, results[i])
 	}
 }
 
@@ -154,9 +205,7 @@ func (s *ValidationState) fork() *ValidationState {
 // recommendations of r that s does not hold yet: a check run again can repeat
 // one that a check run once already gave.
 func (s *ValidationState) record(c check, r *ValidationState) {
-	if c.adopt != nil {
-		c.adopt(s, r)
-	}
+	c.adopt(s, r)
 	for _, w := range r.Warnings {
 		if !slices.Contains(s.Warnings, w) {
 			s.Warnings = append(s.Warnings, w)
@@ -180,11 +229,13 @@ func adoptUnobserved(dst, src *ValidationState, keys ...string) {
 	}
 }
 
-// notPassed reports whether a tri-state row failed or was not observed.
-func notPassed(ok *bool) bool { return ok == nil || !*ok }
-
-// ranAndFailed reports whether a row that may not apply ran and failed.
-func ranAndFailed(ok *bool) bool { return ok != nil && !*ok }
+// ranOutcome is the outcome of a row that may not apply: nil did not run.
+func ranOutcome(ok *bool) outcome {
+	if ok == nil {
+		return passed
+	}
+	return rowOutcome(ok)
+}
 
 // checks returns the role's checks in the order they run.
 func (su *suite) checks(role Role) []check {
@@ -197,7 +248,9 @@ func (su *suite) checks(role Role) []check {
 					src.ControlPlaneHealthy, src.NodesAllReady, src.NotReadyNodes
 				adoptUnobserved(dst, src, CheckKeyControlPlane, CheckKeyWorkerNodesAllReady)
 			},
-			blocks: func(s *ValidationState) bool { return !s.ControlPlaneHealthy || s.Unobserved[CheckKeyControlPlane] },
+			critical: func(s *ValidationState) outcome {
+				return flagOutcome(s.ControlPlaneHealthy, s.Unobserved[CheckKeyControlPlane])
+			},
 		},
 		{
 			name: "Admission Webhooks",
@@ -206,7 +259,9 @@ func (su *suite) checks(role Role) []check {
 				dst.WebhooksSupported = src.WebhooksSupported
 				adoptUnobserved(dst, src, CheckKeyWebhooks)
 			},
-			blocks: func(s *ValidationState) bool { return !s.WebhooksSupported || s.Unobserved[CheckKeyWebhooks] },
+			critical: func(s *ValidationState) outcome {
+				return flagOutcome(s.WebhooksSupported, s.Unobserved[CheckKeyWebhooks])
+			},
 		},
 		{
 			name: "Network Policies",
@@ -217,10 +272,12 @@ func (su *suite) checks(role Role) []check {
 			},
 		},
 		{
-			name:   "Network Checks",
-			run:    su.loadNetworkChecks,
-			adopt:  func(dst, src *ValidationState) { dst.NetworkChecksErr = src.NetworkChecksErr },
-			blocks: func(s *ValidationState) bool { return s.NetworkChecksErr != "" },
+			name:  "Network Checks",
+			run:   su.loadNetworkChecks,
+			adopt: func(dst, src *ValidationState) { dst.NetworkChecksErr = src.NetworkChecksErr },
+			critical: func(s *ValidationState) outcome {
+				return flagOutcome(true, s.NetworkChecksErr != "")
+			},
 		},
 		{
 			name: "Endpoint Reachability", configured: true,
@@ -233,7 +290,7 @@ func (su *suite) checks(role Role) []check {
 				dst.ReachabilityOK, dst.ReachabilityCriticalOK, dst.EndpointResults =
 					src.ReachabilityOK, src.ReachabilityCriticalOK, src.EndpointResults
 			},
-			blocks: func(s *ValidationState) bool { return ranAndFailed(s.ReachabilityCriticalOK) },
+			critical: func(s *ValidationState) outcome { return ranOutcome(s.ReachabilityCriticalOK) },
 		},
 	}
 	if role == RoleControlPlane {
@@ -253,7 +310,7 @@ func (su *suite) checks(role Role) []check {
 				dst.ConfigurableNetPolOK, dst.ConfigurableNetPolCriticalOK, dst.NetpolPairResults =
 					src.ConfigurableNetPolOK, src.ConfigurableNetPolCriticalOK, src.NetpolPairResults
 			},
-			blocks: func(s *ValidationState) bool { return ranAndFailed(s.ConfigurableNetPolCriticalOK) },
+			critical: func(s *ValidationState) outcome { return ranOutcome(s.ConfigurableNetPolCriticalOK) },
 		},
 		check{
 			name: "Network Policy Enforcement", configured: true,
@@ -265,7 +322,12 @@ func (su *suite) checks(role Role) []check {
 			adopt: func(dst, src *ValidationState) {
 				dst.EnforcementOK, dst.EnforcementCritical = src.EnforcementOK, src.EnforcementCritical
 			},
-			blocks: func(s *ValidationState) bool { return s.EnforcementCritical && notPassed(s.EnforcementOK) },
+			critical: func(s *ValidationState) outcome {
+				if !s.EnforcementCritical {
+					return passed
+				}
+				return rowOutcome(s.EnforcementOK)
+			},
 		},
 	)
 }
@@ -281,7 +343,7 @@ func (su *suite) controlPlaneChecks() []check {
 			adopt: func(dst, src *ValidationState) {
 				dst.DefaultStorageClassOK, dst.StorageClassFailure = src.DefaultStorageClassOK, src.StorageClassFailure
 			},
-			blocks: func(s *ValidationState) bool { return notPassed(s.DefaultStorageClassOK) },
+			critical: func(s *ValidationState) outcome { return rowOutcome(s.DefaultStorageClassOK) },
 		},
 		{
 			name: "Gateway API CRDs",
@@ -289,8 +351,8 @@ func (su *suite) controlPlaneChecks() []check {
 				gw := su.gatewayView(ctx)
 				checkGatewayAPICRDsIn(s, gw.surface, gw.err)
 			},
-			adopt:  func(dst, src *ValidationState) { dst.GatewayAPICRDsOK = src.GatewayAPICRDsOK },
-			blocks: func(s *ValidationState) bool { return notPassed(s.GatewayAPICRDsOK) },
+			adopt:    func(dst, src *ValidationState) { dst.GatewayAPICRDsOK = src.GatewayAPICRDsOK },
+			critical: func(s *ValidationState) outcome { return rowOutcome(s.GatewayAPICRDsOK) },
 		},
 		{
 			name: "Envoy Gateway",
@@ -322,8 +384,11 @@ func (su *suite) controlPlaneChecks() []check {
 			adopt: func(dst, src *ValidationState) {
 				dst.NodeToNodeOK, dst.NodeToNodeNotApplicable = src.NodeToNodeOK, src.NodeToNodeNotApplicable
 			},
-			blocks: func(s *ValidationState) bool {
-				return s.NodeToNodeNotApplicable == "" && notPassed(s.NodeToNodeOK)
+			critical: func(s *ValidationState) outcome {
+				if s.NodeToNodeNotApplicable != "" {
+					return passed
+				}
+				return rowOutcome(s.NodeToNodeOK)
 			},
 		},
 		{
@@ -331,8 +396,8 @@ func (su *suite) controlPlaneChecks() []check {
 			run: func(ctx context.Context, s *ValidationState) {
 				checkTier1DeploymentsFor(ctx, su.client, su.gatewayView(ctx).own, s)
 			},
-			adopt:  func(dst, src *ValidationState) { dst.Tier1DeploymentsOK = src.Tier1DeploymentsOK },
-			blocks: func(s *ValidationState) bool { return notPassed(s.Tier1DeploymentsOK) },
+			adopt:    func(dst, src *ValidationState) { dst.Tier1DeploymentsOK = src.Tier1DeploymentsOK },
+			critical: func(s *ValidationState) outcome { return rowOutcome(s.Tier1DeploymentsOK) },
 		},
 		{
 			name: "Tier-2 StatefulSets",
@@ -341,7 +406,7 @@ func (su *suite) controlPlaneChecks() []check {
 				dst.Tier2StatefulSetsOK, dst.Tier2PlacementNotAssessed =
 					src.Tier2StatefulSetsOK, src.Tier2PlacementNotAssessed
 			},
-			blocks: func(s *ValidationState) bool { return notPassed(s.Tier2StatefulSetsOK) },
+			critical: func(s *ValidationState) outcome { return rowOutcome(s.Tier2StatefulSetsOK) },
 		},
 	}
 }
@@ -364,11 +429,16 @@ func (su *suite) computePlaneChecks() []check {
 				dst.GPUAvailable = src.GPUAvailable
 				adoptUnobserved(dst, src, CheckKeyGPUResources)
 			},
-			blocks: func(s *ValidationState) bool { return !s.GPUAvailable || s.Unobserved[CheckKeyGPUResources] },
+			critical: func(s *ValidationState) outcome {
+				return flagOutcome(s.GPUAvailable, s.Unobserved[CheckKeyGPUResources])
+			},
 		},
 		{
-			name: "GPU Operator",
-			run:  func(ctx context.Context, s *ValidationState) { checkGPUOperator(ctx, su.client, s) },
+			// Whether GPUs are discoverable decides how a missing GPU Operator
+			// is reported.
+			name:  "GPU Operator",
+			reads: GPUResourcesLabel,
+			run:   func(ctx context.Context, s *ValidationState) { checkGPUOperator(ctx, su.client, s) },
 			adopt: func(dst, src *ValidationState) {
 				dst.GPUOperatorInstalled = src.GPUOperatorInstalled
 				adoptUnobserved(dst, src, CheckKeyGPUOperator)

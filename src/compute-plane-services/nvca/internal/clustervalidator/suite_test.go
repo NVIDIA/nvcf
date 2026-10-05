@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -104,6 +105,134 @@ func TestRun_ConfirmedNotReadyFailsTheJob(t *testing.T) {
 	s := readPublishedSummary(t, client, recheckSummaryNS)
 	assert.False(t, s.VerdictReady)
 	assert.False(t, s.Checks[CheckKeyGPUResources])
+}
+
+// nodeListsOfAPass counts the node lists of one unrechecked compute-plane run
+// over a cluster from newClient.
+func nodeListsOfAPass(t *testing.T, newClient func() *fake.Clientset) int32 {
+	t.Helper()
+	client := newClient()
+	var lists atomic.Int32
+	client.PrependReactor("list", "nodes", func(ktesting.Action) (bool, runtime.Object, error) {
+		lists.Add(1)
+		return false, nil, nil
+	})
+	_ = Run(core.WithLogger(context.Background(), testLog()), client, nil, "", "", "", false, RoleComputePlane)
+	return lists.Load()
+}
+
+// A recheck that cannot read what the first pass saw fail does not undo that
+// failure: the CPU-only node's GPU Resources failure is published, and it
+// still fails the startup gate. Before, the recheck's read error replaced it,
+// the row became unknown and left the summary, and the gate let it through.
+func TestRun_RecheckKeepsAFailureItCouldNotObserve(t *testing.T) {
+	firstPass := nodeListsOfAPass(t, cpuComputeCluster)
+	client := cpuComputeCluster()
+	var lists atomic.Int32
+	client.PrependReactor("list", "nodes", func(ktesting.Action) (bool, runtime.Object, error) {
+		if lists.Add(1) > firstPass {
+			return true, nil, apierrors.NewServiceUnavailable("etcd leader change")
+		}
+		return false, nil, nil
+	})
+	t.Setenv(StartupGateEnv, "true")
+
+	out, err := runPublishing(context.Background(), t, client, "", "", RoleComputePlane)
+	var notReady *NotReadyError
+	require.ErrorAs(t, err, &notReady)
+	assert.Equal(t, NotReadyError{Failed: 1}, *notReady)
+	assert.Equal(t, ExitNotReady, ExitCode(err))
+	assert.Greater(t, lists.Load(), firstPass, "the recheck tried to read the nodes")
+	assert.Contains(t, out, "The recheck could not observe "+GPUResourcesLabel)
+
+	s := readPublishedSummary(t, client, recheckSummaryNS)
+	assert.False(t, s.VerdictReady)
+	gpu, published := s.Checks[CheckKeyGPUResources]
+	assert.True(t, published, "the failed row stays in the summary")
+	assert.False(t, gpu)
+}
+
+// A recheck that can read what its first pass could not replaces the unknown
+// with what it observed, a failure included.
+func TestSuite_RecheckReplacesAnUnknownWithWhatItObserves(t *testing.T) {
+	for name, tc := range map[string]struct {
+		second func(*ValidationState)
+		want   outcome
+	}{
+		"failure": {func(s *ValidationState) { s.GPUAvailable = false }, failed},
+		"pass":    {func(s *ValidationState) { s.GPUAvailable = true }, passed},
+		"unknown": {func(s *ValidationState) { s.markUnobserved(CheckKeyGPUResources) }, unobserved},
+	} {
+		var runs int
+		c := check{
+			name: GPUResourcesLabel,
+			run: func(_ context.Context, s *ValidationState) {
+				if runs++; runs == 1 {
+					s.markUnobserved(CheckKeyGPUResources)
+					return
+				}
+				tc.second(s)
+			},
+			adopt: func(dst, src *ValidationState) {
+				dst.GPUAvailable = src.GPUAvailable
+				adoptUnobserved(dst, src, CheckKeyGPUResources)
+			},
+			critical: func(s *ValidationState) outcome {
+				return flagOutcome(s.GPUAvailable, s.Unobserved[CheckKeyGPUResources])
+			},
+		}
+		state := &ValidationState{Log: testLog()}
+		results := []*ValidationState{state.fork()}
+		c.run(context.Background(), results[0])
+		(&suite{}).recheck(context.Background(), state, []check{c}, results)
+		assert.Equal(t, 2, runs, name)
+		assert.Equal(t, tc.want, c.critical(results[0]), name)
+	}
+}
+
+// GPUs exposed without the GPU Operator (Manual Instance Configuration) are
+// not a missing GPU Operator: its row reads what GPU Resources found, so it
+// gives a non-blocking warning and no install advice.
+func TestRun_GPUOperatorReadsTheGPUResourcesResult(t *testing.T) {
+	client := readyComputeCluster()
+	out, err := runPublishing(context.Background(), t, client, "", "", RoleComputePlane)
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "GPUs discovered via alternative mechanism")
+	assert.NotContains(t, out, "helm install gpu-operator")
+
+	s := readPublishedSummary(t, client, recheckSummaryNS)
+	assert.False(t, s.Checks[CheckKeyGPUOperator])
+	assert.True(t, slices.ContainsFunc(s.Warnings, func(w string) bool {
+		return strings.Contains(w, "GPUs are discoverable via alternative mechanism")
+	}), s.Warnings)
+}
+
+// The GPU Operator row runs again when the recheck replaces the GPU Resources
+// result it read, so the GPUs the recheck found are not reported missing.
+func TestRun_RecheckRerunsAChecksReaderWhenItReplacesItsResult(t *testing.T) {
+	firstPass := nodeListsOfAPass(t, func() *fake.Clientset { return readyComputeCluster() })
+	client := readyComputeCluster()
+	var lists atomic.Int32
+	client.PrependReactor("list", "nodes", func(ktesting.Action) (bool, runtime.Object, error) {
+		if lists.Add(1) == firstPass {
+			return true, nil, apierrors.NewForbidden(corev1.Resource("nodes"), "", errors.New("denied"))
+		}
+		return false, nil, nil
+	})
+
+	out, err := runPublishing(context.Background(), t, client, "", "", RoleComputePlane)
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "helm install gpu-operator", "the first pass saw no GPUs")
+	assert.Equal(t, 2, strings.Count(out, "  GPU Operator Status\x1b"), "GPU Operator ran again")
+
+	assert.NotContains(t, out, "Install GPU Operator using the command above",
+		"the first pass's install advice is dropped")
+
+	s := readPublishedSummary(t, client, recheckSummaryNS)
+	assert.True(t, s.Checks[CheckKeyGPUResources])
+	assert.True(t, slices.ContainsFunc(s.Warnings, func(w string) bool {
+		return strings.Contains(w, "GPUs are discoverable via alternative mechanism")
+	}), s.Warnings)
 }
 
 // A preflight run is graded by its launcher, which can run it again, so it
@@ -240,7 +369,7 @@ func TestSuite_EveryBlockingRowIsRechecked(t *testing.T) {
 	blocking := func(s *ValidationState) []string {
 		var names []string
 		for _, c := range su.checks(s.Role) {
-			if c.blocks != nil && c.blocks(s) {
+			if c.blocks(s) {
 				names = append(names, c.name)
 			}
 		}
