@@ -1188,7 +1188,9 @@ func TestLoadStackValues_ExternalComponents(t *testing.T) {
 // The Gateways LoadStackValues forwards are the ones the stack renders into
 // the ingress release's nvcfGatewayRoutes.gateways, for the default routes
 // and with each gated route on, so the CLI's gates cannot drift from the
-// template's. Needs helmfile; skipped without it.
+// template's. Needs helmfile and helm on PATH; skipped without them. bazel
+// test runs it on a fixed PATH, where they are found only in /usr/local/bin,
+// /usr/bin or /bin unless the run passes --test_env=PATH.
 func TestLoadStackValues_GatewaysMatchTheRenderedStack(t *testing.T) {
 	if testing.Short() {
 		t.Skip("renders the stack with helmfile")
@@ -1196,6 +1198,9 @@ func TestLoadStackValues_GatewaysMatchTheRenderedStack(t *testing.T) {
 	stack := filepath.Join(repoStacksDir(t), "self-managed")
 	helmfile, err := exec.LookPath("helmfile")
 	if err != nil {
+		if os.Getenv("TEST_SRCDIR") != "" {
+			t.Skip("helmfile is not on bazel test's PATH; run with --test_env=PATH, or with go test")
+		}
 		t.Skip("helmfile is not installed")
 	}
 	const common = `
