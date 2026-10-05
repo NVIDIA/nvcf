@@ -235,18 +235,18 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		detail: "could not verify credentials from this machine: " + te.msg + note})
 }
 
-// isRejectedExchange reports a token exchange the registry refused the
-// credential it was sent.
+// isRejectedExchange reports whether a token exchange failed because the
+// registry refused the credential it was sent.
 func isRejectedExchange(err error) bool {
 	var te *tokenExchangeError
 	return errors.As(err, &te) && te.rejected()
 }
 
 // rejectedLoginNote says that registry rejected the docker login read from
-// source, and how to renew it for docker on this machine.
+// source, which docker on this machine still sends, and how to renew it.
 func rejectedLoginNote(registry, source string) string {
-	return fmt.Sprintf("the docker login from %s was rejected, so docker on this machine cannot pull from %s "+
-		"until: docker login %s --username '$oauthtoken'", source, registry, registry)
+	return fmt.Sprintf("the docker login from %s was rejected, and docker on this machine still sends it; "+
+		"renew it with: docker login %s --username '$oauthtoken'", source, registry)
 }
 
 // anonymousOutcome grades a registry that let this machine in without a
