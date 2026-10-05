@@ -115,32 +115,6 @@ Checks GLM answers, streaming, authentication, discovery and registration. Resul
 
 If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
 
-## Optional configuration
-
-### Alternative container runtimes and external configuration
-
-For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](spark/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
-
-### Runtime image mirror
-
-To use a mirror of the pinned CUDA image, set `runtimeImage` in the saved configuration before running `preflight`.
-
-### API keys
-
-The gateway requires an API key for inference. Model and registry reads are public. By default, `stack` saves the caller key as `api-key` in the private work directory, and the recipe client uses it automatically.
-
-To supply your own key, set `apiKeyFile` in the saved configuration to a file containing the key before running `stack`.
-
-### TLS certificates
-
-Gateway clients use HTTPS and Pylon connects to the router over verified QUIC. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster.
-
-To use existing certificates, complete these steps before running `stack`:
-
-1. Set `tls.selfSigned.enabled=false` in the external configuration.
-2. Create Secrets `llm-gateway-stack-gateway-tls` and `llm-gateway-stack-router-tls` in the namespace with valid `tls.crt` and `tls.key` fields.
-3. Create the configured CA ConfigMap with a `ca.crt` field. Certificates must cover the configured service names and client address.
-
 ## Maintenance
 
 ### Update only gateway or router
@@ -265,6 +239,32 @@ Memory and runtime limits:
 - GLM canary timing is 180 seconds for the timeout and 60 seconds for the interval.
 
 Both model persistent volume claims (PVCs) remain after uninstall.
+
+## Optional configuration
+
+### Alternative container runtimes and external configuration
+
+For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](spark/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
+
+### Runtime image mirror
+
+To use a mirror of the pinned CUDA image, set `runtimeImage` in the saved configuration before running `preflight`.
+
+### API keys
+
+The gateway requires an API key for inference. Model and registry reads are public. By default, `stack` saves the caller key as `api-key` in the private work directory, and the recipe client uses it automatically.
+
+To supply your own key, set `apiKeyFile` in the saved configuration to a file containing the key before running `stack`.
+
+### TLS certificates
+
+Gateway clients use HTTPS and Pylon connects to the router over verified QUIC. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster.
+
+To use existing certificates, complete these steps before running `stack`:
+
+1. Set `tls.selfSigned.enabled=false` in the external configuration.
+2. Create Secrets `llm-gateway-stack-gateway-tls` and `llm-gateway-stack-router-tls` in the namespace with valid `tls.crt` and `tls.key` fields.
+3. Create the configured CA ConfigMap with a `ca.crt` field. Certificates must cover the configured service names and client address.
 
 ## Troubleshooting
 
