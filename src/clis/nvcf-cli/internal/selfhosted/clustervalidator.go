@@ -1068,9 +1068,9 @@ func validatorConfigNames(role, runID string) []string {
 // validatorClusterRules are one role's cluster-wide grants: exactly the calls
 // the validator makes for that role when this CLI launches it, which is with
 // VALIDATOR_PREFLIGHT set, enforcement disabled and no networkPolicies pairs.
-// testdata/validator_api_calls.yaml lists each call with the function that
-// makes it, and a test holds these rules to that list. Discovery and the
-// unauthenticated in-cluster /readyz dial need no grant.
+// The validator's rbac_inventory.yaml lists every request it makes, by role,
+// and a test holds these rules to that list less the grants only the summary
+// write and the enforcement test use. Discovery needs no grant.
 func validatorClusterRules(role string) []rbacv1.PolicyRule {
 	shared := []rbacv1.PolicyRule{
 		// Admission webhook inventory, for both roles.
@@ -1098,10 +1098,11 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 	return append([]rbacv1.PolicyRule{
 		{APIGroups: []string{""}, Resources: []string{"nodes", "services", "events"}, Verbs: []string{"list"}},
 		// The node-to-node probe creates and deletes its own namespace,
-		// DaemonSet and checker pods, and sweeps those of dead runs.
+		// DaemonSet and checker pods, reads each checker pod until it exits,
+		// and sweeps those of dead runs.
 		{APIGroups: []string{""}, Resources: []string{"namespaces"}, Verbs: []string{"get", "list", "create",
 			"delete"}},
-		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"list", "create", "delete"}},
+		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list", "create", "delete"}},
 		{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"list", "create", "delete"}},
 		// The probe allows its own traffic in its namespace, so a default-deny
 		// policy does not read as an overlay fault. The namespace delete

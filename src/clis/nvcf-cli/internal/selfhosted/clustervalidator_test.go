@@ -18,11 +18,15 @@ limitations under the License.
 package selfhosted
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
 	"os"
-	"sort"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -243,43 +247,101 @@ func TestRunClusterValidator_RBACNameCollisionIsNotAdopted(t *testing.T) {
 	assert.Contains(t, res.Err.Error(), "bootstrapping validator RBAC")
 }
 
-// validatorCall is one entry of testdata/validator_api_calls.yaml.
-type validatorCall struct {
-	Group    string   `json:"group"`
-	Resource string   `json:"resource"`
-	URL      string   `json:"url"`
-	Verbs    []string `json:"verbs"`
-	Callers  []string `json:"callers"`
+// validatorRBACInventory is the validator's RBAC inventory, which lists every
+// request it makes by check set. Bazel stages only this package's data, so
+// there the test reads the checked-in copy instead.
+var (
+	validatorRBACInventory = filepath.Join("..", "..", "..", "..", "compute-plane-services", "nvca", "internal",
+		"clustervalidator", "rbac_inventory.yaml")
+	validatorRBACInventoryCopy = filepath.Join("testdata", "rbac_inventory.yaml")
+)
+
+// readValidatorRBACInventory returns the inventory at src, or the copy when
+// src does not exist. When both exist they must be identical, so the copy
+// cannot drift from the validator.
+func readValidatorRBACInventory(src, copyPath string) ([]byte, error) {
+	cp, err := os.ReadFile(copyPath)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(src)
+	if errors.Is(err, fs.ErrNotExist) {
+		return cp, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(raw, cp) {
+		return nil, fmt.Errorf("%s differs from %s: copy the validator's file over it", copyPath, src)
+	}
+	return raw, nil
 }
 
-// validatorRoleCalls are one role's calls, by the kind of grant they need.
-type validatorRoleCalls struct {
-	Cluster         []validatorCall `json:"cluster"`
-	NonResourceURLs []validatorCall `json:"nonResourceURLs"`
-	Namespaced      []validatorCall `json:"namespaced"`
+// validatorInventoryRule is one rule of the validator's RBAC inventory.
+type validatorInventoryRule struct {
+	Roles           []string `json:"roles"`
+	Scope           string   `json:"scope"`
+	APIGroup        string   `json:"apiGroup"`
+	Resources       []string `json:"resources"`
+	ResourceNames   []string `json:"resourceNames"`
+	NonResourceURLs []string `json:"nonResourceURLs"`
+	Verbs           []string `json:"verbs"`
 }
 
-// grantsOf flattens calls into sorted "group/resource:verb" and "url:verb"
-// entries.
-func grantsOf(t *testing.T, calls ...[]validatorCall) []string {
-	t.Helper()
-	set := map[string]bool{}
-	for _, list := range calls {
-		for _, c := range list {
-			require.NotEmpty(t, c.Callers, "every call names the validator function that makes it: %+v", c)
-			for _, v := range c.Verbs {
-				if c.URL != "" {
-					set[c.URL+":"+v] = true
-				} else {
-					set[c.Group+"/"+c.Resource+":"+v] = true
-				}
+// inventoryGrants are the grants the inventory gives role, by scope, keyed as
+// grantsOfRules keys them. A key maps to the resource names it is limited to,
+// or to nil when it is not limited.
+func inventoryGrants(rules []validatorInventoryRule, role string) map[string]map[string][]string {
+	grants := map[string]map[string][]string{"cluster": {}, "namespace": {}}
+	for _, r := range rules {
+		if !slices.Contains(r.Roles, role) {
+			continue
+		}
+		rule := rbacv1.PolicyRule{APIGroups: []string{r.APIGroup}, Resources: r.Resources,
+			NonResourceURLs: r.NonResourceURLs, Verbs: r.Verbs}
+		for _, k := range grantsOfRules([]rbacv1.PolicyRule{rule}) {
+			names, seen := grants[r.Scope][k]
+			switch {
+			case len(r.ResourceNames) == 0:
+				grants[r.Scope][k] = nil
+			case !seen || names != nil:
+				grants[r.Scope][k] = append(names, r.ResourceNames...)
 			}
 		}
 	}
-	return sortedKeys(set)
+	return grants
 }
 
-// grantsOfRules flattens rules the same way grantsOf flattens calls.
+const (
+	omitEnforcement = "only the enforcement test makes it, and the CLI's ConfigMap disables that test"
+	omitSummary     = "only the summary write makes it, and VALIDATOR_PREFLIGHT suppresses that write"
+)
+
+// cliOmittedGrants are the inventory grants this CLI's roles leave out, each
+// with why the validator never makes that request when the CLI launches it.
+// Only the control-plane set runs the node-to-node probe, which creates and
+// reads pods outside the enforcement test.
+var cliOmittedGrants = map[string]map[string]string{
+	clusterValidatorComputePlaneRole: {
+		"/namespaces:create": omitEnforcement,
+		"/pods:create":       omitEnforcement,
+		"/pods:get":          omitEnforcement,
+		"networking.k8s.io/networkpolicies:create": omitEnforcement,
+		"networking.k8s.io/networkpolicies:update": omitEnforcement,
+		"networking.k8s.io/networkpolicies:delete": omitEnforcement,
+		"/configmaps:create":                       omitSummary,
+		"/configmaps:update":                       omitSummary,
+	},
+	clusterValidatorControlPlaneRole: {
+		"networking.k8s.io/networkpolicies:update": omitEnforcement,
+		"networking.k8s.io/networkpolicies:delete": omitEnforcement,
+		"/configmaps:create":                       omitSummary,
+		"/configmaps:update":                       omitSummary,
+	},
+}
+
+// grantsOfRules flattens rules into sorted "group/resource:verb" and
+// "url:verb" entries.
 func grantsOfRules(rules []rbacv1.PolicyRule) []string {
 	set := map[string]bool{}
 	for _, r := range rules {
@@ -294,36 +356,89 @@ func grantsOfRules(rules []rbacv1.PolicyRule) []string {
 			}
 		}
 	}
-	return sortedKeys(set)
+	return slices.Sorted(maps.Keys(set))
 }
 
-func sortedKeys(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
+// assertGrants requires rules to grant exactly the keys of want, and a key
+// the inventory limits to resource names only for some of those names.
+func assertGrants(t *testing.T, want map[string][]string, rules []rbacv1.PolicyRule) {
+	t.Helper()
+	assert.Equal(t, slices.Sorted(maps.Keys(want)), grantsOfRules(rules))
+	for _, r := range rules {
+		for _, k := range grantsOfRules([]rbacv1.PolicyRule{r}) {
+			if names := want[k]; names != nil {
+				assert.NotEmpty(t, r.ResourceNames, "the inventory grants %s only on %v", k, names)
+				assert.Subset(t, names, r.ResourceNames, "the inventory grants %s only on %v", k, names)
+			}
+		}
 	}
-	sort.Strings(out)
-	return out
 }
 
-// Each role's RBAC grants exactly the calls the validator makes for that role
-// when this CLI launches it, as the checked-in inventory lists them: nothing
-// it needs is missing, which turns a critical row UNKNOWN, and nothing it
-// never calls, such as NetworkPolicy writes, is granted. The ConfigMap read is
-// a namespaced Role limited to the names this run's Job can be pointed at.
-func TestValidatorRBAC_MatchesTheValidatorsCalls(t *testing.T) {
-	raw, err := os.ReadFile("testdata/validator_api_calls.yaml")
+// The copy is used only when the validator's file is absent, and must match
+// it when both exist, so the test cannot keep passing against a stale copy.
+func TestReadValidatorRBACInventory_CopyCannotDrift(t *testing.T) {
+	dir := t.TempDir()
+	src, cp := filepath.Join(dir, "src.yaml"), filepath.Join(dir, "copy.yaml")
+	require.NoError(t, os.WriteFile(cp, []byte("rules: []\n"), 0o600))
+
+	got, err := readValidatorRBACInventory(src, cp)
+	require.NoError(t, err, "without the validator's file the copy is used")
+	assert.Equal(t, "rules: []\n", string(got))
+
+	require.NoError(t, os.WriteFile(src, []byte("rules: []\n"), 0o600))
+	got, err = readValidatorRBACInventory(src, cp)
 	require.NoError(t, err)
-	var inventory map[string]validatorRoleCalls
-	require.NoError(t, yaml.UnmarshalStrict(raw, &inventory))
-	roles := make([]string, 0, len(inventory))
-	for role := range inventory {
-		roles = append(roles, role)
-	}
-	assert.ElementsMatch(t, []string{clusterValidatorControlPlaneRole, clusterValidatorComputePlaneRole}, roles)
+	assert.Equal(t, "rules: []\n", string(got))
 
-	for role, calls := range inventory {
+	require.NoError(t, os.WriteFile(src, []byte("rules: [{}]\n"), 0o600))
+	_, err = readValidatorRBACInventory(src, cp)
+	require.ErrorContains(t, err, "differs", "a copy that differs from the validator's file must fail")
+
+	_, err = readValidatorRBACInventory(dir, cp)
+	require.Error(t, err, "a validator file that exists but cannot be read must not fall back to the copy")
+
+	require.NoError(t, os.Remove(cp))
+	_, err = readValidatorRBACInventory(src, cp)
+	require.Error(t, err, "the copy is required")
+}
+
+// Each role's RBAC grants exactly what the validator's RBAC inventory gives
+// that role, less the grants cliOmittedGrants names: nothing the validator
+// requests when this CLI launches it is missing, which turns a critical row
+// UNKNOWN, and nothing it never requests, such as NetworkPolicy updates, is
+// granted. The ConfigMap read is a namespaced Role limited to the names this
+// run's Job can be pointed at.
+func TestValidatorRBAC_MatchesTheValidatorsInventory(t *testing.T) {
+	raw, err := readValidatorRBACInventory(validatorRBACInventory, validatorRBACInventoryCopy)
+	require.NoError(t, err)
+	var inventory struct {
+		Rules []validatorInventoryRule `json:"rules"`
+	}
+	require.NoError(t, yaml.UnmarshalStrict(raw, &inventory))
+	require.NotEmpty(t, inventory.Rules)
+	roles := map[string]bool{}
+	for _, r := range inventory.Rules {
+		require.Contains(t, []string{"cluster", "namespace"}, r.Scope, "%+v", r)
+		require.False(t, r.Scope == "namespace" && len(r.NonResourceURLs) > 0,
+			"a non-resource URL needs a cluster grant: %+v", r)
+		for _, role := range r.Roles {
+			roles[role] = true
+		}
+	}
+	assert.Equal(t, []string{clusterValidatorComputePlaneRole, clusterValidatorControlPlaneRole},
+		slices.Sorted(maps.Keys(roles)))
+
+	for role := range roles {
 		t.Run(role, func(t *testing.T) {
+			want := inventoryGrants(inventory.Rules, role)
+			for k := range cliOmittedGrants[role] {
+				_, cluster := want["cluster"][k]
+				_, namespaced := want["namespace"][k]
+				assert.True(t, cluster || namespaced, "%s is omitted but the inventory no longer grants it", k)
+				delete(want["cluster"], k)
+				delete(want["namespace"], k)
+			}
+
 			client := fake.NewSimpleClientset()
 			created := runObjects{}
 			require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client, role, "runid", false, created))
@@ -331,7 +446,7 @@ func TestValidatorRBAC_MatchesTheValidatorsCalls(t *testing.T) {
 
 			cr, err := client.RbacV1().ClusterRoles().Get(context.Background(), name, metav1.GetOptions{})
 			require.NoError(t, err)
-			assert.Equal(t, grantsOf(t, calls.Cluster, calls.NonResourceURLs), grantsOfRules(cr.Rules))
+			assertGrants(t, want["cluster"], cr.Rules)
 			for _, r := range cr.Rules {
 				assert.Empty(t, r.ResourceNames)
 				assert.NotContains(t, r.Verbs, "*")
@@ -341,7 +456,7 @@ func TestValidatorRBAC_MatchesTheValidatorsCalls(t *testing.T) {
 			r, err := client.RbacV1().Roles(clusterValidatorNamespace).Get(context.Background(), name,
 				metav1.GetOptions{})
 			require.NoError(t, err)
-			assert.Equal(t, grantsOf(t, calls.Namespaced), grantsOfRules(r.Rules))
+			assertGrants(t, want["namespace"], r.Rules)
 			for _, rule := range r.Rules {
 				assert.Equal(t, validatorConfigNames(role, "runid"), rule.ResourceNames)
 			}
