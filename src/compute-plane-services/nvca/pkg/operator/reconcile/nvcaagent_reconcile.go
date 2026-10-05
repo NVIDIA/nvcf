@@ -668,7 +668,7 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
-	err = bc.setupNVCADeployment(ctx, nb)
+	err = bc.setupNVCADeployment(ctx, nb, requestsNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to setup NVCA deployment for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
@@ -2058,7 +2058,11 @@ func (bc *BackendK8sCache) getEffectiveK8sNetworkCIDRs(nb *nvidiaiov1.NVCFBacken
 	return bc.k8sClusterNetworkCIDRs
 }
 
-func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nvidiaiov1.NVCFBackend) error {
+func (bc *BackendK8sCache) setupNVCADeployment(
+	ctx context.Context,
+	original *nvidiaiov1.NVCFBackend,
+	requestsNamespace string,
+) error {
 	// TODO: Remove bart-system namespace at the end of the Setup
 	log := core.GetLogger(ctx)
 	deployName := nvcaoptypes.NVCAModuleName
@@ -2327,10 +2331,6 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 
 	volumes = append(volumes, bc.getOTelCollectorVolume(nb)...)
 	containers := []corev1.Container{nvcaContainer, webhooksContainer}
-	requestsNamespace, err := bc.getEffectiveRequestsNamespace(ctx, original)
-	if err != nil {
-		return err
-	}
 	initContainers := append([]corev1.Container{}, bc.getOTelCollectorContainer(nb, requestsNamespace)...)
 
 	replicas := int32(1)
