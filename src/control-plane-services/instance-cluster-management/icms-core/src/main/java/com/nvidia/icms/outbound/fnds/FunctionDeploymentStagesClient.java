@@ -109,6 +109,7 @@ public class FunctionDeploymentStagesClient {
                 .filter(IcmsOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
                 .filter(authFilter(webClientBuilder, staticClientFndsProperties,
                         tokenUri, clientId, clientSecret, scope))
+                .filter(IcmsOAuth2ClientUtils.getResponseFilterProcessor("FNDS"))
                 .build();
 
         var adapter = WebClientAdapter.create(webClient);

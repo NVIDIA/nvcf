@@ -54,6 +54,7 @@ public class NgcClient {
                 .filter(IcmsOAuth2ClientUtils.getOAuth2ExchangeFilter(
                         webClientBuilder, CLIENT_REGISTRATION_ID, tokenUri,
                         clientId, clientSecret, scope))
+                .filter(IcmsOAuth2ClientUtils.getResponseFilterProcessor("NGC"))
                 .build();
 
         var adapter = WebClientAdapter.create(webClient);
