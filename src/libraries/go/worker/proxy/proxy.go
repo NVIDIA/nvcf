@@ -544,13 +544,13 @@ func tcpConnect(ctx context.Context, requestId string, connectionConfig *pb.Work
 		}
 		c, err = (&tls.Dialer{
 			NetDialer: netDialer,
-			Config:    &tls.Config{ServerName: proxy.Hostname(), RootCAs: roots},
+			Config:    &tls.Config{ServerName: proxy.Hostname(), RootCAs: roots, MinVersion: tls.VersionTLS12},
 		}).DialContext(ctx, "tcp", proxyAddr)
 	} else {
 		c, err = netDialer.DialContext(ctx, "tcp", proxyAddr)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("dialing proxy %q failed: %v", proxyAddr, err)
+		return nil, traceError(span, fmt.Errorf("dialing proxy %q failed: %w", proxyAddr, err))
 	}
 
 	err = request.Write(c)
