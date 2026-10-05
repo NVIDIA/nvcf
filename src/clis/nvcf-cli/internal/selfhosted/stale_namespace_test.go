@@ -19,8 +19,11 @@ package selfhosted
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +48,7 @@ func TestProbeStaleNamespaces_AbsentIsHealthy(t *testing.T) {
 	// A namespace that doesn't exist is not stale - it has simply never been
 	// created or was already fully deleted.
 	client := fake.NewSimpleClientset()
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf", "sis"})
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf", "sis"}, time.Now)
 	require.NoError(t, err)
 	assert.Empty(t, stale, "absent namespaces must not be reported as stale")
 }
@@ -56,7 +59,7 @@ func TestProbeStaleNamespaces_TerminatingIsByDeletionTimestamp(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "nvcf", DeletionTimestamp: &now},
 		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
 	})
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 	require.NoError(t, err)
 	require.Len(t, stale, 1)
 	assert.Equal(t, "nvcf", stale[0].Name)
@@ -68,7 +71,7 @@ func TestProbeStaleNamespaces_TerminatingIsByPhase(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sis"},
 		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
 	})
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"sis"})
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"sis"}, time.Now)
 	require.NoError(t, err)
 	require.Len(t, stale, 1)
 	assert.Equal(t, "sis", stale[0].Name)
@@ -95,7 +98,7 @@ func TestProbeStaleNamespaces_NoReleaseWithInstallDataIsStale(t *testing.T) {
 			Labels:    map[string]string{"owner": "helm", "name": "sis", "status": "deployed"},
 		}},
 	)
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf", "sis"})
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf", "sis"}, time.Now)
 	require.NoError(t, err)
 	require.Len(t, stale, 1)
 	assert.Equal(t, "nvcf", stale[0].Name)
@@ -118,7 +121,7 @@ func TestProbeStaleNamespaces_HealthyReleaseNotStale(t *testing.T) {
 			},
 		},
 	)
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 	require.NoError(t, err)
 	assert.Empty(t, stale, "namespace with an active Helm release must not be stale")
 }
@@ -140,7 +143,7 @@ func TestProbeStaleNamespaces_HealthyReleaseConfigMapDriverNotStale(t *testing.T
 			},
 		},
 	)
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 	require.NoError(t, err)
 	assert.Empty(t, stale, "namespace with an owner=helm ConfigMap (configmap driver) must not be stale")
 }
@@ -181,7 +184,7 @@ func TestProbeStaleNamespaces_MixedNamespaces(t *testing.T) {
 	)
 
 	namespaces := []string{"cassandra-system", "sis", "nvcf", "api-keys", "ess"}
-	stale, err := probeStaleNamespaces(context.Background(), client, namespaces)
+	stale, err := probeStaleNamespaces(context.Background(), client, namespaces, time.Now)
 	require.NoError(t, err)
 	require.Len(t, stale, 2, "only nvcf (terminating) and api-keys (data left behind) should be stale")
 
@@ -310,7 +313,7 @@ func TestProbeStaleNamespaces_PagesPastNonMatchingObjects(t *testing.T) {
 				return true, &corev1.ConfigMapList{Items: []corev1.ConfigMap{{ObjectMeta: release}}}, nil
 			})
 
-			stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+			stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 			require.NoError(t, err)
 			assert.Empty(t, stale,
 				"an empty first page with a Continue token must not be read as 'no Helm release'")
@@ -454,7 +457,8 @@ func TestProbeStaleNamespaces_AfterDownReportsEveryNamespace(t *testing.T) {
 		)
 	}
 	client := fake.NewSimpleClientset(objects...)
-	got, err := probeStaleNamespaces(context.Background(), client, []string{"cassandra-system", "vault-system"})
+	got, err := probeStaleNamespaces(context.Background(), client,
+		[]string{"cassandra-system", "vault-system"}, time.Now)
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 }
@@ -490,7 +494,7 @@ func TestProbeStaleNamespaces_OnlyALiveWorkloadIsAnInstall(t *testing.T) {
 			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: ns}},
 			tc.pod,
 		)
-		got, err := probeStaleNamespaces(context.Background(), client, []string{ns})
+		got, err := probeStaleNamespaces(context.Background(), client, []string{ns}, time.Now)
 		require.NoError(t, err, name)
 		assert.Equal(t, tc.stale, len(got) == 1, name)
 	}
@@ -503,7 +507,7 @@ func TestProbeStaleNamespaces_SQLDriverSkipsTheNoReleaseSignal(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}},
 	)
-	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -519,7 +523,7 @@ func TestProbeStaleNamespaces_TerminatingReportedWithoutHelmObjects(t *testing.T
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
 		},
 	)
-	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "stuck Terminating", got[0].Reason)
@@ -601,7 +605,7 @@ func TestProbeStaleNamespaces_PreCreatedNamespaceIsNotStale(t *testing.T) {
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "openbao-server", Namespace: "vault-system"}},
 	)
 	stale, err := probeStaleNamespaces(context.Background(), client,
-		[]string{"api-keys", "ess", "nvcf", "sis", "cassandra-system", "vault-system"})
+		[]string{"api-keys", "ess", "nvcf", "sis", "cassandra-system", "vault-system"}, time.Now)
 	require.NoError(t, err)
 	var names []string
 	for _, s := range stale {
@@ -625,7 +629,7 @@ func TestProbeStaleNamespaces_NamespaceRunningPodsIsNotStale(t *testing.T) {
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nats-auth", Namespace: "nats-system"},
 			Type: corev1.SecretTypeOpaque},
 	)
-	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nats-system"})
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nats-system"}, time.Now)
 	require.NoError(t, err)
 	assert.Empty(t, stale)
 }
@@ -661,7 +665,7 @@ func TestProbeStaleNamespaces_KeepsProbingPastAReadError(t *testing.T) {
 	})
 
 	stale, err := probeStaleNamespaces(context.Background(), client,
-		[]string{"nvcf", "cassandra-system", "vault-system"})
+		[]string{"nvcf", "cassandra-system", "vault-system"}, time.Now)
 	require.Len(t, stale, 1, "the namespace read after the failed one must still be probed")
 	assert.Equal(t, "cassandra-system", stale[0].Name)
 	assert.Equal(t, StaleStuckTerminating, stale[0].Reason)
@@ -728,10 +732,49 @@ func TestProbeStaleNamespaces_StuckOnlyPastTheBoundOrOnAFailure(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "nvcf", DeletionTimestamp: tc.deleted},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating, Conditions: tc.conditions},
 		})
-		got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+		got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 		require.NoError(t, err, name)
 		require.Len(t, got, 1, name)
 		assert.Equal(t, tc.want, got[0].Reason, name)
+	}
+}
+
+// How long a namespace has been deleting is measured on the API server's
+// clock, read from the Date of its responses, so a workstation clock minutes
+// off neither calls a fresh deletion stuck nor a stuck one fresh.
+func TestNewStaleNamespaceProber_AgesDeletionsOnTheServerClock(t *testing.T) {
+	for name, tc := range map[string]struct {
+		skew, deleting time.Duration
+		want           string
+	}{
+		"workstation 3m fast, deleted 10s ago":  {-3 * time.Minute, 10 * time.Second, StaleTerminating},
+		"workstation 10m slow, deleting for 8m": {10 * time.Minute, 8 * time.Minute, StaleStuckTerminating},
+	} {
+		t.Run(name, func(t *testing.T) {
+			serverNow := time.Now().Add(tc.skew)
+			deleted := metav1.NewTime(serverNow.Add(-tc.deleting))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Date", serverNow.UTC().Format(http.TimeFormat))
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/version" {
+					_, _ = w.Write([]byte(`{"major":"1","minor":"30"}`))
+					return
+				}
+				_ = json.NewEncoder(w).Encode(corev1.Namespace{
+					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+					ObjectMeta: metav1.ObjectMeta{Name: "nvcf", DeletionTimestamp: &deleted},
+					Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
+				})
+			}))
+			t.Cleanup(srv.Close)
+			writeKubeconfig(t, srv.URL)
+
+			got, err := NewStaleNamespaceProber()(context.Background(), "test", []string{"nvcf"})
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.want, got[0].Reason, got[0].Detail)
+			assert.NotContains(t, got[0].Detail, "-", "an age is never negative")
+		})
 	}
 }
 
@@ -802,7 +845,7 @@ func TestProbeStaleNamespaces_GradesReleasesByStatus(t *testing.T) {
 			objects = append(objects, rec)
 		}
 		got, err := probeStaleNamespaces(context.Background(), fake.NewSimpleClientset(objects...),
-			[]string{"cassandra-system"})
+			[]string{"cassandra-system"}, time.Now)
 		require.NoError(t, err, name)
 		if tc.reason == "" {
 			assert.Empty(t, got, name)
@@ -822,7 +865,7 @@ func TestProbeStaleNamespaces_ConfigMapReleaseMidOperation(t *testing.T) {
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "nats.v2", Namespace: "nats-system",
 			Labels: map[string]string{"owner": "helm", "name": "nats", "status": "pending-upgrade"}}},
 	)
-	got, err := probeStaleNamespaces(context.Background(), client, []string{"nats-system"})
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"nats-system"}, time.Now)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, []string{"nats"}, got[0].Releases)
@@ -854,7 +897,7 @@ func TestProbeStaleNamespaces_UnreadableWorkloadIsListedNotReported(t *testing.T
 		client.PrependReactor("list", resource, func(ktesting.Action) (bool, runtime.Object, error) {
 			return true, nil, forbidden(resource, "")
 		})
-		got, err := probeStaleNamespaces(context.Background(), client, []string{"api-keys"})
+		got, err := probeStaleNamespaces(context.Background(), client, []string{"api-keys"}, time.Now)
 		assert.Empty(t, got, resource)
 		require.Error(t, err, resource)
 		assert.Contains(t, err.Error(), "api-keys: list "+resource, resource)
@@ -930,7 +973,7 @@ func TestProbeStaleNamespaces_BudgetCutOffIsReturned(t *testing.T) {
 		cancel()
 		return true, nil, context.Canceled
 	})
-	_, err := probeStaleNamespaces(ctx, client, []string{"nvcf", "sis"})
+	_, err := probeStaleNamespaces(ctx, client, []string{"nvcf", "sis"}, time.Now)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.NotContains(t, err.Error(), "sis", "the scan stops once the context is done")
 
@@ -946,7 +989,7 @@ func TestProbeStaleNamespaces_BudgetCutOffIsReturned(t *testing.T) {
 		cancel()
 		return true, &corev1.PodList{}, nil
 	})
-	_, err = probeStaleNamespaces(ctx, client, []string{"nvcf", "sis"})
+	_, err = probeStaleNamespaces(ctx, client, []string{"nvcf", "sis"}, time.Now)
 	require.ErrorIs(t, err, context.Canceled, "an unfinished scan is never a clean one")
 
 	deadline := fmt.Errorf("list pods: %w", context.DeadlineExceeded)
@@ -990,7 +1033,7 @@ func TestProbeStaleNamespaces_SQLDriverSkipsTheReleaseLists(t *testing.T) {
 			return true, nil, forbidden(resource, "")
 		})
 	}
-	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	got, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"}, time.Now)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }

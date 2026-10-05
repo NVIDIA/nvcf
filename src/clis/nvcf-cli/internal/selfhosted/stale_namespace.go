@@ -20,9 +20,11 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -114,12 +116,57 @@ func NewStaleNamespaceProber() StaleNamespaceProber {
 	return func(ctx context.Context, kubeContext string, namespaces []string) ([]StaleNamespace, error) {
 		// The first contact with each visited cluster, so a cluster that
 		// cannot be reached at all is reported here.
-		client, err := connectCluster(ctx, kubeContext)
+		clock := &apiserverClock{}
+		client, err := connectCluster(ctx, kubeContext, clock.observe)
 		if err != nil {
 			return nil, err
 		}
-		return probeStaleNamespaces(ctx, client, namespaces)
+		return probeStaleNamespaces(ctx, client, namespaces, clock.now)
 	}
+}
+
+// apiserverClock follows the API server's clock through the Date header of
+// its responses. How long a namespace has been deleting is measured on it, as
+// the validator's sweeps measure age, so a workstation clock minutes off
+// neither calls a fresh deletion stuck nor a stuck one fresh.
+type apiserverClock struct {
+	mu sync.Mutex
+	// date is the latest response's Date, and received when it arrived.
+	date, received time.Time
+}
+
+// observe wraps a client's transport to record the Date of each response.
+func (c *apiserverClock) observe(rt http.RoundTripper) http.RoundTripper {
+	return dateRecorder{next: rt, clock: c}
+}
+
+// now is the API server's time: the latest Date plus the time since it
+// arrived, or this machine's time until a response carried one.
+func (c *apiserverClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.date.IsZero() {
+		return time.Now()
+	}
+	return c.date.Add(time.Since(c.received))
+}
+
+type dateRecorder struct {
+	next  http.RoundTripper
+	clock *apiserverClock
+}
+
+func (d dateRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := d.next.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	if date, perr := http.ParseTime(resp.Header.Get("Date")); perr == nil {
+		d.clock.mu.Lock()
+		d.clock.date, d.clock.received = date, time.Now()
+		d.clock.mu.Unlock()
+	}
+	return resp, nil
 }
 
 const (
@@ -346,7 +393,8 @@ func terminatingNamespace(ns *corev1.Namespace, now time.Time) StaleNamespace {
 	out := StaleNamespace{Name: ns.Name, Reason: StaleTerminating}
 	var details []string
 	if ns.DeletionTimestamp != nil {
-		age := now.Sub(ns.DeletionTimestamp.Time).Truncate(time.Second)
+		// Never negative: Date has one-second resolution.
+		age := max(now.Sub(ns.DeletionTimestamp.Time).Truncate(time.Second), 0)
 		details = append(details, "deleting for "+age.String())
 		if age >= namespaceStuckAfter {
 			out.Reason = StaleStuckTerminating
@@ -377,8 +425,10 @@ func terminatingNamespace(ns *corev1.Namespace, now time.Time) StaleNamespace {
 // One namespace that cannot be read does not stop the others from being
 // probed: every error is returned, joined and naming its namespace, next to
 // everything that was found. Once ctx is done the probe stops, and the
-// returned error carries ctx's error.
-func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, namespaces []string) ([]StaleNamespace, error) {
+// returned error carries ctx's error. now is the API server's time.
+func probeStaleNamespaces(
+	ctx context.Context, client kubernetes.Interface, namespaces []string, now func() time.Time,
+) ([]StaleNamespace, error) {
 	var stale []StaleNamespace
 	var errs []error
 	// HELM_DRIVER=sql keeps release state in a database, so no in-cluster
@@ -401,7 +451,7 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 		}
 
 		if ns.DeletionTimestamp != nil || ns.Status.Phase == corev1.NamespaceTerminating {
-			stale = append(stale, terminatingNamespace(ns, time.Now()))
+			stale = append(stale, terminatingNamespace(ns, now()))
 			continue
 		}
 		if !inCluster {

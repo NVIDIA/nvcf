@@ -20,6 +20,7 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -52,15 +53,20 @@ func (e *ClusterUnreachableError) Unwrap() error { return e.Err }
 // credentials come from the kubeconfig itself. A var so tests can shorten it.
 var clusterFirstCallTimeout = 15 * time.Second
 
-// connectCluster builds a client for kubeContext and makes its first API call.
-// When that call fails, whatever the error, the cluster is a
-// ClusterUnreachableError, unless the run's own budget ended or it was
-// interrupted meanwhile: then the run, not the cluster, stopped it, and the
-// probe that follows reports that.
-func connectCluster(ctx context.Context, kubeContext string) (kubernetes.Interface, error) {
+// connectCluster builds a client for kubeContext, its transport wrapped by
+// wraps, and makes its first API call. When that call fails, whatever the
+// error, the cluster is a ClusterUnreachableError, unless the run's own budget
+// ended or it was interrupted meanwhile: then the run, not the cluster, stopped
+// it, and the probe that follows reports that.
+func connectCluster(
+	ctx context.Context, kubeContext string, wraps ...func(http.RoundTripper) http.RoundTripper,
+) (kubernetes.Interface, error) {
 	restCfg, err := loadKubeConfig(kubeContext)
 	if err != nil {
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: fmt.Errorf("building kubeconfig: %w", err)}
+	}
+	for _, wrap := range wraps {
+		restCfg.Wrap(wrap)
 	}
 	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
