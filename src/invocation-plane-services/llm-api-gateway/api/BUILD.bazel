@@ -102,6 +102,7 @@ go_test(
         "routing_key_case_test.go",
         "session_affinity_test.go",
         "token_count_test.go",
+        "upstream_framing_test.go",
         "write_deadline_test.go",
     ],
     embed = [":api"],
