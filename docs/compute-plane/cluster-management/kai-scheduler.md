@@ -207,11 +207,13 @@ kubectl get --raw /api/v1/namespaces/nvca-system/services/nvca:8000/proxy/health
 | `Queue hierarchy misconfigured` | `default-queue` is not a child of `default-parent-queue`. | Correct `parentName` and `childName` in the KAI values. |
 | `resource violation for queue` | A queue quota, limit, or `overQuotaWeight` differs from `-1`, `-1`, `1`. | Restore the unlimited values for CPU, GPU, and memory. |
 
-If the component is healthy but workload Pods stay `Pending`, the problem is
-capacity or placement, not configuration. Check the `Unschedulable` event on
-the Pod and the KAI scheduler logs:
+If the component is healthy but workload Pods stay `Pending`, the queue
+configuration is correct. Confirm that the Pod uses `kai-scheduler` and that
+the KAI components are running, then check the `Unschedulable` event on the
+Pod and the KAI scheduler logs:
 
 ```bash
+kubectl get pods -n kai-scheduler
 kubectl -n <workload-namespace> describe pod <pod-name>
 kubectl -n kai-scheduler logs deploy/kai-scheduler-default --tail=100
 ```
