@@ -45,7 +45,7 @@ Four pieces:
 | Workflow | `regularModelCache` (readers in the request namespace) or `helmModelCache` (readers in other namespaces) |
 | Flow | How a cache moves from writer to readers, derived from access modes: `rwxReadOnly` or `roxReadOnly` |
 | Cache handle | Content hash identifying one model cache |
-| Writer | The single Job that populates a cache, serialized by a Lease. On a shared claim it runs as root: Kubernetes applies fsGroup only where the CSI driver's fsGroupPolicy allows it, and drivers that declare ReadWriteOnceWithFSType (OCI FSS) skip ReadWriteMany volumes, leaving a fresh claim's root owned by root; readers stay read-only and unprivileged |
+| Writer | The single Job that populates a cache, serialized by a Lease. It runs non-root and relies on the pod fsGroup. On a shared claim NVCA records a writer identity when it selects storage: fsGroup when the live CSIDriver declares `fsGroupPolicy: File` (Weka), root when it declares ReadWriteOnceWithFSType or None (OCI FSS, a default NetApp Trident install), because those skip ReadWriteMany volumes and leave a fresh claim's root owned by root. Only the containers that write the claim are elevated; readers stay read-only and unprivileged |
 | Reader | A namespace-local read-only volume onto the same data |
 
 ## Capability catalog
@@ -79,7 +79,11 @@ conventions for stable ordering and diffs; the loader indexes them by name and
 rejects duplicates. `encryptionSupported` records that an encrypted cache has
 been qualified on the driver. It is a capability, not a switch: the
 `ModelCacheEncryption` feature flag decides whether to encrypt, and only a
-driver that lists support can be. Today only the `ReadWriteOnce` plus
+driver that lists support can be. `writerIdentity` is the one optional
+override: `fsGroup` forbids a root writer on the driver, `root` requires one
+when no CSIDriver object is registered. Absent, NVCA decides from the live
+CSIDriver's `fsGroupPolicy`, and the decision is persisted on the request so
+an upgrade never changes how an existing claim's writer runs. Today only the `ReadWriteOnce` plus
 `ReadOnlyMany` shape implements encryption.
 
 The catalog is a ConfigMap rather than a custom resource because it is release
@@ -236,8 +240,11 @@ Configuration drift never authorizes data deletion.
 1. Run the qualification on the exact provisioner and class.
 2. Set the entry's `accessModes` to what the run proved, nothing more.
 3. Set `readerMountOptions` if NVCA creates reader PVs for it; `ro` is required.
-4. Regenerate the vendored chart so both catalog copies match.
-5. Cite the run in the commit.
+4. For a `ReadWriteMany` driver, record the `fsGroupPolicy` its CSIDriver
+   declared during the run. Leave `writerIdentity` unset unless the live object
+   cannot be trusted to carry it.
+5. Regenerate the vendored chart so both catalog copies match.
+6. Cite the run in the commit.
 
 No code change should be needed. If one is, the catalog is missing a fact.
 

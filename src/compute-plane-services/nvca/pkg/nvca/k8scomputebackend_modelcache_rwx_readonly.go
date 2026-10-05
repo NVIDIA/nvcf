@@ -140,12 +140,14 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 			job.Spec.Template.Annotations = map[string]string{}
 		}
 		job.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey] = string(current.UID)
-		runSharedClaimWriterAsRoot(job)
+		if selection.WriterIdentity == nvcastorage.ModelCacheWriterIdentityRoot {
+			runSharedClaimWriterAsRoot(job)
+		}
 		if _, err := jobs.Create(ctx, job, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
 			return fail(modelcachetypes.ReasonPVCSetupFailed, fmt.Errorf("create writer job %s: %w", job.Name, err))
 		}
-		log.Infof("shared cache claim %s created on %s, writer job %s started", current.Name,
-			selection.StorageClassName, initJob.Name)
+		log.Infof("shared cache claim %s created on %s, writer job %s started with writer identity %q", current.Name,
+			selection.StorageClassName, initJob.Name, selection.WriterIdentity)
 		// The claim exists from here on, so every in-progress result names it:
 		// the request records it as its cache reference and the reference
 		// sweep can see the claim is in use while the writer runs.
@@ -316,15 +318,19 @@ func regularModelCacheKeepsSharedClaim(req *nvcav2beta1.ICMSRequest) bool {
 }
 
 // runSharedClaimWriterAsRoot makes the containers that write the shared
-// (ReadWriteMany) claim run as root. The translator relies on the pod
-// fsGroup to make the volume writable by the non-root writer, but Kubernetes
-// applies fsGroup only where the CSI driver's fsGroupPolicy allows it. Drivers
-// that declare ReadWriteOnceWithFSType, as OCI FSS does, skip ReadWriteMany
-// volumes, so a fresh claim's root stays owned by root and the writer fails on
-// its first mkdir with "permission denied". There is exactly one writer per
-// handle, it only populates the cache, and it writes world-readable files, so
-// running it as root on this path keeps the read-only readers unprivileged.
-// Block-backed claims keep the translator's non-root identity.
+// (ReadWriteMany) claim run as root. It is applied only when the persisted
+// selection recorded the root writer identity, which the storage resolver
+// sets from the live CSIDriver or an explicit catalog entry: the translator
+// relies on the pod fsGroup to make the volume writable by the non-root
+// writer, but Kubernetes applies fsGroup only under the File fsGroupPolicy.
+// Drivers that declare ReadWriteOnceWithFSType, as OCI FSS and a default
+// NetApp Trident install do, skip ReadWriteMany volumes, so a fresh claim's
+// root stays owned by root and the writer fails on its first mkdir with
+// "permission denied". Drivers that apply fsGroup, as Weka does by default,
+// and selections persisted before the identity existed keep the non-root
+// writer. There is exactly one writer per handle, it only populates the cache,
+// and it writes world-readable files, so running it as root where required
+// keeps the read-only readers unprivileged.
 //
 // Only containers with a read-write mount of the claim are changed, init
 // containers included since validateSharedClaimWriterJob accepts one as the
