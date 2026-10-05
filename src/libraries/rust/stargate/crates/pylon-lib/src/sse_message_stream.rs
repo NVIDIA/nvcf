@@ -776,13 +776,16 @@ fn exact_usage(
         &usage["prompt_tokens_details"]["cached_tokens"],
         &response_usage["input_tokens_details"]["cached_tokens"],
     ]);
-    let uncached_input_tokens = match (
+    let (uncached_input_tokens, cached_input_exceeds_total) = match (
         invalid_cached_input_tokens,
         input_tokens,
         cached_input_tokens,
     ) {
-        (false, Some(input), Some(cached)) => Some(input.saturating_sub(cached)),
-        _ => None,
+        (false, Some(input), Some(cached)) => match input.checked_sub(cached) {
+            Some(uncached) => (Some(uncached), false),
+            None => (None, true),
+        },
+        _ => (None, false),
     };
     let (output_tokens, invalid_output_tokens) = merge_u64_fields([
         &usage["completion_tokens"],
@@ -843,6 +846,7 @@ fn exact_usage(
         || invalid_container
         || invalid_input_tokens
         || invalid_cached_input_tokens
+        || cached_input_exceeds_total
         || invalid_output_tokens
         || invalid_reasoning_tokens
         || invalid_audio_tokens
@@ -1493,6 +1497,26 @@ mod tests {
                     reasoning_tokens: None,
                 },
                 false,
+            ),
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":8}}}"#,
+                ExactUsage {
+                    input_tokens: Some(5),
+                    uncached_input_tokens: None,
+                    output_tokens: Some(3),
+                    reasoning_tokens: None,
+                },
+                true,
+            ),
+            (
+                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":5,"output_tokens":2,"input_tokens_details":{"cached_tokens":8}}}}"#,
+                ExactUsage {
+                    input_tokens: Some(5),
+                    uncached_input_tokens: None,
+                    output_tokens: Some(2),
+                    reasoning_tokens: None,
+                },
+                true,
             ),
             (
                 r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":"64"}}}"#,
