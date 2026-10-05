@@ -123,6 +123,7 @@ pub struct RequestObservationEvent {
     pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) input_interval: Option<RequestInputInterval>,
     pub(crate) input_tokens_explicit: bool,
+    pub(crate) uncached_input_tokens: Option<u64>,
     pub(crate) output_calibration: OutputCalibrationFacts,
     pub(crate) upstream_duration: Option<Duration>,
 }
@@ -520,6 +521,7 @@ impl PylonRuntimeState {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
+                uncached_input_tokens: None,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
             },
@@ -579,6 +581,7 @@ impl PylonRuntimeState {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
+                uncached_input_tokens: None,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
             },
@@ -728,6 +731,10 @@ impl RequestObservationEvent {
         self.input_tokens_explicit
     }
 
+    pub(crate) fn uncached_input_tokens(&self) -> Option<u64> {
+        self.uncached_input_tokens
+    }
+
     pub(crate) fn output_calibration(&self) -> OutputCalibrationFacts {
         self.output_calibration
     }
@@ -795,6 +802,7 @@ mod tests {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
+                uncached_input_tokens: None,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
             },

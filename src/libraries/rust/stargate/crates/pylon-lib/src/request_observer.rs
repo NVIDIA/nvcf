@@ -172,6 +172,7 @@ pub(crate) struct RequestObserver {
     request_input_tokens: u64,
     input_tokens: u64,
     input_tokens_explicit: bool,
+    uncached_input_tokens: Option<u64>,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
     chat_calibration: Option<ChatCalibrationState>,
@@ -206,6 +207,7 @@ impl RequestObserver {
             request_input_tokens: input_tokens,
             input_tokens,
             input_tokens_explicit: false,
+            uncached_input_tokens: None,
             generation,
             embedding_items: None,
             chat_calibration: (output_token_calibration_enabled
@@ -291,24 +293,34 @@ impl RequestObserver {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_input_tokens_total(&mut self, input_tokens: u64) {
-        if self.input_tokens_explicit {
-            if input_tokens < self.input_tokens {
-                tracing::warn!(
-                    request_id = self.request_id,
-                    prior_input_tokens = self.input_tokens,
-                    input_tokens,
-                    "ignoring regressing explicit input token counter"
-                );
-                return;
-            }
-            if input_tokens == self.input_tokens {
-                return;
-            }
+        self.observe_input_usage(input_tokens, None);
+    }
+
+    pub(crate) fn observe_input_usage(
+        &mut self,
+        input_tokens: u64,
+        uncached_input_tokens: Option<u64>,
+    ) {
+        if self.input_tokens_explicit && input_tokens < self.input_tokens {
+            tracing::warn!(
+                request_id = self.request_id,
+                prior_input_tokens = self.input_tokens,
+                input_tokens,
+                "ignoring regressing explicit input token counter"
+            );
+            return;
         }
+        let changed = input_tokens != self.input_tokens
+            || !self.input_tokens_explicit
+            || self.uncached_input_tokens != uncached_input_tokens;
         self.input_tokens = input_tokens;
         self.input_tokens_explicit = true;
-        self.emit();
+        self.uncached_input_tokens = uncached_input_tokens;
+        if changed {
+            self.emit();
+        }
     }
 
     pub(crate) fn observe_estimated_output_tokens_total(&mut self, output_tokens: u64) {
@@ -545,6 +557,7 @@ impl RequestObserver {
                 changed_generations: Vec::new(),
                 input_interval,
                 input_tokens_explicit: self.input_tokens_explicit,
+                uncached_input_tokens: self.uncached_input_tokens,
                 output_calibration: backend
                     .map_or_else(OutputCalibrationFacts::default, |backend| {
                         backend.output_calibration

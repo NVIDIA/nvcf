@@ -497,7 +497,7 @@ impl TunnelRequestLifecycle {
                 obs.observe_output_calibration_details(exact_usage.reasoning_tokens, false);
             }
             if let Some(input_tokens) = exact_usage.input_tokens {
-                obs.observe_input_tokens_total(input_tokens);
+                obs.observe_input_usage(input_tokens, exact_usage.uncached_input_tokens);
             }
             if let Some(output_tokens) = exact_usage.output_tokens {
                 let update = parser.observe_exact_output_tokens(output_tokens);

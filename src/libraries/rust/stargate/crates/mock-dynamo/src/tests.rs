@@ -414,7 +414,7 @@ async fn test_control_http_api_updates_one_model_and_reports_request_counters() 
     assert_eq!(
         body,
         serde_json::from_str::<serde_json::Value>(
-            r#"{"id":"chatcmpl-mock-id","object":"chat.completion","model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+            r#"{"id":"chatcmpl-mock-id","object":"chat.completion","model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens":1,"total_tokens":2}}"#,
         )
         .expect("expected chat response fixture should be valid JSON")
     );
@@ -597,6 +597,7 @@ async fn streaming_chat_usage_reports_actual_output_only_when_requested() {
             distribution: OutputTokenDistribution::Uniform,
         },
         context_length_tokens: 5,
+        kv_cache: Arc::new(Mutex::new(KvCacheState::new(10))),
         ..test_state()
     };
     let app = Router::new()
@@ -614,7 +615,7 @@ async fn streaming_chat_usage_reports_actual_output_only_when_requested() {
             address,
             "POST",
             "/v1/chat/completions",
-            "connection: close\r\nx-input-tokens: 2\r\nx-output-tokens: 100",
+            "connection: close\r\nx-input-tokens: 2\r\nx-output-tokens: 100\r\nx-cache-affinity-key: chat-usage",
             &body.to_string(),
         )
         .await;
@@ -640,7 +641,12 @@ async fn streaming_chat_usage_reports_actual_output_only_when_requested() {
             assert_eq!(usage["choices"], serde_json::json!([]));
             assert_eq!(
                 usage["usage"],
-                serde_json::json!({"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5})
+                serde_json::json!({
+                    "prompt_tokens": 2,
+                    "prompt_tokens_details": {"cached_tokens": 2},
+                    "completion_tokens": 3,
+                    "total_tokens": 5
+                })
             );
             assert!(
                 output_events
@@ -1137,13 +1143,14 @@ async fn responses_endpoint_streams_response_events_without_private_stats_header
     let (addr, server) = spawn_test_app(app).await;
 
     let cases = [
-        (None, 1),
-        (Some(serde_json::json!("hello")), 5),
-        (Some(serde_json::json!(["hi", {"x": 1}])), 9),
-        (Some(serde_json::json!({"x": 1})), 7),
+        (None, 1, 1),
+        (Some(serde_json::json!("hello")), 5, 4),
+        (Some(serde_json::json!(["hi", {"x": 1}])), 9, 4),
+        (Some(serde_json::json!({"x": 1})), 7, 0),
     ];
     let mut response = String::new();
-    for (index, (input, expected_tokens)) in cases.into_iter().enumerate() {
+    for (index, (input, expected_tokens, expected_uncached_tokens)) in cases.into_iter().enumerate()
+    {
         let mut request_body = serde_json::json!({
             "model": "request-model",
             "max_output_tokens": 2,
@@ -1156,19 +1163,19 @@ async fn responses_endpoint_streams_response_events_without_private_stats_header
             addr,
             "POST",
             "/v1/responses",
-            &format!("connection: close\r\nx-request-id: req-responses-{index}\r\nx-input-tokens: {expected_tokens}\r\nx-cache-affinity-key: cache-{index}"),
+            &format!("connection: close\r\nx-request-id: req-responses-{index}\r\nx-input-tokens: {expected_tokens}\r\nx-cache-affinity-key: cache-shared"),
             &request_body.to_string(),
         )
         .await;
         assert!(response.contains(&format!(
-            "x-kv-cache-uncached-input-tokens: {expected_tokens}"
+            "x-kv-cache-uncached-input-tokens: {expected_uncached_tokens}"
         )));
         assert!(response.contains(&format!(r#""input_tokens":{expected_tokens}"#)));
     }
     assert!(response.starts_with("HTTP/1.1 200 OK"));
-    assert!(response.contains("x-kv-cache-hit: false"));
-    assert!(response.contains("x-kv-cache-reused-input-tokens: 0"));
-    assert!(response.contains("x-kv-cache-uncached-input-tokens: 7"));
+    assert!(response.contains("x-kv-cache-hit: true"));
+    assert!(response.contains("x-kv-cache-reused-input-tokens: 7"));
+    assert!(response.contains("x-kv-cache-uncached-input-tokens: 0"));
     assert!(response.contains("content-type: text/event-stream"));
 
     let (_, body_text) = response
@@ -1182,6 +1189,7 @@ async fn responses_endpoint_streams_response_events_without_private_stats_header
     assert!(body_text.contains(r#""status":"completed""#));
     assert!(body_text.contains(r#""model":"request-model""#));
     assert!(body_text.contains(r#""input_tokens":7"#));
+    assert!(body_text.contains(r#""input_tokens_details":{"cached_tokens":7}"#));
     assert!(body_text.contains(r#""output_tokens":2"#));
     assert!(body_text.contains(r#""total_tokens":9"#));
 

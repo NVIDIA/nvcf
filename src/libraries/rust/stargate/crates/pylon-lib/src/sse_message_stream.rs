@@ -36,6 +36,7 @@ pub(crate) struct GeneratedOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExactUsage {
     pub(crate) input_tokens: Option<u64>,
+    pub(crate) uncached_input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
     pub(crate) reasoning_tokens: Option<u64>,
 }
@@ -771,6 +772,18 @@ fn exact_usage(
     let response_usage = &value["response"]["usage"];
     let (input_tokens, invalid_input_tokens) =
         merge_u64_fields([&usage["prompt_tokens"], &response_usage["input_tokens"]]);
+    let (cached_input_tokens, invalid_cached_input_tokens) = merge_u64_fields([
+        &usage["prompt_tokens_details"]["cached_tokens"],
+        &response_usage["input_tokens_details"]["cached_tokens"],
+    ]);
+    let uncached_input_tokens = match (
+        invalid_cached_input_tokens,
+        input_tokens,
+        cached_input_tokens,
+    ) {
+        (false, Some(input), Some(cached)) => Some(input.saturating_sub(cached)),
+        _ => None,
+    };
     let (output_tokens, invalid_output_tokens) = merge_u64_fields([
         &usage["completion_tokens"],
         &response_usage["output_tokens"],
@@ -780,6 +793,7 @@ fn exact_usage(
         return (
             (input_tokens.is_some() || output_tokens.is_some()).then_some(ExactUsage {
                 input_tokens,
+                uncached_input_tokens,
                 output_tokens,
                 reasoning_tokens: None,
             }),
@@ -803,9 +817,18 @@ fn exact_usage(
     ]);
     let (accepted_prediction_tokens, invalid_accepted_prediction_tokens) =
         merge_u64_fields([&completion_details["accepted_prediction_tokens"]]);
-    let invalid_container = [usage, response_usage, completion_details, output_details]
-        .into_iter()
-        .any(|value| !value.is_null() && value.as_object().is_none());
+    let chat_input_details = &usage["prompt_tokens_details"];
+    let responses_input_details = &response_usage["input_tokens_details"];
+    let invalid_container = [
+        usage,
+        response_usage,
+        completion_details,
+        output_details,
+        chat_input_details,
+        responses_input_details,
+    ]
+    .into_iter()
+    .any(|value| !value.is_null() && value.as_object().is_none());
     let unknown_output_details =
         output_details_have_unknown_fields(completion_details, CHAT_OUTPUT_DETAIL_FIELDS)
             || output_details_have_unknown_fields(output_details, RESPONSES_OUTPUT_DETAIL_FIELDS);
@@ -819,6 +842,7 @@ fn exact_usage(
     let calibration_ineligible = usage_protocol_mismatch
         || invalid_container
         || invalid_input_tokens
+        || invalid_cached_input_tokens
         || invalid_output_tokens
         || invalid_reasoning_tokens
         || invalid_audio_tokens
@@ -832,6 +856,7 @@ fn exact_usage(
         (input_tokens.is_some() || output_tokens.is_some() || reasoning_tokens.is_some())
             .then_some(ExactUsage {
                 input_tokens,
+                uncached_input_tokens,
                 output_tokens,
                 reasoning_tokens,
             }),
@@ -1433,6 +1458,7 @@ mod tests {
                 r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":2}}}"#,
                 ExactUsage {
                     input_tokens: Some(8),
+                    uncached_input_tokens: None,
                     output_tokens: Some(3),
                     reasoning_tokens: Some(2),
                 },
@@ -1442,15 +1468,47 @@ mod tests {
                 r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":5,"output_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}}}"#,
                 ExactUsage {
                     input_tokens: Some(5),
+                    uncached_input_tokens: None,
                     output_tokens: Some(2),
                     reasoning_tokens: Some(1),
                 },
                 false,
             ),
             (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":64}}}"#,
+                ExactUsage {
+                    input_tokens: Some(100),
+                    uncached_input_tokens: Some(36),
+                    output_tokens: Some(3),
+                    reasoning_tokens: None,
+                },
+                false,
+            ),
+            (
+                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":80,"output_tokens":2,"input_tokens_details":{"cached_tokens":30}}}}"#,
+                ExactUsage {
+                    input_tokens: Some(80),
+                    uncached_input_tokens: Some(50),
+                    output_tokens: Some(2),
+                    reasoning_tokens: None,
+                },
+                false,
+            ),
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":"64"}}}"#,
+                ExactUsage {
+                    input_tokens: Some(100),
+                    uncached_input_tokens: None,
+                    output_tokens: Some(3),
+                    reasoning_tokens: None,
+                },
+                true,
+            ),
+            (
                 r#"{"object":"chat.completion.chunk","output_tokens_so_far":7,"choices":[]}"#,
                 ExactUsage {
                     input_tokens: None,
+                    uncached_input_tokens: None,
                     output_tokens: Some(7),
                     reasoning_tokens: None,
                 },
@@ -1460,6 +1518,7 @@ mod tests {
                 r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":8,"completion_tokens_details":{"reasoning_tokens":2,"rejected_prediction_tokens":1}}}"#,
                 ExactUsage {
                     input_tokens: Some(8),
+                    uncached_input_tokens: None,
                     output_tokens: None,
                     reasoning_tokens: Some(2),
                 },
@@ -1546,6 +1605,7 @@ mod tests {
                 parsed.facts.exact_usage,
                 Some(ExactUsage {
                     input_tokens: None,
+                    uncached_input_tokens: None,
                     output_tokens: Some(5),
                     reasoning_tokens: None,
                 })

@@ -807,6 +807,7 @@ mod tests {
                 changed_generations: Vec::new(),
                 input_interval,
                 input_tokens_explicit: false,
+                uncached_input_tokens: None,
                 output_calibration,
                 upstream_duration: None,
             },
@@ -1350,6 +1351,45 @@ mod tests {
         }
 
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 2_000.0);
+    }
+
+    #[test]
+    fn fallback_input_tps_uses_uncached_tokens_when_usage_reports_them() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let observation = completed_observation(100, 1, 10, seconds(1), seconds(2));
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation);
+        event.input_interval = Some(crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        });
+        event.input_tokens_explicit = true;
+        event.uncached_input_tokens = Some(40);
+
+        aggregator.apply_fallback_observation(&event);
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 40.0);
+    }
+
+    #[test]
+    fn fallback_input_tps_keeps_total_tokens_when_cache_usage_is_absent() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let observation = completed_observation(100, 1, 10, seconds(1), seconds(2));
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation);
+        event.input_interval = Some(crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        });
+        event.input_tokens_explicit = true;
+
+        aggregator.apply_fallback_observation(&event);
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
     }
 
     #[test]

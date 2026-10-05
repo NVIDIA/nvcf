@@ -2333,6 +2333,36 @@ async fn quic_tunnel_counts_terminal_only_usage_tokens() {
 }
 
 #[tokio::test]
+async fn quic_tunnel_preserves_cached_prompt_usage_for_fallback_stats() {
+    let app = sse_app(
+        "/v1/chat/completions",
+        &[
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}],"usage":null}"#,
+            r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":13,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":8}}}"#,
+            "[DONE]",
+        ],
+    );
+    let (mut tunnel, rx) = observed_tunnel_for(app).await;
+    let headers = tunnel_request_headers(
+        "/v1/chat/completions",
+        "model-terminal-usage",
+        "req-cached-usage",
+        "13",
+    );
+    tunnel
+        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .await;
+    tunnel.response_head(StatusCode::OK).await;
+    tunnel.drain().await;
+
+    let event = recv_terminal_event(&rx).await;
+    assert_eq!(event.observation().input_tokens, 13);
+    assert_eq!(event.uncached_input_tokens(), Some(5));
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
 async fn quic_tunnel_retains_split_usage_safety_details_for_calibration() {
     let app = sse_app(
         "/v1/chat/completions",

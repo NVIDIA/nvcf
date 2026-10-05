@@ -146,7 +146,9 @@ impl StatsAggregator {
             && let Some(input_tps) = model_state.request_input_intervals.observe(
                 &observation.request_id,
                 interval,
-                observation.input_tokens,
+                event
+                    .uncached_input_tokens()
+                    .unwrap_or(observation.input_tokens),
                 event.input_tokens_explicit(),
                 config,
             )
