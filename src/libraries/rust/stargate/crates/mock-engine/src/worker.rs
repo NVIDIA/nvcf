@@ -24,6 +24,10 @@ use crate::{EngineConfig, EngineEvent, Micros, RequestId, RequestSpec, WorkerSta
 ///   all output tokens at admission, so it never needs preemption.
 /// - When prefill finishes, the uncached input moves into the key's cache
 ///   entry and the sequence keeps only its output reservation.
+/// - When a keyed sequence completes, its output also moves into the entry,
+///   which then covers input plus output. A session's next turn, whose prompt
+///   extends that conversation, reuses all of it. Matching is per key, not
+///   per token block.
 pub(crate) struct Worker {
     waiting: VecDeque<RequestId>,
     running: Vec<RequestId>,
@@ -220,6 +224,13 @@ impl Worker {
         }
         for id in &completed {
             events.push(EngineEvent::Completed { id: *id, at });
+            let spec = self.sequences[id].spec;
+            if let Some(key) = spec.cache_key {
+                // The output reservation becomes cache space when the
+                // sequence is removed below.
+                self.cache
+                    .extend_pinned(key, spec.input_tokens + spec.output_tokens);
+            }
             self.remove(*id);
         }
         completed

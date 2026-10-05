@@ -305,3 +305,33 @@ fn invalid_configs_are_rejected() {
         assert!(Engine::new(broken, false).is_err());
     }
 }
+
+#[test]
+fn completed_output_extends_the_cache_for_the_next_turn() {
+    let mut engine = Engine::new(config(1), false).unwrap();
+    engine.submit(0, 1, spec(Some(9), 1000, 200));
+    drain(&mut engine);
+    assert_eq!(engine.worker_stats()[0].kv_cache_used_tokens, 1200);
+
+    // The next turn's prompt is the previous prompt, its output, and 300 new tokens.
+    engine.submit(1_000_000, 2, spec(Some(9), 1500, 10));
+    let events = drain(&mut engine);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        EngineEvent::FirstToken {
+            id: 2,
+            reused_input_tokens: 1200,
+            ..
+        }
+    )));
+    assert_eq!(engine.worker_stats()[0].kv_cache_used_tokens, 1510);
+}
+
+#[test]
+fn cancelled_requests_do_not_cache_partial_output() {
+    let mut engine = Engine::new(config(1), false).unwrap();
+    engine.submit(0, 1, spec(Some(9), 1000, 10_000));
+    engine.advance_to(50_000);
+    engine.cancel(50_000, 1);
+    assert_eq!(engine.worker_stats()[0].kv_cache_used_tokens, 1000);
+}
