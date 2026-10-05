@@ -666,11 +666,11 @@ const closedStderrChild = "NVCF_CLI_TEST_CLOSED_STDERR_CHILD"
 // A Ctrl-C or a CI cancel signals the whole process group, so a pipe reading
 // stderr ends with the run. Writing the interrupt note, or anything after it,
 // to that pipe must not kill the process before the validator's teardown has
-// removed what the run created.
+// removed what the run created, nor after it, before the process exits 130.
 func TestCheck_InterruptSurvivesTheEndOfItsStderrReader(t *testing.T) {
 	const started = "validator started"
 	if marker := os.Getenv(closedStderrChild); marker != "" {
-		_ = executeCheck(t, time.Minute, func(
+		err := executeCheck(t, time.Minute, func(
 			ctx context.Context, p selfhosted.ClusterValidatorParams,
 		) selfhosted.ClusterValidatorResult {
 			p.OnStart("run1")
@@ -681,7 +681,8 @@ func TestCheck_InterruptSurvivesTheEndOfItsStderrReader(t *testing.T) {
 			require.NoError(t, os.WriteFile(marker, nil, 0o600))
 			return selfhosted.ClusterValidatorResult{Err: ctx.Err(), RunID: "run1", Created: true}
 		}, os.Stderr)
-		return
+		// As main does, after cobra has printed the error to the closed pipe.
+		os.Exit(ExitCodeFromError(err))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -710,6 +711,7 @@ func TestCheck_InterruptSurvivesTheEndOfItsStderrReader(t *testing.T) {
 	waitErr := child.Wait()
 	_, err = os.Stat(marker)
 	assert.NoError(t, err, "the process died before the teardown finished: %v\n%s", waitErr, stdout.String())
+	assert.Equal(t, 130, child.ProcessState.ExitCode(), "%v\n%s", waitErr, stdout.String())
 }
 
 // terminalSink stands in for the --wait dashboard, which draws on the

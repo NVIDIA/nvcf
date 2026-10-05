@@ -256,13 +256,15 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// interrupt ends the run on the first signal or the quit key. A second
 	// Ctrl-C then exits at once, through the default handler. SIGTERM and
 	// SIGHUP stay caught until return: CI follows its SIGINT with a SIGTERM a
-	// few seconds later. So does SIGPIPE, held before the run is cancelled: a
-	// signal to the process group also ends a pipe reading stderr, and the
-	// next write would otherwise kill the process mid-teardown.
+	// few seconds later. SIGPIPE is ignored before the run is cancelled, and
+	// stays ignored after return: a signal to the process group also ends a
+	// pipe reading stderr, and a write to it, in the teardown or in the error
+	// cobra prints afterwards, would otherwise kill the process.
 	var interruptOnce sync.Once
 	interrupt := func() {
 		interruptOnce.Do(func() {
-			signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
+			signal.Ignore(syscall.SIGPIPE)
+			signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP)
 			signal.Stop(caught)
 			cancelSig()
 		})
