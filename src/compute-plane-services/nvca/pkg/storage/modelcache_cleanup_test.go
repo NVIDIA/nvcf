@@ -308,6 +308,21 @@ func TestCleanupIdleModelCaches_KeepsPrimaryBehindActiveSecondary(t *testing.T) 
 			},
 			wantKept: true,
 		},
+		{
+			name: "a failed request with a bound reader but no status handle keeps it through the spec handle",
+			requests: []client.Object{
+				func() *nvcav1new.StorageRequest {
+					st := request("sr-failed-early", "", cacheHandle)
+					st.Status.Phase = nvcav1new.StorageFailed
+					return st
+				}(),
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{Name: "ro-pvc-" + cacheHandle, Namespace: "sr-failed-early"},
+					Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+				},
+			},
+			wantKept: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

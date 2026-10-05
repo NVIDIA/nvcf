@@ -342,7 +342,8 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 	// to publishing a status. A request in a terminal phase can outlive its
 	// readers (legacy MiniService installs keep a failed request for the
 	// life of the workload), so it protects the primary only while its
-	// read-only claim is still bound; its spec handle alone pins nothing.
+	// read-only claim is still bound, through its status handle when it
+	// published one and through its spec handle otherwise.
 	activeVolumeKeys := sets.Set[string]{}
 	activeCacheHandles := sets.Set[string]{}
 	for i := range stList.Items {
@@ -355,8 +356,16 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 			if err != nil {
 				return err
 			}
-			if inUse && st.Status.ModelCache != nil && st.Status.ModelCache.VolumeHandle != "" {
-				activeVolumeKeys = activeVolumeKeys.Insert(volumeHandleKey(st.Status.ModelCache.VolumeHandle))
+			if inUse {
+				// A request can fail before publishing its status (artifact
+				// decode failing on a later reconcile) and still leave the
+				// reader bound; the spec cache handle is the only link then.
+				switch {
+				case st.Status.ModelCache != nil && st.Status.ModelCache.VolumeHandle != "":
+					activeVolumeKeys = activeVolumeKeys.Insert(volumeHandleKey(st.Status.ModelCache.VolumeHandle))
+				case st.Spec.ModelCache != nil && st.Spec.ModelCache.CacheHandle != "":
+					activeCacheHandles = activeCacheHandles.Insert(st.Spec.ModelCache.CacheHandle)
+				}
 			}
 			continue
 		}
