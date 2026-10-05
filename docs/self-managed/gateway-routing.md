@@ -416,7 +416,7 @@ HTTPS.
 
 | Install path | Gateway values to use |
 | --- | --- |
-| [Quickstart](/nvcf/overview/quickstart) | Do not use these remote Gateway values. The quickstart uses local k3d route hostnames. |
+| [Quickstart](../overview/quickstart.md) | Do not use these remote Gateway values. The quickstart uses local k3d route hostnames. |
 | [Helmfile Installation](./helmfile-installation.md) | Use `GATEWAY_ADDR` as `global.domain`, and set `ingress.gatewayApi.gateways` to the Gateway names, namespaces, and listener names from Gateway quickstart. |
 
 ## Configure the CLI for Gateway access
@@ -631,9 +631,9 @@ When the LLM invocation route is enabled in self-managed deployments, send OpenA
 ### Invocation Path Diagrams
 
 For local and multi-cluster invocation-path diagrams, see
-[Generic HTTP Function Invocation](/nvcf/overview/generic-http-function-invocation),
-[gRPC Function Invocation](/nvcf/overview/g-rpc-function-invocation), and
-[LLM Gateway](/nvcf/overview/llm-gateway).
+[Generic HTTP Function Invocation](../overview/generic-http-function-invocation.md),
+[gRPC Function Invocation](../overview/grpc-function-invocation.md), and
+[LLM Gateway](../overview/llm-gateway.md).
 
 ### Vanity Gateway (Optional)
 
@@ -829,7 +829,7 @@ Without the correct `Host` header, the gateway cannot match the request to an HT
 The NVCA agent on a self-managed GPU cluster has the same requirement when it reaches the
 control plane through a load-balancer-fronted gateway. Configure its host-header overrides
 in the operator values, not the CLI config. See
-[self-managed-clusters](/nvcf/compute-plane/self-managed-clusters).
+[self-managed-clusters](../compute-plane/cluster-management/self-managed.md).
 
 </Note>
 
@@ -863,7 +863,7 @@ api_host: "api.a1b2c3d4.us-west-2.elb.amazonaws.com"
 invoke_host: "invocation.a1b2c3d4.us-west-2.elb.amazonaws.com"
 ```
 
-See [cli-configuration](/nvcf/overview/cli) for complete CLI configuration documentation.
+See [cli-configuration](../overview/cli.md) for complete CLI configuration documentation.
 
 ## Production: DNS and HTTPS
 
@@ -1114,6 +1114,6 @@ For gRPC connection problems:
 ## Related Documentation
 
 - [helmfile-installation](./helmfile-installation.md) - Helmfile values that consume Gateway quickstart outputs
-- [cli-configuration](/nvcf/overview/cli) - CLI configuration including Host header settings
+- [cli-configuration](../overview/cli.md) - CLI configuration including Host header settings
 - [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/)
 - [Envoy Gateway](https://gateway.envoyproxy.io/)

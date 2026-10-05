@@ -182,6 +182,13 @@ func convertMessageContentToChatContent(inputContent []openairesponses.InputCont
 				URL:    url,
 				Detail: detail,
 			})
+		case openairesponses.ContentTypeInputAudio:
+			if audio, ok := item.GetAudioContent(); ok {
+				// This conversion is for admission estimates; native input is forwarded unchanged.
+				content = append(content, &models.ContentPartAudioURL{
+					URL: "data:audio/" + audio.InputAudio.Format + ";base64," + audio.InputAudio.Data,
+				})
+			}
 		}
 	}
 

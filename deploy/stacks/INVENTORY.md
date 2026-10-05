@@ -231,23 +231,17 @@ release-drift warning does not block a merge. Generated-document consistency
 remains blocking, and local validation should still return success before a
 dependency change is complete.
 
-## Per-Stack Documentation Freeze
+## Documentation Releases
 
-After a train's first release for one stack, and after its customer artifacts
-are published, update the `compatibility:` block if the qualification result
-changed, sync, then freeze that stack's docs alone:
+Stack artifact releases remain independent. Current documentation uses one
+release selector across all three stack tabs. After the required artifacts
+are published, update the catalog with the exact stack versions, synchronize
+the generated manifest, and review the combination and compatibility matrix.
 
-```bash
-go run -C tools/docs-version-sync . --target main --update-catalog
-go run -C tools/docs-version-sync . --target main
-./tools/scripts/cut-docs-version.sh --stack <self-managed|compute-plane|observability> --train X.Y
-```
-
-The freeze copies only that stack's documentation tree and catalog snapshot
-and adds the train to that stack's version list. The other two stacks are not
-touched. A later development sync moves `docs/<stack>/` forward without
-changing the frozen tree. See `tools/docs-version-sync/README.md` for the
-exact flags.
+Follow [the docs release workflow](../../docs/dev/docs-editions.md) to prepare
+a qualified combination on a protected `docs/releases/X.Y.Z` branch and
+register its exact commit. Do not create new per-stack documentation folders.
+Existing archive folders and published docs release branches remain frozen.
 
 ## Compare Release Sets
 

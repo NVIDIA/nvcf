@@ -29,6 +29,9 @@ func updateCatalogFromGitHub(repoRoot, sourceRef string, base *Catalog) (*Catalo
 }
 
 func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, base *Catalog) (*Catalog, error) {
+	if base != nil && base.DocsEdition != nil && base.DocsEdition.Status == ReleaseSetQualified {
+		return nil, fmt.Errorf("cannot refresh a qualified docs edition; prepare a new edition from development sources")
+	}
 	client := newGitHubClientFromEnvironment()
 	inventories := make(map[string]resolvedStackInventory, len(stackInventorySpecs))
 	for _, spec := range stackInventorySpecs {
@@ -73,6 +76,12 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 		}
 	}
 	catalog.ReleaseSet = releaseSet
+	if base != nil && base.DocsEdition != nil {
+		edition := *base.DocsEdition
+		edition.Status = ReleaseSetDevelopment
+		edition.Qualification = ""
+		catalog.DocsEdition = &edition
+	}
 	for _, spec := range stackInventorySpecs[1:] {
 		version := inventories[spec.Key].Source.Version
 		if !setArtifactVersionByNameAndType(catalog, spec.ResourceName, ArtifactTypeResource, version) {

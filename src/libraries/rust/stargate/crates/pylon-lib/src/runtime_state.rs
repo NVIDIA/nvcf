@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
+use tokio::sync::watch;
 
 use crate::queue_admission::{
     LiveRequestState, PylonQueueMismatchRetryConfig, QueueAdmissionDecision, QueueModelSnapshot,
@@ -87,10 +88,32 @@ impl ModelGeneration {
 #[derive(Clone, Debug, Default)]
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
+    registration_changes: RegistrationChanges,
     live_requests: LiveRequestState,
     output_token_calibration_enabled: bool,
     metrics: Option<Arc<PylonMetrics>>,
     observation_tx: Option<flume::Sender<RequestObservationEvent>>,
+}
+
+/// Version counter for advertised registration content.
+#[derive(Clone, Debug)]
+struct RegistrationChanges(Arc<watch::Sender<u64>>);
+
+impl Default for RegistrationChanges {
+    fn default() -> Self {
+        Self(Arc::new(watch::Sender::new(0)))
+    }
+}
+
+impl RegistrationChanges {
+    fn notify(&self) {
+        self.0
+            .send_modify(|version| *version = version.wrapping_add(1));
+    }
+
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.0.subscribe()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -194,6 +217,7 @@ impl PylonRuntimeState {
                 models,
                 last_upstream_progress_at: None,
             })),
+            registration_changes: RegistrationChanges::default(),
             live_requests: LiveRequestState::default(),
             output_token_calibration_enabled: false,
             metrics: None,
@@ -225,6 +249,14 @@ impl PylonRuntimeState {
 
     pub fn set_status(&self, status: InferenceServerStatus) {
         self.advertised.lock().base_status = status;
+        self.registration_changes.notify();
+    }
+
+    /// Receives a new version whenever advertised status or model stats
+    /// change, so registration streams can publish without waiting for the
+    /// next heartbeat.
+    pub(crate) fn subscribe_registration_changes(&self) -> watch::Receiver<u64> {
+        self.registration_changes.subscribe()
     }
 
     pub(crate) fn model_ids(&self) -> Vec<String> {
@@ -252,6 +284,8 @@ impl PylonRuntimeState {
                 ..RuntimeModelState::default()
             },
         );
+        drop(advertised);
+        self.registration_changes.notify();
         true
     }
 
@@ -291,6 +325,8 @@ impl PylonRuntimeState {
         model.publication = ModelPublication::Admitted {
             bringup_ready: true,
         };
+        drop(advertised);
+        self.registration_changes.notify();
         true
     }
 
@@ -312,6 +348,8 @@ impl PylonRuntimeState {
             .remove(generation.model_id())
             .expect("validated generation should still exist");
         self.live_requests.retire_generation(generation);
+        drop(advertised);
+        self.registration_changes.notify();
         Some(retired.stats)
     }
 
@@ -330,6 +368,7 @@ impl PylonRuntimeState {
             model.stats = stats;
             model.stats.clone()
         };
+        self.registration_changes.notify();
         if let Some(metrics) = &self.metrics {
             metrics.observe_model_stats(generation.model_id(), &observed_stats);
         }
@@ -360,6 +399,8 @@ impl PylonRuntimeState {
                 bringup_ready: ready,
             };
         }
+        drop(advertised);
+        self.registration_changes.notify();
     }
 
     pub(crate) fn set_generation_bringup_ready(
@@ -375,6 +416,8 @@ impl PylonRuntimeState {
             return false;
         };
         *bringup_ready = ready;
+        drop(advertised);
+        self.registration_changes.notify();
         true
     }
 

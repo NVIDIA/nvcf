@@ -24,6 +24,22 @@ CLI concurrency fallback ----------> pylon -> registration -> stargate routing
 The stream reports request counters. `/kv-cache/stats` is optional machine
 state.
 
+## Registration Updates
+
+Pylon publishes its registration, including model stats, to every Stargate in
+two cases:
+
+- When advertised stats or status change, for example when a request is
+  admitted, produces its first output, or completes. Updates are coalesced so
+  each registration stream sends at most one change-driven update per
+  `--stats-update-coalesce-ms` (default `10`).
+- As a heartbeat when nothing has been sent for `--min-update-interval-ms`
+  (default `1000`). Stargate uses this interval for registration liveness.
+
+Stargate routes on the most recent update plus its own pending reservations.
+Change-driven updates keep that view within the coalescing window and network
+delay of the backend's actual load, instead of up to one heartbeat behind.
+
 ## Stream Events
 
 Each non-empty line is JSON with `v: 1` and `type`.

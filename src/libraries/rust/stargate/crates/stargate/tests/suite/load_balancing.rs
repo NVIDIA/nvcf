@@ -1511,3 +1511,79 @@ async fn pulsar_routes_same_affinity_key_consistently() {
     stop_backends(&mut backends);
     stargate.shutdown().await;
 }
+
+#[tokio::test]
+async fn wait_and_widen_capacity_rejection_returns_overloaded_error() {
+    use prometheus::Encoder;
+
+    let model = "wait-and-widen-full-model";
+    let stargate = RunningStargate::start(
+        "test-sg-wait-and-widen-full",
+        Some(r#"{"default":"wait-and-widen"}"#),
+    )
+    .await;
+    let mut backends = vec![
+        RegisteredBackend::active_with_fast_updates(stargate.grpc_addr, model, "full-inst").await,
+    ];
+    backends[0].set_stats(CurrentModelStats {
+        last_mean_input_tps: 1000.0,
+        max_engine_concurrency: Some(1),
+        ..CurrentModelStats::default()
+    });
+    wait_for_routing(stargate.http_addr, model, Duration::from_secs(5)).await;
+
+    backends[0].set_stats(CurrentModelStats {
+        last_mean_input_tps: 1000.0,
+        num_running_queries: 1,
+        max_engine_concurrency: Some(1),
+        ..CurrentModelStats::default()
+    });
+    let state = stargate.handle.state();
+    let target = RoutingTargetKey {
+        routing_key: None,
+        model_id: model.to_string(),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let candidates = state.cluster_candidates_for_target(&target).await;
+        if candidates.len() == 1
+            && candidates[0].stats.max_engine_concurrency == 1
+            && candidates[0].stats.num_running_queries >= 1
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "full backend snapshot did not arrive: {candidates:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let response = ChatRequests::new(stargate.http_addr, model)
+        .request("req-wait-and-widen-full")
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        response_header(&response, "x-stargate-error-code"),
+        "overloaded_error"
+    );
+    let body: serde_json::Value = response.json().await.expect("overloaded body is JSON");
+    assert_eq!(body["error"]["code"], "overloaded_error");
+    let mut encoded = Vec::new();
+    prometheus::TextEncoder::new()
+        .encode(&stargate.handle.metrics().registry().gather(), &mut encoded)
+        .expect("metrics should encode");
+    let metrics = String::from_utf8(encoded).expect("metrics are UTF-8");
+    assert!(
+        metrics.contains(&format!(
+            r#"stargate_admission_rejections_total{{model="{model}",reason="routing_capacity_unavailable",routing_key=""}} 1"#
+        )),
+        "missing routing capacity rejection metric:\n{metrics}"
+    );
+
+    stop_backends(&mut backends);
+    stargate.shutdown().await;
+}
