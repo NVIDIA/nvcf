@@ -54,6 +54,8 @@ type ScenarioContext struct {
 	LastCommand   string
 	NVCFCLIConfig string
 	Manifests     map[string]string
+	HTTPHeaders   map[string]string
+	LastHTTP      *harness.HTTPResponse
 }
 
 // NewScenarioContext wraps suite in a fresh per-scenario state. The
@@ -72,6 +74,8 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		sc.LastCommand = ""
 		sc.NVCFCLIConfig = ""
 		sc.Manifests = nil
+		sc.HTTPHeaders = nil
+		sc.LastHTTP = nil
 		return c, nil
 	})
 	// Godog's default pretty formatter buffers the scenario block until
@@ -101,6 +105,7 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	registerFileSteps(ctx, sc)
 	registerManifestSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
+	registerHTTPSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
 	registerRegistrationSteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)

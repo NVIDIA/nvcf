@@ -176,6 +176,25 @@ original order. Repeated options and empty values are preserved.
 | `When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host {string} path {string} with timeout {string} seconds:` (JSON docstring) | Sends an exact-host HTTP request through the local Envoy listener with the saved function API key passed over sensitive stdin, never argv or command logs. |
 | `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. |
 
+### HTTP requests (Given / When / Then)
+
+These steps use the in-process HTTP client (`harness.HTTPClient`), not the command runner, so headers never reach `out/<run-id>/logs`. Redirects are not followed. Pending headers apply to the next send or poll step only.
+
+| Step | Notes |
+|------|-------|
+| `Given the HTTP request header {string} is {string}` | Queues one request header for the next request. `${VAR}` expansion applies to the value. |
+| `Given the HTTP request header {string} is the NVCF CLI admin token with prefix {string}` | Queues a header whose value is the prefix plus the admin token stored by `nvcf-cli init` in the state file of the selected NVCF CLI config. The token never enters argv, env, or logs. |
+| `When I send a {string} request to {string}` | Sends the request with the queued headers and records status and body. `${VAR}` expansion applies to the URL. A non-2xx status is not a step failure. |
+| `When I send a {string} request to {string} with body:` (docstring) | As above with the interpolated docstring as the request body. |
+| `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
+| `Then the HTTP status should be {int}` | Last response status. The failure message includes a truncated body. |
+| `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
+| `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
+| `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
+| `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. |
+| `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
+| `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
+
 ### Assertions (Then / And)
 
 | Step | Notes |
