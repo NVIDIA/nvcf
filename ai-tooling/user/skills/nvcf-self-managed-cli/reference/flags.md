@@ -50,7 +50,8 @@ RoleBinding in `default` that let it read only its own ConfigMap, and removes
 them after the run, so the kubeconfig context needs permission to manage those.
 It reads the validator's transcript with `get` on `pods/log` in `default`.
 Without it, a validator Job that succeeded still passes, and its row says the
-transcript could not be read, so warnings it reported are not shown.
+transcript could not be read, so neither the checks it ran nor warnings it
+reported are shown.
 The ClusterRole grants only the calls each role's checks make: reads, the
 namespace, DaemonSet and pod writes of the control-plane node-to-node probe,
 and deleting test namespaces an earlier validator run left behind.

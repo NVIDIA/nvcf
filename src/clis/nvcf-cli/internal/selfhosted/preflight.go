@@ -865,12 +865,13 @@ func gradeValidatorTranscript(r *CheckResult, result ClusterValidatorResult, rol
 	}
 	// The validator exits non-zero when the cluster is Not-Ready, so a Job
 	// that succeeded is its verdict even when the transcript cannot be read,
-	// say with pods/log denied. It passes; only its warnings are unseen.
+	// say with pods/log denied. It passes; its warnings, and the role line
+	// that shows which check set ran, are unseen.
 	if result.LogsErr != nil && !strings.Contains(result.Logs, validatorVerdictReady) {
 		r.Passed = true
 		r.Severity = SeverityInfo
 		r.Message = "cluster-validator Job succeeded; its transcript could not be read (" + result.LogsErr.Error() +
-			"), so any warnings it reported are not shown"
+			"), so neither the checks it ran nor any warnings it reported are shown"
 		if hint := kubectlLogsHint(kubeContext, result.JobName); hint != "" {
 			r.Message += "; read it with: " + hint
 		}

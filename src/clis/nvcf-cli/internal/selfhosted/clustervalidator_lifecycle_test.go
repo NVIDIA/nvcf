@@ -1271,8 +1271,9 @@ func TestClusterValidatorCheck_PassNeedsTheRoleLineAndTheVerdict(t *testing.T) {
 
 // The validator exits non-zero when the cluster is Not-Ready, so a Job that
 // succeeded passes even when its transcript cannot be read. The row says the
-// transcript was not read and how to read it, and is not transient: polling
-// again would only start another validator Job that hits the same denial.
+// transcript was not read, so the check set that ran is unconfirmed, and how
+// to read it. It is not transient: polling again would only start another
+// validator Job that hits the same denial.
 func TestClusterValidatorCheck_SucceededJobWithAnUnreadableTranscriptPasses(t *testing.T) {
 	for name, logs := range map[string]string{
 		"nothing read":       "",
@@ -1286,6 +1287,7 @@ func TestClusterValidatorCheck_SucceededJobWithAnUnreadableTranscriptPasses(t *t
 		assert.False(t, r.Transient, name)
 		assert.Contains(t, r.Message, "cluster-validator Job succeeded; its transcript could not be read", name)
 		assert.Contains(t, r.Message, `cannot get resource "pods/log"`, name)
+		assert.Contains(t, r.Message, "neither the checks it ran nor any warnings it reported are shown", name)
 		assert.Contains(t, r.Message, "kubectl --context ctx-a logs -n default job/job-1", name)
 	}
 
