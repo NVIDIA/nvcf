@@ -68,6 +68,12 @@ public class FunctionLlmService {
     private static final String MESG_LLM_TOKENIZER_IMMUTABLE =
             "Function id '%s', version '%s': 'llmConfig.tokenizer' for model '%s' must match "
                     + "existing versions";
+    private static final String MESG_LLM_URIS_NOT_UPDATABLE =
+            "Function id '%s', version '%s': 'llmConfig.uris' for model '%s' cannot be changed "
+                    + "after creation; create a new function to change it";
+    private static final String MESG_LLM_TOKENIZER_NOT_UPDATABLE =
+            "Function id '%s', version '%s': 'llmConfig.tokenizer' for model '%s' cannot be "
+                    + "changed after creation; create a new function to change it";
     private static final String MESG_FUNCTION_TYPE_MISMATCH =
             "Function id '%s': all versions must share the same functionType; "
                     + "existing version '%s' is '%s'";
@@ -398,6 +404,20 @@ public class FunctionLlmService {
                     var mesg = MESG_MODEL_CONFIG_MISSING.formatted(functionId,
                                                                    functionVersionId,
                                                                    modelUpdate.modelName());
+                    log.error(mesg);
+                    throw new BadRequestException(mesg);
+                }
+                if (llmConfigUpdate.uris() != null
+                        && !Objects.equals(llmConfigUpdate.uris(), llmConfig.getUris())) {
+                    var mesg = MESG_LLM_URIS_NOT_UPDATABLE.formatted(
+                            functionId, functionVersionId, modelUpdate.modelName());
+                    log.error(mesg);
+                    throw new BadRequestException(mesg);
+                }
+                if (llmConfigUpdate.tokenizer() != null
+                        && !Objects.equals(llmConfigUpdate.tokenizer(), llmConfig.getTokenizer())) {
+                    var mesg = MESG_LLM_TOKENIZER_NOT_UPDATABLE.formatted(
+                            functionId, functionVersionId, modelUpdate.modelName());
                     log.error(mesg);
                     throw new BadRequestException(mesg);
                 }

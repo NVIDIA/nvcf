@@ -72,7 +72,8 @@ public record UpdateFunctionRequest(
         LlmInvocationConfigDto llmInvocationConfig) {
 
     private static final String MESG_MODEL_CONFIG_UPDATE_REQUIRED =
-            "Invalid request: at least one of 'tokenRateLimit' or 'routingMethod' must be specified";
+            "Invalid request: at least one of 'tokenRateLimit', 'routingMethod', 'uris', or "
+                    + "'tokenizer' must be specified";
     private static final String MESG_DUPLICATE_MODEL_UPDATES =
             "Invalid request: duplicate model names are not allowed in 'modelUpdates'";
     private static final String MESG_FUNCTION_UPDATE_REQUIRED =
@@ -104,7 +105,22 @@ public record UpdateFunctionRequest(
             @Nullable
             @Schema(description = "Updated routing method for the model. " +
                     "When omitted, the existing value is preserved.")
-            String routingMethod) {
+            String routingMethod,
+
+            @Nullable
+            @Schema(description = "Immutable after creation. Accepted only so a value that differs "
+                    + "from the stored one is rejected instead of silently ignored.")
+            List<String> uris,
+
+            @Nullable
+            @Schema(description = "Immutable after creation. Accepted only so a value that differs "
+                    + "from the stored one is rejected instead of silently ignored.")
+            String tokenizer) {
+
+        boolean isEmpty() {
+            return tokenRateLimit == null && routingMethod == null
+                    && uris == null && tokenizer == null;
+        }
     }
 
     @Constraint(validatedBy = ValidUpdateFunctionRequestValidator.class)
@@ -147,8 +163,7 @@ public record UpdateFunctionRequest(
 
             for (var modelUpdate : modelUpdates) {
                 var llmConfig = modelUpdate.llmConfig();
-                if (llmConfig == null
-                        || (llmConfig.tokenRateLimit() == null && llmConfig.routingMethod() == null)) {
+                if (llmConfig == null || llmConfig.isEmpty()) {
                     return violation(context, MESG_MODEL_CONFIG_UPDATE_REQUIRED);
                 }
             }
