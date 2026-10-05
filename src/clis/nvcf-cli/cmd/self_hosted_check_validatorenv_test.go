@@ -296,6 +296,18 @@ func TestCheck_NonStringConfigListEntryFailsTheCommand(t *testing.T) {
 			assert.Contains(t, err.Error(), key+" entry 1 is not a string: map[")
 			assert.Contains(t, err.Error(), hint)
 		})
+		// A single entry written as a map rather than a list of one.
+		t.Run(key+" as a map", func(t *testing.T) {
+			resetCheckFlags(t)
+			withConfigFile(t, key+":\n  {key: dedicated, operator: Equal, value: infra, effect: NoSchedule}\n")
+			rootCmd.SetErr(&bytes.Buffer{})
+			rootCmd.SetOut(&bytes.Buffer{})
+			rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json"})
+			err := rootCmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), key+" is not a list of strings: map[")
+			assert.Contains(t, err.Error(), hint)
+		})
 	}
 
 	resetCheckFlags(t)
@@ -306,6 +318,14 @@ func TestCheck_NonStringConfigListEntryFailsTheCommand(t *testing.T) {
 		{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "infra", Effect: corev1.TaintEffectNoSchedule},
 		{Key: "special", Operator: corev1.TolerationOpExists},
 	}, got, "string entries are read as before")
+
+	resetCheckFlags(t)
+	withConfigFile(t, "cluster_validator_tolerations: dedicated=infra:NoSchedule\n")
+	got, err = configuredValidatorTolerations()
+	require.NoError(t, err)
+	assert.Equal(t, []corev1.Toleration{
+		{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "infra", Effect: corev1.TaintEffectNoSchedule},
+	}, got, "a single string is read as before")
 }
 
 func TestParseToleration(t *testing.T) {

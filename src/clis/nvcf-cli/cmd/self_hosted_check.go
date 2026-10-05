@@ -728,12 +728,18 @@ func localStackDir(src string) string {
 
 // configList returns a list setting from its flag, env var or config file.
 // viper.GetStringSlice reads a config-file entry that is a map or a list,
-// such as a Kubernetes-style toleration, as "", which would drop it without a
-// word, so such an entry is an error naming it.
+// such as a Kubernetes-style toleration, as "", and a value that is a single
+// map as no entries at all, which would drop it without a word, so either is
+// an error naming it.
 func configList(key string) ([]string, error) {
-	raw, ok := viper.Get(key).([]any)
-	if !ok {
+	var raw []any
+	switch v := viper.Get(key).(type) {
+	case nil, string, []string:
 		return viper.GetStringSlice(key), nil
+	case []any:
+		raw = v
+	default:
+		return nil, fmt.Errorf("%s is not a list of strings: %v", key, v)
 	}
 	out := make([]string, 0, len(raw))
 	for i, item := range raw {
