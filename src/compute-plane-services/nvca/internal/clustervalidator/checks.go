@@ -2213,8 +2213,8 @@ type n2nProbe struct {
 	// broken overlay.
 	allowErr error
 	// silent are the nodes whose probe pod was scheduled but showed no
-	// sandbox event when the wait ended. The row cannot pass while any of
-	// them is still one to probe.
+	// sandbox event when the wait ended, or whose events could not be read.
+	// The row cannot pass while any of them is still one to probe.
 	silent []string
 }
 
@@ -2598,7 +2598,7 @@ func (p *n2nProbe) judgeUnnamed(ctx context.Context, run checkerRun, report chec
 }
 
 // verified passes the row, unless a node whose probe pod showed no sandbox
-// event is still one to probe: a CNI plugin that hangs setting up the pod
+// event, or whose events could not be read, is still one to probe: a CNI plugin that hangs setting up the pod
 // network reports nothing until the container runtime times it out, which is
 // after the probe stops waiting, so that node's overlay is untested and the
 // row is unknown. Silence is no evidence of a fault either, so it never fails
@@ -2607,7 +2607,8 @@ func (p *n2nProbe) verified(ctx context.Context, node string, reached int) {
 	if silent := p.stillSilent(ctx); len(silent) > 0 {
 		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
 			"scheduled and showed no pod sandbox event within %s, as when the CNI plugin hangs setting up the "+
-			"pod network", node, reached, strings.Join(silent, ", "), nodeToNodeDSTimeout),
+			"pod network, or its events could not be read", node, reached, strings.Join(silent, ", "),
+			nodeToNodeDSTimeout),
 			nodeToNodeSilentSandboxRecommendation)
 		return
 	}
@@ -2946,8 +2947,9 @@ type probeOutcome struct {
 	// about the overlay.
 	gaps []string
 	// silent are the gaps whose pod was scheduled and showed no sandbox
-	// event at all. A hung CNI plugin looks like this, so they are untested
-	// nodes the row cannot pass without.
+	// event at all, including because the events could not be read. A hung
+	// CNI plugin looks like this, so they are untested nodes the row cannot
+	// pass without.
 	silent []string
 	// imageProblem: a pod could not pull the probe image, or was still
 	// pulling it when the wait ended.
@@ -3017,8 +3019,11 @@ func classifyProbeNodes(
 		case ev.state == sandboxCreated:
 			reason = "sandbox created, pod IP not yet reported (" + ev.reason + ")"
 		case eventsErr != nil:
+			// No sandbox event was seen, as for a silent node: reading less
+			// must not let the row pass where reading more would not.
 			reason = fmt.Sprintf("pod events could not be read (%v), so whether its sandbox exists is undecided",
 				eventsErr)
+			out.silent = append(out.silent, node)
 		case ev.state == sandboxPending:
 			reason = "sandbox not created yet (" + ev.reason + ": " + ev.message + ")"
 		default:
