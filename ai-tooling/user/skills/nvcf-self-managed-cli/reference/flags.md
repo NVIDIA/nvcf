@@ -73,10 +73,13 @@ For `nvcr.io` the NGC API key is also read, from the first of
 `NGC_IMAGE_PULL_API_KEY`, `NVCF_NGCR_API_KEY`, `NVCF_NGC_API_KEY` and
 `NGC_API_KEY` that is set. It goes ahead of the docker login only for a
 bare `--pre` run with the `local` environment, since `up` creates its pull
-secrets from it, and it is never sent to another registry.
+secrets from it, and it is never sent to another registry. Elsewhere the key
+is sent when there is no docker login, or when `nvcr.io` rejects the docker
+login. The run then uses the key, for tag discovery and the validator's pull
+secret too, and the row says how to renew the login `docker` still sends.
 
 Only a credential the registry rejects fails the run, and only for an NVIDIA
-registry the image or the stack names. A rejected NGC API key after install is
+registry the image or the stack names. After install a rejected credential is
 a warning, since the cluster pulls with its own pull secret. A registry this
 machine cannot reach, a token service that fails, and a missing local
 credential are warnings. A registry the probe cannot speak to, such as ECR or

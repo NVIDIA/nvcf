@@ -70,7 +70,9 @@ type registryCredential struct {
 type RegistryCredentials struct {
 	// preferNGCKey puts the NGC API key ahead of the docker config for
 	// nvcr.io. That is right only where up mints its pull secrets from the
-	// key; anywhere else the docker login is what docker and the cluster use.
+	// key; anywhere else the docker login is what docker and the cluster use,
+	// and the key is sent only when there is no login or the registry
+	// rejects it.
 	preferNGCKey bool
 
 	mu    sync.Mutex
@@ -81,6 +83,12 @@ type credentialLookup struct {
 	cred registryCredential
 	ok   bool
 	err  error
+	// fallback is the credential to send once the registry rejects cred:
+	// the NGC key behind a docker login for nvcr.io.
+	fallback *registryCredential
+	// rejectedLogin is the source of the docker login the registry rejected
+	// before cred, the fallback, took its place.
+	rejectedLogin string
 }
 
 // NewRegistryCredentials returns a per-run credential resolver.
@@ -115,31 +123,66 @@ func (rc *RegistryCredentials) lookup(ctx context.Context, registry string) (reg
 	if hit, ok := rc.cache[key]; ok {
 		return hit.cred, hit.ok, hit.err
 	}
-	cred, ok, err := rc.resolve(ctx, registry)
+	found := rc.resolve(ctx, registry)
 	if ctx.Err() == nil {
-		rc.cache[key] = credentialLookup{cred: cred, ok: ok, err: err}
+		rc.cache[key] = found
 	}
-	return cred, ok, err
+	return found.cred, found.ok, found.err
 }
 
-func (rc *RegistryCredentials) resolve(ctx context.Context, registry string) (registryCredential, bool, error) {
-	var fromKey registryCredential
+// rejected records that registry refused cred and returns the credential to
+// send instead, if there is one: the NGC key behind a docker login for
+// nvcr.io. Later lookups return it, so tag discovery, the credential row and
+// the validator's pull secret all move to the credential the registry has not
+// refused.
+func (rc *RegistryCredentials) rejected(registry string, cred registryCredential) (registryCredential, bool) {
+	key := strings.ToLower(registry)
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	hit, ok := rc.cache[key]
+	switch {
+	case !ok || !hit.ok:
+		return registryCredential{}, false
+	case hit.cred != cred:
+		// Another check already moved past cred.
+		return hit.cred, true
+	case hit.fallback == nil:
+		return registryCredential{}, false
+	}
+	next := *hit.fallback
+	rc.cache[key] = credentialLookup{cred: next, ok: true, rejectedLogin: cred.source}
+	return next, true
+}
+
+// rejectedLogin returns the source of the docker login registry rejected
+// before the run moved to the NGC key, or "".
+func (rc *RegistryCredentials) rejectedLogin(registry string) string {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.cache[strings.ToLower(registry)].rejectedLogin
+}
+
+func (rc *RegistryCredentials) resolve(ctx context.Context, registry string) credentialLookup {
+	var fromKey *registryCredential
 	if isNGCKeyRegistry(registry) {
 		if name, key := firstSetEnv(ngcAPIKeyEnvNames...); key != "" {
-			fromKey = registryCredential{user: "$oauthtoken", pass: key, source: name, ngcKey: true}
+			fromKey = &registryCredential{user: "$oauthtoken", pass: key, source: name, ngcKey: true}
 		}
 	}
-	if fromKey.pass != "" && rc.preferNGCKey {
-		return fromKey, true, nil
+	if fromKey != nil && rc.preferNGCKey {
+		return credentialLookup{cred: *fromKey, ok: true}
 	}
 	cred, ok, err := credsFromDockerConfig(ctx, registry)
-	if ok {
-		return cred, true, nil
+	switch {
+	case ok:
+		if fromKey != nil && fromKey.pass == cred.pass {
+			fromKey = nil
+		}
+		return credentialLookup{cred: cred, ok: true, fallback: fromKey}
+	case fromKey != nil:
+		return credentialLookup{cred: *fromKey, ok: true}
 	}
-	if fromKey.pass != "" {
-		return fromKey, true, nil
-	}
-	return registryCredential{}, false, err
+	return credentialLookup{err: err}
 }
 
 // firstSetEnv returns the first of names set to a non-empty value, and that

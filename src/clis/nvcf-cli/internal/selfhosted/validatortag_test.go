@@ -670,3 +670,17 @@ func TestResolveLatestValidatorTag_NoRequestForAHostMovingRef(t *testing.T) {
 	}
 	assert.Empty(t, rec.requests)
 }
+
+// Tag discovery moves to the NGC key when nvcr.io rejects the docker login,
+// as the credential row does.
+func TestResolveLatestValidatorTag_RejectedLoginGivesWayToTheNGCKey(t *testing.T) {
+	withTempCacheDir(t)
+	ngc := newFakeNGC(t, "good-key")
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
+	t.Setenv("NGC_API_KEY", "good-key")
+	ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
+	got, ok := ResolveLatestValidatorTag(ctx, "nvcr.io/nvidia/cv")
+	require.True(t, ok)
+	assert.Equal(t, "nvcr.io/nvidia/cv:1.2.0", got)
+	assert.Equal(t, []string{"rotated-out", "good-key"}, ngc.passwords())
+}

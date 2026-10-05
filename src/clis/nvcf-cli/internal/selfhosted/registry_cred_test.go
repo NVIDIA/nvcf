@@ -26,8 +26,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -712,6 +714,55 @@ func newFakeRegistry(
 	return f
 }
 
+// fakeNGC stands in for nvcr.io: every registry request the test makes,
+// whatever its host, reaches it. Its token endpoint accepts only the password
+// goodPass, and a token it issued lists the tags of any repository.
+type fakeNGC struct {
+	mu   sync.Mutex
+	sent []string
+}
+
+// passwords returns the Basic auth password of each token request, in order.
+func (f *fakeNGC) passwords() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.sent)
+}
+
+func newFakeNGC(t *testing.T, goodPass string) *fakeNGC {
+	t.Helper()
+	f := &fakeNGC{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			_, pass, _ := r.BasicAuth()
+			f.mu.Lock()
+			f.sent = append(f.sent, pass)
+			f.mu.Unlock()
+			if pass != goodPass {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"token":"t"}`))
+		case r.Header.Get("Authorization") == "Bearer t" && strings.HasSuffix(r.URL.Path, "/tags/list"):
+			_, _ = w.Write([]byte(`{"tags":["1.0.0","1.2.0"]}`))
+		default:
+			bearerChallenge(w, "https://"+ngcKeyRegistryHost+"/token")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	tr := srv.Client().Transport.(*http.Transport).Clone()
+	// The test certificate names example.com, not nvcr.io.
+	tr.TLSClientConfig.ServerName = "example.com"
+	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+	prev := http.DefaultTransport
+	http.DefaultTransport = tr
+	t.Cleanup(func() { http.DefaultTransport = prev })
+	return f
+}
+
 func bearerChallenge(w http.ResponseWriter, realm string) {
 	w.Header().Set("Www-Authenticate", `Bearer realm="`+realm+`",service="test"`)
 	w.WriteHeader(http.StatusUnauthorized)
@@ -899,12 +950,13 @@ func TestProbeRegistryCredential_RetriesTransientFailures(t *testing.T) {
 	assert.Equal(t, 3, calls)
 }
 
-// A rejected NGC API key on a run that checks an installed stack is a
-// warning: the cluster pulls with its own pull secret. Before install, and
-// for any other credential, a rejection on a critical registry is an error.
-func TestRegistryCredentialCheck_RejectedNGCKeyAfterInstall(t *testing.T) {
+// A rejected credential on a run that checks an installed stack is a
+// warning, whether it is the NGC API key or a docker login: the cluster pulls
+// with its own pull secret. Before install a rejection on a critical registry
+// is an error.
+func TestRegistryCredentialCheck_RejectedAfterInstall(t *testing.T) {
 	rejectedKey := func(context.Context, string, string, bool) error {
-		return registryProbeOutcome{kind: probeRejected, ngcKey: true, detail: "credentials from NGC_API_KEY rejected"}
+		return registryProbeOutcome{kind: probeRejected, detail: "credentials from NGC_API_KEY rejected"}
 	}
 	rejectedLogin := func(context.Context, string, string, bool) error {
 		return registryProbeOutcome{kind: probeRejected, detail: "credentials from docker config rejected"}
@@ -917,12 +969,62 @@ func TestRegistryCredentialCheck_RejectedNGCKeyAfterInstall(t *testing.T) {
 	}{
 		{rejectedKey, true, SeverityWarning},
 		{rejectedKey, false, SeverityError},
-		{rejectedLogin, true, SeverityError},
+		{rejectedLogin, true, SeverityWarning},
+		{rejectedLogin, false, SeverityError},
 	} {
 		r := registryCredentialCheck(tc.checker, entry, "nvcr.io", tc.postInstall).Run(context.Background())
 		assert.False(t, r.Passed)
 		assert.Equal(t, tc.want, r.Severity, "postInstall=%v", tc.postInstall)
+		if tc.postInstall {
+			assert.Contains(t, r.Message, "affects only this machine")
+		}
 	}
+}
+
+// Where the docker login goes first for nvcr.io and nvcr.io rejects it, the
+// NGC key is sent before the row is graded. The run then moves to the key,
+// so the validator's pull secret is minted from the credential the row found
+// accepted, and the row says how to renew the login docker still sends.
+func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) {
+	ngc := newFakeNGC(t, "good-key")
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
+	t.Setenv("NGC_API_KEY", "good-key")
+	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
+	for _, postInstall := range []bool{true, false} {
+		rc := NewRegistryCredentials(false)
+		ctx := WithRegistryCredentials(context.Background(), rc)
+		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", postInstall).Run(ctx)
+		assert.True(t, r.Passed, r.Message)
+		assert.Equal(t, SeverityInfo, r.Severity)
+		assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
+		assert.Contains(t, r.Message, "the docker login from docker config")
+		assert.Contains(t, r.Message, "docker login nvcr.io --username '$oauthtoken'")
+
+		cred, ok, err := rc.lookup(ctx, "nvcr.io")
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, "good-key", cred.pass, "later lookups, the pull secret's among them, get the key")
+	}
+	assert.Equal(t, []string{"rotated-out", "good-key", "rotated-out", "good-key"}, ngc.passwords())
+}
+
+// When nvcr.io rejects the key too, the row is graded on the key: an error
+// before install, a warning after it, naming both credentials.
+func TestProbeRegistryCredential_RejectedLoginAndKey(t *testing.T) {
+	ngc := newFakeNGC(t, "nothing-matches")
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
+	t.Setenv("NGC_API_KEY", "revoked-key")
+	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
+	for postInstall, want := range map[bool]Severity{true: SeverityWarning, false: SeverityError} {
+		ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
+		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", postInstall).Run(ctx)
+		assert.False(t, r.Passed)
+		assert.Equal(t, want, r.Severity, "postInstall=%v", postInstall)
+		assert.Contains(t, r.Message, "credentials from NGC_API_KEY rejected")
+		assert.Contains(t, r.Message, "generate a new NGC API key")
+		assert.Contains(t, r.Message, "the docker login from docker config")
+	}
+	assert.Equal(t, []string{"rotated-out", "revoked-key", "rotated-out", "revoked-key"}, ngc.passwords())
 }
 
 // The stack's org is the probe's scope, so a key without access to it is

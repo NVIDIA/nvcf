@@ -86,15 +86,18 @@ const (
 	// that carried the credential. The one outcome that is evidence of a bad
 	// credential.
 	probeRejected
+	// probeLoginRejected: the registry rejected the docker login and
+	// accepted the NGC key sent in its place. The run uses the key, but
+	// docker on this machine still sends the login.
+	probeLoginRejected
 )
 
 // registryProbeOutcome is the result of a probe that did not verify a
-// credential. Only probeRejected can fail a run.
+// credential, or verified one only after the registry rejected another. Only
+// probeRejected can fail a run.
 type registryProbeOutcome struct {
 	kind   registryProbeKind
 	detail string
-	// ngcKey marks a rejected NGC API key read from the environment.
-	ngcKey bool
 }
 
 func (o registryProbeOutcome) Error() string { return o.detail }
@@ -191,9 +194,25 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		sent = &cred
 	}
 	_, err = exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth, sent)
+	// A docker login the registry rejects gives way to the NGC key, where the
+	// run has one, before anything is graded.
+	if hasCred && isRejectedExchange(err) {
+		if next, ok := creds.rejected(registry, cred); ok {
+			cred = next
+			_, err = exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth, &cred)
+		}
+	}
+	note := ""
+	if login := creds.rejectedLogin(registry); login != "" && hasCred {
+		note = "; " + rejectedLoginNote(registry, login)
+	}
 	if err == nil {
-		if !hasCred {
+		switch {
+		case !hasCred:
 			return anonymousOutcome(registry, critical, lookupErr)
+		case note != "":
+			return registryProbeOutcome{kind: probeLoginRejected,
+				detail: "credentials from " + cred.source + " valid" + note}
 		}
 		return nil
 	}
@@ -201,19 +220,33 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	switch {
 	case !errors.As(err, &te):
 		return interrupted(registryProbeOutcome{kind: probeUnverifiable,
-			detail: "could not verify credentials from this machine: " + err.Error()})
+			detail: "could not verify credentials from this machine: " + err.Error() + note})
 	case te.refused:
 		return registryProbeOutcome{kind: probeSkipped, detail: te.msg}
 	case te.rejected():
-		return registryProbeOutcome{kind: probeRejected, ngcKey: cred.ngcKey,
-			detail: fmt.Sprintf("credentials from %s rejected: %s; %s", cred.source, te.msg, rejectedHint(registry, cred))}
+		return registryProbeOutcome{kind: probeRejected, detail: fmt.Sprintf("credentials from %s rejected: %s; %s%s",
+			cred.source, te.msg, rejectedHint(registry, cred), note)}
 	case !hasCred && (te.status == http.StatusUnauthorized || te.status == http.StatusForbidden):
 		// Anonymous access refused: the registry needs a credential this
 		// machine does not have.
 		return noCredentialOutcome(registry, lookupErr)
 	}
 	return interrupted(registryProbeOutcome{kind: probeUnverifiable,
-		detail: "could not verify credentials from this machine: " + te.msg})
+		detail: "could not verify credentials from this machine: " + te.msg + note})
+}
+
+// isRejectedExchange reports a token exchange the registry refused the
+// credential it was sent.
+func isRejectedExchange(err error) bool {
+	var te *tokenExchangeError
+	return errors.As(err, &te) && te.rejected()
+}
+
+// rejectedLoginNote says that registry rejected the docker login read from
+// source, and how to renew it for docker on this machine.
+func rejectedLoginNote(registry, source string) string {
+	return fmt.Sprintf("the docker login from %s was rejected, so docker on this machine cannot pull from %s "+
+		"until: docker login %s --username '$oauthtoken'", source, registry, registry)
 }
 
 // anonymousOutcome grades a registry that let this machine in without a

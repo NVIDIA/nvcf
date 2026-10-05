@@ -158,7 +158,8 @@ func isRepositoryPath(s string) bool {
 
 // fetchValidatorTags walks the OCI tag-list endpoint for a single repo.
 // Handles the standard Bearer token exchange: try anonymous, on 401 re-auth
-// with the run's local credential for the registry.
+// with the run's local credential for the registry, and with the NGC key when
+// nvcr.io rejects the docker login.
 func fetchValidatorTags(ctx context.Context, registry, repo string) ([]string, error) {
 	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list", registry, repo)
 	body, err := fetchWithBearer(ctx, tagsURL, registry, repo)
@@ -196,12 +197,18 @@ func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte
 	wwwAuth := selectAuthChallenge(resp.Header.Values("Www-Authenticate"))
 	resp.Body.Close()
 
-	cred, hasCred, _ := registryCredentialsFrom(ctx).lookup(ctx, registry)
+	creds := registryCredentialsFrom(ctx)
+	cred, hasCred, _ := creds.lookup(ctx, registry)
 	var credential *registryCredential
 	if hasCred {
 		credential = &cred
 	}
 	token, err := exchangeBearerToken(ctx, client, registry, repo, wwwAuth, credential)
+	if hasCred && isRejectedExchange(err) {
+		if next, ok := creds.rejected(registry, cred); ok {
+			token, err = exchangeBearerToken(ctx, client, registry, repo, wwwAuth, &next)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

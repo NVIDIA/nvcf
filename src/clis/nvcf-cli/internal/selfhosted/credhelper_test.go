@@ -212,6 +212,43 @@ func TestRegistryCredentials_NGCKeyOrder(t *testing.T) {
 	}
 }
 
+// A docker login the registry rejected gives way to the NGC key once, and
+// every later lookup returns the key. The key itself has nothing behind it,
+// and where it goes first a rejected key never falls back to the login.
+func TestRegistryCredentials_RejectedLoginMovesToTheKey(t *testing.T) {
+	dockerHome(t, `{"auths":{"nvcr.io":{}},"credsStore":"store"}`, "store")
+	t.Setenv("NGC_API_KEY", "env-key")
+	ctx := context.Background()
+
+	rc := NewRegistryCredentials(false)
+	login, ok, err := rc.lookup(ctx, "nvcr.io")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Empty(t, rc.rejectedLogin("nvcr.io"))
+
+	next, ok := rc.rejected("nvcr.io", login)
+	require.True(t, ok)
+	assert.Equal(t, "env-key", next.pass)
+	assert.Equal(t, "docker-credential-store", rc.rejectedLogin("nvcr.io"))
+	again, ok := rc.rejected("nvcr.io", login)
+	require.True(t, ok, "a check still holding the login moves to the key too")
+	assert.Equal(t, next, again)
+	cred, _, _ := rc.lookup(ctx, "nvcr.io")
+	assert.Equal(t, next, cred)
+	_, ok = rc.rejected("nvcr.io", next)
+	assert.False(t, ok, "nothing is left to try after the key")
+
+	rc = NewRegistryCredentials(true)
+	key, _, _ := rc.lookup(ctx, "nvcr.io")
+	_, ok = rc.rejected("nvcr.io", key)
+	assert.False(t, ok, "where the key goes first, a rejected key is graded as it is")
+
+	rc = NewRegistryCredentials(false)
+	quay, _, _ := rc.lookup(ctx, "quay.io")
+	_, ok = rc.rejected("quay.io", quay)
+	assert.False(t, ok, "the key is never sent to another registry")
+}
+
 // docker reads its config from $DOCKER_CONFIG when that is set, as CI
 // runners do.
 func TestCredsFromDockerConfig_HonorsDOCKER_CONFIG(t *testing.T) {

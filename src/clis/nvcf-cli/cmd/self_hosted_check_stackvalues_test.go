@@ -306,7 +306,7 @@ func TestCheck_MalformedValidatorRegistryFailsTheCommand(t *testing.T) {
 
 // The NGC key is checked ahead of the docker login only before a local
 // install, where up mints its pull secrets from it; every other scope checks
-// an installed stack, where a rejected key is only this machine's.
+// an installed stack, where a rejected credential is only this machine's.
 func TestCheckScope_NGCKeyOrderAndPostInstall(t *testing.T) {
 	t.Setenv("HELMFILE_ENV", "")
 	for _, tc := range []struct {

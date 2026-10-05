@@ -1120,11 +1120,11 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 
 // registryCredentialCheck returns a binaryCheckSpec that probes one registry.
 // Only a credential the registry rejected can fail: at error severity for a
-// critical registry, at warning for any other. A rejected NGC API key on a
-// post-install run is a warning too: it is this machine's key, and the
-// cluster pulls with its own pull secret. Everything else the probe can
-// report, from an unreachable registry to a missing local credential, is a
-// warning or an informational pass.
+// critical registry, at warning for any other. A rejection on a post-install
+// run is a warning too: it is this machine's credential, and the cluster
+// pulls with its own pull secret. Everything else the probe can report, from
+// an unreachable registry to a missing local credential, is a warning or an
+// informational pass.
 func registryCredentialCheck(
 	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
 ) binaryCheckSpec {
@@ -1158,7 +1158,7 @@ func registryCredentialCheck(
 				r.Passed = true
 				r.Severity = SeverityInfo
 				r.Message = label + ": skipped (" + outcome.detail + ")"
-			case probeAnonymous, probeNotVerified:
+			case probeAnonymous, probeNotVerified, probeLoginRejected:
 				r.Passed = true
 				r.Severity = SeverityInfo
 			case probeNoCredential, probeUnverifiable:
@@ -1166,7 +1166,7 @@ func registryCredentialCheck(
 				r.Err = err
 			case probeRejected:
 				r.Err = err
-				if postInstall && outcome.ngcKey {
+				if postInstall {
 					r.Severity = SeverityWarning
 					r.Message += "; the cluster pulls with its own pull secret, so this affects only this machine"
 				}
