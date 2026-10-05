@@ -4192,6 +4192,11 @@ func deploymentRolloutStalled(d *appsv1.Deployment) bool {
 // order; the highest is its new ReplicaSet.
 const deploymentRevisionAnnotation = "deployment.kubernetes.io/revision"
 
+// daemonSetPodGenerationLabel is the template generation a DaemonSet pod was
+// created from. It equals the DaemonSet's appsv1.DeprecatedTemplateGeneration
+// annotation once the pod is updated.
+const daemonSetPodGenerationLabel = "pod-template-generation"
+
 // rolloutDating dates Tier-1 rollouts for the stall bound. It reads the
 // cluster only when a rollout tolerance depends on it.
 type rolloutDating struct {
@@ -4284,6 +4289,55 @@ func replicaSetRevision(rs *appsv1.ReplicaSet) int64 {
 		return 0
 	}
 	return n
+}
+
+// daemonSetMoved is when ds's rollout last moved. It began when its update
+// ControllerRevision was created, which an updated pod names; since then an
+// updated pod created, or any of its pods deleted, is progress. Only when that
+// revision cannot be read does the last write to ds's spec date it.
+func (r *rolloutDating) daemonSetMoved(ds *appsv1.DaemonSet) time.Time {
+	written, _ := specWrittenAt(ds)
+	pods, err := r.podsSelectedBy(ds.Namespace, ds.Spec.Selector)
+	if err != nil {
+		return written
+	}
+	generation := ds.Annotations[appsv1.DeprecatedTemplateGeneration]
+	owned := func(p *corev1.Pod) bool { return metav1.IsControlledBy(p, ds) }
+	updated := func(p *corev1.Pod) bool {
+		return owned(p) && generation != "" && p.Labels[daemonSetPodGenerationLabel] == generation
+	}
+	started := written
+	for i := range pods {
+		hash := pods[i].Labels[appsv1.DefaultDaemonSetUniqueLabelKey]
+		if !updated(&pods[i]) || hash == "" {
+			continue
+		}
+		if created, err := r.revisionCreated(ds.Namespace, controllerRevisionName(ds.Name, hash)); err == nil {
+			started = created
+		}
+		break
+	}
+	return rolloutMoved(started, pods, owned, updated)
+}
+
+// controllerRevisionName is the name the DaemonSet and StatefulSet
+// controllers give the revision of a workload with the given template hash.
+func controllerRevisionName(prefix, hash string) string {
+	if len(prefix) > 223 {
+		prefix = prefix[:223]
+	}
+	return prefix + "-" + hash
+}
+
+// revisionCreated is when ControllerRevision ns/name was created.
+func (r *rolloutDating) revisionCreated(ns, name string) (time.Time, error) {
+	rev, err := observe(r.ctx, func(c context.Context) (*appsv1.ControllerRevision, error) {
+		return r.client.AppsV1().ControllerRevisions(ns).Get(c, name, metav1.GetOptions{})
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return rev.CreationTimestamp.Time, nil
 }
 
 // podsSelectedBy lists the pods in ns that sel matches.
@@ -4521,7 +4575,9 @@ func deploymentReadiness(d *appsv1.Deployment, dates *rolloutDating) workloadRea
 // daemonSetReadiness judges a DaemonSet on every node it should run on. A
 // RollingUpdate replaces up to maxUnavailable pods at a time (rounded up,
 // default 1), so that many may be down while updated pods are still missing.
-func daemonSetReadiness(ds *appsv1.DaemonSet) workloadReadiness {
+// No controller deadline covers a DaemonSet rollout, so it is tolerated only
+// until stalledRolloutAfter passes without it moving.
+func daemonSetReadiness(ds *appsv1.DaemonSet, dates *rolloutDating) workloadReadiness {
 	want := ds.Status.DesiredNumberScheduled
 	r := workloadReadiness{
 		ref: ds.Namespace + "/" + ds.Name + " (DaemonSet)", daemonSet: true,
@@ -4530,7 +4586,8 @@ func daemonSetReadiness(ds *appsv1.DaemonSet) workloadReadiness {
 	if ds.Spec.UpdateStrategy.Type == appsv1.OnDeleteDaemonSetStrategyType {
 		return r
 	}
-	r.rolling = ds.Status.ObservedGeneration < ds.Generation || ds.Status.UpdatedNumberScheduled < want
+	r.rolling = (ds.Status.ObservedGeneration < ds.Generation || ds.Status.UpdatedNumberScheduled < want) &&
+		time.Since(dates.daemonSetMoved(ds)) <= stalledRolloutAfter
 	maxUnavailable, maxSurge := intstr.FromInt32(1), intstr.FromInt32(0)
 	if ru := ds.Spec.UpdateStrategy.RollingUpdate; ru != nil {
 		if ru.MaxUnavailable != nil {
@@ -4707,7 +4764,7 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface, dates *r
 		for i := range daemonSets.Items {
 			ds := &daemonSets.Items[i]
 			add("daemonset", ds.Namespace, ds.Name, ds.Labels,
-				func() workloadReadiness { return daemonSetReadiness(ds) })
+				func() workloadReadiness { return daemonSetReadiness(ds, dates) })
 		}
 	}
 	return out, nil

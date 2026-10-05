@@ -741,6 +741,80 @@ func TestCheckTier1Deployments_NoDeadlineRolloutIsDatedByItsReplicaSets(t *testi
 	}
 }
 
+// natsProxyRollout is NVCF Gateway gw/nats-gw's DaemonSet proxy on desired
+// nodes, rolling to template generation 2, whose ControllerRevision was
+// created at started, as was the write to its spec. The first updated of its
+// pods are on generation 2, the rest on 1, and the first ready of them are
+// Ready, all created at created.
+func natsProxyRollout(desired, updated, ready int32, started, created time.Time) []runtime.Object {
+	sel := map[string]string{"app": "envoy-nats"}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-nats", Namespace: envoyGatewayNamespace, UID: "uid-envoy-nats",
+			Generation: 2, Annotations: map[string]string{appsv1.DeprecatedTemplateGeneration: "2"},
+			Labels:        map[string]string{owningGatewayNameLabel: "nats-gw", owningGatewayNamespaceLabel: "gw"},
+			ManagedFields: []metav1.ManagedFieldsEntry{specWrite(installManager, started)}},
+		Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: sel}},
+		Status: appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: desired,
+			UpdatedNumberScheduled: updated, NumberReady: ready},
+	}
+	objs := []runtime.Object{ds, &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{
+		Name: controllerRevisionName(ds.Name, "h2"), Namespace: ds.Namespace,
+		CreationTimestamp: metav1.NewTime(started)}, Revision: 2}}
+	for i := range desired {
+		generation, hash := "1", "h1"
+		if i < updated {
+			generation, hash = "2", "h2"
+		}
+		labels := map[string]string{"app": "envoy-nats", daemonSetPodGenerationLabel: generation,
+			appsv1.DefaultDaemonSetUniqueLabelKey: hash}
+		objs = append(objs, rolloutPod(fmt.Sprintf("envoy-nats-%d", i), ds.Namespace, labels,
+			controlledBy("DaemonSet", ds), created, i < ready))
+	}
+	return objs
+}
+
+// A DaemonSet proxy rollout is tolerated only until the bound passes without
+// it moving, as a Deployment's is: its update ControllerRevision dates the
+// start, and an updated pod created or any pod deleted since is progress. A
+// proxy held at 2 of 3 updated for a week, or a one-node proxy at 0 of 1, is
+// down, not rolling.
+func TestCheckTier1Deployments_DaemonSetProxyRolloutIsBounded(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "gw/nats-gw")
+	week, recent := time.Now().Add(-7*24*time.Hour), time.Now().Add(-time.Minute)
+	steppedRecently := natsProxyRollout(3, 2, 2, week, week)
+	podNamed(steppedRecently, "envoy-nats-1").CreationTimestamp = metav1.NewTime(recent)
+	oldRecreated := natsProxyRollout(3, 2, 2, week, week)
+	podNamed(oldRecreated, "envoy-nats-2").CreationTimestamp = metav1.NewTime(recent)
+	for name, tc := range map[string]struct {
+		objs []runtime.Object
+		ok   bool
+	}{
+		"2 of 3 updated, started a minute ago":     {objs: natsProxyRollout(3, 2, 2, recent, recent), ok: true},
+		"2 of 3 updated, an updated pod just made": {objs: steppedRecently, ok: true},
+		"2 of 3 updated for a week":                {objs: natsProxyRollout(3, 2, 2, week, week)},
+		"an old pod recreated":                     {objs: oldRecreated},
+		"one node at 0 of 1, spec written recently": {
+			objs: natsProxyRollout(1, 0, 0, recent, week), ok: true},
+		"one node at 0 of 1 for a week": {objs: natsProxyRollout(1, 0, 0, week, week)},
+		"revision unreadable, spec written recently": {
+			objs: withoutRevision(natsProxyRollout(3, 2, 2, recent, week), "envoy-nats-h2"), ok: true},
+	} {
+		gateways := envoyGatewayClient(t, gatewayObject("gw", "nats-gw", "eg"))
+		state := runTier1(t, false, gateways, tc.objs...)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
+	}
+
+	// The revision, when it can be read, dates the start: a later write to
+	// the spec does not restart the bound.
+	objs := natsProxyRollout(3, 2, 2, week, week)
+	objs[0].(*appsv1.DaemonSet).ManagedFields = []metav1.ManagedFieldsEntry{specWrite(installManager, recent)}
+	state := runTier1(t, false, envoyGatewayClient(t, gatewayObject("gw", "nats-gw", "eg")), objs...)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK)
+}
+
 // -- Tier-1 proxies and Gateway coverage --
 
 // envoyProxyAt is an Envoy proxy Deployment in ns with the given labels.

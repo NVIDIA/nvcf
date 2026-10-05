@@ -348,13 +348,17 @@ func assertInventoryMatches(t *testing.T, role Role, actions []ktesting.Action) 
 }
 
 // rolloutDatingActions dates a Deployment rollout no progress deadline
-// bounds, which reads the ReplicaSets and pods behind it.
+// bounds and a DaemonSet proxy rollout, which read the ReplicaSets, pods and
+// ControllerRevisions behind them.
 func rolloutDatingActions(t *testing.T) []ktesting.Action {
 	t.Helper()
+	t.Setenv(nvcfGatewayNamesEnv, "gw/nats-gw")
 	recent := time.Now().Add(-time.Minute)
-	client := fake.NewSimpleClientset(noDeadlineRollout(recent, recent)...)
+	objs := append(noDeadlineRollout(recent, recent), natsProxyRollout(3, 2, 2, recent, recent)...)
+	client := fake.NewSimpleClientset(objs...)
 	state := &ValidationState{Log: testLog()}
-	checkTier1Deployments(context.Background(), client, routeClient(), state)
+	checkTier1Deployments(context.Background(), client, envoyGatewayClient(t, gatewayObject("gw", "nats-gw", "eg")),
+		state)
 	require.NotNil(t, state.Tier1DeploymentsOK)
 	require.True(t, *state.Tier1DeploymentsOK)
 	return client.Actions()
