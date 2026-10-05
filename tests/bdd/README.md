@@ -24,7 +24,8 @@ steps/      Godog step handlers. Every handler is a thin wrapper around a
             dsl helper or CommandRunner.Run; no domain validation.
 godog_test.go
             Live entry points (TestSingleClusterUp, TestSingleClusterUpOneClick,
-            TestMultiClusterUp, TestSingleClusterHelmfile, TestMultiClusterHelmfile,
+            TestMultiClusterUp, TestSingleClusterHelmfile, TestSingleClusterHA,
+            TestMultiClusterHelmfile,
             TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile) and
             wiring tests with a fake CommandRunner.
 .golangci.yml
@@ -79,6 +80,12 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
+
+# Single-cluster HA Helmfile feature: installs the control plane with
+# highAvailability.mode preferred and checks that nvcf-api runs 2 Ready
+# replicas on distinct nodes with a PDB and a surge-first rollout strategy.
+NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  go test -run '^TestSingleClusterHA$' -timeout 90m -v
 
 # Focused single-cluster Helmfile feature for the documented public Docker Hub
 # NATS reloader and API bootstrap Alpine Kubernetes utility image. The feature

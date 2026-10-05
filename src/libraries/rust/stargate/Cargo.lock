@@ -3309,6 +3309,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sse-core"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28f4c044039e70ba5724b7e9dacf9fb610394773d15df2bb629170ca30391c88"
+dependencies = [
+ "bytes",
+ "memchr",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3399,6 +3410,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sse-core",
  "stargate",
  "stargate-proto",
  "stargate-protocol",

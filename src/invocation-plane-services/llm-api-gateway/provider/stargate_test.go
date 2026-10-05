@@ -1050,6 +1050,129 @@ func TestStargateProviderNewOutboundRequestUsesOnlyContextRoutingMethod(t *testi
 	}
 }
 
+// Backends such as Dynamo reject unknown members even when they are null, so
+// the forwarded body must not gain fields the client did not send.
+func TestStargateProviderNewOutboundRequestOmitsFieldsTheClientDidNotSend(t *testing.T) {
+	t.Parallel()
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		body       string
+		stream     bool
+		wantFields []string
+		wantValues map[string]string
+	}{
+		{
+			name:       "unary chat",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "max_tokens", "service_tier", "stream"},
+		},
+		{
+			name:       "unary chat forced to stream upstream",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`,
+			stream:     true,
+			wantFields: []string{"messages", "model", "max_tokens", "service_tier", "stream", "stream_options"},
+		},
+		{
+			name:       "streaming chat",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`,
+			stream:     true,
+			wantFields: []string{"messages", "model", "service_tier", "stream"},
+		},
+		{
+			name:       "explicit reasoning fields",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"include_reasoning":false,"reasoning_format":"parsed","prompt_cache_key":"k"}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "include_reasoning", "reasoning_format", "prompt_cache_key", "service_tier", "stream"},
+		},
+		{
+			name:       "explicit null fields",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":null,"stop":null}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "service_tier", "stream"},
+		},
+		{
+			name:       "explicit empty stop list",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":[]}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantValues: map[string]string{"stop": `[]`},
+		},
+		{
+			name:       "stop string",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":"END"}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantValues: map[string]string{"stop": `["END"]`},
+		},
+		{
+			name:       "explicit zero and false values",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0,"seed":0,"parallel_tool_calls":false,"logit_bias":{}}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "temperature", "seed", "parallel_tool_calls", "logit_bias", "service_tier", "stream"},
+			wantValues: map[string]string{"temperature": `0`, "seed": `0`, "parallel_tool_calls": `false`, "logit_bias": `{}`},
+		},
+		{
+			name:       "json schema without optional members",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s"}}}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s"}}`},
+		},
+		{
+			name:       "json schema with explicit strict false and empty schema",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}`},
+		},
+		{
+			name:       "tool without optional members",
+			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}]}`,
+			stream:     false,
+			wantFields: []string{"messages", "model", "tools", "service_tier", "stream"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var chatRequest models.ChatCompletionRequest
+			require.NoError(t, json.Unmarshal([]byte(tt.body), &chatRequest))
+
+			outbound, err := provider.newOutboundRequest(
+				&requestctx.RequestContext{},
+				&NormalizedRequest{ChatRequest: &chatRequest},
+				tt.stream,
+			)
+			require.NoError(t, err)
+			defer outbound.Body.Close()
+
+			var payload map[string]json.RawMessage
+			require.NoError(t, json.NewDecoder(outbound.Body).Decode(&payload))
+			gotFields := make([]string, 0, len(payload))
+			for field := range payload {
+				gotFields = append(gotFields, field)
+			}
+			require.ElementsMatch(t, tt.wantFields, gotFields)
+			for field, want := range tt.wantValues {
+				require.JSONEq(t, want, string(payload[field]), field)
+			}
+
+			if tools, ok := payload["tools"]; ok {
+				require.JSONEq(t, `[{"type":"function","function":{"name":"f"}}]`, string(tools))
+			}
+			if options, ok := payload["stream_options"]; ok {
+				require.JSONEq(t, `{"include_usage":true}`, string(options))
+			}
+		})
+	}
+}
+
 func TestStargateProviderNewOutboundRequestForwardsPriority(t *testing.T) {
 	t.Parallel()
 

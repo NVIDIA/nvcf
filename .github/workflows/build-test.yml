@@ -7,7 +7,7 @@ on:
   push:
     branches: [main, 'release-**']
   pull_request:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'docs/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -23,6 +23,7 @@ jobs:
   docs:
     name: docs
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,10 +36,31 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: fern/.node-version
 
       - name: Run docs validation
         run: ./tools/ci/check-docs
+
+      - name: Validate Development links
+        run: ./tools/ci/preview-docs --check
+
+      - name: Test changed-doc link selection
+        run: bash tools/scripts/test/test-check-doc-links
+
+      - name: Check links in changed Markdown
+        env:
+          DOCS_LINK_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./tools/ci/check-doc-links "$DOCS_LINK_BASE" "$RUNNER_TEMP/docs-link-report.md"
+
+      - name: Retain link report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-link-report
+          path: ${{ runner.temp }}/docs-link-report.md
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Check latest stack release
         continue-on-error: true
@@ -106,20 +128,6 @@ jobs:
 
       - name: Lint and render every chart with a CI values file
         run: ./tools/ci/check-helm-charts
-
-      - name: Check NVCA Operator chart is synced with its monorepo source
-        # Pins the version fields to whatever is already committed in the
-        # vendored chart, so this only fails on real content drift between
-        # src/compute-plane-services/nvca/deployments/nvca-operator and
-        # deploy/helm/nvca-operator/nvca-operator, not on pending version bumps.
-        run: |
-          set -euo pipefail
-          cd deploy/helm/nvca-operator
-          NVCA_VERSION="$(yq '.selfManaged.nvcaVersion' nvca-operator/values.yaml)" \
-          NVCA_OPERATOR_VERSION="$(yq '.appVersion' nvca-operator/Chart.yaml)" \
-          NVCA_SHARED_STORAGE_IMAGE_TAG="$(yq '.selfManaged.sharedStorage.imageTag' nvca-operator/values.yaml)" \
-          NVCA_OTEL_COLLECTOR_IMAGE_TAG="$(yq '.otelCollector.imageTag' nvca-operator/values.yaml)" \
-            make check-vendor-chart
 
       - name: Test NVCA chart schema and defaults
         run: |

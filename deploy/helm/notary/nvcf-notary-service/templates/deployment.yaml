@@ -22,6 +22,10 @@ metadata:
     {{- include "nvcf-notary-service.labels" . | nindent 4 }}
 spec:
   replicas: {{ default 1 .Values.notary.replicaCount }}
+  {{- with .Values.notary.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "nvcf-notary-service.selectorLabels" . | nindent 6 }}
@@ -101,6 +105,10 @@ spec:
       {{- end }}
       {{- with .Values.notary.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.notary.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.notary.tolerations }}
