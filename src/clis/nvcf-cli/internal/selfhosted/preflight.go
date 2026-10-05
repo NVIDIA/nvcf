@@ -633,6 +633,9 @@ type NodeInotifyLimits struct {
 	MaxUserInstances int64
 	MaxUserWatches   int64
 	Err              error
+	// OutOfBudget marks an Err caused by the probe's budget running out
+	// before this node's probe finished. A later run may reach the node.
+	OutOfBudget bool
 }
 
 // NodeInotifyProber returns one NodeInotifyLimits per cluster node, or a
@@ -669,9 +672,11 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 				return r
 			}
 			var failing, probeErrs []string
+			outOfBudget := false
 			for _, l := range limits {
 				if l.Err != nil {
 					probeErrs = append(probeErrs, fmt.Sprintf("%s: %v", l.NodeName, l.Err))
+					outOfBudget = outOfBudget || l.OutOfBudget
 					continue
 				}
 				if l.MaxUserInstances < minInotifyMaxUserInstances || l.MaxUserWatches < minInotifyMaxUserWatches {
@@ -705,6 +710,10 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 					"could not probe inotify limits on %d node(s): %s",
 					len(probeErrs), strings.Join(probeErrs, "; "),
 				)
+				// A node the budget did not reach may be below the limits,
+				// so --wait polls again: a later run, on warm image caches,
+				// gets further.
+				r.Transient = outOfBudget
 				return r
 			}
 			r.Passed = true

@@ -46,6 +46,7 @@ const pinnedValidatorImage = "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"
 // checkStubs replaces what a recorded check run would reach outside the test.
 type checkStubs struct {
 	stale     func(ctx context.Context) ([]selfhosted.StaleNamespace, error)
+	inotify   func(ctx context.Context) ([]selfhosted.NodeInotifyLimits, error)
 	validator func(ctx context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult
 	tools     func() []selfhosted.BinarySpec
 	budget    time.Duration // 0 keeps the requested budget
@@ -144,10 +145,13 @@ func runCheck(t *testing.T, stubs checkStubs, args ...string) checkRun {
 		}
 	}
 	newInotifyProberForSelfHosted = func(string) selfhosted.NodeInotifyProber {
-		return func(_ context.Context, kubeContext string) ([]selfhosted.NodeInotifyLimits, error) {
+		return func(ctx context.Context, kubeContext string) ([]selfhosted.NodeInotifyLimits, error) {
 			mu.Lock()
 			run.inotify = append(run.inotify, kubeContext)
 			mu.Unlock()
+			if stubs.inotify != nil {
+				return stubs.inotify(ctx)
+			}
 			return []selfhosted.NodeInotifyLimits{{NodeName: "n1", MaxUserInstances: 8192, MaxUserWatches: 524288}}, nil
 		}
 	}
@@ -492,6 +496,40 @@ func TestCheck_WaitDeadlineBeatsTheTicker(t *testing.T) {
 		assert.Equal(t, 5, exitErr.Code)
 		require.Equal(t, 1, calls, "run %d polled again after the wait ended", i)
 	}
+}
+
+// --wait polls again while the inotify probe's budget leaves nodes unprobed:
+// one of them may be below the limits. A single run still exits 0 on the
+// warning.
+func TestCheck_WaitPollsOnNodesTheInotifyProbeDidNotReach(t *testing.T) {
+	prev := checkPollInterval
+	checkPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { checkPollInterval = prev })
+	probed := selfhosted.NodeInotifyLimits{NodeName: "n1", MaxUserInstances: 8192, MaxUserWatches: 524288}
+	calls := 0
+	inotify := func(context.Context) ([]selfhosted.NodeInotifyLimits, error) {
+		calls++
+		if calls == 1 {
+			return []selfhosted.NodeInotifyLimits{probed, {NodeName: "n2", OutOfBudget: true,
+				Err: errors.New("not probed: the inotify probe's 1m40s budget ran out")}}, nil
+		}
+		return []selfhosted.NodeInotifyLimits{probed,
+			{NodeName: "n2", MaxUserInstances: 8192, MaxUserWatches: 524288}}, nil
+	}
+	args := []string{"--compute-plane", "--skip-cluster-validation"}
+
+	run := runCheck(t, checkStubs{inotify: inotify}, args...)
+	assert.Equal(t, 0, run.code(), run.stderr)
+	row := run.row(t, "compute-plane-cluster", "node-inotify-limits")
+	require.NotNil(t, row)
+	assert.Equal(t, "warning", row["severity"])
+	assert.Equal(t, true, row["transient"])
+
+	calls = 0
+	run = runCheck(t, checkStubs{inotify: inotify}, append(args, "--wait", "30s")...)
+	assert.Equal(t, 0, run.code(), run.stderr)
+	assert.Equal(t, 2, calls, "the second poll reached every node")
+	assert.Equal(t, "ok", finalEvent(t, run.stderr)["verdict"])
 }
 
 // Every flag set in both topologies: which roles run and where, what each

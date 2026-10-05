@@ -77,6 +77,7 @@ func TestProbeAllNodes_PodCreateErrorSurfacesPerNode(t *testing.T) {
 		require.Error(t, r.Err, "per-node create failure must surface as NodeInotifyLimits.Err")
 		assert.Contains(t, r.Err.Error(), "create probe pod")
 		assert.Contains(t, r.Err.Error(), r.NodeName)
+		assert.False(t, r.OutOfBudget, "the node's own failure, not the budget's")
 	}
 }
 
@@ -112,6 +113,7 @@ func TestProbeAllNodes_StallingPodsAreBoundedByTheProbeBudget(t *testing.T) {
 	notProbed := 0
 	for _, r := range results {
 		require.Error(t, r.Err, r.NodeName)
+		assert.True(t, r.OutOfBudget, "%s: stopped in flight or never reached, a later run may probe it", r.NodeName)
 		if strings.Contains(r.Err.Error(), "not probed: the inotify probe's 500ms budget ran out") {
 			notProbed++
 		}
@@ -156,9 +158,11 @@ func TestBuildInotifyProbePodShape(t *testing.T) {
 	require.NotNil(t, pod.Spec.Volumes[0].HostPath)
 	assert.Equal(t, "/", pod.Spec.Volumes[0].HostPath.Path)
 
-	assert.False(t, c.Resources.Requests.Cpu().IsZero(), "a LimitRange or quota needs requests")
-	assert.False(t, c.Resources.Requests.Memory().IsZero(), "a LimitRange or quota needs requests")
-	assert.False(t, c.Resources.Limits.Memory().IsZero())
+	// Pinned with NodeName, the pod is admitted against the node's free
+	// capacity: a request has it rejected on a fully requested node. A limit
+	// alone would become the request.
+	assert.Empty(t, c.Resources.Requests)
+	assert.Empty(t, c.Resources.Limits)
 	require.NotNil(t, pod.Spec.SecurityContext)
 	require.NotNil(t, pod.Spec.SecurityContext.RunAsUser)
 	assert.NotZero(t, *pod.Spec.SecurityContext.RunAsUser, "the sysctls are world-readable, so root is not needed")

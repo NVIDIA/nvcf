@@ -30,7 +30,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -207,8 +206,11 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface, image strin
 // the parsed limits or a per-node error.
 func probeOneNode(
 	ctx context.Context, client kubernetes.Interface, run *probeRun, nodeName, image string,
-) NodeInotifyLimits {
-	res := NodeInotifyLimits{NodeName: nodeName}
+) (res NodeInotifyLimits) {
+	res = NodeInotifyLimits{NodeName: nodeName}
+	// ctx is the whole probe's, so a failure once it ended is the budget's,
+	// not the node's.
+	defer func() { res.OutOfBudget = res.Err != nil && ctx.Err() != nil }()
 	if ctx.Err() != nil {
 		res.Err = fmt.Errorf("not probed: the inotify probe's %s budget ran out", inotifyProbeBudget)
 		return res
@@ -289,18 +291,11 @@ func buildInotifyProbePod(nodeName, runID, image string) *corev1.Pod {
 				Name:    inotifyProbeContainer,
 				Image:   image,
 				Command: []string{"sh", "-c", inotifyProbeShellCmd},
-				// Requests let the pod in under a namespace LimitRange or
-				// quota that requires them.
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("10m"),
-						corev1.ResourceMemory: resource.MustParse("16Mi"),
-					},
-					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("32Mi"),
-					},
-				},
+				// No requests: the pod is pinned with NodeName, so the
+				// kubelet admits it against the node's free capacity, and
+				// any request has it rejected OutOfcpu or OutOfmemory on a
+				// fully requested node, the busiest ones. No limits either:
+				// a limit without a request sets the request to it.
 				SecurityContext: &corev1.SecurityContext{
 					RunAsNonRoot:             &runAsNonRoot,
 					ReadOnlyRootFilesystem:   &readOnlyRoot,

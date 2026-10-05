@@ -625,6 +625,42 @@ func TestNodeInotifyCheck_PerNodeProbeError(t *testing.T) {
 	assert.Equal(t, SeverityWarning, got.Severity, "probe failures degrade to warning, not error")
 	assert.Contains(t, got.Message, "node-b")
 	assert.Contains(t, got.Message, "forbidden")
+	assert.False(t, got.Transient, "a denied create does not clear by itself")
+}
+
+// A node the probe's budget did not reach may be below the limits, so the
+// warning is transient and --wait polls again. A limit violation found beside
+// it is an error, never transient.
+func TestNodeInotifyCheck_NodesTheBudgetDidNotReachAreTransient(t *testing.T) {
+	notReached := NodeInotifyLimits{NodeName: "node-b", OutOfBudget: true,
+		Err: errors.New("not probed: the inotify probe's 1m40s budget ran out")}
+	ok := NodeInotifyLimits{NodeName: "node-a", MaxUserInstances: 8192, MaxUserWatches: 524288}
+	low := NodeInotifyLimits{NodeName: "node-a", MaxUserInstances: 128, MaxUserWatches: 524288}
+	for name, tc := range map[string]struct {
+		limits        []NodeInotifyLimits
+		wantSeverity  Severity
+		wantTransient bool
+	}{
+		"not reached": {
+			limits:        []NodeInotifyLimits{ok, notReached},
+			wantSeverity:  SeverityWarning,
+			wantTransient: true,
+		},
+		"not reached beside a violation": {
+			limits:       []NodeInotifyLimits{low, notReached},
+			wantSeverity: SeverityError,
+		},
+	} {
+		res := RunPreflightForRole(context.Background(), PreflightConfig{}, RoleComputePlane, RoleConfig{
+			InotifyProber: func(context.Context, string) ([]NodeInotifyLimits, error) { return tc.limits, nil },
+		}, &captureSink{})
+		got := findResult(res, "node-inotify-limits")
+		require.NotNil(t, got, name)
+		assert.False(t, got.Passed, name)
+		assert.Equal(t, tc.wantSeverity, got.Severity, name)
+		assert.Equal(t, tc.wantTransient, got.Transient, name)
+		assert.Contains(t, got.Message, "node-b: not probed", name)
+	}
 }
 
 func TestNodeInotifyCheck_ClusterWideProbeError(t *testing.T) {
