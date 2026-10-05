@@ -17,9 +17,12 @@
 
 use crate::health::{ComponentHealth, Health, HealthStatus as HealthState};
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::Json;
-use axum::{routing::get, Router};
+use axum::http::{header, Method, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
+use axum::{
+    routing::{any, get},
+    Router,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,6 +61,15 @@ impl From<ComponentHealth> for ComponentHealthResponse {
 /// in crates/server/BUILD.bazel on --stamp builds.
 pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
     Json(nvcf_info::info_response!("nvcf-function-autoscaler"))
+}
+
+/// Serves build metadata for GET and rejects other methods.
+async fn info(method: Method) -> Response {
+    if method == Method::GET {
+        get_info().await.into_response()
+    } else {
+        (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "GET")]).into_response()
+    }
 }
 
 /// Liveness: process is alive. No dependency checks.
@@ -111,7 +123,7 @@ pub fn health_router(health: Arc<Health>) -> Router {
         .route("/admin/health/liveness", get(get_liveness))
         .route("/admin/health/readiness", get(get_readiness))
         .route("/health", get(get_health))
-        .route("/info", get(get_info))
+        .route("/info", any(info))
         .with_state(health)
 }
 
@@ -172,7 +184,7 @@ mod tests {
     // Requests /info through the router health_router builds, not the
     // handler in isolation.
     #[tokio::test]
-    async fn info_route_returns_200_on_get_and_405_on_post() {
+    async fn info_route_accepts_only_get() {
         let health = Arc::new(Health::new());
         let router = health_router(health);
 
@@ -187,13 +199,36 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["service"], "nvcf-function-autoscaler");
 
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri("/info")
-            .body(Body::empty())
-            .unwrap();
-        let response = router.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert!(!body["version"].as_str().unwrap().is_empty());
+        assert!(!body["commit"].as_str().unwrap().is_empty());
+        for method in [
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+            Method::TRACE,
+            Method::CONNECT,
+            Method::from_bytes(b"CUSTOM").unwrap(),
+        ] {
+            let request = Request::builder()
+                .method(method.clone())
+                .uri("/info?build=true")
+                .body(Body::empty())
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{method}"
+            );
+            assert_eq!(response.headers()[header::ALLOW], "GET", "{method}");
+            assert!(to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .is_empty());
+        }
     }
 
     #[tokio::test]

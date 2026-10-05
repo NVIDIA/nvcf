@@ -40,7 +40,7 @@ metadata:
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
   annotations:
-    kubernetes.io/description: Reject HTTPRoutes that reuse NVCF-managed hostnames on the shared Gateway listener.
+    kubernetes.io/description: Reject HTTPRoutes whose match ties an NVCF-managed root match on the shared Gateway listener.
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -68,12 +68,32 @@ spec:
   variables:
     - name: reservedHostnames
       expression: {{ printf "{%s}" (join ", " $entries) | quote }}
+    - name: routeRef
+      expression: 'request.namespace + "/" + object.metadata.name'
+    # Every chart route is a bare PathPrefix / with no method, header or query
+    # match, so only an equally undiscriminated match ties it under Gateway API
+    # rule precedence and falls through to the creationTimestamp tiebreak.
+    # RegularExpression counts as tying because the spec leaves its precedence
+    # implementation-specific.
+    - name: tiesRootMatch
+      expression: >-
+        !has(object.spec.rules) ? true :
+        object.spec.rules.exists(rule,
+          (!has(rule.matches) || rule.matches.size() == 0) ? true :
+          rule.matches.exists(match,
+            (!has(match.headers) || match.headers.size() == 0) &&
+            (!has(match.queryParams) || match.queryParams.size() == 0) &&
+            !has(match.method) &&
+            (!has(match.path) ? true :
+              (has(match.path.type) && match.path.type == "RegularExpression") ||
+              ((!has(match.path.type) || match.path.type == "PathPrefix") &&
+               (!has(match.path.value) || match.path.value.matches("^/+$"))))))
     - name: conflictingHostnames
       expression: >-
-        !has(object.spec.hostnames) ? [] :
+        (!variables.tiesRootMatch || !has(object.spec.hostnames)) ? [] :
         object.spec.hostnames.filter(hostname,
           hostname in variables.reservedHostnames &&
-          request.namespace + "/" + object.metadata.name != variables.reservedHostnames[hostname])
+          variables.routeRef != variables.reservedHostnames[hostname])
   validations:
     - expression: variables.conflictingHostnames.size() == 0
       reason: Invalid
@@ -81,7 +101,10 @@ spec:
         "hostname \"" + variables.conflictingHostnames[0] +
         "\" is reserved by NVCF HTTPRoute \"" +
         variables.reservedHostnames[variables.conflictingHostnames[0]] +
-        "\" on Gateway \"{{ $routeNamespace }}/{{ .Values.nvcfGatewayRoutes.gateways.shared.name }}\" listener \"{{ .Values.nvcfGatewayRoutes.gateways.shared.listenerName }}\""
+        "\" on Gateway \"{{ $routeNamespace }}/{{ .Values.nvcfGatewayRoutes.gateways.shared.name }}\" listener \"{{ .Values.nvcfGatewayRoutes.gateways.shared.listenerName }}\"; " +
+        "that route matches PathPrefix \"/\" with no method, header or query match, so this route ties it " +
+        "and Gateway API would resolve the tie by creation timestamp. " +
+        "Use a path match more specific than \"/\", or a different hostname."
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

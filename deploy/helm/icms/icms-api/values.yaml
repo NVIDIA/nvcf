@@ -72,7 +72,7 @@ sis:
     pullPolicy: IfNotPresent
     # Pin the runtime image tag because the chart release pipeline rewrites
     # Chart.appVersion to the chart version.
-    tag: "0.7.2"
+    tag: "0.8.3"
     # Optional immutable manifest digest. When set, this takes precedence over
     # `tag` and `Chart.AppVersion`.
     digest: ""
@@ -186,6 +186,16 @@ sis:
   tolerations: []
 
   affinity: {}
+
+  # HA hooks; set by the HA value layer, off by default.
+  topologySpreadConstraints: []
+  strategy: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
 
   ports:
     - name: http

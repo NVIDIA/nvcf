@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "models",
@@ -13,6 +13,7 @@ go_library(
         "openai_reranking.go",
         "openai_tool_calling.go",
         "openai_tts.go",
+        "unmodeled.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models",
     visibility = ["//visibility:public"],
@@ -27,4 +28,13 @@ alias(
     name = "go_default_library",
     actual = ":models",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "models_test",
+    srcs = [
+        "openai_marshal_test.go",
+        "unmodeled_test.go",
+    ],
+    embed = [":models"],
 )

@@ -11,6 +11,7 @@ test:
 	@tests/llm-servicemonitor-defaults.sh
 	@tests/gateway-routes-local-chart.sh
 	@tests/gateway-routes-enable-wiring.sh
+	@tests/gateway-routes-hostname-policy-wiring.sh
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
@@ -27,12 +28,15 @@ test:
 	@tests/api-env-wiring.sh
 	@tests/apikeys-env-wiring.sh
 	@tests/ess-base-url-wiring.sh
+	@tests/nvct-remote-config-wiring.sh
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
 	@tests/nats-auth-callout-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
+	@tests/ha-value-wiring.sh
+	@tests/ha-chart-render.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"

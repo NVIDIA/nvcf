@@ -32,7 +32,7 @@ pub use attach::post_attach::response_attach;
 pub use get_exec::exec_status;
 pub use get_pexec::pexec_status_route;
 pub use health::get_health;
-pub use info::get_info;
+pub use info::{get_info, info_method_guard};
 pub use post_exec::exec;
 pub use post_exec::{InvokeFunctionResponse, InvokeStatus};
 pub use post_pexec::pexec;

@@ -134,6 +134,54 @@ func TestRateLimiterService(t *testing.T) {
 		testPerUserResetClearsUserCounter(ctx, t, nvcfServer, client, rateLimiter)
 	})
 
+	t.Run("testOwnerNcaIdSeparatesGlobalTierCounters", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdSeparatesGlobalTierCounters(ctx, t, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdSelectsPerNcaIdRate", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdSelectsPerNcaIdRate(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdIsolatedFromAccountOwnKeys", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdIsolatedFromAccountOwnKeys(ctx, t, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdEmptyAndEqualShareCounter", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdEmptyAndEqualShareCounter(ctx, t, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdExclusionsFollowOwner", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdExclusionsFollowOwner(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdScopesPerUserCounter", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdScopesPerUserCounter(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
 	t.Run("testPerUserAndGlobalRate", func(t *testing.T) {
 		rateLimiter.ClearAllCaches()
 		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
@@ -848,6 +896,175 @@ func testPerUserResetClearsUserCounter(ctx context.Context, t *testing.T, nvcfSe
 	assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "caller should be allowed again after per-user counter reset")
 
 	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, ncaId, functionVersionId), ncaId, functionVersionId)
+}
+
+// Two key owners are granted access to the same account (ncaId), each with
+// its own ownerNcaId. Global rate is 4-S: each member gets a full budget.
+func testOwnerNcaIdSeparatesGlobalTierCounters(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	ncaId := "test_nca_id_shared_org"
+	memberA := "test_nca_id_owner_a"
+	memberB := "test_nca_id_owner_b"
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+
+	for i := 0; i < 4; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        memberA,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "member A req %d within budget", i)
+	}
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		OwnerNcaId:        memberA,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "member A blocked once its budget is exhausted")
+
+	for i := 0; i < 4; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        memberB,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "member B req %d must not share member A's counter", i)
+	}
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), memberA, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), memberB, functionVersionId)
+}
+
+// Per-NCA-ID rate 4-S is configured for test_nca_id_1 only, with no global
+// rate. The entry is matched against the key owner's NCA ID, so it applies to a
+// key owned by test_nca_id_1 wherever it is authorized, and is not inherited by
+// other owners authorized against test_nca_id_1.
+func testOwnerNcaIdSelectsPerNcaIdRate(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.perNcaIdRateOnly = true
+	defer func() { nvcfServer.perNcaIdRateOnly = false }()
+
+	configuredNcaId := "test_nca_id_1"
+	otherNcaId := "test_nca_id_shared_org_3"
+	otherOwner := "test_nca_id_owner_b"
+	functionVersionId := "test_function_version_id"
+
+	results := sendRateLimit(ctx, t, client, otherNcaId, configuredNcaId, 5)
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_DISALLOW}, results,
+		"owner's per-NCA-ID rate applies even when authorized against another account")
+
+	for i, result := range sendRateLimit(ctx, t, client, configuredNcaId, otherOwner, 6) {
+		assert.Equal(t, pb.RateLimitResult_ALLOW, result, "request %d: another owner does not inherit the authorized account's rate", i)
+	}
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerNcaIdCacheKey(configuredNcaId, functionVersionId), configuredNcaId, functionVersionId)
+}
+
+// sendRateLimit issues n requests for the test function and returns the results in order.
+func sendRateLimit(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, ncaId, ownerNcaId string, n int) []pb.RateLimitResult {
+	results := make([]pb.RateLimitResult, 0, n)
+	for i := 0; i < n; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        ownerNcaId,
+			FunctionId:        "test_function_id",
+			FunctionVersionId: "test_function_version_id",
+		})
+		assert.NoError(t, err)
+		results = append(results, resp.Result)
+	}
+	return results
+}
+
+// The account's own keys (ownerNcaId == ncaId) and a key owned by another
+// account but authorized against it (global rate 4-S) never share a counter, in
+// either direction.
+func testOwnerNcaIdIsolatedFromAccountOwnKeys(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	ncaId := "test_nca_id_shared_org_2"
+	owner := "test_nca_id_owner_c"
+	functionVersionId := "test_function_version_id"
+	allow4 := []pb.RateLimitResult{pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW}
+
+	assert.Equal(t, allow4, sendRateLimit(ctx, t, client, ncaId, ncaId, 4), "account's own keys within budget")
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_DISALLOW}, sendRateLimit(ctx, t, client, ncaId, ncaId, 1), "account's own keys blocked once exhausted")
+	assert.Equal(t, allow4, sendRateLimit(ctx, t, client, ncaId, owner, 4), "other owner unaffected by the account's own usage")
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_DISALLOW}, sendRateLimit(ctx, t, client, ncaId, owner, 1), "other owner blocked once its own budget is exhausted")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaId, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), owner, functionVersionId)
+}
+
+// During a rolling upgrade some callers omit ownerNcaId and others send it equal
+// to ncaId for the same key. Both must hit one counter (global rate 4-S), not
+// two, or the account would briefly get double its budget.
+func testOwnerNcaIdEmptyAndEqualShareCounter(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	ncaId := "test_nca_id_rolling_upgrade"
+	functionVersionId := "test_function_version_id"
+
+	for i := 0; i < 2; i++ {
+		assert.Equal(t, pb.RateLimitResult_ALLOW, sendRateLimit(ctx, t, client, ncaId, "", 1)[0], "legacy request %d", i)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, sendRateLimit(ctx, t, client, ncaId, ncaId, 1)[0], "owner-aware request %d", i)
+	}
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, sendRateLimit(ctx, t, client, ncaId, "", 1)[0], "shared budget exhausted for legacy request")
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, sendRateLimit(ctx, t, client, ncaId, ncaId, 1)[0], "shared budget exhausted for owner-aware request")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaId, functionVersionId)
+}
+
+// Exclusions are matched against the key owner's NCA ID. Global rate 4-S;
+// test_nca_id_exclude2 is excluded.
+func testOwnerNcaIdExclusionsFollowOwner(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.perNcaIdWithExclusions = true
+	defer func() { nvcfServer.perNcaIdWithExclusions = false }()
+
+	excludedNcaId := "test_nca_id_exclude2"
+	notExcludedNcaId := "test_nca_id_not_excluded"
+	owner := "test_nca_id_owner_d"
+	functionVersionId := "test_function_version_id"
+
+	for i, result := range sendRateLimit(ctx, t, client, notExcludedNcaId, excludedNcaId, 6) {
+		assert.Equal(t, pb.RateLimitResult_ALLOW, result, "request %d: an excluded owner stays exempt when authorized against another account", i)
+	}
+
+	results := sendRateLimit(ctx, t, client, excludedNcaId, owner, 5)
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_DISALLOW}, results,
+		"another owner does not inherit the authorized account's exclusion")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), owner, functionVersionId)
+}
+
+// Per-user rate 2-M, no NCA-tier rate. The user-tier counter is scoped by the
+// key owner's NCA ID, so the same caller and owner share one budget across the
+// accounts the key is authorized against.
+func testOwnerNcaIdScopesPerUserCounter(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserRate = true
+	defer func() { nvcfServer.withPerUserRate = false }()
+
+	owner := "test_nca_id_owner_e"
+	user := "user_owner_e"
+	functionVersionId := "test_function_version_id"
+	send := func(ncaId string) pb.RateLimitResult {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        owner,
+			FunctionId:        "test_function_id",
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: user,
+		})
+		assert.NoError(t, err)
+		return resp.Result
+	}
+
+	assert.Equal(t, pb.RateLimitResult_ALLOW, send("test_nca_id_shared_org_4"))
+	assert.Equal(t, pb.RateLimitResult_ALLOW, send("test_nca_id_shared_org_5"))
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, send("test_nca_id_shared_org_4"), "user budget is shared across authorized accounts for one owner")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, owner, functionVersionId), owner, functionVersionId)
 }
 
 // testPerUserAndGlobalRate verifies AND-check semantics: a request must pass

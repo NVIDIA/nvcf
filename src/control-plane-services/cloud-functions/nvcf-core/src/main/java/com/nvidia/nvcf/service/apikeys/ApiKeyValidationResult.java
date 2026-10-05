@@ -39,14 +39,17 @@ import org.springframework.util.StringUtils;
 /**
  * Represents the result of ApiKey validation.
  *
- * @param allowed    indicates whether the current request should be allowed to proceed
- * @param ncaId      NVIDIA Cloud Account(NCA) id
- * @param ownerId    for Service Keys, this parameter will be NCA Id; for Personal Keys,
- *                   this parameter will be OIDC Id
- * @param policy     resource types and scopes
+ * @param allowed     indicates whether the current request should be allowed to proceed
+ * @param ncaId       NVIDIA Cloud Account(NCA) id
+ * @param ownerNcaId  NCA id the key's owner belongs to; differs from ncaId only when the
+ *                    key's owner was granted access to another account
+ * @param ownerId     for Service Keys, this parameter will be NCA Id; for Personal Keys,
+ *                    this parameter will be OIDC Id
+ * @param policy      resource types and scopes
  */
 public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
                               @JsonProperty("ncaId") String ncaId,
+                              @JsonProperty("ownerNcaId") String ownerNcaId,
                               @JsonProperty("ownerId") String ownerId,
                               @JsonProperty("policy") Policy policy) {
 
@@ -56,10 +59,12 @@ public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
     public ApiKeyValidationResult(
             boolean allowed,
             String ncaId,
+            String ownerNcaId,
             String ownerId,
             Policy policy) {
         this.allowed = allowed;
         this.ncaId = ncaId;
+        this.ownerNcaId = ownerNcaId;
         this.ownerId = ownerId;
         this.policy = policy;
     }

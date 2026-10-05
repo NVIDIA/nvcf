@@ -3191,3 +3191,96 @@ fn wait_and_widen_affinity_wait_preserves_the_next_bucket_wakeup() {
         assert_eq!(choice.rank_depth, 1);
     }
 }
+
+fn saturation_candidate(id: &str, input_tps: f64, running: u64) -> RoutedClusterSnapshot {
+    candidate(id, 1024).with_stats(|stats| {
+        stats.last_mean_input_tps = input_tps;
+        stats.max_engine_concurrency = 4;
+        stats.num_running_queries = running;
+    })
+}
+
+fn assert_wait_near(decision: LoadBalancerDecision, expected_ms: u64) {
+    let LoadBalancerDecision::Wait(delay) = decision else {
+        panic!("expected a timed wait near {expected_ms} ms, got {decision:?}");
+    };
+    let delay_ms = delay.as_secs_f64() * 1000.0;
+    assert!(
+        (delay_ms - expected_ms as f64).abs() < 1.0,
+        "expected a wait near {expected_ms} ms, got {delay:?}"
+    );
+}
+
+#[test]
+fn wait_and_widen_without_affinity_waits_for_a_slower_bucket_with_capacity() {
+    let lb = WaitAndWidenLoadBalancer::new(wait_and_widen_config(
+        &wait_and_widen_algorithm_config(|_| {}),
+    ));
+    let target = target();
+    let request = request(&target, None, Some(4_000));
+    // Fast TTFT is 5 + 4000 / 20000 s = 205 ms; slow TTFT is 5 + 4000 / 5000 s
+    // = 805 ms. The slow bucket unlocks at (805 - 205) * 0.25 = 150 ms.
+    let candidates = [
+        saturation_candidate("fast-a", 20_000.0, 4),
+        saturation_candidate("fast-b", 20_000.0, 4),
+        saturation_candidate("fast-c", 20_000.0, 4),
+        saturation_candidate("slow-idle", 5_000.0, 0),
+    ];
+
+    assert_wait_near(lb.decide_at(&request, &candidates, Duration::ZERO), 150);
+    assert_wait_near(
+        lb.decide_at(&request, &candidates, Duration::from_millis(149)),
+        1,
+    );
+    let choice = lb
+        .decide_at(&request, &candidates, Duration::from_millis(151))
+        .selected()
+        .expect("the slower bucket should be unlocked");
+    assert_eq!(candidates[choice.candidate_index].cluster_id, "slow-idle");
+}
+
+#[test]
+fn wait_and_widen_without_affinity_is_unavailable_when_no_bucket_has_capacity() {
+    let lb = WaitAndWidenLoadBalancer::new(wait_and_widen_config(
+        &wait_and_widen_algorithm_config(|_| {}),
+    ));
+    let target = target();
+    let request = request(&target, None, Some(4_000));
+    let candidates = [
+        saturation_candidate("fast-full", 20_000.0, 4),
+        saturation_candidate("slow-full", 5_000.0, 4),
+    ];
+
+    for elapsed_ms in [0, 150, 10_000] {
+        assert_eq!(
+            lb.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
+            LoadBalancerDecision::Unavailable,
+            "elapsed={elapsed_ms} ms",
+        );
+    }
+}
+
+#[test]
+fn wait_and_widen_without_affinity_prefers_a_fast_bucket_with_capacity() {
+    let lb = WaitAndWidenLoadBalancer::new(wait_and_widen_config(
+        &wait_and_widen_algorithm_config(|_| {}),
+    ));
+    let target = target();
+    let request = request(&target, None, Some(4_000));
+    let candidates = [
+        saturation_candidate("fast-full", 20_000.0, 4),
+        saturation_candidate("fast-available", 20_000.0, 3),
+        saturation_candidate("slow-idle", 5_000.0, 0),
+    ];
+
+    for _ in 0..32 {
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::ZERO)
+            .selected()
+            .expect("the fast bucket has capacity");
+        assert_eq!(
+            candidates[choice.candidate_index].cluster_id,
+            "fast-available"
+        );
+    }
+}

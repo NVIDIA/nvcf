@@ -1090,8 +1090,8 @@
                 },
                 "icmsServiceURL": {
                     "type": "string",
-                    "description": "URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
-                    "default": "http://icms.example.invalid:8080"
+                    "description": "(REQUIRED for self-managed clusters) URL of the ICMS service. Set the endpoint generated during cluster registration.",
+                    "default": ""
                 },
                 "icmsServiceHostHeaderOverride": {
                     "type": "string",
@@ -1100,8 +1100,8 @@
                 },
                 "revalServiceURL": {
                     "type": "string",
-                    "description": "URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.",
-                    "default": "http://reval.example.invalid:8080"
+                    "description": "(REQUIRED for self-managed clusters) URL of the ReVal service. Set the endpoint generated during cluster registration.",
+                    "default": ""
                 },
                 "revalServiceHostHeaderOverride": {
                     "type": "string",
@@ -1110,8 +1110,8 @@
                 },
                 "natsURL": {
                     "type": "string",
-                    "description": "URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
-                    "default": "nats://nats.example.invalid:4222"
+                    "description": "(REQUIRED for self-managed clusters) URL of the NATS service. Set the endpoint generated during cluster registration.",
+                    "default": ""
                 },
                 "natsHostOverride": {
                     "type": "string",

@@ -720,12 +720,10 @@ func TestCreateResponseRejectsModelWithoutResponsesURI(t *testing.T) {
 func TestChatUsageFromResponsesClampsInvalidCounts(t *testing.T) {
 	t.Parallel()
 
-	usage := chatUsageFromResponses(&openairesponses.Response{
-		Usage: &openairesponses.ResponseUsage{
-			InputTokens:  -1,
-			OutputTokens: 3,
-			TotalTokens:  int(^uint32(0)) + 1,
-		},
+	usage := chatUsageFromResponses(&openairesponses.ResponseUsage{
+		InputTokens:  -1,
+		OutputTokens: 3,
+		TotalTokens:  int(^uint32(0)) + 1,
 	})
 
 	if usage == nil {
