@@ -235,10 +235,27 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// Without this the process exits on the signal and the validator's
 	// cluster-wide ClusterRole, bound to a ServiceAccount in default, stays
 	// behind until a later check's orphan sweep.
-	sigCtx, stop := signal.NotifyContext(runCtx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
+	sigCtx, cancelSig := context.WithCancel(runCtx)
+	defer cancelSig()
+	caught := make(chan os.Signal, 1)
+	signal.Notify(caught, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(caught)
 	held := make(chan os.Signal, 1)
 	defer signal.Stop(held)
+	// interrupt ends the run on the first signal or the quit key. A second
+	// Ctrl-C then exits at once, through the default handler. SIGTERM and
+	// SIGHUP stay caught until return: CI follows its SIGINT with a SIGTERM a
+	// few seconds later. So does SIGPIPE, held before the run is cancelled: a
+	// signal to the process group also ends a pipe reading stderr, and the
+	// next write would otherwise kill the process mid-teardown.
+	var interruptOnce sync.Once
+	interrupt := func() {
+		interruptOnce.Do(func() {
+			signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
+			signal.Stop(caught)
+			cancelSig()
+		})
+	}
 	// interrupted is an explicit cancel, not the timeout below, which is a
 	// child of sigCtx and leaves it live.
 	interrupted := func() bool { return sigCtx.Err() != nil }
@@ -287,7 +304,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 
 	// A quit key in the dashboard cancels the run the way a signal does.
-	sink, err := selectCheckRendererFn(errOut, waitDur > 0, stop)
+	sink, err := selectCheckRendererFn(errOut, waitDur > 0, interrupt)
 	if err != nil {
 		return err
 	}
@@ -295,12 +312,10 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		starter.Start()
 	}
 	// After the first signal or quit key, say at once how to remove what the
-	// runs in progress may leave, before anything can end the process. A
-	// second Ctrl-C then exits at once, through the default handler. SIGTERM
-	// and SIGHUP stay caught until the bounded teardown ends: CI follows its
-	// SIGINT with a SIGTERM a few seconds later.
+	// runs in progress may leave, before anything can end the process.
 	var noteOnce sync.Once
 	noteInterrupt := func() {
+		interrupt()
 		noteOnce.Do(func() {
 			commands := ledger.Outstanding()
 			if len(commands) == 0 {
@@ -321,10 +336,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		select {
 		case <-returned:
 			return
+		case <-caught:
 		case <-sigCtx.Done():
 		}
-		signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP)
-		stop()
 		noteInterrupt()
 	}()
 	var lastResults []selfhosted.CheckResult
@@ -449,16 +463,19 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 // printInterruptCleanup says, as soon as a run is interrupted, how to remove
 // what its validator runs may leave in the cluster if the teardown is cut
-// short.
+// short. A failed write is ignored: the teardown goes on whether or not
+// anything still reads stderr.
 func printInterruptCleanup(w io.Writer, commands []string) {
 	if len(commands) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "note: interrupted; stopping the cluster-validator and removing its objects. "+
-		"A second Ctrl-C exits at once and leaves them; remove them with:")
+	var note strings.Builder
+	note.WriteString("note: interrupted; stopping the cluster-validator and removing its objects. " +
+		"A second Ctrl-C exits at once and leaves them; remove them with:\n")
 	for _, cmd := range commands {
-		fmt.Fprintln(w, "  "+cmd)
+		note.WriteString("  " + cmd + "\n")
 	}
+	_, _ = io.WriteString(w, note.String())
 }
 
 // printKeptValidatorObjects prints, as the command ends, how to remove what

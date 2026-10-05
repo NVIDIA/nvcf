@@ -18,6 +18,7 @@ limitations under the License.
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -27,6 +28,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -149,18 +152,26 @@ func runCheckWithBudget(t *testing.T, budget time.Duration,
 func runCheckWith(t *testing.T, budget time.Duration, validator selfhosted.ClusterValidator, out *syncBuffer,
 	args ...string) (error, string) {
 	t.Helper()
+	return executeCheck(t, budget, validator, out, args...), out.String()
+}
+
+// executeCheck runs `self-hosted check --control-plane --json` with the given
+// budget and validator stub, writing stderr to errOut.
+func executeCheck(t *testing.T, budget time.Duration, validator selfhosted.ClusterValidator, errOut io.Writer,
+	args ...string) error {
+	t.Helper()
 	resetCheckFlags(t)
 	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
 	prevBudget, prevCV := checkBudget, newClusterValidatorForSelfHosted
 	checkBudget = func(d time.Duration) time.Duration { requestedBudget = d; return budget }
 	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator { return validator }
 	t.Cleanup(func() { checkBudget, newClusterValidatorForSelfHosted = prevBudget, prevCV })
-	rootCmd.SetErr(out)
+	rootCmd.SetErr(errOut)
 	rootCmd.SetOut(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil); rootCmd.SetOut(nil) })
 	rootCmd.SetArgs(append([]string{"self-hosted", "check", "--control-plane", "--json",
 		"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0"}, args...))
-	return rootCmd.Execute(), out.String()
+	return rootCmd.Execute()
 }
 
 // syncBuffer is a bytes.Buffer safe to write from the interrupt handler while
@@ -499,6 +510,60 @@ func TestCheck_InterruptPrintsTheRemovalCommandBeforeTheTeardown(t *testing.T) {
 	assert.True(t, printedFirst)
 	assert.Equal(t, 1, strings.Count(stderr, note), "printed once")
 	assert.NotContains(t, stderr, keptNote(removalCommand("run1")), "the teardown removed everything")
+}
+
+// closedStderrChild runs TestCheck_InterruptSurvivesTheEndOfItsStderrReader as
+// the child process. Its value is the file the child writes once its
+// validator's teardown has finished.
+const closedStderrChild = "NVCF_CLI_TEST_CLOSED_STDERR_CHILD"
+
+// A Ctrl-C or a CI cancel signals the whole process group, so a pipe reading
+// stderr ends with the run. Writing the interrupt note, or anything after it,
+// to that pipe must not kill the process before the validator's teardown has
+// removed what the run created.
+func TestCheck_InterruptSurvivesTheEndOfItsStderrReader(t *testing.T) {
+	const started = "validator started"
+	if marker := os.Getenv(closedStderrChild); marker != "" {
+		_ = executeCheck(t, time.Minute, func(
+			ctx context.Context, p selfhosted.ClusterValidatorParams,
+		) selfhosted.ClusterValidatorResult {
+			p.OnStart("run1")
+			fmt.Fprintln(os.Stderr, started)
+			<-ctx.Done()
+			// The teardown takes a while; the note is written meanwhile.
+			time.Sleep(time.Second)
+			require.NoError(t, os.WriteFile(marker, nil, 0o600))
+			return selfhosted.ClusterValidatorResult{Err: ctx.Err(), RunID: "run1", Created: true}
+		}, os.Stderr)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	marker := filepath.Join(t.TempDir(), "torn-down")
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$")
+	child.Env = append(os.Environ(), closedStderrChild+"="+marker)
+	child.Stderr = w
+	var stdout bytes.Buffer
+	child.Stdout = &stdout
+	require.NoError(t, child.Start())
+	require.NoError(t, w.Close())
+
+	seen := false
+	for lines := bufio.NewScanner(r); !seen && lines.Scan(); {
+		seen = lines.Text() == started
+	}
+	require.NoError(t, r.Close())
+	if !seen {
+		_ = child.Wait()
+		t.Fatalf("the validator never started:\n%s", stdout.String())
+	}
+	require.NoError(t, child.Process.Signal(os.Interrupt))
+	waitErr := child.Wait()
+	_, err = os.Stat(marker)
+	assert.NoError(t, err, "the process died before the teardown finished: %v\n%s", waitErr, stdout.String())
 }
 
 // terminalSink stands in for the --wait dashboard, which draws on the
