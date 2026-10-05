@@ -185,6 +185,38 @@ Add `--namespace <namespace>` to attachment when the cluster has multiple instal
 
 Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
+### Uninstall
+
+For the default K3s recipe, match the example context, namespace and release prefix below to your saved configuration. Use its `releases` names if you configured overrides. The block stops on a failure and keeps the operator running until endpoint cleanup finishes.
+
+```bash
+(
+  set -e
+  context=spark-demo
+  namespace=llm-spark-poc
+  prefix=llm-poc
+
+  helm --kube-context "$context" -n "$namespace" uninstall "${prefix}-glm" --wait --timeout 3m
+  kubectl --context "$context" -n "$namespace" wait --for=delete inferenceendpoint/glm53-iq2 --timeout=60s
+  kubectl --context "$context" -n "$namespace" wait --for=delete deployment/pylon-glm53-iq2 --timeout=90s
+  for release in "${prefix}-glm-chain" "${prefix}-images" "${prefix}-operator" "${prefix}-stack"; do
+    helm --kube-context "$context" -n "$namespace" uninstall "$release" --wait --timeout 3m
+  done
+)
+```
+
+The model/artifact and RPC-cache PVCs, downloaded models, namespace, InferenceEndpoint CRD, CA Secret and operator credential remain. Keep the local work directory and saved configuration for reuse.
+
+To reinstall, run these commands from the recipe directory with the same configuration and context:
+
+```bash
+python3 spark.py --context spark-demo init
+python3 spark.py --context spark-demo render
+python3 spark.py --context spark-demo inventory
+```
+
+`init` validates the retained resources and archives stale progress. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
+
 ### Update the source baseline
 
 [spark/source.lock.json](spark/source.lock.json) records the baseline required by the recipe. Update it when the recipe requires newer runtime, API or chart changes.
