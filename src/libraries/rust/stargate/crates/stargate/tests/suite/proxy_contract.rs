@@ -2435,6 +2435,71 @@ async fn unknown_model_returns_404_no_eligible_candidates() {
 }
 
 #[tokio::test]
+async fn early_response_keeps_connection_reusable_when_body_arrives_late() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    async fn read_response_status(stream: &mut BufReader<TcpStream>) -> std::io::Result<u16> {
+        let mut status_line = String::new();
+        if stream.read_line(&mut status_line).await? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        let status = status_line
+            .split(' ')
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .ok_or(std::io::ErrorKind::InvalidData)?;
+        let mut content_length = 0;
+        loop {
+            let mut line = String::new();
+            stream.read_line(&mut line).await?;
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                content_length = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| std::io::ErrorKind::InvalidData)?;
+            }
+        }
+        stream.read_exact(&mut vec![0; content_length]).await?;
+        Ok(status)
+    }
+
+    let (_, http_addr, handle) = start_stargate("test-sg-early-response-keepalive").await;
+    let body = r#"{"model":"nonexistent","messages":[{"role":"user","content":"hi"}]}"#;
+    let head = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: {http_addr}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\
+         X-Model: nonexistent\r\nX-Request-Id: early-response\r\nX-Input-Tokens: 1\r\n\r\n",
+        body.len(),
+    );
+    let mut client = BufReader::new(TcpStream::connect(http_addr).await.unwrap());
+    for request in 1..=2 {
+        // The router rejects from the headers alone; the body follows its decision.
+        client
+            .get_mut()
+            .write_all(head.as_bytes())
+            .await
+            .unwrap_or_else(|error| panic!("request {request}: connection unusable: {error}"));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = client.get_mut().write_all(body.as_bytes()).await;
+        let status =
+            tokio::time::timeout(Duration::from_secs(5), read_response_status(&mut client))
+                .await
+                .expect("response timed out");
+        assert_eq!(
+            status.ok(),
+            Some(404),
+            "request {request} on the same connection should get the no-candidates response"
+        );
+    }
+
+    finish_stargate(handle).await;
+}
+
+#[tokio::test]
 async fn retryable_upstream_rejection_retries_alternate_backend() {
     let mut fixture = ProxyFixture::start("test-sg-retryable-rejection").await;
     let reject_runtime = active_runtime("retry-model");
