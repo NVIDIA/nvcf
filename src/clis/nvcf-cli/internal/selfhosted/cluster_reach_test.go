@@ -67,9 +67,9 @@ users:
 	t.Setenv("KUBECONFIG", path)
 }
 
-// A cluster the run cannot contact at all is unreachable: a context that does
-// not exist, refused credentials, or a refused connection. A server that
-// answers with an error is reachable; the probe after it reports that.
+// A cluster no API call succeeds against is unreachable, whatever the error: a
+// context that does not exist, refused credentials, a refused connection, no
+// answer, or a server error. Nothing about it was checked.
 func TestConnectCluster_ClassifiesAClusterItCannotReach(t *testing.T) {
 	status := func(code int) string {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -101,7 +101,8 @@ func TestConnectCluster_ClassifiesAClusterItCannotReach(t *testing.T) {
 		"rejected token":      {server: status(http.StatusUnauthorized), context: "test", unreachable: true},
 		"refused connection":  {server: closed.URL, context: "test", unreachable: true},
 		"no answer":           {server: silent.URL, context: "test", unreachable: true},
-		"server error":        {server: status(http.StatusInternalServerError), context: "test"},
+		"server error":        {server: status(http.StatusInternalServerError), context: "test", unreachable: true},
+		"forbidden":           {server: status(http.StatusForbidden), context: "test", unreachable: true},
 		"answers the request": {server: status(http.StatusOK), context: "test"},
 	} {
 		writeKubeconfig(t, tc.server)
@@ -152,7 +153,8 @@ func credentialPlugin(t *testing.T, body string) string {
 
 // Credentials from a plugin are fetched within the first call, so its time
 // does not count against the call's bound, and a cached token the server
-// rejects is replaced and tried again.
+// rejects is replaced and tried again. A plugin that fails gets no call
+// through: the cluster is unreachable.
 func TestConnectCluster_CredentialPlugin(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fresh" {
@@ -174,6 +176,7 @@ func TestConnectCluster_CredentialPlugin(t *testing.T) {
 		"rotates a rejected token": {
 			body: `token=fresh; if [ ! -e "$0.ran" ]; then : > "$0.ran"; token=stale; fi`,
 		},
+		"fails":                {body: "exit 1", unreachable: true},
 		"token rejected twice": {body: "token=stale", unreachable: true},
 	} {
 		writeKubeconfigFor(t, srv.URL, credentialPlugin(t, tc.body))

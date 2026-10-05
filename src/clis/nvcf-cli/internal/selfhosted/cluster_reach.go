@@ -19,11 +19,7 @@ package selfhosted
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
 	"fmt"
-	"net"
-	"syscall"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,10 +28,11 @@ import (
 )
 
 // ClusterUnreachableError reports a cluster the run could not contact at all:
-// its kubeconfig or context did not load, or the API server refused the
-// connection, could not be resolved, failed TLS verification, or rejected the
-// credentials. Unlike an error part way through a probe, it means nothing
-// about the cluster was checked.
+// its kubeconfig or context did not load, or no API call to it succeeded,
+// whatever stopped it: a refused or dropped connection, a name that did not
+// resolve, failed TLS verification, rejected credentials or a credential
+// plugin that failed, no answer in time, or a server error. Unlike an error
+// part way through a probe, it means nothing about the cluster was checked.
 type ClusterUnreachableError struct {
 	Context string
 	Err     error
@@ -56,9 +53,10 @@ func (e *ClusterUnreachableError) Unwrap() error { return e.Err }
 var clusterFirstCallTimeout = 15 * time.Second
 
 // connectCluster builds a client for kubeContext and makes its first API call.
-// A cluster that cannot be contacted at all is a ClusterUnreachableError,
-// including one that does not answer that call in time. Any other failure of
-// that call is left for the probe that follows to report.
+// When that call fails, whatever the error, the cluster is a
+// ClusterUnreachableError, unless the run's own budget ended or it was
+// interrupted meanwhile: then the run, not the cluster, stopped it, and the
+// probe that follows reports that.
 func connectCluster(ctx context.Context, kubeContext string) (kubernetes.Interface, error) {
 	restCfg, err := loadKubeConfig(kubeContext)
 	if err != nil {
@@ -74,8 +72,7 @@ func connectCluster(ctx context.Context, kubeContext string) (kubernetes.Interfa
 		// the next call.
 		err = firstClusterCall(ctx, client, restCfg)
 	}
-	// A run whose own budget ended says so itself; the cluster is not to blame.
-	if err != nil && ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || isUnreachable(err)) {
+	if err != nil && ctx.Err() == nil {
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: err}
 	}
 	return client, nil
@@ -91,14 +88,4 @@ func firstClusterCall(ctx context.Context, client kubernetes.Interface, restCfg 
 		defer cancel()
 	}
 	return client.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Error()
-}
-
-// isUnreachable reports an error no retry within the run can clear: the
-// server refused the connection or the credentials, could not be resolved, or
-// failed TLS verification. A server error is not among them.
-func isUnreachable(err error) bool {
-	var dnsErr *net.DNSError
-	var certErr *tls.CertificateVerificationError
-	return apierrors.IsUnauthorized(err) || errors.Is(err, syscall.ECONNREFUSED) ||
-		errors.As(err, &dnsErr) || errors.As(err, &certErr)
 }
