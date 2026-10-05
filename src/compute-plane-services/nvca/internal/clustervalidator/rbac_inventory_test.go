@@ -22,6 +22,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -267,16 +268,33 @@ func namedStorageClassActions(t *testing.T) []ktesting.Action {
 	return client.Actions()
 }
 
-// nodeToNodeActions drives the overlay probe across two nodes, one of them
-// still pulling, so the run reads sandbox events too.
+// nodeToNodeActions drives the overlay probe across three nodes, one of them
+// still pulling, so the run reads sandbox events, and through the checker pod
+// on the other two, so it creates and reads that pod. Enforcement, the other
+// scenario that makes those pod requests, is off in some launchers.
 func nodeToNodeActions(t *testing.T) []ktesting.Action {
 	t.Helper()
-	pulling := probePod("node-2", "Pending", "", "ContainerCreating")
-	pulling.Name = "s-2"
-	f := newN2NFixture(t, []*corev1.Node{makeNode("node-1", true, 0), makeNode("node-2", true, 0)},
-		[]corev1.Pod{runningProbePod("s-1", "node-1", "10.0.0.1"), pulling},
-		[]corev1.Event{podEvent("s-2", "Pulling", 0)}, checkerExit(0))
-	checkNodeToNode(context.Background(), f.client, &ValidationState{Log: testLog()}, enforcementDefaultImg)
+	pulling := probePod("node-3", "Pending", "", "ContainerCreating")
+	pulling.Name = "s-3"
+	f := newN2NFixture(t, readyNodes(3), append(runningServers("node-1", "node-2"), pulling),
+		[]corev1.Event{podEvent("s-3", "Pulling", 0)}, checkerExit(0))
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), f.client, state, enforcementDefaultImg)
+	require.NotNil(t, state.NodeToNodeOK, "the probe must reach a verdict; warnings: %v", state.Warnings)
+	require.True(t, *state.NodeToNodeOK)
+	require.Len(t, f.checkerNodes, 1, "the probe must run the checker pod")
+
+	made := map[string]bool{}
+	for _, req := range requestsOf(f.client.Actions()) {
+		if strings.HasPrefix(req.namespace, nodeToNodeNSPrefix) {
+			made[req.key()] = true
+		}
+	}
+	for _, verb := range []string{"create", "get", "list", "delete"} {
+		assert.True(t, made[apiRequest{resource: "pods", verb: verb}.key()],
+			"the node-to-node probe makes pods %s in its namespace", verb)
+	}
+	assert.True(t, made[apiRequest{resource: "events", verb: "list"}.key()])
 	return f.client.Actions()
 }
 
