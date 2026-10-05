@@ -46,8 +46,6 @@ Use your existing kubeconfig.
 
 Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](spark/BUILDING.md).
 
-Set `runtimeImage` in the configuration if using a mirror of the pinned CUDA image.
-
 ### Deploy in order
 
 The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Run preflight qualification after changing these versions.
@@ -124,6 +122,10 @@ If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key
 ### Alternative container runtimes and external configuration
 
 For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](spark/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
+
+### Runtime image mirror
+
+To use a mirror of the pinned CUDA image, set `runtimeImage` in the saved configuration before running `preflight`.
 
 ### API keys
 
