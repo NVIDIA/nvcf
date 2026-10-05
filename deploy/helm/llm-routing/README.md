@@ -54,6 +54,8 @@ Set `runtimeImage` in the configuration if using a mirror of the pinned CUDA ima
 
 The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Run preflight qualification after changing these versions.
 
+`stack` generates the default caller API key and self-signed certificates. To supply your own, complete [Optional configuration](#optional-configuration) before running `stack`.
+
 Run each command in order and continue after it succeeds.
 
 ```bash
@@ -78,8 +80,6 @@ python3 spark.py verify-gateway
 8. `register`: Register GLM with Pylon and wait for readiness.
 9. `verify-gateway`: Test GLM through the gateway, including authentication and discovery.
 
-Use [the recovery workflow](#recovery-and-limits) to test restarting a loaded model.
-
 After fixing a failed qualification Job, run `python3 spark.py qualify --retry`.
 
 Pinned runtime:
@@ -87,18 +87,6 @@ Pinned runtime:
 - Model revision: `346b3591c7f28d1a23716f97a065ecf12ec14771`, with 238,577,585,701 bytes across six GGUF shards.
 - llama.cpp revision: `f872b591121761ac7b2af18283bd99bdc092a63a`.
 - Capacity: two model nodes, equal layer split, context 2048 and one request slot.
-
-## Authentication and TLS
-
-The gateway requires an API key for inference. Model and registry reads are public.
-
-Gateway clients use HTTPS and Pylon connects to the router over verified QUIC. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster.
-
-To use existing certificates:
-
-1. Set `tls.selfSigned.enabled=false` in the external configuration.
-2. Before `stack`, create Secrets `llm-gateway-stack-gateway-tls` and `llm-gateway-stack-router-tls` in the namespace with valid `tls.crt` and `tls.key` fields.
-3. Create the configured CA ConfigMap with a `ca.crt` field. Certificates must cover the configured service names and client address.
 
 ## Verification
 
@@ -132,6 +120,24 @@ python3 spark.py verify-gateway
 Checks GLM answers, streaming, authentication, discovery and registration. Results are saved in `evidence/gateway.json` under the local work directory.
 
 If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
+
+## Optional configuration
+
+### API keys
+
+The gateway requires an API key for inference. Model and registry reads are public. By default, `stack` saves the caller key as `api-key` in the private work directory, and the recipe client uses it automatically.
+
+To supply your own key, set `apiKeyFile` in the saved configuration to a file containing the key before running `stack`.
+
+### TLS certificates
+
+Gateway clients use HTTPS and Pylon connects to the router over verified QUIC. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster.
+
+To use existing certificates, complete these steps before running `stack`:
+
+1. Set `tls.selfSigned.enabled=false` in the external configuration.
+2. Create Secrets `llm-gateway-stack-gateway-tls` and `llm-gateway-stack-router-tls` in the namespace with valid `tls.crt` and `tls.key` fields.
+3. Create the configured CA ConfigMap with a `ca.crt` field. Certificates must cover the configured service names and client address.
 
 ## Maintenance
 
@@ -234,7 +240,9 @@ python3 spark.py --context spark-demo inventory
 
 Use `--source-dir /path/to/existing/checkout` on commands to select another checkout.
 
-## Recovery and limits
+### Recovery and limits
+
+This optional resilience check restarts the RPC worker, interrupts model service and verifies inference after recovery.
 
 1. Schedule a time when a model interruption is acceptable.
 2. Run the explicit recovery check.
@@ -244,8 +252,6 @@ Use `--source-dir /path/to/existing/checkout` on commands to select another chec
    ```
 
 3. Save and review the results from the target cluster.
-
-The recovery check restarts the RPC worker and verifies inference afterward.
 
 The tested setup took about 26 minutes for a cold load and 11 minutes for recovery with cached weights.
 
