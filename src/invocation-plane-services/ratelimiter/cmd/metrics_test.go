@@ -43,6 +43,6 @@ func TestSetupMetricsLogsServeFailure(t *testing.T) {
 	setupMetrics()
 
 	require.Eventually(t, func() bool {
-		return len(logs.FilterMessage("metrics server failed").All()) > 0
+		return len(logs.FilterLevelExact(zap.ErrorLevel).FilterMessage("metrics server failed").All()) > 0
 	}, 5*time.Second, 10*time.Millisecond)
 }
