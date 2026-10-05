@@ -267,8 +267,8 @@ type PreflightConfig struct {
 	Interrupted func() bool
 
 	// RegistryPostInstall marks a run that checks an installed stack. The
-	// cluster then pulls with its own pull secrets, so a rejected NGC API key
-	// from this machine's environment is a warning rather than an error.
+	// cluster then pulls with its own pull secrets, so a credential of this
+	// machine's that a registry rejects is a warning rather than an error.
 	RegistryPostInstall bool
 }
 

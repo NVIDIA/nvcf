@@ -647,7 +647,8 @@ func resolveStackEnv() string {
 
 // preferNGCKey reports whether the NGC API key goes ahead of the docker login
 // for nvcr.io: only where up mints its pull secrets from the key, before a
-// local install. Anywhere else the docker login is what docker uses.
+// local install. Anywhere else the docker login is what docker uses, and the
+// key is sent only when there is none or nvcr.io rejects it.
 func preferNGCKey() bool {
 	return !checkScopeIsPostInstall() && strings.EqualFold(resolveStackEnv(), "local")
 }
