@@ -1035,7 +1035,9 @@ func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) 
 		assert.Equal(t, SeverityInfo, r.Severity)
 		assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
 		assert.Contains(t, r.Message, "the docker login from docker config")
-		assert.Contains(t, r.Message, "docker login nvcr.io --username '$oauthtoken'")
+		assert.Contains(t, r.Message, "docker on this machine still sends it; "+
+			"renew it with: docker login nvcr.io --username '$oauthtoken'")
+		assert.NotContains(t, r.Message, "cannot pull")
 
 		cred, ok, err := rc.lookup(ctx, "nvcr.io")
 		require.NoError(t, err)
@@ -1060,6 +1062,8 @@ func TestProbeRegistryCredential_RejectedLoginAndKey(t *testing.T) {
 		assert.Contains(t, r.Message, "credentials from NGC_API_KEY rejected")
 		assert.Contains(t, r.Message, "generate a new NGC API key")
 		assert.Contains(t, r.Message, "the docker login from docker config")
+		assert.Contains(t, r.Message, "renew it with: docker login nvcr.io")
+		assert.NotContains(t, r.Message, "cannot pull")
 	}
 	assert.Equal(t, []string{"rotated-out", "revoked-key", "rotated-out", "revoked-key"}, ngc.passwords())
 }
