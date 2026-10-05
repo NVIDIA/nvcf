@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Explicit phases for the pinned two-GPU Spark recipe. See README.md first."""
+"""Explicit phases for the two-GPU Spark recipe. See README.md first."""
 import argparse
 import base64
 import contextlib
@@ -258,7 +258,7 @@ class Recipe:
         repo = HERE.parents[3]
         require(not self.work.is_relative_to(repo), 'Keep generated work and credentials outside the checkout.')
         self.work.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.source = pathlib.Path(source).resolve() if source else self.work/'source'
+        self.source = pathlib.Path(source).expanduser().resolve() if source else repo
         self.state_path = self.work/'state.json'
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
         identity = {k: config[k] for k in ('context', 'namespace', 'releasePrefix', 'clusterId', 'nodes')}
@@ -289,20 +289,35 @@ class Recipe:
         require(re.fullmatch(r'[0-9a-f]{40}', LOCK['revision']) is not None, 'Pin a full immutable source revision in source.lock.json.')
         return {key: LOCK[key] for key in ('repository', 'revision')}
 
-    def source_check(self):
+    def source_check(self, image_update=False):
         identity = self.source_identity()
-        require(self.source.is_dir(), 'Run prepare first, or pass --source-dir pointing to the prepared pinned checkout.')
-        require(output(['git', 'rev-parse', 'HEAD'], cwd=self.source).strip() == identity['revision'], 'Dependency source revision differs from source.lock.json.')
+        require(self.source.is_dir(), 'Source checkout does not exist. Use --source-dir to select an existing checkout.')
+        try:
+            root = output(['git', 'rev-parse', '--show-toplevel'], cwd=self.source, stderr=subprocess.PIPE).strip()
+            require(pathlib.Path(root).resolve() == self.source, 'Source directory must be the repository root.')
+            result = subprocess.run(['git', 'merge-base', '--is-ancestor', identity['revision'], 'HEAD'],
+                                    cwd=self.source, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except (OSError, subprocess.CalledProcessError):
+            raise RuntimeError('Source directory must be an existing Git checkout.') from None
+        require(result.returncode == 0,
+                'Checkout does not contain the source revision in source.lock.json. Use a checkout with that history.')
+        if image_update:
+            charts = ['deploy/helm/'+name+'/'+name for name in
+                      ('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router')]
+            changed = subprocess.run(['git', 'diff', '--quiet', identity['revision'], '--', *charts], cwd=self.source)
+            added = output(['git', 'ls-files', '--others', '--exclude-standard', '--', *charts], cwd=self.source)
+            require(changed.returncode == 0 and not added.strip(),
+                    'Image-only updates require unchanged routing charts. Use a coordinated stack installation for chart changes.')
+
+    def checkout_revision(self):
+        revision = output(['git', 'rev-parse', 'HEAD'], cwd=self.source).strip()
+        dirty = output(['git', 'status', '--porcelain'], cwd=self.source).strip()
+        return revision + ('-dirty' if dirty else '')
 
     def prepare(self):
-        identity = self.source_identity()
-        if not self.source.exists():
-            run(['git', 'clone', '--filter=blob:none', '--no-checkout', identity['repository'], self.source])
-            run(['git', 'fetch', 'origin', identity['revision']], cwd=self.source)
-            run(['git', 'checkout', '--detach', identity['revision']], cwd=self.source)
         self.source_check()
         run(['helm', 'dependency', 'build', '--skip-refresh', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
-        print('Prepared source:', self.source)
+        print('Using source checkout:', self.source)
 
     def backend_values(self, phase='serve', register=False, render=False):
         values = json.loads((HERE/'backend.defaults.json').read_text())
@@ -746,7 +761,7 @@ class Recipe:
             if name in ('router', 'pylon'):
                 command += ['--target', 'stargate-runtime' if name == 'router' else 'pylon-runtime', '--build-arg', 'CARGO_PROFILE=integration']
             if name == 'operator':
-                command += ['-f', str(HERE/'operator.Dockerfile'), '--build-arg', 'SOURCE_REVISION='+LOCK['revision']]
+                command += ['-f', str(HERE/'operator.Dockerfile'), '--build-arg', 'SOURCE_REVISION='+self.checkout_revision()]
             run(command+[str(self.source/COMPONENTS[name])])
 
     def export_images(self, component=None, tag=None):
@@ -881,7 +896,7 @@ finally:
 
     def update(self, component, tag):
         self.bound_cluster()
-        self.source_check()
+        self.source_check(image_update=True)
         require(not self.state.get('attachedExisting') or self.state.get('gateway'), 'Verify GLM through the attached gateway before its first update.')
         chart, service = {'gateway': ('llm-api-gateway', 'llmApiGateway'), 'router': ('llm-request-router', 'llmRequestRouter')}[component]
         require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', tag) is not None, 'Invalid image tag.')
@@ -978,7 +993,7 @@ def main(argv=None):
     parser.add_argument('--context', help='Kubernetes context; defaults to SPARK_CONTEXT, saved settings, or the sole kubeconfig context.')
     parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
-    parser.add_argument('--source-dir', type=pathlib.Path)
+    parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
     parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
@@ -1018,7 +1033,7 @@ def main(argv=None):
         print('Routing node:', config['nodes']['control'])
         return
     if args.phase == 'paths':
-        source = args.source_dir.expanduser().resolve() if args.source_dir else work/'source'
+        source = args.source_dir.expanduser().resolve() if args.source_dir else HERE.parents[3]
         print(json.dumps({'workDir': str(work), 'config': str(config_path), 'source': str(source)}, indent=2))
         return
     discovered = config is None
@@ -1035,7 +1050,7 @@ def main(argv=None):
         if discovered:
             save(config_path, config)
             print('Discovered configuration:', config_path)
-        print('Run verify-gateway next. Run prepare before editing or building application images.')
+        print('Run verify-gateway next. Run prepare before building application images.')
     elif args.phase == 'build-images':
         try:
             recipe.build_images(args.component, args.tag)

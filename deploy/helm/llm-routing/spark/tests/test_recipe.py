@@ -28,8 +28,8 @@ class RecipeTests(unittest.TestCase):
         self.config = json.loads((HERE/'config.example.json').read_text())
         self.recipe = spark.Recipe(self.config, self.tmp.name)
 
-    def source_repository(self):
-        source = pathlib.Path(self.tmp.name)/'seed'
+    def source_repository(self, name='seed'):
+        source = pathlib.Path(self.tmp.name).resolve()/name
         source.mkdir()
         subprocess.run(['git', 'init', '--quiet', source], check=True)
         (source/'service.txt').write_text('committed service\n')
@@ -40,23 +40,31 @@ class RecipeTests(unittest.TestCase):
         revision = spark.output(['git', 'rev-parse', 'HEAD'], cwd=source).strip()
         return source, {'repository': str(source), 'revision': revision}
 
-    def test_prepare_clones_pinned_source_without_a_patch(self):
-        seed, lock = self.source_repository()
-        execute = spark.run
-
-        def local_command(command, **kwargs):
-            if command[0] == 'helm':
-                return
-            return execute(command, **kwargs)
-
-        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run', side_effect=local_command) as run:
+    def test_prepare_only_builds_dependencies_in_the_selected_checkout(self):
+        self.recipe.source, lock = self.source_repository()
+        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
             self.recipe.prepare()
             self.assertEqual(self.recipe.source_identity(), lock)
         self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
-        self.assertEqual((self.recipe.source/'service.txt').read_bytes(), (seed/'service.txt').read_bytes())
+        self.assertEqual((self.recipe.source/'service.txt').read_text(), 'committed service\n')
         self.assertEqual(spark.output(['git', 'status', '--porcelain'], cwd=self.recipe.source), '')
-        self.assertEqual(run.call_args.args[0], ['helm', 'dependency', 'build', '--skip-refresh',
-                                               self.recipe.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
+        run.assert_called_once_with(['helm', 'dependency', 'build', '--skip-refresh',
+                                    self.recipe.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
+
+    def test_default_source_is_the_recipe_checkout_and_ignores_stale_work_source(self):
+        seed, lock = self.source_repository()
+        stale = self.recipe.work/'source'
+        stale.mkdir()
+        (stale/'unrelated.txt').write_text('leave this old copy alone\n')
+        recipe_path = seed/'deploy/helm/llm-routing/spark'
+        with patch.object(spark, 'HERE', recipe_path), patch.dict(spark.LOCK, lock, clear=True), \
+             patch.object(spark, 'run') as run:
+            recipe = spark.Recipe(self.config, self.recipe.work)
+            recipe.prepare()
+            recipe.build_images('gateway', 'developer-change')
+        self.assertEqual(recipe.source, seed.resolve())
+        self.assertEqual(run.call_args.args[0][-1], str(seed/spark.COMPONENTS['gateway']))
+        self.assertEqual((stale/'unrelated.txt').read_text(), 'leave this old copy alone\n')
 
     def test_prepare_and_build_keep_local_edits_at_the_pinned_head(self):
         self.recipe.source, lock = self.source_repository()
@@ -69,6 +77,82 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
         self.assertEqual([call.args[0][0] for call in run.call_args_list], ['helm', 'docker', 'docker'])
         self.assertIn(self.recipe.image('gateway', 'edited-build'), run.call_args.args[0])
+
+    def test_prepare_and_build_accept_committed_descendants_without_resetting_edits(self):
+        self.recipe.source, lock = self.source_repository()
+        edited = self.recipe.source/'service.txt'
+        edited.write_text('committed developer change\n')
+        subprocess.run(['git', 'add', 'service.txt'], cwd=self.recipe.source, check=True)
+        subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
+                        '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
+                        'commit', '--quiet', '-m', 'Developer change'], cwd=self.recipe.source, check=True)
+        head = spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
+        edited.write_text('uncommitted follow-up\n')
+        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
+            self.recipe.prepare()
+            self.recipe.build_images('router', 'developer-change')
+        self.assertNotEqual(head, lock['revision'])
+        self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), head)
+        self.assertEqual(edited.read_text(), 'uncommitted follow-up\n')
+        self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/spark.COMPONENTS['router']))
+        self.assertEqual([call.args[0][0] for call in run.call_args_list], ['helm', 'docker', 'docker'])
+
+    def test_existing_but_unrelated_baseline_is_rejected(self):
+        self.recipe.source, lock = self.source_repository()
+        subprocess.run(['git', 'checkout', '--quiet', '--orphan', 'unrelated'], cwd=self.recipe.source, check=True)
+        subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
+                        '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
+                        'commit', '--quiet', '-m', 'Unrelated history'], cwd=self.recipe.source, check=True)
+        for action in (self.recipe.prepare, self.recipe.build_images):
+            with self.subTest(action=action.__name__), patch.dict(spark.LOCK, lock, clear=True), \
+                 patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
+                action()
+            run.assert_not_called()
+
+    def test_source_must_be_the_checkout_root(self):
+        seed, lock = self.source_repository()
+        self.recipe.source = seed/'nested'
+        self.recipe.source.mkdir()
+        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
+            self.recipe.prepare()
+        run.assert_not_called()
+
+    def test_missing_source_does_not_clone_or_create_a_checkout(self):
+        self.recipe.source = self.recipe.work/'missing'
+        with patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
+            self.recipe.prepare()
+        run.assert_not_called()
+        self.assertFalse(self.recipe.source.exists())
+
+    def test_image_update_rejects_committed_local_and_untracked_chart_changes(self):
+        for index, chart in enumerate(('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router')):
+            for change in ('committed', 'local', 'untracked'):
+                self.recipe.source, lock = self.source_repository('chart-' + str(index) + '-' + change)
+                template = self.recipe.source/'deploy/helm'/chart/chart/'templates/deployment.yaml'
+                template.parent.mkdir(parents=True)
+                if change != 'untracked':
+                    template.write_text('baseline chart\n')
+                    subprocess.run(['git', 'add', '.'], cwd=self.recipe.source, check=True)
+                    subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
+                                    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
+                                    'commit', '--quiet', '-m', 'Baseline chart'], cwd=self.recipe.source, check=True)
+                    lock['revision'] = spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
+                template.write_text('would change the running chart\n')
+                if change == 'committed':
+                    subprocess.run(['git', 'add', '.'], cwd=self.recipe.source, check=True)
+                    subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
+                                    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
+                                    'commit', '--quiet', '-m', 'Chart change'], cwd=self.recipe.source, check=True)
+                with self.subTest(chart=chart, change=change), patch.dict(spark.LOCK, lock, clear=True):
+                    self.recipe.source_check()
+                    with self.assertRaisesRegex(RuntimeError, 'unchanged routing charts'):
+                        self.recipe.source_check(image_update=True)
+
+    def test_image_update_accepts_service_changes_without_chart_changes(self):
+        self.recipe.source, lock = self.source_repository()
+        (self.recipe.source/'service.txt').write_text('local service change\n')
+        with patch.dict(spark.LOCK, lock, clear=True):
+            self.recipe.source_check(image_update=True)
 
     def test_wrong_or_mutable_source_revision_is_rejected_before_prepare_or_build(self):
         self.recipe.source, lock = self.source_repository()
@@ -101,10 +185,24 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[1].args[0][:3], ['docker', 'buildx', 'build'])
         self.assertNotIn('env', run.call_args_list[1].kwargs)
 
-    def test_operator_build_identifies_the_exact_pinned_revision(self):
-        with patch.object(self.recipe, 'source_check'), patch.object(spark, 'run') as run:
-            self.recipe.build_images('operator')
-        self.assertIn('SOURCE_REVISION='+spark.LOCK['revision'], run.call_args.args[0])
+    def test_operator_build_identifies_actual_checkout_and_local_edits(self):
+        self.recipe.source, lock = self.source_repository()
+        edited = self.recipe.source/'service.txt'
+        edited.write_text('operator change\n')
+        subprocess.run(['git', 'add', 'service.txt'], cwd=self.recipe.source, check=True)
+        subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
+                        '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
+                        'commit', '--quiet', '-m', 'Operator change'], cwd=self.recipe.source, check=True)
+        head = spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
+        self.assertNotEqual(head, lock['revision'])
+        for dirty in (False, True):
+            if dirty:
+                edited.write_text('uncommitted operator change\n')
+            with self.subTest(dirty=dirty), patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
+                self.recipe.build_images('operator')
+            expected = head + ('-dirty' if dirty else '')
+            self.assertIn('SOURCE_REVISION='+expected, run.call_args.args[0])
+            self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/spark.COMPONENTS['operator']))
 
     def test_duplicate_model_nodes_and_missing_context_are_rejected(self):
         self.config['nodes']['worker'] = self.config['nodes']['leader']
@@ -356,8 +454,9 @@ class RecipeTests(unittest.TestCase):
                 {'metadata': {'name': self.recipe.glm+'-leader', 'uid': 'm1'}, 'status': {'phase': 'Running'}}]
         after = copy.deepcopy(pods)
         after[0]['metadata']['uid'] = 'g2'
-        with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(spark, 'run') as run:
+        with patch.object(self.recipe, 'source_check') as source, patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(spark, 'run') as run:
             self.recipe.update('gateway', 'next-tag')
+        source.assert_called_once_with(image_update=True)
         command = run.call_args.args[0]
         self.assertIn('--reuse-values', command)
         self.assertIn('llm-api-gateway.llmApiGateway.image.tag=next-tag', command)

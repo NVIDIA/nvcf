@@ -6,7 +6,7 @@ Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Oper
 
 The `spark.py` installer coordinates the combined gateway/router chart, the Pylon Operator chart and the GLM backend chart. The backend chart builds llama.cpp, downloads and verifies the GGUF model files, runs GLM across the two GPUs, and creates an `InferenceEndpoint` for Pylon to register.
 
-[source.lock.json](spark/source.lock.json) pins the application source and charts. `prepare` downloads that revision and prints the directory to edit for [gateway or router updates](#update-only-gateway-or-router).
+Application images and charts use your checkout, including local edits. `prepare` builds the Helm dependencies.
 
 ## Prerequisites
 
@@ -31,9 +31,9 @@ Use your existing kubeconfig.
    python3 spark.py init
    ```
 
-   Review the selected nodes and generated configuration. `init` configures idle GPUs, storage and image preload for K3s. For another container runtime, edit a copy of [config.example.json](spark/config.example.json) and pass `--config /path/to/config.json` instead of running `init`.
+   Review the selected nodes and generated configuration. `init` configures idle GPUs, storage and image preload for K3s. Configuration and evidence are saved automatically in a private work directory outside the checkout. For another container runtime, edit an external copy of [config.example.json](spark/config.example.json) and pass `--config /path/to/config.json` instead of running `init`.
 
-2. Prepare the source, render the manifests and inventory the cluster.
+2. Prepare the checkout's Helm dependencies, render the manifests and inventory the cluster.
 
    ```bash
    python3 spark.py prepare
@@ -138,7 +138,7 @@ If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key
 
 If this workstation has not used the running installation before, [attach to it first](#update-an-existing-installation).
 
-1. Run `python3 spark.py prepare`, then edit the selected service in the source directory it prints.
+1. Run `python3 spark.py prepare`, then edit the service in your checkout: `src/invocation-plane-services/llm-api-gateway` for gateway or `src/libraries/rust/stargate` for router.
 2. [Build and distribute that component](spark/BUILDING.md#rebuild-gateway-or-router) with a fresh tag. Run the next commands in the same terminal.
 3. Update the selected image and verify gateway requests.
 
@@ -149,7 +149,7 @@ If this workstation has not used the running installation before, [attach to it 
 
 4. Save the printed update record path for rollback.
 
-GLM stays loaded. Gateway updates briefly interrupt requests; router updates reconnect Pylon transports. For changes to the shared source revision, follow [Updating the pinned stack](#updating-the-pinned-stack).
+GLM stays loaded. Gateway updates briefly interrupt requests. Router updates reconnect Pylon transports. Image-only updates require unchanged routing charts. For changes to the required source revision, follow [Update the source baseline](#update-the-source-baseline).
 
 To roll back the image update:
 
@@ -184,25 +184,23 @@ Add `--namespace <namespace>` to attachment when the cluster has multiple instal
 
 Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
-### Updating the pinned stack
+### Update the source baseline
 
-[spark/source.lock.json](spark/source.lock.json) selects the source revision used for builds.
-
-After upstream history changes, check that the pinned revision remains fetchable using your configuration and a fresh work directory:
-
-```bash
-python3 spark.py --config /path/to/config.json --work-dir /path/to/fresh-work prepare
-```
-
-Use the same configuration and work directory options for the checks below.
-
-To adopt a new source revision:
+[spark/source.lock.json](spark/source.lock.json) records the baseline required by the recipe. Update it when the recipe requires newer runtime, API or chart changes.
 
 1. Commit runtime, API and chart fixes in their owning source directories, including generated files and regression tests.
-2. Select a reachable commit containing those fixes and update the repository and full revision in `spark/source.lock.json`.
-3. Repeat `prepare` and `render` with the explicit configuration and fresh work directory options above, then run the [local regression checks](#local-validation).
-4. Build and deploy gateway and router together when their API contract changes. Both must use the same pinned source and compatible chart configuration.
-5. Deploy the new revision and rerun gateway verification, recovery and image update/rollback checks.
+2. Update the repository and full baseline revision in `spark/source.lock.json`. The revision must exist in the selected checkout and be an ancestor of its `HEAD`.
+3. Validate the checkout and chart dependencies, then run the [local regression checks](#local-validation).
+
+   ```bash
+   python3 spark.py prepare
+   python3 spark.py render
+   ```
+
+4. Build and deploy gateway and router together when their API contract changes. Use the same checkout and compatible chart configuration for both.
+5. Rerun gateway verification, recovery and image update/rollback checks.
+
+Use `--source-dir /path/to/existing/checkout` on commands to select another checkout.
 
 ## Recovery and limits
 
@@ -230,7 +228,7 @@ Both model persistent volume claims (PVCs) remain after uninstall.
 
 ## Local validation
 
-1. Prepare the pinned source as described under [Configure and prepare](#configure-and-prepare).
+1. Prepare the checkout's Helm dependencies as described under [Configure and prepare](#configure-and-prepare).
 2. From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks.
 
    ```bash

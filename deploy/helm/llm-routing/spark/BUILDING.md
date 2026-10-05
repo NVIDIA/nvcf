@@ -1,11 +1,11 @@
 # Build application images
 
-Build gateway, router, Pylon and operator images for `linux/arm64`. Run these commands from `deploy/helm/llm-routing/spark`.
+Build gateway, router, Pylon and operator images for `linux/arm64` from your checkout, including local edits. Run these commands from `deploy/helm/llm-routing/spark`.
 
 ## Requirements
 
 - A running Docker engine with Buildx, ARM64 build capability and access to base images and build dependencies.
-- Prepared source from `python3 spark.py prepare`. Edit services in the source directory it prints.
+- Helm dependencies prepared with `python3 spark.py prepare`.
 - For registry distribution, set `images.prefix` and a fresh `images.tag` in the configuration. `images.repositories` overrides the repository for individual components.
 
 Router and Pylon builds use Cargo profile `integration`.
@@ -36,7 +36,7 @@ Router and Pylon builds use Cargo profile `integration`.
 
 ## Rebuild gateway or router
 
-1. Edit the selected service in the prepared source and build it with a fresh tag.
+1. Edit the service in your checkout: `src/invocation-plane-services/llm-api-gateway` for gateway or `src/libraries/rust/stargate` for router. Build it with a fresh tag.
 
    ```bash
    COMPONENT=gateway # Or router.

@@ -162,10 +162,19 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(stream), patch.object(spark, 'Recipe') as recipe, patch.object(spark, 'output') as output:
             spark.main(['paths'])
         paths = json.loads(stream.getvalue())
-        self.assertEqual(paths, {'workDir': str(self.work), 'config': str(self.work/'config.json'), 'source': str(self.work/'source')})
+        self.assertEqual(paths, {'workDir': str(self.work), 'config': str(self.work/'config.json'), 'source': str(HERE.parents[3])})
         recipe.assert_not_called()
         output.assert_not_called()
         self.assertFalse(self.work.exists())
+
+    def test_explicit_source_directory_overrides_the_recipe_checkout(self):
+        source = self.root/'another-checkout'
+        with redirect_stdout(io.StringIO()) as stream, patch.object(spark, 'output') as output:
+            spark.main(['paths', '--source-dir', str(source)])
+        self.assertEqual(json.loads(stream.getvalue())['source'], str(source))
+        output.assert_not_called()
+        self.assertFalse(self.work.exists())
+        self.assertFalse(source.exists())
 
     def test_attach_then_verify_uses_generated_config_without_flags_or_prepare(self):
         seen = []
