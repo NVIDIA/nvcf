@@ -1112,10 +1112,12 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 		// (NVCF_STORAGE_CLASS) is read by name.
 		{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"storageclasses"}, Verbs: []string{"get", "list"}},
 		// Tier-1 and Tier-2 readiness, and the Envoy proxies behind the NVCF
-		// Gateways.
-		{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"list"}},
-		// The creation time of a rolling StatefulSet's update revision dates
-		// its rollout, which Tier-2 bounds.
+		// Gateways. The newest ReplicaSet dates a Deployment rollout that no
+		// progress deadline bounds.
+		{APIGroups: []string{"apps"}, Resources: []string{"deployments", "replicasets", "statefulsets"},
+			Verbs: []string{"list"}},
+		// The creation time of a rolling StatefulSet's or DaemonSet's update
+		// revision dates its rollout, which Tier-1 and Tier-2 bound.
 		{APIGroups: []string{"apps"}, Resources: []string{"controllerrevisions"}, Verbs: []string{"get"}},
 		// The validator follows every NVCF route kind's parentRefs to learn
 		// which Gateways are NVCF's, and lists the GatewayClasses to tell

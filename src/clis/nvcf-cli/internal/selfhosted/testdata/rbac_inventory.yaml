@@ -65,7 +65,7 @@ rules:
   - roles: [control-plane]
     scope: cluster
     apiGroup: apps
-    resources: [deployments, statefulsets]
+    resources: [deployments, replicasets, statefulsets]
     verbs: [list]
   - roles: [control-plane]
     scope: cluster
