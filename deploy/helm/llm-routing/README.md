@@ -48,10 +48,6 @@ Build and distribute `gateway`, `router`, `pylon` and `operator` using the [imag
 
 ### Deploy in order
 
-The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Run preflight qualification after changing these versions.
-
-`stack` generates the default caller API key and self-signed certificates. To supply your own, complete [Optional configuration](#optional-configuration) before running `stack`.
-
 Run each command in order and continue after it succeeds.
 
 ```bash
@@ -66,8 +62,8 @@ python3 spark.py register
 python3 spark.py verify-gateway
 ```
 
-1. `preflight`: Check GPU calculations and available memory on both model nodes.
-2. `stack`: Install the gateway, router and Pylon Operator.
+1. `preflight`: Check GPU calculations and available memory on both model nodes. The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Rerun `preflight` and `qualify` after changing these versions.
+2. `stack`: Install the gateway, router and Pylon Operator. This generates the default caller API key and self-signed certificates. To supply your own, complete [Optional configuration](#optional-configuration) before running `stack`.
 3. `build-runtime`: Build llama.cpp with CUDA and remote procedure call (RPC) support.
 4. `qualify`: Test calculations and data transfer across both GPUs. (After fixing a failed qualification Job, run `python3 spark.py qualify --retry`.)
 5. `download`: Download the six GLM files and verify their sizes and SHA256 checksums. See the [model and runtime licenses](spark/NOTICE).
@@ -169,32 +165,37 @@ Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
 ### Uninstall
 
-For the default K3s recipe, match the example context, namespace and release prefix below to your saved configuration. Use its `releases` names if you configured overrides. The block stops on a failure and keeps the operator running until endpoint cleanup finishes.
+Run the entire block, including parentheses, from `deploy/helm/llm-routing/spark` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
+
+The namespace and release names below are the default K3s recipe values. If you changed `namespace`, `releasePrefix` or `releases` in your saved configuration, replace these names to match. The model chain release is the GLM release name plus `-chain`, and the image-import release is the release prefix plus `-images`.
+
+The block skips absent releases, including the optional image importer, and stops on other failures. It keeps the operator running until endpoint cleanup finishes.
 
 ```bash
 (
-  set -e
-  context=spark-demo
+  set -eu
+  context="$(python3 spark.py context)"
+  : "${context:?Context lookup returned an empty value}"
   namespace=llm-spark-poc
-  prefix=llm-poc
+  : "${namespace:?Set the namespace from your saved configuration}"
 
-  helm --kube-context "$context" -n "$namespace" uninstall "${prefix}-glm" --wait --timeout 3m
+  helm --kube-context "$context" -n "$namespace" uninstall llm-poc-glm --ignore-not-found --wait --timeout 3m
   kubectl --context "$context" -n "$namespace" wait --for=delete inferenceendpoint/glm53-iq2 --timeout=60s
   kubectl --context "$context" -n "$namespace" wait --for=delete deployment/pylon-glm53-iq2 --timeout=90s
-  for release in "${prefix}-glm-chain" "${prefix}-images" "${prefix}-operator" "${prefix}-stack"; do
-    helm --kube-context "$context" -n "$namespace" uninstall "$release" --wait --timeout 3m
+  for release in llm-poc-glm-chain llm-poc-images llm-poc-operator llm-poc-stack; do
+    helm --kube-context "$context" -n "$namespace" uninstall "$release" --ignore-not-found --wait --timeout 3m
   done
 )
 ```
 
 The model/artifact and RPC-cache PVCs, downloaded models, namespace, InferenceEndpoint CRD, CA Secret and operator credential remain. Keep the local work directory and saved configuration for reuse.
 
-After uninstalling the demo releases, run these commands from the recipe directory with the same configuration and context:
+After uninstalling the demo releases, run these commands from the recipe directory with the same configuration and context selection used for installation:
 
 ```bash
-python3 spark.py --context spark-demo init
-python3 spark.py --context spark-demo render
-python3 spark.py --context spark-demo inventory
+python3 spark.py init
+python3 spark.py render
+python3 spark.py inventory
 ```
 
 `init` checks that the demo is uninstalled, reuses the saved placement, image references and credentials, and archives stale progress under `before-reinit-*` in the work directory. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
