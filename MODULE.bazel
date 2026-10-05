@@ -326,6 +326,7 @@ crate.from_cargo(
         "//src/libraries/rust/stargate/crates/%s:Cargo.toml" % c
         for c in [
             "mock-dynamo",
+            "mock-engine",
             "proto",
             "protocol",
             "pylon",

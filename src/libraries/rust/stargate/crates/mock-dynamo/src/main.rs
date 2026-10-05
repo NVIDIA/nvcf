@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod engine_driver;
 mod kv_cache;
 mod openai;
 mod stats_stream;
@@ -144,9 +145,39 @@ struct Args {
     /// Delay /health responses to create deterministic RTT differences in tests
     #[arg(long, default_value_t = 0, value_name = "MS")]
     health_delay_ms: u64,
-    /// Total mock KV-cache capacity in tokens. 0 disables cache tracking
+    /// Total mock KV-cache capacity in tokens. 0 disables cache tracking.
+    /// With the batched engine this is the capacity of each worker
     #[arg(long, default_value_t = 0, value_name = "TOKENS")]
     kv_cache_capacity_tokens: u64,
+    /// Engine timing model. Defaults to `batched` with --profile and `legacy` otherwise
+    #[arg(long, value_enum, value_name = "MODEL")]
+    engine_model: Option<EngineModel>,
+    /// Batched engine: inference workers (GPUs) in this deployment
+    #[arg(long, default_value_t = 1, value_name = "N")]
+    num_gpu_workers: usize,
+    /// Batched engine: maximum running sequences per worker
+    #[arg(long, value_name = "N")]
+    max_num_seqs: Option<usize>,
+    /// Batched engine: maximum decode plus prefill tokens per worker step
+    #[arg(long, value_name = "TOKENS")]
+    max_batched_tokens: Option<u64>,
+    /// Batched engine: fixed cost of each worker step
+    #[arg(long, value_name = "MS")]
+    step_fixed_ms: Option<f64>,
+    /// Batched engine: step cost per decoding sequence
+    #[arg(long, value_name = "MS")]
+    step_decode_ms_per_seq: Option<f64>,
+    /// Batched engine: step cost per prefill token
+    #[arg(long, value_name = "MS")]
+    step_prefill_ms_per_token: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum EngineModel {
+    /// Fixed per-request prefill and decode delays with a concurrency limit.
+    Legacy,
+    /// Iteration-level batching that shares each worker between prefill and decode.
+    Batched,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -247,6 +278,39 @@ impl Args {
         })
     }
 
+    /// The batched engine configuration, or `None` for the legacy model.
+    fn engine_config(&self) -> Result<Option<mock_engine::EngineConfig>> {
+        let model = self.engine_model.unwrap_or(if self.profile.is_some() {
+            EngineModel::Batched
+        } else {
+            EngineModel::Legacy
+        });
+        if model == EngineModel::Legacy {
+            return Ok(None);
+        }
+        let mut config = mock_engine::EngineConfig::h100_llama_3_1_8b(self.num_gpu_workers);
+        if self.kv_cache_capacity_tokens > 0 {
+            config.kv_cache_capacity_tokens = self.kv_cache_capacity_tokens;
+        }
+        if let Some(max_num_seqs) = self.max_num_seqs {
+            config.max_num_seqs = max_num_seqs;
+        }
+        if let Some(max_batched_tokens) = self.max_batched_tokens {
+            config.max_batched_tokens = max_batched_tokens;
+        }
+        if let Some(step_fixed_ms) = self.step_fixed_ms {
+            config.step_fixed_ms = step_fixed_ms;
+        }
+        if let Some(step_decode_ms_per_seq) = self.step_decode_ms_per_seq {
+            config.step_decode_ms_per_seq = step_decode_ms_per_seq;
+        }
+        if let Some(step_prefill_ms_per_token) = self.step_prefill_ms_per_token {
+            config.step_prefill_ms_per_token = step_prefill_ms_per_token;
+        }
+        config.validate().map_err(anyhow::Error::msg)?;
+        Ok(Some(config))
+    }
+
     fn output_tokens(&self) -> Result<OutputTokenConfig> {
         let defaults = self.profile.map_or_else(
             || OutputTokenConfig::fixed(self.num_tokens.unwrap_or(10)),
@@ -273,6 +337,33 @@ impl Args {
             _ => unreachable!("clap requires complete output token distribution settings"),
         }
     }
+}
+
+fn batched_engine_explanation(config: &mock_engine::EngineConfig) -> String {
+    let full_batch = config.max_num_seqs as f64;
+    let decode_step_ms = config.step_fixed_ms + config.step_decode_ms_per_seq * full_batch;
+    format!(
+        r#"  workers: --num-gpu-workers (default 1); each is one GPU with its own scheduler and KV cache
+  per worker: up to {} running sequences and {} tokens per step
+  step time: {} ms + {} ms per decoding sequence + {} ms per prefill token
+  decode rate with {} sequences: about {:.0} tokens/s per sequence
+  prefill capacity: about {:.0} tokens/s per worker, shared by concurrent prompts
+  KV cache: {} tokens per worker; requests go to the worker caching their x-cache-affinity-key,
+    otherwise to the least-loaded worker
+  Pylon --max-engine-concurrency: num_gpu_workers x {}
+  Step costs are estimates, not measurements.
+"#,
+        config.max_num_seqs,
+        config.max_batched_tokens,
+        config.step_fixed_ms,
+        config.step_decode_ms_per_seq,
+        config.step_prefill_ms_per_token,
+        config.max_num_seqs,
+        1000.0 / decode_step_ms,
+        1000.0 / config.step_prefill_ms_per_token,
+        config.kv_cache_capacity_tokens,
+        config.max_num_seqs,
+    )
 }
 
 fn parse_positive_rate(value: &str) -> Result<f64, String> {
@@ -338,9 +429,11 @@ impl Profile {
         format!(
             r#"Profile: h100-llama-3.1-8b
 Calibration: NVIDIA NIM 1.8.0, Llama 3.1 8B Instruct, one H100 80GB, FP8 TP1, near 25 concurrent requests.
-Model: fixed-delay approximation; dynamic batching and load-dependent slowdown are not modeled.
+Default engine model: batched (select the older model with --engine-model legacy).
+{}
+Legacy engine model: fixed-delay approximation; dynamic batching and load-dependent slowdown are not modeled.
 
-Model and hardware behavior:
+Legacy model and hardware behavior:
   context length: {} input + output tokens
   prefill rate: {:.0} uncached input tokens/s
   TTFT: {} ms + deterministic 0..={} ms jitter + uncached prefill time
@@ -365,6 +458,7 @@ Expected cold-cache TTFT:
 
 Benchmark reference: https://docs.nvidia.com/nim/benchmarking/llm/1.0.0/performance.html#llama-3-1-8b-instruct-results
 "#,
+            batched_engine_explanation(&mock_engine::EngineConfig::h100_llama_3_1_8b(1)),
             behavior.context_length_tokens,
             behavior.prefill_tokens_per_s,
             behavior.ttft_ms,
@@ -401,6 +495,8 @@ struct AppState {
     request_slots: Option<Arc<Semaphore>>,
     health_delay: Duration,
     kv_cache: Arc<Mutex<kv_cache::KvCacheState>>,
+    /// Batched engine; `None` selects the legacy timing model.
+    engine: Option<engine_driver::EngineDriver>,
     stats_events: broadcast::Sender<stats_stream::StatsStreamEvent>,
     test_control: test_control::TestControlState,
 }
@@ -421,6 +517,18 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let behavior = args.behavior()?;
+    let engine = match args.engine_config()? {
+        Some(config) => {
+            info!(
+                num_gpu_workers = config.num_gpu_workers,
+                max_num_seqs = config.max_num_seqs,
+                max_concurrency = config.max_concurrency(),
+                "using batched engine; set Pylon --max-engine-concurrency to max_concurrency"
+            );
+            Some(engine_driver::EngineDriver::spawn(config).map_err(anyhow::Error::msg)?)
+        }
+        None => None,
+    };
     let output_tokens = args.output_tokens()?;
     let http_addr: std::net::SocketAddr = args.http_listen_addr.parse()?;
 
@@ -439,6 +547,7 @@ async fn main() -> Result<()> {
         kv_cache: Arc::new(Mutex::new(kv_cache::KvCacheState::new(
             behavior.kv_cache_capacity_tokens,
         ))),
+        engine,
         stats_events,
         test_control: test_control::TestControlState::with_discovered_models([args.model_name]),
     };

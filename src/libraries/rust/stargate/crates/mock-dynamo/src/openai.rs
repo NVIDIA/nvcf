@@ -24,6 +24,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tracing::info;
 
 use crate::AppState;
+use crate::engine_driver::EngineRequest;
 use crate::kv_cache::{KvCacheAccess, KvCacheStats, insert_kv_cache_headers};
 use crate::stats_stream::StatsStreamEvent;
 use crate::test_control::{TestEndpoint, TestRequestClass, is_canary_request, request_class};
@@ -175,11 +176,57 @@ struct StreamResponseConfig {
     id: String,
     request_id: String,
     input_tokens: usize,
-    first_token_delay: Duration,
     output_tokens: usize,
-    kv_cache_access: KvCacheAccess,
-    request_slot: Option<OwnedSemaphorePermit>,
+    prepared: PreparedRequest,
     kind: StreamKind,
+}
+
+/// A request whose prefill has finished, from either engine model.
+struct PreparedRequest {
+    /// Legacy concurrency permit, held until the response ends.
+    request_slot: Option<OwnedSemaphorePermit>,
+    kv_cache_access: KvCacheAccess,
+    /// Remaining delay before the first token. Zero for the batched engine,
+    /// which reports first tokens when they are produced.
+    first_token_delay: Duration,
+    pacing: TokenPacing,
+}
+
+enum TokenPacing {
+    /// Legacy per-request decode delays.
+    Fixed,
+    /// Token events from the shared batched engine.
+    Engine(EngineRequest),
+}
+
+impl TokenPacing {
+    async fn next_token(&mut self, state: &AppState, request_id: &str, token_index: usize) {
+        match self {
+            Self::Fixed => tokio::time::sleep(token_delay(state, request_id, token_index)).await,
+            Self::Engine(request) => request.next_token().await,
+        }
+    }
+
+    async fn whole_response(
+        &mut self,
+        state: &AppState,
+        request_id: &str,
+        first_token_delay: Duration,
+        output_tokens: usize,
+    ) {
+        match self {
+            Self::Fixed => {
+                tokio::time::sleep(non_streaming_delay(
+                    state,
+                    request_id,
+                    first_token_delay,
+                    output_tokens,
+                ))
+                .await;
+            }
+            Self::Engine(request) => request.completion().await,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -227,17 +274,20 @@ pub(crate) async fn chat_completions(
             ),
         );
     };
-    let request_slot = state.acquire_request_slot().await;
     let stream = req.stream == Some(true);
     info!(id = %id, model = %model, stream = stream, "received chat/completions request");
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
-    state.emit_counters(&request_id, &model, 0, 0, false);
-    let kv_cache_access = state
-        .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
+    let mut prepared = state
+        .prepare_request(
+            &model,
+            &request_id,
+            cache_affinity_key.as_deref(),
+            input_tokens,
+            output_tokens,
+            stream,
+        )
         .await;
-    state.emit_counters(&request_id, &model, input_tokens, 0, false);
-    let first_token_delay =
-        state.ttft + Duration::from_millis(jitter_ms(&request_id, "ttft", state.ttft_jitter_ms));
+    let kv_cache_access = prepared.kv_cache_access;
     info!(
         id = %id,
         cache_affinity_key = ?cache_affinity_key,
@@ -256,10 +306,8 @@ pub(crate) async fn chat_completions(
             id,
             request_id,
             input_tokens,
-            first_token_delay,
             output_tokens,
-            kv_cache_access,
-            request_slot,
+            prepared,
             kind: StreamKind::Chat {
                 canary,
                 include_usage: req
@@ -270,13 +318,15 @@ pub(crate) async fn chat_completions(
         });
     }
 
-    tokio::time::sleep(non_streaming_delay(
-        &state,
-        &request_id,
-        first_token_delay,
-        output_tokens,
-    ))
-    .await;
+    prepared
+        .pacing
+        .whole_response(
+            &state,
+            &request_id,
+            prepared.first_token_delay,
+            output_tokens,
+        )
+        .await;
 
     let content = if canary {
         CANARY_ANSWER.to_string()
@@ -352,16 +402,18 @@ pub(crate) async fn responses(
             ),
         );
     };
-    let request_slot = state.acquire_request_slot().await;
     info!(id = %id, model = %model, "received responses request");
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
-    state.emit_counters(&request_id, &model, 0, 0, false);
-    let kv_cache_access = state
-        .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
+    let prepared = state
+        .prepare_request(
+            &model,
+            &request_id,
+            cache_affinity_key.as_deref(),
+            input_tokens,
+            output_tokens,
+            true,
+        )
         .await;
-    state.emit_counters(&request_id, &model, input_tokens, 0, false);
-    let first_token_delay =
-        state.ttft + Duration::from_millis(jitter_ms(&request_id, "ttft", state.ttft_jitter_ms));
 
     stream_response(StreamResponseConfig {
         state,
@@ -369,10 +421,8 @@ pub(crate) async fn responses(
         id,
         request_id,
         input_tokens,
-        first_token_delay,
         output_tokens,
-        kv_cache_access,
-        request_slot,
+        prepared,
         kind: StreamKind::Responses {
             created_at: current_unix_timestamp(),
         },
@@ -443,10 +493,67 @@ pub(crate) async fn health(State(state): State<AppState>) -> &'static str {
 }
 
 pub(crate) async fn kv_cache_stats(State(state): State<AppState>) -> Json<KvCacheStats> {
+    if let Some(engine) = &state.engine {
+        let workers = engine.worker_stats().await;
+        return Json(KvCacheStats::from_engine_workers(
+            &state.model_name,
+            &workers,
+        ));
+    }
     Json(state.kv_cache.lock().await.stats(&state.model_name))
 }
 
 impl AppState {
+    /// Runs prefill and returns once the first token is ready to be timed.
+    /// `emit_start_counters` sends the zero-progress stats event before
+    /// prefill, as streaming responses do.
+    async fn prepare_request(
+        &self,
+        model: &str,
+        request_id: &str,
+        cache_affinity_key: Option<&str>,
+        input_tokens: usize,
+        output_tokens: usize,
+        emit_start_counters: bool,
+    ) -> PreparedRequest {
+        if let Some(engine) = &self.engine {
+            let mut request = engine
+                .submit(cache_affinity_key, input_tokens, output_tokens)
+                .await;
+            if emit_start_counters {
+                self.emit_counters(request_id, model, 0, 0, false);
+            }
+            let reused = usize::try_from(request.first_token().await)
+                .unwrap_or(input_tokens)
+                .min(input_tokens);
+            return PreparedRequest {
+                request_slot: None,
+                kv_cache_access: KvCacheAccess {
+                    hit: reused > 0,
+                    reused_input_tokens: reused as u64,
+                    uncached_input_tokens: (input_tokens - reused) as u64,
+                    ..KvCacheAccess::default()
+                },
+                first_token_delay: Duration::ZERO,
+                pacing: TokenPacing::Engine(request),
+            };
+        }
+        let request_slot = self.acquire_request_slot().await;
+        if emit_start_counters {
+            self.emit_counters(request_id, model, 0, 0, false);
+        }
+        let kv_cache_access = self
+            .process_input_with_cache(cache_affinity_key, input_tokens)
+            .await;
+        PreparedRequest {
+            request_slot,
+            kv_cache_access,
+            first_token_delay: self.ttft
+                + Duration::from_millis(jitter_ms(request_id, "ttft", self.ttft_jitter_ms)),
+            pacing: TokenPacing::Fixed,
+        }
+    }
+
     async fn process_input_with_cache(
         &self,
         cache_affinity_key: Option<&str>,
@@ -566,12 +673,16 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         id,
         request_id,
         input_tokens,
-        first_token_delay,
         output_tokens,
-        kv_cache_access,
-        request_slot,
+        prepared,
         kind,
     } = config;
+    let PreparedRequest {
+        request_slot,
+        kv_cache_access,
+        first_token_delay,
+        mut pacing,
+    } = prepared;
     let stream = async_stream::stream! {
         let _request_slot = request_slot;
         let mut output_text = String::new();
@@ -594,13 +705,15 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         }
         tokio::time::sleep(first_token_delay).await;
 
+        state.emit_counters(&request_id, &model, input_tokens, 0, false);
+
         if let StreamKind::Chat { include_usage, .. } = kind {
             yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role, include_usage));
         }
 
         for i in 0..output_tokens {
             if i > 0 {
-                tokio::time::sleep(token_delay(&state, &request_id, i)).await;
+                pacing.next_token(&state, &request_id, i).await;
             }
             let token = if matches!(kind, StreamKind::Chat { canary: true, .. }) {
                 CANARY_ANSWER

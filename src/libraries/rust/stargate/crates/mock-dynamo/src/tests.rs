@@ -53,6 +53,7 @@ fn test_state() -> AppState {
         request_slots: None,
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
+        engine: None,
         stats_events: test_stats_events(),
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
@@ -1291,4 +1292,156 @@ async fn read_until_contains(
         }
     }
     Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[test]
+fn profile_defaults_to_the_batched_engine_with_configurable_workers() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--num-gpu-workers",
+        "4",
+    ])
+    .unwrap();
+    let config = args
+        .engine_config()
+        .unwrap()
+        .expect("profile uses batched engine");
+    assert_eq!(config.num_gpu_workers, 4);
+    assert_eq!(config.max_concurrency(), 100);
+
+    let legacy = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--engine-model",
+        "legacy",
+    ])
+    .unwrap();
+    assert!(legacy.engine_config().unwrap().is_none());
+    assert!(
+        Args::try_parse_from(["mock-dynamo"])
+            .unwrap()
+            .engine_config()
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn batched_engine_flags_override_profile_costs() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--engine-model",
+        "batched",
+        "--max-num-seqs",
+        "8",
+        "--kv-cache-capacity-tokens",
+        "1000",
+        "--step-prefill-ms-per-token",
+        "0.1",
+    ])
+    .unwrap();
+    let config = args.engine_config().unwrap().unwrap();
+    assert_eq!(config.max_num_seqs, 8);
+    assert_eq!(config.kv_cache_capacity_tokens, 1000);
+    assert_eq!(config.step_prefill_ms_per_token, 0.1);
+    assert!(
+        Args::try_parse_from([
+            "mock-dynamo",
+            "--engine-model",
+            "batched",
+            "--num-gpu-workers",
+            "0"
+        ])
+        .unwrap()
+        .engine_config()
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn batched_engine_reuses_cached_prefixes_across_requests() {
+    let engine = engine_driver::EngineDriver::spawn(mock_engine::EngineConfig {
+        num_gpu_workers: 1,
+        max_num_seqs: 4,
+        max_batched_tokens: 10_000,
+        step_fixed_ms: 1.0,
+        step_decode_ms_per_seq: 0.0,
+        step_prefill_ms_per_token: 0.1,
+        kv_cache_capacity_tokens: 100_000,
+    })
+    .unwrap();
+    let state = AppState {
+        output_tokens: OutputTokenConfig::fixed(3),
+        engine: Some(engine),
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state);
+    let (addr, _server) = spawn_test_app(app).await;
+    let body = serde_json::json!({"model": "dummy-model", "messages": []}).to_string();
+    let send = || {
+        json_response(
+            addr,
+            "POST",
+            "/v1/chat/completions",
+            "connection: close\r\nx-input-tokens: 2000\r\nx-cache-affinity-key: shared-prefix",
+            &body,
+        )
+    };
+
+    let started = std::time::Instant::now();
+    let cold = send().await;
+    let cold_elapsed = started.elapsed();
+    assert!(cold.contains("x-kv-cache-hit: false"), "{cold}");
+    assert!(cold.contains("x-kv-cache-uncached-input-tokens: 2000"));
+    assert!(cold.contains(r#""completion_tokens":3"#));
+    // 2,000 prefill tokens at 0.1 ms each.
+    assert!(
+        cold_elapsed >= Duration::from_millis(200),
+        "{cold_elapsed:?}"
+    );
+
+    let started = std::time::Instant::now();
+    let warm = send().await;
+    assert!(warm.contains("x-kv-cache-hit: true"), "{warm}");
+    assert!(warm.contains("x-kv-cache-reused-input-tokens: 2000"));
+    assert!(started.elapsed() < cold_elapsed / 2);
+
+    let streamed = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "connection: close\r\nx-input-tokens: 2000\r\nx-cache-affinity-key: shared-prefix",
+        &serde_json::json!({"model": "dummy-model", "messages": [], "stream": true}).to_string(),
+    )
+    .await;
+    assert!(streamed.contains("x-kv-cache-hit: true"), "{streamed}");
+    assert_eq!(streamed.matches(r#""content":"#).count(), 3, "{streamed}");
+    assert!(streamed.contains("[DONE]"), "{streamed}");
+}
+
+#[test]
+fn stats_stream_pings_advertise_batched_engine_concurrency() {
+    let advertised = StatsStreamEvent::Ping {
+        v: 1,
+        model: Some("dummy-model".to_string()),
+        max_engine_concurrency: Some(100),
+    };
+    assert_eq!(
+        String::from_utf8(ndjson_event(&advertised).to_vec()).unwrap(),
+        "{\"type\":\"ping\",\"v\":1,\"model\":\"dummy-model\",\"max_engine_concurrency\":100}\n"
+    );
+    let legacy = StatsStreamEvent::Ping {
+        v: 1,
+        model: None,
+        max_engine_concurrency: None,
+    };
+    assert_eq!(
+        String::from_utf8(ndjson_event(&legacy).to_vec()).unwrap(),
+        "{\"type\":\"ping\",\"v\":1}\n"
+    );
 }

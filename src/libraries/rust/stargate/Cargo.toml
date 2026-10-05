@@ -26,6 +26,7 @@ members = [
   "crates/stargate",
   "crates/stargate-k8s-router",
   "crates/mock-dynamo",
+  "crates/mock-engine",
   "crates/stargate-bench",
   "crates/pylon",
 ]
@@ -112,6 +113,7 @@ stargate-tls = { path = "crates/stargate-tls" }
 stargate = { path = "crates/stargate" }
 stargate-proto = { path = "crates/proto" }
 stargate-protocol = { path = "crates/protocol" }
+mock-engine = { path = "crates/mock-engine" }
 pylon-lib = { path = "crates/pylon-lib" }
 
 [profile.integration]
