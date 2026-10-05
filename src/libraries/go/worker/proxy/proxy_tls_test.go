@@ -116,6 +116,28 @@ func TestDefaultProxyPort(t *testing.T) {
 	require.Equal(t, "80", defaultProxyPort(""))
 }
 
+func TestProxyDialAddr(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"https://proxy.example/v1/proxy", "proxy.example:443"},
+		{"http://proxy.example/v1/proxy", "proxy.example:80"},
+		{"https://proxy.example:8443/v1/proxy", "proxy.example:8443"},
+		{"http://127.0.0.1/v1/proxy", "127.0.0.1:80"},
+		// A portless IPv6 URL already carries brackets in Host; they must not be doubled.
+		{"https://[::1]/v1/proxy", "[::1]:443"},
+		{"http://[::1]/v1/proxy", "[::1]:80"},
+		{"https://[::1]:8443/v1/proxy", "[::1]:8443"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			u, err := url.Parse(tc.raw)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, proxyDialAddr(u))
+		})
+	}
+}
+
 // TestDialProxy_PlaintextUnchanged guards the existing behaviour: a non-https scheme
 // must still open a plain TCP connection.
 func TestDialProxy_PlaintextUnchanged(t *testing.T) {

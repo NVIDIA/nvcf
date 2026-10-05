@@ -533,14 +533,11 @@ func tcpConnect(ctx context.Context, requestId string, connectionConfig *pb.Work
 	if err != nil {
 		return nil, traceError(span, err)
 	}
-	proxyAddr := proxy.Host
-	if proxy.Port() == "" {
-		proxyAddr = net.JoinHostPort(proxyAddr, defaultProxyPort(proxy.Scheme))
-	}
+	proxyAddr := proxyDialAddr(proxy)
 
 	c, err := dialProxy(ctx, proxy, proxyAddr)
 	if err != nil {
-		return nil, fmt.Errorf("dialing proxy %q failed: %v", proxyAddr, err)
+		return nil, traceError(span, fmt.Errorf("dialing proxy %q failed: %w", proxyAddr, err))
 	}
 
 	err = request.Write(c)
@@ -575,6 +572,15 @@ func defaultProxyPort(scheme string) string {
 		return "443"
 	}
 	return "80"
+}
+
+// proxyDialAddr resolves the host:port to dial. Hostname() rather than Host, because a
+// portless IPv6 URL carries its own brackets and JoinHostPort would add a second pair.
+func proxyDialAddr(proxy *url.URL) string {
+	if proxy.Port() != "" {
+		return proxy.Host
+	}
+	return net.JoinHostPort(proxy.Hostname(), defaultProxyPort(proxy.Scheme))
 }
 
 // dialProxy opens the transport the CONNECT request is written on. The scheme selects it:
