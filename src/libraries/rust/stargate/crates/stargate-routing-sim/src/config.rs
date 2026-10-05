@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use anyhow::{Context, bail};
+use mock_engine::EngineConfig;
 use serde::Deserialize;
 use stargate::load_balancer::LoadBalancerAlgorithmConfig;
 
@@ -23,6 +24,7 @@ pub struct SimConfig {
     pub name: String,
     pub seeds: Vec<u64>,
     pub topology: TopologyConfig,
+    /// The MockDynamo deployment behind each Pylon, shared with MockDynamo.
     pub engine: EngineConfig,
     pub pylon: PylonConfig,
     pub stargate: StargateConfig,
@@ -49,33 +51,29 @@ pub struct RegionConfig {
     pub name: String,
     pub stargates: usize,
     pub backends: usize,
-    /// Multiplies prefill and decode speed for every backend in the region.
+    /// Divides every engine step cost for backends in the region.
     #[serde(default = "one")]
     pub backend_speed: f64,
+    /// Overrides `engine.num_gpu_workers` for backends in the region.
+    #[serde(default)]
+    pub gpu_workers: Option<usize>,
+    /// Per-backend `num_gpu_workers`, one entry per backend. Takes precedence
+    /// over `gpu_workers`.
+    #[serde(default)]
+    pub backend_gpu_workers: Option<Vec<usize>>,
     /// Relative share of client traffic that enters through this region.
     #[serde(default = "one")]
     pub traffic_weight: f64,
-}
-
-/// Mirrors the MockDynamo engine model so simulated results can be checked
-/// against cluster runs that use MockDynamo backends.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EngineConfig {
-    pub slots: usize,
-    pub prefill_tokens_per_s: f64,
-    pub ttft_base_ms: f64,
-    pub ttft_jitter_ms: f64,
-    pub decode_tokens_per_s_min: f64,
-    pub decode_tokens_per_s_max: f64,
-    pub kv_cache_capacity_tokens: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PylonConfig {
     pub heartbeat_ms: f64,
-    pub max_engine_concurrency: u64,
+    /// When set, Pylon also publishes after request state changes, at most
+    /// once per this many milliseconds. When absent, only heartbeats publish.
+    #[serde(default)]
+    pub stats_update_coalesce_ms: Option<f64>,
     pub input_tps: InputTpsModel,
     pub queue_mismatch: QueueMismatchConfig,
 }
@@ -84,13 +82,15 @@ pub struct PylonConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "model", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum InputTpsModel {
-    /// Fixed values per unit of backend speed, as if seeded and never observed.
+    /// Fixed values per GPU worker and unit of backend speed, as if seeded and
+    /// never observed.
     Constant { mean: f64, max: f64 },
     /// OpenAI fallback stats: the rate over the most recent requests' input
     /// tokens divided by the union of their submit-to-first-output intervals
     /// (`pylon-lib/src/stats/aggregator.rs`). The maximum is a high-water mark.
     FallbackWindow {
-        /// Value left by startup calibration, per unit of backend speed.
+        /// Value left by startup calibration, per GPU worker and unit of
+        /// backend speed.
         initial: f64,
         window: usize,
         duration_floor_ms: f64,
@@ -128,6 +128,22 @@ pub struct ClientConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkloadConfig {
+    /// Offered request rates. Each rate is an independent steady-state run.
+    pub rates_rps: Vec<f64>,
+    pub warmup_s: f64,
+    pub measure_s: f64,
+    /// Exactly one of `fixed` or `growing` describes the sessions.
+    #[serde(default)]
+    pub fixed: Option<FixedSessionsConfig>,
+    #[serde(default)]
+    pub growing: Option<GrowingSessionsConfig>,
+}
+
+/// A fixed population of sessions. Each request picks a session and replays
+/// its prompt, with Poisson arrivals.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixedSessionsConfig {
     pub sessions: usize,
     pub input_tokens_min: u64,
     pub input_tokens_max: u64,
@@ -135,10 +151,43 @@ pub struct WorkloadConfig {
     /// Zipf exponent for session popularity. Zero selects sessions uniformly.
     #[serde(default)]
     pub session_zipf_s: f64,
-    /// Each rate is an independent steady-state run with Poisson arrivals.
-    pub rates_rps: Vec<f64>,
-    pub warmup_s: f64,
-    pub measure_s: f64,
+}
+
+/// Conversations that grow each turn. Sessions start with Poisson arrivals;
+/// each later turn starts a think time after the previous response finishes,
+/// and its prompt is the previous prompt, the previous output, and a new user
+/// message. A session ends after its sampled turn count, at the context limit,
+/// or when a turn fails.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrowingSessionsConfig {
+    pub system_prompt_tokens: u64,
+    pub user_tokens_min: u64,
+    pub user_tokens_max: u64,
+    pub output_tokens_min: u64,
+    pub output_tokens_max: u64,
+    pub turns_min: u32,
+    pub turns_max: u32,
+    /// Mean of the exponential delay between a response and the next turn.
+    pub think_time_mean_s: f64,
+    /// Prompt plus output limit; a turn that would exceed it ends the session.
+    pub max_context_tokens: u64,
+    /// Attempts per turn, including the first. A turn that fails every
+    /// attempt ends the session.
+    #[serde(default = "default_turn_attempts")]
+    pub max_turn_attempts: u32,
+    /// A failed attempt is retried after this many seconds times its attempt
+    /// number.
+    #[serde(default = "default_retry_backoff_s")]
+    pub retry_backoff_s: f64,
+}
+
+fn default_turn_attempts() -> u32 {
+    3
+}
+
+fn default_retry_backoff_s() -> f64 {
+    1.0
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -183,16 +232,66 @@ impl SimConfig {
         {
             bail!("topology needs at least one backend");
         }
-        if self.workload.sessions == 0 {
-            bail!("workload needs at least one session");
-        }
-        if self.workload.input_tokens_min == 0
-            || self.workload.input_tokens_min > self.workload.input_tokens_max
-        {
-            bail!("workload input token range is invalid");
+        match (&self.workload.fixed, &self.workload.growing) {
+            (Some(fixed), None) => {
+                if fixed.sessions == 0 {
+                    bail!("fixed workload needs at least one session");
+                }
+                if fixed.input_tokens_min == 0 || fixed.input_tokens_min > fixed.input_tokens_max {
+                    bail!("fixed workload input token range is invalid");
+                }
+            }
+            (None, Some(growing)) => {
+                if growing.user_tokens_min == 0
+                    || growing.user_tokens_min > growing.user_tokens_max
+                    || growing.output_tokens_min == 0
+                    || growing.output_tokens_min > growing.output_tokens_max
+                    || growing.turns_min == 0
+                    || growing.turns_min > growing.turns_max
+                {
+                    bail!("growing workload ranges are invalid");
+                }
+                if growing.system_prompt_tokens
+                    + growing.user_tokens_max
+                    + growing.output_tokens_max
+                    > growing.max_context_tokens
+                {
+                    bail!("growing workload first turn can exceed max_context_tokens");
+                }
+                if !(growing.think_time_mean_s.is_finite() && growing.think_time_mean_s >= 0.0) {
+                    bail!("growing workload think_time_mean_s must be non-negative");
+                }
+                if growing.max_turn_attempts == 0
+                    || !(growing.retry_backoff_s.is_finite() && growing.retry_backoff_s >= 0.0)
+                {
+                    bail!("growing workload retry settings are invalid");
+                }
+            }
+            _ => bail!("workload needs exactly one of fixed or growing"),
         }
         if self.seeds.is_empty() || self.workload.rates_rps.is_empty() || self.policies.is_empty() {
             bail!("seeds, rates_rps and policies must be non-empty");
+        }
+        self.engine.validate().map_err(anyhow::Error::msg)?;
+        for region in &self.topology.regions {
+            if !(region.backend_speed.is_finite() && region.backend_speed > 0.0) {
+                bail!("region {}: backend_speed must be positive", region.name);
+            }
+            if let Some(workers) = &region.backend_gpu_workers {
+                if workers.len() != region.backends {
+                    bail!(
+                        "region {}: backend_gpu_workers needs {} entries",
+                        region.name,
+                        region.backends
+                    );
+                }
+                if workers.contains(&0) {
+                    bail!(
+                        "region {}: backend_gpu_workers must be positive",
+                        region.name
+                    );
+                }
+            }
         }
         for policy in &self.policies {
             let config = policy.algorithm_config()?;
@@ -206,6 +305,23 @@ impl SimConfig {
                 .with_context(|| format!("policy {} is not a valid load balancer", policy.name))?;
         }
         Ok(())
+    }
+
+    /// Engine configuration for backend `backend` in `region`.
+    pub fn backend_engine(&self, region: &RegionConfig, backend: usize) -> EngineConfig {
+        let speed = region.backend_speed;
+        EngineConfig {
+            num_gpu_workers: region
+                .backend_gpu_workers
+                .as_ref()
+                .map(|workers| workers[backend])
+                .or(region.gpu_workers)
+                .unwrap_or(self.engine.num_gpu_workers),
+            step_fixed_ms: self.engine.step_fixed_ms / speed,
+            step_decode_ms_per_seq: self.engine.step_decode_ms_per_seq / speed,
+            step_prefill_ms_per_token: self.engine.step_prefill_ms_per_token / speed,
+            ..self.engine.clone()
+        }
     }
 }
 

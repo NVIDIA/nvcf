@@ -31,10 +31,16 @@ pub struct RequestRecord {
     pub backend_received_at: Option<Micros>,
     pub reservation: Option<u64>,
     pub backend: Option<usize>,
-    pub prefill_started_at: Option<Micros>,
+    /// Ranking depth of the final selection; 1 is the primary candidate.
+    pub rank_depth: usize,
+    /// When the engine produced the first token, before the return trip.
+    pub backend_first_token_at: Option<Micros>,
     pub reused_input_tokens: u64,
     pub first_token_at: Option<Micros>,
     pub completed_at: Option<Micros>,
+    pub attempt: u32,
+    /// The last allowed attempt of a growing-session turn failed.
+    pub abandoned_session: bool,
     pub no_route: bool,
     pub retries_exhausted: bool,
     pub timed_out: bool,
@@ -67,23 +73,44 @@ pub struct RunSummary {
     pub failed_no_route: usize,
     pub failed_retries_exhausted: usize,
     pub failed_timeout: usize,
+    /// Measured requests that retry a failed turn.
+    pub retried_requests: usize,
+    pub abandoned_sessions: usize,
     pub goodput_rps: f64,
     pub throughput_rps: f64,
     pub slo_attainment: f64,
     pub ttft_ms: Percentiles,
     pub e2e_ms: Percentiles,
+    /// Prompt sizes of measured requests.
+    pub input_tokens: Percentiles,
     /// Arrival to final dispatch, including affinity and bucket waits.
     pub routing_delay_ms: Percentiles,
-    /// Backend arrival to engine slot, excluding prefill.
-    pub engine_queue_ms: Percentiles,
+    /// Backend arrival to first token at the backend: engine queueing plus prefill.
+    pub backend_ttft_ms: Percentiles,
     pub cache_hit_rate: f64,
     pub reused_input_token_fraction: f64,
     pub mismatch_rejections: u64,
     pub mean_route_attempts: f64,
     pub cross_region_fraction: f64,
+    /// Successful requests not served by their first-ranked candidate.
+    pub off_primary_fraction: f64,
     /// Highest per-backend share of successful requests divided by the mean share.
     pub backend_load_peak_to_mean: f64,
+    /// Successful requests by the backend that served them.
+    pub backends: Vec<BackendSummary>,
     pub wall_clock_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BackendSummary {
+    pub id: String,
+    pub gpu_workers: usize,
+    pub max_engine_concurrency: u64,
+    pub succeeded: usize,
+    pub ttft_ms: Percentiles,
+    /// Backend arrival to first token: engine queueing plus prefill.
+    pub backend_ttft_ms: Percentiles,
+    pub reused_input_token_fraction: f64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -117,6 +144,7 @@ pub fn summarize(
     measure_start: Micros,
     measure_end: Micros,
     backend_ids: &[String],
+    backend_engines: &[mock_engine::EngineConfig],
     wall_clock: Duration,
 ) -> RunSummary {
     let config = spec.config;
@@ -185,10 +213,21 @@ pub fn summarize(
             .filter(|record| record.retries_exhausted)
             .count(),
         failed_timeout: measured.iter().filter(|record| record.timed_out).count(),
+        retried_requests: measured.iter().filter(|record| record.attempt > 0).count(),
+        abandoned_sessions: measured
+            .iter()
+            .filter(|record| record.abandoned_session)
+            .count(),
         goodput_rps: good as f64 / measure_seconds,
         throughput_rps: succeeded.len() as f64 / measure_seconds,
         slo_attainment: ratio(good, measured.len()),
         ttft_ms: Percentiles::from_ms(succeeded.iter().map(|record| ms(ttft(record))).collect()),
+        input_tokens: Percentiles::from_ms(
+            measured
+                .iter()
+                .map(|record| record.input_tokens as f64)
+                .collect(),
+        ),
         e2e_ms: Percentiles::from_ms(
             succeeded
                 .iter()
@@ -206,11 +245,13 @@ pub fn summarize(
                 .filter_map(|record| record.dispatched_at.map(|at| ms(at - record.arrival)))
                 .collect(),
         ),
-        engine_queue_ms: Percentiles::from_ms(
+        backend_ttft_ms: Percentiles::from_ms(
             succeeded
                 .iter()
                 .filter_map(|record| {
-                    Some(ms(record.prefill_started_at? - record.backend_received_at?))
+                    Some(ms(
+                        record.backend_first_token_at? - record.backend_received_at?
+                    ))
                 })
                 .collect(),
         ),
@@ -240,6 +281,51 @@ pub fn summarize(
                 / measured.len() as f64
         },
         cross_region_fraction: ratio(cross_region, succeeded.len()),
+        off_primary_fraction: ratio(
+            succeeded
+                .iter()
+                .filter(|record| record.rank_depth > 1)
+                .count(),
+            succeeded.len(),
+        ),
+        backends: backend_ids
+            .iter()
+            .zip(backend_engines)
+            .enumerate()
+            .map(|(index, (id, engine))| {
+                let served: Vec<&RequestRecord> = succeeded
+                    .iter()
+                    .copied()
+                    .filter(|record| record.backend == Some(index))
+                    .collect();
+                let input: u64 = served.iter().map(|record| record.input_tokens).sum();
+                let reused: u64 = served.iter().map(|record| record.reused_input_tokens).sum();
+                BackendSummary {
+                    id: id.clone(),
+                    gpu_workers: engine.num_gpu_workers,
+                    max_engine_concurrency: engine.max_concurrency(),
+                    succeeded: served.len(),
+                    ttft_ms: Percentiles::from_ms(
+                        served.iter().map(|record| ms(ttft(record))).collect(),
+                    ),
+                    backend_ttft_ms: Percentiles::from_ms(
+                        served
+                            .iter()
+                            .filter_map(|record| {
+                                Some(ms(
+                                    record.backend_first_token_at? - record.backend_received_at?
+                                ))
+                            })
+                            .collect(),
+                    ),
+                    reused_input_token_fraction: if input == 0 {
+                        0.0
+                    } else {
+                        reused as f64 / input as f64
+                    },
+                }
+            })
+            .collect(),
         backend_load_peak_to_mean: if mean_backend > 0.0 {
             per_backend.iter().copied().max().unwrap_or_default() as f64 / mean_backend
         } else {

@@ -10,9 +10,10 @@ configurations. It calls the production `LoadBalancer` implementations from the
 - Pylon: live request phases, queue estimates, queue-mismatch admission, and
   the fallback input-throughput window that sets `last_mean_input_tps` and
   `max_input_tps`.
-- Engine: the MockDynamo timing model. Each request has a slot, a FIFO wait
-  queue, independent per-request prefill at a fixed rate, per-key LRU KV
-  cache, and a sampled decode rate.
+- Engine: the `mock-engine` crate that MockDynamo also runs. Each backend is a
+  Dynamo deployment with `num_gpu_workers` workers that batch prefill and
+  decode in shared steps, keep their own KV caches, and receive requests by
+  perfect KV routing.
 - Network: per-region round-trip times between Stargates and backends.
 - Clients: open-loop Poisson arrivals over sessions, a client timeout that
   cancels engine work, and a TTFT SLO for goodput.
@@ -31,8 +32,7 @@ same JSON shape as Stargate per-model load-balancer config.
 
 ## Fidelity limits
 
-- Engine prefill is independent per request, as in MockDynamo. Real engines
-  share prefill compute, so cache hits matter more on real hardware.
+- Engine step costs are estimates until calibrated against a real engine.
 - Load balancers use an unseeded thread RNG internally, so runs with the same
   seed are not bit-for-bit reproducible. Use several seeds.
 - One backend per routed cluster. Shared-engine cluster aggregation and

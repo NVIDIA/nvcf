@@ -30,6 +30,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mock_engine::{EngineEvent, RequestSpec};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use stargate::load_balancer::{
@@ -42,8 +43,8 @@ use stargate_protocol::common::{has_available_engine_slot, queue_time_delta_ms};
 use crate::backend::Backend;
 use crate::config::{PolicyConfig, SimConfig};
 use crate::metrics::{RequestRecord, RunSummary, summarize};
-use crate::time::{Micros, micros_from_duration, micros_from_ms, micros_from_secs};
-use crate::workload::{PlannedRequest, plan};
+use crate::time::{Micros, micros_from_duration, micros_from_ms};
+use crate::workload::{PlannedRequest, WorkloadPlan, plan};
 
 const ROUTING_WAIT_RECHECK: Micros = 25_000;
 const ROUTING_RETRY_MAX_WAIT: Micros = 60_000_000;
@@ -70,11 +71,18 @@ enum Event {
         backend: usize,
         reservation: u64,
     },
-    PrefillDone(usize),
-    FirstToken(usize),
-    Complete(usize),
+    /// The backend's engine has progress due now.
+    EngineWake(usize),
+    /// A growing session's turn starts, or a failed turn is retried.
+    NextTurn {
+        session: u32,
+        turn: u32,
+        attempt: u32,
+    },
     ClientTimeout(usize),
     Heartbeat(usize),
+    /// Coalesced change-driven publish for a backend.
+    Publish(usize),
     StatsArrive {
         backend: usize,
         stargate: usize,
@@ -111,9 +119,7 @@ impl Ord for Scheduled {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EngineState {
     NotAdmitted,
-    Waiting,
-    Prefilling,
-    Decoding,
+    InEngine,
     Finished,
 }
 
@@ -140,6 +146,7 @@ struct RequestState {
 
 struct Simulation<'a> {
     config: &'a SimConfig,
+    workload: WorkloadPlan,
     now: Micros,
     sequence: u64,
     queue: BinaryHeap<Reverse<Scheduled>>,
@@ -150,6 +157,8 @@ struct Simulation<'a> {
     rng: StdRng,
     next_reservation: u64,
     unresolved: usize,
+    last_publish: Vec<Micros>,
+    publish_pending: Vec<bool>,
 }
 
 pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
@@ -158,15 +167,17 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     let mut backends = Vec::new();
     let mut stargates = Vec::new();
     let mut stargate_weights = Vec::new();
+    let mut backend_engines = Vec::new();
     for (region_index, region) in config.topology.regions.iter().enumerate() {
         for backend_index in 0..region.backends {
+            backend_engines.push(config.backend_engine(region, backend_index));
             backends.push(Backend::new(
                 format!("{}-backend-{backend_index}", region.name),
                 region_index,
                 region.backend_speed,
-                &config.engine,
+                config.backend_engine(region, backend_index),
                 &config.pylon,
-            ));
+            )?);
         }
         for _ in 0..region.stargates {
             stargates.push(StargateView {
@@ -180,7 +191,7 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     }
     let initial_stats: Vec<Rc<ModelStats>> = backends
         .iter()
-        .map(|backend| Rc::new(backend.stats(&config.pylon)))
+        .map(|backend| Rc::new(backend.stats()))
         .collect();
     for stargate in &mut stargates {
         stargate.stats = initial_stats.iter().cloned().map(Some).collect();
@@ -189,30 +200,21 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
 
     let workload = plan(
         &config.workload,
-        &config.engine,
         &stargate_weights,
         spec.rate_rps,
         spec.seed,
     );
     let requests = workload
         .requests
-        .into_iter()
-        .map(|plan| RequestState {
-            cache_affinity_key: format!("session-{}", plan.session),
-            record: RequestRecord::new(
-                plan.arrival,
-                plan.input_tokens,
-                stargates[plan.stargate].region,
-            ),
-            plan,
-            excluded: HashSet::new(),
-            engine: EngineState::NotAdmitted,
-            resolved: false,
-        })
+        .iter()
+        .cloned()
+        .map(|plan| request_state(plan, &stargates))
         .collect::<Vec<_>>();
 
+    let (measure_start, measure_end) = (workload.measure_start, workload.measure_end);
     let mut simulation = Simulation {
         config,
+        workload,
         now: 0,
         sequence: 0,
         queue: BinaryHeap::new(),
@@ -228,6 +230,24 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         // policies that retry differently still see identical demand.
         rng: StdRng::seed_from_u64(spec.seed ^ 0x5eed_0f57_a6a7),
         next_reservation: 0,
+        last_publish: vec![
+            0;
+            config
+                .topology
+                .regions
+                .iter()
+                .map(|region| region.backends)
+                .sum()
+        ],
+        publish_pending: vec![
+            false;
+            config
+                .topology
+                .regions
+                .iter()
+                .map(|region| region.backends)
+                .sum()
+        ],
     };
     simulation.schedule_initial_events();
     let started = Instant::now();
@@ -240,15 +260,34 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     Ok(summarize(
         spec,
         &records,
-        workload.measure_start,
-        workload.measure_end,
+        measure_start,
+        measure_end,
         &simulation
             .backends
             .iter()
             .map(|backend| backend.id.clone())
             .collect::<Vec<_>>(),
+        &backend_engines,
         started.elapsed(),
     ))
+}
+
+fn request_state(plan: PlannedRequest, stargates: &[StargateView]) -> RequestState {
+    RequestState {
+        cache_affinity_key: format!("session-{}", plan.session),
+        record: RequestRecord {
+            attempt: plan.attempt,
+            ..RequestRecord::new(
+                plan.arrival,
+                plan.input_tokens,
+                stargates[plan.stargate].region,
+            )
+        },
+        plan,
+        excluded: HashSet::new(),
+        engine: EngineState::NotAdmitted,
+        resolved: false,
+    }
 }
 
 impl Simulation<'_> {
@@ -267,11 +306,8 @@ impl Simulation<'_> {
             let offset = self.rng.random_range(0..heartbeat.max(1));
             self.schedule(offset, Event::Heartbeat(backend));
         }
-        let timeout = micros_from_ms(self.config.client.timeout_ms as f64);
         for request in 0..self.requests.len() {
-            let arrival = self.requests[request].plan.arrival;
-            self.schedule(arrival, Event::RouteAttempt(request));
-            self.schedule(arrival + timeout, Event::ClientTimeout(request));
+            self.schedule_arrival(request);
         }
     }
 
@@ -298,11 +334,24 @@ impl Simulation<'_> {
                 backend,
                 reservation,
             } => self.mismatch_rejected(request, backend, reservation),
-            Event::PrefillDone(request) => self.prefill_done(request),
-            Event::FirstToken(request) => self.first_token(request),
-            Event::Complete(request) => self.complete(request),
+            Event::EngineWake(backend) => self.engine_wake(backend),
+            Event::NextTurn {
+                session,
+                turn,
+                attempt,
+            } => self.next_turn(session, turn, attempt),
             Event::ClientTimeout(request) => self.client_timeout(request),
-            Event::Heartbeat(backend) => self.heartbeat(backend),
+            Event::Heartbeat(backend) => {
+                self.publish(backend);
+                self.schedule(
+                    micros_from_ms(self.config.pylon.heartbeat_ms),
+                    Event::Heartbeat(backend),
+                );
+            }
+            Event::Publish(backend) => {
+                self.publish_pending[backend] = false;
+                self.publish(backend);
+            }
             Event::StatsArrive {
                 backend,
                 stargate,
@@ -396,6 +445,7 @@ impl Simulation<'_> {
         match decision {
             LoadBalancerDecision::Selected(choice) => {
                 let backend = backend_indices[choice.candidate_index];
+                self.requests[request].record.rank_depth = choice.rank_depth;
                 let expected_queue_ms =
                     expected_queue_ms(&candidates[choice.candidate_index].stats);
                 self.dispatch(request, backend, expected_queue_ms);
@@ -435,7 +485,7 @@ impl Simulation<'_> {
             let delay = micros_from_ms(sleep_ms as f64).min(remaining);
             self.schedule(delay, Event::RouteAttempt(request));
         } else {
-            self.resolve(request, |record| record.no_route = true);
+            self.fail(request, |record| record.no_route = true);
         }
     }
 
@@ -474,11 +524,7 @@ impl Simulation<'_> {
             self.backends[backend].region,
             self.stargates[stargate].region,
         );
-        if self.backends[backend].rejects(
-            expected_queue_ms,
-            &self.config.pylon,
-            &self.config.pylon.queue_mismatch,
-        ) {
+        if self.backends[backend].rejects(expected_queue_ms, &self.config.pylon.queue_mismatch) {
             let reservation = self.requests[request]
                 .record
                 .reservation
@@ -493,13 +539,17 @@ impl Simulation<'_> {
             );
             return;
         }
-        let input_tokens = self.requests[request].plan.input_tokens;
+        let plan = &self.requests[request].plan;
+        let spec = RequestSpec {
+            cache_key: Some(u64::from(plan.session)),
+            input_tokens: plan.input_tokens,
+            output_tokens: plan.output_tokens,
+        };
         self.requests[request].record.backend_received_at = Some(self.now);
-        if self.backends[backend].accept(request, input_tokens) {
-            self.start_prefill(request);
-        } else {
-            self.requests[request].engine = EngineState::Waiting;
-        }
+        self.requests[request].engine = EngineState::InEngine;
+        self.backends[backend].accept(self.now, request, spec);
+        self.reschedule_wake(backend);
+        self.stats_changed(backend);
     }
 
     fn mismatch_rejected(&mut self, request: usize, backend: usize, reservation: u64) {
@@ -512,7 +562,7 @@ impl Simulation<'_> {
         record.mismatch_rejections += 1;
         record.backend = None;
         if record.mismatch_rejections > self.config.stargate.max_request_retries {
-            self.resolve(request, |record| record.retries_exhausted = true);
+            self.fail(request, |record| record.retries_exhausted = true);
             return;
         }
         // One backend per cluster: the sibling-backend retry finds none and
@@ -522,122 +572,194 @@ impl Simulation<'_> {
         self.schedule(0, Event::RouteAttempt(request));
     }
 
-    fn start_prefill(&mut self, request: usize) {
-        let backend_index = self.requests[request]
-            .record
-            .backend
-            .expect("admitted request has a backend");
+    /// Advances a backend's engine to now and applies its events.
+    fn engine_wake(&mut self, backend: usize) {
+        if self.backends[backend].wake_at != Some(self.now) {
+            // Superseded by an earlier wake.
+            return;
+        }
+        self.backends[backend].wake_at = None;
+        for event in self.backends[backend].advance_engine(self.now) {
+            let request = match event {
+                EngineEvent::FirstToken { id, .. }
+                | EngineEvent::Token { id, .. }
+                | EngineEvent::Completed { id, .. } => id as usize,
+            };
+            // Events produced before a client cancellation was applied.
+            if self.requests[request].engine != EngineState::InEngine {
+                continue;
+            }
+            match event {
+                EngineEvent::FirstToken {
+                    id,
+                    at,
+                    reused_input_tokens,
+                    ..
+                } => self.first_token(backend, id as usize, at, reused_input_tokens),
+                EngineEvent::Completed { id, at } => self.complete(backend, id as usize, at),
+                EngineEvent::Token { .. } => {}
+            }
+        }
+        self.reschedule_wake(backend);
+    }
+
+    /// Schedules the next engine wake if it is earlier than the pending one.
+    fn reschedule_wake(&mut self, backend: usize) {
+        let Some(next) = self.backends[backend].next_engine_event() else {
+            return;
+        };
+        if self.backends[backend]
+            .wake_at
+            .is_some_and(|scheduled| scheduled <= next)
+        {
+            return;
+        }
+        self.backends[backend].wake_at = Some(next);
+        self.schedule(next.saturating_sub(self.now), Event::EngineWake(backend));
+    }
+
+    fn first_token(&mut self, backend: usize, request: usize, at: Micros, reused: u64) {
         let state = &mut self.requests[request];
-        let backend = &mut self.backends[backend_index];
-        let reused = backend.start_prefill(state.plan.session, state.plan.input_tokens);
         state.record.reused_input_tokens = reused;
-        state.record.prefill_started_at = Some(self.now);
-        state.engine = EngineState::Prefilling;
-        let uncached = state.plan.input_tokens - reused;
-        let delay =
-            micros_from_secs(uncached as f64 / backend.prefill_tokens_per_s(&self.config.engine));
-        self.schedule(delay, Event::PrefillDone(request));
-    }
-
-    fn prefill_done(&mut self, request: usize) {
-        let state = &mut self.requests[request];
-        if state.engine != EngineState::Prefilling {
-            return;
-        }
-        let backend = state
-            .record
-            .backend
-            .expect("prefilling request has a backend");
-        self.backends[backend].finish_prefill(state.plan.session, state.plan.input_tokens);
-        let delay = micros_from_ms(self.config.engine.ttft_base_ms) + state.plan.ttft_jitter;
-        self.schedule(delay, Event::FirstToken(request));
-    }
-
-    fn first_token(&mut self, request: usize) {
-        let state = &mut self.requests[request];
-        if state.engine != EngineState::Prefilling {
-            return;
-        }
-        state.engine = EngineState::Decoding;
-        let backend_index = state
-            .record
-            .backend
-            .expect("decoding request has a backend");
+        state.record.backend_first_token_at = Some(at);
         let submitted = state
             .record
             .backend_received_at
-            .expect("decoding request reached its backend");
-        self.backends[backend_index].first_token(
-            state.plan.input_tokens,
-            submitted,
-            self.now,
-            &self.config.pylon,
-        );
+            .expect("engine requests reached their backend");
+        let (input_tokens, stargate) = (state.plan.input_tokens, state.plan.stargate);
+        self.backends[backend].first_token(input_tokens, submitted, at, &self.config.pylon);
         let return_delay = self.one_way(
-            self.backends[backend_index].region,
-            self.stargates[self.requests[request].plan.stargate].region,
-        );
-        let state = &mut self.requests[request];
-        state.record.first_token_at = Some(self.now + return_delay);
-        let decode_seconds = state.plan.output_tokens.saturating_sub(1) as f64
-            / (state.plan.decode_tokens_per_s * self.backends[backend_index].speed());
-        self.schedule(micros_from_secs(decode_seconds), Event::Complete(request));
-    }
-
-    fn complete(&mut self, request: usize) {
-        let state = &mut self.requests[request];
-        if state.engine != EngineState::Decoding {
-            return;
-        }
-        state.engine = EngineState::Finished;
-        let backend_index = state
-            .record
-            .backend
-            .expect("completed request has a backend");
-        let (stargate, input_tokens) = (state.plan.stargate, state.plan.input_tokens);
-        let return_delay = self.one_way(
-            self.backends[backend_index].region,
+            self.backends[backend].region,
             self.stargates[stargate].region,
         );
-        let next = self.backends[backend_index].complete(input_tokens);
-        self.requests[request].record.completed_at = Some(self.now + return_delay);
+        self.requests[request].record.first_token_at = Some(at + return_delay);
+        self.stats_changed(backend);
+    }
+
+    fn complete(&mut self, backend: usize, request: usize, at: Micros) {
+        let state = &mut self.requests[request];
+        state.engine = EngineState::Finished;
+        let (input_tokens, stargate) = (state.plan.input_tokens, state.plan.stargate);
+        self.backends[backend].complete(input_tokens);
+        let return_delay = self.one_way(
+            self.backends[backend].region,
+            self.stargates[stargate].region,
+        );
+        self.requests[request].record.completed_at = Some(at + return_delay);
         if !self.requests[request].resolved {
             self.resolve(request, |_| {});
+            self.schedule_next_turn(request, at + return_delay);
         }
-        if let Some(next) = next {
-            self.start_prefill(next);
+        self.stats_changed(backend);
+    }
+
+    fn schedule_arrival(&mut self, request: usize) {
+        let arrival = self.requests[request].plan.arrival;
+        let timeout = micros_from_ms(self.config.client.timeout_ms as f64);
+        self.schedule(arrival - self.now, Event::RouteAttempt(request));
+        self.schedule(arrival + timeout - self.now, Event::ClientTimeout(request));
+    }
+
+    /// Queues the session's next turn after a successful response.
+    fn schedule_next_turn(&mut self, request: usize, responded_at: Micros) {
+        let plan = &self.requests[request].plan;
+        let (session, turn) = (plan.session, plan.turn + 1);
+        let Some(next) = self
+            .workload
+            .sessions
+            .get(session as usize)
+            .and_then(|planned| planned.turns.get(turn as usize))
+        else {
+            return;
+        };
+        self.schedule_turn(session, turn, 0, responded_at + next.think_time);
+    }
+
+    /// Resolves a failed request and retries its turn for growing sessions.
+    fn fail(&mut self, request: usize, mark: impl FnOnce(&mut RequestRecord)) {
+        self.resolve(request, mark);
+        let Some(growing) = &self.config.workload.growing else {
+            return;
+        };
+        let plan = &self.requests[request].plan;
+        let attempt = plan.attempt + 1;
+        if attempt >= growing.max_turn_attempts {
+            self.requests[request].record.abandoned_session = true;
+            return;
         }
+        let backoff = micros_from_ms(growing.retry_backoff_s * 1000.0 * f64::from(attempt));
+        let (session, turn) = (plan.session, plan.turn);
+        self.schedule_turn(session, turn, attempt, self.now + backoff);
+    }
+
+    fn schedule_turn(&mut self, session: u32, turn: u32, attempt: u32, start: Micros) {
+        if start >= self.workload.measure_end {
+            return;
+        }
+        // A pending turn keeps the run alive until it starts.
+        self.unresolved += 1;
+        self.schedule(
+            start.saturating_sub(self.now),
+            Event::NextTurn {
+                session,
+                turn,
+                attempt,
+            },
+        );
+    }
+
+    fn next_turn(&mut self, session: u32, turn: u32, attempt: u32) {
+        self.unresolved -= 1;
+        let plan = self
+            .workload
+            .turn_request(session, turn, attempt, self.now)
+            .expect("scheduled turns exist in the plan");
+        let request = self.requests.len();
+        self.requests.push(request_state(plan, &self.stargates));
+        self.unresolved += 1;
+        self.schedule_arrival(request);
     }
 
     fn client_timeout(&mut self, request: usize) {
         if self.requests[request].resolved {
             return;
         }
-        self.resolve(request, |record| record.timed_out = true);
+        self.fail(request, |record| record.timed_out = true);
         // Disconnects propagate to the engine; free the slot the way a dropped
         // MockDynamo stream does. Reservations stay until the next heartbeat.
         let state = &mut self.requests[request];
         let Some(backend_index) = state.record.backend else {
             return;
         };
-        let input_tokens = state.plan.input_tokens;
-        let next = match state.engine {
-            EngineState::NotAdmitted | EngineState::Finished => None,
-            EngineState::Waiting => {
-                self.backends[backend_index].cancel_waiting(request, input_tokens);
-                None
-            }
-            EngineState::Prefilling => self.backends[backend_index].cancel_prefilling(input_tokens),
-            EngineState::Decoding => self.backends[backend_index].complete(input_tokens),
-        };
-        self.requests[request].engine = EngineState::Finished;
-        if let Some(next) = next {
-            self.start_prefill(next);
+        if state.engine != EngineState::InEngine {
+            return;
         }
+        state.engine = EngineState::Finished;
+        let input_tokens = state.plan.input_tokens;
+        let decoding = state.record.backend_first_token_at.is_some();
+        self.backends[backend_index].cancel(self.now, request, input_tokens, decoding);
+        self.reschedule_wake(backend_index);
+        self.stats_changed(backend_index);
     }
 
-    fn heartbeat(&mut self, backend: usize) {
-        let stats = Rc::new(self.backends[backend].stats(&self.config.pylon));
+    /// Pylon request state changed on `backend`.
+    fn stats_changed(&mut self, backend: usize) {
+        let Some(coalesce_ms) = self.config.pylon.stats_update_coalesce_ms else {
+            return;
+        };
+        if self.publish_pending[backend] {
+            return;
+        }
+        self.publish_pending[backend] = true;
+        let ready_at = self.last_publish[backend] + micros_from_ms(coalesce_ms);
+        // A zero delay still runs after the current event, so simultaneous
+        // changes share one publish.
+        self.schedule(ready_at.saturating_sub(self.now), Event::Publish(backend));
+    }
+
+    fn publish(&mut self, backend: usize) {
+        self.last_publish[backend] = self.now;
+        let stats = Rc::new(self.backends[backend].stats());
         let relay = micros_from_ms(self.config.topology.stats_relay_delay_ms);
         for stargate in 0..self.stargates.len() {
             let delay = self.one_way(
@@ -653,10 +775,6 @@ impl Simulation<'_> {
                 },
             );
         }
-        self.schedule(
-            micros_from_ms(self.config.pylon.heartbeat_ms),
-            Event::Heartbeat(backend),
-        );
     }
 
     fn resolve(&mut self, request: usize, mark: impl FnOnce(&mut RequestRecord)) {

@@ -3555,6 +3555,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "clap",
+ "mock-engine",
  "rand 0.9.3",
  "serde",
  "serde_json",

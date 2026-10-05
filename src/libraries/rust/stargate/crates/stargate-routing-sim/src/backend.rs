@@ -13,32 +13,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! One Pylon plus one MockDynamo engine.
+//! One Pylon in front of one MockDynamo deployment.
 //!
-//! Engine: a fixed number of request slots with a FIFO wait queue. Each
-//! admitted request prefills its uncached tokens at the full per-request rate,
-//! independent of other requests, then decodes at its own sampled rate. This is
-//! the MockDynamo timing model, not a model of real GPU contention.
+//! Engine: the shared `mock-engine` model that MockDynamo runs in real time.
+//! It owns scheduling, batching, KV caching, and worker routing.
 //!
 //! Pylon: tracks live requests by phase and publishes the same `ModelStats`
 //! fields that `pylon-lib/src/queue_admission.rs` derives for routing.
 
 use std::collections::{HashMap, VecDeque};
 
+use mock_engine::{Engine, EngineConfig, EngineEvent, RequestSpec};
 use stargate_proto::pb::ModelStats;
 use stargate_protocol::common::{has_available_engine_slot, queue_time_delta_ms};
 
-use crate::config::{EngineConfig, InputTpsModel, PylonConfig, QueueMismatchConfig};
-use crate::kv_cache::KvCache;
+use crate::config::{InputTpsModel, PylonConfig, QueueMismatchConfig};
 use crate::time::{Micros, micros_from_ms};
 
 pub struct Backend {
     pub id: String,
     pub region: usize,
-    speed: f64,
-    free_slots: usize,
-    waiting: VecDeque<usize>,
-    kv_cache: KvCache,
+    engine: Engine,
+    /// Pylon's limit: the deployment's workers times sequences per worker.
+    max_engine_concurrency: u64,
+    /// Time of the scheduled engine wake event, if any.
+    pub wake_at: Option<Micros>,
     input_phase_requests: u64,
     output_phase_requests: u64,
     prompt_work_tokens: u64,
@@ -59,20 +58,23 @@ impl Backend {
         id: String,
         region: usize,
         speed: f64,
-        engine: &EngineConfig,
+        engine: EngineConfig,
         pylon: &PylonConfig,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
+        let capacity = speed * engine.num_gpu_workers as f64;
         let (last_mean, max) = match pylon.input_tps {
-            InputTpsModel::Constant { mean, max } => (mean * speed, max * speed),
-            InputTpsModel::FallbackWindow { initial, .. } => (initial * speed, initial * speed),
+            InputTpsModel::Constant { mean, max } => (mean * capacity, max * capacity),
+            InputTpsModel::FallbackWindow { initial, .. } => {
+                (initial * capacity, initial * capacity)
+            }
         };
-        Self {
+        let max_engine_concurrency = engine.max_concurrency();
+        Ok(Self {
             id,
             region,
-            speed,
-            free_slots: engine.slots,
-            waiting: VecDeque::new(),
-            kv_cache: KvCache::new(engine.kv_cache_capacity_tokens),
+            engine: Engine::new(engine, false).map_err(anyhow::Error::msg)?,
+            max_engine_concurrency,
+            wake_at: None,
             input_phase_requests: 0,
             output_phase_requests: 0,
             prompt_work_tokens: 0,
@@ -82,11 +84,7 @@ impl Backend {
                 max,
                 window: VecDeque::new(),
             },
-        }
-    }
-
-    pub fn speed(&self) -> f64 {
-        self.speed
+        })
     }
 
     fn live_requests(&self) -> u64 {
@@ -95,12 +93,7 @@ impl Backend {
 
     /// Pylon queue-estimate mismatch admission. Returns true when Pylon would
     /// reject with a retryable 429 before the request reaches the engine.
-    pub fn rejects(
-        &self,
-        expected_queue_ms: Option<u64>,
-        pylon: &PylonConfig,
-        mismatch: &QueueMismatchConfig,
-    ) -> bool {
+    pub fn rejects(&self, expected_queue_ms: Option<u64>, mismatch: &QueueMismatchConfig) -> bool {
         if !mismatch.enabled {
             return false;
         }
@@ -108,7 +101,7 @@ impl Backend {
             return false;
         };
         let actual_ms =
-            if has_available_engine_slot(self.live_requests(), pylon.max_engine_concurrency) {
+            if has_available_engine_slot(self.live_requests(), self.max_engine_concurrency) {
                 0
             } else {
                 queue_time_delta_ms(self.prompt_work_tokens, self.input_tps.last_mean)
@@ -124,28 +117,20 @@ impl Backend {
         actual_ms > additive.max(multiplicative)
     }
 
-    /// Pylon accepted the request and forwarded it to the engine. Returns true
-    /// when the engine has a free slot and the request can start now.
-    pub fn accept(&mut self, request: usize, input_tokens: u64) -> bool {
+    /// Pylon accepted the request and submitted it to the engine.
+    pub fn accept(&mut self, now: Micros, request: usize, spec: RequestSpec) {
         self.input_phase_requests += 1;
-        self.prompt_work_tokens += input_tokens;
-        self.total_input_tokens += input_tokens;
-        if self.free_slots > 0 {
-            self.free_slots -= 1;
-            true
-        } else {
-            self.waiting.push_back(request);
-            false
-        }
+        self.prompt_work_tokens += spec.input_tokens;
+        self.total_input_tokens += spec.input_tokens;
+        self.engine.submit(now, request as u64, spec);
     }
 
-    /// Starts prefill and returns the number of reused input tokens.
-    pub fn start_prefill(&mut self, session: u32, input_tokens: u64) -> u64 {
-        self.kv_cache.access(session, input_tokens)
+    pub fn advance_engine(&mut self, now: Micros) -> Vec<EngineEvent> {
+        self.engine.advance_to(now)
     }
 
-    pub fn finish_prefill(&mut self, session: u32, input_tokens: u64) {
-        self.kv_cache.commit(session, input_tokens);
+    pub fn next_engine_event(&self) -> Option<Micros> {
+        self.engine.next_event_time()
     }
 
     /// Pylon observed first output for a request it submitted at `submitted`.
@@ -153,7 +138,7 @@ impl Backend {
         &mut self,
         input_tokens: u64,
         submitted: Micros,
-        now: Micros,
+        first_output: Micros,
         pylon: &PylonConfig,
     ) {
         self.input_phase_requests -= 1;
@@ -165,7 +150,13 @@ impl Backend {
             ..
         } = pylon.input_tps
         {
-            self.observe_input_interval(submitted, now, input_tokens, window, duration_floor_ms);
+            self.observe_input_interval(
+                submitted,
+                first_output,
+                input_tokens,
+                window,
+                duration_floor_ms,
+            );
         }
     }
 
@@ -214,50 +205,25 @@ impl Backend {
         }
     }
 
-    /// Frees the slot and returns the next queued request, which now owns it.
-    pub fn complete(&mut self, input_tokens: u64) -> Option<usize> {
+    /// Pylon saw the request finish.
+    pub fn complete(&mut self, input_tokens: u64) {
         self.output_phase_requests -= 1;
         self.total_input_tokens -= input_tokens;
-        self.release_slot()
     }
 
-    /// The client disconnected while the request waited for a slot.
-    pub fn cancel_waiting(&mut self, request: usize, input_tokens: u64) {
-        let position = self
-            .waiting
-            .iter()
-            .position(|waiting| *waiting == request)
-            .expect("cancelled waiting request must be queued");
-        self.waiting.remove(position);
-        self.forget_input_phase(input_tokens);
-    }
-
-    /// The client disconnected during prefill. Returns the next slot owner.
-    pub fn cancel_prefilling(&mut self, input_tokens: u64) -> Option<usize> {
-        self.forget_input_phase(input_tokens);
-        self.release_slot()
-    }
-
-    fn forget_input_phase(&mut self, input_tokens: u64) {
-        self.input_phase_requests -= 1;
-        self.prompt_work_tokens -= input_tokens;
-        self.total_input_tokens -= input_tokens;
-    }
-
-    fn release_slot(&mut self) -> Option<usize> {
-        if let Some(next) = self.waiting.pop_front() {
-            Some(next)
+    /// The client disconnected; the engine drops the request.
+    pub fn cancel(&mut self, now: Micros, request: usize, input_tokens: u64, decoding: bool) {
+        if decoding {
+            self.output_phase_requests -= 1;
         } else {
-            self.free_slots += 1;
-            None
+            self.input_phase_requests -= 1;
+            self.prompt_work_tokens -= input_tokens;
         }
+        self.total_input_tokens -= input_tokens;
+        self.engine.cancel(now, request as u64);
     }
 
-    pub fn prefill_tokens_per_s(&self, engine: &EngineConfig) -> f64 {
-        engine.prefill_tokens_per_s * self.speed
-    }
-
-    pub fn stats(&self, pylon: &PylonConfig) -> ModelStats {
+    pub fn stats(&self) -> ModelStats {
         let mean_input_tps = self.input_tps.last_mean;
         let mut queue_time_estimate_ms_by_priority = HashMap::new();
         if self.prompt_work_tokens > 0 {
@@ -272,7 +238,7 @@ impl Backend {
             queue_size: self.input_phase_requests,
             queued_input_size: self.prompt_work_tokens,
             num_running_queries: self.live_requests(),
-            max_engine_concurrency: pylon.max_engine_concurrency,
+            max_engine_concurrency: self.max_engine_concurrency,
             total_query_input_size: self.total_input_tokens,
             input_processing_queries: self.input_phase_requests,
             output_generation_queries: self.output_phase_requests,
@@ -288,20 +254,20 @@ mod tests {
 
     fn engine() -> EngineConfig {
         EngineConfig {
-            slots: 2,
-            prefill_tokens_per_s: 1000.0,
-            ttft_base_ms: 0.0,
-            ttft_jitter_ms: 0.0,
-            decode_tokens_per_s_min: 100.0,
-            decode_tokens_per_s_max: 100.0,
-            kv_cache_capacity_tokens: 10_000,
+            num_gpu_workers: 1,
+            max_num_seqs: 2,
+            max_batched_tokens: 10_000,
+            step_fixed_ms: 1.0,
+            step_decode_ms_per_seq: 0.0,
+            step_prefill_ms_per_token: 1.0,
+            kv_cache_capacity_tokens: 100_000,
         }
     }
 
     fn pylon() -> PylonConfig {
         PylonConfig {
             heartbeat_ms: 1000.0,
-            max_engine_concurrency: 2,
+            stats_update_coalesce_ms: None,
             input_tps: InputTpsModel::Constant {
                 mean: 1000.0,
                 max: 1000.0,
@@ -314,32 +280,45 @@ mod tests {
         }
     }
 
+    fn spec(input_tokens: u64) -> RequestSpec {
+        RequestSpec {
+            cache_key: None,
+            input_tokens,
+            output_tokens: 4,
+        }
+    }
+
     #[test]
-    fn slots_queue_fifo_and_hand_off_on_completion() {
+    fn pylon_stats_track_phases_and_engine_concurrency() {
         let pylon = pylon();
-        let mut backend = Backend::new("b".into(), 0, 1.0, &engine(), &pylon);
-        assert!(backend.accept(0, 100));
-        assert!(backend.accept(1, 100));
-        assert!(!backend.accept(2, 100));
-        backend.first_token(100, 0, 1, &pylon);
-        assert_eq!(backend.complete(100), Some(2));
-        let stats = backend.stats(&pylon);
+        let mut backend = Backend::new("b".into(), 0, 1.0, engine(), &pylon).unwrap();
+        backend.accept(0, 0, spec(100));
+        backend.accept(0, 1, spec(100));
+        backend.accept(0, 2, spec(100));
+        let stats = backend.stats();
+        assert_eq!(stats.max_engine_concurrency, 2);
+        assert_eq!(stats.num_running_queries, 3);
+        assert_eq!(stats.queued_input_size, 300);
+        assert_eq!(stats.queue_time_estimate_ms_by_priority.get(&0), Some(&300));
+
+        backend.first_token(100, 0, 10_000, &pylon);
+        backend.cancel(20_000, 2, 100, false);
+        let stats = backend.stats();
         assert_eq!(stats.num_running_queries, 2);
-        assert_eq!(stats.queued_input_size, 200);
-        assert_eq!(stats.queue_time_estimate_ms_by_priority.get(&0), Some(&200));
+        assert_eq!(stats.queued_input_size, 100);
     }
 
     #[test]
     fn mismatch_rejects_only_when_full_and_far_above_expected() {
         let pylon = pylon();
-        let mut backend = Backend::new("b".into(), 0, 1.0, &engine(), &pylon);
-        backend.accept(0, 1000);
-        assert!(!backend.rejects(Some(0), &pylon, &pylon.queue_mismatch));
-        backend.accept(1, 1000);
+        let mut backend = Backend::new("b".into(), 0, 1.0, engine(), &pylon).unwrap();
+        backend.accept(0, 0, spec(1000));
+        assert!(!backend.rejects(Some(0), &pylon.queue_mismatch));
+        backend.accept(0, 1, spec(1000));
         // Full engine with 2,000 prompt tokens at 1,000 tokens/s is 2,000 ms.
-        assert!(backend.rejects(Some(0), &pylon, &pylon.queue_mismatch));
-        assert!(!backend.rejects(Some(1700), &pylon, &pylon.queue_mismatch));
-        assert!(!backend.rejects(None, &pylon, &pylon.queue_mismatch));
+        assert!(backend.rejects(Some(0), &pylon.queue_mismatch));
+        assert!(!backend.rejects(Some(1700), &pylon.queue_mismatch));
+        assert!(!backend.rejects(None, &pylon.queue_mismatch));
     }
 
     #[test]
@@ -350,18 +329,18 @@ mod tests {
             window: 2,
             duration_floor_ms: 10.0,
         };
-        let mut backend = Backend::new("b".into(), 0, 1.0, &engine(), &pylon);
+        let mut backend = Backend::new("b".into(), 0, 1.0, engine(), &pylon).unwrap();
         for request in 0..3 {
-            backend.accept(request, 1000);
+            backend.accept(0, request, spec(1000));
         }
         // Two overlapping one-second intervals: 2,000 tokens over 1.5 s.
         backend.first_token(1000, 0, 1_000_000, &pylon);
         backend.first_token(1000, 500_000, 1_500_000, &pylon);
-        let stats = backend.stats(&pylon);
+        let stats = backend.stats();
         assert!((stats.last_mean_input_tps - 2000.0 / 1.5).abs() < 1e-6);
         // A cache hit with a 20 ms interval replaces the oldest entry.
         backend.first_token(1000, 1_980_000, 2_000_000, &pylon);
-        let stats = backend.stats(&pylon);
+        let stats = backend.stats();
         assert!((stats.last_mean_input_tps - 2000.0 / 1.02).abs() < 1e-6);
         assert_eq!(stats.max_input_tps, Some(stats.last_mean_input_tps));
     }

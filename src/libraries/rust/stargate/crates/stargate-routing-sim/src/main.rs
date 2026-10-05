@@ -15,7 +15,6 @@
 
 mod backend;
 mod config;
-mod kv_cache;
 mod metrics;
 mod sim;
 mod time;
@@ -108,7 +107,7 @@ fn main() -> anyhow::Result<()> {
 fn print_table(name: &str, summaries: &[RunSummary]) {
     println!("{name}");
     println!(
-        "{:<24} {:>6} {:>5} {:>8} {:>8} {:>6} {:>6} {:>6} {:>6} {:>9} {:>9} {:>9} {:>6} {:>6} {:>6} {:>6} {:>7}",
+        "{:<34} {:>6} {:>5} {:>8} {:>8} {:>6} {:>6} {:>6} {:>6} {:>9} {:>9} {:>9} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7}",
         "policy",
         "rps",
         "seed",
@@ -124,12 +123,13 @@ fn print_table(name: &str, summaries: &[RunSummary]) {
         "hit%",
         "reuse%",
         "xreg%",
+        "off1%",
         "peak",
         "wall_ms"
     );
     for summary in summaries {
         println!(
-            "{:<24} {:>6.1} {:>5} {:>8.2} {:>8.2} {:>6.2} {:>6} {:>6} {:>6} {:>9.1} {:>9.1} {:>9.1} {:>6.1} {:>6.1} {:>6.1} {:>6.2} {:>7.0}",
+            "{:<34} {:>6.1} {:>5} {:>8.2} {:>8.2} {:>6.2} {:>6} {:>6} {:>6} {:>9.1} {:>9.1} {:>9.1} {:>6.1} {:>6.1} {:>6.1} {:>6.1} {:>6.2} {:>7.0}",
             summary.policy,
             summary.rate_rps,
             summary.seed,
@@ -145,6 +145,7 @@ fn print_table(name: &str, summaries: &[RunSummary]) {
             summary.cache_hit_rate * 100.0,
             summary.reused_input_token_fraction * 100.0,
             summary.cross_region_fraction * 100.0,
+            summary.off_primary_fraction * 100.0,
             summary.backend_load_peak_to_mean,
             summary.wall_clock_ms,
         );
