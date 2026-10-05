@@ -29,7 +29,7 @@ unbounded request fields as metric labels.
 | `stargate_routing_selections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `algorithm`, `selection` | Primary and ranked fallback cluster choices used for upstream attempts. |
 | `stargate_routing_kv_free_token_fallback_selections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `algorithm` | Routes selected after a higher-ranked candidate failed the KV free-token check. |
 | `stargate_proxy_retry_exhausted_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Total requests that exhausted retry options. |
-| `stargate_admission_rejections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Requests rejected by local input-work admission control. |
+| `stargate_admission_rejections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Requests rejected before an upstream attempt: `input_work_limit_exceeded` and `input_work_capacity_unavailable` from input-work admission, `routing_capacity_unavailable` when every eligible backend lacks capacity. These return `503` with `overloaded_error`. |
 | `stargate_quic_connection_evictions_total` | Counter | `llm-request-router:9090/metrics` | `inference_server_id`, `reason` | Total QUIC pool evictions by backend and reason. |
 | `stargate_quic_hot_path_reconnect_total` | Counter | `llm-request-router:9090/metrics` | `inference_server_id`, `result` | Direct QUIC reconnect attempts from the proxy hot path. |
 | `stargate_tls_reloads_total` | Counter | `llm-request-router:9090/metrics` | `material_type`, `result` | Mounted TLS server identity reload attempts by result. |

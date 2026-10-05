@@ -358,16 +358,19 @@ func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
 	require.NoError(t, validateStorageCapabilityCatalog(catalog))
 }
 
-// shippedChartDir locates the operator chart: Bazel runs the test from the
-// runfiles root with the storage-capability-catalog data dependency, go test
-// runs it from the package directory.
+// shippedChartDir locates the operator chart. Bazel runs the test from the
+// runfiles root with the catalog staged as a data dependency; go test runs it
+// from the package directory. The chart lives outside this package either way.
 func shippedChartDir(t *testing.T) string {
 	t.Helper()
-	chartDir := filepath.Join("src", "compute-plane-services", "nvca", "deployments", "nvca-operator")
-	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
-		chartDir = filepath.Join("..", "..", "deployments", "nvca-operator")
+	rel := filepath.Join("deploy", "helm", "nvca-operator", "nvca-operator")
+	for _, candidate := range []string{rel, filepath.Join("_main", rel), filepath.Join("..", "..", "..", "..", "..", rel)} {
+		if _, err := os.Stat(filepath.Join(candidate, "files", "nvcf-storage-capabilities-v1alpha1.yaml")); err == nil {
+			return candidate
+		}
 	}
-	return chartDir
+	t.Fatal("could not locate the nvca-operator chart files")
+	return ""
 }
 
 func TestShippedStorageCapabilityCatalog(t *testing.T) {
@@ -384,10 +387,10 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NotNil(t, nvmesh.ReaderMountOptions)
 	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 
-	// Weka and OCI FSS are shared filesystems enabled on the ReadWriteMany
-	// shape: one shared claim, readers mount it read-only, no derived reader
-	// PV and therefore no reader mount options.
-	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com"} {
+	// Weka, OCI FSS and NetApp Trident (ONTAP NAS) are shared filesystems
+	// enabled on the ReadWriteMany shape: one shared claim, readers mount it
+	// read-only, no derived reader PV and therefore no reader mount options.
+	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "csi.trident.netapp.io"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
 		require.NotNil(t, driver.AccessModes, provisioner)

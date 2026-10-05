@@ -4,13 +4,13 @@
 
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 
-bao_version=${BAO_VERSION:-2.6.2}
-bao_source_commit=${BAO_SOURCE_COMMIT:-dd9c19c37a878cf4a81b18efb8d6f0599c7da923}
-bao_source_sha256=${BAO_SOURCE_SHA256:-a7784550a9db16f24e99d65a18c9b12a433707c79ef4c1f34262d3f48171c7a9}
-bao_commit_date=${BAO_COMMIT_DATE:-2026-08-18T15:43:05Z}
+bao_version=${BAO_VERSION:-2.6.3}
+bao_source_commit=${BAO_SOURCE_COMMIT:-63a65e6b907589dbb952c371a70260a065bf8bd7}
+bao_source_sha256=${BAO_SOURCE_SHA256:-471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69}
+bao_commit_date=${BAO_COMMIT_DATE:-2026-09-23T16:37:53Z}
 x_crypto_version=${X_CRYPTO_VERSION:-v0.56.0}
 grpc_version=${GRPC_VERSION:-v1.83.2}
 go_archive_version=${GO_ARCHIVE_VERSION:-v0.3.0}

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "server",
@@ -37,4 +37,14 @@ alias(
     name = "go_default_library",
     actual = ":server",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "server_test",
+    srcs = ["server_test.go"],
+    embed = [":server"],
+    deps = [
+        "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/provider",
+    ],
 )

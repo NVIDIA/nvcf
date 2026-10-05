@@ -25,7 +25,10 @@ mod tests;
 mod webtransport;
 
 pub use backend::{DEFAULT_PRIORITY_CEILING, UpstreamBackend};
-pub use core::{DEFAULT_MAX_SSE_BUFFER_BYTES, PylonRetryConfig, TunnelForwardingConfig};
+pub use core::{
+    DEFAULT_FIRST_OUTPUT_TIMEOUT, DEFAULT_MAX_SSE_BUFFER_BYTES, DEFAULT_OUTPUT_CHUNK_TIMEOUT,
+    PylonRetryConfig, TunnelForwardingConfig,
+};
 pub use endpoint::TunnelError;
 pub use reverse::{ReverseQuicTunnelConfig, ReverseQuicTunnelHandle, start_reverse_quic_tunnel};
 pub use server::{QuicHttpTunnelConfig, QuicHttpTunnelHandle, start_quic_http_tunnel};

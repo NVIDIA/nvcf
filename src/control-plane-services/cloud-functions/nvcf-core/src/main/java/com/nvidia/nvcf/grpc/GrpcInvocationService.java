@@ -20,8 +20,10 @@ import static com.nvidia.nvcf.util.NvcfConstants.ADMIN_SCOPE_INVOKE_FUNCTION;
 import static com.nvidia.nvcf.util.NvcfConstants.SCOPE_INVOKE_FUNCTION;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.nvcf.configuration.exceptions.InvalidInvocationException;
+import com.nvidia.nvcf.persistence.function.entity.FunctionType;
 import com.nvidia.nvcf.proto.ClientInvokeRequest;
 import com.nvidia.nvcf.proto.ClientInvokeResponse;
 import com.nvidia.nvcf.proto.ClientInvokeResponse.FunctionVersion;
@@ -46,6 +48,10 @@ import org.springframework.web.ErrorResponseException;
 @RequiredArgsConstructor
 public class GrpcInvocationService extends InvocationImplBase {
 
+    private static final String MESG_LLM_FUNCTION_NOT_INVOCABLE =
+            "Function id '%s': LLM functions cannot be invoked through this endpoint. "
+                    + "Use the LLM API instead.";
+
     private final GrpcAuthService grpcAuthService;
     private final AccountService accountService;
     private final FunctionInvocationValidationService functionInvocationValidationService;
@@ -64,10 +70,14 @@ public class GrpcInvocationService extends InvocationImplBase {
                 UUID.fromString(request.getFunctionVersionId()) : null;
         var ncaId = request.hasTargetNcaId() ? request.getTargetNcaId()
                 : accountService.getNcaId(authentication);
-        var functions = lookupAndValidateAccess(authentication,
-                ncaId,
+        // LLM workers do not consume the request queues this path publishes to, so a request
+        // would wait out the poll window and time out. Only return versions that can serve it.
+        var functions = withoutLlmVersions(ncaId,
                 functionId,
-                functionVersionId);
+                lookupAndValidateAccess(authentication,
+                        ncaId,
+                        functionId,
+                        functionVersionId));
 
         // picking the first function version for function level info.
         // all function versions will be of the same function.
@@ -95,6 +105,8 @@ public class GrpcInvocationService extends InvocationImplBase {
                                         .setFunctionId(request.getFunctionId())
                                         .setClientAuthSubject(first.subject())
                                         .setClientNcaId(first.ncaId())
+                                        .setClientOwnerNcaId(
+                                                accountService.getOwnerNcaId(authentication, first.ncaId()))
                                         .addAllFunctionVersions(versions)
                                         .build());
         responseObserver.onCompleted();
@@ -152,6 +164,22 @@ public class GrpcInvocationService extends InvocationImplBase {
                             "functionVersionId={}", ncaId, functionId, functionVersionId);
             throw new InvalidInvocationException(ncaId, e);
         }
+    }
+
+    private static List<FunctionContext> withoutLlmVersions(
+            String ncaId,
+            UUID functionId,
+            List<FunctionContext> functions) {
+        var invocable = functions.stream()
+                .filter(context -> context.targetFunction().getFunctionType() != FunctionType.LLM)
+                .toList();
+        if (invocable.isEmpty()) {
+            var mesg = MESG_LLM_FUNCTION_NOT_INVOCABLE.formatted(functionId);
+            log.warn("Rejecting classic invocation of LLM function: ncaId={}, functionId={}",
+                     ncaId, functionId);
+            throw new InvalidInvocationException(ncaId, new NotFoundException(mesg));
+        }
+        return invocable;
     }
 
 }

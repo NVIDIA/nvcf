@@ -1092,6 +1092,7 @@ algorithms:
             cache_affinity_key: Some("cache-key-0".to_string()),
             input_tokens: 128,
             output_tokens: 16,
+            observed_output_tokens: Some(16),
             scheduled_offset_ms: 0,
             status_code: 200,
             selected_backend_id: Some("backend-0".to_string()),

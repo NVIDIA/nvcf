@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # This script exits non-zero if .env image tags are out of sync with the
-# vendored operator chart defaults in deployments/nvca-operator/.
+# operator chart defaults in deploy/helm/nvca-operator/nvca-operator/.
 set -eu -o pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${repo_root}"

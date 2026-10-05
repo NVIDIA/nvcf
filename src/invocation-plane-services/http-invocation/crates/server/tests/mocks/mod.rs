@@ -45,11 +45,17 @@ pub const VERSION_ID_1: Uuid = uuid!("26597542-1782-4a18-aa02-504ba0598202");
 pub const VERSION_ID_2: Uuid = uuid!("49331123-201a-407d-9cbc-7bb328fd0295");
 pub const VERSION_ID_3: Uuid = uuid!("4117e32b-1b96-4be2-8cd2-9da4047daa05");
 pub const VERSION_ID_4: Uuid = uuid!("2bf046f7-37c1-40b8-b2c2-8f8d260f7645");
+#[allow(unused)]
+pub const LLM_FUNCTION_ID: Uuid = uuid!("5d0c8a3e-9f4b-4e62-8a1d-3b7e2c9f0a14");
+#[allow(unused)]
+pub const LLM_VERSION_ID: Uuid = uuid!("e2a7b4c1-6d3f-4a85-9c02-7f1e8b5d3a96");
 pub const LOCALSTACK_REGION: &str = "us-east-1";
 pub const ASSETS_BUCKET: &str = "assets-bucket";
 pub const RESULTS_BUCKET: &str = "results-bucket";
 pub const API_KEY: &str = "test-token";
 pub const NCA_ID: &str = "test-nca-id";
+#[allow(unused)]
+pub const OWNER_NCA_ID: &str = "test-owner-nca-id";
 #[allow(unused)]
 pub const INSTANCE_ID: &str = "local-worker-instance-id";
 
@@ -141,6 +147,7 @@ async fn mock_nvcf_api() -> ApiMockServer {
                     functions: vec![VERSION_ID_1, VERSION_ID_2],
                     has_rate_limit: false,
                     sync_check: false,
+                    is_llm: false,
                 },
             ),
             // FUNCTION_ID_2_RATELIMIT_SYNC has rate limit and sync check
@@ -150,6 +157,7 @@ async fn mock_nvcf_api() -> ApiMockServer {
                     functions: vec![VERSION_ID_3],
                     has_rate_limit: true,
                     sync_check: true,
+                    is_llm: false,
                 },
             ),
             // FUNCTION_ID_3_RATELIMIT_ASYNC has rate limit and async check
@@ -159,6 +167,16 @@ async fn mock_nvcf_api() -> ApiMockServer {
                     functions: vec![VERSION_ID_4],
                     has_rate_limit: true,
                     sync_check: false,
+                    is_llm: false,
+                },
+            ),
+            (
+                LLM_FUNCTION_ID,
+                FunctionMetadata {
+                    functions: vec![LLM_VERSION_ID],
+                    has_rate_limit: false,
+                    sync_check: false,
+                    is_llm: true,
                 },
             ),
         ]
@@ -169,6 +187,7 @@ async fn mock_nvcf_api() -> ApiMockServer {
             ApiClient {
                 subject: "test-subject".into(),
                 nca_id: NCA_ID.into(),
+                owner_nca_id: OWNER_NCA_ID.into(),
             },
         )]
         .into_iter()

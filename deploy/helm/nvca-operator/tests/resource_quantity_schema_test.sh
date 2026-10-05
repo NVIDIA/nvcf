@@ -5,7 +5,6 @@
 set -euo pipefail
 
 chart_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source_chart="${chart_root}/../../../src/compute-plane-services/nvca/deployments/nvca-operator"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
@@ -85,7 +84,7 @@ render_with_quantity() {
     --namespace nvca-operator \
     --set generateImagePullSecret=false \
     --set imagePullSecretName=dummy \
-    "${extra_args[@]}" \
+    ${extra_args[@]+"${extra_args[@]}"} \
     --set-string "${path}=${value}" \
     >"${output}" 2>"${error_output}"
 }
@@ -129,7 +128,7 @@ invalid_quantities=(
   "1e" "1E+" "1.2.3" "--1" "- 1" "1foo" "NaN" "Inf" " 1" "1 "
 )
 
-charts=("${chart_root}/nvca-operator" "${source_chart}")
+charts=("${chart_root}/nvca-operator")
 for chart in "${charts[@]}"; do
   assert_schema_topology "${chart}/values.schema.json"
 

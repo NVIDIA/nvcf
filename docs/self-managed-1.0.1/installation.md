@@ -2,14 +2,14 @@
 
 Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
 
-For a local k3d fresh install, start with the [Quickstart](./quickstart.md). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
+For a local k3d fresh install, start with the [Quickstart](/nvcf/overview/quickstart). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
 
 For a full list of required artifacts, see [self-hosted-artifact-manifest](./manifest.md).
 
 ![Self-hosted component overview](images/nvcf-high-level-stack.svg)
 
 <Tip>
-Want to try NVCF locally first? See [Local Development](./local-development.md) to create a k3d cluster, then use the [Quickstart](./quickstart.md) local k3d flow.
+Want to try NVCF locally first? See [Local Development](./local-development.md) to create a k3d cluster, then use the [Quickstart](/nvcf/overview/quickstart) local k3d flow.
 
 </Tip>
 
@@ -17,7 +17,7 @@ Want to try NVCF locally first? See [Local Development](./local-development.md) 
 
 | Path | Use when | Starting point |
 | --- | --- | --- |
-| Local one-click CLI installation | You want the fastest local k3d install and cluster registration path. | [Quickstart](./quickstart.md) |
+| Local one-click CLI installation | You want the fastest local k3d install and cluster registration path. | [Quickstart](/nvcf/overview/quickstart) |
 | Helmfile installation | You need manual release control, partial recovery, upgrades, or detailed Helmfile operations. | [Helmfile Installation](./helmfile-installation.md) |
 
 The control plane and GPU cluster can be the same Kubernetes cluster or separate clusters when you use Helmfile or the explicit CLI install primitives. The quickstart supports only a single local k3d cluster. For a complete Amazon EKS example of both topologies, see the [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
@@ -42,7 +42,7 @@ Every installation path follows the same high-level sequence:
 
 3. Create or select Kubernetes cluster targets. You need a cluster for the control plane and a GPU cluster for function workloads. These can be the same cluster or separate clusters.
 
-4. Install the self-hosted control plane. Use the [Quickstart](./quickstart.md) for a local k3d install or [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations.
+4. Install the self-hosted control plane. Use the [Quickstart](/nvcf/overview/quickstart) for a local k3d install or [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations.
 
 5. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](./cluster-management/self-managed.md).
 
