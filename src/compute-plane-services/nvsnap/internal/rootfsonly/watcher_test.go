@@ -451,10 +451,13 @@ func TestWatcher_AbandonedPodReplacementIsRetryable(t *testing.T) {
 	w.WarmupDelay = 0
 
 	// refreshPodForCapture re-reads the pod and abandons the capture when the
-	// UID changed, meaning ours was deleted and recreated. The client has no
-	// such pod at all, which drives the same abandon path.
-	pod := fakePod(types.UID("uid-that-is-not-in-the-fake-client"), "ghost",
-		map[string]string{DefaultCaptureLabel: "true"}, true)
+	// UID changed, meaning ours was deleted and recreated. The client holds a
+	// pod with the same namespace and name but a different UID, which is the
+	// replacement case exactly; a missing pod would fall back to the stale
+	// copy and never take this branch.
+	labels := map[string]string{DefaultCaptureLabel: "true"}
+	pod := fakePod(types.UID("uid-of-the-deleted-pod"), "ghost", labels, true)
+	w.KubeClient = fake.NewSimpleClientset(fakePod(types.UID("uid-of-the-replacement"), "ghost", labels, true))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -480,15 +483,23 @@ func TestWatcher_CommittedCaptureStaysDeduped(t *testing.T) {
 	w.WarmupDelay = 0
 
 	pod := fakePod(types.UID(env.podUID), "p", map[string]string{DefaultCaptureLabel: "true"}, true)
+	done := make(chan bool, 1)
+	w.captureDone = func(_ types.UID, committed bool) { done <- committed }
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	w.HandlePodEvent(ctx, pod)
 
-	// Once the capture commits the mark must persist.
-	if !waitFor(t, 3*time.Second, func() bool { _, ok := w.captured.Load(pod.UID); return ok }) {
-		t.Fatal("expected the UID to remain marked after a committed capture")
+	// HandlePodEvent marks the UID synchronously, so the mark being present
+	// says nothing yet. Wait for the capture goroutine to finish, confirm it
+	// committed, and only then assert the mark survived the deferred release.
+	select {
+	case committed := <-done:
+		if !committed {
+			t.Fatal("the capture did not commit; the fixtures are wrong for this test")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture goroutine did not finish")
 	}
-	time.Sleep(200 * time.Millisecond)
 	if _, ok := w.captured.Load(pod.UID); !ok {
 		t.Fatal("a committed capture released its dedup mark; the pod would be recaptured on every resync")
 	}

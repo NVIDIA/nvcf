@@ -209,3 +209,44 @@ func TestTryL2CacheDir_PrewarmFollowsStorageProfile(t *testing.T) {
 		t.Error("NVSNAP_PREWARM=0 on the pod must override a profile that turns the prewarm on")
 	}
 }
+
+// NVSNAP_PREWARM supplied through ValueFrom cannot be read at admission: the
+// prewarm init must still be added, carry the same reference, and gate the
+// sweep on the resolved value at run time.
+func TestTryL2CacheDir_PrewarmValueFromGatesAtRuntime(t *testing.T) {
+	m := &Mutator{
+		CacheDir: "/opt/nvsnap", MainContainer: 0,
+		L2Backend: &stubL2Backend{mountResult: checkpointstore.PodMount{
+			Volume:      corev1.Volume{Name: "x", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "rox-abc"}}},
+			VolumeMount: corev1.VolumeMount{Name: "x", MountPath: "/opt/nvsnap"},
+		}},
+	}
+	ref := corev1.EnvVar{Name: "NVSNAP_PREWARM", ValueFrom: &corev1.EnvVarSource{
+		ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "tuning"}, Key: "prewarm"},
+	}}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "reuse", Namespace: "ns"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "vllm", Image: "img", Command: []string{"serve"}, Env: []corev1.EnvVar{ref},
+		}}},
+	}
+	patches, err := m.tryL2CacheDir(context.Background(), pod, "abc", checkpointstore.Manifest{Hash: "abc", CaptureMethod: "cachedir"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range patches {
+		c, ok := p.Value.(corev1.Container)
+		if !ok || c.Name != "nvsnap-prewarm" {
+			continue
+		}
+		cmd := strings.Join(c.Command, " ")
+		if !strings.Contains(cmd, `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0`) {
+			t.Errorf("prewarm command must gate on the resolved NVSNAP_PREWARM, got %q", cmd)
+		}
+		if len(c.Env) != 1 || c.Env[0].Name != "NVSNAP_PREWARM" || c.Env[0].ValueFrom == nil || c.Env[0].ValueFrom.ConfigMapKeyRef == nil || c.Env[0].ValueFrom.ConfigMapKeyRef.Name != "tuning" {
+			t.Errorf("prewarm init must carry the workload's NVSNAP_PREWARM reference, got %+v", c.Env)
+		}
+		return
+	}
+	t.Fatal("a ValueFrom NVSNAP_PREWARM must still add the prewarm init container")
+}

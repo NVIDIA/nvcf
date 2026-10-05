@@ -215,7 +215,9 @@ data:
       strategy: shared-volume
       volumeHandleTransform: nvmesh
       mountOptions: [ro, norecovery, nouuid]  # xfs RO multi-mount needs nouuid
-      prewarm: false                       # one reader saturates the volume
+      prewarm: false                       # ConfigMap override only: the built-in
+                                           # NVMesh profile leaves prewarm on; one
+                                           # reader saturates the volume
     efs.csi.aws.com:                       # EFS — shared RWX filesystem
       strategy: shared-volume
       volumeHandleTransform: none
