@@ -40,7 +40,7 @@ Use your existing kubeconfig.
    python3 spark.py inventory
    ```
 
-Check the rendered manifests and cluster inventory before deploying. Installation commands report their result and save detailed tool output in private `evidence/*.log` files inside the work directory. Failures identify the next check and the diagnostic log.
+`render` lints the Helm charts and generates manifests. `inventory` checks node readiness, GPU availability and cluster prerequisites. Continue after both commands pass.
 
 ### Build and distribute the application images
 
@@ -265,6 +265,10 @@ Memory and runtime limits:
 - GLM canary timing is 180 seconds for the timeout and 60 seconds for the interval.
 
 Both model persistent volume claims (PVCs) remain after uninstall.
+
+## Troubleshooting
+
+If a command fails, follow the next check and diagnostic log path printed by the CLI. Detailed tool output is saved in private `evidence/*.log` files inside the work directory. Use `python3 spark.py paths` to locate that directory.
 
 ## Local validation
 
