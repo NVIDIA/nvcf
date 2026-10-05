@@ -56,12 +56,16 @@ func retryable(err error) bool {
 }
 
 // observe calls fn until it succeeds or fails in a way a retry cannot change,
-// for at most observeTimeout and never past ctx. Each attempt is bounded by
-// attemptContext, so one hung request cannot spend the whole budget.
+// for at most observeTimeout and never past ctx. An attempt may use what is
+// left of that budget, not a poll loop's pollAttemptTimeout: a LIST on a large
+// cluster can take longer than that cap, and every attempt cut off there
+// fails the same way. The client's request timeout bounds a hung request. The
+// one-second floor is attemptContext's: an attempt that starts after a retry
+// pause has crossed the deadline still gets an answer.
 func observe[T any](ctx context.Context, fn func(context.Context) (T, error)) (T, error) {
 	deadline := time.Now().Add(observeTimeout)
 	for {
-		attemptCtx, cancel := attemptContext(ctx, deadline)
+		attemptCtx, cancel := context.WithTimeout(ctx, max(time.Until(deadline), time.Second))
 		v, err := fn(attemptCtx)
 		cancel()
 		if err == nil || !retryable(err) || ctx.Err() != nil || !time.Now().Before(deadline) {

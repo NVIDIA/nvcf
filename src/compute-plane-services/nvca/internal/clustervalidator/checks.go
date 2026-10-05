@@ -2380,9 +2380,9 @@ func (p *n2nProbe) failOnSandboxFaults(ctx context.Context, outcome *probeOutcom
 // failure on it without the overlay. A failed read returns nothing, which
 // leaves the evidence as it was.
 func (p *n2nProbe) lostNodes(ctx context.Context, names []string) map[string]string {
-	listCtx, cancel := context.WithTimeout(ctx, pollAttemptTimeout)
-	defer cancel()
-	list, err := p.client.CoreV1().Nodes().List(listCtx, metav1.ListOptions{})
+	list, err := observe(ctx, func(c context.Context) (*corev1.NodeList, error) {
+		return p.client.CoreV1().Nodes().List(c, metav1.ListOptions{})
+	})
 	if err != nil {
 		printWarning(p.log, fmt.Sprintf("Could not re-read nodes to rule out one lost during the probe: %v", err))
 		return nil

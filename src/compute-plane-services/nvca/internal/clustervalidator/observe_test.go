@@ -223,6 +223,51 @@ func TestObserve_RetriesOnlyWhatCanClear(t *testing.T) {
 	assert.Equal(t, 1, calls, "an ended run is not retried")
 }
 
+// An observed request may use the whole budget, not a poll attempt's cap: a
+// node LIST on a large cluster can take longer than that cap, and cutting
+// every attempt off there leaves the row unknown on every run.
+func TestObserve_AnAttemptMayOutlastThePollCap(t *testing.T) {
+	prev := observeTimeout
+	observeTimeout = 3 * pollAttemptTimeout
+	t.Cleanup(func() { observeTimeout = prev })
+
+	var left time.Duration
+	_, err := observe(context.Background(), func(c context.Context) (struct{}, error) {
+		deadline, ok := c.Deadline()
+		require.True(t, ok, "an attempt is still bounded")
+		left = time.Until(deadline)
+		return struct{}{}, nil
+	})
+	require.NoError(t, err)
+	assert.Greater(t, left, pollAttemptTimeout)
+}
+
+// The node re-read that rules out a node lost during the probe is observed
+// like any other read: a throttled LIST is retried, so the node that left is
+// still a coverage gap and not an overlay failure.
+func TestCheckNodeToNode_NodeReReadRetriesATransientError(t *testing.T) {
+	nodes := []string{"node-1", "node-2", "node-3"}
+	var f *n2nFixture
+	var lost string
+	f = newN2NFixture(t, readyNodes(3), runningServers(nodes...), nil, func() (*corev1.Pod, error) {
+		lost = f.others(nodes...)[1]
+		f.removeNode(t, lost)
+		return checkerReported(nodeToNodeUnreachableExit, "unreachable: "+ipOf(lost)), nil
+	})
+	var lists atomic.Int32
+	f.client.PrependReactor("list", "nodes", func(ktesting.Action) (bool, runtime.Object, error) {
+		if lists.Add(1) == 2 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	state := runN2N(f)
+
+	require.NotNil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
+	assert.True(t, *state.NodeToNodeOK, "the node still up was reached")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), lost+": removed during the probe")
+}
+
 // Discovery takes no context in client-go. A stalled aggregated API must not
 // hold the run past its deadline.
 func TestDiscoverGatewayAPIResources_EndsWithItsContext(t *testing.T) {
