@@ -86,6 +86,13 @@ reach the grpc-proxy callback listener. The stack passes this value to the
 grpc-proxy chart, which renders the grpc-proxy container configuration. Do not
 set the raw container environment variable directly.
 
+The URL scheme sets the worker's transport. Use `http://` when workers reach
+the callback listener in plaintext. Use `https://` when a load balancer in
+front of the listener terminates TLS. The worker then opens TLS to that
+address, on port 443 unless the URL sets one, and verifies the certificate
+against the system trust store plus any CAs in `NVCF_PROXY_CA_FILE` or
+`NVCF_PROXY_CA_PEM`.
+
 For local multi-cluster testing with ncp-local, use:
 
 ```yaml

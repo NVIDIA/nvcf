@@ -19,8 +19,13 @@ package proxy
 
 import (
 	"context"
+	"crypto/x509"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -268,4 +273,128 @@ func TestTcpConnect_BadURI(t *testing.T) {
 		ProxyAuthorizationToken: "tok",
 	})
 	require.Error(t, err)
+}
+
+// connectTunnelHandler accepts the worker's CONNECT /v1/proxy and writes a
+// marker into the hijacked tunnel.
+func connectTunnelHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect || r.URL.Path != "/v1/proxy" || r.Header.Get("Authorization") != "Bearer tok" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		conn, buf, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\n\r\ntunnel-up")
+		_ = buf.Flush()
+	})
+}
+
+// TestTcpConnect_Scheme verifies the URI scheme selects the transport: http://
+// dials plain TCP, https:// dials TLS and verifies the proxy certificate.
+func TestTcpConnect_Scheme(t *testing.T) {
+	setupLogger()
+	tests := []struct {
+		name      string
+		serverTLS bool
+		scheme    string
+		trusted   bool
+		wantErr   bool
+	}{
+		{name: "http to plain listener", scheme: "http"},
+		{name: "https to trusted TLS listener", serverTLS: true, scheme: "https", trusted: true},
+		{name: "https to untrusted TLS listener", serverTLS: true, scheme: "https", wantErr: true},
+		{name: "http to TLS listener", serverTLS: true, scheme: "http", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewUnstartedServer(connectTunnelHandler())
+			srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+			if tt.serverTLS {
+				srv.StartTLS()
+			} else {
+				srv.Start()
+			}
+			defer srv.Close()
+
+			pool := x509.NewCertPool()
+			if tt.trusted {
+				pool.AddCert(srv.Certificate())
+			}
+			before := proxyRootCAs
+			proxyRootCAs = func() (*x509.CertPool, error) { return pool, nil }
+			t.Cleanup(func() { proxyRootCAs = before })
+
+			conn, err := tcpConnect(t.Context(), "req-id", &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_HTTP1ConnectionConfig{
+				ProxyURI:                tt.scheme + "://" + srv.Listener.Addr().String() + "/v1/proxy",
+				ProxyAuthorizationToken: "tok",
+			})
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			defer conn.Close()
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+			got := make([]byte, len("tunnel-up"))
+			_, err = io.ReadFull(conn, got)
+			require.NoError(t, err)
+			require.Equal(t, "tunnel-up", string(got))
+		})
+	}
+}
+
+// TestTcpConnect_TLSHandshakeTimeout verifies the dial timeout also bounds the
+// TLS handshake, so a listener that accepts TCP but never answers fails fast.
+func TestTcpConnect_TLSHandshakeTimeout(t *testing.T) {
+	setupLogger()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	var mu sync.Mutex
+	var accepted []net.Conn
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range accepted {
+			_ = conn.Close()
+		}
+	}()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			accepted = append(accepted, conn)
+			mu.Unlock()
+		}
+	}()
+
+	start := time.Now()
+	_, err = tcpConnect(t.Context(), "req-id", &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_HTTP1ConnectionConfig{
+		ProxyURI:                "https://" + ln.Addr().String() + "/v1/proxy",
+		ProxyAuthorizationToken: "tok",
+	})
+	require.Error(t, err)
+	require.Less(t, time.Since(start), 10*time.Second)
+}
+
+// TestProxyDialAddr verifies the default port follows the scheme.
+func TestProxyDialAddr(t *testing.T) {
+	tests := map[string]string{
+		"http://proxy.example.com/v1/proxy":       "proxy.example.com:80",
+		"https://proxy.example.com/v1/proxy":      "proxy.example.com:443",
+		"https://proxy.example.com:8443/v1/proxy": "proxy.example.com:8443",
+		"http://[::1]/v1/proxy":                   "[::1]:80",
+	}
+	for uri, want := range tests {
+		u, err := url.Parse(uri)
+		require.NoError(t, err)
+		require.Equal(t, want, proxyDialAddr(u), uri)
+	}
 }

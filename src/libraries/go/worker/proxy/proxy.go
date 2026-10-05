@@ -50,6 +50,7 @@ import (
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/ca"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/buffconn"
@@ -532,12 +533,22 @@ func tcpConnect(ctx context.Context, requestId string, connectionConfig *pb.Work
 	if err != nil {
 		return nil, traceError(span, err)
 	}
-	proxyAddr := proxy.Host
-	if proxy.Port() == "" {
-		proxyAddr = net.JoinHostPort(proxyAddr, "80")
-	}
+	proxyAddr := proxyDialAddr(proxy)
 
-	c, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", proxyAddr)
+	netDialer := &net.Dialer{Timeout: 3 * time.Second}
+	var c net.Conn
+	if proxy.Scheme == "https" {
+		roots, caErr := proxyRootCAs()
+		if caErr != nil {
+			return nil, traceError(span, caErr)
+		}
+		c, err = (&tls.Dialer{
+			NetDialer: netDialer,
+			Config:    &tls.Config{ServerName: proxy.Hostname(), RootCAs: roots},
+		}).DialContext(ctx, "tcp", proxyAddr)
+	} else {
+		c, err = netDialer.DialContext(ctx, "tcp", proxyAddr)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dialing proxy %q failed: %v", proxyAddr, err)
 	}
@@ -567,4 +578,21 @@ func tcpConnect(ctx context.Context, requestId string, connectionConfig *pb.Work
 
 	// purposely not closing the body, we're going to ignore the response body and use the stream directly
 	return buffconn.NewBufConn(c, br), nil
+}
+
+// proxyRootCAs is the trust pool for https:// CONNECT proxies, the same pool
+// the HTTP/3 path uses. A variable so tests can trust their own server.
+var proxyRootCAs = ca.ProxyCAs
+
+// proxyDialAddr returns the host:port tcpConnect dials: the URI's port, or the
+// scheme default (443 for https, 80 otherwise).
+func proxyDialAddr(u *url.URL) string {
+	if u.Port() != "" {
+		return u.Host
+	}
+	port := "80"
+	if u.Scheme == "https" {
+		port = "443"
+	}
+	return net.JoinHostPort(u.Hostname(), port)
 }
