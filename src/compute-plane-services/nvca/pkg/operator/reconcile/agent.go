@@ -189,6 +189,8 @@ type Agent struct {
 	numDispatchers                 int
 	getTickerEventsFunc            func(ctx context.Context) <-chan *core.Event
 	getBackendK8sKubeClientsChFunc func(ctx context.Context) <-chan *core.KubeClients
+	// newKubeClientsFunc builds the backend kube clients in Start; tests replace it with fakes.
+	newKubeClientsFunc func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
 
 	backendk8scache *BackendK8sCache
 
@@ -301,6 +303,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	}
 	a.getTickerEventsFunc = a.getTickerEvents
 	a.getBackendK8sKubeClientsChFunc = a.getBackendK8sKubeClientsCh
+	a.newKubeClientsFunc = a.newKubeClients
 	return a, nil
 }
 
@@ -435,7 +438,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	tickerEventsCh := a.getTickerEventsFunc(ctx)
 
 	log.Debug("Adding Backend K8s cache and events ...")
-	backendK8sClients, err := a.newKubeClients(ctx, a.KubeConfigPath)
+	backendK8sClients, err := a.newKubeClientsFunc(ctx, a.KubeConfigPath)
 	if err != nil {
 		return err
 	}
