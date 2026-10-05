@@ -198,10 +198,13 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if _, err := configuredExternalComponents(); err != nil {
 		return err
 	}
-	// One credential lookup per registry for the whole run, shared by tag
+	// One credential lookup per registry for each poll, shared by tag
 	// discovery, the local credential row and the validator's pull secret,
-	// so the row checks the credential the validator Job is given.
-	runCtx := selfhosted.WithRegistryCredentials(c.Context(), selfhosted.NewRegistryCredentials(preferNGCKey()))
+	// so the row checks the credential the validator Job is given. Each
+	// --wait poll reads them again: a login renewed meanwhile, or a helper
+	// that failed once, counts on the next poll.
+	creds := selfhosted.NewRegistryCredentials(preferNGCKey())
+	runCtx := selfhosted.WithRegistryCredentials(c.Context(), creds)
 
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
 	skipClusterValidation := clusterValidationSkipped()
@@ -355,15 +358,18 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		}
 
 		runOnce := func() []selfhosted.CheckResult {
+			// The first poll keeps the lookups the image resolution above made.
+			pollCtx := selfhosted.WithRegistryCredentials(ctx, creds)
+			creds = selfhosted.NewRegistryCredentials(preferNGCKey())
 			var results []selfhosted.CheckResult
 			if unresolvedImage != "" {
 				// Discovery fails transiently too, and each --wait poll is a new
 				// chance to run the validator.
-				clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(ctx)
+				clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(pollCtx)
 			}
 			if checkPre || checkAll || checkControlPlane || checkComputePlane {
 				results = append(results,
-					runPreflightByRole(ctx, cfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger)...)
+					runPreflightByRole(pollCtx, cfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger)...)
 			}
 			return results
 		}

@@ -77,6 +77,8 @@ secrets from it, and it is never sent to another registry. Elsewhere the key
 is sent when there is no docker login, or when `nvcr.io` rejects the docker
 login. The run then uses the key, for tag discovery and the validator's pull
 secret too, and the row says how to renew the login `docker` still sends.
+Each `--wait` poll reads the credentials again, so a login renewed while the
+run waits counts on the next poll.
 
 Only a credential the registry rejects fails the run, and only for an NVIDIA
 registry the image or the stack names. After install a rejected credential is

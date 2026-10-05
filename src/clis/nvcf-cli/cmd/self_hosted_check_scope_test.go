@@ -427,6 +427,77 @@ func TestCheck_UnresolvedValidatorTagFailsTheRun(t *testing.T) {
 	assert.Contains(t, registries, "harbor.example.com")
 }
 
+// Each --wait poll reads the local credentials again, so a docker login the
+// operator renews while the run waits is the one the next poll sends.
+func TestCheck_WaitReadsCredentialsAgainEachPoll(t *testing.T) {
+	prevInterval := checkPollInterval
+	checkPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { checkPollInterval = prevInterval })
+
+	var mu sync.Mutex
+	var sent []string
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token" {
+			w.Header().Set("Www-Authenticate", `Bearer realm="`+srv.URL+`/token",service="test"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, pass, _ := r.BasicAuth()
+		mu.Lock()
+		sent = append(sent, pass)
+		mu.Unlock()
+		if pass != "renewed" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"token":"t"}`))
+	}))
+	t.Cleanup(srv.Close)
+	prevTransport := http.DefaultTransport
+	http.DefaultTransport = srv.Client().Transport
+	t.Cleanup(func() { http.DefaultTransport = prevTransport })
+	host := strings.TrimPrefix(srv.URL, "https://")
+
+	dockerDir := t.TempDir()
+	t.Setenv("DOCKER_CONFIG", dockerDir)
+	login := func(pass string) {
+		cfg, err := json.Marshal(map[string]any{"auths": map[string]any{
+			host: map[string]string{"username": "u", "password": pass},
+		}})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dockerDir, "config.json"), cfg, 0o600))
+	}
+	login("stale")
+
+	prevChecker := newRegistryCredentialCheckerForSelfHosted
+	t.Cleanup(func() { newRegistryCredentialCheckerForSelfHosted = prevChecker })
+	probe := selfhosted.NewRegistryCredentialChecker()
+	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
+		return func(ctx context.Context, registry, repo string, critical bool) error {
+			if registry != host {
+				return nil
+			}
+			return probe(ctx, registry, repo, critical)
+		}
+	}
+
+	polls := 0
+	err, stderr := runCheckWithBudget(t, time.Minute, func(context.Context) selfhosted.ClusterValidatorResult {
+		polls++
+		if polls == 1 {
+			login("renewed")
+			return selfhosted.ClusterValidatorResult{ExitCode: 1, Logs: "Validator role: control-plane\n"}
+		}
+		return selfhosted.ClusterValidatorResult{Passed: true, Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
+	}, "--cluster-validator-registries", host, "--wait", "30s")
+	require.NoError(t, err, stderr)
+	assert.Equal(t, 2, polls)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"stale", "renewed"}, sent, "the second poll sends the renewed login")
+}
+
 // The tag is resolved again on every --wait poll, so a discovery failure that
 // clears lets the validator run.
 func TestCheck_WaitResolvesTheValidatorTagAgainEachPoll(t *testing.T) {
