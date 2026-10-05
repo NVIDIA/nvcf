@@ -107,13 +107,13 @@ public record UpdateFunctionRequest(
             String routingMethod,
 
             @Nullable
-            @Schema(description = "Immutable after creation. Accepted only so a value that differs "
-                    + "from the stored one is rejected instead of silently ignored.")
+            @Schema(description = "Cannot be changed after creation. A value that differs from "
+                    + "the stored one is rejected with 400.")
             List<String> uris,
 
             @Nullable
-            @Schema(description = "Immutable after creation. Accepted only so a value that differs "
-                    + "from the stored one is rejected instead of silently ignored.")
+            @Schema(description = "Cannot be changed after creation. A value that differs from "
+                    + "the stored one is rejected with 400.")
             String tokenizer) {
 
         boolean isEmpty() {
