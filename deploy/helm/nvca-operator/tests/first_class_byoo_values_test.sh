@@ -21,6 +21,7 @@ render() {
   shift
 
   helm template nvca-operator "${repo_root}/nvca-operator" \
+    --set-string "ngcConfig.serviceKey=test-service-key" \
     --namespace nvca-operator \
     --values "${repo_root}/nvca-operator/values.yaml" \
     --values "${repo_root}/values.release-sbom.yaml" \
@@ -112,6 +113,7 @@ yq eval '
 ' "${repo_root}/nvca-operator/values.yaml" > "${legacy_values}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
   --namespace nvca-operator \
   --values "${legacy_values}" \
   --values "${repo_root}/values.release-sbom.yaml" \

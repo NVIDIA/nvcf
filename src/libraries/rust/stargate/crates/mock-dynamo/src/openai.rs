@@ -72,10 +72,17 @@ const CANARY_ANSWER: &str = "2";
 #[derive(Deserialize)]
 pub(crate) struct ChatRequest {
     pub(crate) stream: Option<bool>,
+    stream_options: Option<ChatStreamOptions>,
     pub(crate) model: Option<String>,
     pub(crate) max_tokens: Option<usize>,
     #[serde(default)]
     pub(crate) messages: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct ChatStreamOptions {
+    #[serde(default)]
+    include_usage: bool,
 }
 
 #[derive(Deserialize)]
@@ -105,7 +112,10 @@ struct ChatCompletionChunk<'a> {
     id: &'a str,
     object: &'static str,
     model: &'a str,
-    choices: [ChunkChoice<'a>; 1],
+    choices: &'a [ChunkChoice<'a>],
+    // Omitted unless requested, then null until the final usage chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<Option<ChatUsage>>,
 }
 
 #[derive(Serialize)]
@@ -174,7 +184,7 @@ struct StreamResponseConfig {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamKind {
-    Chat { canary: bool },
+    Chat { canary: bool, include_usage: bool },
     Responses { created_at: u64 },
 }
 
@@ -251,7 +261,13 @@ pub(crate) async fn chat_completions(
             output_tokens,
             kv_cache_access,
             request_slot,
-            kind: StreamKind::Chat { canary },
+            kind: StreamKind::Chat {
+                canary,
+                include_usage: req
+                    .stream_options
+                    .as_ref()
+                    .is_some_and(|options| options.include_usage),
+            },
         });
     }
 
@@ -495,29 +511,52 @@ pub(crate) enum ChatStreamChunk<'a> {
     Role,
     Content(&'a str),
     Stop,
+    Usage {
+        input_tokens: usize,
+        output_tokens: usize,
+    },
 }
 
-pub(crate) fn chat_chunk_json(id: &str, model: &str, chunk: ChatStreamChunk<'_>) -> String {
-    let (role, content, finish_reason) = match chunk {
-        ChatStreamChunk::Role => (Some("assistant"), None, None),
-        ChatStreamChunk::Content(content) => (None, Some(content), None),
-        ChatStreamChunk::Stop => (None, None, Some("stop")),
-    };
+pub(crate) fn chat_chunk_json(
+    id: &str,
+    model: &str,
+    chunk: ChatStreamChunk<'_>,
+    include_usage: bool,
+) -> String {
+    let mut usage = include_usage.then_some(None);
+    let choice = match chunk {
+        ChatStreamChunk::Role => Some((Some("assistant"), None, None)),
+        ChatStreamChunk::Content(content) => Some((None, Some(content), None)),
+        ChatStreamChunk::Stop => Some((None, None, Some("stop"))),
+        ChatStreamChunk::Usage {
+            input_tokens,
+            output_tokens,
+        } => {
+            usage = Some(Some(ChatUsage {
+                prompt_tokens: input_tokens,
+                completion_tokens: output_tokens,
+                total_tokens: input_tokens.saturating_add(output_tokens),
+            }));
+            None
+        }
+    }
+    .map(|(role, content, finish_reason)| ChunkChoice {
+        index: 0,
+        delta: Delta { role, content },
+        finish_reason,
+    });
     serde_json::to_string(&ChatCompletionChunk {
         id,
         object: "chat.completion.chunk",
         model,
-        choices: [ChunkChoice {
-            index: 0,
-            delta: Delta { role, content },
-            finish_reason,
-        }],
+        choices: choice.as_slice(),
+        usage,
     })
     .expect("chat stream event should serialize")
 }
 
-fn chat_sse_event(id: &str, model: &str, chunk: ChatStreamChunk<'_>) -> Event {
-    Event::default().data(chat_chunk_json(id, model, chunk))
+fn chat_sse_event(id: &str, model: &str, chunk: ChatStreamChunk<'_>, include_usage: bool) -> Event {
+    Event::default().data(chat_chunk_json(id, model, chunk, include_usage))
 }
 
 fn stream_response(config: StreamResponseConfig) -> Response {
@@ -557,22 +596,22 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         state.emit_counters(&request_id, &model, input_tokens, 0, false);
 
-        if matches!(kind, StreamKind::Chat { .. }) {
-            yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role));
+        if let StreamKind::Chat { include_usage, .. } = kind {
+            yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role, include_usage));
         }
 
         for i in 0..output_tokens {
             if i > 0 {
                 tokio::time::sleep(token_delay(&state, &request_id, i)).await;
             }
-            let token = if matches!(kind, StreamKind::Chat { canary: true }) {
+            let token = if matches!(kind, StreamKind::Chat { canary: true, .. }) {
                 CANARY_ANSWER
             } else {
                 DUMMY_TOKENS[i % DUMMY_TOKENS.len()]
             };
             let event = match kind {
-                StreamKind::Chat { .. } => {
-                    chat_sse_event(&id, &model, ChatStreamChunk::Content(token))
+                StreamKind::Chat { include_usage, .. } => {
+                    chat_sse_event(&id, &model, ChatStreamChunk::Content(token), include_usage)
                 }
                 StreamKind::Responses { .. } => {
                     output_text.push_str(token);
@@ -593,7 +632,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         }
 
         let completed = match kind {
-            StreamKind::Chat { .. } => chat_sse_event(&id, &model, ChatStreamChunk::Stop),
+            StreamKind::Chat { include_usage, .. } => chat_sse_event(&id, &model, ChatStreamChunk::Stop, include_usage),
             StreamKind::Responses { created_at } => responses_sse_event(
                 "response.completed",
                 &serde_json::json!({
@@ -628,7 +667,10 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
 
-        if matches!(kind, StreamKind::Chat { .. }) {
+        if let StreamKind::Chat { include_usage, .. } = kind {
+            if include_usage {
+                yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Usage { input_tokens, output_tokens }, true));
+            }
             yield Ok(Event::default().data("[DONE]"));
         }
     };

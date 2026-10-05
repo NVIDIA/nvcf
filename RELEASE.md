@@ -89,13 +89,17 @@ how inventories reach a release.
 
 ### Stack documentation
 
-Each stack is published as its own Fern product with its own version list, so
-documentation for one stack can be frozen without touching the other two.
-After QA approves a stack release, freeze that exact version's docs with:
+Documentation uses a separate SemVer docs edition for one qualified combination
+of the three stacks. The stacks retain their artifact versions and release
+branches. A stack release does not automatically qualify or publish docs.
 
-```sh
-./tools/scripts/cut-docs-version.sh --stack <self-managed|compute-plane|observability> --version X.Y.Z
-```
+Prepare each docs edition from a reviewed source commit and exact stack versions,
+then protect and register its full-version `docs/releases/X.Y.Z` branch. Do not
+create docs tags or copied per-stack version directories. A docs-only correction
+can release a patch edition with the same three artifact versions.
+
+See [the docs edition release workflow](docs/dev/docs-editions.md) for commands,
+qualification, validation, and rollback.
 
 `nvca` used the same model until the 3.3 line and now releases from `main`
 like every other subproject. Nothing publishes a `-dev.N` any more, and none
