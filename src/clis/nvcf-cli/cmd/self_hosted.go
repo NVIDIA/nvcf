@@ -97,7 +97,8 @@ func init() {
 		"Compute-plane stack source: local path, git URL, or oci:// URL (default: built-in OCI URL pinned to this CLI version)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedEnv, "env", "local",
 		"Helmfile environment (e.g. local, prd). check reads the stack's environments/<env>.yaml only when "+
-			"this or HELMFILE_ENV names it, so pass the install's --env")
+			"this or HELMFILE_ENV names it, or for a plane --pre checks before its install, which up installs "+
+			"with this default; so pass the install's --env")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedNoApply, "no-apply", false,
 		"Emit YAML to stdout without invoking kubectl (install only)")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedNonInter, "non-interactive", false,

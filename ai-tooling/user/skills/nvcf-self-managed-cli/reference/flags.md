@@ -14,7 +14,7 @@
 |---|---|---|
 | `--control-plane-stack=...` | Control-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
 | `--compute-plane-stack=...` | Compute-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
-| `--env=local\|prd\|...` | Helmfile environment name. `check` reads the stack's `environments/<env>.yaml` only for an environment named with `--env` or `HELMFILE_ENV`, so pass the `--env` the install used; see [Settings read from the stack](#settings-read-from-the-stack) | `local` |
+| `--env=local\|prd\|...` | Helmfile environment name. `check` reads the stack's `environments/<env>.yaml` only for an environment named with `--env` or `HELMFILE_ENV`, or for a plane `--pre` checks before its install, so pass the `--env` the install used; see [Settings read from the stack](#settings-read-from-the-stack) | `local` |
 | `--non-interactive` | Disable all stdin prompts | `false` |
 | `--token=$JWT` | Admin JWT, overrides stored session | - |
 | `--no-apply` | `install` only - emit YAML, do not kubectl apply | `false` |
@@ -115,7 +115,8 @@ The registries above also come from the stack. `check` reads stack values only
 when they describe the install:
 
 - The environment is named with `--env` or `HELMFILE_ENV`. The `--env`
-  default is not used, so pass the `--env` the install used.
+  default is used only for a plane `--pre` checks before its install,
+  since `up` installs with it. Otherwise pass the `--env` the install used.
 - `environments/<env>.yaml` is read, layered over `base.yaml`. `base.yaml`
   alone is not used.
 - The file comes from the stack the install used: `--control-plane-stack`

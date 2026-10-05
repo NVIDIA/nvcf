@@ -535,15 +535,25 @@ type stackTarget struct {
 	source, builtIn string
 	// name is the stack's directory in a checkout, under deploy/stacks.
 	name string
+	// beforeInstall is set when the run checks the plane before its install.
+	beforeInstall bool
 }
 
 func controlPlaneStackTarget() stackTarget {
-	return stackTarget{source: selfHostedControlPlaneStack, builtIn: builtInControlPlaneStackOCI(), name: "self-managed"}
+	return stackTarget{source: selfHostedControlPlaneStack, builtIn: builtInControlPlaneStackOCI(),
+		name: "self-managed", beforeInstall: checkedBeforeInstall(checkControlPlane)}
 }
 
 func computePlaneStackTarget() stackTarget {
 	return stackTarget{source: selfHostedComputePlaneStack, builtIn: builtInComputePlaneStackOCI(),
-		name: "nvcf-compute-plane"}
+		name: "nvcf-compute-plane", beforeInstall: checkedBeforeInstall(checkComputePlane)}
+}
+
+// checkedBeforeInstall reports whether a plane is checked before its install:
+// --pre checks it so, unless --all or the plane's own flag checks it as
+// installed.
+func checkedBeforeInstall(planeFlag bool) bool {
+	return checkPre && !checkAll && !planeFlag
 }
 
 // stackValuesForRun returns the values files that describe the install, in
@@ -551,7 +561,8 @@ func computePlaneStackTarget() stackTarget {
 // when it can read them from the stack the install used:
 //
 //   - The environment must be named, with --env or HELMFILE_ENV. --env's
-//     default is not evidence of the environment the install used.
+//     default is not evidence of the environment an install used. Before
+//     the install it is: up installs with it.
 //   - <env>.yaml must be read, since helmfile refuses to install without it,
 //     so base.yaml alone does not describe the install.
 //   - It is read from the stack the install commands resolve: the stack
@@ -564,6 +575,9 @@ func computePlaneStackTarget() stackTarget {
 // Otherwise nothing is read, and every stack-derived input is left out.
 func stackValuesForRun(t stackTarget) ([]string, bool) {
 	env, ok := explicitStackEnv()
+	if !ok && t.beforeInstall {
+		env, ok = resolveStackEnv(), true
+	}
 	if !ok {
 		return nil, false
 	}

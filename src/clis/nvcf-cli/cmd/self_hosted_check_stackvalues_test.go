@@ -99,6 +99,34 @@ func TestStackValuesForRun_NeedsTheNamedEnvironmentFile(t *testing.T) {
 	assert.False(t, ok, "base.yaml without prod.yaml does not describe the install")
 }
 
+// A plane --pre checks before its install is read with --env's default: up
+// installs with it. A plane checked as installed still needs it named.
+func TestStackValuesForRun_BeforeInstallReadsUpsDefaultEnvironment(t *testing.T) {
+	resetCheckFlags(t)
+	t.Setenv("HELMFILE_ENV", "")
+	cp := stackWithEnvs(t, "local")
+	withStackFlag(t, &selfHostedControlPlaneStack, cp)
+	withStackFlag(t, &selfHostedComputePlaneStack, stackWithEnvs(t, "local"))
+	withEnvFlag(t, "local", false)
+
+	checkPre = true
+	files, ok := stackValuesForRun(controlPlaneStackTarget())
+	require.True(t, ok, "a bare --pre checks both planes before up installs them")
+	assert.Equal(t, filepath.Join(cp, "environments", "local.yaml"), files[1])
+	_, ok = stackValuesForRun(computePlaneStackTarget())
+	assert.True(t, ok)
+
+	checkComputePlane = true
+	_, ok = stackValuesForRun(computePlaneStackTarget())
+	assert.False(t, ok, "--pre --compute-plane checks the compute plane as installed")
+	_, ok = stackValuesForRun(controlPlaneStackTarget())
+	assert.True(t, ok, "and the control plane still before its install")
+
+	checkComputePlane, checkAll = false, true
+	_, ok = stackValuesForRun(controlPlaneStackTarget())
+	assert.False(t, ok, "--pre --all checks both planes as installed")
+}
+
 // An operator who exports HELMFILE_ENV and runs helmfile directly gets that
 // environment; an explicit --env still wins over it.
 func TestResolveStackEnv_Precedence(t *testing.T) {
@@ -271,6 +299,26 @@ func TestCheck_RegistriesNeedTheEnvironmentFile(t *testing.T) {
 			assert.NotContains(t, got, "harbor.corp.example/nvcf/site")
 		})
 	}
+}
+
+// check --pre without --env grades the registries of the environment up
+// installs, so an NGC repository the key cannot pull from fails the gate.
+func TestCheck_PreGradesTheRegistriesUpInstallsFrom(t *testing.T) {
+	t.Setenv("HELMFILE_ENV", "")
+	t.Setenv("NVCF_CLI_DEFAULT_CONTROL_PLANE_STACK", "")
+	stack := t.TempDir()
+	envDir := filepath.Join(stack, "environments")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "local.yaml"),
+		[]byte("global:\n  image:\n    registry: nvcr.io\n    repository: acme/nvcf\ncertManager:\n  enabled: false\n"),
+		0o644))
+
+	got := registryProbes(t, "--pre", "--control-plane-stack", stack)
+	assert.Equal(t, map[string]bool{"nvcr.io/acme/nvcf": true}, got)
+
+	got = registryProbes(t, "--pre", "--all", "--control-plane-stack", stack)
+	assert.NotContains(t, got, "nvcr.io/acme/nvcf", "an installed stack's environment is not assumed")
+	assert.False(t, got["nvcr.io"])
 }
 
 // A compute-plane-only run reads the compute-plane stack, under the same rule.
