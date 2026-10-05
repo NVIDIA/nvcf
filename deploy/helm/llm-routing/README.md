@@ -31,9 +31,7 @@ Use your existing kubeconfig.
    python3 spark.py init
    ```
 
-   After uninstalling all demo releases, run `init` again with the same context and saved configuration. It checks that releases and workloads are gone, validates retained storage and CRD ownership, and archives any previous progress in `before-reinit-*` inside the work directory. It reuses placement, image references and credentials without deleting volumes or downloaded models. Continue with `render`, `inventory` and the installation phases from `preflight`. Active or ambiguous installations are rejected.
-
-   Review the selected nodes and generated configuration. `init` configures idle GPUs, storage and image preload for K3s. Configuration and evidence are saved automatically in a private work directory outside the checkout. For another container runtime, edit an external copy of [config.example.json](spark/config.example.json) and pass `--config /path/to/config.json` instead of running `init`.
+   Review the selected nodes and generated configuration. `init` discovers idle GPUs, storage and image preload settings for K3s. The configuration is saved at the printed path in a private work directory.
 
 2. Render the manifests and inventory the cluster.
 
@@ -122,6 +120,10 @@ Checks GLM answers, streaming, authentication, discovery and registration. Resul
 If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
 
 ## Optional configuration
+
+### Alternative container runtimes and external configuration
+
+For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](spark/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
 
 ### API keys
 
@@ -213,7 +215,7 @@ For the default K3s recipe, match the example context, namespace and release pre
 
 The model/artifact and RPC-cache PVCs, downloaded models, namespace, InferenceEndpoint CRD, CA Secret and operator credential remain. Keep the local work directory and saved configuration for reuse.
 
-To reinstall, run these commands from the recipe directory with the same configuration and context:
+After uninstalling the demo releases, run these commands from the recipe directory with the same configuration and context:
 
 ```bash
 python3 spark.py --context spark-demo init
@@ -221,7 +223,7 @@ python3 spark.py --context spark-demo render
 python3 spark.py --context spark-demo inventory
 ```
 
-`init` validates the retained resources and archives stale progress. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
+`init` checks that the demo is uninstalled, reuses the saved placement, image references and credentials, and archives stale progress under `before-reinit-*` in the work directory. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
 
 ### Update the source baseline
 
