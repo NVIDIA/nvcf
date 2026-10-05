@@ -70,7 +70,7 @@ python3 spark.py verify-gateway
 6. `load`: Load GLM across both GPUs and wait for the model server.
 7. `verify-direct`: Test model answers and streaming directly.
 8. `register`: Register GLM with Pylon and wait for readiness.
-9. `verify-gateway`: Test GLM through the gateway, including authentication and discovery.
+9. `verify-gateway`: Test GLM answers, streaming, authentication, discovery and registration through the gateway. For failures, see [Gateway check troubleshooting](#gateway-check-failures).
 
 Pinned runtime:
 
@@ -98,18 +98,6 @@ Check the node placement, ready replicas and model endpoint status.
 python3 spark.py chat 'What is 17 multiplied by 19? Give one short sentence.'
 python3 spark.py chat 'Explain what a GPU does in two sentences.' --stream
 ```
-
-### Run the automated gateway checks
-
-The check uses local port 18443. Stop a previous port-forward if it occupies that port.
-
-```bash
-python3 spark.py verify-gateway
-```
-
-Checks GLM answers, streaming, authentication, discovery and registration. Results are saved in `evidence/gateway.json` under the local work directory.
-
-If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
 
 ## Maintenance
 
@@ -270,6 +258,18 @@ To use existing certificates, complete these steps before running `stack`:
 ## Troubleshooting
 
 If a command fails, follow the next check and diagnostic log path printed by the CLI. Detailed tool output is saved in private `evidence/*.log` files inside the work directory. Use `python3 spark.py paths` to locate that directory.
+
+### Gateway check failures
+
+If `verify-gateway` fails, inspect its results in `evidence/gateway.json` under the local work directory. The check uses local port 18443. Stop a previous port-forward if it occupies that port.
+
+If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
+
+After resolving the problem, rerun the check from the recipe directory:
+
+```bash
+python3 spark.py verify-gateway
+```
 
 ## Local validation
 
