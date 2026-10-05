@@ -4232,30 +4232,64 @@ type rolloutDating struct {
 // then a pod it created (stepped) or the deletion of any pod it owns, since
 // the controller deletes each pod it replaces. Any other pod created anew,
 // such as one of an older revision recreated after an eviction or a failure,
-// is churn rather than the rollout.
-func rolloutMoved(started time.Time, pods []corev1.Pod, owned, stepped func(*corev1.Pod) bool) time.Time {
+// is churn rather than the rollout. So is a failed pod, created or deleted,
+// and a stepped pod created after a failed stepped one in the same slot (the
+// place a replacement takes, see rolloutSlot): it may be that pod's
+// replacement, and a pod that keeps failing is replaced for ever.
+func rolloutMoved(
+	started time.Time, pods []corev1.Pod, owned, stepped func(*corev1.Pod) bool, slot func(*corev1.Pod) string,
+) time.Time {
+	firstFailed := map[string]time.Time{}
+	for i := range pods {
+		p := &pods[i]
+		if p.Status.Phase != corev1.PodFailed || !owned(p) || !stepped(p) {
+			continue
+		}
+		if at, seen := firstFailed[slot(p)]; !seen || p.CreationTimestamp.Time.Before(at) {
+			firstFailed[slot(p)] = p.CreationTimestamp.Time
+		}
+	}
 	moved := started
 	for i := range pods {
 		p := &pods[i]
 		switch {
-		case !owned(p):
+		case !owned(p), p.Status.Phase == corev1.PodFailed:
 		case p.DeletionTimestamp != nil:
 			moved = laterOf(moved, p.DeletionTimestamp.Time)
 		case stepped(p):
-			moved = laterOf(moved, p.CreationTimestamp.Time)
+			if failedAt, failed := firstFailed[slot(p)]; !failed || p.CreationTimestamp.Time.Before(failedAt) {
+				moved = laterOf(moved, p.CreationTimestamp.Time)
+			}
 		}
 	}
 	return moved
 }
 
+// rolloutSlot is the place a controller's replacement for a failed pod
+// takes, for each kind of workload. A ReplicaSet replaces a failed pod with
+// any new one, and keeps the failed pod. A DaemonSet replaces one on its node,
+// and a StatefulSet under its name, each once it has deleted the failed pod.
+func rolloutSlot(kind string) func(*corev1.Pod) string {
+	switch kind {
+	case "DaemonSet":
+		return probePodNode
+	case "StatefulSet":
+		return func(p *corev1.Pod) string { return p.Name }
+	}
+	return func(*corev1.Pod) string { return "" }
+}
+
 // deploymentMoved is when d's rollout last moved. A rollout begins with a new
 // ReplicaSet, so the newest one's creation dates its start; since then a pod
 // of the new ReplicaSet created, or any of d's pods deleted, is progress. Only
-// when the ReplicaSets cannot be read does the last write to d's spec date it.
+// when the ReplicaSets cannot be read does the last write to d's spec date it,
+// and when the controller has not observed d's generation, which it creates
+// the new ReplicaSet on: until then the newest one is the last rollout's, and
+// the generation shows the write changed the spec.
 func (r *rolloutDating) deploymentMoved(d *appsv1.Deployment) time.Time {
+	written, _ := specWrittenAt(d)
 	sets, err := r.replicaSetsOf(d)
 	if err != nil || len(sets) == 0 {
-		written, _ := specWrittenAt(d)
 		return written
 	}
 	var started time.Time
@@ -4265,6 +4299,9 @@ func (r *rolloutDating) deploymentMoved(d *appsv1.Deployment) time.Time {
 		if replicaSetRevision(&sets[i]) > replicaSetRevision(newest) {
 			newest = &sets[i]
 		}
+	}
+	if d.Status.ObservedGeneration < d.Generation {
+		started = laterOf(started, written)
 	}
 	pods, err := r.podsSelectedBy(d.Namespace, d.Spec.Selector)
 	if err != nil {
@@ -4279,7 +4316,8 @@ func (r *rolloutDating) deploymentMoved(d *appsv1.Deployment) time.Time {
 		}
 		return false
 	}
-	return rolloutMoved(started, pods, owned, func(p *corev1.Pod) bool { return metav1.IsControlledBy(p, newest) })
+	return rolloutMoved(started, pods, owned, func(p *corev1.Pod) bool { return metav1.IsControlledBy(p, newest) },
+		rolloutSlot("ReplicaSet"))
 }
 
 // replicaSetsOf returns the ReplicaSets d controls.
@@ -4341,7 +4379,7 @@ func (r *rolloutDating) daemonSetMoved(ds *appsv1.DaemonSet) time.Time {
 		}
 		break
 	}
-	return rolloutMoved(started, pods, owned, updated)
+	return rolloutMoved(started, pods, owned, updated, rolloutSlot("DaemonSet"))
 }
 
 // controllerRevisionName is the name the DaemonSet and StatefulSet
@@ -5867,7 +5905,7 @@ func stalledRollout(
 	newestStep := rolloutNewestStep(sts, pods)
 	lastProgress := rolloutMoved(started, pods,
 		func(p *corev1.Pod) bool { return metav1.IsControlledBy(p, sts) },
-		func(p *corev1.Pod) bool { return p == newestStep })
+		func(p *corev1.Pod) bool { return p == newestStep }, rolloutSlot("StatefulSet"))
 	if started.IsZero() && (owned < int(*sts.Spec.Replicas) || lastProgress.IsZero()) {
 		// A pod is down and when the rollout began is unknown. A missing pod
 		// is usually the controller between deleting a pod and recreating

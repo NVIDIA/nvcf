@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -303,6 +304,8 @@ func TestCheckTier2StatefulSets_RecreatedPodsAreNotProgress(t *testing.T) {
 			"nats-0", "nats-r1", true, recent),
 		"updated pod recreated above the newest step": onRevision(onRevision(wedged(),
 			"nats-2", "nats-r2", true, recent), "nats-1", "nats-r2", false, longAgo),
+		"failed pod deleted to be recreated": failedAndDeleted(onRevision(wedged(),
+			"nats-2", "nats-r2", false, longAgo), "nats-0", recent),
 	} {
 		state := runTier2(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)
@@ -313,6 +316,16 @@ func TestCheckTier2StatefulSets_RecreatedPodsAreNotProgress(t *testing.T) {
 		"nats-1", "nats-r2", false, recent))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK, "the newest step was created a minute ago")
+}
+
+// failedAndDeleted marks pod name in objs Failed and deleted at deleted, as a
+// controller deletes a failed pod to recreate it.
+func failedAndDeleted(objs []runtime.Object, name string, deleted time.Time) []runtime.Object {
+	p := podNamed(objs, name)
+	p.Status.Phase = corev1.PodFailed
+	at := metav1.NewTime(deleted)
+	p.DeletionTimestamp = &at
+	return objs
 }
 
 // The partition is decided by ordinal. Old-revision pods below it are held
@@ -721,6 +734,48 @@ func TestCheckTier1Deployments_NoDeadlineRolloutIsDatedByItsReplicaSets(t *testi
 		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
 	}
 
+	// A pod of the new ReplicaSet that keeps failing, as one kubelet admission
+	// rejects for want of CPU, is replaced for ever. Its replacements are
+	// churn, not steps, and so are the failed pods.
+	failing := func(replaced time.Time) []runtime.Object {
+		objs := noDeadlineRollout(longAgo, longAgo)
+		newRS := objs[2].(*appsv1.ReplicaSet)
+		for i, age := range []time.Duration{90 * time.Minute, 30 * time.Minute, 5 * time.Minute} {
+			p := rolloutPod(fmt.Sprintf("api-new-failed-%d", i), "nvcf", newRS.Labels,
+				controlledBy("ReplicaSet", newRS), time.Now().Add(-age), false)
+			p.Status.Phase, p.Status.Reason = corev1.PodFailed, "OutOfcpu"
+			objs = append(objs, p)
+		}
+		podNamed(objs, "api-new-a").CreationTimestamp = metav1.NewTime(replaced)
+		return objs
+	}
+	state := runTier1(t, false, routeClient(), failing(recent)...)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "a failed pod replaced a minute ago")
+	// A step taken before any pod of the new ReplicaSet failed is progress.
+	stepped := failing(longAgo)
+	podNamed(stepped, "api-new-a").CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Minute))
+	for i, age := range []time.Duration{time.Minute, time.Minute / 2, time.Minute / 4} {
+		podNamed(stepped, fmt.Sprintf("api-new-failed-%d", i)).CreationTimestamp = metav1.NewTime(time.Now().Add(-age))
+	}
+	state = runTier1(t, false, routeClient(), stepped...)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "a step two minutes ago, before the failures")
+
+	// Until the controller observes a new generation it has made no ReplicaSet
+	// for it, so the newest one is the last rollout's, created long ago. The
+	// write that bumped the generation dates the new rollout.
+	for written, ok := range map[time.Time]bool{recent: true, twenty: false} {
+		objs := noDeadlineRollout(longAgo, longAgo)
+		d := objs[0].(*appsv1.Deployment)
+		d.Generation, d.Status.ObservedGeneration = 3, 2
+		d.ManagedFields = []metav1.ManagedFieldsEntry{specWrite(installManager, written)}
+		state := runTier1(t, false, routeClient(), objs...)
+		require.NotNil(t, state.Tier1DeploymentsOK, written)
+		assert.Equal(t, ok, *state.Tier1DeploymentsOK, "generation unobserved, spec written %s ago",
+			time.Since(written).Round(time.Minute))
+	}
+
 	// The spec write dates the rollout only when the ReplicaSets cannot be
 	// read.
 	for written, ok := range map[time.Time]bool{recent: true, longAgo: false} {
@@ -802,6 +857,49 @@ func TestCheckTier1Deployments_DaemonSetProxyRolloutIsBounded(t *testing.T) {
 	} {
 		gateways := envoyGatewayClient(t, gatewayObject("gw", "nats-gw", "eg"))
 		state := runTier1(t, false, gateways, tc.objs...)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
+	}
+
+	// An updated pod that keeps failing on its node is replaced there for
+	// ever, after the controller deletes it. A replacement on a node where an
+	// updated pod failed is churn, and so are the failed pod and its deletion;
+	// an updated pod on another node is a step.
+	onNodes := func(objs []runtime.Object) []runtime.Object {
+		for i := range 3 {
+			podNamed(objs, fmt.Sprintf("envoy-nats-%d", i)).Spec.NodeName = fmt.Sprintf("node-%d", i)
+		}
+		return objs
+	}
+	failedOn := func(objs []runtime.Object, node string, created time.Time, deleted bool) []runtime.Object {
+		labels := maps.Clone(podNamed(objs, "envoy-nats-1").Labels)
+		failed := rolloutPod("envoy-nats-failed", envoyGatewayNamespace, labels,
+			controlledBy("DaemonSet", objs[0].(*appsv1.DaemonSet)), created, false)
+		failed.Spec.NodeName, failed.Status.Phase = node, corev1.PodFailed
+		if deleted {
+			at := metav1.NewTime(recent)
+			failed.DeletionTimestamp = &at
+		}
+		return append(objs, failed)
+	}
+	stepped := func() []runtime.Object {
+		objs := onNodes(natsProxyRollout(3, 2, 2, week, week))
+		podNamed(objs, "envoy-nats-1").CreationTimestamp = metav1.NewTime(recent)
+		return objs
+	}
+	fiveMinutes := time.Now().Add(-5 * time.Minute)
+	for name, tc := range map[string]struct {
+		objs []runtime.Object
+		ok   bool
+	}{
+		"failed a minute ago, held by back-off": {
+			objs: failedOn(onNodes(natsProxyRollout(3, 2, 2, week, week)), "node-1", recent, false)},
+		"failed, deleted a minute ago": {
+			objs: failedOn(onNodes(natsProxyRollout(3, 2, 2, week, week)), "node-1", fiveMinutes, true)},
+		"replaced on the node it failed on": {objs: failedOn(stepped(), "node-1", fiveMinutes, false)},
+		"stepped beside a failed pod":       {objs: failedOn(stepped(), "node-0", week, false), ok: true},
+	} {
+		state := runTier1(t, false, envoyGatewayClient(t, gatewayObject("gw", "nats-gw", "eg")), tc.objs...)
 		require.NotNil(t, state.Tier1DeploymentsOK, name)
 		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
 	}
