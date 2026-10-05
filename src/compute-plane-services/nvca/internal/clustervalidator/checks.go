@@ -3702,6 +3702,7 @@ type gatewayOwnership struct {
 	classErr      error
 
 	controllersListed bool
+	controllerDeploys []appsv1.Deployment
 	controllerPods    []corev1.Pod
 	controllerNS      map[string]bool
 	controllerErr     error
@@ -3882,7 +3883,7 @@ func (o *gatewayOwnership) envoyControllers(ctx context.Context) ([]corev1.Pod, 
 		o.controllerErr = fmt.Errorf("listing Envoy Gateway controller pods: %w", err)
 		return nil, nil, o.controllerErr
 	}
-	o.controllerPods, o.controllerNS = pods.Items, map[string]bool{}
+	o.controllerDeploys, o.controllerPods, o.controllerNS = deployments.Items, pods.Items, map[string]bool{}
 	if ns != "" {
 		o.controllerNS[ns] = true
 	}
@@ -3893,6 +3894,22 @@ func (o *gatewayOwnership) envoyControllers(ctx context.Context) ([]corev1.Pod, 
 		o.controllerNS[pods.Items[i].Namespace] = true
 	}
 	return o.controllerPods, o.controllerNS, nil
+}
+
+// envoyControllerDeployments returns the Envoy Gateway controller Deployments
+// envoyControllers found.
+func (o *gatewayOwnership) envoyControllerDeployments(ctx context.Context) ([]appsv1.Deployment, error) {
+	if _, _, err := o.envoyControllers(ctx); err != nil {
+		return nil, err
+	}
+	return o.controllerDeploys, nil
+}
+
+// isEnvoyController reports whether a workload's labels mark the Envoy
+// Gateway controller.
+func isEnvoyController(l map[string]string) bool {
+	sel, err := labels.Parse(envoyGatewayControllerSelector)
+	return err == nil && sel.Matches(labels.Set(l))
 }
 
 // credits reports whether a proxy workload or Service in ns can serve entry.
@@ -4180,8 +4197,8 @@ func sharedTier1Namespaces() map[string]bool {
 
 // sharedNamespaceReleases are the Helm releases the self-managed stack
 // installs into the namespaces it shares with other installs. The Envoy
-// Gateway controller is a prerequisite the stack does not install; the Envoy
-// row judges it.
+// Gateway controller is a prerequisite the stack does not install, so it is
+// judged apart (assessEnvoyController).
 var sharedNamespaceReleases = map[string][]string{"cert-manager": {"cert-manager", "nvcf-pki"}}
 
 // stackOwned reports whether a stack release manages obj in the shared
@@ -4193,9 +4210,10 @@ func stackOwned(ns string, obj metav1.Object) bool {
 }
 
 // checkTier1DeploymentsFor verifies that every NVCF Deployment in the
-// control-plane namespaces, and every Envoy proxy of an NVCF Gateway wherever
-// it runs, has all its pods Ready. Any under-replicated one means HA headroom
-// is gone and a second failure causes a full outage.
+// control-plane namespaces, every Envoy proxy of an NVCF Gateway wherever it
+// runs, and after install the Envoy Gateway controller, has all its pods
+// Ready. Any under-replicated one means HA headroom is gone and a second
+// failure causes a full outage.
 //
 // The check is generic; no hardcoded Deployment names. New services added to
 // those namespaces are automatically covered.
@@ -4208,9 +4226,11 @@ func checkTier1DeploymentsFor(
 	printHeader(state.Log, "Tier-1 Deployment Readiness")
 	own.reportInvalid(state.Log, state)
 	scan := newTier1Scan(own, state)
+	scan.judgeController = state.PostInstall && own.envoyNotApplicable(ctx) == ""
 	for _, ns := range scan.namespaces {
 		scan.scanNamespace(ctx, client, ns)
 	}
+	scan.assessEnvoyController(ctx)
 	scan.assessProxies(ctx, client)
 	proxiesUnobserved := scan.reportProxyAttribution()
 	coverageUndecided := scan.checkGatewayCoverage(ctx)
@@ -4234,6 +4254,10 @@ type tier1Scan struct {
 	// noGatewaysPostInstall: installed with no NVCF Gateway named anywhere,
 	// every proxy is treated as possibly NVCF's.
 	noGatewaysPostInstall bool
+	// judgeController: the Envoy Gateway controller is judged like an NVCF
+	// Deployment, and controllerErr is why it could not be read.
+	judgeController bool
+	controllerErr   error
 
 	underReplicated []string
 	scaledToZero    []string
@@ -4317,6 +4341,8 @@ func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 		switch {
 		case isEnvoyProxy(d.Labels), s.proxyOnly[ns]:
 			// Proxies are assessed with every other proxy, wherever they run.
+		case s.judgeController && isEnvoyController(d.Labels):
+			// Judged with every controller Deployment, wherever it runs.
 		case s.shared[ns] && !stackOwned(ns, d):
 			s.notAssessed = append(s.notAssessed, ns+"/"+d.Name)
 		default:
@@ -4325,6 +4351,26 @@ func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 			}
 			s.assess(deploymentReadiness(d))
 		}
+	}
+}
+
+// assessEnvoyController judges, after install, the Envoy Gateway controller
+// that runs the NVCF Gateways like any NVCF Deployment: while it is down, route
+// changes and every new or restarted proxy go unprogrammed. Before install
+// the non-critical Envoy row alone reports it, since the stack does not
+// install it.
+func (s *tier1Scan) assessEnvoyController(ctx context.Context) {
+	if !s.judgeController {
+		return
+	}
+	deploys, err := s.own.envoyControllerDeployments(ctx)
+	if err != nil {
+		s.controllerErr = err
+		s.warn(readFailure("the Envoy Gateway controller", err))
+		return
+	}
+	for i := range deploys {
+		s.assess(deploymentReadiness(&deploys[i]))
 	}
 }
 
@@ -4751,6 +4797,7 @@ const (
 		"so they were not assessed)"
 	tier1CoverageUnknown = "Tier-1 Deployments: status unknown (whether every NVCF Gateway exists and has an " +
 		"Envoy proxy could not be confirmed)"
+	tier1ControllerUnknown = "Tier-1 Deployments: status unknown (the Envoy Gateway controller could not be read)"
 )
 
 func (s *tier1Scan) deniedWarning() string {
@@ -4780,12 +4827,15 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 	switch {
 	case s.reportFindings():
 		s.setOK(false)
-	case proxiesUnobserved || coverageUndecided || len(s.unread) > 0:
+	case proxiesUnobserved || coverageUndecided || len(s.unread) > 0 || s.controllerErr != nil:
 		// Something was never observed, so "all ready" is not a claim we can
 		// make even though everything we could see passed.
 		if len(s.unread) > 0 {
 			printWarning(s.log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
 				s.checkedCount, len(s.unread)))
+		}
+		if s.controllerErr != nil {
+			s.state.Warnings = append(s.state.Warnings, tier1ControllerUnknown)
 		}
 		if proxiesUnobserved {
 			s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)

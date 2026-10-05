@@ -568,6 +568,64 @@ func TestCheckTier1Deployments_MergedProxyCoversItsClassAfterInstall(t *testing.
 	assert.True(t, *state.Tier1DeploymentsOK)
 }
 
+// After install the Envoy Gateway controller is judged like an NVCF
+// Deployment, wherever it runs: dead, it leaves route changes and every new
+// or restarted proxy unprogrammed. Before install, and when another
+// implementation runs every NVCF Gateway, the Envoy row alone reports it.
+func TestCheckTier1Deployments_PostInstallJudgesTheEnvoyController(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+	labels := map[string]string{owningGatewayNameLabel: "nvcf-gw", owningGatewayNamespaceLabel: "nvcf"}
+	deployments := appsv1.SchemeGroupVersion.WithResource("deployments")
+	// cluster holds the controller in ns, Ready or not, in place of the
+	// fixture's Ready one, beside a Ready NVCF proxy and service.
+	cluster := func(ns string, ready int32) *fake.Clientset {
+		client := gatewayDiscoveryClient(gatewayAPIGroup+"/v1/httproutes", gatewayAPIGroup+"/v1/gateways",
+			gatewayAPIGroup+"/v1/gatewayclasses")
+		require.NoError(t, client.Tracker().Delete(deployments, envoyGatewayNamespace, "envoy-gateway"))
+		controller := envoyController(ns)
+		controller.Status.ReadyReplicas = ready
+		for _, o := range []runtime.Object{controller, envoyProxyAt(ns, "envoy-nvcf", labels, 2, 2), nvcfAPI()} {
+			require.NoError(t, client.Tracker().Add(o))
+		}
+		return client
+	}
+	gateways := func(class string) dynamic.Interface {
+		return envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", class))
+	}
+	for name, tc := range map[string]struct {
+		postInstall bool
+		class, ns   string
+		ready       int32
+		ok          bool
+	}{
+		"down after install":                 {postInstall: true, class: "eg", ns: envoyGatewayNamespace},
+		"down after install, found by label": {postInstall: true, class: "eg", ns: "custom-envoy-system"},
+		"Ready after install": {
+			postInstall: true, class: "eg", ns: envoyGatewayNamespace, ready: 1, ok: true},
+		"down before install":             {class: "eg", ns: envoyGatewayNamespace, ok: true},
+		"down, NVCF Gateway run by istio": {postInstall: true, class: "istio", ns: envoyGatewayNamespace, ok: true},
+	} {
+		state := &ValidationState{Log: testLog(), PostInstall: tc.postInstall}
+		checkTier1Deployments(context.Background(), cluster(tc.ns, tc.ready), gateways(tc.class), state)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
+	}
+
+	// A controller that cannot be read after install leaves the row unknown.
+	client := cluster(envoyGatewayNamespace, 1)
+	client.PrependReactor("list", "deployments", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.(ktesting.ListAction).GetListRestrictions().Labels.String() == envoyGatewayControllerSelector {
+			return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+		}
+		return false, nil, nil
+	})
+	state := &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier1Deployments(context.Background(), client, gateways("eg"), state)
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	assert.Contains(t, state.Warnings, tier1ControllerUnknown)
+}
+
 // A proxy Deployment with no Ready pod does not cover its Gateway, wherever
 // the controller runs, including a namespace Tier-1 does not otherwise scan.
 func TestCheckTier1Deployments_ProxyDeploymentWithoutReadyPodIsAGap(t *testing.T) {
