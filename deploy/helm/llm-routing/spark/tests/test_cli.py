@@ -330,17 +330,51 @@ class CliTests(unittest.TestCase):
             spark.main(['prepare'])
         prepare.assert_called_once()
 
-    def test_init_refuses_existing_config_or_state(self):
-        self.write_config()
-        with self.assertRaisesRegex(RuntimeError, 'does not overwrite'):
-            spark.main(['init'])
-        self.assertEqual(json.loads((self.work/'config.json').read_text()), self.config)
-        (self.work/'config.json').unlink()
+    def test_init_refuses_state_without_configuration(self):
         spark.save(self.work/'state.json', {'identity': 'original'})
         with self.assertRaisesRegex(RuntimeError, 'does not overwrite'):
             spark.main(['init'])
         self.assertFalse((self.work/'config.json').exists())
         self.assertEqual(json.loads((self.work/'state.json').read_text()), {'identity': 'original'})
+
+    def test_init_archives_stale_progress_and_preserves_config_and_credentials(self):
+        self.write_config()
+        recipe = spark.Recipe(self.config, self.work)
+        original = {'identity': recipe.identity, 'serve': True, 'stack': True, 'attachedExisting': True}
+        spark.save(self.work/'state.json', original)
+        spark.save(self.work/'api-key', 'keep-me')
+        before = (self.work/'config.json').read_bytes()
+        with patch.object(spark.cluster_setup, 'validate_reinitialization') as inspect, redirect_stdout(io.StringIO()):
+            spark.main(['init'])
+        inspect.assert_called_once_with(self.config)
+        self.assertEqual((self.work/'config.json').read_bytes(), before)
+        self.assertEqual((self.work/'api-key').read_text(), 'keep-me')
+        self.assertFalse((self.work/'state.json').exists())
+        archive, = self.work.glob('before-reinit-*')
+        self.assertEqual(json.loads((archive/'state.json').read_text()), original)
+        self.assertEqual(json.loads((archive/'config.json').read_text()), self.config)
+        self.assertEqual(archive.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(spark.Recipe(self.config, self.work).state, {})
+
+    def test_init_reuses_config_when_progress_was_already_archived(self):
+        self.write_config()
+        with patch.object(spark.cluster_setup, 'validate_reinitialization') as inspect, redirect_stdout(io.StringIO()):
+            spark.main(['--context', 'team-context', 'init'])
+        inspect.assert_called_once_with(self.config)
+        self.assertFalse((self.work/'state.json').exists())
+        self.assertEqual(list(self.work.glob('before-reinit-*')), [])
+
+    def test_rejected_reinit_preserves_progress(self):
+        self.write_config()
+        recipe = spark.Recipe(self.config, self.work)
+        original = {'identity': recipe.identity, 'serve': True}
+        spark.save(self.work/'state.json', original)
+        with patch.object(spark.cluster_setup, 'validate_reinitialization',
+                          side_effect=spark.cluster_setup.ClusterSetupError('Live installation')), \
+             redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            spark.main(['init'])
+        self.assertEqual(json.loads((self.work/'state.json').read_text()), original)
+        self.assertEqual(list(self.work.glob('before-reinit-*')), [])
 
     def test_init_supports_new_explicit_config_path_and_namespace(self):
         path = self.root/'custom'/'config.json'

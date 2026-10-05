@@ -274,6 +274,23 @@ class Recipe:
         for name in (self.glm, self.operator, self.stack):
             require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', name) is not None and len(name) <= 53, 'Invalid release name.')
 
+    def reinitialize(self, config_path):
+        require(not (self.work/'temporary-gateway-key.json').exists(),
+                'A temporary gateway key still needs cleanup. No progress was reset.')
+        if self.state.get('inventory'):
+            self.bound_cluster()
+        cluster_setup.validate_reinitialization(self.c)
+        if self.state_path.exists():
+            require(json.loads(self.state_path.read_text()) == self.state,
+                    'Progress changed during inspection. Stop concurrent recipe commands and retry init.')
+            archive = pathlib.Path(tempfile.mkdtemp(prefix='before-reinit-', dir=self.work))
+            save(archive/'config.json', self.c)
+            self.state_path.rename(archive/'state.json')
+            print('Previous progress archived:', archive)
+        print('Reusing configuration:', config_path)
+        print('Placement, image references, credentials and retained volumes are unchanged.')
+        print('Run inventory, then follow the installation phases from preflight.')
+
     def stamp(self, phase, value=True):
         self.state.update(identity=self.identity)
         self.state[phase] = value
@@ -1017,8 +1034,14 @@ def main(argv=None):
         print(context)
         return
     if args.phase == 'init':
-        require(config is None and not config_path.exists() and not (work/'state.json').exists(),
-                'Configuration or deployment state already exists. Init does not overwrite an installation.')
+        if config is not None:
+            try:
+                Recipe(config, work, args.source_dir).reinitialize(config_path)
+            except cluster_setup.ClusterSetupError as error:
+                parser.exit(2, 'error: ' + str(error) + '\n')
+            return
+        require(not config_path.exists() and not (work/'state.json').exists(),
+                'Saved state is missing its configuration. Init does not overwrite an installation.')
         require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
         try:
             config = cluster_setup.discover_config(context, args.namespace)

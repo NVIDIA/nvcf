@@ -21,10 +21,12 @@ def require(condition, message):
         raise ClusterSetupError(message)
 
 
-def items(context, resource, all_namespaces=False):
+def items(context, resource, all_namespaces=False, namespace=None):
     command = ['kubectl', '--context', context, 'get', resource]
     if all_namespaces:
         command.append('--all-namespaces')
+    if namespace:
+        command += ['-n', namespace]
     try:
         result = json.loads(subprocess.check_output(command + ['-o', 'json'], text=True,
                                                    stderr=subprocess.PIPE, timeout=30))
@@ -124,3 +126,102 @@ def discover_config(context, namespace=None):
     config['containerd'] = {'socketPath': '/run/k3s/containerd/containerd.sock', 'archiveNode': control,
                            'runAsUser': 1000, 'nodeNames': sorted(node['metadata']['name'] for node in imports)}
     return config
+
+
+def validate_reinitialization(config):
+    """Inspect an uninstalled demo before allowing local progress to be reset."""
+    context, namespace = config['context'], config['namespace']
+    prefix = config['releasePrefix']
+    releases = config.get('releases', {})
+    glm = releases.get('glm', prefix + '-glm')
+    operator = releases.get('operator', prefix + '-operator')
+    stack = releases.get('stack', prefix + '-stack')
+    try:
+        records = json.loads(subprocess.check_output(
+            ['helm', '--kube-context', context, '-n', namespace, 'list', '--deployed', '--failed',
+             '--pending', '--uninstalling', '--superseded', '--uninstalled', '-o', 'json'],
+            text=True, stderr=subprocess.PIPE, timeout=30))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise ClusterSetupError('Could not inspect Helm releases. No progress was reset.') from None
+    require(isinstance(records, list) and not records,
+            'Helm releases still exist in this namespace. Finish uninstalling before init. No progress was reset.')
+
+    def owned(resource, release):
+        metadata = resource.get('metadata', {})
+        annotations = metadata.get('annotations', {})
+        require(not metadata.get('deletionTimestamp')
+                and annotations.get('meta.helm.sh/release-name') == release
+                and annotations.get('meta.helm.sh/release-namespace') == namespace
+                and annotations.get('helm.sh/resource-policy') == 'keep',
+                'Retained resource has another owner or is not retained: ' + metadata.get('name', 'unknown'))
+
+    crds = [item for item in items(context, 'crds')
+            if item['metadata']['name'] == 'inferenceendpoints.pylon.nvidia.com']
+    for crd in crds:
+        owned(crd, operator)
+        spec = crd['spec']
+        require(spec.get('group') == 'pylon.nvidia.com' and spec.get('scope') == 'Namespaced'
+                and spec.get('names', {}).get('kind') == 'InferenceEndpoint'
+                and [(v['name'], v['served'], v['storage']) for v in spec.get('versions', [])]
+                == [('v1alpha1', True, True)]
+                and set(crd.get('status', {}).get('storedVersions', [])) <= {'v1alpha1'},
+                'Retained Pylon CRD has an incompatible API version.')
+        require(not items(context, 'inferenceendpoints.pylon.nvidia.com', all_namespaces=True),
+                'InferenceEndpoints still exist. Finish uninstalling before init.')
+    namespaces = [item for item in items(context, 'namespaces') if item['metadata']['name'] == namespace]
+    require(not any(item['metadata'].get('deletionTimestamp') for item in namespaces),
+            'The saved namespace is terminating.')
+    nodes = {item['metadata']['name']: item for item in items(context, 'nodes')}
+    for role, name in config['nodes'].items():
+        require(name in nodes and eligible(nodes[name]), 'Saved node is unavailable: ' + name)
+        require(nodes[name]['metadata']['labels'].get('kubernetes.io/hostname') == name,
+                'Saved node hostname no longer matches placement: ' + name)
+        if role in ('leader', 'worker'):
+            require(int(nodes[name]['status'].get('allocatable', {}).get('nvidia.com/gpu', 0)) >= 1,
+                    'Saved model node has no advertised GPU: ' + name)
+    pods = items(context, 'pods', all_namespaces=True)
+    require(not any(requests_gpu(pod) and pod.get('spec', {}).get('nodeName') in
+                    (config['nodes']['leader'], config['nodes']['worker']) for pod in pods),
+            'A saved model GPU is occupied.')
+    if not namespaces:
+        require(not crds, 'Retained CRD without the saved namespace requires ownership review.')
+        return
+    require(not items(context, 'deployments,statefulsets,daemonsets,jobs,cronjobs,pods,services,ingresses', namespace=namespace),
+            'Workloads still exist in the saved namespace. Finish uninstalling before init.')
+    claims = items(context, 'persistentvolumeclaims', namespace=namespace)
+    volumes = {item['metadata']['name']: item for item in items(context, 'persistentvolumes')} if claims else {}
+    expected = {glm + '-artifacts': (glm, 'leader'), glm + '-rpc-cache': (glm, 'worker'),
+                prefix + '-monitoring-metrics': (prefix + '-monitoring', 'control')}
+    for claim in claims:
+        name = claim['metadata']['name']
+        require(name in expected, 'Unexpected retained PVC: ' + name)
+        release, role = expected[name]
+        owned(claim, release)
+        spec = claim['spec']
+        require(claim.get('status', {}).get('phase') == 'Bound'
+                and spec.get('storageClassName') == config['storageClass']
+                and spec.get('accessModes') == ['ReadWriteOnce']
+                and spec.get('volumeMode', 'Filesystem') == 'Filesystem',
+                'Retained PVC is not compatible with saved storage: ' + name)
+        volume = volumes.get(spec.get('volumeName'), {})
+        ref = volume.get('spec', {}).get('claimRef', {})
+        require(not volume.get('metadata', {}).get('deletionTimestamp')
+                and ref.get('uid') == claim['metadata']['uid']
+                and ref.get('name') == name and ref.get('namespace') == namespace,
+                'Retained PVC binding changed: ' + name)
+        selected = claim['metadata'].get('annotations', {}).get('volume.kubernetes.io/selected-node')
+        require(not selected or selected == config['nodes'][role], 'Retained PVC placement changed: ' + name)
+        terms = volume.get('spec', {}).get('nodeAffinity', {}).get('required', {}).get('nodeSelectorTerms')
+        if terms is not None:
+            # Fail closed for affinity shapes that this K3s recipe cannot validate.
+            require(any(not term.get('matchFields') and term.get('matchExpressions') and
+                        all(expr.get('key') == 'kubernetes.io/hostname' and expr.get('operator') == 'In'
+                            and config['nodes'][role] in expr.get('values', [])
+                            for expr in term['matchExpressions']) for term in terms),
+                    'Retained PV affinity does not match saved placement: ' + name)
+    secrets_by_name = {operator + '-cluster-credential': operator, config['caConfigMap']: stack}
+    for secret in items(context, 'secrets', namespace=namespace):
+        name = secret['metadata']['name']
+        require(name in secrets_by_name, 'Unexpected retained Secret requires review: ' + name)
+        owned(secret, secrets_by_name[name])
+    require(crds or claims, 'Existing namespace has no retained demo ownership evidence. Use a new namespace.')
