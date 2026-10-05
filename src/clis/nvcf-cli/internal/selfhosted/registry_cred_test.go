@@ -1181,26 +1181,6 @@ func TestLoadStackValues_ExternalComponents(t *testing.T) {
 	assert.Empty(t, LoadStackValues([]string{base}).ExternalComponents)
 }
 
-// findSelfManagedStack returns the repository's self-managed stack, found
-// above the package directory, or skips the test where it is not there, as
-// in a sandboxed build.
-func findSelfManagedStack(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	require.NoError(t, err)
-	for {
-		stack := filepath.Join(dir, "deploy", "stacks", "self-managed")
-		if _, err := os.Stat(filepath.Join(stack, "helmfile.d")); err == nil {
-			return stack
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Skip("the self-managed stack is not available here")
-		}
-		dir = parent
-	}
-}
-
 // The Gateways LoadStackValues forwards are the ones the stack renders into
 // the ingress release's nvcfGatewayRoutes.gateways, for the default routes
 // and with each gated route on, so the CLI's gates cannot drift from the
@@ -1209,11 +1189,11 @@ func TestLoadStackValues_GatewaysMatchTheRenderedStack(t *testing.T) {
 	if testing.Short() {
 		t.Skip("renders the stack with helmfile")
 	}
+	stack := filepath.Join(repoStacksDir(t), "self-managed")
 	helmfile, err := exec.LookPath("helmfile")
 	if err != nil {
 		t.Skip("helmfile is not installed")
 	}
-	stack := findSelfManagedStack(t)
 	const common = `
 ingress:
   gatewayApi:

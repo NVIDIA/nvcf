@@ -264,10 +264,7 @@ func TestResolveStackNamespaces_NeverProbesRuntimeOwnedNamespaces(t *testing.T) 
 // so they must agree with the stacks: the same namespaces, gated by the same
 // conditions, with base.yaml's defaults.
 func TestStaticNamespaces_MatchTheStacks(t *testing.T) {
-	root := filepath.Join("..", "..", "..", "..", "..", "deploy", "stacks")
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("deploy/stacks not reachable from the test's working directory: %v", err)
-	}
+	root := repoStacksDir(t)
 	for stack, static := range map[string][]stackNamespace{
 		"self-managed":       nvcfControlPlaneNamespaces,
 		"nvcf-compute-plane": nvcfComputePlaneNamespaces,
@@ -291,4 +288,30 @@ func TestStaticNamespaces_MatchTheStacks(t *testing.T) {
 			}
 		}
 	}
+}
+
+// repoStacksDir returns the repository's deploy/stacks, found at or above the
+// package directory. Bazel stages it as the test's data, so a run under Bazel
+// fails without it rather than skipping the tests that pin the CLI to the
+// stacks; elsewhere, as in a copy of the module alone, the test skips.
+func repoStacksDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		stacks := filepath.Join(dir, "deploy", "stacks")
+		if _, err := os.Stat(filepath.Join(stacks, "self-managed", "helmfile.d")); err == nil {
+			return stacks
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	if os.Getenv("TEST_SRCDIR") != "" {
+		t.Fatal("deploy/stacks is not in the test's runfiles; add //:nvcf-cli-stacks to its data")
+	}
+	t.Skip("deploy/stacks is not reachable from the test's working directory")
+	return ""
 }

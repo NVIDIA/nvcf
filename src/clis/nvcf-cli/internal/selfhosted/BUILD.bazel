@@ -84,7 +84,7 @@ go_test(
         "validator_config_parity_test.go",
         "validatortag_test.go",
     ],
-    data = glob(["testdata/**"]),
+    data = glob(["testdata/**"]) + ["//:nvcf-cli-stacks"],
     embed = [":selfhosted"],
     deps = [
         "//src/clis/nvcf-cli/internal/client",
