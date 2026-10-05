@@ -4,6 +4,7 @@ go_library(
     name = "cache",
     srcs = [
         "cache.go",
+        "metrics.go",
         "timing_wheel.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/cache",
@@ -11,6 +12,8 @@ go_library(
     deps = [
         "//src/control-plane-services/event-ledger/internal/data_access",
         "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
         "@org_uber_go_zap//:zap",
     ],
 )
@@ -26,6 +29,7 @@ go_test(
     srcs = [
         "cache_test.go",
         "handler_wheel_test.go",
+        "metrics_test.go",
         "timing_wheel_test.go",
     ],
     embed = [":cache"],
@@ -33,5 +37,10 @@ go_test(
         "//src/control-plane-services/event-ledger/internal/data_access",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_metric//noop",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
     ],
 )
