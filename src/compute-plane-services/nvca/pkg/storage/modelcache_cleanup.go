@@ -337,10 +337,27 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 	// deleted a primary while a function was serving from its secondary
 	// (2026-10-03), after which that request's own reconcile could not find
 	// the primary and tore the secondary down too.
+	//
+	// The spec's cache handle protects a request that is still on its way
+	// to publishing a status. A request in a terminal phase can outlive its
+	// readers (legacy MiniService installs keep a failed request for the
+	// life of the workload), so it protects the primary only while its
+	// read-only claim is still bound; its spec handle alone pins nothing.
 	activeVolumeKeys := sets.Set[string]{}
 	activeCacheHandles := sets.Set[string]{}
-	for _, st := range stList.Items {
+	for i := range stList.Items {
+		st := &stList.Items[i]
 		if st.DeletionTimestamp != nil {
+			continue
+		}
+		if terminalStoragePhase(st.Status.Phase) {
+			inUse, err := r.secondaryInUse(ctx, st)
+			if err != nil {
+				return err
+			}
+			if inUse && st.Status.ModelCache != nil && st.Status.ModelCache.VolumeHandle != "" {
+				activeVolumeKeys = activeVolumeKeys.Insert(volumeHandleKey(st.Status.ModelCache.VolumeHandle))
+			}
 			continue
 		}
 		if st.Status.ModelCache != nil && st.Status.ModelCache.VolumeHandle != "" {
@@ -623,4 +640,10 @@ func deleteStorageClassIfEncrypted(ctx context.Context, c client.Client, scName 
 	if err := c.Delete(ctx, sc); err != nil && !apierrors.IsNotFound(err) {
 		log.Error(err, "Failed to delete storage class, manual cleanup needed")
 	}
+}
+
+// terminalStoragePhase reports whether a storage request has failed for
+// good: its reconcile runs the cleanup and it will never publish a status.
+func terminalStoragePhase(p nvcav1new.StoragePhase) bool {
+	return p == nvcav1new.StorageFailed || p == nvcav1new.StorageRuntimeError
 }

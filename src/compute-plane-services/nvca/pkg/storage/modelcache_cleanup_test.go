@@ -19,6 +19,7 @@ package storage
 
 import (
 	"context"
+	stderrors "errors"
 	"testing"
 	"time"
 
@@ -28,8 +29,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
@@ -281,6 +284,30 @@ func TestCleanupIdleModelCaches_KeepsPrimaryBehindActiveSecondary(t *testing.T) 
 			requests: nil,
 			wantKept: false,
 		},
+		{
+			name: "a failed request with only the spec handle and no reader does not keep it",
+			requests: []client.Object{func() *nvcav1new.StorageRequest {
+				st := request("sr-failed", "", cacheHandle)
+				st.Status.Phase = nvcav1new.StorageFailed
+				return st
+			}()},
+			wantKept: false,
+		},
+		{
+			name: "a failed request whose reader claim is still bound keeps it",
+			requests: []client.Object{
+				func() *nvcav1new.StorageRequest {
+					st := request("sr-failed-bound", secondaryHandle, cacheHandle)
+					st.Status.Phase = nvcav1new.StorageRuntimeError
+					return st
+				}(),
+				&corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{Name: "ro-pvc-" + cacheHandle, Namespace: "sr-failed-bound"},
+					Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+				},
+			},
+			wantKept: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -358,4 +385,48 @@ func TestSecondaryInUse(t *testing.T) {
 	got, err := none.secondaryInUse(context.Background(), &nvcav1new.StorageRequest{})
 	require.NoError(t, err)
 	assert.False(t, got, "a request without a cache handle has no secondary")
+}
+
+// A missing primary is only tolerated for a Ready request with a bound
+// secondary. A Creating request has no reader status yet; preserving it
+// would leave the phase at Creating forever, so it fails terminally and the
+// caller handles the failure.
+func TestPrimaryMissing(t *testing.T) {
+	const cacheHandle = "797a73eb7557f74f2c3d1d1e7e53e449"
+	request := func(phase nvcav1new.StoragePhase) *nvcav1new.StorageRequest {
+		return &nvcav1new.StorageRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: nvcav1new.ModelCacheRequest.Name(), Namespace: "sr-fn"},
+			Spec:       nvcav1new.StorageRequestSpec{ModelCache: &nvcav1new.ModelCacheSpec{CacheHandle: cacheHandle}},
+			Status:     nvcav1new.StorageRequestStatus{Phase: phase},
+		}
+	}
+	boundClaim := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "ro-pvc-" + cacheHandle, Namespace: "sr-fn"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	notFound := errors.NewNotFound(corev1.Resource("persistentvolumes"), "primary-pv")
+	tests := []struct {
+		name         string
+		phase        nvcav1new.StoragePhase
+		objs         []client.Object
+		wantTerminal bool
+	}{
+		{name: "ready with a bound secondary is preserved", phase: nvcav1new.StorageReady, objs: []client.Object{boundClaim}, wantTerminal: false},
+		{name: "ready without a reader fails", phase: nvcav1new.StorageReady, wantTerminal: true},
+		{name: "creating with a bound secondary still fails", phase: nvcav1new.StorageCreating, objs: []client.Object{boundClaim}, wantTerminal: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(tt.objs...).Build()
+			r := &Reconciler{Client: c, eventRecorder: record.NewFakeRecorder(4), metrics: newTestMetrics()}
+			st := request(tt.phase)
+			err := r.primaryMissing(context.Background(), st, st.DeepCopy(), notFound)
+			if tt.wantTerminal {
+				require.Error(t, err)
+				assert.True(t, stderrors.Is(err, reconcile.TerminalError(nil)), "expected a terminal error, got %v", err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
