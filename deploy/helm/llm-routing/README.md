@@ -6,7 +6,7 @@ Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Oper
 
 The `spark.py` installer coordinates the combined gateway/router chart, the Pylon Operator chart and the GLM backend chart. The backend chart builds llama.cpp, downloads and verifies the GGUF model files, runs GLM across the two GPUs, and creates an `InferenceEndpoint` for Pylon to register.
 
-Application images and charts use your checkout, including local edits. `prepare` builds the Helm dependencies.
+Application images and charts use your checkout, including local edits.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ Application images and charts use your checkout, including local edits. `prepare
 
 Follow these steps for the first installation of the stack and GLM model.
 
-### Configure and prepare
+### Configure
 
 Use your existing kubeconfig.
 
@@ -33,10 +33,9 @@ Use your existing kubeconfig.
 
    Review the selected nodes and generated configuration. `init` configures idle GPUs, storage and image preload for K3s. Configuration and evidence are saved automatically in a private work directory outside the checkout. For another container runtime, edit an external copy of [config.example.json](spark/config.example.json) and pass `--config /path/to/config.json` instead of running `init`.
 
-2. Prepare the checkout's Helm dependencies, render the manifests and inventory the cluster.
+2. Render the manifests and inventory the cluster.
 
    ```bash
-   python3 spark.py prepare
    python3 spark.py render
    python3 spark.py inventory
    ```
@@ -138,7 +137,7 @@ If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key
 
 If this workstation has not used the running installation before, [attach to it first](#update-an-existing-installation).
 
-1. Run `python3 spark.py prepare`, then edit the service in your checkout: `src/invocation-plane-services/llm-api-gateway` for gateway or `src/libraries/rust/stargate` for router.
+1. Edit the service in your checkout: `src/invocation-plane-services/llm-api-gateway` for gateway or `src/libraries/rust/stargate` for router.
 2. [Build and distribute that component](spark/BUILDING.md#rebuild-gateway-or-router) with a fresh tag. Run the next commands in the same terminal.
 3. Update the selected image and verify gateway requests.
 
@@ -190,10 +189,9 @@ Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
 1. Commit runtime, API and chart fixes in their owning source directories, including generated files and regression tests.
 2. Update the repository and full baseline revision in `spark/source.lock.json`. The revision must exist in the selected checkout and be an ancestor of its `HEAD`.
-3. Validate the checkout and chart dependencies, then run the [local regression checks](#local-validation).
+3. Render the manifests, then run the [local regression checks](#local-validation).
 
    ```bash
-   python3 spark.py prepare
    python3 spark.py render
    ```
 
@@ -228,12 +226,11 @@ Both model persistent volume claims (PVCs) remain after uninstall.
 
 ## Local validation
 
-1. Prepare the checkout's Helm dependencies as described under [Configure and prepare](#configure-and-prepare).
-2. From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks.
+From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks.
 
-   ```bash
-   python3 -m unittest discover -s tests -v
-   python3 -m unittest discover -s charts/gguf-backend/tests -v
-   python3 spark.py render
-   git diff --check
-   ```
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s charts/gguf-backend/tests -v
+python3 spark.py render
+git diff --check
+```

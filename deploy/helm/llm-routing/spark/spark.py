@@ -417,7 +417,7 @@ class Recipe:
                         'Existing image repository differs: '+component)
             # Retain installer checkpoints and credentials; attachment must not turn
             # an installation owner into a restricted iteration-only work directory.
-            print('Existing installation matches the saved setup. Run verify-gateway next.')
+            print('Existing installation matches the saved setup.')
             return
         if self.state:
             self.bound_cluster()
@@ -656,8 +656,8 @@ class Recipe:
 
     def deploy_stack(self):
         require(not self.state.get('attachedExisting'), 'Existing installations support verification and image iteration, not fresh stack deployment.')
-        self.source_check()
         self.bound_cluster()
+        self.prepare()
         op_chart = self.source/'deploy/helm/pylon-operator/pylon-operator'
         self.helm_apply(self.operator, op_chart, self.operator_values())
         secret = json.loads(output(self.kc+['get', 'secret', self.operator+'-cluster-credential', '-o', 'json']))
@@ -906,6 +906,7 @@ finally:
         current = values[chart][service]['image']
         require(current['registry']+'/'+current['repository'] == self.repository(component), 'Live image repository differs from config.')
         require(current['tag'] != tag, 'Use a fresh tag.')
+        self.prepare()
         before = json.loads(output(self.kc+['get', 'pods', '-o', 'json']))['items']
         value_key = chart+'.'+service+'.image.tag'
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -973,7 +974,7 @@ finally:
         self.verify(True, port+1)
 
     def render(self):
-        self.source_check()
+        self.prepare()
         renders = [('stack', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', self.stack_values('a'*64, 'b'*64)),
                    ('operator', self.source/'deploy/helm/pylon-operator/pylon-operator', self.operator_values())]
         for phase in ('preflight', 'build', 'qualify', 'chain', 'download', 'serve'):
@@ -1050,7 +1051,7 @@ def main(argv=None):
         if discovered:
             save(config_path, config)
             print('Discovered configuration:', config_path)
-        print('Run verify-gateway next. Run prepare before building application images.')
+        print('Run verify-gateway next.')
     elif args.phase == 'build-images':
         try:
             recipe.build_images(args.component, args.tag)

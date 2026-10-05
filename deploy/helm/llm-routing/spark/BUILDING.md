@@ -5,7 +5,6 @@ Build gateway, router, Pylon and operator images for `linux/arm64` from your che
 ## Requirements
 
 - A running Docker engine with Buildx, ARM64 build capability and access to base images and build dependencies.
-- Helm dependencies prepared with `python3 spark.py prepare`.
 - For registry distribution, set `images.prefix` and a fresh `images.tag` in the configuration. `images.repositories` overrides the repository for individual components.
 
 Router and Pylon builds use Cargo profile `integration`.

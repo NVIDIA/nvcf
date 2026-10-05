@@ -124,6 +124,40 @@ class RecipeTests(unittest.TestCase):
         run.assert_not_called()
         self.assertFalse(self.recipe.source.exists())
 
+    def test_render_prepares_dependencies_before_lint_or_template(self):
+        operations = []
+
+        def run(command, **kwargs):
+            operations.append(tuple(str(value) for value in command[:3]))
+
+        def output(command, **kwargs):
+            operations.append(tuple(str(value) for value in command[:2]))
+            return 'kind: List\nitems: []\n'
+
+        with patch.object(self.recipe, 'source_check'), patch.object(spark, 'run', side_effect=run), \
+             patch.object(spark, 'output', side_effect=output):
+            self.recipe.render()
+        self.assertEqual(operations[0], ('helm', 'dependency', 'build'))
+        self.assertEqual(sum(operation[:2] == ('helm', 'lint') for operation in operations), 8)
+        self.assertEqual(sum(operation == ('helm', 'template') for operation in operations), 8)
+        self.assertEqual(len(list((self.recipe.work/'render').glob('*.yaml'))), 8)
+
+    def test_render_dependency_failure_stops_before_rendered_files_or_templates(self):
+        with patch.object(self.recipe, 'source_check'), patch.object(spark, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
+             patch.object(spark, 'output') as output, self.assertRaisesRegex(RuntimeError, 'dependency build failed'):
+            self.recipe.render()
+        self.assertEqual(run.call_args.args[0][:3], ['helm', 'dependency', 'build'])
+        run.assert_called_once()
+        output.assert_not_called()
+        self.assertFalse((self.recipe.work/'render').exists())
+
+    def test_build_images_does_not_prepare_chart_dependencies(self):
+        with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'prepare') as prepare, \
+             patch.object(spark, 'run') as run:
+            self.recipe.build_images('gateway', 'test-build')
+        prepare.assert_not_called()
+        self.assertTrue(all(command.args[0][0] == 'docker' for command in run.call_args_list))
+
     def test_image_update_rejects_committed_local_and_untracked_chart_changes(self):
         for index, chart in enumerate(('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router')):
             for change in ('committed', 'local', 'untracked'):
@@ -247,8 +281,16 @@ class RecipeTests(unittest.TestCase):
     def test_stack_generates_private_key_hash_and_only_glm_stack_components(self):
         encoded = __import__('base64').b64encode(b'private-cluster-token').decode()
         responses = [json.dumps({'data': {'cluster-token': encoded}}), json.dumps({'data': {'ca.crt': 'public-ca'}})]
-        with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply') as helm, patch.object(spark, 'output', side_effect=responses):
+        operations = []
+        with patch.object(self.recipe, 'source_check'), \
+             patch.object(self.recipe, 'bound_cluster', side_effect=lambda: operations.append('bound')), \
+             patch.object(self.recipe, 'helm_apply', side_effect=lambda release, *args: operations.append(release)) as helm, \
+             patch.object(spark, 'run', side_effect=lambda *args, **kwargs: operations.append('dependencies')) as run, \
+             patch.object(spark, 'output', side_effect=responses):
             self.recipe.deploy_stack()
+        self.assertEqual(operations, ['bound', 'dependencies', self.recipe.operator, self.recipe.stack])
+        self.assertEqual(run.call_args.args[0][:3], ['helm', 'dependency', 'build'])
+        run.assert_called_once()
         self.assertEqual(helm.call_count, 2)
         key_path = pathlib.Path(self.tmp.name)/'api-key'
         key = key_path.read_text().strip()
@@ -260,12 +302,38 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(self.recipe.components(), ['gateway', 'router', 'pylon', 'operator'])
         self.assertEqual(self.recipe.state['stack']['apiKeyFile'], str(key_path.resolve()))
 
+    def test_stack_dependency_failure_stops_before_operator_or_key_creation(self):
+        self.recipe.state = {'inventory': {'nodes': {'control': 'node-uid'}}}
+        original = copy.deepcopy(self.recipe.state)
+        with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster') as cluster, \
+             patch.object(spark, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
+             patch.object(self.recipe, 'helm_apply') as helm, patch.object(spark, 'output') as output, \
+             self.assertRaisesRegex(RuntimeError, 'dependency build failed'):
+            self.recipe.deploy_stack()
+        cluster.assert_called_once()
+        self.assertEqual(run.call_args.args[0][:3], ['helm', 'dependency', 'build'])
+        run.assert_called_once()
+        helm.assert_not_called()
+        output.assert_not_called()
+        self.assertEqual(self.recipe.state, original)
+        self.assertFalse((self.recipe.work/'api-key').exists())
+
+    def test_stack_binding_failure_prevents_dependency_preparation(self):
+        with patch.object(self.recipe, 'bound_cluster', side_effect=RuntimeError('node identity changed')), \
+             patch.object(self.recipe, 'prepare') as prepare, patch.object(self.recipe, 'helm_apply') as helm, \
+             self.assertRaisesRegex(RuntimeError, 'node identity changed'):
+            self.recipe.deploy_stack()
+        prepare.assert_not_called()
+        helm.assert_not_called()
+
     def test_direct_and_gateway_verification_use_the_glm_client(self):
         self.recipe.state = {'stack': {'apiKeyFile': str(pathlib.Path(self.tmp.name)/'api-key'), 'testFixture': True}}
         for gateway in (False, True):
             with self.subTest(gateway=gateway):
-                with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward') as forward, patch.object(spark, 'run') as run:
+                with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward') as forward, \
+                     patch.object(self.recipe, 'prepare') as prepare, patch.object(spark, 'run') as run:
                     self.recipe.verify(gateway, 18443)
+                prepare.assert_not_called()
                 command = [str(value) for value in run.call_args.args[0]]
                 self.assertEqual(command[command.index('--mode')+1], 'verify')
                 self.assertNotIn('--retained-model', command)
@@ -456,7 +524,10 @@ class RecipeTests(unittest.TestCase):
         after[0]['metadata']['uid'] = 'g2'
         with patch.object(self.recipe, 'source_check') as source, patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(spark, 'run') as run:
             self.recipe.update('gateway', 'next-tag')
-        source.assert_called_once_with(image_update=True)
+        self.assertEqual(source.call_args_list[0].kwargs, {'image_update': True})
+        self.assertEqual(source.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0][:3], ['helm', 'dependency', 'build'])
+        self.assertEqual(run.call_count, 2)
         command = run.call_args.args[0]
         self.assertIn('--reuse-values', command)
         self.assertIn('llm-api-gateway.llmApiGateway.image.tag=next-tag', command)
@@ -466,6 +537,44 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(record['previousTag'], self.config['images']['tag'])
         self.assertEqual(record['backendPodsChanged'], [])
         self.assertEqual(record['source'], self.recipe.source_identity())
+
+    def test_update_dependency_failure_stops_before_update_record_or_upgrade(self):
+        values = self.recipe.stack_values('a'*64, 'b'*64)
+        self.recipe.state = {'attachedExisting': True, 'gateway': True}
+        original = copy.deepcopy(self.recipe.state)
+
+        def read(command, **kwargs):
+            if command[:len(self.recipe.hm)+3] == self.recipe.hm+['get', 'values', self.recipe.stack]:
+                return json.dumps(values)
+            self.assertIn('pods', command)
+            return '{"items": []}'
+
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), \
+             patch.object(spark, 'output', side_effect=read), \
+             patch.object(spark, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
+             self.assertRaisesRegex(RuntimeError, 'dependency build failed'):
+            self.recipe.update('gateway', 'next-tag')
+        self.assertEqual(run.call_args.args[0][:3], ['helm', 'dependency', 'build'])
+        run.assert_called_once()
+        self.assertFalse((self.recipe.work/'evidence').exists())
+        self.assertEqual(self.recipe.state, original)
+
+    def test_update_live_repository_or_tag_mismatch_stops_before_preparation(self):
+        for mismatch in ('repository', 'tag'):
+            values = self.recipe.stack_values('a'*64, 'b'*64)
+            image = values['llm-api-gateway']['llmApiGateway']['image']
+            if mismatch == 'repository':
+                image['repository'] = 'other/gateway'
+            else:
+                image['tag'] = 'next-tag'
+            with self.subTest(mismatch=mismatch), patch.object(self.recipe, 'bound_cluster'), \
+                 patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'prepare') as prepare, \
+                 patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(spark, 'run') as run, \
+                 self.assertRaises(RuntimeError):
+                self.recipe.update('gateway', 'next-tag')
+            prepare.assert_not_called()
+            run.assert_not_called()
+            self.assertFalse((self.recipe.work/'evidence').exists())
 
     def test_image_update_rejects_unmarked_or_different_stack_sources_before_mutation(self):
         self.recipe.state = {'attachedExisting': True, 'gateway': True}
@@ -509,6 +618,21 @@ class RecipeTests(unittest.TestCase):
         with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
             self.recipe.rollback(path)
         update.assert_called_once_with('router', 'old-tag')
+
+    def test_rollback_automatically_prepares_before_the_restoring_upgrade(self):
+        values = self.recipe.stack_values('a'*64, 'b'*64)
+        values['llm-request-router']['llmRequestRouter']['image']['tag'] = 'next-tag'
+        record = {'context': self.config['context'], 'namespace': self.config['namespace'], 'release': self.recipe.stack,
+                  'component': 'router', 'newTag': 'next-tag', 'previousTag': 'old-tag', 'source': self.recipe.source_identity()}
+        path = self.recipe.work/'rollback.json'
+        path.write_text(json.dumps(record))
+        reads = [json.dumps(values), json.dumps(values), '{"items": []}', '{"items": []}']
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), \
+             patch.object(spark, 'output', side_effect=reads), patch.object(spark, 'run') as run:
+            self.recipe.rollback(path)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0][:3], ['helm', 'dependency', 'build'])
+        self.assertIn('llm-request-router.llmRequestRouter.image.tag=old-tag', run.call_args_list[1].args[0])
 
     def test_rollback_refuses_a_subsequent_update(self):
         values = self.recipe.stack_values('a'*64, 'b'*64)
@@ -567,11 +691,13 @@ class RecipeTests(unittest.TestCase):
 
     def test_existing_attachment_blocks_fresh_stack_and_recovery(self):
         self.recipe.state = {'attachedExisting': True}
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply') as helm:
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'prepare') as prepare, \
+             patch.object(self.recipe, 'helm_apply') as helm:
             with self.assertRaisesRegex(RuntimeError, 'fresh stack'):
                 self.recipe.deploy_stack()
             with self.assertRaisesRegex(RuntimeError, 'existing backend owner'):
                 self.recipe.recovery(True, 18443)
+            prepare.assert_not_called()
             helm.assert_not_called()
 
     def test_explicit_release_and_repository_mapping(self):
