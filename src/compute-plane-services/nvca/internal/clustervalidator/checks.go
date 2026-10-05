@@ -1898,6 +1898,13 @@ var (
 		"has no nc that can listen (nc -l -p) and connect (nc -v -z -w)")
 )
 
+// nodeToNodeSilentSandboxRecommendation goes with a probe pod that got no pod
+// sandbox and no event saying why.
+const nodeToNodeSilentSandboxRecommendation = "A probe pod on the listed nodes got no pod sandbox, and so no pod " +
+	"IP, and no event saying why. A CNI plugin that hangs on pod network setup reports FailedCreatePodSandBox " +
+	"only when the container runtime times it out, minutes later. Check the CNI daemon's and the container " +
+	"runtime's logs on those nodes (crictl pods lists a sandbox stuck NotReady)."
+
 // createNodeToNodeNamespace creates the per-run probe namespace. Its labels
 // are what sweepOrphanN2NNamespaces matches on, and are deliberately distinct
 // from the netpol-validation labels so the two sweeps cannot cross-delete.
@@ -2164,6 +2171,10 @@ type n2nProbe struct {
 	// it a default-deny policy in the probe namespace cannot be told from a
 	// broken overlay.
 	allowErr error
+	// silent are the nodes whose probe pod was scheduled but showed no
+	// sandbox event when the wait ended. The row cannot pass while any of
+	// them is still one to probe.
+	silent []string
 }
 
 func newN2NProbe(client kubernetes.Interface, state *ValidationState, image string) *n2nProbe {
@@ -2260,6 +2271,7 @@ func (p *n2nProbe) run(ctx context.Context, probeNodes []string) {
 
 	sandboxes, eventsErr := probeSandboxEvents(ctx, p.client, p.ns)
 	outcome := classifyProbeNodes(pods, probeNodes, sandboxes, eventsErr)
+	p.silent = outcome.silent
 	if len(outcome.networkFaults) > 0 && p.failOnSandboxFaults(ctx, &outcome) {
 		return
 	}
@@ -2433,7 +2445,7 @@ func (p *n2nProbe) runChecker(ctx context.Context, servers []corev1.Pod) (checke
 func (p *n2nProbe) judge(ctx context.Context, run checkerRun) {
 	p.log.Infof("  Checker on %s, server pods on %d other node(s)", run.node, run.targets)
 	if run.succeeded {
-		p.verified(run.node, run.targets)
+		p.verified(ctx, run.node, run.targets)
 		return
 	}
 	// The checker is pinned with NodeName, so the scheduler's resource check
@@ -2485,7 +2497,7 @@ func (p *n2nProbe) judge(ctx context.Context, run checkerRun) {
 	case reached < 1:
 		p.notObserved("no server pod on a node still to probe answered the checker", "")
 	default:
-		p.verified(run.node, reached)
+		p.verified(ctx, run.node, reached)
 	}
 }
 
@@ -2519,11 +2531,40 @@ func (p *n2nProbe) judgeUnnamed(ctx context.Context, run checkerRun, report chec
 	p.unreachable(run.node, []string{targets})
 }
 
-func (p *n2nProbe) verified(node string, reached int) {
+// verified passes the row, unless a node whose probe pod showed no sandbox
+// event is still one to probe: a CNI plugin that hangs setting up the pod
+// network reports nothing until the container runtime times it out, which is
+// after the probe stops waiting, so that node's overlay is untested and the
+// row is unknown. Silence is no evidence of a fault either, so it never fails
+// the row.
+func (p *n2nProbe) verified(ctx context.Context, node string, reached int) {
+	if silent := p.stillSilent(ctx); len(silent) > 0 {
+		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
+			"scheduled and showed no pod sandbox event within %s, as when the CNI plugin hangs setting up the "+
+			"pod network", node, reached, strings.Join(silent, ", "), nodeToNodeDSTimeout),
+			nodeToNodeSilentSandboxRecommendation)
+		return
+	}
 	printSuccess(p.log, fmt.Sprintf("Node-to-node overlay verified: %s -> %d node(s) reachable on port %d",
 		node, reached, nodeToNodeTestPort))
 	ok := true
 	p.state.NodeToNodeOK = &ok
+}
+
+// stillSilent returns the nodes whose probe pod showed no sandbox event that
+// are still ones to probe when re-read. A failed re-read keeps them all.
+func (p *n2nProbe) stillSilent(ctx context.Context) []string {
+	if len(p.silent) == 0 {
+		return nil
+	}
+	lost := p.lostNodes(ctx, p.silent)
+	var silent []string
+	for _, n := range p.silent {
+		if _, ok := lost[n]; !ok {
+			silent = append(silent, n)
+		}
+	}
+	return silent
 }
 
 // unreachable fails the row: the checker ran and could not connect to the
@@ -2838,6 +2879,10 @@ type probeOutcome struct {
 	// kubelet rejection, or no sandbox event either way. They say nothing
 	// about the overlay.
 	gaps []string
+	// silent are the gaps whose pod was scheduled and showed no sandbox
+	// event at all. A hung CNI plugin looks like this, so they are untested
+	// nodes the row cannot pass without.
+	silent []string
 	// imageProblem: a pod could not pull the probe image, or was still
 	// pulling it when the wait ended.
 	imageProblem bool
@@ -2861,7 +2906,8 @@ type sandboxFault struct {
 // pull or a container start has a working pod network, and only one whose
 // latest sandbox event is a failure to create it is evidence against the
 // node's. Silence proves nothing: a hung CNI plugin reports nothing until the
-// runtime times it out, but neither does a busy kubelet or a lost event.
+// runtime times it out, but neither does a busy kubelet or a lost event. So a
+// silent node is no fault, but it is listed in silent as well as gaps.
 func classifyProbeNodes(
 	pods []corev1.Pod, expected []string, sandboxes map[string]sandboxEvidence, eventsErr error,
 ) probeOutcome {
@@ -2894,6 +2940,8 @@ func classifyProbeNodes(
 			reason = "not scheduled"
 		case pick.Status.PodIP != "":
 			reason = "networked but not yet Running"
+		case pick.Status.Phase == corev1.PodRunning:
+			reason = "Running, but its pod IP is not reported yet"
 		case ev.state == sandboxFailed:
 			out.networkFaults = append(out.networkFaults, sandboxFault{node: node, message: ev.message})
 			continue
@@ -2910,6 +2958,7 @@ func classifyProbeNodes(
 		default:
 			reason = "scheduled, but no sandbox event yet (a hung CNI plugin reports none until the runtime " +
 				"times it out)"
+			out.silent = append(out.silent, node)
 		}
 		out.gaps = append(out.gaps, node+": "+reason)
 	}

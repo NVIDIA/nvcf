@@ -1833,8 +1833,11 @@ func TestClassifyProbeNodes(t *testing.T) {
 		{"events unreadable", creating(), nil, unreadable, false,
 			"pod events could not be read (Internal error occurred: etcd timeout)", false},
 		{"running without IP", second(probePod("node-2", "Running", "", "")), nil, nil, false,
-			"scheduled, but no sandbox event yet", false},
+			"Running, but its pod IP is not reported yet", false},
 	}
+	// Only a scheduled pod with no sandbox event at all is silent, which is
+	// what a hung CNI plugin looks like.
+	silentCases := map[string]bool{"no sandbox event long after scheduling": true}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := classifyProbeNodes(tc.pods, nodes, tc.sandboxes, tc.eventsErr)
@@ -1849,8 +1852,56 @@ func TestClassifyProbeNodes(t *testing.T) {
 			require.Len(t, got.gaps, 1)
 			assert.Contains(t, got.gaps[0], "node-2: "+tc.gap)
 			assert.Equal(t, tc.imageError, got.imageProblem)
+			if silentCases[tc.name] {
+				assert.Equal(t, []string{"node-2"}, got.silent)
+			} else {
+				assert.Empty(t, got.silent)
+			}
 		})
 	}
+}
+
+// A CNI plugin that hangs on pod network setup reports FailedCreatePodSandBox
+// only when the runtime times it out, after the probe stops waiting. A pod
+// scheduled on an eligible node with no sandbox event is no fault, but the
+// overlay there is untested, so the row is unknown and the warning names the
+// node, even though every other node was reached.
+func TestCheckNodeToNode_SilentSandboxLeavesTheRowUnknown(t *testing.T) {
+	silent := probePod("node-3", "Pending", "", "ContainerCreating")
+	silent.Name = "s-3"
+	servers := append(runningServers("node-1", "node-2"), silent)
+	// The scheduler's event is no sandbox event.
+	events := []corev1.Event{podEvent("s-3", "Scheduled", 0)}
+
+	f := newN2NFixture(t, readyNodes(3), servers, events, checkerExit(0))
+	state := runN2N(f)
+	assert.Nil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
+	warnings := strings.Join(state.Warnings, "; ")
+	assert.Contains(t, warnings, "Node-to-Node: status unknown (the overlay was verified from")
+	assert.Contains(t, warnings, "the probe pod on node-3 was scheduled and showed no pod sandbox event")
+	assert.Contains(t, state.Recommendations, nodeToNodeSilentSandboxRecommendation)
+	assert.Empty(t, f.leftovers(t))
+
+	// A checker that could not reach another node still fails the row: that
+	// is evidence, whatever the silent node hides.
+	f = newN2NFixture(t, readyNodes(3), servers, events, func() (*corev1.Pod, error) {
+		return checkerReported(nodeToNodeUnreachableExit, "unreachable: "+ipOf(f.others("node-1", "node-2")[0])), nil
+	})
+	state = runN2N(f)
+	require.NotNil(t, state.NodeToNodeOK)
+	assert.False(t, *state.NodeToNodeOK)
+
+	// A node that went NotReady while the probe waited explains its own pod,
+	// so it is a coverage gap and the others pass.
+	f = newN2NFixture(t, readyNodes(3), servers, events, checkerExit(0))
+	f.client.PrependReactor("create", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		f.markNotReady(t, "node-3")
+		return false, nil, nil
+	})
+	state = runN2N(f)
+	require.NotNil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
+	assert.True(t, *state.NodeToNodeOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "node-3: scheduled, but no sandbox event yet")
 }
 
 // Every kubelet event that follows sandbox creation says the sandbox exists,
