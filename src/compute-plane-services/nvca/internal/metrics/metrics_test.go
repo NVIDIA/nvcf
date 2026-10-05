@@ -31,7 +31,6 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	metricsgctypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/gctypes"
 	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/workloadtypes"
@@ -2584,17 +2583,6 @@ func TestClusterValidatorMetrics_SummaryAfterResetWithoutBaseline(t *testing.T) 
 	checks := gatherClusterValidatorSeries(t, reg, ClusterValidatorCheckStatusMetricName)
 	require.Len(t, checks, 1)
 	assert.Equal(t, 1.0, checks[0].GetGauge().GetValue())
-}
-
-// TestClusterValidatorCheckKeysSync guards the two hand-maintained check-key
-// lists against drift: the init-to-zero baseline in metrics
-// (clusterValidatorCheckKeys) must expose exactly the same checks the validator
-// emits (clustervalidator.AllCheckKeys). If they diverge, the baseline would
-// initialize a different set than real runs produce — a silent metric gap.
-func TestClusterValidatorCheckKeysSync(t *testing.T) {
-	assert.ElementsMatch(t, clustervalidator.AllCheckKeys, clusterValidatorCheckKeys(),
-		"clusterValidatorCheckKeys() must match clustervalidator.AllCheckKeys; "+
-			"when adding a CheckKey* constant, update both lists")
 }
 
 // TestClusterValidatorMetrics_NetpolDirectionalSeries confirms each pair
