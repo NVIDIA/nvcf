@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,8 +34,16 @@ import (
 )
 
 // writeKubeconfig points KUBECONFIG at a file with one context, "test", for
-// server.
+// server, with a static token.
 func writeKubeconfig(t *testing.T, server string) {
+	t.Helper()
+	writeKubeconfigFor(t, server, "    token: test-token\n")
+}
+
+// writeKubeconfigFor is writeKubeconfig with user, indented to sit under
+// user:, as the credentials. client-go sends them only over TLS, so an https
+// server's certificate is not verified.
+func writeKubeconfigFor(t *testing.T, server, user string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config")
 	body := fmt.Sprintf(`apiVersion: v1
@@ -43,6 +52,7 @@ clusters:
 - name: test
   cluster:
     server: %s
+    insecure-skip-tls-verify: %t
 contexts:
 - name: test
   context:
@@ -51,9 +61,8 @@ contexts:
 users:
 - name: test
   user:
-    token: test-token
-current-context: test
-`, server)
+%scurrent-context: test
+`, server, strings.HasPrefix(server, "https://"), user)
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	t.Setenv("KUBECONFIG", path)
 }
@@ -123,4 +132,56 @@ func TestConnectCluster_SpentBudgetIsNotUnreachable(t *testing.T) {
 	_, err := connectCluster(ctx, "test")
 	var unreachable *ClusterUnreachableError
 	assert.False(t, errors.As(err, &unreachable), "%v", err)
+}
+
+// credentialPlugin writes an exec credential plugin that runs the shell body
+// and then returns the token body left in $token, and returns the kubeconfig
+// user that runs it.
+func credentialPlugin(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "plugin")
+	script := "#!/bin/sh\n" + body + "\nprintf '{\"apiVersion\":\"client.authentication.k8s.io/v1\"," +
+		"\"kind\":\"ExecCredential\",\"status\":{\"token\":\"%s\"}}' \"$token\"\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	return fmt.Sprintf(`    exec:
+      apiVersion: client.authentication.k8s.io/v1
+      command: %s
+      interactiveMode: Never
+`, path)
+}
+
+// Credentials from a plugin are fetched within the first call, so its time
+// does not count against the call's bound, and a cached token the server
+// rejects is replaced and tried again.
+func TestConnectCluster_CredentialPlugin(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	prev := clusterFirstCallTimeout
+	clusterFirstCallTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { clusterFirstCallTimeout = prev })
+
+	for name, tc := range map[string]struct {
+		body        string
+		unreachable bool
+	}{
+		"slower than the bound": {body: "sleep 1; token=fresh"},
+		"rotates a rejected token": {
+			body: `token=fresh; if [ ! -e "$0.ran" ]; then : > "$0.ran"; token=stale; fi`,
+		},
+		"token rejected twice": {body: "token=stale", unreachable: true},
+	} {
+		writeKubeconfigFor(t, srv.URL, credentialPlugin(t, tc.body))
+		_, err := connectCluster(context.Background(), "test")
+		var unreachable *ClusterUnreachableError
+		assert.Equal(t, tc.unreachable, errors.As(err, &unreachable), "%s: %v", name, err)
+		if !tc.unreachable {
+			assert.NoError(t, err, name)
+		}
+	}
 }
