@@ -2662,6 +2662,27 @@ func TestObservabilityDisabled(t *testing.T) {
 	runLiveFeature(t, "observability-disabled.feature")
 }
 
+// TestEventLedger is the live entry point for the event-ledger feature. It
+// runs against an already-running single-cluster ncp-local stack and installs
+// nothing. Skipped under -short.
+func TestEventLedger(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "event-ledger.feature")
+}
+
+// TestEventLedgerReadOnly runs the event-ledger feature without the function
+// lifecycle scenario (no GPU capacity or image pull access needed) and without
+// the known-defect scenario (it writes an event).
+// Skipped under -short.
+func TestEventLedgerReadOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeatureTags(t, "event-ledger.feature", "~@function-lifecycle && ~@known-defect")
+}
+
 // TestMultiClusterHelmfile is the live entry point for the
 // multi-cluster Helmfile feature: control-plane install on
 // k3d-ncp-local-cp followed by register + NVCA install on the
@@ -2886,4 +2907,141 @@ func assertFileContains(t *testing.T, path string, needles ...string) {
 func mustResolveFeaturePath(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join("features", name)
+}
+
+// eventLedgerHTTPFake answers the event-ledger feature's HTTP calls the way
+// the real services are expected to, and records requests for assertions.
+type eventLedgerHTTPFake struct {
+	destroyed *bool
+	requests  []string
+}
+
+func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, headers map[string]string, _ string) (harness.HTTPResponse, error) {
+	f.requests = append(f.requests, method+" "+rawURL)
+	hostAndPath := strings.TrimPrefix(rawURL, "http://")
+	host, rest, _ := strings.Cut(hostAndPath, "/")
+	path, query, _ := strings.Cut("/"+rest, "?")
+	auth := headers["Authorization"]
+	admin := auth == "Bearer admin-jwt"
+	reader := auth == "Bearer nvapi-test"
+
+	if strings.HasPrefix(host, "api-keys.") {
+		switch {
+		case !admin || headers["Key-Issuer-Id"] == "":
+			return harness.HTTPResponse{Status: 401}, nil
+		case method == "POST":
+			return harness.HTTPResponse{Status: 200, Body: `{"id":"key-1","value":"nvapi-test"}`}, nil
+		default:
+			return harness.HTTPResponse{Status: 204}, nil
+		}
+	}
+	switch {
+	case path == "/health":
+		return harness.HTTPResponse{Status: 200}, nil
+	case strings.HasPrefix(path, "/v1/"), strings.HasPrefix(path, "/v2/"):
+		return harness.HTTPResponse{Status: 404}, nil
+	case auth == "", strings.HasPrefix(auth, "Bearer eyJ"):
+		return harness.HTTPResponse{Status: 401}, nil
+	case !reader:
+		return harness.HTTPResponse{Status: 403}, nil
+	case method == "POST":
+		return harness.HTTPResponse{Status: 403}, nil
+	}
+	namespace := strings.Split(path, "/")[4]
+	switch {
+	case strings.Contains(query, "attribute_key"), strings.Contains(query, "instance_id=bad"), strings.Contains(query, "view=bogus"):
+		return harness.HTTPResponse{Status: 400}, nil
+	case strings.HasSuffix(path, "/stats"):
+		if strings.Contains(query, "NoSuchEvent") {
+			return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","contexts":[]}`}, nil
+		}
+		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","summary":{"by_event":{"InstanceReady":1,"InstanceDestroyed":1}}}`}, nil
+	case namespace == "version-1":
+		body := `{"namespace":"version-1","events":[{"event_name":"InstanceReady","source":"nvidia-spot"}`
+		if *f.destroyed {
+			body += `,{"event_name":"InstanceDestroyed","source":"nvidia-spot"}`
+		}
+		return harness.HTTPResponse{Status: 200, Body: body + `]}`}, nil
+	default:
+		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","events":[]}`}, nil
+	}
+}
+
+func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
+	const selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"token":"admin-jwt"}`), 0o600); err != nil {
+		t.Fatalf("seed cli state: %v", err)
+	}
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	destroyed := false
+	runner := newFakeRunner(map[string]harness.Result{
+		selectedFunctionStatusCommand: {
+			ExitCode: 0,
+			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
+		},
+		`/bin/bash -c 'date -u -d "+1 day" +%Y-%m-%dT%H:%M:%S.000Z'`: {ExitCode: 0, Stdout: "2030-01-01T00:00:00.000Z\n"},
+		"kubectl --context k3d-ncp-local --namespace nvcf get service event-ledger -o jsonpath={.spec.ports[*].name}": {
+			ExitCode: 0,
+			Stdout:   "api-port metrics",
+		},
+		"kubectl --context k3d-ncp-local --namespace sis get configmaps -o yaml": {
+			ExitCode: 0,
+			Stdout:   "  ICMS_FNDS_MESSAGES_ENABLED: \"true\"\n  ICMS_FNDS_MESSAGES_V3_ENABLED: \"true\"\n",
+		},
+	})
+	runner.onRun = func(command string) error {
+		if strings.Contains(command, " function delete --deployment-only") {
+			destroyed = true
+		}
+		return nil
+	}
+	suite := newWiringSuite(t, runner)
+	httpFake := &eventLedgerHTTPFake{destroyed: &destroyed}
+	suite.HTTP = httpFake
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "event-ledger.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "event-ledger-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, " function deploy create ") {
+		t.Fatal("function deploy command was never invoked")
+	}
+	if !commandRanThatContains(runs, " function delete --deployment-only") {
+		t.Fatal("function undeploy command was never invoked")
+	}
+	for _, secret := range []string{"admin-jwt", "nvapi-test"} {
+		if commandRanThatContains(runs, secret) {
+			t.Fatalf("secret %q leaked into a command line", secret)
+		}
+	}
+	deletes := 0
+	for _, request := range httpFake.requests {
+		if request == "DELETE http://api-keys.localhost:8080/v1/keys/key-1" {
+			deletes++
+		}
+	}
+	if deletes != 3 {
+		t.Fatalf("read keys deleted = %d, want 3", deletes)
+	}
 }

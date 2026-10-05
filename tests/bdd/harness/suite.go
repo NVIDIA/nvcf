@@ -40,6 +40,7 @@ type Suite struct {
 	Ledger    *Ledger
 	EnvLedger *EnvLedger
 	Cache     *CommandCache
+	HTTP      HTTPClient
 
 	signalMu      sync.Mutex
 	signalContext context.Context
