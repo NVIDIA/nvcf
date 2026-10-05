@@ -60,8 +60,9 @@ KUBECONFIG=cp.yaml:gpu1.yaml nvcf-cli self-hosted up \
   --icms-url=https://icms.nvcf.example.com
 
 # Add a new compute plane to an existing control plane, from the profile
-# `self-hosted control-plane profile export` wrote (no kubectl access to CP
-# needed; reaches the control plane via the public ICMS HTTPRoute):
+# `self-hosted control-plane profile export` wrote to the path it printed,
+# copied here as control-plane-profile.yaml (no kubectl access to CP needed;
+# reaches the control plane via the public ICMS HTTPRoute):
 nvcf-cli self-hosted compute-plane register \
   --control-plane-profile=control-plane-profile.yaml \
   --cluster-name=ncp-local-2 \

@@ -15,10 +15,11 @@ User says NVCA stopped authenticating, or PSAT auth is 401-ing against ICMS. The
 2. **Rotate.** From a context that can reach the compute plane's K8s API (because rotation re-fetches the K8s API's `/openid/v1/jwks`):
 
    ```sh
-   nvcf-cli cluster rotate --cluster-id=<id> --compute-plane-context=<ctx>
+   kubectl config use-context <ctx>
+   nvcf-cli cluster rotate --cluster-id=<id>
    ```
 
-   This re-fetches JWKS from the compute plane's K8s API and PUTs it to ICMS. The cluster ID stays the same.
+   `cluster rotate` reads the current context, or the one `--kubeconfig=<path>` selects. It re-fetches JWKS from the compute plane's K8s API and PUTs it to ICMS. The cluster ID stays the same.
 
 3. **Verify.** `nvcf-cli cluster get --cluster-id=<id>` — confirm `updatedAt` advanced. Then `kubectl logs -n nvca-system -l app.kubernetes.io/name=nvca --tail=20` — register attempts should succeed (200, not 401).
 

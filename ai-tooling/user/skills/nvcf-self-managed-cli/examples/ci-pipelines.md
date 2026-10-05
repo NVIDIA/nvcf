@@ -80,7 +80,7 @@ deploy_compute_planes:
         --cluster-name=$CLUSTER
 ```
 
-Each parallel job registers + installs one compute plane against the shared control plane. Failures are isolated. The control-plane profile comes from `nvcf-cli self-hosted control-plane profile export`, run once against the control plane.
+Each parallel job registers + installs one compute plane against the shared control plane. Failures are isolated. The control-plane profile comes from `nvcf-cli self-hosted control-plane profile export`, run once against the control plane. It writes the profile to the stack's `out/` directory and prints that path; hand the file to each job as `control-plane-profile.yaml`, for example as an artifact.
 
 ## Plan-only preview in PRs
 

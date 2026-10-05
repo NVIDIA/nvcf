@@ -7,7 +7,7 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 - **kubectl context for the new compute plane** in their `KUBECONFIG`.
 - **Public ICMS URL** of the existing control plane (e.g. `https://icms.nvcf.example.com`).
 - **Admin JWT** for the control plane's account, OR ability to mint one via `nvcf-cli init` against the control plane's public api endpoint. (Admin tokens come from the API Keys service via the public api gateway — kubectl access to the control plane is NOT required to obtain one.)
-- The control plane's profile file, which `nvcf-cli self-hosted control-plane profile export` writes on a machine that can reach the control-plane cluster. It carries the control plane's endpoints and trust for registration.
+- The control plane's profile file, which `nvcf-cli self-hosted control-plane profile export` writes on a machine that can reach the control-plane cluster. It carries the control plane's endpoints and trust for registration. The command writes it to the stack's `out/` directory and prints that path; the steps below expect it copied to `control-plane-profile.yaml` in the working directory.
 - A unique `--cluster-name` that doesn't collide with already-registered clusters. Use `nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS` to check.
 
 ## Steps

@@ -12,8 +12,10 @@ KUBECONFIG=cp.yaml nvcf-cli self-hosted install --control-plane | kubectl apply 
 nvcf-cli self-hosted check --control-plane --wait 5m
 
 # 2. Export the control-plane profile every compute plane registers from.
-#    The command prints the path it wrote:
+#    It is written to the stack's out/ directory, and the command prints
+#    that path. Copy the file here:
 KUBECONFIG=cp.yaml nvcf-cli self-hosted control-plane profile export --cluster-name=ncp-cp
+cp <path it printed> control-plane-profile.yaml
 
 # 3. Register + install each compute plane. Both commands name the GPU
 #    cluster's context with --kube-context:
@@ -54,7 +56,8 @@ nvcf-cli self-hosted check --compute-plane \
   --json
 
 # Register and install just the compute plane, from the profile the
-# control-plane operator exported with `self-hosted control-plane profile export`:
+# control-plane operator exported with `self-hosted control-plane profile export`,
+# saved here as control-plane-profile.yaml:
 nvcf-cli self-hosted compute-plane register \
   --control-plane-profile=control-plane-profile.yaml \
   --cluster-name=my-compute-1 \
