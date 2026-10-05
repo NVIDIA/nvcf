@@ -112,8 +112,12 @@ SEQ=("$CREATING" "$RUNNING" "$READY"); LOGS=(0 10 20); run_loop 600 100000; RC=$
 loopcheck "becomes ready" 0
 
 # A terminal state fails immediately, not after any budget.
+# Run the waiter in this shell, not a subshell: the VNOW check below needs
+# the virtual clock the waiter's _wp_sleep calls advanced.
 SEQ=("$PULLFAIL"); LOGS=(0); IDX=0; VNOW=0
-out=$(wait_pod_ready testpod testns 600 100000 2>&1) && RC=0 || RC=$?
+_out_file=$(mktemp)
+wait_pod_ready testpod testns 600 100000 >"$_out_file" 2>&1 && RC=0 || RC=$?
+out=$(cat "$_out_file"); rm -f "$_out_file"
 loopcheck "terminal state fails" 1
 [[ "$out" == *"ImagePullBackOff"* ]] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FAIL terminal reason not reported"; }
 [ "$VNOW" -lt 120 ] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FAIL terminal state waited $VNOW virtual seconds"; }

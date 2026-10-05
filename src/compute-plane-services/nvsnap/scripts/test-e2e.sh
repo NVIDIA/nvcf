@@ -295,6 +295,12 @@ NAMESPACE="nvsnap-system"
 # appropriate there. They are single generous defaults rather than a table.
 MODELS_POLL_TIMEOUT="${NVSNAP_MODELS_POLL_TIMEOUT:-1200}"
 INFERENCE_POLL_TIMEOUT="${NVSNAP_INFERENCE_POLL_TIMEOUT:-300}"
+for _tv in NVSNAP_MODELS_POLL_TIMEOUT:"$MODELS_POLL_TIMEOUT" NVSNAP_INFERENCE_POLL_TIMEOUT:"$INFERENCE_POLL_TIMEOUT"; do
+    if ! [[ "${_tv#*:}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: ${_tv%%:*} must be a positive integer number of seconds, got '${_tv#*:}'" >&2
+        exit 2
+    fi
+done
 MODELS_POLL_INTERVAL=30
 INFERENCE_POLL_INTERVAL=30
 POST_MODELS_TIMEOUT=120

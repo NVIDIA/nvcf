@@ -115,8 +115,11 @@ for cs in (s.get("initContainerStatuses") or []) + (s.get("containerStatuses") o
 # has to be reachable by a test. These four wrap everything in it that touches
 # the world; wait-progress-test.sh redefines them to replay a scripted pod
 # sequence against a virtual clock, with no cluster and no real waiting.
-_wp_pod_json() { kubectl get pod "$1" -n "$2" -o json 2>/dev/null; }
-_wp_log_size() { kubectl logs "$1" -n "$2" --tail=-1 2>/dev/null | wc -c; }
+# Each API call gets a finite request timeout: kubectl's default of 0 never
+# times out, and a hung request here would sit outside the stall and
+# NVSNAP_MAX_WAIT budgets the loop below enforces.
+_wp_pod_json() { kubectl get pod "$1" -n "$2" -o json --request-timeout="${NVSNAP_API_TIMEOUT:-30s}" 2>/dev/null; }
+_wp_log_size() { kubectl logs "$1" -n "$2" --tail=-1 --request-timeout="${NVSNAP_API_TIMEOUT:-30s}" 2>/dev/null | wc -c; }
 _wp_now()      { date +%s; }
 _wp_sleep()    { sleep "$1"; }
 
