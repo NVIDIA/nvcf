@@ -33,6 +33,7 @@ import com.nvidia.icms.service.extensions.api.InstanceLifecycleHelper;
 import com.nvidia.icms.outbound.cassandra.reservation.entity.ReservationEntity;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.byoc.ClustersService.ReadyClusterInfo;
+import com.nvidia.icms.service.cpu.CpuShapes;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
@@ -322,7 +323,7 @@ public class ClusterGpuInfoHelper {
                 instanceType.getIsDefault() != null && instanceType.getIsDefault());
         responseCluster.setMaxClusterAvailableCapacity(
                 getMaxInstancesCreatedWithAvailableCapacity(
-                        gpuAvailable, instanceType.getGpuCount()));
+                        gpuAvailable, readyClusterInfo.getGpu(), instanceType));
         responseCluster.setAttributes(readyClusterInfo.getAttributes() != null
                                               ? readyClusterInfo.getAttributes()
                                               : new HashSet<>());
@@ -377,6 +378,21 @@ public class ClusterGpuInfoHelper {
             return available / gpuCountForInstanceType;
         }
         return 0;
+    }
+
+    /**
+     * Same as {@link #getMaxInstancesCreatedWithAvailableCapacity(int, int)}, but a CPU shape is
+     * counted in instances: its reported available capacity already is a number of instances, so
+     * there is nothing to divide. Every other instance type keeps the GPU rule unchanged.
+     */
+    public static int getMaxInstancesCreatedWithAvailableCapacity(
+            int available,
+            String gpuName,
+            InstanceTypeV5Udt instanceType) {
+        if (CpuShapes.isCpuShapeEntry(gpuName, instanceType.getName(), instanceType.getGpuCount())) {
+            return Math.max(available, 0);
+        }
+        return getMaxInstancesCreatedWithAvailableCapacity(available, instanceType.getGpuCount());
     }
 
 }

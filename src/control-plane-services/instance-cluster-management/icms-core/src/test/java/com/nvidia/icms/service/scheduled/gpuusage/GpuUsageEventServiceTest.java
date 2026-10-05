@@ -700,6 +700,65 @@ class GpuUsageEventServiceTest {
         verify(instanceTypeConfigurationProperties, times(3)).getGpuCountForInstanceType(anyString());
     }
 
+    // ---- CPU instances ----
+
+    @Test
+    void getGpuCountAssociatedToInstance_cpuInstance_usesNoGpuInsteadOfFallingBackToOne() {
+        InstanceV2Entity instance = createTestInstance("cpu-1", "req-1", Instant.now(),
+                "NCP.CPU.4c16g", "CPU", SpotInstanceInternalState.RUNNING, Instant.now());
+        instance.setGpuCountPerInstance(0);
+
+        // The fallback treats a count of 0 as unknown and would bill one GPU.
+        org.junit.jupiter.api.Assertions.assertEquals(0,
+                gpuUsageEventService.getGpuCountAssociatedToInstance(CloudProvider.AWS, instance));
+        org.junit.jupiter.api.Assertions.assertEquals(0,
+                gpuUsageEventService.getGpuCountAssociatedToInstance(null, instance));
+    }
+
+    @Test
+    void getGpuCountAssociatedToInstance_gpuInstanceWithZeroCount_stillFallsBack() {
+        // Unchanged behavior for GPU instances stored with a count of 0.
+        InstanceV2Entity gpuInstance = createTestInstance("gpu-1", "req-2", Instant.now(),
+                "NCP.GPU.H100_2x", "H100", SpotInstanceInternalState.RUNNING, Instant.now());
+        gpuInstance.setGpuCountPerInstance(0);
+
+        org.junit.jupiter.api.Assertions.assertEquals(2,
+                gpuUsageEventService.getGpuCountAssociatedToInstance(CloudProvider.AWS, gpuInstance));
+    }
+
+    @Test
+    void getGpuCountAssociatedToInstance_reservedNameWithGpuInstanceType_isNotACpuInstance() {
+        InstanceV2Entity legacy = createTestInstance("legacy-1", "req-3", Instant.now(),
+                "NCP.GPU.A100_4x", "CPU", SpotInstanceInternalState.RUNNING, Instant.now());
+        legacy.setGpuCountPerInstance(0);
+
+        org.junit.jupiter.api.Assertions.assertEquals(4,
+                gpuUsageEventService.getGpuCountAssociatedToInstance(CloudProvider.AWS, legacy));
+    }
+
+    @Test
+    void getGpuCountAssociatedToInstance_recordedGpusOnAReservedNameInstance_areStillBilled() {
+        // A real GPU that happens to be named CPU, with a CPU-looking type name, but a recorded
+        // GPU count above zero, must never be billed as zero GPUs.
+        InstanceV2Entity gpuNamedCpu = createTestInstance("odd-1", "req-4", Instant.now(),
+                "NCP.CPU.odd", "CPU", SpotInstanceInternalState.RUNNING, Instant.now());
+        gpuNamedCpu.setGpuCountPerInstance(2);
+
+        org.junit.jupiter.api.Assertions.assertEquals(2,
+                gpuUsageEventService.getGpuCountAssociatedToInstance(CloudProvider.AWS, gpuNamedCpu));
+    }
+
+    @Test
+    void getGpuCountAssociatedToInstance_missingCountOnReservedNameInstance_isNotACpuInstance() {
+        // A missing count is unknown, not zero, so the existing fallback applies.
+        InstanceV2Entity unknown = createTestInstance("odd-2", "req-5", Instant.now(),
+                "NCP.CPU.odd", "CPU", SpotInstanceInternalState.RUNNING, Instant.now());
+        unknown.setGpuCountPerInstance(null);
+
+        org.junit.jupiter.api.Assertions.assertNotEquals(0,
+                gpuUsageEventService.getGpuCountAssociatedToInstance(null, unknown));
+    }
+
     private InstanceV2Entity createTestInstance(
             String instanceId,
             String requestId,

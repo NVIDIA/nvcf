@@ -61,6 +61,7 @@ import com.nvidia.icms.service.AppAuditService;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.byoc.ByocServiceHelper;
 import com.nvidia.icms.service.byoc.ClusterQueueAccessCredsService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsTestFixtures;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
@@ -143,7 +144,8 @@ class NvcaClusterRegistrationServiceTest {
                                                                             telemetryEventClient,
                 auditService,
                 instanceServiceHelper,
-                byocServiceHelper);
+                byocServiceHelper,
+                CpuWorkloadsTestFixtures.disabled());
     }
 
     @Test
@@ -784,6 +786,76 @@ class NvcaClusterRegistrationServiceTest {
         // We should add more complex logic for validation if we need it
         /*verify(telemetryClient).triggerEvent(
                 getDummyGenericMetricForClusterRegistration(updatedClusterEntity));*/
+    }
+
+    @Test
+    void nvcaClusterRegistration_cpuShapeWhileCpuWorkloadsDisabled_isRejectedBeforeAnyQueueIsTouched() {
+        // Prepare: a cluster with dynamic discovery that already registered an A100.
+        var existingClusterEntity = getDummyClusterEntity(DUMMY_CLUSTER_ID, Set.of(getDummyA100GpuV5()),
+                                                          false, false, false);
+        existingClusterEntity.setCapabilities(Set.of(DYNAMIC_GPU_DISCOVERY.toString()));
+        doReturn(Optional.of(existingClusterEntity)).when(clusterRepository)
+                .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
+
+        var cpuGpu = com.nvidia.icms.inbound.rest.model.byoc.GpuRequestSchema.builder()
+                .name("CPU").capacity(1)
+                .instanceTypes(Set.of(com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeRequestSchema
+                        .builder().name("NCP.CPU.4c16g").value("NCP.CPU.4c16g").gpuCount(0)
+                        .cpuCores(4).systemMemory("16Gi").isDefault(true).build()))
+                .build();
+        var request = NvcaRegistrationRequest.builder()
+                .status(ClusterStatusEnum.READY)
+                .gpus(Set.of(getDummyGpuRequestSchema(DUMMY_BYOC_INSTANCE_TYPE,
+                                                      DUMMY_BYOC_INSTANCE_TYPE_VALUE, A100GpuName),
+                             cpuGpu))
+                .k8sVersion("1.29.0")
+                .build();
+
+        assertThrows(com.nvidia.icms.errors.CpuWorkloadsNotReadyException.class,
+                () -> nvcaClusterRegistrationService.nvcaClusterRegistration(
+                        request, DUMMY_CLUSTER_ID, new HashMap<>()));
+
+        // The stored registration is untouched and no queue was created or deleted.
+        verify(nvcaClusterRepository, Mockito.never()).updateClusterRegistration(Mockito.any());
+        verify(clusterQueueAccessCredsService, Mockito.never())
+                .createNvcaFunctionCreationQueue(Mockito.any(), Mockito.any(), Mockito.anyBoolean());
+        verify(clusterQueueAccessCredsService, Mockito.never())
+                .createNvcaTerminationQueue(Mockito.any(), Mockito.any(), Mockito.anyBoolean());
+        verify(clusterRepository, Mockito.never()).getClustersFromClusterGroup(Mockito.any());
+    }
+
+    @Test
+    void nvcaClusterRegistration_repeatedUnchangedCpuShapeWhileCpuWorkloadsDisabled_isStillRejected() {
+        // The CPU shape is already stored, for example from before the switch was turned off, so
+        // it is not "newly added". It must still not be kept alive while CPU workloads are off.
+        var storedCpuGpu = com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt.builder()
+                .name("CPU").capacity(1)
+                .instanceTypes(Set.of(com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt
+                        .builder().name("NCP.CPU.4c16g").value("NCP.CPU.4c16g").gpuCount(0)
+                        .cpuCores(4).systemMemory("16Gi").isDefault(true).build()))
+                .build();
+        var existingClusterEntity = getDummyClusterEntity(DUMMY_CLUSTER_ID, Set.of(storedCpuGpu),
+                                                          false, false, false);
+        existingClusterEntity.setCapabilities(Set.of(DYNAMIC_GPU_DISCOVERY.toString()));
+        doReturn(Optional.of(existingClusterEntity)).when(clusterRepository)
+                .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
+
+        var sameCpuGpu = com.nvidia.icms.inbound.rest.model.byoc.GpuRequestSchema.builder()
+                .name("CPU").capacity(1)
+                .instanceTypes(Set.of(com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeRequestSchema
+                        .builder().name("NCP.CPU.4c16g").value("NCP.CPU.4c16g").gpuCount(0)
+                        .cpuCores(4).systemMemory("16Gi").isDefault(true).build()))
+                .build();
+        var request = NvcaRegistrationRequest.builder()
+                .status(ClusterStatusEnum.READY)
+                .gpus(Set.of(sameCpuGpu))
+                .k8sVersion("1.29.0")
+                .build();
+
+        assertThrows(com.nvidia.icms.errors.CpuWorkloadsNotReadyException.class,
+                () -> nvcaClusterRegistrationService.nvcaClusterRegistration(
+                        request, DUMMY_CLUSTER_ID, new HashMap<>()));
+        verify(nvcaClusterRepository, Mockito.never()).updateClusterRegistration(Mockito.any());
     }
 
     @Test

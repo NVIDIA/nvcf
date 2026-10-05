@@ -25,6 +25,7 @@ import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity
 import com.nvidia.icms.outbound.cassandra.reservation.ReservationRepository;
 import com.nvidia.icms.outbound.cassandra.reservation.entity.ReservationEntity;
 import com.nvidia.icms.service.InstanceServiceHelper;
+import com.nvidia.icms.service.cpu.CpuShapes;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.NotNull;
@@ -44,6 +45,10 @@ import static com.nvidia.icms.outbound.cassandra.cloudhealth.CloudHealthReposito
 @Service
 @AllArgsConstructor
 public class ReservationCapacityValidationHelper {
+
+    public static final String CPU_RESERVATION_MESSAGE =
+            "CPU workloads do not support reservations. Request a CPU shape on a cluster without a "
+                    + "reservation.";
 
     private final ReservationRepository reservationRepository;
     private final ReservationProcessor reservationProcessor;
@@ -94,6 +99,23 @@ public class ReservationCapacityValidationHelper {
     }
 
     /**
+     * CPU workloads do not support reservations, which are counted in GPUs. Every path that attaches a
+     * reservation to an instance request, whatever its capacity type, calls this so that a CPU shape
+     * is refused with an explicit error and is never accepted with a reservation id.
+     */
+    public void rejectCpuShapeWithReservation(@NotNull InstanceRequestV2Entity instanceRequestEntity) {
+        Integer recordedCount = instanceRequestEntity.getGpuCountPerInstance();
+        if (recordedCount != null && recordedCount > 0) {
+            return;
+        }
+        ClientRequestDataModel.LaunchSpecification launchSpec = instanceServiceHelper.parseRequestInfo(
+                instanceRequestEntity.getRequest()).getLaunchSpecification();
+        if (CpuShapes.isCpuShapeEntry(launchSpec.getGpu(), launchSpec.getInstanceType(), 0)) {
+            throw new PreConditionFailedException(CPU_RESERVATION_MESSAGE);
+        }
+    }
+
+    /**
      * Calculates GPU count for an instance based on request data with fallback logic
      */
     public Integer calculateGpuCountForInstance(@NotNull InstanceRequestV2Entity instanceRequestEntity) {
@@ -101,6 +123,11 @@ public class ReservationCapacityValidationHelper {
         if (gpuCount == null || gpuCount <= 0) {
             // Fallback: get GPU count from instance type
             ClientRequestDataModel.LaunchSpecification launchSpec = instanceServiceHelper.parseRequestInfo(instanceRequestEntity.getRequest()).getLaunchSpecification();
+            // Reservations are counted in GPUs, and this fallback would count a CPU instance as
+            // one GPU. CPU workloads do not support reservations, so fail explicitly instead.
+            if (CpuShapes.isCpuShapeEntry(launchSpec.getGpu(), launchSpec.getInstanceType(), 0)) {
+                throw new PreConditionFailedException(CPU_RESERVATION_MESSAGE);
+            }
             gpuCount = instanceTypeConfigurationProperties.getGpuCountForInstanceType(launchSpec.getInstanceType());
         }
         return gpuCount;

@@ -179,6 +179,80 @@ class ReservationCapacityValidationHelperTest {
     }
 
     @Test
+    void testCalculateGpuCountForInstance_CpuShape_IsRejectedInsteadOfCountedAsOneGpu() {
+        // Given: a CPU instance, which has no GPU. The fallback would count it as one GPU.
+        testInstanceRequest.setGpuCountPerInstance(0);
+        testLaunchSpec.setGpu("CPU");
+        testLaunchSpec.setInstanceType("NCP.CPU.4c16g");
+        when(instanceServiceHelper.parseRequestInfo(any())).thenReturn(
+                ClientRequestDataModel.builder().launchSpecification(testLaunchSpec).build());
+
+        // When / Then
+        com.nvidia.icms.errors.PreConditionFailedException e = org.junit.jupiter.api.Assertions.assertThrows(
+                com.nvidia.icms.errors.PreConditionFailedException.class,
+                () -> reservationCapacityValidationHelper.calculateGpuCountForInstance(testInstanceRequest));
+        assertTrue(e.getMessage().contains("do not support reservations"));
+        verify(instanceTypeConfigurationProperties, never()).getGpuCountForInstanceType(any());
+    }
+
+    @Test
+    void testRejectCpuShapeWithReservation_CpuShape_IsRejected() {
+        // Every path that attaches a reservation calls this, for RESERVED as well as RESERVED_BACKUP.
+        testInstanceRequest.setGpuCountPerInstance(0);
+        testLaunchSpec.setGpu("CPU");
+        testLaunchSpec.setInstanceType("NCP.CPU.8c32g");
+        when(instanceServiceHelper.parseRequestInfo(any())).thenReturn(
+                ClientRequestDataModel.builder().launchSpecification(testLaunchSpec).build());
+
+        com.nvidia.icms.errors.PreConditionFailedException e = org.junit.jupiter.api.Assertions.assertThrows(
+                com.nvidia.icms.errors.PreConditionFailedException.class,
+                () -> reservationCapacityValidationHelper.rejectCpuShapeWithReservation(testInstanceRequest));
+        assertTrue(e.getMessage().contains("do not support reservations"));
+    }
+
+    @Test
+    void testRejectCpuShapeWithReservation_MissingCountOnCpuShape_IsRejected() {
+        testInstanceRequest.setGpuCountPerInstance(null);
+        testLaunchSpec.setGpu("CPU");
+        testLaunchSpec.setInstanceType("NCP.CPU.8c32g");
+        when(instanceServiceHelper.parseRequestInfo(any())).thenReturn(
+                ClientRequestDataModel.builder().launchSpecification(testLaunchSpec).build());
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.nvidia.icms.errors.PreConditionFailedException.class,
+                () -> reservationCapacityValidationHelper.rejectCpuShapeWithReservation(testInstanceRequest));
+    }
+
+    @Test
+    void testRejectCpuShapeWithReservation_GpuInstances_AreNotAffected() {
+        // A GPU instance, and a GPU that merely carries the reserved name with a real GPU count.
+        testInstanceRequest.setGpuCountPerInstance(0);
+        testLaunchSpec.setGpu("H100");
+        testLaunchSpec.setInstanceType("test-instance-type");
+        when(instanceServiceHelper.parseRequestInfo(any())).thenReturn(
+                ClientRequestDataModel.builder().launchSpecification(testLaunchSpec).build());
+        reservationCapacityValidationHelper.rejectCpuShapeWithReservation(testInstanceRequest);
+
+        testInstanceRequest.setGpuCountPerInstance(2);
+        testLaunchSpec.setGpu("CPU");
+        testLaunchSpec.setInstanceType("NCP.CPU.8c32g");
+        reservationCapacityValidationHelper.rejectCpuShapeWithReservation(testInstanceRequest);
+    }
+
+    @Test
+    void testCalculateGpuCountForInstance_ZeroCountGpuInstance_StillFallsBack() {
+        // Unchanged behavior for a GPU instance stored with a count of 0.
+        testInstanceRequest.setGpuCountPerInstance(0);
+        testLaunchSpec.setGpu("H100");
+        testLaunchSpec.setInstanceType("test-instance-type");
+        when(instanceServiceHelper.parseRequestInfo(any())).thenReturn(
+                ClientRequestDataModel.builder().launchSpecification(testLaunchSpec).build());
+        when(instanceTypeConfigurationProperties.getGpuCountForInstanceType("test-instance-type")).thenReturn(2);
+
+        assertEquals(2, reservationCapacityValidationHelper.calculateGpuCountForInstance(testInstanceRequest));
+    }
+
+    @Test
     void testCalculateGpuCountForInstance_NoGpuCountInRequest_FallbackToInstanceType() {
         // Given
         testInstanceRequest.setGpuCountPerInstance(null);

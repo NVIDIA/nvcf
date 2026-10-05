@@ -53,6 +53,8 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.outbound.sqs.QueueManager;
 import com.nvidia.icms.service.AppAuditService;
 import com.nvidia.icms.service.InstanceServiceHelper;
+import com.nvidia.icms.service.cpu.CpuShapes;
+import com.nvidia.icms.service.cpu.CpuWorkloadsService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
@@ -92,6 +94,7 @@ public class ClusterRegistrationService {
     private final InstanceServiceHelper instanceServiceHelper;
     private final ByocServiceHelper byocServiceHelper;
     private final ComputePlatformService computePlatformService;
+    private final CpuWorkloadsService cpuWorkloadsService;
 
 
     @Observed
@@ -234,6 +237,8 @@ public class ClusterRegistrationService {
         validateAuthorizedNcaIdsForNewCluster(bartRegistrationRequest.getAuthorizedNcaIds());
 
         Set<GpuUdt> requestedGpus = NvcaRequestSchemaToUdtConverter.toGpuUdts(bartRegistrationRequest.getGpus());
+        // The legacy flow has its own validators, so the CPU rules are applied here as well.
+        cpuWorkloadsService.validateLegacyGpus(requestedGpus);
 
         validateGpusForNewCluster(requestedGpus);
 
@@ -313,6 +318,8 @@ public class ClusterRegistrationService {
         }
 
         Set<GpuUdt> requestedGpus = NvcaRequestSchemaToUdtConverter.toGpuUdts(bartRegistrationRequest.getGpus());
+        // The legacy flow has its own validators, so the CPU rules are applied here as well.
+        cpuWorkloadsService.validateLegacyGpus(requestedGpus);
 
         if (computePlatformService.isComputePlatformBackend(existingClusterEntity.getClusterGroupName())) {
             validateGpusForNewCluster(requestedGpus);
@@ -408,6 +415,8 @@ public class ClusterRegistrationService {
                                  bartRegistrationRequest.getAuthorizedNcaIds());
 
         Set<GpuUdt> requestedGpus = NvcaRequestSchemaToUdtConverter.toGpuUdts(bartRegistrationRequest.getGpus());
+        // The legacy flow has its own validators, so the CPU rules are applied here as well.
+        cpuWorkloadsService.validateLegacyGpus(requestedGpus);
         validateGpus(clusterGroupEntity.getGpus(), requestedGpus);
 
         validateClusterStatus(bartRegistrationRequest.getStatus());
@@ -688,6 +697,24 @@ public class ClusterRegistrationService {
                 isNvca2Flow, gpuName);
     }
 
+    /**
+     * CPU shapes shared between clusters of a group must be identical in every field that
+     * describes the machine, not only the fields compared for GPUs. Applies only to CPU shape
+     * entries, so GPU group membership, including a GPU that happens to be named CPU, is decided
+     * exactly as before.
+     */
+    private static boolean cpuShapeFieldsMatch(
+            String gpuName, InstanceTypeV5Udt act, InstanceTypeV5Udt exp) {
+        if (!CpuShapes.isCpuShapeEntry(gpuName, exp.getName(), exp.getGpuCount())) {
+            return true;
+        }
+        return act.getGpuCount() == exp.getGpuCount()
+                && Objects.equals(act.getCpuArch(), exp.getCpuArch())
+                && Objects.equals(act.getOs(), exp.getOs())
+                && Objects.equals(act.getStorage(), exp.getStorage())
+                && Objects.equals(act.getNodeType(), exp.getNodeType());
+    }
+
     public static void validateInstanceTypesV5(
             Set<InstanceTypeV5Udt> expected, Set<InstanceTypeV5Udt> actual,
             boolean isNvca2Flow, String gpuName) {
@@ -696,13 +723,14 @@ public class ClusterRegistrationService {
         for (InstanceTypeV5Udt exp : expected) {
             InstanceTypeV5Udt found = null;
             for (InstanceTypeV5Udt act : expectedInstanceSet) {
-                if (act.getName().equals(exp.getName()) &&
-                        act.getValue().equals(exp.getValue()) &&
-                        act.getDescription().equals(exp.getDescription()) &&
+                if (Objects.equals(act.getName(), exp.getName()) &&
+                        Objects.equals(act.getValue(), exp.getValue()) &&
+                        Objects.equals(act.getDescription(), exp.getDescription()) &&
                         Objects.equals(act.getIsDefault(), exp.getIsDefault()) &&
-                        act.getGpuMemory().equals(exp.getGpuMemory()) &&
-                        act.getSystemMemory().equals(exp.getSystemMemory()) &&
-                        act.getCpuCores() == exp.getCpuCores()) {
+                        Objects.equals(act.getGpuMemory(), exp.getGpuMemory()) &&
+                        Objects.equals(act.getSystemMemory(), exp.getSystemMemory()) &&
+                        act.getCpuCores() == exp.getCpuCores() &&
+                        cpuShapeFieldsMatch(gpuName, act, exp)) {
                     found = act;
                 }
             }

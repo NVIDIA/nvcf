@@ -41,6 +41,8 @@ import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.service.NvcaService;
 import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsStatus;
 import com.nvidia.icms.service.heartbeats.NvcaHeartbeatService;
 import com.nvidia.icms.util.JwtKeyUtils;
 import com.nvidia.icms.util.TestUtil;
@@ -67,6 +69,8 @@ class NvcaControllerTest extends IntegrationTest {
 
     private final String NVCA_CREDS_RENEWAL_URL = "/v1/nvca/clusters/{clusterId}/credentials";
     private final String NVCA_RECORD_HEARTBEAT_URL = "/v1/nvca/clusters/{clusterId}/heartbeat";
+    private final String NVCA_CPU_WORKLOADS_STATUS_URL =
+            "/v1/nvca/clusters/{clusterId}/cpu-workloads-status";
 
     @Autowired
     private MockMvc mockMvc;
@@ -85,6 +89,59 @@ class NvcaControllerTest extends IntegrationTest {
 
     @MockitoBean
     private ClusterOidcIdentityService clusterOidcIdentityService;
+
+    @MockitoBean
+    private CpuWorkloadsService cpuWorkloadsService;
+
+    @Test
+    void cpuWorkloadsStatus_returnsTheStatusToTheClusterThatAsks() throws Exception {
+        when(cpuWorkloadsService.status()).thenReturn(CpuWorkloadsStatus.READY);
+
+        mockMvc.perform(MockMvcRequestBuilders.get(NVCA_CPU_WORKLOADS_STATUS_URL, DUMMY_CLUSTER_ID)
+                                .header(HttpHeaders.AUTHORIZATION,
+                                        JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                  TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE)))
+                .andExpect(MockMvcResultMatchers.status().isOk())
+                .andExpect(MockMvcResultMatchers.jsonPath("$.state").value("READY"))
+                .andExpect(MockMvcResultMatchers.jsonPath("$.reason").value(""));
+    }
+
+    @Test
+    void cpuWorkloadsStatus_whenBlocked_givesOnlyAGenericReason() throws Exception {
+        when(cpuWorkloadsService.status())
+                .thenReturn(CpuWorkloadsStatus.blocked(CpuWorkloadsStatus.REASON_COLLISION_DETECTED));
+
+        MvcResult result = mockMvc.perform(
+                        MockMvcRequestBuilders.get(NVCA_CPU_WORKLOADS_STATUS_URL, DUMMY_CLUSTER_ID)
+                                .header(HttpHeaders.AUTHORIZATION,
+                                        JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                  TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE)))
+                .andExpect(MockMvcResultMatchers.status().isOk())
+                .andReturn();
+
+        // The response carries a state and a generic code. It never names a cluster, account or GPU.
+        assertEquals("{\"state\":\"BLOCKED\",\"reason\":\"COLLISION_DETECTED\"}",
+                     result.getResponse().getContentAsString());
+    }
+
+    @Test
+    void cpuWorkloadsStatus_forAnotherClustersId_isRefusedAndReadsNothing() throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.get(NVCA_CPU_WORKLOADS_STATUS_URL, "some-other-cluster-id")
+                                .header(HttpHeaders.AUTHORIZATION,
+                                        JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                  TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE)))
+                .andExpect(MockMvcResultMatchers.status().isConflict());
+
+        verify(cpuWorkloadsService, Mockito.never()).status();
+    }
+
+    @Test
+    void cpuWorkloadsStatus_withoutCredentials_isRefused() throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.get(NVCA_CPU_WORKLOADS_STATUS_URL, DUMMY_CLUSTER_ID))
+                .andExpect(MockMvcResultMatchers.status().isUnauthorized());
+
+        verify(cpuWorkloadsService, Mockito.never()).status();
+    }
 
     @Test
     void registerCluster_success()

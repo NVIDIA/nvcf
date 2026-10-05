@@ -314,7 +314,7 @@ components:
         gpuCount:
           type: integer
           format: int32
-          description: Number of GPUs to be attached to the worker pod. Supported values 1, 2, 4, 8 (Default value is 1)
+          description: Number of GPUs to be attached to the worker pod. Supported values 1, 2, 4, 8 (Default value is 1). 0 is used only by CPU-only instance types registered under the GPU name CPU
         name:
           type: string
           description: Name of the instance type

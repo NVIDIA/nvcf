@@ -43,6 +43,7 @@ import com.nvidia.icms.service.AppAuditService;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.byoc.ByocServiceHelper;
 import com.nvidia.icms.service.byoc.ClusterQueueAccessCredsService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsTestFixtures;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeRequestSchema;
 import com.nvidia.icms.inbound.rest.model.byoc.GpuRequestSchema;
@@ -107,7 +108,8 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
             telemetryEventClient,
             auditService,
             instanceServiceHelper,
-            byocServiceHelper
+            byocServiceHelper,
+            CpuWorkloadsTestFixtures.disabled()
         );
         
         when(nvcaConfigurationProperties.getCreationQueueNameFormat()).thenReturn(CREATION_QUEUE_FORMAT);

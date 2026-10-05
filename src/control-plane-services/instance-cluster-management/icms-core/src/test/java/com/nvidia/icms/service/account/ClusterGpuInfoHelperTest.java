@@ -143,6 +143,40 @@ class ClusterGpuInfoHelperTest {
     }
 
     @Test
+    void getMaxInstancesCreatedWithAvailableCapacity_forACpuShape_countsInstancesNotGpus() {
+        com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt shape =
+                new com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt();
+        shape.setName("NCP.CPU.4c16g");
+        shape.setGpuCount(0);
+
+        // Available capacity of a CPU shape already is a number of instances.
+        assertEquals(7, ClusterGpuInfoHelper.getMaxInstancesCreatedWithAvailableCapacity(7, "CPU", shape));
+        assertEquals(0, ClusterGpuInfoHelper.getMaxInstancesCreatedWithAvailableCapacity(0, "CPU", shape));
+        assertEquals(0, ClusterGpuInfoHelper.getMaxInstancesCreatedWithAvailableCapacity(-3, "CPU", shape));
+    }
+
+    @Test
+    void getMaxInstancesCreatedWithAvailableCapacity_forGpuTypes_keepsTheGpuRule() {
+        com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt twoGpus =
+                new com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt();
+        twoGpus.setName("NCP.GPU.H100_2x");
+        twoGpus.setGpuCount(2);
+        com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt zeroCountGpu =
+                new com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt();
+        zeroCountGpu.setName("NCP.GPU.H100_1x");
+        zeroCountGpu.setGpuCount(0);
+        // A CPU-shaped name under a GPU name is not a CPU shape either.
+        com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt cpuNamedUnderGpu =
+                new com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt();
+        cpuNamedUnderGpu.setName("NCP.CPU.4c16g");
+        cpuNamedUnderGpu.setGpuCount(0);
+
+        assertEquals(5, ClusterGpuInfoHelper.getMaxInstancesCreatedWithAvailableCapacity(10, "H100", twoGpus));
+        assertEquals(0, ClusterGpuInfoHelper.getMaxInstancesCreatedWithAvailableCapacity(10, "H100", zeroCountGpu));
+        assertEquals(0, ClusterGpuInfoHelper.getMaxInstancesCreatedWithAvailableCapacity(10, "H100", cpuNamedUnderGpu));
+    }
+
+    @Test
     void getMaxInstancesCreatedWithAvailableCapacity_WhenGpuCountIsZero_ReturnsZero() {
         // Given
         int availableGpus = 10;

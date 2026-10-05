@@ -71,6 +71,94 @@ class CloudHealthServiceTest {
                                                     ComputePlatformTestFixtures.nonByocComputePlatformService());
     }
 
+    private static com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity capacity(
+            int total, int available, int allocated) {
+        com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity capacity =
+                new com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity();
+        capacity.setCapacity(total);
+        capacity.setAvailable(available);
+        capacity.setAllocated(allocated);
+        return capacity;
+    }
+
+    private static com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity clusterWithCpuEntry(
+            String zone, String gpuName, String instanceTypeName, int gpuCount) {
+        com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt instanceType =
+                new com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt();
+        instanceType.setName(instanceTypeName);
+        instanceType.setGpuCount(gpuCount);
+        return com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity.builder()
+                .clusterId(zone).clusterName("cluster-name")
+                .gpusV5(new java.util.HashSet<>(java.util.List.of(
+                        com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt.builder()
+                                .name(gpuName)
+                                .instanceTypes(java.util.Set.of(instanceType)).build())))
+                .build();
+    }
+
+    @Test
+    void updateCloudHealthStatus_storedCpuShape_goesToCpuGaugesAndNotToGpuGauges() {
+        String zone = "cluster-1";
+        com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity cluster =
+                clusterWithCpuEntry(zone, "CPU", "NCP.CPU.4c16g", 0);
+        when(clusterRepository.getClusterInfoByClusterId(zone, true)).thenReturn(Optional.of(cluster));
+
+        cloudHealthService.updateCloudHealthStatus(
+                ResourceProvider.OCI, zone, CloudHealthStatus.HEALTHY, null,
+                java.util.Map.of("CPU", capacity(10, 7, 3)), 100);
+
+        verify(clusterGpuUsageMetricsService).recordCpuCapacity("cluster-name", "CPU", 10, 7, 3, cluster);
+        verify(clusterGpuUsageMetricsService, org.mockito.Mockito.never())
+                .recordTotalGpus(any(), any(), any(), any());
+        verify(clusterGpuUsageMetricsService, org.mockito.Mockito.never())
+                .recordAvailableGpus(any(), any(), any(), any());
+        verify(clusterGpuUsageMetricsService, org.mockito.Mockito.never())
+                .recordOccupiedGpus(any(), any(), any(), any());
+    }
+
+    @Test
+    void updateCloudHealthStatus_legacyStoredCpuShape_goesToCpuGauges() {
+        String zone = "cluster-3";
+        com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt instanceType =
+                new com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt();
+        instanceType.setName("NCP.CPU.4c16g");
+        instanceType.setGpuCount(0);
+        com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity cluster =
+                com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity.builder()
+                        .clusterId(zone).clusterName("cluster-name")
+                        .gpus(new java.util.HashSet<>(java.util.List.of(
+                                com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt.builder()
+                                        .name("CPU").instanceTypes(java.util.Set.of(instanceType)).build())))
+                        .build();
+        when(clusterRepository.getClusterInfoByClusterId(zone, true)).thenReturn(Optional.of(cluster));
+
+        cloudHealthService.updateCloudHealthStatus(
+                ResourceProvider.OCI, zone, CloudHealthStatus.HEALTHY, null,
+                java.util.Map.of("CPU", capacity(10, 7, 3)), 100);
+
+        verify(clusterGpuUsageMetricsService).recordCpuCapacity("cluster-name", "CPU", 10, 7, 3, cluster);
+        verify(clusterGpuUsageMetricsService, org.mockito.Mockito.never())
+                .recordTotalGpus(any(), any(), any(), any());
+    }
+
+    @Test
+    void updateCloudHealthStatus_gpuNamedCpu_keepsItsGpuGauges() {
+        // Unchanged behavior: a real GPU that happens to be called CPU is still reported with
+        // the GPU gauges, whatever the feature state is.
+        String zone = "cluster-2";
+        com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity cluster =
+                clusterWithCpuEntry(zone, "CPU", "NCP.GPU.CPU_1x", 1);
+        when(clusterRepository.getClusterInfoByClusterId(zone, true)).thenReturn(Optional.of(cluster));
+
+        cloudHealthService.updateCloudHealthStatus(
+                ResourceProvider.OCI, zone, CloudHealthStatus.HEALTHY, null,
+                java.util.Map.of("CPU", capacity(4, 3, 1)), 100);
+
+        verify(clusterGpuUsageMetricsService).recordTotalGpus("cluster-name", "CPU", 4, cluster);
+        verify(clusterGpuUsageMetricsService, org.mockito.Mockito.never())
+                .recordCpuCapacity(any(), any(), any(), any(), any(), any());
+    }
+
     @Test
     void updateCloudHealthStatus_forHealthyZones() {
         // Prepare

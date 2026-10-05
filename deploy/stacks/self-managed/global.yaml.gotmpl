@@ -1321,6 +1321,23 @@ notary:
   env:
     {{- toYaml $notaryEnv | nindent 4 }}
 
+{{- $cpuWorkloadsEnabled := dig "cpuWorkloads" "enabled" false .Values }}
+{{- if not (kindIs "bool" $cpuWorkloadsEnabled) }}
+{{- fail "cpuWorkloads.enabled must be true or false" }}
+{{- end }}
+{{- /* The SIS chart this stack pins predates CPU-only workloads, so the switch is refused until a chart that has it is
+       named, by version or through the existing sis.chartPath override. */}}
+{{- $cpuSisChartVersion := dig "cpuWorkloads" "sisChartVersion" "" .Values }}
+{{- $cpuSisChartPath := dig "sis" "chartPath" "" .Values }}
+{{- if and $cpuWorkloadsEnabled (not $cpuSisChartVersion) (not $cpuSisChartPath) }}
+{{- fail "cpuWorkloads.enabled=true needs an sis chart that supports CPU-only workloads, and the chart this stack pins (2.6.0) does not. Set cpuWorkloads.sisChartVersion to a released chart that does, or sis.chartPath to a chart built from this repository" }}
+{{- end }}
+{{- if and $cpuSisChartVersion (not $cpuWorkloadsEnabled) }}
+{{- fail "cpuWorkloads.sisChartVersion requires cpuWorkloads.enabled=true" }}
+{{- end }}
+{{- if and $cpuSisChartVersion $cpuSisChartPath }}
+{{- fail "set only one of cpuWorkloads.sisChartVersion and sis.chartPath" }}
+{{- end }}
 sis:
   fullnameOverride: spot-instance-service
   {{- if $haEnabled }}
@@ -1389,6 +1406,11 @@ sis:
     {{- end }}
     {{- with include "nvcf.natsStreamReplicas" .Values }}
     ICMS_NATS_REPLICAS: {{ . | quote }}
+    {{- end }}
+    {{- if $cpuWorkloadsEnabled }}
+    # Binds to icms.cpu-workloads.enabled. Emitted only when the switch is on, so the
+    # default render is unchanged.
+    ICMS_CPUWORKLOADS_ENABLED: "true"
     {{- end }}
 
 adminIssuerProxy:

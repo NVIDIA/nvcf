@@ -68,6 +68,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.sqs.QueueManager;
 import com.nvidia.icms.service.AppAuditService;
 import com.nvidia.icms.service.InstanceServiceHelper;
+import com.nvidia.icms.service.cpu.CpuWorkloadsTestFixtures;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
@@ -147,10 +148,40 @@ public class ClusterRegistrationServiceTest {
                         auditService,
                         instanceServiceHelper,
                         byocServiceHelper,
-                        ComputePlatformTestFixtures.nonByocComputePlatformService());
+                        ComputePlatformTestFixtures.nonByocComputePlatformService(),
+                        CpuWorkloadsTestFixtures.disabled());
     }
 
     // Tests for adding new cluster
+    @Test
+    void registerNewCluster_cpuShapeWhileCpuWorkloadsDisabled_isRejectedBeforeAnythingIsCreated() {
+        BartRegistrationRequest request = getBartRegistrationRequest();
+        request.setK8sVersion("1.29.2-gke.1");
+        com.nvidia.icms.inbound.rest.model.byoc.Gpu gpu = request.getGpus().iterator().next();
+        gpu.setName("CPU");
+        com.nvidia.icms.inbound.rest.model.byoc.InstanceType shape =
+                gpu.getInstanceTypes().iterator().next();
+        shape.setName("NCP.CPU.4c16g");
+        shape.setValue("NCP.CPU.4c16g");
+        shape.setGpuCount(0);
+        shape.setCpuCores(4);
+        shape.setSystemMemory("16Gi");
+        Mockito.lenient().when(clusterRepository.getClusterByAccountAndName(
+                request.getNcaId(), request.getClusterName())).thenReturn(Optional.empty());
+        Mockito.lenient().when(clusterRepository.getClusterGroupInfoByAccountAndNameInMainAccount(
+                request.getNcaId(), request.getClusterGroup())).thenReturn(Optional.empty());
+
+        Assertions.assertThrows(
+                com.nvidia.icms.errors.CpuWorkloadsNotReadyException.class,
+                () -> clusterRegistrationService.registerCluster(
+                        request, DUMMY_CLUSTER_ID, new HashMap<>()));
+
+        // Rejected before any state was written or any queue was created.
+        Mockito.verify(clusterRepository, Mockito.never()).saveClusterInfo(Mockito.any());
+        Mockito.verify(clusterQueueAccessCredsService, Mockito.never())
+                .createQueue(Mockito.any(), Mockito.any());
+    }
+
     @Test
     void registerNewCluster_success() {
 

@@ -24,6 +24,8 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import com.nvidia.icms.service.account.GpuUsageFilter;
 import com.nvidia.icms.service.byoc.ByocValidationService;
+import com.nvidia.icms.service.cpu.CpuShapes;
+import com.nvidia.icms.service.cpu.CpuWorkloadsService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
@@ -49,6 +51,7 @@ public class DestinationCreator {
     private final IcmsConfigurationProperties icmsConfigurationProperties;
     private final ByocConfigurationProperties byocConfigurationProperties;
     private final ComputePlatformService computePlatformService;
+    private final CpuWorkloadsService cpuWorkloadsService;
 
     /**
      * Iterates over every GPU / instance-type combination in the given cluster data and
@@ -82,6 +85,9 @@ public class DestinationCreator {
                     }
                     for (InstanceTypeV5Udt instanceTypeV5 : gpuV5.getInstanceTypes()) {
                         if (filter.isInstanceTypeAllowed(instanceTypeV5.getName())) {
+                            // A request that targets a CPU shape while CPU workloads are not
+                            // ready fails explicitly, never as a one-GPU instance.
+                            cpuWorkloadsService.assertDestinationAllowed(gpuV5.getName(), instanceTypeV5);
                             result.add(createDestination(
                                     destinationClusterData,
                                     instanceTypeV5,
@@ -110,8 +116,13 @@ public class DestinationCreator {
             @NotNull Integer instanceCount) {
 
         InstanceTypeV5Udt instanceTypeV5Copy = new InstanceTypeV5Udt(instanceTypeV5);
-        instanceTypeV5Copy.setGpuCount(byocValidationService.getRequiredGpuCountForInstance(
-                instanceTypeV5Copy.getGpuCount()));
+        // A CPU shape keeps its zero GPU count. Everything else keeps the existing rule, where a
+        // count of 0 or 1 means one GPU.
+        if (!CpuShapes.isCpuShapeEntry(
+                providedGpuName, instanceTypeV5Copy.getName(), instanceTypeV5Copy.getGpuCount())) {
+            instanceTypeV5Copy.setGpuCount(byocValidationService.getRequiredGpuCountForInstance(
+                    instanceTypeV5Copy.getGpuCount()));
+        }
 
         // Determine the appropriate instance batch count based on destination type
         boolean isPlatformDestination = computePlatformService.isPlatformCluster(destinationClusterData.getClusterGroupName());

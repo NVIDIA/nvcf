@@ -43,6 +43,8 @@ import com.nvidia.icms.service.NvcaService;
 import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
 import com.nvidia.icms.service.byoc.nvca.NvcaNatsAuthorizationService;
 import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsStatus;
 import com.nvidia.icms.service.heartbeats.NvcaHeartbeatService;
 import com.nvidia.icms.util.AuthUtils;
 import com.nvidia.icms.util.audit.AuditUtils;
@@ -97,6 +99,9 @@ public class NvcaController {
 
     @Autowired
     private NvcaNatsAuthorizationService nvcaNatsAuthorizationService;
+
+    @Autowired
+    private CpuWorkloadsService cpuWorkloadsService;
 
     /**
      * @return true when OIDC/PSAT cluster identity is enabled in configuration.
@@ -195,6 +200,28 @@ public class NvcaController {
             @Valid @RequestBody NvcaClusterHeartbeatRequest nvcaClusterHeartbeatRequest) {
         return nvcaHeartbeatService.recordClusterHeartbeat(validateClusterIdWithAuthToken(clusterId),
                                                nvcaClusterHeartbeatRequest);
+    }
+
+    @GetMapping("clusters/{clusterId}/cpu-workloads-status")
+    @PreAuthorize("hasAuthority('nvca-cluster') or hasAuthority('apikey:nvca-cluster')")
+    @Operation(summary = "CPU workloads status",
+            description = "Reports whether this ICMS supports CPU-only workloads. A cluster should "
+                    + "register CPU instance types only when the state is 'ready'. The reason is a "
+                    + "generic code. A cluster can read only its own status.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "OK"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "401", description = "Unauthorized"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "403", description = "Forbidden - invalid token provided"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "409", description = "Conflict - cluster id does not match the caller"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "500", description = "Internal server error")
+            })
+    public CpuWorkloadsStatus getCpuWorkloadsStatus(
+            @Schema(description = "Id of the cluster")
+            @PathVariable("clusterId")
+            String clusterId) {
+        // The authority alone does not bind the cluster, so check the id against the token.
+        validateClusterIdWithAuthToken(clusterId);
+        return cpuWorkloadsService.status();
     }
 
     @PutMapping("clusters/{clusterId}/jwks")

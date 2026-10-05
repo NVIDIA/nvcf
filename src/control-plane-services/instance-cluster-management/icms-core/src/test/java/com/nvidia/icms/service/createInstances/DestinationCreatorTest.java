@@ -40,6 +40,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccoun
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
+import com.nvidia.icms.service.cpu.CpuWorkloadsTestFixtures;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.account.GpuUsageFilter;
 import com.nvidia.icms.service.byoc.ByocValidationService;
@@ -71,7 +72,8 @@ class DestinationCreatorTest extends CreateInstancesTestBase {
 
     @BeforeEach
     void setUp() {
-        creator = new DestinationCreator(byocValidationService, icmsConfigurationProperties, byocConfigurationProperties, new ComputePlatformService(List.of()));
+        creator = new DestinationCreator(byocValidationService, icmsConfigurationProperties, byocConfigurationProperties, new ComputePlatformService(List.of()),
+                CpuWorkloadsTestFixtures.disabled());
         clusterEntity = createClusterEntity();
     }
 
@@ -461,6 +463,118 @@ class DestinationCreatorTest extends CreateInstancesTestBase {
         DestinationClusterData data = new DestinationClusterData(cluster, Map.of(DUMMY_GPU, "queueUrl"));
         // No GPU names or instance types specified — filter imposes no restriction
         GpuUsageFilter filter = GpuUsageFilter.builder().build();
+        when(byocValidationService.getRequiredGpuCountForInstance(1)).thenReturn(1);
+
+        List<RequestInstanceDestination> result =
+                creator.addAvailableDestinations(data, filter, CloudProvider.AWS, 1);
+
+        assertEquals(1, result.size());
+        assertEquals(DUMMY_GPU, result.get(0).getGpuName());
+    }
+
+    // -------------------------------------------------------------------------
+    // CPU shapes
+    // -------------------------------------------------------------------------
+
+    private static final String CPU_SHAPE = "NCP.CPU.4c16g";
+
+    private InstanceTypeV5Udt cpuShape() {
+        InstanceTypeV5Udt shape = new InstanceTypeV5Udt();
+        shape.setName(CPU_SHAPE);
+        shape.setValue(CPU_SHAPE);
+        shape.setGpuCount(0);
+        shape.setCpuCores(4);
+        shape.setSystemMemory("16Gi");
+        return shape;
+    }
+
+    private GpuV5Udt gpuNamed(String name, InstanceTypeV5Udt... types) {
+        GpuV5Udt gpu = new GpuV5Udt();
+        gpu.setName(name);
+        gpu.setInstanceTypes(Set.of(types));
+        return gpu;
+    }
+
+    private DestinationCreator creatorWith(
+            com.nvidia.icms.service.cpu.CpuWorkloadsService cpuWorkloadsService) {
+        return new DestinationCreator(byocValidationService, icmsConfigurationProperties,
+                byocConfigurationProperties, new ComputePlatformService(List.of()),
+                cpuWorkloadsService);
+    }
+
+    @Test
+    void createDestination_cpuShape_keepsZeroGpusAndSkipsTheOneGpuRule() {
+        DestinationClusterData data =
+                new DestinationClusterData(clusterEntity, Map.of("CPU", "queueUrl"));
+
+        RequestInstanceDestination dest = creator.createDestination(
+                data, cpuShape(), CloudProvider.AWS, "CPU", "queueUrl", 1);
+
+        assertEquals(0, dest.getInstanceType().getGpuCount());
+        org.mockito.Mockito.verify(byocValidationService, org.mockito.Mockito.never())
+                .getRequiredGpuCountForInstance(org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void createDestination_zeroCountUnderAGpuName_stillCountsAsOneGpu() {
+        // Unchanged behavior: a stored zero under an ordinary GPU name means one GPU, even when
+        // the instance type happens to be named like a CPU shape.
+        InstanceTypeV5Udt zeroCount = cpuShape();
+        when(byocValidationService.getRequiredGpuCountForInstance(0)).thenReturn(1);
+        DestinationClusterData data =
+                new DestinationClusterData(clusterEntity, Map.of(DUMMY_GPU, "queueUrl"));
+
+        RequestInstanceDestination dest = creator.createDestination(
+                data, zeroCount, CloudProvider.AWS, DUMMY_GPU, "queueUrl", 1);
+
+        assertEquals(1, dest.getInstanceType().getGpuCount());
+    }
+
+    @Test
+    void addAvailableDestinations_cpuShapeWhenDisabled_failsExplicitlyInsteadOfBecomingOneGpu() {
+        ClusterByGroupIdAndIdEntity cluster = createClusterEntity();
+        cluster.setGpusV5(Set.of(gpuNamed("CPU", cpuShape())));
+        DestinationClusterData data = new DestinationClusterData(cluster, Map.of("CPU", "queueUrl"));
+        GpuUsageFilter filter = GpuUsageFilter.builder()
+                .gpuNames(Set.of("CPU"))
+                .instanceTypes(Set.of(CPU_SHAPE))
+                .build();
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.nvidia.icms.errors.CpuWorkloadsNotReadyException.class,
+                () -> creator.addAvailableDestinations(data, filter, CloudProvider.AWS, 1));
+    }
+
+    @Test
+    void addAvailableDestinations_cpuShapeWhenReady_returnsADestinationWithZeroGpus() {
+        DestinationCreator readyCreator = creatorWith(CpuWorkloadsTestFixtures.ready());
+        ClusterByGroupIdAndIdEntity cluster = createClusterEntity();
+        cluster.setGpusV5(Set.of(gpuNamed("CPU", cpuShape())));
+        DestinationClusterData data = new DestinationClusterData(cluster, Map.of("CPU", "queueUrl"));
+        GpuUsageFilter filter = GpuUsageFilter.builder()
+                .gpuNames(Set.of("CPU"))
+                .instanceTypes(Set.of(CPU_SHAPE))
+                .build();
+
+        List<RequestInstanceDestination> result =
+                readyCreator.addAvailableDestinations(data, filter, CloudProvider.AWS, 1);
+
+        assertEquals(1, result.size());
+        assertEquals("CPU", result.get(0).getGpuName());
+        assertEquals(0, result.get(0).getInstanceType().getGpuCount());
+    }
+
+    @Test
+    void addAvailableDestinations_gpuRequestIgnoresACpuShapeInTheSameCluster() {
+        // A GPU request is not affected by a CPU shape that is not ready.
+        ClusterByGroupIdAndIdEntity cluster = createClusterEntity();
+        cluster.setGpusV5(Set.of(createGpuV5(), gpuNamed("CPU", cpuShape())));
+        DestinationClusterData data = new DestinationClusterData(
+                cluster, Map.of(DUMMY_GPU, "queueUrl", "CPU", "queueUrl"));
+        GpuUsageFilter filter = GpuUsageFilter.builder()
+                .gpuNames(Set.of(DUMMY_GPU))
+                .instanceTypes(Set.of(DUMMY_NON_BYOC_INSTANCE_TYPE))
+                .build();
         when(byocValidationService.getRequiredGpuCountForInstance(1)).thenReturn(1);
 
         List<RequestInstanceDestination> result =

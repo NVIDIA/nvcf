@@ -565,6 +565,22 @@ rateLimiter:
 icms:
   enabled: true
 
+# CPU-only workloads (functions and tasks that need no GPU). Off by default, and with
+# it off the stack renders exactly as before. When true, ICMS accepts CPU instance
+# types registered under the reserved GPU name CPU (instance types named
+# <provider>.CPU.<shape>, with no GPU) and serves requests for them. Enable this
+# on the control plane first, then set the same switch in the compute-plane stack
+# for the clusters that should run CPU workloads. ICMS blocks CPU shapes, with an
+# explicit error, if a GPU is already registered under the name CPU in any letter
+# case; rename that GPU first.
+#
+# The sis chart this stack pins predates CPU-only workloads, so enabling the switch needs
+# sisChartVersion, a released chart that has the feature, or sis.chartPath, a chart built from this
+# repository.
+cpuWorkloads:
+  enabled: false
+  sisChartVersion: ""
+
 # PDB knobs for control-plane services. Disabled by default.
 # Set enabled: true for any service running more than one replica.
 

@@ -74,6 +74,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.AppAuditService;
 import com.nvidia.icms.service.byoc.ClusterRegistrationService;
 import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
@@ -132,6 +133,8 @@ public class ClusterCreationService {
     private final NvcaClusterConfigurationRepository nvcaClusterConfigurationRepository;
 
     private final ClusterOidcIdentityService clusterOidcIdentityService;
+
+    private final CpuWorkloadsService cpuWorkloadsService;
 
     /**
      * Validates authorized NCA IDs format.
@@ -490,6 +493,9 @@ public class ClusterCreationService {
         }
 
         defaultGpuValidation(gpus);
+
+        // Runs before anything is persisted or any queue is touched.
+        cpuWorkloadsService.validateGpus(gpus);
     }
 
     public void validateClusterProvider(

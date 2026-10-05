@@ -17,6 +17,7 @@
 package com.nvidia.icms.service.createInstances;
 
 import com.amazonaws.services.sqs.model.QueueAttributeName;
+import com.nvidia.icms.service.cpu.CpuWorkloadsTestFixtures;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
@@ -73,6 +74,8 @@ import jakarta.validation.constraints.NotNull;
 import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -210,7 +213,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 byocValidationService,
                 icmsConfigurationProperties,
                 byocConfigurationProperties,
-                computePlatformService);
+                computePlatformService,
+                CpuWorkloadsTestFixtures.disabled());
 
         NoOpInstanceDestinationProvider instanceDestinationProvider =
                 new NoOpInstanceDestinationProvider();
@@ -2076,6 +2080,111 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
             eq(instanceRequest),
             eq(healthMap)
         );
+    }
+
+    /**
+     * CPU workloads do not support reservations. A CPU shape that is given a RESERVED or
+     * RESERVED_BACKUP destination is refused before anything is queued.
+     */
+    @ParameterizedTest
+    @EnumSource(value = CapacityType.class, names = {"RESERVED", "RESERVED_BACKUP"})
+    void processInstanceRequest_WhenCpuShapeGetsReservedDestinations_ShouldRefuseBeforeQueueing(
+            CapacityType capacityType) {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+            "NCP.CPU.8c32g",
+            ResourceProvider.BYOC.toString(),
+            "CPU",
+            DUMMY_BYOC_NCA_ID,
+            true
+        );
+        Map<String, Object> auditProps = new HashMap<>();
+        setupTargetedRequestMocks(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID, DUMMY_BYOC_CLUSTER_NAME,
+                                DUMMY_BYOC_CLUSTER_GROUP_NAME, "CPU", "NCP.CPU.8c32g");
+        CloudHealthEntity cloudHealth = createCloudHealthEntity(DUMMY_CLUSTER_ID, "CPU", CloudHealthStatus.HEALTHY, ResourceProvider.BYOC, 10, 5, 5);
+        Map<String, CloudHealthEntity> healthMap = new HashMap<>();
+        healthMap.put(DUMMY_CLUSTER_ID, cloudHealth);
+        when(clusterTargetingHelper.getAllClusterHealthInMap()).thenReturn(healthMap);
+        when(reservationProcessor.filterDestinationBasedOnReservation(
+            any(Set.class),
+            any(SpotInstanceRequestSchema.class),
+            any(Map.class)
+        )).thenAnswer(invocation -> {
+            Set<RequestInstanceDestination> originalDestinations = invocation.getArgument(0);
+            Set<RequestInstanceDestination> reservedDestinations = new HashSet<>();
+            for (RequestInstanceDestination original : originalDestinations) {
+                RequestInstanceDestination reservedDestination = new RequestInstanceDestination(original);
+                // A CPU shape is registered with a GPU count of 0. The guard reads it from the destination.
+                InstanceTypeV5Udt cpuType = new InstanceTypeV5Udt(original.getInstanceType());
+                cpuType.setGpuCount(0);
+                reservedDestination.setInstanceType(cpuType);
+                reservedDestination.setReservationId(UUID.randomUUID());
+                reservedDestination.setCapacityType(capacityType);
+                reservedDestination.setInstanceBatchCount(1);
+                reservedDestinations.add(reservedDestination);
+            }
+            return reservedDestinations;
+        });
+
+        // Act / Assert
+        IcmsBadRequestException e = assertThrows(IcmsBadRequestException.class, () ->
+            createInstanceService.processInstanceRequest(TEST_CUSTOMER, instanceRequest, auditProps));
+        assertTrue(e.getMessage().contains("do not support reservations"));
+        verifyNoInteractions(byocCreateService);
+    }
+
+    /**
+     * A real GPU that is registered under the legacy name CPU, with a positive GPU count, is not a CPU
+     * workload. It keeps working with reservations exactly as before.
+     */
+    @ParameterizedTest
+    @EnumSource(value = CapacityType.class, names = {"RESERVED", "RESERVED_BACKUP"})
+    void processInstanceRequest_WhenRealGpuNamedCpuGetsReservedDestinations_ShouldNotBeRefused(
+            CapacityType capacityType) {
+        // Arrange
+        SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
+            "NCP.CPU.8c32g",
+            ResourceProvider.BYOC.toString(),
+            "CPU",
+            DUMMY_BYOC_NCA_ID,
+            true
+        );
+        Map<String, Object> auditProps = new HashMap<>();
+        CreateSpotInstancesResponse expectedResponse = new CreateSpotInstancesResponse();
+        setupTargetedRequestMocks(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID, DUMMY_BYOC_CLUSTER_NAME,
+                                DUMMY_BYOC_CLUSTER_GROUP_NAME, "CPU", "NCP.CPU.8c32g");
+        setupByocCreateServiceMock(instanceRequest, auditProps, expectedResponse);
+        CloudHealthEntity cloudHealth = createCloudHealthEntity(DUMMY_CLUSTER_ID, "CPU", CloudHealthStatus.HEALTHY, ResourceProvider.BYOC, 10, 5, 5);
+        Map<String, CloudHealthEntity> healthMap = new HashMap<>();
+        healthMap.put(DUMMY_CLUSTER_ID, cloudHealth);
+        when(clusterTargetingHelper.getAllClusterHealthInMap()).thenReturn(healthMap);
+        when(reservationProcessor.filterDestinationBasedOnReservation(
+            any(Set.class),
+            any(SpotInstanceRequestSchema.class),
+            any(Map.class)
+        )).thenAnswer(invocation -> {
+            Set<RequestInstanceDestination> originalDestinations = invocation.getArgument(0);
+            Set<RequestInstanceDestination> reservedDestinations = new HashSet<>();
+            for (RequestInstanceDestination original : originalDestinations) {
+                RequestInstanceDestination reservedDestination = new RequestInstanceDestination(original);
+                InstanceTypeV5Udt gpuType = new InstanceTypeV5Udt(original.getInstanceType());
+                gpuType.setGpuCount(1);
+                reservedDestination.setInstanceType(gpuType);
+                reservedDestination.setReservationId(UUID.randomUUID());
+                reservedDestination.setCapacityType(capacityType);
+                reservedDestination.setInstanceBatchCount(1);
+                reservedDestination.setCreationQueueUrl("reserved-queue-" + original.getClusterId());
+                reservedDestinations.add(reservedDestination);
+            }
+            return reservedDestinations;
+        });
+
+        // Act
+        CreateSpotInstancesResponse response = createInstanceService.processInstanceRequest(
+            TEST_CUSTOMER, instanceRequest, auditProps);
+
+        // Assert: it was accepted and handed on to the queue path.
+        assertEquals(expectedResponse, response);
     }
 
     /**

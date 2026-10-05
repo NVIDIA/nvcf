@@ -16,6 +16,9 @@
  */
 package com.nvidia.icms.service.metrics;
 
+import static com.nvidia.icms.service.metrics.MetricsConstants.METER_CPU_AVAILABLE_COUNT;
+import static com.nvidia.icms.service.metrics.MetricsConstants.METER_CPU_OCCUPIED_COUNT;
+import static com.nvidia.icms.service.metrics.MetricsConstants.METER_CPU_TOTAL_COUNT;
 import static com.nvidia.icms.service.metrics.MetricsConstants.METER_GPU_AVAILABLE_COUNT;
 import static com.nvidia.icms.service.metrics.MetricsConstants.METER_GPU_OCCUPIED_COUNT;
 import static com.nvidia.icms.service.metrics.MetricsConstants.METER_GPU_TOTAL_COUNT;
@@ -59,9 +62,20 @@ public class ClusterGpuUsageMetricsService  {
     private final LoadingCache<GpuUsageKey, Gauge> gpuTotalGauges;
     private final LoadingCache<GpuUsageKey, Gauge> gpuAvailableGauges;
     private final LoadingCache<GpuUsageKey, Gauge> gpuOccupiedGauges;
+    private final CapacitySeries cpuTotal;
+    private final CapacitySeries cpuAvailable;
+    private final CapacitySeries cpuOccupied;
 
     public ClusterGpuUsageMetricsService(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
+
+        // CPU-only workloads are reported in instances, separately from the GPU gauges.
+        this.cpuTotal = new CapacitySeries(
+                METER_CPU_TOTAL_COUNT, "Total CPU instance capacity for given cluster");
+        this.cpuAvailable = new CapacitySeries(
+                METER_CPU_AVAILABLE_COUNT, "Available CPU instance capacity for given cluster");
+        this.cpuOccupied = new CapacitySeries(
+                METER_CPU_OCCUPIED_COUNT, "Occupied CPU instance capacity for given cluster");
 
         // Gauge for total counts
         this.gpuTotalGauges = Caffeine.newBuilder()
@@ -93,6 +107,37 @@ public class ClusterGpuUsageMetricsService  {
                 .scheduler(Scheduler.systemScheduler())
                 .build();
 
+    }
+
+    /** A gauge family fed from a cache of latest values, created on first record. */
+    private final class CapacitySeries {
+        private final Cache<GpuUsageKey, Integer> values = Caffeine.newBuilder()
+                .expireAfterAccess(ofMinutes(3))
+                .scheduler(Scheduler.systemScheduler())
+                .build();
+        private final LoadingCache<GpuUsageKey, Gauge> gauges;
+
+        CapacitySeries(String meterName, String description) {
+            this.gauges = Caffeine.newBuilder()
+                    .expireAfterAccess(ofMinutes(3))
+                    .build(key -> Gauge.builder(meterName, () -> values.getIfPresent(key))
+                            .tag(TAG_CLUSTER_NAME, key.clusterName())
+                            .tag(TAG_GPU_TYPE, key.gpuType())
+                            .tag(TAG_REGION, key.region())
+                            .tag(TAG_NCA_ID, key.ncaId())
+                            .tag(TAG_CLOUD_PROVIDER, key.cloudProvider().toString())
+                            .tag(TAG_CLUSTER_GROUP_NAME, key.clusterGroupName())
+                            .tag(TAG_NVCA_VERSION, key.nvcaVersion())
+                            .tag(TAG_CLUSTER_ID, key.clusterId())
+                            .description(description)
+                            .register(meterRegistry));
+        }
+
+        void record(GpuUsageKey key, Integer count) {
+            values.put(key, count);
+            // Create and register the gauge if it does not exist yet
+            Gauge unusedGauge = gauges.get(key);
+        }
     }
 
     private Gauge createTotalGpuGauge(GpuUsageKey key) {
@@ -192,6 +237,29 @@ public class ClusterGpuUsageMetricsService  {
 
         // Create and register gauge if it doesn't exists
         Gauge unusedGauge = gpuAvailableGauges.get(key);
+    }
+
+    /**
+     * Records CPU instance capacity for a cluster. Used instead of the GPU recorders for the
+     * reserved CPU GPU name, so CPU instances never appear in the GPU gauges.
+     */
+    @Observed
+    public void recordCpuCapacity(
+            String clusterName, String cpuType,
+            Integer total, Integer available, Integer occupied, ClusterEntity clusterEntity) {
+        GpuUsageKey key = GpuUsageKey.builder()
+                .clusterName(clusterName)
+                .gpuType(cpuType)
+                .ncaId(clusterEntity.getNcaId())
+                .region(clusterEntity.getRegion())
+                .cloudProvider(clusterEntity.getClusterProvider())
+                .nvcaVersion(clusterEntity.getNvcaVersion())
+                .clusterGroupName(clusterEntity.getClusterGroupName())
+                .clusterId(clusterEntity.getClusterId())
+                .build();
+        cpuTotal.record(key, total);
+        cpuAvailable.record(key, available);
+        cpuOccupied.record(key, occupied);
     }
 
     @Observed

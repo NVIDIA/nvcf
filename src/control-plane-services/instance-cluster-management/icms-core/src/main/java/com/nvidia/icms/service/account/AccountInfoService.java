@@ -303,7 +303,8 @@ public class AccountInfoService {
 
         // Checking if instanceType can be created with available GPU
         if (filter.isValidateCapacity() &&
-                getMaxInstancesCreatedWithAvailableCapacity(availableGpus, instanceType.getGpuCount()) <= 0) {
+                getMaxInstancesCreatedWithAvailableCapacity(
+                        availableGpus, readyClusterInfo.getGpu(), instanceType) <= 0) {
             return;
         }
 

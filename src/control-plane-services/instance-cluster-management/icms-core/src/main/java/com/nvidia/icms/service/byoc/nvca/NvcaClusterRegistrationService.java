@@ -52,6 +52,7 @@ import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.byoc.ByocServiceHelper;
 import com.nvidia.icms.service.byoc.ClusterQueueAccessCredsService;
 import com.nvidia.icms.service.byoc.ClusterRegistrationService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
 import com.nimbusds.jose.jwk.JWKSet;
@@ -111,6 +112,8 @@ public class NvcaClusterRegistrationService {
     private final InstanceServiceHelper instanceServiceHelper;
 
     private final ByocServiceHelper byocServiceHelper;
+
+    private final CpuWorkloadsService cpuWorkloadsService;
 
     public static final String OAUTH_CLIENT_ID_PREFIX = "nvssa";
 
@@ -256,6 +259,14 @@ public class NvcaClusterRegistrationService {
 
         // Validate GPU name
         validateGpuName(!isSetEmptyOrNull(providedGpus) ? providedGpus : existingGpus);
+
+        // Reject CPU shapes that are not allowed. Must stay before any queue is created or
+        // deleted below, so a rejected registration leaves ICMS state untouched. Every provided
+        // GPU is checked, not only new ones, so a repeat registration cannot keep a CPU shape
+        // alive while CPU workloads are not ready.
+        if (!isSetEmptyOrNull(providedGpus)) {
+            cpuWorkloadsService.validateGpus(providedGpus);
+        }
 
         // Fetching allCluster info ONLY if needed
         if (!isSetEmptyOrNull(newlyAddedGpus) || !isSetEmptyOrNull(removedGpuNames)) {

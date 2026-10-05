@@ -32,6 +32,7 @@ test:
 	@tests/notary-env-wiring.sh
 	@tests/ess-base-url-wiring.sh
 	@tests/nvct-remote-config-wiring.sh
+	@tests/cpu-workloads-wiring.sh
 	@tests/icms-condition-wiring.sh
 	@tests/nonroot-icms-migrations.sh
 	@tests/nats-placement-tags.sh
