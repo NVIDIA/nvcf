@@ -464,9 +464,10 @@ func TestRenderJSONL_Uninstall(t *testing.T) {
 	assertGolden(t, "testdata/jsonl_uninstall.golden", got)
 }
 
-// A warning --wait polls on is marked transient on the wire, so a consumer of
-// the stream can tell a rollout in progress from a finding. The field is left
-// out otherwise. A run that timed out ends with success false.
+// A warning --wait polls on is marked transient on the wire, and a check the
+// time budget stopped is marked cutShort, so a consumer of the stream can tell
+// either from a finding without parsing the message. Each field is left out
+// otherwise. A run that timed out ends with success false.
 func TestRenderJSONL_CheckTransientAndTimeout(t *testing.T) {
 	clock := &fakeClock{times: []time.Time{ts("2026-04-29T03:45:01Z")}}
 	got := runEmit(t, clock, []Event{
@@ -474,7 +475,9 @@ func TestRenderJSONL_CheckTransientAndTimeout(t *testing.T) {
 			Message: "rollout in progress", Transient: true},
 		CheckCompleted{Category: "control-plane-cluster", ID: "stale-namespaces", Severity: "warning",
 			Message: "1 stale namespace"},
-		Final{Success: false, Verdict: "timeout", TotalChecks: 2, PassedCount: 0, FailedCount: 0},
+		CheckCompleted{Category: "registry-credentials", ID: "registry-cred-a.example", Severity: "warning",
+			Message: "cut short: the check's time budget ran out before it finished", CutShort: true},
+		Final{Success: false, Verdict: "timeout", TotalChecks: 3, PassedCount: 0, FailedCount: 0},
 	})
 	lines := strings.Split(strings.TrimSpace(got), "\n")
 	var events []map[string]any
@@ -485,9 +488,11 @@ func TestRenderJSONL_CheckTransientAndTimeout(t *testing.T) {
 			events = append(events, m)
 		}
 	}
-	require.Len(t, events, 3)
+	require.Len(t, events, 4)
 	assert.Equal(t, true, events[0]["transient"])
 	assert.NotContains(t, events[1], "transient")
-	assert.Equal(t, false, events[2]["success"])
-	assert.Equal(t, "timeout", events[2]["verdict"])
+	assert.NotContains(t, events[1], "cutShort")
+	assert.Equal(t, true, events[2]["cutShort"])
+	assert.Equal(t, false, events[3]["success"])
+	assert.Equal(t, "timeout", events[3]["verdict"])
 }

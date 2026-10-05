@@ -378,12 +378,12 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			emitCheckFinal(context.Background(), sink, lastResults, ledger.Outstanding())
 			return &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
 		}
-		// The outer budget stopped a check: one never started, or ran out of time
-		// while it ran. Its row is no finding, so the verdict is a timeout rather
-		// than whatever the partial set would grade as. A budget that ran out
-		// only after every check had its result changes nothing. A blocking
-		// failure in a row the budget did not cut short is still exit 2: no retry
-		// with more time passes it.
+		// A budget stopped a check: one never started, or ran out of time while
+		// it ran. Its row is no finding, so when it blocks the verdict is a
+		// timeout rather than whatever the partial set would grade as. A budget
+		// that ran out only after every check had its result changes nothing. A
+		// blocking failure in a row the budget did not cut short is still exit 2:
+		// no retry with more time passes it.
 		exitBudgetSpent := func() error {
 			if anyFindingFailed(lastResults) {
 				return exitFailed()
@@ -398,7 +398,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			if interrupted() {
 				return exitInterrupted()
 			}
-			if anyCutShort(lastResults) {
+			if anyCutShortFailure(lastResults) {
 				return exitBudgetSpent()
 			}
 			if anyFailed(lastResults) {
@@ -417,8 +417,12 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		// with the exit code: a run still waiting on a rollout has not passed.
 		waitTimeout := func() error {
 			emitCheckTimeout(sink, lastResults, ledger.Outstanding())
-			if anyFailed(lastResults) {
+			switch {
+			case anyFindingFailed(lastResults):
 				return &ExitCodeError{Code: 5, Msg: "wait timeout: checks still failing after " + selfHostedWait}
+			case anyCutShort(lastResults):
+				return &ExitCodeError{Code: 5, Msg: "wait timeout: a check was still cut short by its time budget after " +
+					selfHostedWait}
 			}
 			return &ExitCodeError{Code: 5, Msg: "wait timeout: a rollout was still in progress after " + selfHostedWait}
 		}
@@ -427,9 +431,10 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			if interrupted() {
 				return exitInterrupted()
 			}
-			// An iteration the budget cut short has incomplete results: never a
-			// pass.
-			if anyCutShort(lastResults) {
+			// A poll a budget cut short has incomplete results: never a pass. The
+			// next poll gets fresh shares, so only the spent outer budget ends
+			// the wait here.
+			if anyCutShort(lastResults) && ctx.Err() != nil {
 				return exitBudgetSpent()
 			}
 			if !anyFailed(lastResults) && !anyWarningToWaitOn(lastResults) {
@@ -853,7 +858,7 @@ func runPreflightByRole(
 ) []selfhosted.CheckResult {
 	// LocalOnly: skip all cluster probes, and say so in a row for each.
 	if cfg.LocalOnly {
-		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly,
+		return checkRunRole(ctx, cfg, selfhosted.RoleLocalOnly,
 			selfhosted.RoleConfig{Skipped: localOnlySkips()}, sink)
 	}
 
@@ -968,7 +973,7 @@ func runPreflightByRole(
 					Skipped:                         cpSkips,
 					StackEnv:                        stackEnv,
 				}
-				cpResults = selfhosted.RunPreflightForRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
+				cpResults = checkRunRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
 				return nil
 			})
 		}
@@ -991,7 +996,7 @@ func runPreflightByRole(
 					Skipped:                         computeSkips,
 					StackEnv:                        stackEnv,
 				}
-				gpuResults = selfhosted.RunPreflightForRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
+				gpuResults = checkRunRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
 				return nil
 			})
 		}
@@ -1045,7 +1050,7 @@ func runPreflightByRole(
 				Skipped:                         cpSkips,
 			}
 			results = append(results,
-				selfhosted.RunPreflightForRole(ctx, cpCfg, selfhosted.RoleControlPlane, cpRC, sink)...)
+				checkRunRole(ctx, cpCfg, selfhosted.RoleControlPlane, cpRC, sink)...)
 		}
 		if runComputePlane {
 			gpuRC := selfhosted.RoleConfig{
@@ -1065,7 +1070,7 @@ func runPreflightByRole(
 				StackEnv:                        stackEnv,
 			}
 			results = append(results,
-				selfhosted.RunPreflightForRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
+				checkRunRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
 		}
 		return results
 	}
@@ -1256,7 +1261,7 @@ func emitCheckTimeout(sink progress.EventSink, results []selfhosted.CheckResult,
 	})
 }
 
-// anyCutShort reports a check the run's budget stopped before it finished.
+// anyCutShort reports a check a budget stopped before it finished.
 func anyCutShort(results []selfhosted.CheckResult) bool {
 	for _, r := range results {
 		if r.CutShort {
@@ -1266,9 +1271,24 @@ func anyCutShort(results []selfhosted.CheckResult) bool {
 	return false
 }
 
+// anyCutShortFailure reports a check a budget stopped whose worst outcome
+// fails the run. One that could at worst warn does not.
+func anyCutShortFailure(results []selfhosted.CheckResult) bool {
+	for _, r := range results {
+		if r.CutShort && r.IsBlockingFailure() {
+			return true
+		}
+	}
+	return false
+}
+
 // checkPreflightTools is a test seam over the local tool checks, so command
 // tests do not depend on what is installed on the machine running them.
 var checkPreflightTools = selfHostedPreflightTools
+
+// checkRunRole is a test seam over one role's checks, so command tests can
+// grade rows a time budget stopped without waiting it out.
+var checkRunRole = selfhosted.RunPreflightForRole
 
 // checkBudget is a test seam over the command's outer time budget.
 var checkBudget = func(d time.Duration) time.Duration { return d }
@@ -1386,12 +1406,12 @@ func anyFindingFailed(results []selfhosted.CheckResult) bool {
 	return false
 }
 
-// anyWarningToWaitOn reports a warning expected to clear by itself, such as a
-// rollout the validator saw in progress. --wait keeps polling on it; a single
-// run still exits 0.
+// anyWarningToWaitOn reports a warning a later poll may clear: one expected to
+// clear by itself, such as a rollout the validator saw in progress, or a check
+// its budget stopped. --wait keeps polling on it; a single run still exits 0.
 func anyWarningToWaitOn(results []selfhosted.CheckResult) bool {
 	for _, r := range results {
-		if r.Transient && !r.Passed {
+		if (r.Transient || r.CutShort) && !r.Passed {
 			return true
 		}
 	}

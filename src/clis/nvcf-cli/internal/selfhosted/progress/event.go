@@ -291,6 +291,10 @@ type CheckCompleted struct {
 	// Transient marks a warning expected to clear by itself, such as a
 	// rollout in progress; --wait keeps polling while one remains.
 	Transient bool
+	// CutShort marks a check the run's time budget stopped before it
+	// finished, or before it started. Its severity is the worst the check
+	// could have found.
+	CutShort bool
 	// Cleanup is the command that removes what the check left in the
 	// cluster, when it left anything.
 	Cleanup string

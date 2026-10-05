@@ -357,6 +357,66 @@ func TestCheck_BlockingFailureBeatsATimeout(t *testing.T) {
 	}
 }
 
+// stubRolePolls replaces each role's checks with the rows of one poll after
+// another, the last repeating, and returns how many role runs there were.
+func stubRolePolls(t *testing.T, polls ...[]selfhosted.CheckResult) *int {
+	t.Helper()
+	prevRun, prevInterval := checkRunRole, checkPollInterval
+	t.Cleanup(func() { checkRunRole, checkPollInterval = prevRun, prevInterval })
+	checkPollInterval = 10 * time.Millisecond
+	calls := 0
+	checkRunRole = func(ctx context.Context, _ selfhosted.PreflightConfig, _ selfhosted.Role,
+		_ selfhosted.RoleConfig, sink progress.EventSink) []selfhosted.CheckResult {
+		rows := polls[min(calls, len(polls)-1)]
+		calls++
+		for _, r := range rows {
+			_ = sink.Emit(ctx, progress.CheckCompleted{Category: r.Category, ID: r.ID, Passed: r.Passed,
+				Severity: r.Severity, Message: r.Message, CutShort: r.CutShort})
+		}
+		return rows
+	}
+	return &calls
+}
+
+// A check a share stopped keeps the severity it could at worst have had. One
+// that could only warn, a registry that is not critical, does not fail the
+// run or time it out: exit 0, and the row says it was cut short. --wait polls
+// again on it, and on a cut-short check that blocks, instead of ending on the
+// first poll whose share ran out.
+func TestCheck_CutShortRowsKeepTheirSeverityAndWaitPollsAgain(t *testing.T) {
+	cutShort := func(severity selfhosted.Severity) []selfhosted.CheckResult {
+		return []selfhosted.CheckResult{{Category: selfhosted.CategoryRegistryCredentials,
+			ID: "registry-cred-slow.example", Severity: severity, CutShort: true,
+			Message: "cut short: the check's time budget ran out before it finished"}}
+	}
+	passed := []selfhosted.CheckResult{{Category: selfhosted.CategoryRegistryCredentials,
+		ID: "registry-cred-slow.example", Passed: true, Severity: selfhosted.SeverityInfo}}
+	args := []string{"--control-plane", "--skip-cluster-validation"}
+
+	calls := stubRolePolls(t, cutShort(selfhosted.SeverityWarning))
+	run := runCheck(t, checkStubs{}, args...)
+	assert.Equal(t, 0, run.code(), run.stderr)
+	assert.Equal(t, "warnings", finalEvent(t, run.stderr)["verdict"])
+	row := run.row(t, selfhosted.CategoryRegistryCredentials, "registry-cred-slow.example")
+	require.NotNil(t, row)
+	assert.Equal(t, true, row["cutShort"])
+	assert.Equal(t, "warning", row["severity"])
+	assert.Equal(t, 1, *calls)
+
+	for _, severity := range []selfhosted.Severity{selfhosted.SeverityWarning, selfhosted.SeverityError} {
+		calls = stubRolePolls(t, cutShort(severity), passed)
+		run = runCheck(t, checkStubs{}, append(args, "--wait", "30s")...)
+		assert.Equal(t, 0, run.code(), "%s: %s", severity, run.stderr)
+		assert.Equal(t, 2, *calls, "%s: the next poll gets fresh shares", severity)
+		assert.Equal(t, "ok", finalEvent(t, run.stderr)["verdict"], severity)
+	}
+
+	stubRolePolls(t, cutShort(selfhosted.SeverityWarning))
+	run = runCheck(t, checkStubs{}, append(args, "--wait", "50ms")...)
+	assert.Equal(t, 5, run.code(), run.stderr)
+	require.ErrorContains(t, run.err, "a check was still cut short by its time budget")
+}
+
 // A cluster that cannot be contacted at all fails the run, with or without a
 // validator: nothing about it was checked.
 func TestCheck_UnreachableClusterFailsTheRun(t *testing.T) {

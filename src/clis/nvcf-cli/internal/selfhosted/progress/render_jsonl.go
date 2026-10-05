@@ -545,6 +545,7 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 			Message:   ev.Message,
 			Detail:    ev.Detail,
 			Transient: ev.Transient,
+			CutShort:  ev.CutShort,
 			HintURL:   ev.HintURL,
 			Cleanup:   ev.Cleanup,
 		}
@@ -756,6 +757,8 @@ type wireCheckCompleted struct {
 	HintURL  string `json:"hintURL,omitempty"`
 	// Transient is set on a warning --wait keeps polling on.
 	Transient bool `json:"transient,omitempty"`
+	// CutShort is set on a check the time budget stopped before it finished.
+	CutShort bool `json:"cutShort,omitempty"`
 	// Cleanup is the command that removes what the check left in the cluster.
 	Cleanup string `json:"cleanup,omitempty"`
 }

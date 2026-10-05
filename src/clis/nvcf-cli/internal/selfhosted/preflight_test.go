@@ -1157,8 +1157,9 @@ func TestStaleNamespaceCheck_UnreachableClusterIsAnError(t *testing.T) {
 }
 
 // A stuck namespace found before the probe share ran out still blocks the
-// run: it is not graded as cut short, which would drop its name and exit 5. A
-// warning found before the cutoff is.
+// run: it is not graded as cut short, which would exit 5. A warning found
+// before the cutoff is cut short, still blocking since a namespace the scan
+// did not reach could be stuck, and keeps the namespaces it found.
 func TestStaleNamespaceCheck_StuckFindingSurvivesTheBudget(t *testing.T) {
 	pinCurrentKubeContext(t, "")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
@@ -1169,7 +1170,7 @@ func TestStaleNamespaceCheck_StuckFindingSurvivesTheBudget(t *testing.T) {
 		spec := staleNamespaceCheck(func(context.Context, string, []string) ([]StaleNamespace, error) {
 			return []StaleNamespace{{Name: "cassandra-system", Reason: reason}}, cutOff
 		}, "", []string{"cassandra-system", "sis"})
-		return normaliseResult(ctx, spec.Run(ctx))
+		return normaliseResult(ctx, spec.Run(ctx), spec.worstSeverity())
 	}
 
 	stuck := probe(StaleStuckTerminating)
@@ -1178,7 +1179,71 @@ func TestStaleNamespaceCheck_StuckFindingSurvivesTheBudget(t *testing.T) {
 	assert.Contains(t, stuck.Message, "cassandra-system (stuck Terminating")
 	assert.Contains(t, stuck.Message, "Additionally could not probe: get namespace sis: timeout")
 
-	assert.True(t, probe(StaleNoHelmRelease).CutShort, "a warning beside a spent budget is not the whole answer")
+	partial := probe(StaleNoHelmRelease)
+	assert.True(t, partial.CutShort, "a warning beside a spent budget is not the whole answer")
+	assert.True(t, partial.IsBlockingFailure())
+	assert.True(t, strings.HasPrefix(partial.Message, cutShortMessage+"; found before then: "), partial.Message)
+	assert.Contains(t, partial.Message, "cassandra-system (no Helm release)")
+
+	deleting := probe(StaleTerminating)
+	assert.True(t, deleting.CutShort)
+	assert.Equal(t, SeverityError, deleting.Severity)
+	assert.False(t, deleting.Transient, "only a warning is transient")
+}
+
+// A check the budget stops keeps the most severe grade it could have given,
+// and the row says it was cut short on the wire. A registry whose rejection
+// only warns stays a warning, cut short or not run, so a slow one cannot fail
+// the run; a critical one still blocks. A tool a post-install run only
+// advises on warns too.
+func TestRunPreflight_CutShortRowsKeepTheirWorstSeverity(t *testing.T) {
+	prevLocal := localCheckShare
+	localCheckShare = 200 * time.Millisecond
+	t.Cleanup(func() { localCheckShare = prevLocal })
+	hang := func(ctx context.Context, _, _ string, _ bool) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	sink := &captureSink{}
+	res := RunPreflightForRole(context.Background(), PreflightConfig{
+		Registries: []RegistryEntry{
+			{Registry: "slow.example"}, {Registry: "nvcr.io", Critical: true}, {Registry: "other.example"},
+		},
+		RegistryChecker: hang,
+	}, RoleLocalOnly, RoleConfig{}, sink)
+	want := map[string]struct {
+		severity Severity
+		message  string
+	}{
+		"registry-cred-slow.example":  {SeverityWarning, "cut short: "},
+		"registry-cred-nvcr.io":       {SeverityError, "not run: "},
+		"registry-cred-other.example": {SeverityWarning, "not run: "},
+	}
+	require.Len(t, res, len(want))
+	for _, r := range res {
+		assert.True(t, r.CutShort, r.ID)
+		assert.Equal(t, want[r.ID].severity, r.Severity, r.ID)
+		assert.True(t, strings.HasPrefix(r.Message, want[r.ID].message), r.ID+": "+r.Message)
+	}
+	rows := completedRows(sink)
+	require.Len(t, rows, len(want))
+	for _, row := range rows {
+		assert.True(t, row.CutShort, row.ID)
+		assert.Equal(t, want[row.ID].severity, row.Severity, row.ID)
+	}
+
+	for advisory, severity := range map[bool]Severity{false: SeverityError, true: SeverityWarning} {
+		tool := passingToolSpec("helmfile", "1.0.0")
+		tool.Version = func(ctx context.Context, _ string) (*semver.Version, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		res := RunPreflightForRole(context.Background(), PreflightConfig{Tools: []BinarySpec{tool},
+			ToolsAdvisory: advisory}, RoleLocalOnly, RoleConfig{}, &captureSink{})
+		require.Len(t, res, 1)
+		assert.True(t, res[0].CutShort, "advisory=%v", advisory)
+		assert.Equal(t, severity, res[0].Severity, "advisory=%v", advisory)
+	}
 }
 
 // Each term of the validator's run ceiling counts as often as one run can

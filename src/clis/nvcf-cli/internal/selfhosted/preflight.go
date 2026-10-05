@@ -18,6 +18,7 @@ limitations under the License.
 package selfhosted
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -474,6 +475,14 @@ type binaryCheckSpec struct {
 	// static marks a row whose result is known without any work, so the
 	// budget cannot cut it short.
 	static bool
+	// worst is the most severe grade the check gives a miss, which a row the
+	// budget cuts short keeps: not knowing the outcome is no worse than the
+	// worst outcome. Empty is an error.
+	worst Severity
+}
+
+func (s binaryCheckSpec) worstSeverity() Severity {
+	return cmp.Or(s.worst, SeverityError)
 }
 
 // buildCategories converts a PreflightConfig into the ordered list of
@@ -539,6 +548,7 @@ func buildLocalHostCategory(cfg PreflightConfig) *categorySpec {
 	if cfg.ToolsAdvisory {
 		for i := range checks {
 			checks[i].Run = advisoryTool(checks[i].Run)
+			checks[i].worst = SeverityWarning
 		}
 	}
 	return &categorySpec{name: CategoryLocalHostTools, role: RoleLocalOnly, checks: checks}
@@ -1155,6 +1165,7 @@ func registryCredentialCheck(
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: fmt.Sprintf("checking credentials for %s...", label),
+		worst:      severity,
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: severity}
 			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical)
@@ -1273,17 +1284,22 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				}
 				hints = append(hints, staleNamespaceHints(ns, kctl, probedContext)...)
 			}
-			r.Message = fmt.Sprintf("%d stale namespace(s) detected: %s. %s",
+			found := fmt.Sprintf("%d stale namespace(s) detected: %s. %s",
 				len(stale), strings.Join(parts, ", "), strings.Join(hints, "; "))
+			r.Message = found
 			if err != nil {
 				r.Message += ". Additionally could not probe: " + err.Error()
 			}
-			// The error reaches a warning row, so a budget that ran out
-			// mid-scan grades it as cut short rather than as the warnings
-			// found so far. A stuck namespace is a finding however the scan
-			// ended: graded as cut short it would lose its name and exit 5.
+			// A stuck namespace is a finding however the scan ended: graded
+			// as cut short it would exit 5. Short of one, a scan the budget
+			// stopped is cut short, since a namespace it did not reach could
+			// be stuck, and it keeps the namespaces it found.
 			if r.Severity != SeverityError {
 				r.Err = err
+				if cutShortBy(ctx, err) {
+					r.CutShort = true
+					r.Message = cutShortMessage + "; found before then: " + found
+				}
 			}
 			r.Transient = r.Transient && r.Severity == SeverityWarning
 			return r
@@ -1496,7 +1512,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 				// let the partial set grade as the verdict, so a validator
 				// that never ran could pass the gate.
 				res = CheckResult{
-					ID: spec.ID, Severity: SeverityError, CutShort: true,
+					ID: spec.ID, Severity: spec.worstSeverity(), CutShort: true,
 					Message: "not run: the check's time budget ran out before it started",
 					Err:     checkCtx.Err(),
 				}
@@ -1519,7 +1535,7 @@ func runPreflightImpl(ctx context.Context, cfg PreflightConfig, role Role, rc Ro
 					}
 					return all
 				}
-				res = normaliseResult(checkCtx, res)
+				res = normaliseResult(checkCtx, res, spec.worstSeverity())
 			}
 			res.Category = cat.name
 			all = append(all, res)
@@ -1559,22 +1575,36 @@ func (l *lazyTimeout) stop() {
 	}
 }
 
+// cutShortMessage starts the message of a row the budget stopped while it ran.
+const cutShortMessage = "cut short: the check's time budget ran out before it finished"
+
+// cutShortBy reports a miss caused by the spent budget that ctx carries,
+// rather than by a bound of the check's own.
+func cutShortBy(ctx context.Context, err error) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(err, context.DeadlineExceeded)
+}
+
 // normaliseResult applies the rules every row shares. A pass is info, whatever
 // severity the check set before it knew the outcome. A miss caused by the
-// spent budget, which ctx carries, is cut short: no finding either way. A
-// check whose own bound fired keeps its result.
-func normaliseResult(ctx context.Context, res CheckResult) CheckResult {
+// spent budget is cut short: no finding either way, graded at worst, the
+// check's most severe grade. A check whose own bound fired keeps its result.
+func normaliseResult(ctx context.Context, res CheckResult, worst Severity) CheckResult {
 	if res.Passed {
 		res.Severity = SeverityInfo
 		return res
 	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(res.Err, context.DeadlineExceeded) {
-		res.CutShort = true
-		res.Severity = SeverityError
-		// Replaced, not wrapped: the check's own advice is about a failure
-		// it did not get to observe.
-		res.Message = "cut short: the check's time budget ran out before it finished"
+	if !res.CutShort && !cutShortBy(ctx, res.Err) {
+		return res
 	}
+	if !res.CutShort {
+		// Replaced, not wrapped: the check's own advice is about a failure
+		// it did not get to observe. A check that kept what it found
+		// before the budget ran out marked the row itself.
+		res.Message = cutShortMessage
+	}
+	res.CutShort = true
+	res.Severity = worst
+	res.Transient = res.Transient && worst == SeverityWarning
 	return res
 }
 
@@ -1590,6 +1620,7 @@ func emitCheckCompleted(sink progress.EventSink, category string, res CheckResul
 		Detail:    res.Detail,
 		HintURL:   res.HintURL,
 		Transient: res.Transient,
+		CutShort:  res.CutShort,
 		Cleanup:   res.Cleanup,
 	})
 }
