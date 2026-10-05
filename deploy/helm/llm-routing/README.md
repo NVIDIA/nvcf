@@ -31,7 +31,7 @@ Use your existing kubeconfig.
    python3 spark.py init
    ```
 
-   After uninstalling all demo releases, run `init` again with the same context and saved configuration. It checks that releases and workloads are gone, validates retained storage and CRD ownership, and archives any previous progress in `before-reinit-*` inside the work directory. It reuses placement, image references and credentials without deleting volumes or downloaded models. Continue with `inventory` and the installation phases from `preflight`. Active or ambiguous installations are rejected.
+   After uninstalling all demo releases, run `init` again with the same context and saved configuration. It checks that releases and workloads are gone, validates retained storage and CRD ownership, and archives any previous progress in `before-reinit-*` inside the work directory. It reuses placement, image references and credentials without deleting volumes or downloaded models. Continue with `render`, `inventory` and the installation phases from `preflight`. Active or ambiguous installations are rejected.
 
    Review the selected nodes and generated configuration. `init` configures idle GPUs, storage and image preload for K3s. Configuration and evidence are saved automatically in a private work directory outside the checkout. For another container runtime, edit an external copy of [config.example.json](spark/config.example.json) and pass `--config /path/to/config.json` instead of running `init`.
 
@@ -42,7 +42,7 @@ Use your existing kubeconfig.
    python3 spark.py inventory
    ```
 
-Check the rendered manifests and cluster inventory before deploying.
+Check the rendered manifests and cluster inventory before deploying. Installation commands report their result and save detailed tool output in private `evidence/*.log` files inside the work directory. Failures identify the next check and the diagnostic log.
 
 ### Build and distribute the application images
 

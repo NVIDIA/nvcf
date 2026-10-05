@@ -9,6 +9,7 @@ import json
 import pathlib
 import re
 import ssl
+import sys
 import time
 import urllib.parse
 
@@ -202,8 +203,14 @@ def main():
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, indent=2) + '\n')
-    print(json.dumps(report, indent=2))
+    if args.mode != 'chat':
+        print(json.dumps(report, indent=2))
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except (RuntimeError, ValueError, OSError, http.client.HTTPException) as error:
+        print('Request failed: ' + str(error), file=sys.stderr)
+        print('Check the gateway/model response and connection settings.', file=sys.stderr)
+        sys.exit(1)

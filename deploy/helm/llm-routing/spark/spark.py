@@ -24,6 +24,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
+import console_output
 LOCK = json.loads((HERE/'source.lock.json').read_text())
 MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
@@ -45,11 +46,11 @@ def save(path, value):
 
 
 def run(command, **kwargs):
-    return subprocess.run([str(x) for x in command], check=True, **kwargs)
+    return console_output.run(command, **kwargs)
 
 
 def output(command, **kwargs):
-    return subprocess.check_output([str(x) for x in command], text=True, **kwargs)
+    return console_output.output(command, **kwargs)
 
 
 def validate(c):
@@ -288,8 +289,7 @@ class Recipe:
             self.state_path.rename(archive/'state.json')
             print('Previous progress archived:', archive)
         print('Reusing configuration:', config_path)
-        print('Placement, image references, credentials and retained volumes are unchanged.')
-        print('Run inventory, then follow the installation phases from preflight.')
+        print('Run render, inventory, then preflight.')
 
     def stamp(self, phase, value=True):
         self.state.update(identity=self.identity)
@@ -414,7 +414,7 @@ class Recipe:
         run(self.kc+['get', 'storageclass', self.c['storageClass']])
         save(self.work/'evidence/inventory.json', {'nodes': nodes, 'pods': pods})
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
-        print('Inventory passed. Actual CUDA, memory and RPC checks are separate phases.')
+        print('Inventory passed.')
 
     def attach_existing(self):
         if self.state and not self.state.get('attachedExisting'):
@@ -462,9 +462,9 @@ class Recipe:
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
         self.stamp('stack', {'apiKeyFile': str(key) if key else None, 'source': values.get('sparkRecipeSource')})
         self.stamp('serve')
-        print('Existing installation inspected without changing it. Run verify-gateway next.')
+        print('Existing installation inspected. Run verify-gateway next.')
         if values.get('sparkRecipeSource') != self.source_identity():
-            print('Image updates are disabled for this source revision. Use a coordinated stack installation to change gateway/router contracts.')
+            console_output.warn('Image updates are disabled for this source revision. Use a coordinated stack installation to change gateway/router contracts.')
 
     def bound_cluster(self):
         require(self.state.get('inventory'), 'Run inventory for this installation first.')
@@ -520,7 +520,7 @@ class Recipe:
                 save(evidence/(name+'.log'), output(self.kc+['logs', name], stderr=subprocess.STDOUT))
             except subprocess.CalledProcessError as error:
                 save(evidence/(name+'-log-error.txt'), error.output or str(error))
-                print('Could not retrieve logs for', name, '- saved the error with its pod status.')
+                console_output.warn('Could not retrieve logs for ' + name + '. Check the saved error and pod status.')
         values = self.backend_values('qualify')
         defaults = {'qualificationAttempt': values['qualification']['attempt'], 'chainAttempt': values['chain']['attempt']}
         for key, prefix in prefixes.items():
@@ -627,7 +627,7 @@ class Recipe:
                 'GLM resources or Helm revision changed while resuming load. Retry after the operation completes.')
         save(self.work/'evidence'/'load-resume.json', {'release': self.glm, 'revision': revision, 'resources': identities})
         self.stamp('serve')
-        print('Resumed completed GLM load without changing the deployment. Run verify-direct next.')
+        print('Resumed completed GLM load. Run verify-direct next.')
         return True
 
     def backend_phase(self, phase, retry=False):
@@ -1000,12 +1000,12 @@ finally:
             path = self.work/'render'/(name+'-values.json')
             save(path, values)
             # Offline: no kube context, lookup, or API traffic. Generated TLS stays private.
-            run(['helm', 'lint', chart, '-f', path], stdout=subprocess.DEVNULL)
+            run(['helm', 'lint', chart, '-f', path])
             save(self.work/'render'/(name+'.yaml'), output(['helm', 'template', self.c['releasePrefix']+'-'+name, chart, '-n', self.c['namespace'], '-f', path]))
-        print('Offline Helm lint/render passed for', len(renders), 'configurations. No deployment was performed.')
+        print('Helm lint/render passed for', len(renders), 'configurations.')
 
 
-def main(argv=None):
+def main(argv=None, console=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=pathlib.Path)
     parser.add_argument('--context', help='Kubernetes context; defaults to SPARK_CONTEXT, saved settings, or the sole kubeconfig context.')
@@ -1024,12 +1024,21 @@ def main(argv=None):
     parser.add_argument('--confirm-model-interruption', action='store_true')
     parser.add_argument('--retry', action='store_true', help='Archive an unsuccessful qualification and run new qualification and chain Jobs.')
     args = parser.parse_intermixed_args(argv)
+    if console:
+        console.phase = args.phase
     require(args.phase == 'chat' or (args.prompt is None and not args.stream), 'Prompt and --stream are supported only for chat.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
     try:
         context, work, config_path, config = cli_settings(args)
     except ContextSelectionError as error:
+        if console:
+            raise
         parser.exit(2, 'error: ' + str(error) + '\n')
+    action = lambda: execute(args, parser, context, work, config_path, config)
+    return console.run(args.phase, work, action) if console else action()
+
+
+def execute(args, parser, context, work, config_path, config):
     if args.phase == 'context':
         print(context)
         return
@@ -1052,9 +1061,10 @@ def main(argv=None):
         fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'w') as file:
             file.write(json.dumps(config, indent=2) + '\n')
-        print('Configuration:', config_path)
+        print('Configuration created:', config_path)
         print('Model GPUs:', config['nodes']['leader'], 'and', config['nodes']['worker'])
         print('Routing node:', config['nodes']['control'])
+        print('Run render, inventory, then preflight.')
         return
     if args.phase == 'paths':
         source = args.source_dir.expanduser().resolve() if args.source_dir else HERE.parents[3]
@@ -1103,5 +1113,18 @@ def main(argv=None):
     elif args.phase == 'recover': recipe.recovery(args.confirm_model_interruption, args.port)
 
 
+def cli(argv=None):
+    console = console_output.Console()
+    try:
+        main(argv, console=console)
+        return 0
+    except SystemExit as error:
+        if not console.log_path:
+            return error.code
+        return console.failure(error)
+    except (Exception, KeyboardInterrupt) as error:
+        return console.failure(error)
+
+
 if __name__ == '__main__':
-    main()
+    sys.exit(cli())
