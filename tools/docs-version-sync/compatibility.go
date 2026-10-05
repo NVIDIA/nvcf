@@ -26,12 +26,12 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		slug, err := documentationProductSlug(stack)
+		link, err := overviewStackLink(stack, catalog.DocsEdition != nil)
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(fmt.Sprintf("| [%s](/nvcf/%s/) | `%s` | `%s` |\n",
-			documentationStackDisplayName(stack), slug, metadata.Version, metadata.SourceTag))
+		b.WriteString(fmt.Sprintf("| [%s](%s) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), link, metadata.Version, metadata.SourceTag))
 	}
 	b.WriteString("\n## Compatible stack versions\n\n")
 	b.WriteString("| Stack | Release | Works with |\n| --- | --- | --- |\n")
@@ -53,6 +53,21 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		b.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", documentationStackDisplayName(entry.Stack), entry.Version, strings.Join(worksWith, ", ")))
 	}
 	return b.String(), nil
+}
+
+func overviewStackLink(stack string, edition bool) (string, error) {
+	slug, err := documentationProductSlug(stack)
+	if err != nil {
+		return "", err
+	}
+	if !edition {
+		return "/nvcf/" + slug + "/", nil
+	}
+	return map[string]string{
+		releaseSetStackControlPlane:  "../self-managed/installation.md",
+		releaseSetStackComputePlane:  "../compute-plane/cluster-management/index.md",
+		releaseSetStackObservability: "../observability/observability.md",
+	}[stack], nil
 }
 
 func stackOrder(stack string) int {

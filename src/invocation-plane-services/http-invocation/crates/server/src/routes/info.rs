@@ -13,12 +13,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use axum::Json;
+use axum::{
+    extract::Request,
+    http::{header, Method, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    Json,
+};
 
 /// Build metadata. Version and commit are stamped by the version_env template
 /// in crates/server/BUILD.bazel on --stamp builds.
 pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
     Json(nvcf_info::info_response!("nvcf-invocation-service"))
+}
+
+/// Rejects non-GET `/info` requests before CorsLayer can handle OPTIONS.
+pub async fn info_method_guard(request: Request, next: Next) -> Response {
+    if request.uri().path() == "/info" && request.method() != Method::GET {
+        (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "GET")]).into_response()
+    } else {
+        next.run(request).await
+    }
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ go_library(
         "//src/control-plane-services/event-ledger/internal/data_access",
         "//src/control-plane-services/event-ledger/internal/interfaces",
         "//src/control-plane-services/event-ledger/internal/middleware",
+        "//src/control-plane-services/event-ledger/internal/nvca",
         "//src/control-plane-services/event-ledger/internal/observability/logging",
         "//src/control-plane-services/event-ledger/internal/observability/tracing",
         "//src/control-plane-services/event-ledger/internal/policy",

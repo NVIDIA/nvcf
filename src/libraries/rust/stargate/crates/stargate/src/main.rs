@@ -167,8 +167,10 @@ struct Args {
     /// Timeout for establishing outbound direct QUIC connections and development-only peer relays.
     #[arg(long, default_value_t = 2000, value_name = "MS")]
     quic_connect_timeout_ms: u64,
-    /// Timeout for each proxied request over an established QUIC tunnel.
-    #[arg(long, default_value_t = 30000, value_name = "MS")]
+    /// Timeout for response headers on each proxied request over an
+    /// established QUIC tunnel. Engines may hold headers while a request is
+    /// queued, so this must exceed the longest queue wait callers tolerate.
+    #[arg(long, default_value_t = 300000, value_name = "MS")]
     quic_request_timeout_ms: u64,
     /// Number of direct QUIC connections opened per backend.
     #[arg(

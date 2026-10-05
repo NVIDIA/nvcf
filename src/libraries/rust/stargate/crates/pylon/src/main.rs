@@ -104,7 +104,7 @@ struct Args {
     /// Output-token estimate calibration. single-pylon asserts one active Pylon per cluster ID
     #[arg(long, value_enum, default_value = "off", value_name = "MODE")]
     output_token_calibration: OutputTokenCalibrationMode,
-    /// Interval between active canary requests in milliseconds. `0` disables active canaries
+    /// Interval between active canary requests in milliseconds. Models with request progress within the interval skip the canary. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
     /// Treat canary responses that generate this many tokens as runaway generation
@@ -119,7 +119,7 @@ struct Args {
     /// Maximum concurrent requests used during calibration
     #[arg(long, default_value_t = 4, value_name = "N")]
     calibration_max_concurrency: usize,
-    /// Timeout for canary requests in milliseconds
+    /// Timeout for canary requests in milliseconds. An active canary that times out while other requests make progress does not mark the model unavailable
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     bringup_canary_timeout_ms: u64,
     /// Timeout for calibration requests in milliseconds
@@ -137,9 +137,12 @@ struct Args {
     /// Fallback maximum engine concurrency for every model until the engine reports a limit
     #[arg(long, value_name = "N")]
     max_engine_concurrency: Option<NonZeroU64>,
-    /// Minimum interval between registration/stat updates to stargate
+    /// Heartbeat interval: the longest gap between registration updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
+    /// Minimum interval between stat updates triggered by request state changes
+    #[arg(long, default_value_t = 10, value_name = "MS")]
+    stats_update_coalesce_ms: u64,
     /// Static auth token for registration and reverse tunnel handshake
     #[arg(long, env = "STARGATE_AUTH_TOKEN", value_name = "TOKEN")]
     auth_token: Option<String>,
@@ -214,7 +217,7 @@ struct Args {
     /// Minimum additive delta above Stargate's queue estimate before local retry
     #[arg(
         long,
-        default_value_t = 25,
+        default_value_t = pylon_lib::DEFAULT_QUEUE_MISMATCH_MIN_DELTA_MS,
         env = "PYLON_QUEUE_MISMATCH_MIN_DELTA_MS",
         value_name = "MS"
     )]
@@ -222,7 +225,7 @@ struct Args {
     /// Multiplicative tolerance above Stargate's queue estimate before local retry
     #[arg(
         long,
-        default_value_t = 1.25,
+        default_value_t = pylon_lib::DEFAULT_QUEUE_MISMATCH_TOLERANCE_FACTOR,
         env = "PYLON_QUEUE_MISMATCH_TOLERANCE_FACTOR",
         value_name = "FACTOR"
     )]
@@ -249,6 +252,26 @@ struct Args {
         value_name = "RANK"
     )]
     pylon_priority_ceiling: u32,
+    /// Longest wait for the first streamed output after upstream response
+    /// headers. Engines queue requests here, so set it above the longest
+    /// queue wait callers should tolerate
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_FIRST_OUTPUT_TIMEOUT.as_millis() as u64,
+        value_parser = clap::value_parser!(u64).range(1..),
+        env = "PYLON_FIRST_OUTPUT_TIMEOUT_MS",
+        value_name = "MS"
+    )]
+    pylon_first_output_timeout_ms: u64,
+    /// Longest gap between streamed outputs once generation has started
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_OUTPUT_CHUNK_TIMEOUT.as_millis() as u64,
+        value_parser = clap::value_parser!(u64).range(1..),
+        env = "PYLON_OUTPUT_CHUNK_TIMEOUT_MS",
+        value_name = "MS"
+    )]
+    pylon_output_chunk_timeout_ms: u64,
     /// Collect post-stream output quality metrics (gibberish checks)
     #[arg(long, default_value_t = false)]
     collect_quality_metrics: bool,
@@ -495,6 +518,20 @@ mod tests {
 
         assert_eq!(args.pylon_upstream_backend, defaults.upstream_backend);
         assert_eq!(args.pylon_priority_ceiling, defaults.priority_ceiling);
+        assert_eq!(
+            std::time::Duration::from_millis(args.pylon_first_output_timeout_ms),
+            defaults.first_output_timeout
+        );
+        assert_eq!(
+            std::time::Duration::from_millis(args.pylon_output_chunk_timeout_ms),
+            defaults.output_chunk_timeout
+        );
+    }
+
+    #[test]
+    fn pylon_stream_timeouts_reject_zero() {
+        assert!(try_parse_argv(&["--pylon-first-output-timeout-ms", "0"]).is_err());
+        assert!(try_parse_argv(&["--pylon-output-chunk-timeout-ms", "0"]).is_err());
     }
 
     #[test]
