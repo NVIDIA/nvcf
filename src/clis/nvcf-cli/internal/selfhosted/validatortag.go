@@ -42,12 +42,13 @@ const (
 	// Wall-clock budget for cache freshness. Preflight is rarely re-run more
 	// often than this, and the cluster-validator's rc cadence is multi-day.
 	validatorTagCacheTTL = 1 * time.Hour
-
-	// Hard upper bound on the registry round trips of tag discovery, so a
-	// slow registry cannot stall preflight. When it trips, an untagged image
-	// is reported as unresolved rather than launched.
-	validatorTagFetchTimeout = 5 * time.Second
 )
+
+// validatorTagFetchTimeout is a hard upper bound on the registry round trips
+// of tag discovery, so a slow registry cannot stall preflight. When it trips,
+// an untagged image is reported as unresolved rather than launched. A var so
+// tests can shorten it.
+var validatorTagFetchTimeout = 5 * time.Second
 
 // Restrict to X.Y.Z or X.Y.Z-rc.N tags; excludes sigstore metadata
 // (sha256-*.sig/sbom/vex) and commit-SHA pre-releases (X.Y.Z-vSHA).
@@ -84,9 +85,7 @@ func ResolveLatestValidatorTag(ctx context.Context, baseImage string) (string, b
 		return fmt.Sprintf("%s/%s:%s", registry, repo, cached), true
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, validatorTagFetchTimeout)
-	defer cancel()
-	tags, err := fetchValidatorTags(fetchCtx, registry, repo)
+	tags, err := fetchValidatorTags(ctx, registry, repo)
 	if err != nil || len(tags) == 0 {
 		return "", false
 	}
@@ -175,12 +174,20 @@ func fetchValidatorTags(ctx context.Context, registry, repo string) ([]string, e
 	return doc.Tags, nil
 }
 
+// fetchWithBearer GETs rawURL, anonymously first and, on a 401, with a Bearer
+// token for the run's local credential. Its registry round trips share
+// validatorTagFetchTimeout. Reading the credential does not spend it: a helper
+// waiting on a keychain prompt or a pinentry is bounded on its own, and the
+// NGC key it gives way to must still have time to reach the registry.
 func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte, error) {
 	client := newRegistryHTTPClient(validatorTagFetchTimeout)
+	start := time.Now()
+	anonCtx, cancelAnon := context.WithTimeout(ctx, validatorTagFetchTimeout)
+	defer cancelAnon()
 
 	// First attempt without auth so anonymous-pullable registries work.
-	resp, err := doRegistryRequest(ctx, client, func() (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	resp, err := doRegistryRequest(anonCtx, client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(anonCtx, http.MethodGet, rawURL, nil)
 	})
 	if err != nil {
 		return nil, err
@@ -196,25 +203,28 @@ func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte
 	// Capture the auth challenge before closing.
 	wwwAuth := selectAuthChallenge(resp.Header.Values("Www-Authenticate"))
 	resp.Body.Close()
+	spent := time.Since(start)
 
 	creds := registryCredentialsFrom(ctx)
 	cred, hasCred, _ := creds.lookup(ctx, registry)
+	authCtx, cancelAuth := context.WithTimeout(ctx, validatorTagFetchTimeout-spent)
+	defer cancelAuth()
 	var credential *registryCredential
 	if hasCred {
 		credential = &cred
 	}
-	token, err := exchangeBearerToken(ctx, client, registry, repo, wwwAuth, credential)
+	token, err := exchangeBearerToken(authCtx, client, registry, repo, wwwAuth, credential)
 	if hasCred && isRejectedExchange(err) {
 		if next, ok := creds.rejected(registry, cred); ok {
-			token, err = exchangeBearerToken(ctx, client, registry, repo, wwwAuth, &next)
+			token, err = exchangeBearerToken(authCtx, client, registry, repo, wwwAuth, &next)
 		}
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err = doRegistryRequest(ctx, client, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	resp, err = doRegistryRequest(authCtx, client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(authCtx, http.MethodGet, rawURL, nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}

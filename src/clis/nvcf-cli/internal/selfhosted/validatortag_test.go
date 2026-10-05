@@ -684,3 +684,27 @@ func TestResolveLatestValidatorTag_RejectedLoginGivesWayToTheNGCKey(t *testing.T
 	assert.Equal(t, "nvcr.io/nvidia/cv:1.2.0", got)
 	assert.Equal(t, []string{"rotated-out", "good-key"}, ngc.passwords())
 }
+
+// A credential helper that outlasts the round trips' budget does not spend
+// it: once the helper's own bound ends, the NGC key it gives way to still has
+// the whole budget to reach the registry.
+func TestResolveLatestValidatorTag_SlowHelperDoesNotSpendTheBudget(t *testing.T) {
+	withTempCacheDir(t)
+	ngc := newFakeNGC(t, "good-key")
+	dockerHome(t, `{"credsStore":"hang"}`)
+	bin := t.TempDir()
+	hang := filepath.Join(bin, "docker-credential-hang")
+	require.NoError(t, os.WriteFile(hang, []byte("#!/bin/sh\nsleep 30\n"), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("NGC_API_KEY", "good-key")
+	credentialHelperTimeout = time.Second
+	prev := validatorTagFetchTimeout
+	validatorTagFetchTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { validatorTagFetchTimeout = prev })
+
+	ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
+	got, ok := ResolveLatestValidatorTag(ctx, "nvcr.io/nvidia/cv")
+	require.True(t, ok)
+	assert.Equal(t, "nvcr.io/nvidia/cv:1.2.0", got)
+	assert.Equal(t, []string{"good-key"}, ngc.passwords())
+}
