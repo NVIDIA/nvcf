@@ -91,6 +91,13 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
   `openbao`, `cassandra`) in `clusterValidator.externalComponents`, or Tier-2
   reports them missing after install. `make render-values-from-stack` lists
   each one the stack environment disables.
+- `make render-values-from-stack` rewrites `gatewayNames`, `storageClass` and
+  `externalComponents` from the stack on every render, empty included. Set a
+  different value with `additional_values`, not on the release.
+- The node-to-node probe pods have no image pull secrets. On a registry other
+  than `nvcr.io`, `make render-values-from-stack` points
+  `clusterValidator.nodeToNodeProbeImage` at `busybox:1.36` under the stack's
+  repository. Pass `NODE_TO_NODE_PROBE_IMAGE` to choose another image.
 - Use `yq` carefully for nested keys and quoted strings.
 - `Chart.yaml` name stays in git and must match the subproject's service_name;
   the release refuses to publish when they differ. Only the version is set at

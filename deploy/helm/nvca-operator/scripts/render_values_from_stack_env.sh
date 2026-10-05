@@ -90,10 +90,15 @@ yq eval -i '
   .fullnameOverride = "nvca-operator"
 ' "${output_file}"
 
+# The clusterValidator keys below describe the stack, so they are written on
+# every render, empty included. Values reused from the release would otherwise
+# keep a Gateway, a StorageClass or an external component the stack no longer
+# has, and the validator would judge the cluster against it.
+
 # The control-plane validator judges only the NVCF Gateways, so name them as
 # the stack wires its routes (base.yaml defaults: gatewayApi enabled, optional
 # routes off): shared and grpc always, nats and the LLM worker Gateways only
-# with their routes on. Route-label discovery would otherwise stand in.
+# with their routes on. With none named, route-label discovery stands in.
 stack_value() {
   yq -r "$1" "${stack_env_file}"
 }
@@ -117,19 +122,19 @@ if [ "$(stack_value '.ingress.gatewayApi.enabled')" != "false" ]; then
     add_gateway llmQuic
   fi
 fi
+GATEWAY_NAMES=""
 if [ "${#gateway_names[@]}" -gt 0 ]; then
   GATEWAY_NAMES="$(printf '%s\n' "${gateway_names[@]}" | sort -u | paste -sd, -)"
-  export GATEWAY_NAMES
-  yq eval -i '.clusterValidator.gatewayNames = (strenv(GATEWAY_NAMES) | split(","))' "${output_file}"
 fi
+export GATEWAY_NAMES
+yq eval -i '.clusterValidator.gatewayNames = (strenv(GATEWAY_NAMES) | split(",") | map(select(. != "")))' \
+  "${output_file}"
 
 # global.storageClass binds every control-plane PVC to that class, so the
 # validator checks it instead of requiring a default class.
 STORAGE_CLASS="$(stack_value '.global.storageClass // ""')"
-if [ -n "${STORAGE_CLASS}" ]; then
-  export STORAGE_CLASS
-  yq eval -i '.clusterValidator.storageClass = strenv(STORAGE_CLASS)' "${output_file}"
-fi
+export STORAGE_CLASS
+yq eval -i '.clusterValidator.storageClass = strenv(STORAGE_CLASS)' "${output_file}"
 
 # A quorum dependency the stack does not install runs outside the cluster,
 # so after install the validator must not expect its StatefulSet.
@@ -139,11 +144,26 @@ for component in nats openbao cassandra; do
     external_components+=("${component}")
   fi
 done
+EXTERNAL_COMPONENTS=""
 if [ "${#external_components[@]}" -gt 0 ]; then
   EXTERNAL_COMPONENTS="$(IFS=,; echo "${external_components[*]}")"
-  export EXTERNAL_COMPONENTS
-  yq eval -i '.clusterValidator.externalComponents = (strenv(EXTERNAL_COMPONENTS) | split(","))' "${output_file}"
 fi
+export EXTERNAL_COMPONENTS
+yq eval -i '.clusterValidator.externalComponents = (strenv(EXTERNAL_COMPONENTS) | split(",") | map(select(. != "")))' \
+  "${output_file}"
+
+# The node-to-node probe pods carry no imagePullSecrets, and an air-gapped
+# cluster cannot reach Docker Hub. On a mirror registry they pull
+# busybox:1.36 from the stack's repository, where it must be mirrored and
+# pullable without a secret. The NVIDIA catalog on nvcr.io has no busybox,
+# so there the chart's Docker Hub default stays. NODE_TO_NODE_PROBE_IMAGE
+# overrides both.
+PROBE_IMAGE="${NODE_TO_NODE_PROBE_IMAGE:-}"
+if [ -z "${PROBE_IMAGE}" ] && [ "${stack_image_registry}" != "nvcr.io" ]; then
+  PROBE_IMAGE="${repo_prefix}/busybox:1.36"
+fi
+export PROBE_IMAGE
+yq eval -i '.clusterValidator.nodeToNodeProbeImage = strenv(PROBE_IMAGE)' "${output_file}"
 
 if [ -n "${NVCA_OPERATOR_VERSION:-}" ]; then
   export NVCA_OPERATOR_VERSION

@@ -42,9 +42,14 @@ make render-values-from-stack \
 ```
 
 Inspect the generated file under `bin/`, then install or upgrade. The render
-also sets `clusterValidator.gatewayNames` from the stack's wired
-`ingress.gatewayApi.gateways` and `clusterValidator.storageClass` from
-`global.storageClass`, which the control-plane validator role needs:
+also sets the values the control-plane validator role needs from the stack:
+`clusterValidator.gatewayNames` from the wired `ingress.gatewayApi.gateways`,
+`clusterValidator.storageClass` from `global.storageClass`, and
+`clusterValidator.externalComponents` from the quorum components the stack
+disables. It rewrites them on every render, empty included, so an upgrade does
+not keep a stale value from the release. On a registry other than `nvcr.io` it
+also sets `clusterValidator.nodeToNodeProbeImage` to `busybox:1.36` under the
+stack's repository, so mirror that image there:
 
 ```bash
 make install-from-stack \
@@ -58,6 +63,8 @@ make install-from-stack \
 - `NCA_ID=<value>` to set the primary account ID explicitly
 - `CLUSTER_NAME=<value>` and `CLUSTER_ID=<value>` to preserve or pin cluster identity
 - `IMAGE_PULL_SECRET_NAME=<secret>` to attach a pre-created image pull secret
+- `NODE_TO_NODE_PROBE_IMAGE=<image>` to pick the node-to-node probe image; it
+  must be pullable without an image pull secret
 
 ## Existing Release Reuse
 

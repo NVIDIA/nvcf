@@ -73,6 +73,7 @@ render-values-from-stack:
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	CLUSTER_ID="$(CLUSTER_ID)" \
 	IMAGE_PULL_SECRET_NAME="$(IMAGE_PULL_SECRET_NAME)" \
+	NODE_TO_NODE_PROBE_IMAGE="$(NODE_TO_NODE_PROBE_IMAGE)" \
 	./scripts/render_values_from_stack_env.sh
 	@echo "Rendered values to $(generated_values)"
 
