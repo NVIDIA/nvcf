@@ -260,7 +260,7 @@ The chart exposes `llm-request-router:9090/metrics` when request-router metrics
 are enabled. The current chart passes `--metrics-port` and uses Stargate's
 default `stargate_` metric prefix.
 
-See [LLM Request Router Metrics](/nvcf/observability/llm-request-router) for
+See [LLM Request Router Metrics](../observability/metrics/llm-request-router/metrics.md) for
 metric names, labels, and scrape configuration.
 
 ## Troubleshoot

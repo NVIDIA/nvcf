@@ -66,6 +66,7 @@ pub(super) enum RetryDecision<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FinalRetryDisposition {
     PassThrough,
+    AmbiguousDelivery,
     Exhausted(String),
     ReplayIncomplete(String),
     PayloadTooLarge(Option<String>),
@@ -75,6 +76,7 @@ impl FinalRetryDisposition {
     pub(super) fn label(&self) -> &'static str {
         match self {
             Self::PassThrough => "pass_through",
+            Self::AmbiguousDelivery => "ambiguous_delivery",
             Self::Exhausted(_) => "retry_exhausted",
             Self::ReplayIncomplete(_) => "replay_incomplete",
             Self::PayloadTooLarge(_) => "payload_too_large",
@@ -84,6 +86,7 @@ impl FinalRetryDisposition {
     pub(super) fn retry_reason(&self) -> Option<&str> {
         match self {
             Self::PassThrough => None,
+            Self::AmbiguousDelivery => Some("request_may_have_been_applied"),
             Self::Exhausted(reason) | Self::ReplayIncomplete(reason) => Some(reason),
             Self::PayloadTooLarge(reason) => reason.as_deref(),
         }
@@ -137,6 +140,7 @@ pub(super) fn decide_proxy_error_retry(
     retry: &ProxyRetryConfig,
     retry_budget_remaining: bool,
     connect_retries: u32,
+    request_body_started: bool,
     replay_readiness: ReplayReadiness,
 ) -> RetryDecision<()> {
     if !matches!(
@@ -144,6 +148,9 @@ pub(super) fn decide_proxy_error_retry(
         StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT | StatusCode::SERVICE_UNAVAILABLE
     ) {
         return RetryDecision::Final(FinalRetryDisposition::PassThrough);
+    }
+    if request_body_started && matches!(replay_readiness, ReplayReadiness::Ready) {
+        return RetryDecision::Final(FinalRetryDisposition::AmbiguousDelivery);
     }
     if !retry_budget_remaining {
         return retry_exhausted("retry_budget_exhausted");
@@ -276,6 +283,36 @@ mod tests {
         )]
         .into_iter()
         .collect()
+    }
+
+    #[test]
+    fn completed_body_does_not_authorize_retry_after_submission() {
+        let retry = ProxyRetryConfig::default();
+        for status in [
+            StatusCode::BAD_GATEWAY,
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            for (budget_remaining, connect_retries) in [
+                (true, 0),
+                (false, 0),
+                (true, retry.max_connect_retries),
+                (false, retry.max_connect_retries),
+            ] {
+                assert_eq!(
+                    decide_proxy_error_retry(
+                        status,
+                        &retry,
+                        budget_remaining,
+                        connect_retries,
+                        true,
+                        ReplayReadiness::Ready,
+                    ),
+                    RetryDecision::Final(FinalRetryDisposition::AmbiguousDelivery),
+                    "status={status}, budget_remaining={budget_remaining}, connect_retries={connect_retries}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -491,6 +528,7 @@ mod tests {
                 &retry,
                 true,
                 0,
+                false,
                 ReplayReadiness::Ready,
             ),
             RetryDecision::Retry(())
@@ -507,6 +545,7 @@ mod tests {
                 &retry,
                 false,
                 0,
+                false,
                 ReplayReadiness::Ready,
             ),
             RetryDecision::Final(FinalRetryDisposition::Exhausted(
@@ -519,6 +558,7 @@ mod tests {
                 &retry,
                 true,
                 retry.max_connect_retries,
+                false,
                 ReplayReadiness::PayloadTooLarge,
             ),
             RetryDecision::Final(FinalRetryDisposition::Exhausted(
@@ -531,6 +571,7 @@ mod tests {
                 &retry,
                 true,
                 0,
+                false,
                 ReplayReadiness::PayloadTooLarge,
             ),
             RetryDecision::Final(FinalRetryDisposition::PassThrough)
@@ -547,6 +588,7 @@ mod tests {
                 &retry,
                 true,
                 0,
+                false,
                 ReplayReadiness::Incomplete,
             ),
             RetryDecision::Final(FinalRetryDisposition::ReplayIncomplete(

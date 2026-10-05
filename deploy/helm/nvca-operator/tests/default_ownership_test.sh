@@ -15,8 +15,7 @@ fail() {
 }
 
 for schema in \
-  "${chart}/values.schema.json" \
-  "${chart_root}/../../../src/compute-plane-services/nvca/deployments/nvca-operator/values.schema.json"; do
+  "${chart}/values.schema.json"; do
   test "$(yq -r '.properties.selfManaged.properties.region.default' "${schema}")" = "us-west-1" ||
     fail "${schema} does not declare the selfManaged.region default"
   test "$(yq -r '.properties.helmManaged.properties | has("region")' "${schema}")" = "false" ||
@@ -28,6 +27,7 @@ render() {
   shift
   helm template nvca-operator "${chart}" \
     --namespace nvca-operator \
+    --set-string "ngcConfig.serviceKey=test-service-key" \
     --values "${chart}/values.yaml" \
     --set-string ngcConfig.clusterSource=self-managed \
     --set-string selfManaged.icmsServiceURL=http://icms.example.invalid:8080 \

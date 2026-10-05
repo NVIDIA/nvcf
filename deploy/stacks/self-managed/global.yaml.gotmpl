@@ -100,7 +100,7 @@ merge:
 {{- end -}}
 {{- end -}}
 
-{{/* JetStream stream replicas for the stream creators (nvcf-api, invocation),
+{{/* JetStream stream replicas for the stream creators (nvcf-api, invocation, icms),
      derived from the NATS server count and capped at 3 as NATS recommends. Empty
      for a single server so the services keep their own default. Override per
      service with api.env.NVCF_NATS_REPLICAS or invocation.env.NATS_PROPERTIES__REPLICAS. */}}
@@ -1025,6 +1025,11 @@ invocation:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+{{- $configuredNvctApiRemoteConfigData := dig "nvctApi" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredNvctApiRemoteConfigData) }}
+{{- fail "nvctApi.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $nvctApiRemoteConfigData := deepCopy $configuredNvctApiRemoteConfigData }}
 nvctApi:
   fullnameOverride: nvct-api
   {{- if $haEnabled }}
@@ -1056,6 +1061,12 @@ nvctApi:
     {{- with dig "nvctApi" "image" "tag" nil .Values }}
     tag: {{ . | quote }}
     {{- end }}
+
+  {{- if $nvctApiRemoteConfigData }}
+  remoteConfig:
+    configData:
+      {{- toYaml $nvctApiRemoteConfigData | nindent 6 }}
+  {{- end }}
 
   env:
     NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
@@ -1335,6 +1346,9 @@ sis:
     MANAGEMENT_METRICS_ENABLE_ALL: {{ .Values.global.observability.metrics.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+    {{- with include "nvcf.natsStreamReplicas" .Values }}
+    ICMS_NATS_REPLICAS: {{ . | quote }}
     {{- end }}
 
 adminIssuerProxy:
