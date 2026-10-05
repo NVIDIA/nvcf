@@ -20,12 +20,12 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 // ClusterUnreachableError reports a cluster the run could not contact at all:
@@ -49,8 +49,8 @@ func (e *ClusterUnreachableError) Error() string {
 
 func (e *ClusterUnreachableError) Unwrap() error { return e.Err }
 
-// clusterFirstCallTimeout bounds the first API call to a cluster whose
-// credentials come from the kubeconfig itself. A var so tests can shorten it.
+// clusterFirstCallTimeout bounds each round trip of the first API call to a
+// cluster. A var so tests can shorten it.
 var clusterFirstCallTimeout = 15 * time.Second
 
 // connectCluster builds a client for kubeContext, its transport wrapped by
@@ -65,6 +65,7 @@ func connectCluster(
 	if err != nil {
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: fmt.Errorf("building kubeconfig: %w", err)}
 	}
+	restCfg.Wrap(boundFirstCall)
 	for _, wrap := range wraps {
 		restCfg.Wrap(wrap)
 	}
@@ -72,11 +73,11 @@ func connectCluster(
 	if err != nil {
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: fmt.Errorf("building kubernetes client: %w", err)}
 	}
-	err = firstClusterCall(ctx, client, restCfg)
+	err = firstClusterCall(ctx, client)
 	if apierrors.IsUnauthorized(err) && ctx.Err() == nil {
 		// A credential plugin replaces a cached token the server rejected on
 		// the next call.
-		err = firstClusterCall(ctx, client, restCfg)
+		err = firstClusterCall(ctx, client)
 	}
 	if err != nil && ctx.Err() == nil {
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: err}
@@ -84,14 +85,50 @@ func connectCluster(
 	return client, nil
 }
 
-// firstClusterCall asks the server for its version. Credentials from an exec
-// or auth provider are fetched within the call, and a login it waits on takes
-// as long as it takes, so then only the run's budget bounds it.
-func firstClusterCall(ctx context.Context, client kubernetes.Interface, restCfg *rest.Config) error {
-	if restCfg.ExecProvider == nil && restCfg.AuthProvider == nil {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, clusterFirstCallTimeout)
-		defer cancel()
-	}
+// firstClusterCall asks the server for its version, each round trip bounded
+// by clusterFirstCallTimeout.
+func firstClusterCall(ctx context.Context, client kubernetes.Interface) error {
+	ctx = context.WithValue(ctx, firstCallBound{}, clusterFirstCallTimeout)
 	return client.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Error()
+}
+
+// firstCallBound is the context key for the bound firstClusterCall puts on
+// each of its round trips.
+type firstCallBound struct{}
+
+// boundFirstCall wraps a client's transport to bound a round trip whose
+// context carries a firstCallBound. An exec or auth provider wraps the
+// transport outside it and fetches its credentials before the round trip, so
+// a login the operator is waiting on does not count, while an API server that
+// takes the connection and never answers still does.
+func boundFirstCall(rt http.RoundTripper) http.RoundTripper {
+	return boundedRoundTripper{next: rt}
+}
+
+type boundedRoundTripper struct{ next http.RoundTripper }
+
+func (b boundedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	bound, ok := req.Context().Value(firstCallBound{}).(time.Duration)
+	if !ok {
+		return b.next.RoundTrip(req)
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), bound)
+	resp, err := b.next.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	// The body is read after the round trip returns, within the same bound.
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error {
+	defer c.cancel()
+	return c.ReadCloser.Close()
 }

@@ -188,3 +188,35 @@ func TestConnectCluster_CredentialPlugin(t *testing.T) {
 		}
 	}
 }
+
+// With a credential plugin, the bound still covers the network once the
+// credentials are in hand: an API server that takes the connection and never
+// answers is unreachable after the bound, not after the run's whole budget.
+func TestConnectCluster_CredentialPluginAgainstASilentServer(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	prev := clusterFirstCallTimeout
+	clusterFirstCallTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { clusterFirstCallTimeout = prev })
+
+	for name, body := range map[string]string{
+		"fast plugin": "token=fresh",
+		"slow plugin": "sleep 1; token=fresh",
+	} {
+		writeKubeconfigFor(t, srv.URL, credentialPlugin(t, body))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		start := time.Now()
+		_, err := connectCluster(ctx, "test")
+		cancel()
+		var unreachable *ClusterUnreachableError
+		assert.True(t, errors.As(err, &unreachable), "%s: %v", name, err)
+		assert.Less(t, time.Since(start), 5*time.Second, name)
+	}
+}
