@@ -50,6 +50,7 @@ import (
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/ca"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/buffconn"
@@ -534,10 +535,10 @@ func tcpConnect(ctx context.Context, requestId string, connectionConfig *pb.Work
 	}
 	proxyAddr := proxy.Host
 	if proxy.Port() == "" {
-		proxyAddr = net.JoinHostPort(proxyAddr, "80")
+		proxyAddr = net.JoinHostPort(proxyAddr, defaultProxyPort(proxy.Scheme))
 	}
 
-	c, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", proxyAddr)
+	c, err := dialProxy(ctx, proxy, proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("dialing proxy %q failed: %v", proxyAddr, err)
 	}
@@ -567,4 +568,36 @@ func tcpConnect(ctx context.Context, requestId string, connectionConfig *pb.Work
 
 	// purposely not closing the body, we're going to ignore the response body and use the stream directly
 	return buffconn.NewBufConn(c, br), nil
+}
+
+func defaultProxyPort(scheme string) string {
+	if scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+// dialProxy opens the transport the CONNECT request is written on. The scheme selects it:
+// https negotiates TLS with the proxy, anything else stays plaintext so existing
+// deployments are unaffected. grpc-proxy's HTTP/1 listener does not serve TLS itself, so
+// https is only usable where TLS terminates in front of it.
+func dialProxy(ctx context.Context, proxy *url.URL, proxyAddr string) (net.Conn, error) {
+	netDialer := &net.Dialer{Timeout: 3 * time.Second}
+	if proxy.Scheme != "https" {
+		return netDialer.DialContext(ctx, "tcp", proxyAddr)
+	}
+
+	// Same trust pool as the HTTP/3 path, so one NVCF_PROXY_CA_FILE covers both transports.
+	proxyCAs, err := ca.ProxyCAs()
+	if err != nil {
+		return nil, err
+	}
+	return (&tls.Dialer{
+		NetDialer: netDialer,
+		Config: &tls.Config{
+			ServerName: proxy.Hostname(),
+			RootCAs:    proxyCAs,
+			MinVersion: tls.VersionTLS12,
+		},
+	}).DialContext(ctx, "tcp", proxyAddr)
 }
