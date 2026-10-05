@@ -522,9 +522,7 @@ func TestCheckNodeToNode_PinsTheDaemonSetToEligibleNodes(t *testing.T) {
 	require.NotNil(t, affinity.NodeAffinity)
 	require.NotNil(t, affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
 	terms := affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-	require.Len(t, terms, 1)
-	require.Len(t, terms[0].MatchFields, 1)
-	assert.Equal(t, []string{"node-1", "node-2"}, terms[0].MatchFields[0].Values)
+	assert.Equal(t, []string{"node-1", "node-2"}, pinnedNodes(t, terms))
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.True(t, *state.NodeToNodeOK)
 	assert.Contains(t, strings.Join(state.Warnings, "; "),

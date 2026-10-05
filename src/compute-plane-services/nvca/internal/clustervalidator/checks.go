@@ -3144,6 +3144,14 @@ func hardenProbePodSpec(spec *corev1.PodSpec) {
 func buildNodeToNodeDaemonSet(
 	name, namespace string, labels map[string]string, image string, nodes []string,
 ) *appsv1.DaemonSet {
+	// The API server accepts exactly one value in a node field selector with
+	// In, so each node gets a term of its own; terms are ORed.
+	pin := make([]corev1.NodeSelectorTerm, 0, len(nodes))
+	for _, node := range nodes {
+		pin = append(pin, corev1.NodeSelectorTerm{MatchFields: []corev1.NodeSelectorRequirement{{
+			Key: metav1.ObjectNameField, Operator: corev1.NodeSelectorOpIn, Values: []string{node},
+		}}})
+	}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
 		Spec: appsv1.DaemonSetSpec{
@@ -3156,13 +3164,7 @@ func buildNodeToNodeDaemonSet(
 					RestartPolicy: corev1.RestartPolicyAlways,
 					Tolerations:   nodeToNodeTolerations(),
 					Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
-						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-							NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-								MatchFields: []corev1.NodeSelectorRequirement{{
-									Key: metav1.ObjectNameField, Operator: corev1.NodeSelectorOpIn, Values: nodes,
-								}},
-							}},
-						},
+						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: pin},
 					}},
 					Containers: []corev1.Container{{
 						Name:  "server",

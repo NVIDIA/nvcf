@@ -1388,13 +1388,47 @@ func TestBuildNodeToNodeDaemonSet_ToleratesEveryTaint(t *testing.T) {
 	require.NotNil(t, affinity.NodeAffinity)
 	required := affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
 	require.NotNil(t, required)
-	terms := required.NodeSelectorTerms
-	require.Len(t, terms, 1)
-	assert.Equal(t, []corev1.NodeSelectorRequirement{{
-		Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{"node-1", "node-2"},
-	}}, terms[0].MatchFields)
+	assert.Equal(t, []string{"node-1", "node-2"}, pinnedNodes(t, required.NodeSelectorTerms))
 	pod := buildNodeToNodeCheckerPod("checker", "ns", "node-1", nil, []string{"10.0.0.1"}, "img")
 	assert.Equal(t, everything, pod.Spec.Tolerations)
+}
+
+// The API server rejects a node field selector with In or NotIn that has
+// more than one value, so a pin listing the nodes in one requirement made
+// every DaemonSet create fail with 422 on a cluster with two or more nodes.
+// The fake clientset does not validate, so the shape is checked here.
+func TestBuildNodeToNodeDaemonSet_PinHasOneNodePerTerm(t *testing.T) {
+	nodes := []string{"node-1", "node-2", "node-3"}
+	ds := buildNodeToNodeDaemonSet("n2n", "ns", nil, "img", nodes)
+	terms := ds.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	require.Len(t, terms, len(nodes))
+	for i, term := range terms {
+		assert.Empty(t, term.MatchExpressions)
+		require.Len(t, term.MatchFields, 1)
+		f := term.MatchFields[0]
+		assert.Equal(t, metav1.ObjectNameField, f.Key)
+		assert.Equal(t, corev1.NodeSelectorOpIn, f.Operator)
+		assert.Len(t, f.Values, 1, "term %d: a node field selector with In takes exactly one value", i)
+	}
+	assert.Equal(t, nodes, pinnedNodes(t, terms))
+}
+
+// pinnedNodes returns the nodes a metadata.name node pin selects, requiring
+// every term to be one the API server accepts: field requirements only, each
+// on metadata.name with In and exactly one value.
+func pinnedNodes(t *testing.T, terms []corev1.NodeSelectorTerm) []string {
+	t.Helper()
+	var nodes []string
+	for _, term := range terms {
+		require.Empty(t, term.MatchExpressions)
+		for _, f := range term.MatchFields {
+			require.Equal(t, metav1.ObjectNameField, f.Key)
+			require.Equal(t, corev1.NodeSelectorOpIn, f.Operator)
+			require.Len(t, f.Values, 1, "the API server rejects more than one value for In on a node field")
+			nodes = append(nodes, f.Values[0])
+		}
+	}
+	return nodes
 }
 
 // gatewayDiscoveryClient returns a fake clientset whose discovery surface
