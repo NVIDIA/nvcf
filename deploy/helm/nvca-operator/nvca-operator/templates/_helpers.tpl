@@ -329,32 +329,56 @@ Usage: {{ include "nvcaop.jsonListOrEmpty" <list> }}
 {{- end -}}
 
 {{/*
-Get the imageCredHelper repository based on image.repository
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Registry path (registry plus org and team) of a repository: everything
+before the last path element. The operator, agent, credential helper and
+collector images are published together, so a sibling image lives next to
+image.repository wherever that is: the public org, staging, or the SBOM
+org of a managed cluster.
+Usage: {{ include "nvcaop.imageRegistryPath" .Values.image.repository }}
+*/}}
+{{- define "nvcaop.imageRegistryPath" -}}
+{{- $parts := splitList "/" . -}}
+{{- if gt (len $parts) 1 -}}
+{{- join "/" (initial $parts) -}}
+{{- else -}}
+{{- . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Get the imageCredHelper repository based on image.repository.
+If imageRepository is explicitly set, use it. Otherwise it is the sibling of
+image.repository: nvcf-image-credential-helper under the same registry path.
+The default image.repository therefore still resolves to
+nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper and staging to
+stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper, while a cluster
+whose operator image comes from another org (the SBOM org on managed
+clusters) pulls the helper from that org, which is where releases past
+0.10.2 are published. Pinning the public org regardless of the operator
+image left the hourly image-cred-updater in ImagePullBackOff on such
+clusters (NVCA 3.12, 2026-09-18).
 Usage: {{ include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .Values.helmManaged.imageCredHelper.imageRepository "defaultRepository" .Values.image.repository) }}
 */}}
 {{- define "nvcaop.imageCredHelperRepository" -}}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
-{{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper
 {{- else -}}
-nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper
+{{- include "nvcaop.imageRegistryPath" .defaultRepository }}/nvcf-image-credential-helper
 {{- end -}}
 {{- end -}}
 
 {{/*
-Get the OTel collector repository based on image.repository
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Get the OTel collector repository based on image.repository.
+If imageRepository is explicitly set, use it. Otherwise it is the sibling of
+image.repository, nvcf-otel-collector under the same registry path (see
+nvcaop.imageCredHelperRepository).
 Usage: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) }}
 */}}
 {{- define "nvcaop.otelCollectorRepository" -}}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
-{{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
 {{- else -}}
-nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
+{{- include "nvcaop.imageRegistryPath" .defaultRepository }}/nvcf-otel-collector
 {{- end -}}
 {{- end -}}
 
