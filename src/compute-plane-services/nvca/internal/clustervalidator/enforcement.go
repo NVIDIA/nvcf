@@ -462,18 +462,20 @@ func cleanupTestNamespace(log *logrus.Entry, client kubernetes.Interface, ns str
 	printInfo(log, fmt.Sprintf("Cleaning up test namespace %s", ns))
 	err := client.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
-		log.Warnf("Failed to clean up namespace %s: %v", ns, err)
+		log.Warn(probeCleanupFailure(ns, orphanNamespaceTTL, err))
 	}
 }
 
 // sweepOrphanTestNamespaces lists all netpol-validation-* namespaces and
 // deletes any whose age exceeds ttl. Used to reclaim leaks from prior runs
 // that died before their deferred cleanup could fire (SIGKILL, OOM,
-// force-delete, node failure). Namespaces younger than ttl are left alone
-// in case they belong to a concurrent run.
+// force-delete, node failure) or lost their RBAC first. Namespaces younger
+// than ttl are left alone in case they belong to a concurrent run. It reports
+// whether a later sweep has more to do: a namespace too young yet, or a
+// failed request.
 func sweepOrphanTestNamespaces(
 	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
-) {
+) (more bool) {
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -482,10 +484,10 @@ func sweepOrphanTestNamespaces(
 	})
 	if err != nil {
 		log.Warnf("Orphan sweep: failed to list namespaces: %v", err)
-		return
+		return true
 	}
 	if len(nsList.Items) == 0 {
-		return
+		return false
 	}
 
 	cutoff := time.Now().Add(-ttl)
@@ -496,6 +498,7 @@ func sweepOrphanTestNamespaces(
 			continue
 		}
 		if ns.CreationTimestamp.After(cutoff) {
+			more = true
 			continue // still within TTL — might be a concurrent run
 		}
 		if ns.DeletionTimestamp != nil {
@@ -506,6 +509,7 @@ func sweepOrphanTestNamespaces(
 		delCancel()
 		if err != nil && !apierrors.IsNotFound(err) {
 			log.Warnf("Orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
+			more = true
 			continue
 		}
 		deleted++
@@ -515,6 +519,7 @@ func sweepOrphanTestNamespaces(
 			"Orphan sweep: deleted %d stale netpol-validation-* namespace(s) older than %s",
 			deleted, ttl))
 	}
+	return more
 }
 
 // ---------------------------------------------------------------------------

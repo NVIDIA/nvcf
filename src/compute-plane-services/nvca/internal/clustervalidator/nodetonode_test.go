@@ -739,3 +739,113 @@ func TestNodeToNodeCheckerScript_RetriesUnrefusedDials(t *testing.T) {
 	assert.NotContains(t, string(out), "unreachable")
 	assert.NotContains(t, string(out), "10.0.0.2:", "the retried dial succeeded")
 }
+
+// A validator disabled or uninstalled mid-run loses its RBAC (403), or its
+// ServiceAccount and with it its token (401), before its cleanup runs. The
+// cleanup then says the namespace is left behind and who reclaims it, once,
+// rather than a warning per object.
+func TestProbeCleanup_DeniedDeleteSaysWhoReclaims(t *testing.T) {
+	denials := map[string]func(resource string) error{
+		"forbidden": func(resource string) error {
+			return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, "x", fmt.Errorf(
+				`User "system:serviceaccount:nvca-operator:nvca-operator-cluster-validator" cannot delete resource %q`,
+				resource))
+		},
+		"unauthorized": func(string) error { return apierrors.NewUnauthorized("Unauthorized") },
+	}
+	for name, deny := range denials {
+		t.Run("node-to-node/"+name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			for _, resource := range []string{"daemonsets", "pods", "namespaces"} {
+				client.PrependReactor("delete", resource, func(ktesting.Action) (bool, runtime.Object, error) {
+					return true, nil, deny(resource)
+				})
+			}
+			log, buf := bufferLog()
+			newN2NProbe(client, &ValidationState{Log: log}, enforcementDefaultImg).cleanup()
+
+			out := buf.String()
+			assert.Contains(t, out, "is left behind")
+			assert.Contains(t, out, "nvca-operator while it is installed")
+			assert.Contains(t, out, orphanN2NNamespaceTTL.String())
+			assert.Equal(t, 1, strings.Count(out, "\n"), "one warning, not one per object: %s", out)
+			for _, a := range client.Actions() {
+				assert.NotEqual(t, "pods", a.GetResource().Resource, "pod deletes would be denied too")
+			}
+		})
+		t.Run("enforcement/"+name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			client.PrependReactor("delete", "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, deny("namespaces")
+			})
+			log, buf := bufferLog()
+			cleanupTestNamespace(log, client, "netpol-validation-abc")
+			assert.Contains(t, buf.String(), "netpol-validation-abc is left behind")
+			assert.Contains(t, buf.String(), orphanNamespaceTTL.String())
+		})
+	}
+
+	t.Run("other failures keep their own warnings", func(t *testing.T) {
+		client := fake.NewSimpleClientset()
+		client.PrependReactor("delete", "*", func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewServiceUnavailable("etcd leader change")
+		})
+		log, buf := bufferLog()
+		newN2NProbe(client, &ValidationState{Log: log}, enforcementDefaultImg).cleanup()
+		assert.Contains(t, buf.String(), "Failed to clean up probe DaemonSet")
+		assert.Contains(t, buf.String(), "Failed to clean up probe namespace")
+		assert.NotContains(t, buf.String(), "left behind")
+	})
+}
+
+// The operator's sweep reclaims both kinds of probe namespace once they are
+// past their TTL, and says when a later sweep has more to do: a namespace too
+// young to tell from a live run's, or a request that failed.
+func TestSweepLeftoverProbes(t *testing.T) {
+	n2n := func(name string, age time.Duration) *corev1.Namespace {
+		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: nodeToNodeNSPrefix + name, Labels: n2nLabels(n2nNamespaceComponent, name),
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-age)),
+		}}
+	}
+	ctx := context.Background()
+	exists := func(client kubernetes.Interface, name string) bool {
+		_, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		return err == nil
+	}
+
+	t.Run("young ones wait", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			n2n("stale", orphanN2NNamespaceTTL+time.Minute), n2n("young", time.Minute),
+			makeNetpolValidationNs("netpol-validation-stale", orphanNamespaceTTL+time.Minute),
+			makeNetpolValidationNs("netpol-validation-young", time.Minute))
+		assert.True(t, SweepLeftoverProbes(ctx, testLog(), client))
+		assert.False(t, exists(client, nodeToNodeNSPrefix+"stale"))
+		assert.False(t, exists(client, "netpol-validation-stale"))
+		assert.True(t, exists(client, nodeToNodeNSPrefix+"young"))
+		assert.True(t, exists(client, "netpol-validation-young"))
+	})
+	for kind, young := range map[string]*corev1.Namespace{
+		"node-to-node": n2n("young", time.Minute),
+		"enforcement":  makeNetpolValidationNs("netpol-validation-young", time.Minute),
+	} {
+		t.Run("a young "+kind+" namespace waits", func(t *testing.T) {
+			assert.True(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset(young)))
+		})
+	}
+	t.Run("nothing left", func(t *testing.T) {
+		client := fake.NewSimpleClientset(n2n("stale", orphanN2NNamespaceTTL+time.Minute),
+			makeNetpolValidationNs("netpol-validation-stale", orphanNamespaceTTL+time.Minute))
+		assert.False(t, SweepLeftoverProbes(ctx, testLog(), client))
+		assert.False(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset()))
+	})
+	for _, verb := range []string{"list", "delete"} {
+		t.Run(verb+" failure", func(t *testing.T) {
+			client := fake.NewSimpleClientset(n2n("stale", orphanN2NNamespaceTTL+time.Minute))
+			client.PrependReactor(verb, "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewServiceUnavailable("etcd leader change")
+			})
+			assert.True(t, SweepLeftoverProbes(ctx, testLog(), client))
+		})
+	}
+}

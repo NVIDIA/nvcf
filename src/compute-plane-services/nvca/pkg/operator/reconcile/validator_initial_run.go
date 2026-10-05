@@ -315,6 +315,27 @@ func validatorRunJobName(cronJob *batchv1.CronJob, spec, newest string) string {
 	return base + suffix
 }
 
+// validatorProbeSweepInterval is how often the operator sweeps again while a
+// cluster-validator's probe namespaces are left. A var so tests can shorten it.
+var validatorProbeSweepInterval = time.Minute
+
+// sweepValidatorProbes deletes the probe namespaces cluster-validator runs left
+// behind. A validator disabled during its node-to-node or NetworkPolicy probe
+// loses its RBAC before its cleanup runs, and no later run comes to sweep, so
+// the operator, which outlives it, sweeps at start. While the validator is
+// disabled it keeps sweeping until none are left: one from the interrupted run
+// is not deleted before it is old enough that no running probe can own it.
+func sweepValidatorProbes(ctx context.Context, client kubernetes.Interface, untilClean bool) {
+	log := core.GetLogger(ctx).WithField("sweep", "cluster-validator probes")
+	for clustervalidator.SweepLeftoverProbes(ctx, log, client) && untilClean {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(validatorProbeSweepInterval):
+		}
+	}
+}
+
 // deleteLeftoverValidatorSummary removes the summary a cluster-validator wrote
 // while it was enabled. Nothing updates it once the validator is disabled, so
 // an agent that still reads it, such as one older than this operator, would

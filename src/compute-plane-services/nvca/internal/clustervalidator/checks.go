@@ -2003,12 +2003,15 @@ func sweepLegacyOrphanN2NDaemonSets(
 // sweepOrphanN2NNamespaces deletes any nvcf-n2n-validation-* namespaces older
 // than ttl, taking the DaemonSet and checker pod inside with them. These are
 // left behind when the validator process is killed with SIGKILL (OOM,
-// force-delete, node failure) before the deferred cleanup fires. Namespaces
-// younger than ttl are skipped in case they belong to a concurrent run. One
-// already Terminating is not deleted again, but its probe pods are
-// force-deleted: a pod on a node whose kubelet is gone would otherwise hold it
-// Terminating until the node returns.
-func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration) {
+// force-delete, node failure) before the deferred cleanup fires, or loses its
+// RBAC first. Namespaces younger than ttl are skipped in case they belong to
+// a concurrent run. One already Terminating is not deleted again, but its
+// probe pods are force-deleted: a pod on a node whose kubelet is gone would
+// otherwise hold it Terminating until the node returns. It reports whether a
+// later sweep has more to do: a namespace too young yet, or a failed request.
+func sweepOrphanN2NNamespaces(
+	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
+) (more bool) {
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -2017,7 +2020,7 @@ func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kub
 	})
 	if err != nil {
 		log.Warnf("N2N orphan sweep: failed to list namespaces: %v", err)
-		return
+		return true
 	}
 
 	cutoff := time.Now().Add(-ttl)
@@ -2030,6 +2033,7 @@ func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kub
 			continue
 		}
 		if ns.CreationTimestamp.After(cutoff) {
+			more = true
 			continue // still within TTL; might be a concurrent run
 		}
 		if ns.DeletionTimestamp != nil {
@@ -2041,6 +2045,7 @@ func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kub
 		delCancel()
 		if err != nil && !apierrors.IsNotFound(err) {
 			log.Warnf("N2N orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
+			more = true
 			continue
 		}
 		deleted++
@@ -2048,6 +2053,30 @@ func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kub
 	if deleted > 0 {
 		printInfo(log, fmt.Sprintf("N2N orphan sweep: deleted %d stale probe namespace(s) older than %s", deleted, ttl))
 	}
+	return more
+}
+
+// SweepLeftoverProbes deletes the probe namespaces validator runs left behind,
+// with the DaemonSets, pods and NetworkPolicies in them, once they are older
+// than a run can last. Every run sweeps them too, but a validator disabled or
+// uninstalled mid-run loses its RBAC before its cleanup runs, and no later run
+// comes. It reports whether a later sweep has more to do.
+func SweepLeftoverProbes(ctx context.Context, log *logrus.Entry, client kubernetes.Interface) (more bool) {
+	n2n := sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
+	enforcement := sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
+	return n2n || enforcement
+}
+
+// probeCleanupFailure says why a run left its probe namespace behind. A
+// denied delete is the usual case: a validator disabled or uninstalled during
+// a run loses its RBAC before its cleanup runs.
+func probeCleanupFailure(ns string, ttl time.Duration, err error) string {
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		return fmt.Sprintf("Probe namespace %s is left behind: the validator is no longer allowed to delete it "+
+			"(%v), as when it is disabled or uninstalled during a run. A later validator run, or the "+
+			"nvca-operator while it is installed, deletes it once it is older than %s.", ns, err, ttl)
+	}
+	return fmt.Sprintf("Failed to clean up probe namespace %s: %v", ns, err)
 }
 
 // forceDeleteProbePods deletes the pods selector matches in ns with no grace
@@ -2191,16 +2220,22 @@ func newN2NProbe(client kubernetes.Interface, state *ValidationState, image stri
 // force-deleted, and the namespace takes the rest.
 func (p *n2nProbe) cleanup() {
 	grace := int64(0)
-	if err := withDeleteBudget(func(c context.Context) error {
+	err := withDeleteBudget(func(c context.Context) error {
 		return p.client.AppsV1().DaemonSets(p.ns).Delete(c, p.dsName, metav1.DeleteOptions{GracePeriodSeconds: &grace})
-	}); err != nil && !apierrors.IsNotFound(err) {
+	})
+	// A denied DaemonSet delete means the pod deletes are denied too; the
+	// namespace delete below reports why.
+	denied := apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
+	if err != nil && !apierrors.IsNotFound(err) && !denied {
 		p.log.Warnf("Failed to clean up probe DaemonSet %s/%s: %v", p.ns, p.dsName, err)
 	}
-	forceDeleteProbePods(p.log, p.client, p.ns, n2nSelector("", p.instance))
+	if !denied {
+		forceDeleteProbePods(p.log, p.client, p.ns, n2nSelector("", p.instance))
+	}
 	if err := withDeleteBudget(func(c context.Context) error {
 		return p.client.CoreV1().Namespaces().Delete(c, p.ns, metav1.DeleteOptions{})
 	}); err != nil && !apierrors.IsNotFound(err) {
-		p.log.Warnf("Failed to clean up probe namespace %s: %v", p.ns, err)
+		p.log.Warn(probeCleanupFailure(p.ns, orphanN2NNamespaceTTL, err))
 	}
 }
 

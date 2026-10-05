@@ -548,3 +548,66 @@ func TestDeleteLeftoverValidatorSummary(t *testing.T) {
 		})
 	}
 }
+
+// probeNamespace is a node-to-node probe namespace a validator run left,
+// created at age ago.
+func probeNamespace(name string, age time.Duration) *corev1.Namespace {
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "nvcf-n2n-validation-" + name,
+		Labels: map[string]string{
+			"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
+			"app.kubernetes.io/component":  "n2n-probe",
+		},
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-age)),
+	}}
+}
+
+// A validator disabled mid-probe leaves a namespace too young to delete at
+// the operator's restart. While the validator stays disabled the operator
+// keeps sweeping, and stops once that namespace is old enough and deleted.
+func TestSweepValidatorProbes_DisabledSweepsUntilClean(t *testing.T) {
+	prev := validatorProbeSweepInterval
+	validatorProbeSweepInterval = 10 * time.Millisecond
+	t.Cleanup(func() { validatorProbeSweepInterval = prev })
+	ctx, cancel := context.WithCancel(context.Background())
+	client := fake.NewSimpleClientset(probeNamespace("interrupted", time.Minute))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sweepValidatorProbes(ctx, client, true)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the sweep stopped while a probe namespace was left")
+	default:
+	}
+	assert.GreaterOrEqual(t, countVerb(client, "list", "namespaces"), 4, "it keeps sweeping")
+
+	_, err := client.CoreV1().Namespaces().Update(ctx, probeNamespace("interrupted", time.Hour), metav1.UpdateOptions{})
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sweep did not stop once nothing was left")
+	}
+	_, err = client.CoreV1().Namespaces().Get(ctx, "nvcf-n2n-validation-interrupted", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "got %v", err)
+}
+
+// With the validator enabled its own runs sweep, so the operator sweeps once
+// at start and leaves a namespace a live run may still own.
+func TestSweepValidatorProbes_EnabledSweepsOnce(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset(probeNamespace("stale", time.Hour), probeNamespace("live", time.Minute))
+	sweepValidatorProbes(ctx, client, false)
+	_, err := client.CoreV1().Namespaces().Get(ctx, "nvcf-n2n-validation-stale", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "got %v", err)
+	_, err = client.CoreV1().Namespaces().Get(ctx, "nvcf-n2n-validation-live", metav1.GetOptions{})
+	assert.NoError(t, err)
+}

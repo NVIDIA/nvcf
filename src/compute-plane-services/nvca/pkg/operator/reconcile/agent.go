@@ -509,6 +509,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	if !a.ClusterValidatorEnabled {
 		go deleteLeftoverValidatorSummary(ctx, backendK8sClients.K8s, a.PodNamespace)
 	}
+	go sweepValidatorProbes(ctx, backendK8sClients.K8s, !a.ClusterValidatorEnabled)
 
 	// TODO: source this directly from values and default URL's based on that.
 	envType := nvidiaiov1.EnvTypeProd
