@@ -43,6 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -149,7 +150,10 @@ func checkControlPlaneHealth(ctx context.Context, client kubernetes.Interface, s
 	// real clusters and distinguish three cases: (a) /readyz reports ready,
 	// (b) /readyz reports not-ready, (c) /readyz not reachable (e.g. fake
 	// client) — fall back to ServerVersion only.
-	if _, verr := client.Discovery().ServerVersion(); verr == nil {
+	_, verr := observe(ctx, func(c context.Context) (*version.Info, error) {
+		return withContext(c, client.Discovery().ServerVersion)
+	})
+	if verr == nil {
 		reached, ready := probeReadyz(ctx, client)
 		switch {
 		case reached && ready:

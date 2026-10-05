@@ -488,9 +488,10 @@ parallelism: 1
 completions: 1
 backoffLimit: 2
 activeDeadlineSeconds: 600
-# A published Not-Ready verdict exits 3. Rerunning the suite would not change
-# it, so it fails the Job at once; any other failure, including a summary the
-# run could not write, is retried.
+# A published Not-Ready verdict exits 3. The run already ran the critical
+# checks behind it a second time, so it fails the Job at once rather than
+# rerunning the suite; any other failure, including a summary the run could
+# not write, is retried.
 podFailurePolicy:
   rules:
     - action: FailJob

@@ -52,6 +52,7 @@ func TestMain(m *testing.M) {
 	// Fake clients answer at once, so a short retry budget still retries a
 	// transient error several times without slowing every error-path test.
 	observeTimeout, observeRetryInterval = 300*time.Millisecond, 10*time.Millisecond
+	recheckDelay = 0
 	os.Exit(m.Run())
 }
 

@@ -244,9 +244,10 @@ const RequireSummaryEnv = "VALIDATOR_REQUIRE_SUMMARY"
 const StartupGateEnv = "VALIDATOR_STARTUP_GATE"
 
 // ExitNotReady is the exit code of a RequireSummaryEnv run that published a
-// Not-Ready verdict. The chart's podFailurePolicy fails the Job on it rather
-// than rerunning a suite whose result would not change. Other runs keep exit
-// code 1 for Not-Ready, which launchers grade on.
+// Not-Ready verdict. The run already ran the critical checks behind it a
+// second time, so the chart's podFailurePolicy fails the Job on it rather than
+// rerunning the whole suite. Other runs keep exit code 1 for Not-Ready, which
+// launchers grade on.
 const ExitNotReady = 3
 
 // ErrNotReady is the error Run returns, as a *NotReadyError, when the cluster
@@ -296,9 +297,10 @@ func ExitCode(err error) int {
 
 // Run executes all cluster validation checks and returns a non-nil error when
 // the cluster is not ready. role selects the check set; configNamespace/configName
-// identify the optional ConfigMap; emitMetrics gates the summary write. routes
-// lists Gateway API routes to identify the NVCF Gateways; nil leaves that
-// ownership undetermined.
+// identify the optional ConfigMap; emitMetrics gates the summary write, and a
+// run that writes it reruns once the critical checks that did not pass before
+// deciding. routes lists Gateway API routes to identify the NVCF Gateways; nil
+// leaves that ownership undetermined.
 func Run(
 	ctx context.Context,
 	client kubernetes.Interface,
@@ -348,61 +350,8 @@ func Run(
 		sweepLegacyOrphanN2NDaemonSets(ctx, log, client, orphanN2NNamespaceTTL)
 	}
 
-	checkControlPlaneHealth(ctx, client, state)
-	checkWebhookSupport(ctx, client, state)
-	checkNetworkPolicies(ctx, client, state)
-
-	var netCfg *NetworkCheckConfig
-	if configNamespace != "" && configName != "" {
-		cfg, err := LoadNetworkCheckConfig(ctx, client, configNamespace, configName)
-		if err != nil {
-			// The checks it would configure may be critical, so they cannot
-			// simply be skipped: say so, and leave the verdict unknown.
-			state.NetworkChecksErr = fmt.Sprintf("could not load %s/%s: %v", configNamespace, configName, err)
-			printWarning(log, "Network checks: "+state.NetworkChecksErr)
-			state.Warnings = append(state.Warnings, "Network checks: "+state.NetworkChecksErr+
-				"; its endpoint, NetworkPolicy and enforcement checks did not run")
-		} else {
-			netCfg = cfg
-		}
-	}
-
-	if netCfg != nil && netCfg.Reachability != nil && len(netCfg.Reachability.Endpoints) > 0 {
-		checkConfigurableReachability(ctx, state, netCfg.Reachability)
-	}
-
-	if role == RoleControlPlane {
-		// Control-plane cluster: check gateway infrastructure, storage,
-		// inter-node overlay connectivity and HA readiness. GPU operator and
-		// SMB CSI are compute-plane concerns and are skipped.
-		checkStorageClass(ctx, client, state)
-		// Discover the Gateway API surface and decide which Gateways are
-		// NVCF's once, so the Envoy, LoadBalancer and Tier-1 rows judge the
-		// same set.
-		surface, surfaceErr := discoverGatewayAPIResources(ctx, client)
-		checkGatewayAPICRDsIn(state, surface, surfaceErr)
-		ownership := resolveGatewayOwnershipIn(ctx, client, surface, surfaceErr, routes)
-		checkEnvoyGatewayFor(ctx, client, ownership, state)
-		checkGatewayRoutesIn(state, surface, surfaceErr)
-		checkExternalLoadBalancerFor(ctx, client, ownership, state)
-		checkNodeToNode(ctx, client, state, nodeToNodeProbeImage(netCfg))
-		checkTier1DeploymentsFor(ctx, client, ownership, state)
-		checkTier2StatefulSets(ctx, client, state)
-	} else {
-		// Compute-plane cluster (default): GPU operator, SMB CSI driver.
-		checkSMBCSIDriver(ctx, client, state)
-		checkGPUResources(ctx, client, state)
-		checkGPUOperator(ctx, client, state)
-	}
-
-	if netCfg != nil {
-		if netCfg.NetworkPolicies != nil && len(netCfg.NetworkPolicies.Pairs) > 0 {
-			checkConfigurableNetworkPolicies(ctx, client, state, netCfg.NetworkPolicies)
-		}
-		if netCfg.Enforcement != nil && netCfg.Enforcement.Enabled {
-			checkNetworkPolicyEnforcement(ctx, client, state, netCfg.Enforcement)
-		}
-	}
+	su := &suite{client: client, routes: routes, configNamespace: configNamespace, configName: configName}
+	su.run(ctx, state, emitMetrics)
 
 	summaryErr := printSummary(state)
 	if errors.Is(ctx.Err(), context.Canceled) {
