@@ -238,7 +238,7 @@ func mirroredStack(t *testing.T) string {
 		[]byte("global:\n  image:\n    registry: nvcr.io\n    repository: YOUR_ORG/YOUR_TEAM\n"+
 			"certManager:\n  enabled: true\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(envDir, "prod.yaml"),
-		[]byte("global:\n  image:\n    registry: harbor.corp.example\n    repository: nvcf\n"+
+		[]byte("global:\n  image:\n    registry: harbor.corp.example\n    repository: nvcf/site\n"+
 			"certManager:\n  acmesolver:\n    image:\n      repository: harbor.corp.example/jetstack/acmesolver\n"), 0o644))
 	return stack
 }
@@ -254,7 +254,7 @@ func TestCheck_RegistriesNeedTheEnvironmentFile(t *testing.T) {
 	stack := mirroredStack(t)
 
 	got := registryProbes(t, "--control-plane", "--env", "prod", "--control-plane-stack", stack)
-	assert.Equal(t, map[string]bool{"harbor.corp.example/nvcf": false}, got,
+	assert.Equal(t, map[string]bool{"harbor.corp.example/nvcf/site": false}, got,
 		"the install's mirror is probed, and neither nvcr.io nor quay.io is")
 
 	for name, args := range map[string][]string{
@@ -268,7 +268,7 @@ func TestCheck_RegistriesNeedTheEnvironmentFile(t *testing.T) {
 			got := registryProbes(t, args...)
 			assert.Contains(t, got, "nvcr.io")
 			assert.False(t, got["nvcr.io"], "a guessed nvcr.io is never critical")
-			assert.NotContains(t, got, "harbor.corp.example/nvcf")
+			assert.NotContains(t, got, "harbor.corp.example/nvcf/site")
 		})
 	}
 }
@@ -282,11 +282,11 @@ func TestCheck_ComputeOnlyRunReadsTheComputePlaneStack(t *testing.T) {
 	envDir := filepath.Join(gpuStack, "environments")
 	require.NoError(t, os.MkdirAll(envDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(envDir, "prod.yaml"),
-		[]byte("global:\n  image:\n    registry: gpu-mirror.example.com\n    repository: site\n"), 0o644))
+		[]byte("global:\n  image:\n    registry: gpu-mirror.example.com\n    repository: site/gpu\n"), 0o644))
 
 	got := registryProbes(t, "--compute-plane", "--cluster-name", "gpu", "--env", "prod",
 		"--control-plane-stack", mirroredStack(t), "--compute-plane-stack", gpuStack)
-	assert.Equal(t, map[string]bool{"gpu-mirror.example.com/site": false}, got)
+	assert.Equal(t, map[string]bool{"gpu-mirror.example.com/site/gpu": false}, got)
 }
 
 // A malformed --cluster-validator-registries entry fails the command naming
