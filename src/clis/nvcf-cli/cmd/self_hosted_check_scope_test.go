@@ -338,6 +338,24 @@ func TestCheck_WaitTimeoutOnARolloutIsNotASuccess(t *testing.T) {
 	assert.EqualValues(t, 0, final["failedCount"])
 }
 
+// A validator Job that succeeded is the validator's verdict even when its
+// transcript cannot be read, so --wait accepts the first poll instead of
+// starting a new Job on every poll until it times out.
+func TestCheck_WaitAcceptsASucceededValidatorWhoseTranscriptCannotBeRead(t *testing.T) {
+	calls := 0
+	err, stderr := runCheckWithBudget(t, time.Minute, func(context.Context) selfhosted.ClusterValidatorResult {
+		calls++
+		return selfhosted.ClusterValidatorResult{Passed: true, JobName: "cv-1",
+			LogsErr: errors.New(`pods "cv-1-abc" is forbidden: cannot get resource "pods/log"`)}
+	}, "--wait", "30s")
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+	row := validatorRow(t, stderr)
+	assert.Equal(t, true, row["passed"])
+	assert.Contains(t, row["message"], "its transcript could not be read")
+	assert.Equal(t, "ok", finalEvent(t, stderr)["verdict"])
+}
+
 // The dashboard's quit key interrupts the run as a signal does: exit 130. A
 // validator that kept objects in the cluster still says how to remove them:
 // at once, before its teardown, and again on stderr once the dashboard is

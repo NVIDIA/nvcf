@@ -1238,8 +1238,6 @@ func TestClusterValidatorCheck_PassNeedsTheRoleLineAndTheVerdict(t *testing.T) {
 		cleanOK bool
 	}{
 		"empty transcript": {role: validatorRoleControlPlane, want: "its transcript was empty"},
-		"unreadable": {role: validatorRoleControlPlane, res: ClusterValidatorResult{
-			LogsErr: errors.New("connection refused to kubelet")}, want: "connection refused to kubelet"},
 		"no role line": {role: validatorRoleControlPlane, res: ClusterValidatorResult{
 			Logs: "Starting NVCF cluster validation\nCluster is NVCF-Ready\n"}, want: "does not show the control-plane checks"},
 		"other role": {role: validatorRoleControlPlane, res: ClusterValidatorResult{
@@ -1269,6 +1267,31 @@ func TestClusterValidatorCheck_PassNeedsTheRoleLineAndTheVerdict(t *testing.T) {
 		assert.Contains(t, r.Message, tc.want, name)
 		assert.Contains(t, r.Message, "kubectl --context ctx-a logs -n default job/job-1", name)
 	}
+}
+
+// The validator exits non-zero when the cluster is Not-Ready, so a Job that
+// succeeded passes even when its transcript cannot be read. The row says the
+// transcript was not read and how to read it, and is not transient: polling
+// again would only start another validator Job that hits the same denial.
+func TestClusterValidatorCheck_SucceededJobWithAnUnreadableTranscriptPasses(t *testing.T) {
+	for name, logs := range map[string]string{
+		"nothing read":       "",
+		"part of it read":    "Validator role: control-plane\nTier-1: ok\n",
+		"only the run notes": "note: validator config not applied (forbidden); reachability checks may be skipped\n",
+	} {
+		r := gradeWith(validatorRoleControlPlane, ClusterValidatorResult{Passed: true, JobName: "job-1", Logs: logs,
+			LogsErr: errors.New(`pods "cv-1-abc" is forbidden: cannot get resource "pods/log"`)})
+		assert.True(t, r.Passed, name)
+		assert.Equal(t, SeverityInfo, r.Severity, name)
+		assert.False(t, r.Transient, name)
+		assert.Contains(t, r.Message, "cluster-validator Job succeeded; its transcript could not be read", name)
+		assert.Contains(t, r.Message, `cannot get resource "pods/log"`, name)
+		assert.Contains(t, r.Message, "kubectl --context ctx-a logs -n default job/job-1", name)
+	}
+
+	failed := gradeWith(validatorRoleControlPlane, ClusterValidatorResult{ExitCode: 1, JobName: "job-1",
+		LogsErr: errors.New("connection refused to kubelet")})
+	assert.True(t, failed.IsBlockingFailure(), "a Job that failed still fails")
 }
 
 // A failed run names the rows that failed it, unobserved critical checks
