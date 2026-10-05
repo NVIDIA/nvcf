@@ -3855,6 +3855,25 @@ func (o *gatewayOwnership) envoyNotApplicable(ctx context.Context) string {
 	return strings.Join(others, "; ")
 }
 
+// envoyRuns returns the NVCF Gateways Envoy Gateway is seen to run, none when
+// that cannot be told.
+func (o *gatewayOwnership) envoyRuns(ctx context.Context) []string {
+	if o.err != nil || len(o.gateways) == 0 {
+		return nil
+	}
+	impls, err := o.implementations(ctx)
+	if err != nil {
+		return nil
+	}
+	var runs []string
+	for _, e := range o.gateways.sorted() {
+		if kind, _ := impls.kind(e); kind == gatewayEnvoy {
+			runs = append(runs, e)
+		}
+	}
+	return runs
+}
+
 // envoyControllers returns the Envoy Gateway controller pods and the
 // namespaces it runs in. NVCF_ENVOY_GATEWAY_NAMESPACE pins the namespace.
 // Unset, the controller is found by its label in every namespace: the stack
@@ -4427,9 +4446,14 @@ type tier1Scan struct {
 	noGatewaysPostInstall bool
 	// judgeController: the Envoy Gateway controller is judged like an NVCF
 	// Deployment, and controllerErr is why it could not be read.
-	judgeController bool
-	controllerErr   error
-	dates           *rolloutDating
+	// controllerMissing says no controller Deployment exists for the NVCF
+	// Gateways Envoy Gateway runs; controllerUnconfirmed, that the Gateways it
+	// was missing for were found only from the NVCF routes.
+	judgeController       bool
+	controllerErr         error
+	controllerMissing     []string
+	controllerUnconfirmed bool
+	dates                 *rolloutDating
 
 	underReplicated []string
 	scaledToZero    []string
@@ -4544,6 +4568,33 @@ func (s *tier1Scan) assessEnvoyController(ctx context.Context) {
 	for i := range deploys {
 		s.assess(deploymentReadiness(&deploys[i], s.dates))
 	}
+	if len(deploys) == 0 {
+		s.noController(ctx)
+	}
+}
+
+// noController reports that no Envoy Gateway controller Deployment exists
+// although Envoy Gateway runs an NVCF Gateway, so nothing programs its routes
+// or replaces its proxies. Like a missing proxy, it fails the row only for
+// Gateways the launcher named.
+func (s *tier1Scan) noController(ctx context.Context) {
+	runs := s.own.envoyRuns(ctx)
+	if len(runs) == 0 {
+		return
+	}
+	where := "in any namespace"
+	if ns := strings.TrimSpace(os.Getenv(envoyGatewayNamespaceEnv)); ns != "" {
+		where = "in " + ns
+	}
+	msg := fmt.Sprintf("no Envoy Gateway controller Deployment found %s, though Envoy Gateway runs NVCF Gateway "+
+		"%s", where, strings.Join(runs, ", "))
+	if !s.own.configured {
+		s.warn(fmt.Sprintf("%s. These Gateways were found from the NVCF routes, which cannot fail the row; set "+
+			"clusterValidator.gatewayNames (env %s) to the stack's Gateways", msg, nvcfGatewayNamesEnv))
+		s.controllerUnconfirmed = true
+		return
+	}
+	s.controllerMissing = append(s.controllerMissing, msg)
 }
 
 // workloadReadiness is what Tier-1 judges a Deployment or DaemonSet by.
@@ -4669,7 +4720,7 @@ func (s *tier1Scan) reportFindings() bool {
 		workloads = append(workloads, fmt.Sprintf("scaled to zero replicas: %s", strings.Join(s.scaledToZero, ", ")))
 	}
 	missing := s.controlPlaneMissing()
-	total := len(workloads) + len(s.gatewayGaps)
+	total := len(workloads) + len(s.gatewayGaps) + len(s.controllerMissing)
 	if missing {
 		total++
 	}
@@ -4699,6 +4750,13 @@ func (s *tier1Scan) reportFindings() bool {
 		s.state.Recommendations = append(s.state.Recommendations,
 			"A Deployment scaled to zero serves nothing: restore its replicaCount in the self-managed stack "+
 				"values, or scale it back up (kubectl -n <namespace> scale deployment <name> --replicas=<n>).")
+	}
+	printFindingBlock(s.log, "Envoy Gateway controller", s.controllerMissing)
+	if len(s.controllerMissing) > 0 {
+		s.state.Recommendations = append(s.state.Recommendations,
+			"Envoy Gateway runs the NVCF Gateways, so its controller must run: reinstall it as the "+
+				"gateway-routing guide describes, or, if it runs in a namespace other than "+
+				"clusterValidator.envoyGatewayNamespace (env "+envoyGatewayNamespaceEnv+"), correct that setting.")
 	}
 	printFindingBlock(s.log, "NVCF Gateway coverage gaps", s.gatewayGaps)
 	if len(s.gatewayGaps) > 0 {
@@ -4974,7 +5032,9 @@ const (
 		"so they were not assessed)"
 	tier1CoverageUnknown = "Tier-1 Deployments: status unknown (whether every NVCF Gateway exists and has an " +
 		"Envoy proxy could not be confirmed)"
-	tier1ControllerUnknown = "Tier-1 Deployments: status unknown (the Envoy Gateway controller could not be read)"
+	tier1ControllerUnknown     = "Tier-1 Deployments: status unknown (the Envoy Gateway controller could not be read)"
+	tier1ControllerUnconfirmed = "Tier-1 Deployments: status unknown (no Envoy Gateway controller was found " +
+		"for Gateways found from the NVCF routes)"
 )
 
 func (s *tier1Scan) deniedWarning() string {
@@ -5004,7 +5064,8 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 	switch {
 	case s.reportFindings():
 		s.setOK(false)
-	case proxiesUnobserved || coverageUndecided || len(s.unread) > 0 || s.controllerErr != nil:
+	case proxiesUnobserved || coverageUndecided || len(s.unread) > 0 || s.controllerErr != nil ||
+		s.controllerUnconfirmed:
 		// Something was never observed, so "all ready" is not a claim we can
 		// make even though everything we could see passed.
 		if len(s.unread) > 0 {
@@ -5013,6 +5074,9 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 		}
 		if s.controllerErr != nil {
 			s.state.Warnings = append(s.state.Warnings, tier1ControllerUnknown)
+		}
+		if s.controllerUnconfirmed {
+			s.state.Warnings = append(s.state.Warnings, tier1ControllerUnconfirmed)
 		}
 		if proxiesUnobserved {
 			s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)

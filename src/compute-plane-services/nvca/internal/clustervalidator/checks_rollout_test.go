@@ -886,6 +886,45 @@ func TestCheckTier1Deployments_PostInstallJudgesTheEnvoyController(t *testing.T)
 		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
 	}
 
+	// No controller Deployment at all is a finding after install when Envoy
+	// Gateway runs a named NVCF Gateway, also where a pinned controller
+	// namespace still credits the proxies in it. Before install, or for
+	// another implementation's Gateway, it is not. For Gateways found only
+	// from the NVCF routes it leaves the row unknown.
+	absent := func(pin string) *fake.Clientset {
+		t.Setenv(envoyGatewayNamespaceEnv, pin)
+		client := cluster(envoyGatewayNamespace, 1)
+		require.NoError(t, client.Tracker().Delete(deployments, envoyGatewayNamespace, "envoy-gateway"))
+		return client
+	}
+	for name, tc := range map[string]struct {
+		postInstall bool
+		pin, class  string
+		ok          bool
+	}{
+		"absent after install, namespace pinned": {postInstall: true, pin: envoyGatewayNamespace, class: "eg"},
+		"absent after install":                   {postInstall: true, class: "eg"},
+		"absent before install":                  {pin: envoyGatewayNamespace, class: "eg", ok: true},
+		"absent, NVCF Gateway run by istio": {
+			postInstall: true, pin: envoyGatewayNamespace, class: "istio", ok: true},
+	} {
+		state := &ValidationState{Log: testLog(), PostInstall: tc.postInstall}
+		checkTier1Deployments(context.Background(), absent(tc.pin), gateways(tc.class), state)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
+	}
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	routed := envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg"))
+	httpRoutes := schema.GroupVersionResource{Group: gatewayAPIGroup, Version: "v1", Resource: "httproutes"}
+	require.NoError(t, routed.Tracker().Create(httpRoutes,
+		route("HTTPRoute", "nvcf", "api", "nvcf-gateway-routes-1.0.0", parentRef("name", "nvcf-gw")), "nvcf"))
+	state := &ValidationState{Log: testLog(), PostInstall: true}
+	checkTier1Deployments(context.Background(), absent(envoyGatewayNamespace), routed, state)
+	assert.Nil(t, state.Tier1DeploymentsOK)
+	assert.Contains(t, state.Warnings, tier1ControllerUnconfirmed)
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+
 	// A controller that cannot be read after install leaves the row unknown.
 	client := cluster(envoyGatewayNamespace, 1)
 	client.PrependReactor("list", "deployments", func(a ktesting.Action) (bool, runtime.Object, error) {
@@ -894,7 +933,7 @@ func TestCheckTier1Deployments_PostInstallJudgesTheEnvoyController(t *testing.T)
 		}
 		return false, nil, nil
 	})
-	state := &ValidationState{Log: testLog(), PostInstall: true}
+	state = &ValidationState{Log: testLog(), PostInstall: true}
 	checkTier1Deployments(context.Background(), client, gateways("eg"), state)
 	assert.Nil(t, state.Tier1DeploymentsOK)
 	assert.Contains(t, state.Warnings, tier1ControllerUnknown)
