@@ -142,7 +142,7 @@ func init() {
 			"(e.g. harbor.company.internal:443/nvcf,ghcr.io); a path scopes the credential check. "+
 			"Added to the registries the install pulls from. The in-pod probes are warnings only. "+
 			"A malformed entry fails the command. Env: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES. "+
-			"Can also be set in nvcf-cli config as cluster_validator_registries (list).")
+			"Can also be set in nvcf-cli config as cluster_validator_registries, a list of strings in this format.")
 	_ = viper.BindPFlag("cluster_validator_registries",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-registries"))
 	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorTolerations, "cluster-validator-tolerations", nil,
@@ -150,7 +150,7 @@ func init() {
 			"control-plane ones it always tolerates. Format: key[=value][:effect], effect one of NoSchedule, "+
 			"PreferNoSchedule or NoExecute (e.g. dedicated=infra:NoSchedule). Repeatable or comma-separated. "+
 			"Env: NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS. "+
-			"Can also be set in nvcf-cli config as cluster_validator_tolerations (list).")
+			"Can also be set in nvcf-cli config as cluster_validator_tolerations, a list of strings in this format.")
 	_ = viper.BindPFlag("cluster_validator_tolerations",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-tolerations"))
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorProbeImage, "cluster-validator-probe-image", "",
@@ -167,7 +167,7 @@ func init() {
 			"them in the cluster: a subset of nats, openbao and cassandra. Repeatable or comma-separated. "+
 			"Defaults to NVCF_EXTERNAL_COMPONENTS, then to the components the stack's environment file "+
 			"disables. Env: NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS. "+
-			"Can also be set in nvcf-cli config as cluster_validator_external_components (list).")
+			"Can also be set in nvcf-cli config as cluster_validator_external_components, a list of names.")
 	_ = viper.BindPFlag("cluster_validator_external_components",
 		selfHostedCheckCmd.Flags().Lookup("cluster-validator-external-components"))
 	selfHostedCheckCmd.Flags().BoolVar(&checkShowLogs, "show-logs", false,
@@ -716,6 +716,28 @@ func localStackDir(src string) string {
 	return ""
 }
 
+// configList returns a list setting from its flag, env var or config file.
+// viper.GetStringSlice reads a config-file entry that is a map or a list,
+// such as a Kubernetes-style toleration, as "", which would drop it without a
+// word, so such an entry is an error naming it.
+func configList(key string) ([]string, error) {
+	raw, ok := viper.Get(key).([]any)
+	if !ok {
+		return viper.GetStringSlice(key), nil
+	}
+	out := make([]string, 0, len(raw))
+	for i, item := range raw {
+		switch v := item.(type) {
+		case nil:
+		case string, bool, int, int64, uint64, float64:
+			out = append(out, fmt.Sprint(v))
+		default:
+			return nil, fmt.Errorf("%s entry %d is not a string: %v", key, i+1, v)
+		}
+	}
+	return out, nil
+}
+
 // configuredValidatorRegistries parses the extra registries from the flag,
 // env var, or config file, one entry per registry. A malformed entry is an
 // error naming it, as a malformed toleration is.
@@ -723,8 +745,12 @@ func localStackDir(src string) string {
 // viper.GetStringSlice splits a raw env string on whitespace, so the documented
 // comma form "a:443,b:443" arrives as a single element and is split here.
 func configuredValidatorRegistries() ([]selfhosted.RegistryEntry, error) {
+	raws, err := configList("cluster_validator_registries")
+	if err != nil {
+		return nil, fmt.Errorf("%w; write each registry as host[:port][/path]", err)
+	}
 	var out []selfhosted.RegistryEntry
-	for _, raw := range viper.GetStringSlice("cluster_validator_registries") {
+	for _, raw := range raws {
 		for _, part := range strings.Split(raw, ",") {
 			if part = strings.TrimSpace(part); part == "" {
 				continue
@@ -744,8 +770,12 @@ func configuredValidatorRegistries() ([]selfhosted.RegistryEntry, error) {
 // a value it matches that value, without one any; with no effect it matches
 // every effect.
 func configuredValidatorTolerations() ([]corev1.Toleration, error) {
+	raws, err := configList("cluster_validator_tolerations")
+	if err != nil {
+		return nil, fmt.Errorf("%w; write each toleration as key[=value][:effect]", err)
+	}
 	var out []corev1.Toleration
-	for _, raw := range viper.GetStringSlice("cluster_validator_tolerations") {
+	for _, raw := range raws {
 		for _, entry := range strings.Split(raw, ",") {
 			if entry = strings.TrimSpace(entry); entry == "" {
 				continue
@@ -1199,7 +1229,10 @@ func configuredProbeImage() string {
 // config key), then NVCF_EXTERNAL_COMPONENTS. nil means neither is set, and
 // the stack values decide.
 func configuredExternalComponents() ([]string, error) {
-	raw := viper.GetStringSlice("cluster_validator_external_components")
+	raw, err := configList("cluster_validator_external_components")
+	if err != nil {
+		return nil, fmt.Errorf("%w; write each component as its name", err)
+	}
 	if len(raw) == 0 {
 		raw = []string{configValue("NVCF_EXTERNAL_COMPONENTS")}
 	}

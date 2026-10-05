@@ -181,7 +181,7 @@ api_keys_owner_id: svc@nvcf-api.local
 # for the cert-manager ACME solver. List only registries beyond those. A
 # malformed entry fails the command.
 #
-# Config key: cluster_validator_registries (list)
+# Config key: cluster_validator_registries (list of strings)
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES (comma-separated)
 # Command-line flag: --cluster-validator-registries (repeatable or comma-separated)
 #
@@ -205,7 +205,8 @@ api_keys_owner_id: svc@nvcf-api.local
 # always carries, for clusters whose nodes use other taints. Each entry is
 # key[=value][:effect], with effect NoSchedule, PreferNoSchedule or NoExecute.
 #
-# Config key: cluster_validator_tolerations
+# Config key: cluster_validator_tolerations (list of strings, not Kubernetes
+# toleration objects; any other entry fails the command)
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS (comma-separated)
 # Command-line flag: --cluster-validator-tolerations
 #
@@ -218,7 +219,7 @@ api_keys_owner_id: svc@nvcf-api.local
 # components whose <name>.enabled the stack's environment file sets to
 # anything but true.
 #
-# Config key: cluster_validator_external_components (list)
+# Config key: cluster_validator_external_components (list of names)
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS (comma-separated)
 # Command-line flag: --cluster-validator-external-components
 #

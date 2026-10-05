@@ -23,6 +23,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -265,6 +266,46 @@ func TestCheck_ValidatorTolerationsReachBothRoles(t *testing.T) {
 	err := rootCmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "effect must be NoSchedule, PreferNoSchedule or NoExecute")
+}
+
+// withConfigFile loads body as the nvcf-cli config file for one test.
+func withConfigFile(t *testing.T, body string) {
+	t.Helper()
+	viper.SetConfigType("yaml")
+	require.NoError(t, viper.ReadConfig(strings.NewReader(body)))
+	t.Cleanup(func() { _ = viper.ReadConfig(strings.NewReader("{}")) })
+}
+
+// A config-file entry that is not a string, such as a Kubernetes-style
+// toleration, fails the command naming it. Read as a string slice it was ""
+// and dropped without a word, leaving the validator pod unschedulable.
+func TestCheck_NonStringConfigListEntryFailsTheCommand(t *testing.T) {
+	for key, hint := range map[string]string{
+		"cluster_validator_tolerations":         "write each toleration as key[=value][:effect]",
+		"cluster_validator_registries":          "write each registry as host[:port][/path]",
+		"cluster_validator_external_components": "write each component as its name",
+	} {
+		t.Run(key, func(t *testing.T) {
+			resetCheckFlags(t)
+			withConfigFile(t, key+":\n  - {key: dedicated, operator: Equal, value: infra, effect: NoSchedule}\n")
+			rootCmd.SetErr(&bytes.Buffer{})
+			rootCmd.SetOut(&bytes.Buffer{})
+			rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json"})
+			err := rootCmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), key+" entry 1 is not a string: map[")
+			assert.Contains(t, err.Error(), hint)
+		})
+	}
+
+	resetCheckFlags(t)
+	withConfigFile(t, "cluster_validator_tolerations:\n  - dedicated=infra:NoSchedule\n  - special\n")
+	got, err := configuredValidatorTolerations()
+	require.NoError(t, err)
+	assert.Equal(t, []corev1.Toleration{
+		{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "infra", Effect: corev1.TaintEffectNoSchedule},
+		{Key: "special", Operator: corev1.TolerationOpExists},
+	}, got, "string entries are read as before")
 }
 
 func TestParseToleration(t *testing.T) {
