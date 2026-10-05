@@ -40,6 +40,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -4988,8 +4989,8 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 		// Anti-affinity is what an HA mode renders, and an HA mode runs at
 		// least three members: this one has lost its quorum.
 		s.fail(tier2BelowQuorumAdvice, "%s/%s: spec.replicas=%d, below the quorum minimum of %d for a "+
-			"StatefulSet spread for "+
-			"high availability (its pods carry anti-affinity)", ns, sts.Name, want, minQuorumSize)
+			"StatefulSet spread for high availability (its pods are kept off each other's nodes)",
+			ns, sts.Name, want, minQuorumSize)
 		s.checkedCount++
 		return
 	case !known && (want < minQuorumSize || want%2 == 0):
@@ -5085,25 +5086,58 @@ func (s *tier2Scan) assessMembers(
 	return rolling
 }
 
-// spreadsAcrossNodes reports whether sts asks for its pods on distinct nodes,
-// through pod anti-affinity or a hostname topology spread. The stack renders
-// anti-affinity on its quorum StatefulSets only under highAvailability.mode
-// preferred or enforced, so this tells an HA install from a non-HA one
-// without being told the mode, and follows an operator's own placement
-// override too.
+// spreadsAcrossNodes reports whether sts asks for its own pods on distinct
+// nodes: a pod anti-affinity term, required or preferred, or a topology
+// spread, keyed on the node hostname and selecting the StatefulSet's own pods.
+// The stack renders such a term on its quorum StatefulSets only under
+// highAvailability.mode preferred or enforced, so this tells an HA install
+// from a non-HA one without being told the mode, and follows an operator's
+// own placement override too. A term against another app's pods, keyed on a
+// zone, or injected by an admission policy for other pods says nothing about
+// where this StatefulSet's peers go.
 func spreadsAcrossNodes(sts *appsv1.StatefulSet) bool {
 	spec := &sts.Spec.Template.Spec
-	if a := spec.Affinity; a != nil && a.PodAntiAffinity != nil &&
-		(len(a.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) > 0 ||
-			len(a.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution) > 0) {
-		return true
+	own := labels.Set(sts.Spec.Template.Labels)
+	if a := spec.Affinity; a != nil && a.PodAntiAffinity != nil {
+		terms := slices.Clone(a.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
+		for _, w := range a.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+			terms = append(terms, w.PodAffinityTerm)
+		}
+		for i := range terms {
+			if separatesPeers(sts.Namespace, own, &terms[i]) {
+				return true
+			}
+		}
 	}
 	for i := range spec.TopologySpreadConstraints {
-		if spec.TopologySpreadConstraints[i].TopologyKey == corev1.LabelHostname {
+		c := &spec.TopologySpreadConstraints[i]
+		if c.TopologyKey == corev1.LabelHostname && selectsLabels(c.LabelSelector, own) {
 			return true
 		}
 	}
 	return false
+}
+
+// separatesPeers reports whether an anti-affinity term keeps pods labelled own
+// in namespace ns off each other's nodes. A term covers its pod's own
+// namespace when it names none; a namespace selector is matched against the
+// name label every namespace carries, the only one known without reading it.
+func separatesPeers(ns string, own labels.Set, t *corev1.PodAffinityTerm) bool {
+	if t.TopologyKey != corev1.LabelHostname || !selectsLabels(t.LabelSelector, own) {
+		return false
+	}
+	if len(t.Namespaces) == 0 && t.NamespaceSelector == nil {
+		return true
+	}
+	return slices.Contains(t.Namespaces, ns) ||
+		selectsLabels(t.NamespaceSelector, labels.Set{corev1.LabelMetadataName: ns})
+}
+
+// selectsLabels reports whether sel matches set. A nil selector matches
+// nothing, as in a pod affinity term.
+func selectsLabels(sel *metav1.LabelSelector, set labels.Set) bool {
+	s, err := metav1.LabelSelectorAsSelector(sel)
+	return err == nil && s.Matches(set)
 }
 
 // assessRollout handles a RollingUpdate in flight (rolling). StatefulSets roll
@@ -5198,8 +5232,8 @@ func (s *tier2Scan) verdict() {
 		s.state.Warnings = append(s.state.Warnings, s.deniedWarning())
 	}
 	if len(s.unspread) > 0 {
-		printInfo(s.log, fmt.Sprintf("  Placement not assessed (no pod anti-affinity or hostname topology spread "+
-			"rendered): %s", strings.Join(s.unspread, ", ")))
+		printInfo(s.log, fmt.Sprintf("  Placement not assessed (no hostname anti-affinity or topology spread "+
+			"selects their own pods): %s", strings.Join(s.unspread, ", ")))
 	}
 	if len(s.notAssessed) > 0 {
 		printInfo(s.log, fmt.Sprintf("  Not assessed (in a shared namespace and not installed by the stack): %s",

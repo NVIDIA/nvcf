@@ -674,8 +674,8 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: sel},
-			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Affinity: &corev1.Affinity{
-				PodAntiAffinity: &corev1.PodAntiAffinity{
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: sel}, Spec: corev1.PodSpec{
+				Affinity: &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
 					PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
 						Weight: 100,
 						PodAffinityTerm: corev1.PodAffinityTerm{
@@ -683,8 +683,8 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 							TopologyKey:   corev1.LabelHostname,
 						},
 					}},
-				},
-			}}},
+				}},
+			}},
 		},
 		Status: appsv1.StatefulSetStatus{
 			ObservedGeneration: 1,

@@ -319,7 +319,7 @@ func TestCheckTier2StatefulSets_HAIsReadFromRenderedPlacement(t *testing.T) {
 	}
 	spread := func(key string) []corev1.TopologySpreadConstraint {
 		return []corev1.TopologySpreadConstraint{{MaxSkew: 1, TopologyKey: key,
-			WhenUnsatisfiable: corev1.ScheduleAnyway}}
+			WhenUnsatisfiable: corev1.ScheduleAnyway, LabelSelector: term.LabelSelector}}
 	}
 	cases := map[string]struct {
 		affinity *corev1.Affinity
@@ -346,6 +346,73 @@ func TestCheckTier2StatefulSets_HAIsReadFromRenderedPlacement(t *testing.T) {
 		assert.Equal(t, !tc.ha, *state.Tier2StatefulSetsOK,
 			"one replica has lost quorum only when rendered for HA: %s", name)
 	}
+}
+
+// Only a term that keeps the StatefulSet's own pods off each other's nodes
+// reads as HA. Under mode none, global.affinity may carry anti-affinity
+// against another app, or an admission policy may inject a term; neither
+// makes a single Cassandra a lost quorum or a single-node NATS co-located.
+func TestCheckTier2StatefulSets_ForeignPlacementIsNotHA(t *testing.T) {
+	own := &metav1.LabelSelector{MatchLabels: map[string]string{"app": "cassandra"}}
+	other := &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}
+	term := func(sel *metav1.LabelSelector, key string, mutate func(*corev1.PodAffinityTerm)) *corev1.Affinity {
+		tm := corev1.PodAffinityTerm{LabelSelector: sel, TopologyKey: key}
+		if mutate != nil {
+			mutate(&tm)
+		}
+		return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{tm}}}
+	}
+	inNamespaces := func(names ...string) func(*corev1.PodAffinityTerm) {
+		return func(tm *corev1.PodAffinityTerm) { tm.Namespaces = names }
+	}
+	byNamespaceName := func(ns string) func(*corev1.PodAffinityTerm) {
+		return func(tm *corev1.PodAffinityTerm) {
+			tm.NamespaceSelector = &metav1.LabelSelector{MatchLabels: map[string]string{corev1.LabelMetadataName: ns}}
+		}
+	}
+	cases := map[string]struct {
+		affinity *corev1.Affinity
+		spread   *metav1.LabelSelector
+		ha       bool
+	}{
+		"another app's pods":         {affinity: term(other, corev1.LabelHostname, nil)},
+		"own pods by zone":           {affinity: term(own, corev1.LabelTopologyZone, nil)},
+		"no selector":                {affinity: term(nil, corev1.LabelHostname, nil)},
+		"own labels, other ns":       {affinity: term(own, corev1.LabelHostname, inNamespaces("api-system"))},
+		"own labels, other ns label": {affinity: term(own, corev1.LabelHostname, byNamespaceName("api-system"))},
+		"another app's spread":       {spread: other},
+		"own pods":                   {affinity: term(own, corev1.LabelHostname, nil), ha: true},
+		"every pod":                  {affinity: term(&metav1.LabelSelector{}, corev1.LabelHostname, nil), ha: true},
+		"own ns listed": {affinity: term(own, corev1.LabelHostname,
+			inNamespaces("api-system", "cassandra-system")), ha: true},
+		"own ns by name label": {affinity: term(own, corev1.LabelHostname,
+			byNamespaceName("cassandra-system")), ha: true},
+		"own spread": {spread: own, ha: true},
+	}
+	for name, tc := range cases {
+		objs := makeQuorumSTS("cassandra", "cassandra-system", 1, 1, []string{"node-1"})
+		sts := objs[0].(*appsv1.StatefulSet)
+		sts.Spec.Template.Spec.Affinity = tc.affinity
+		if tc.spread != nil {
+			sts.Spec.Template.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{{
+				MaxSkew: 1, TopologyKey: corev1.LabelHostname, WhenUnsatisfiable: corev1.ScheduleAnyway,
+				LabelSelector: tc.spread}}
+		}
+		assert.Equal(t, tc.ha, spreadsAcrossNodes(sts), name)
+		state := runTier2(objs)
+		require.NotNil(t, state.Tier2StatefulSetsOK, name)
+		assert.Equal(t, !tc.ha, *state.Tier2StatefulSetsOK, "one Ready replica: %s", name)
+	}
+
+	// A single-node mode none NATS at 3/3 is not judged on placement under a
+	// foreign term.
+	objs := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-1", "node-1"})
+	objs[0].(*appsv1.StatefulSet).Spec.Template.Spec.Affinity = term(other, corev1.LabelHostname, nil)
+	state := runTier2(objs)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.Equal(t, 1, state.Tier2PlacementNotAssessed)
 }
 
 // A known component scaled to zero is down whether or not it was rendered
