@@ -67,16 +67,20 @@ deploy_compute_planes:
       - CLUSTER: ncp-eu-1
         CONTEXT: admin@gpu-eu-1
   script:
-    - nvcf-cli self-hosted up
+    - nvcf-cli self-hosted compute-plane register
+        --control-plane-profile=control-plane-profile.yaml
         --cluster-name=$CLUSTER
-        --compute-plane-context=$CONTEXT
+        --kube-context=$CONTEXT
         --icms-url=$ICMS_PUBLIC_URL
         --token=$NVCF_ADMIN_JWT
-        --non-interactive
-        --json
+        --output=$CLUSTER-register-values.yaml
+    - nvcf-cli self-hosted compute-plane install
+        --values=$CLUSTER-register-values.yaml
+        --kube-context=$CONTEXT
+        --cluster-name=$CLUSTER
 ```
 
-Each parallel job registers + installs one compute plane against the shared control plane. Failures are isolated.
+Each parallel job registers + installs one compute plane against the shared control plane. Failures are isolated. The control-plane profile comes from `nvcf-cli self-hosted control-plane profile export`, run once against the control plane.
 
 ## Plan-only preview in PRs
 

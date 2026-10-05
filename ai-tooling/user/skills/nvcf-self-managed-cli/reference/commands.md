@@ -12,9 +12,10 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `self-hosted check --all [--wait DUR]` | Both of the above | streaming events on stderr | Gate on the `final` event; see [exit-codes.md](exit-codes.md) |
 | `self-hosted install --control-plane` | Render control-plane manifests | YAML on stdout | Pipe to `kubectl apply -f -` |
 | `self-hosted install --compute-plane --cluster-name=X` | Register cluster + render compute manifests | YAML on stdout | One invocation per GPU cluster |
-| `self-hosted up --cluster-name=X` | One-shot first install (both planes) | (empty) stdout, progress on stderr | Always installs both planes; for compute-only use `add-compute-plane` |
+| `self-hosted up --cluster-name=X` | One-shot first install (both planes) | (empty) stdout, progress on stderr | Always installs both planes; for compute-only use `compute-plane register` and `compute-plane install` |
 | `self-hosted up --plan-only --cluster-name=X` | Dry-run preview | JSONL on stderr | Agent-friendly, no cluster changes |
-| `self-hosted add-compute-plane --cluster-name=X --compute-plane-context=Y --icms-url=URL --token=$JWT` | Add a compute plane to an existing control plane | progress on stderr | For 2nd, 3rd, … GPU cluster after the first install. CP not touched. |
+| `self-hosted compute-plane register --control-plane-profile=P --cluster-name=X --kube-context=Y [--output=V]` | Register a compute cluster with an existing control plane and write its NVCA operator values | summary on stdout | For the 2nd, 3rd, ... GPU cluster after the first install. CP not touched |
+| `self-hosted compute-plane install --values=V --kube-context=Y` | Install a compute plane from the values `compute-plane register` wrote | progress on stderr | Run after `compute-plane register` |
 | `self-hosted status [--cluster-name=X] [--watch]` | Snapshot cluster health | TTY/plain/JSONL | `--watch` for live re-render |
 | `self-hosted uninstall --compute-plane --cluster-name=X` | Per-plane primitive: `helmfile destroy` on one compute plane (no ICMS unregister, no drain) | progress | Just the helm releases on that compute plane |
 | `self-hosted uninstall --control-plane [--force-with-registered-clusters]` | Per-plane primitive: `helmfile destroy` on the control plane | progress | Refuses if compute planes still registered unless `--force-with-registered-clusters` |

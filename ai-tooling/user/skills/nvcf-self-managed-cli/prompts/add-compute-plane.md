@@ -7,13 +7,14 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 - **kubectl context for the new compute plane** in their `KUBECONFIG`.
 - **Public ICMS URL** of the existing control plane (e.g. `https://icms.nvcf.example.com`).
 - **Admin JWT** for the control plane's account, OR ability to mint one via `nvcf-cli init` against the control plane's public api endpoint. (Admin tokens come from the API Keys service via the public api gateway — kubectl access to the control plane is NOT required to obtain one.)
+- The control plane's profile file, which `nvcf-cli self-hosted control-plane profile export` writes on a machine that can reach the control-plane cluster. It carries the control plane's endpoints and trust for registration.
 - A unique `--cluster-name` that doesn't collide with already-registered clusters. Use `nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS` to check.
 
 ## Steps
 
 1. Ask for inputs:
    - `--cluster-name=<unique>` — must be unique within the control plane's NCA scope
-   - `--compute-plane-context=<context>` — the new GPU cluster's kubectl context
+   - `--kube-context=<context>`: the new GPU cluster's kubectl context
    - `--icms-url=<https://icms.nvcf.example.com>` — control plane's public ICMS URL
    - GPU type? (default `H100`, but ask)
 
@@ -35,23 +36,33 @@ User has a working NVCF control plane (running somewhere) and wants to register 
    Operator, SMB CSI driver) when `cluster_validator_image` is set. `--pre`
    would also run the control-plane checks against this cluster, so leave it
    off. A missing `helm`, `helmfile` or `kubectl` is a warning here, although
-   `add-compute-plane` needs them. If the gate fails, show the user the
+   `compute-plane install` needs them. If the gate fails, show the user the
    `check_completed` events with `passed: false` and `severity: "error"`, and
    address them before proceeding.
 
-3. Run `add-compute-plane`:
+3. Register the cluster, then install its compute plane from the values
+   file registration writes. Both commands name the new cluster's context
+   with `--kube-context`:
 
    ```sh
-   nvcf-cli self-hosted add-compute-plane \
+   nvcf-cli self-hosted compute-plane register \
+     --control-plane-profile=control-plane-profile.yaml \
      --cluster-name=$NAME \
-     --compute-plane-context=$CTX \
+     --kube-context=$CTX \
      --icms-url=$ICMS \
      --token=$JWT \
-     --non-interactive \
-     --json
+     --output=$NAME-register-values.yaml
+   nvcf-cli self-hosted compute-plane install \
+     --values=$NAME-register-values.yaml \
+     --kube-context=$CTX \
+     --cluster-name=$NAME
    ```
 
-   This is a separate subcommand from `up`. It runs only the compute-plane-relevant phases: 1 (compute-plane preflight), 5 (register), 6 (compute-plane apply), 8 (final health on the new compute plane). It does NOT touch the control plane and does NOT accept `--control-plane-context` — the control plane is reached over HTTPS at `--icms-url`. `--token` is required because there's no kubectl path to mint one from.
+   `compute-plane register` records the cluster's OIDC issuer and JWKS with
+   ICMS at `--icms-url` and writes the NVCA operator values. `compute-plane
+   install` installs the compute-plane stack with them. Neither touches the
+   control-plane cluster: ICMS is reached over HTTPS. `--token` passes the
+   admin JWT; without it the token `nvcf-cli init` stored is used.
 
 4. Verify. `nvcf-cli self-hosted status --cluster-name=$NAME --json | jq`: expect `verdict: "healthy"`. The Registered Compute Planes panel from ICMS should now list the new cluster.
 
@@ -59,7 +70,7 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 
 ## What if a cluster with the same name already exists?
 
-`add-compute-plane`'s register phase uses `--ignore-existing` semantics — it'll match the existing ICMS row and reuse its clusterId. Two scenarios:
+`compute-plane register` reuses an existing registration: it matches the ICMS row with the same name, reuses its clusterId and replaces its JWKS. Two scenarios:
 
 - **Re-registering the same cluster** (re-running on the same compute plane that was previously registered): expected, no-op semantics.
 - **Different physical cluster but same name**: the second attempt will reuse the ICMS row, but the new compute plane's JWKS will be silently *replaced* — the old compute plane's NVCA agent will start failing PSAT auth. **Confirm with the user** that they meant to overwrite.

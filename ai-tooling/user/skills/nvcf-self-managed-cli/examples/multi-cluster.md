@@ -11,19 +11,28 @@ The canonical multi-cluster topology. Each compute plane is registered separatel
 KUBECONFIG=cp.yaml nvcf-cli self-hosted install --control-plane | kubectl apply -f -
 nvcf-cli self-hosted check --control-plane --wait 5m
 
-# 2. Register + install each compute plane:
+# 2. Export the control-plane profile every compute plane registers from.
+#    The command prints the path it wrote:
+KUBECONFIG=cp.yaml nvcf-cli self-hosted control-plane profile export --cluster-name=ncp-cp
+
+# 3. Register + install each compute plane. Both commands name the GPU
+#    cluster's context with --kube-context:
 for CTX in admin@gpu-east-1 admin@gpu-west-1 admin@gpu-eu-1; do
   NAME=$(echo "$CTX" | cut -d@ -f2)
-  nvcf-cli self-hosted up \
+  nvcf-cli self-hosted compute-plane register \
+    --control-plane-profile=control-plane-profile.yaml \
     --cluster-name=$NAME \
-    --compute-plane-context=$CTX \
+    --kube-context=$CTX \
     --icms-url=https://icms.nvcf.example.com \
     --token=$NVCF_ADMIN_JWT \
-    --non-interactive \
-    --json
+    --output=$NAME-register-values.yaml
+  nvcf-cli self-hosted compute-plane install \
+    --values=$NAME-register-values.yaml \
+    --kube-context=$CTX \
+    --cluster-name=$NAME
 done
 
-# 3. Verify all compute planes registered:
+# 4. Verify all compute planes registered:
 nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS --json \
   | jq '.clusters[] | {name: .clusterName, status, nvcaVersion}'
 ```
@@ -44,17 +53,24 @@ nvcf-cli self-hosted check --compute-plane \
   --icms-url=https://icms.nvcf.example.com \
   --json
 
-# Bring up just the compute plane:
-nvcf-cli self-hosted up \
+# Register and install just the compute plane, from the profile the
+# control-plane operator exported with `self-hosted control-plane profile export`:
+nvcf-cli self-hosted compute-plane register \
+  --control-plane-profile=control-plane-profile.yaml \
   --cluster-name=my-compute-1 \
-  --compute-plane-context=admin@gpu1 \
+  --kube-context=admin@gpu1 \
   --icms-url=https://icms.nvcf.example.com \
   --token=$ADMIN_JWT \
-  --non-interactive
+  --output=my-compute-1-register-values.yaml
+nvcf-cli self-hosted compute-plane install \
+  --values=my-compute-1-register-values.yaml \
+  --kube-context=admin@gpu1 \
+  --cluster-name=my-compute-1
 
-# Status (compute-only — operator can't see control-plane component health):
+# Status of the current context, admin@gpu1 (compute-only: the operator
+# can't see control-plane component health):
 nvcf-cli self-hosted status \
-  --compute-plane-context=admin@gpu1 \
+  --cluster-name=my-compute-1 \
   --icms-url=https://icms.nvcf.example.com
 ```
 
@@ -88,9 +104,9 @@ nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS --json \
 # Status snapshot per compute plane (assuming each context name matches):
 while read NAME; do
   echo "=== $NAME ==="
+  kubectl config use-context "admin@$NAME" >/dev/null
   nvcf-cli self-hosted status \
     --cluster-name=$NAME \
-    --compute-plane-context=admin@$NAME \
     --json | jq -c '{cluster:.cluster, verdict:.verdict, reconcile:.reconcileAgeSec}'
 done < clusters.txt
 ```
