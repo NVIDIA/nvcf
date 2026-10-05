@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -942,10 +943,11 @@ func runPreflightByRole(
 	icmsURL := ""
 	var computeSkips []selfhosted.SkippedCheck
 	if checkAll || checkComputePlane {
-		if icmsURL = resolveCheckSISURL(selfHostedICMSURL); icmsURL == "" {
+		var unset string
+		if icmsURL, unset = resolveCheckSISURL(selfHostedICMSURL); icmsURL == "" {
 			computeSkips = append(computeSkips, selfhosted.SkippedCheck{
 				Category: selfhosted.CategoryComputePlane, ID: "sis-reachability", Warn: true,
-				Message: "SIS reachability not checked: no ICMS URL is configured; pass --icms-url or set NVCF_ICMS_URL",
+				Message: "SIS reachability not checked: " + unset + "; pass --icms-url or set NVCF_ICMS_URL",
 			})
 		}
 	}
@@ -1447,16 +1449,33 @@ func envToggleOn(name string) bool {
 	return on
 }
 
-// resolveCheckSISURL returns the SIS URL to probe, or "" when none was
-// configured. Unlike resolveICMSURL it does not fall back to the client's
-// built-in base_http_url, which names NVIDIA's hosted service rather than
-// this install.
-func resolveCheckSISURL(flagValue string) string {
+// resolveCheckSISURL returns the SIS URL to probe, or "" and why there is
+// none. Unlike resolveICMSURL it does not fall back to the client's built-in
+// base_http_url, nor derive one from a base_http_url on NVIDIA's hosted
+// service, as a config copied from the template has: neither is this install.
+func resolveCheckSISURL(flagValue string) (sisURL, unset string) {
 	if flagValue == "" && os.Getenv("NVCF_ICMS_URL") == "" && os.Getenv("NVCF_SIS_URL") == "" &&
-		!viper.IsSet("icms_url") && !viper.IsSet("base_http_url") {
-		return ""
+		strings.TrimSpace(viper.GetString("icms_url")) == "" {
+		switch base := strings.TrimSpace(viper.GetString("base_http_url")); {
+		case base == "":
+			return "", "no ICMS URL is configured"
+		case onNVIDIAHostedNVCF(base):
+			return "", "base_http_url names NVIDIA's hosted NVCF, not this install"
+		}
 	}
-	return resolveICMSURL(flagValue)
+	return resolveICMSURL(flagValue), ""
+}
+
+// onNVIDIAHostedNVCF reports whether rawURL is on the domain of NVIDIA's
+// hosted NVCF, which the client's default base_http_url and the config
+// template's name.
+func onNVIDIAHostedNVCF(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "nvcf.nvidia.com" || strings.HasSuffix(host, ".nvcf.nvidia.com")
 }
 
 // validatorSkip is the row for a role whose validator does not run: none when

@@ -335,6 +335,18 @@ func TestCheck_SISOnlyAtAConfiguredURL(t *testing.T) {
 	assert.Equal(t, 0, run.code())
 	assert.EqualValues(t, 1, hits.Load(), "a base_http_url the operator set is the install's")
 	assert.Equal(t, true, run.row(t, "compute-plane-cluster", "sis-reachability")["passed"])
+
+	// The template's base_http_url names NVIDIA's hosted service, so a config
+	// copied from it does not point check at that SIS.
+	for _, hosted := range []string{"https://api.nvcf.nvidia.com", "https://api.shqa.stg.nvcf.nvidia.com"} {
+		viper.Set("base_http_url", hosted)
+		run = runCheck(t, checkStubs{noSISURL: true}, "--compute-plane", "--skip-cluster-validation")
+		row = run.row(t, "compute-plane-cluster", "sis-reachability")
+		require.NotNil(t, row, hosted)
+		assert.Equal(t, false, row["passed"], hosted)
+		assert.Equal(t, "warning", row["severity"], hosted)
+		assert.Contains(t, row["message"], "base_http_url names NVIDIA's hosted NVCF", hosted)
+	}
 }
 
 // A blocking finding exits 2 even when the budget cut another row short: no
