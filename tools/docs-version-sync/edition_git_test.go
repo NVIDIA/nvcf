@@ -186,11 +186,3 @@ func TestEditionRegisterDocsOnlyPatch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestEditionRejectsLegacyFolderFreeze(t *testing.T) {
-	root, _, _ := editionGitFixture(t)
-	_, err := freezeStackDocumentation(root, filepath.Join(root, "docs", "version-catalog", "main.yaml"), releaseSetStackControlPlane, "1.2.3")
-	if err == nil || !strings.Contains(err.Error(), "folder snapshots are disabled") {
-		t.Fatalf("legacy snapshot path accepted edition catalog: %v", err)
-	}
-}

@@ -1,8 +1,8 @@
 # Documentation Version Sync
 
 This tool keeps top-of-tree documentation aligned with three released stack
-inventories. It renders the cross-stack compatibility matrix and writes the
-catalog snapshot that freezes one stack's exact documentation version.
+inventories. It renders the cross-stack compatibility matrix and prepares
+branch-based SemVer docs editions for qualified three-stack combinations.
 
 ## Release and documentation flow
 
@@ -28,20 +28,22 @@ the resolved chart and image inventory before publishing the GitHub Release.
 Release attachment is keyed by tag, not by branch. Public artifact publishing
 is a separate process and can happen later after QA.
 
-## Documentation product trees
+## Documentation source trees
 
-Documentation is split into one Fern product per stack plus a shared overview:
+Documentation uses one edition selector and six tabs. Each stable edition
+reads these source trees from its protected release branch:
 
-| Tree | Product | Versioned |
+| Tree | Tab | Versioned |
 | --- | --- | --- |
-| `docs/overview/` | Overview (matrix, quickstart, manifest, image mirroring) | No |
+| `docs/overview/` | Overview guides, Manifest, and Release Notes (matrix and upgrade guides) | Yes |
 | `docs/self-managed/` | Self-Managed Stack (control plane) | Yes |
 | `docs/compute-plane/` | Compute Plane Stack | Yes |
 | `docs/observability/` | Observability Stack | Yes |
 
-Generated blocks live only in these four trees. Frozen copies
-(`docs/<stack>-<version>/`) are never regenerated; the catalog rejects output
-paths that point at them.
+Generated blocks live only in these four trees. The native Release Notes tab
+reads `fern/changelog/`. Existing frozen copies (`docs/<stack>-<version>/`)
+remain historical archives and are never regenerated. New editions create a
+branch, not a new source directory. See [the release and rollback workflow](../../docs/dev/docs-editions.md).
 
 ## Compatibility matrix
 
@@ -87,7 +89,7 @@ The command selects the latest stable release for all three stacks and records
 each stack as development documentation. It updates:
 
 - `docs/version-catalog/main.yaml`
-- Generated blocks configured by the catalog under the product trees
+- Generated blocks configured by the catalog under the current source trees
 - The self-managed, compute-plane, and observability bundle versions
 - The exact source tag, commit, and inventory asset for all three stacks
 
@@ -140,36 +142,12 @@ go run -C tools/docs-version-sync . --target main
 
 A publication-only update does not require a new stack release.
 
-## Freeze a stack documentation version
+## Historical per-stack snapshots
 
-Each stack freezes documentation on its own schedule. No joint qualification
-of all three stacks is required. After QA approves stack release `X.Y.Z` and
-its artifacts are published:
-
-```bash
-git fetch --tags origin
-go run -C tools/docs-version-sync . --target main --update-catalog
-go run -C tools/docs-version-sync . --target main
-./tools/scripts/cut-docs-version.sh --stack observability --version X.Y.Z
-```
-
-The cut script runs `--freeze-stack <release_set stack> --freeze-version X.Y.Z`,
-which checks that the stack's current release in `release_set.stacks` is
-`X.Y.Z`, warns when `publication_pending` is non-empty (the frozen
-manifest keeps the pending markers), and writes
-`docs/version-catalog/<stack>-X.Y.Z.yaml` with that one stack marked
-`qualified`. `main.yaml` stays in development state. The script then copies
-`docs/<stack>/` to `docs/<stack>-X.Y.Z/`, generates
-`fern/products/<stack>/X.Y.Z.yml`, and prints the `versions:` entry to add to
-`fern/docs.yml`.
-
-Stack names for `--freeze-stack` are `control-plane`, `compute-plane`, and
-`observability`. The script accepts the product slugs `self-managed`,
-`compute-plane`, and `observability` and maps them. Overview documentation is
-unversioned and is never cut.
-
-Add or adjust `compatibility` entries for the new release before regenerating so
-the matrix reflects the qualified combination.
+Existing per-stack folders and their catalogs are retained for historical URLs.
+The per-stack folder-cut script and freeze flags have been removed. Use the
+edition commands below to prepare a qualified three-stack combination on its
+own branch.
 
 ## Add an artifact to the stack inventory
 
@@ -263,10 +241,10 @@ expected catalog and documentation updates.
 
 ## Docs edition preparation
 
-The edition commands are additive. The existing per-stack docs remain the
-published default until the edition registry is activated in `fern/docs.yml`.
-`docs_edition` metadata is optional in the catalog; catalogs without it retain
-their existing validation and rendering behavior.
+The canonical registry in `fern/docs.yml` selects stable editions from protected
+branches. `fern/editions.yml` pins their exact commits. The main catalog remains
+a development candidate; each release branch holds its own qualified catalog.
+Legacy catalogs without `docs_edition` retain their historical validation behavior.
 
 A docs edition records one exact combination of all three stack releases. Its
 SemVer version is independent of stack artifact versions. Declare `initial`
@@ -281,9 +259,9 @@ contain `fern/navigation.yml`. Then prepare a candidate outside the checkout:
 
 ```bash
 go run -C tools/docs-version-sync . edition prepare \
-  --source <full-reviewed-commit> --version 1.0.0 --change initial \
+  --source <full-reviewed-commit> --version 1.0.1 --change initial \
   --self-managed 1.0.1 --compute-plane 1.0.0 --observability 1.0.0 \
-  --out /tmp/nvcf-docs-edition-1.0.0
+  --out /tmp/nvcf-docs-edition-1.0.1
 ```
 
 Preparation verifies that the explicit stack versions match the reviewed
@@ -320,7 +298,7 @@ Register its exact branch commit from the canonical checkout:
 
 ```bash
 go run -C tools/docs-version-sync . edition register \
-  --version 1.0.0 --commit <full-docs-release-branch-commit>
+  --version 1.0.1 --commit <full-docs-release-branch-commit>
 ./tools/ci/check-doc-editions
 ```
 
@@ -338,19 +316,34 @@ new artifact release does not invalidate historical documentation.
 
 ### Edition navigation and links
 
-`fern/navigation.yml` contains five tabs and explicit page slugs. Preparation
+`fern/navigation.yml` contains six tabs and explicit page slugs. Preparation
 converts current absolute product links to relative source-file links so Fern
 keeps them inside the selected edition. Existing exact redirect aliases and
 anchors are preserved. Explicit historical-version links retain their archive
 URLs. Missing current-page targets fail preparation.
 
-The opt-in `fern/edition-preview.yml` uses the same conversion in the preview
-helper's temporary clone. The source product configuration and frozen files are
-not rewritten. For a manually staged clone, run:
+`tools/ci/preview-docs` derives a Development-first configuration from
+`fern/docs.yml` in a temporary clone and applies the same link conversion.
+Site settings, redirects, release refs, and archive entries come from the
+canonical configuration. A prepared release branch uses its local default.
+Frozen files and the source working tree are not rewritten.
 
 ```bash
-go run -C tools/docs-version-sync . edition links --repo /path/to/staged-clone
+tools/ci/preview-docs --check
 ```
+
+Set `DOCS_PREVIEW_CONFIG=fern/docs.yml` to preview the canonical ordering, or
+name another YAML file directly under `fern/` to preview an alternate config.
+Overrides are used as supplied, without reordering or link normalization.
+For a manually staged disposable clone, run:
+
+```bash
+go run -C tools/docs-version-sync . edition preview --repo /path/to/staged-clone
+```
+
+Use `edition links` instead of `edition preview` when only link conversion is
+needed. Both commands modify staged files; do not run them on the source
+working tree.
 
 Release branches retain hidden path-based historical versions after their own
 default. Fern reads only that default when composing the branch as a ref in the

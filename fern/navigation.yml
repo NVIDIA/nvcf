@@ -18,11 +18,14 @@ tabs:
     display-name: Observability
     icon: chart-line
     slug: observability
+  manifest:
+    display-name: Manifest
+    icon: list
+    slug: manifest
   release-notes:
     display-name: Release Notes
     icon: clock
     slug: release-notes
-    changelog: ./changelog
 navigation:
 - tab: overview
   layout:
@@ -32,48 +35,12 @@ navigation:
   - page: Quickstart
     path: ../docs/overview/quickstart.md
     slug: quickstart
-  - page: Documentation Archive
-    path: ../docs/overview/documentation-archive.md
-    slug: documentation-archive
-  - section: Release Notes
-    skip-slug: true
-    contents:
-    - page: Release Notes Overview
-      path: ../docs/overview/release-notes/index.md
-      slug: release-notes-overview
-    - page: Compatibility Matrix
-      path: ../docs/overview/compatibility-matrix.md
-      slug: compatibility-matrix
-    - page: 1.0.1 Release Notes
-      path: ../docs/overview/release-notes/1.0.1.md
-      slug: 1-0-1-release-notes
-    - page: 0.6.1 to 1.0.1 Upgrade
-      path: ../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
-      slug: 0-6-1-to-1-0-1-upgrade
-    - page: (Legacy) 0.6.1 Release Notes
-      path: ../docs/overview/release-notes/0.6.1.md
-      slug: legacy-0-6-1-release-notes
-    - page: (Legacy) 0.6.0 to 0.6.1 Upgrade
-      path: ../docs/overview/release-notes/0.6.0-to-0.6.1-upgrade.md
-      slug: legacy-0-6-0-to-0-6-1-upgrade
-    - page: (Legacy) 0.6.0 Release Notes
-      path: ../docs/overview/release-notes/0.6.0.md
-      slug: legacy-0-6-0-release-notes
-    - page: (Legacy) 0.5.0 to 0.6.0 Upgrade
-      path: ../docs/overview/release-notes/0.5.0-to-0.6.0-upgrade.md
-      slug: legacy-0-5-0-to-0-6-0-upgrade
   - section: Before You Deploy
     skip-slug: true
     contents:
     - page: Infrastructure Sizing
       path: ../docs/overview/infrastructure-sizing.md
       slug: infrastructure-sizing
-    - page: Manifest
-      path: ../docs/overview/manifest.md
-      slug: manifest
-    - page: Image Mirroring
-      path: ../docs/overview/image-mirroring.md
-      slug: image-mirroring
     - page: Multi-Tenancy
       path: ../docs/overview/multi-tenancy.md
       slug: multi-tenancy
@@ -123,19 +90,19 @@ navigation:
     skip-slug: true
     contents:
     - page: gRPC Load Testing
-      path: ../docs/overview/grpc-load-testing.md
+      path: ../docs/dev/grpc-load-testing.md
       slug: g-rpc-load-testing
     - page: gRPC Load Test SLI Guide
-      path: ../docs/overview/grpc-load-test-sli-guide.md
+      path: ../docs/dev/grpc-load-test-sli-guide.md
       slug: g-rpc-load-test-sli-guide
     - page: HTTP Load Testing
-      path: ../docs/overview/http-load-testing.md
+      path: ../docs/dev/http-load-testing.md
       slug: http-load-testing
     - page: HTTP Load Test SLI Guide
-      path: ../docs/overview/http-load-test-sli-guide.md
+      path: ../docs/dev/http-load-test-sli-guide.md
       slug: http-load-test-sli-guide
     - page: HTTP Soak Testing
-      path: ../docs/overview/http-soak-testing.md
+      path: ../docs/dev/http-soak-testing.md
       slug: http-soak-testing
   - section: Development
     skip-slug: true
@@ -147,7 +114,7 @@ navigation:
       skip-slug: true
       contents:
       - page: Local Development
-        path: ../docs/overview/local-development.md
+        path: ../docs/dev/local-development.md
         slug: local-development
       - page: Single-cluster (CLI)
         path: ../docs/overview/local-development/single-cluster-cli.md
@@ -161,9 +128,12 @@ navigation:
       - page: Multi-cluster (Helmfile)
         path: ../docs/overview/local-development/multi-cluster-helmfile.md
         slug: multi-cluster-helmfile
-  - section: Managed (Legacy)
+  - section: Legacy
     skip-slug: true
     contents:
+    - page: Documentation Archive
+      path: ../docs/overview/documentation-archive.md
+      slug: documentation-archive
     - section: Cluster Management
       skip-slug: true
       contents:
@@ -301,7 +271,7 @@ navigation:
       path: ../docs/compute-plane/cluster-management/nsight-profiling.md
       slug: nsight-profiling
     - page: Fake GPU Operator
-      path: ../docs/compute-plane/fake-gpu-operator.md
+      path: ../docs/dev/fake-gpu-operator.md
       slug: fake-gpu-operator
   - section: Configuration
     skip-slug: true
@@ -452,4 +422,34 @@ navigation:
     - page: Vault/OpenBao
       path: ../docs/observability/metrics/vault-openbao/metrics.md
       slug: vault-open-bao
+- tab: manifest
+  layout:
+  - page: Artifact Manifest
+    path: ../docs/overview/manifest.md
+    slug: artifacts
+  - page: Image Mirroring
+    path: ../docs/overview/image-mirroring.md
+    slug: image-mirroring
 - tab: release-notes
+  layout:
+  - changelog: ./changelog
+    title: Releases
+    slug: ""
+  - page: Compatibility Matrix
+    path: ../docs/overview/compatibility-matrix.md
+    slug: compatibility-matrix
+  - section: Upgrade Notes
+    skip-slug: true
+    contents:
+    - page: 0.6.2 to 1.0.1 Upgrade
+      path: ../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
+      slug: 0-6-1-to-1-0-1-upgrade
+    - page: (Legacy) 0.6.1 to 0.6.2 Upgrade
+      path: ../docs/overview/release-notes/0.6.1-to-0.6.2-upgrade.md
+      slug: 0-6-1-to-0-6-2-upgrade
+    - page: (Legacy) 0.6.0 to 0.6.1 Upgrade
+      path: ../docs/overview/release-notes/0.6.0-to-0.6.1-upgrade.md
+      slug: legacy-0-6-0-to-0-6-1-upgrade
+    - page: (Legacy) 0.5.0 to 0.6.0 Upgrade
+      path: ../docs/overview/release-notes/0.5.0-to-0.6.0-upgrade.md
+      slug: legacy-0-5-0-to-0-6-0-upgrade
