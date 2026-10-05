@@ -70,10 +70,10 @@ public class FunctionLlmService {
                     + "existing versions";
     private static final String MESG_LLM_URIS_NOT_UPDATABLE =
             "Function id '%s', version '%s': 'llmConfig.uris' for model '%s' cannot be changed "
-                    + "after creation; create a new function to change it";
+                    + "after creation";
     private static final String MESG_LLM_TOKENIZER_NOT_UPDATABLE =
             "Function id '%s', version '%s': 'llmConfig.tokenizer' for model '%s' cannot be "
-                    + "changed after creation; create a new function to change it";
+                    + "changed after creation";
     private static final String MESG_FUNCTION_TYPE_MISMATCH =
             "Function id '%s': all versions must share the same functionType; "
                     + "existing version '%s' is '%s'";
