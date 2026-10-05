@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -107,14 +108,15 @@ func init() {
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterName, "cluster-name", "",
 		"Cluster name shown in the check output header; no check uses it")
 	selfHostedCheckCmd.Flags().BoolVar(&checkLocalOnly, "local-only", false,
-		"Run local-host checks only (no cluster or registry contact); the skipped checks are reported as skipped rows")
+		"Run local-host checks only (no cluster or registry contact); the skipped checks are reported as "+
+			"skipped rows. Env: NVCF_CLI_SELFHOSTED_LOCAL_ONLY=true")
 	selfHostedCheckCmd.Flags().BoolVar(&checkSkipInotifyCheck, "skip-inotify-check", false,
 		"Disable the per-node inotify-limits probe; its row says it was skipped. Required when the "+
 			"kubeconfig user cannot create pods in 'default', or when the probe image comes from a registry "+
-			"that needs credentials: the probe pods get no pull secret. Env: NVCF_CLI_SELFHOSTED_SKIP_INOTIFY")
+			"that needs credentials: the probe pods get no pull secret. Env: NVCF_CLI_SELFHOSTED_SKIP_INOTIFY=true")
 	selfHostedCheckCmd.Flags().BoolVar(&checkSkipClusterValidation, "skip-cluster-validation", false,
 		"Disable the in-cluster cluster-validator probe; its row says it was skipped. "+
-			"Env: NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION")
+			"Env: NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION=true")
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterValidatorImage, "cluster-validator-image", "",
 		"Cluster-validator container image. Resolved from --cluster-validator-image > "+
 			"NVCF_CLI_CLUSTER_VALIDATOR_IMAGE > nvcf-cli config (cluster_validator_image). "+
@@ -198,6 +200,11 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if _, err := configuredExternalComponents(); err != nil {
 		return err
 	}
+	for _, name := range []string{envLocalOnly, envSkipClusterValidation, envSkipInotify} {
+		if _, err := envToggle(name); err != nil {
+			return err
+		}
+	}
 	// One credential lookup per registry for each poll, shared by tag
 	// discovery, the local credential row and the validator's pull secret,
 	// so the row checks the credential the validator Job is given. Each
@@ -206,7 +213,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	creds := selfhosted.NewRegistryCredentials(preferNGCKey())
 	runCtx := selfhosted.WithRegistryCredentials(c.Context(), creds)
 
-	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
+	localOnly := checkLocalOnly || envToggleOn(envLocalOnly)
 	skipClusterValidation := clusterValidationSkipped()
 
 	// ValidateFlags in PersistentPreRunE guarantees mode is ModeSingle or
@@ -1404,11 +1411,40 @@ func checkRunBudget(mode kubectx.Mode, localOnly, validatorConfigured bool, wait
 }
 
 func clusterValidationSkipped() bool {
-	return checkSkipClusterValidation || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION") != ""
+	return checkSkipClusterValidation || envToggleOn(envSkipClusterValidation)
 }
 
 func inotifyCheckSkipped() bool {
-	return checkSkipInotifyCheck || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY") != ""
+	return checkSkipInotifyCheck || envToggleOn(envSkipInotify)
+}
+
+// The env toggles of check's --local-only, --skip-cluster-validation and
+// --skip-inotify-check.
+const (
+	envLocalOnly             = "NVCF_CLI_SELFHOSTED_LOCAL_ONLY"
+	envSkipClusterValidation = "NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION"
+	envSkipInotify           = "NVCF_CLI_SELFHOSTED_SKIP_INOTIFY"
+)
+
+// envToggle reads a boolean env toggle: unset or empty is off, and a value
+// strconv.ParseBool reads says which, so "false" and "0" are off. Any other
+// value is an error naming it.
+func envToggle(name string) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return false, nil
+	}
+	on, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s=%q: expected true or false", name, raw)
+	}
+	return on, nil
+}
+
+// envToggleOn is envToggle for a toggle validated before the run starts.
+func envToggleOn(name string) bool {
+	on, _ := envToggle(name)
+	return on
 }
 
 // resolveCheckSISURL returns the SIS URL to probe, or "" when none was

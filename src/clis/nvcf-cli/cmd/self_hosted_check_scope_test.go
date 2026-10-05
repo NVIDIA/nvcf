@@ -123,6 +123,34 @@ func TestCheck_StaleNamespaceGatesFollowTheInstallsStack(t *testing.T) {
 	assert.NotContains(t, ns, "kai-scheduler", "with no environment named, base.yaml decides")
 }
 
+// The env toggles are booleans, so a config that spells one out as "false"
+// or "0" leaves its check on. Any other value fails the command naming it.
+func TestCheck_EnvTogglesAreBooleans(t *testing.T) {
+	t.Setenv(envLocalOnly, "false")
+	ns, _ := runCheckRecording(t, "--control-plane")
+	assert.NotEmpty(t, ns, "LOCAL_ONLY=false still checks the cluster")
+	t.Setenv(envLocalOnly, "true")
+	ns, _ = runCheckRecording(t, "--control-plane")
+	assert.Empty(t, ns)
+	t.Setenv(envLocalOnly, "")
+
+	resetCheckFlags(t)
+	for value, on := range map[string]bool{"0": false, "false": false, "": false, "1": true, "TRUE": true} {
+		t.Setenv(envSkipClusterValidation, value)
+		t.Setenv(envSkipInotify, value)
+		assert.Equal(t, on, clusterValidationSkipped(), value)
+		assert.Equal(t, on, inotifyCheckSkipped(), value)
+	}
+
+	t.Setenv(envSkipInotify, "maybe")
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json"})
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY="maybe": expected true or false`)
+}
+
 // A bare --pre skips SIS, which is not up before install; an explicit --all or
 // --compute-plane still asks for it; --control-plane never contacts it.
 func TestCheck_SISReachabilityScope(t *testing.T) {
