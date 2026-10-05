@@ -20,6 +20,7 @@ package com.nvidia.boot.core;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -105,6 +106,15 @@ class NvBootCoreIntegrationTest {
         mockMvc.perform(options("/info"))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(header().string("Allow", "GET"));
+    }
+
+    @Test
+    void infoEndpointRejectsPostWithoutAdvertisingOptions() throws Exception {
+        mockMvc.perform(post("/info"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Allow"))
+                        .contains("GET")
+                        .doesNotContain("OPTIONS"));
     }
 
     @Test

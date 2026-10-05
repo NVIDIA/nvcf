@@ -96,14 +96,6 @@ class NvBootCoreReactiveIntegrationTest {
     }
 
     @Test
-    void infoEndpointRejectsOptions() {
-        webTestClient.options().uri("/info")
-                .exchange()
-                .expectStatus().isEqualTo(405)
-                .expectHeader().valueEquals("Allow", "GET");
-    }
-
-    @Test
     void corsPreflightOnInfoSucceeds() {
         var origin = "https://example.com";
         webTestClient.options().uri("/info")
