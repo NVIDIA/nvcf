@@ -385,7 +385,25 @@ class Recipe:
         print('Inventory passed. Actual CUDA, memory and RPC checks are separate phases.')
 
     def attach_existing(self):
-        require(not self.state or self.state.get('attachedExisting'), 'Use a separate work directory for an existing installation.')
+        if self.state and not self.state.get('attachedExisting'):
+            self.bound_cluster()
+            require(all(self.state.get(phase) for phase in ('stack', 'serve', 'registered')),
+                    'Saved installation is incomplete. Finish installing and registering GLM before attaching.')
+            require(self.state['stack'].get('source') == self.source_identity(),
+                    'Saved installation source differs from source.lock.json. Use the matching recipe checkout.')
+            live = discover_config(self.c['context'], self.c['namespace'])
+            for field in ('context', 'namespace', 'clusterId', 'nodes', 'runtimeClass',
+                          'runtimeImage', 'storageClass', 'caConfigMap'):
+                require(live[field] == self.c[field], 'Existing installation differs from saved configuration: '+field)
+            require(live['releases'] == {'stack': self.stack, 'operator': self.operator, 'glm': self.glm},
+                    'Existing Helm releases differ from the saved installation.')
+            for component in COMPONENTS:
+                require(live['images']['repositories'][component] == self.repository(component),
+                        'Existing image repository differs: '+component)
+            # Retain installer checkpoints and credentials; attachment must not turn
+            # an installation owner into a restricted iteration-only work directory.
+            print('Existing installation matches the saved setup. Run verify-gateway next.')
+            return
         if self.state:
             self.bound_cluster()
         require(set(self.c.get('releases', {})) >= {'stack', 'operator', 'glm'}, 'Set explicit releases.stack, releases.operator and releases.glm.')
