@@ -1343,7 +1343,7 @@ func TestStargateProviderProxyOmitsPriorityWhenUnset(t *testing.T) {
 
 // Stargate checks its size limit against the declared length, so a known body
 // length must reach it as Content-Length, not chunked.
-func TestStargateProviderProxy_ContentLengthHeader_SendsFixedLengthBody(t *testing.T) {
+func TestStargateProviderProxy_ContentLength_SendsFixedLengthBody(t *testing.T) {
 	t.Parallel()
 
 	body := `{"model":"proxy-model","input":"hello"}`
@@ -1364,10 +1364,10 @@ func TestStargateProviderProxy_ContentLengthHeader_SendsFixedLengthBody(t *testi
 	require.NoError(t, err)
 
 	response, err := provider.Proxy(context.Background(), &requestctx.RequestContext{RequestID: "req-proxy"}, &ProxyRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/responses",
-		Header: http.Header{"Content-Length": []string{fmt.Sprint(len(body))}},
-		Body:   io.NopCloser(strings.NewReader(body)),
+		Method:        http.MethodPost,
+		Path:          "/v1/responses",
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
 	})
 	require.NoError(t, err)
 	defer response.Body.Close()
