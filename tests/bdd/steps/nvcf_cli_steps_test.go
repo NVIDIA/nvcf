@@ -75,6 +75,100 @@ func TestNVCFCLICreatePassesOptionsWithoutProductValidation(t *testing.T) {
 	}
 }
 
+func TestNVCFCLICreateHelmFunctionPassesChartAndOptionsInOrder(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "/tmp/nvcf cli")
+	t.Setenv("BDD_HELM_CHART", "https://charts.example.test/chart with spaces.tgz")
+	t.Setenv("BDD_HELM_SERVICE", "entrypoint")
+	sc.NVCFCLIConfig = "/tmp/config file.yaml"
+	fake.result = harness.Result{ExitCode: 0}
+	options := docTable(t, [][]string{
+		{"option", "value"},
+		{"--helm-chart-service", "${BDD_HELM_SERVICE}"},
+		{"--inference-url", "/echo"},
+		{"--inference-port", "8000"},
+		{"--health-uri", "/health"},
+		{"--health-port", "8000"},
+		{"--health-timeout", "PT30S"},
+		{"--future-option", ""},
+		{"--future-option", "not-an-api-value"},
+	})
+
+	err := sc.iSuccessfullyCreateHelmFunction(
+		context.Background(),
+		"function with spaces",
+		"${BDD_HELM_CHART}",
+		options,
+	)
+	if err != nil {
+		t.Fatalf("create Helm function: %v", err)
+	}
+	want := "'/tmp/nvcf cli' --config '/tmp/config file.yaml' function create" +
+		" --name 'function with spaces'" +
+		" --helm-chart 'https://charts.example.test/chart with spaces.tgz'" +
+		" --helm-chart-service entrypoint --inference-url /echo --inference-port 8000" +
+		" --health-uri /health --health-port 8000 --health-timeout PT30S" +
+		" --future-option '' --future-option not-an-api-value"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %+v, want command %q", fake.runs, want)
+	}
+}
+
+func TestNVCFCLICreateHelmFunctionReportsFailures(t *testing.T) {
+	tests := []struct {
+		name     string
+		rows     [][]string
+		result   harness.Result
+		runErr   error
+		wantErr  string
+		wantRuns int
+		wantExit int
+	}{
+		{
+			name:     "command exits non-zero",
+			rows:     [][]string{{"option", "value"}, {"--helm-chart-service", "entrypoint"}},
+			result:   harness.Result{ExitCode: 22, Stderr: "CLI rejected the chart"},
+			runErr:   errors.New("exit status 22"),
+			wantErr:  "exit code = 22, want 0",
+			wantRuns: 1,
+			wantExit: 22,
+		},
+		{
+			name:    "table headers are not option and value",
+			rows:    [][]string{{"flag", "setting"}, {"--helm-chart-service", "entrypoint"}},
+			wantErr: "headers must be option and value",
+		},
+		{
+			name:    "table has no data rows",
+			rows:    [][]string{{"option", "value"}},
+			wantErr: "at least one data row",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			t.Setenv("NVCF_CLI", "nvcf-cli")
+			sc.NVCFCLIConfig = "config.yaml"
+			fake.result = test.result
+			fake.err = test.runErr
+
+			err := sc.iSuccessfullyCreateHelmFunction(
+				context.Background(),
+				"bdd-helm-function",
+				"https://charts.example.test/inference-test.tgz",
+				docTable(t, test.rows),
+			)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, test.wantErr)
+			}
+			if len(fake.runs) != test.wantRuns || sc.LastResult.ExitCode != test.wantExit {
+				t.Fatalf("runs = %+v, result = %+v", fake.runs, sc.LastResult)
+			}
+		})
+	}
+}
+
 func TestNVCFCLIInvocationAdaptersExposeAllArguments(t *testing.T) {
 	tests := []struct {
 		name string

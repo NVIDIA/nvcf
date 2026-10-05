@@ -990,6 +990,76 @@ async fn wait_and_widen_waits_for_later_bucket_when_fastest_is_full() {
 }
 
 #[tokio::test]
+async fn wait_and_widen_widens_to_slower_bucket_without_max_wait_header() {
+    let model = "wait-and-widen-no-header-model";
+    let stargate = RunningStargate::start(
+        "test-sg-wait-and-widen-no-header",
+        Some(
+            r#"{"default": "power-of-n", "models": {"wait-and-widen-no-header-model": "wait-and-widen"}}"#,
+        ),
+    )
+    .await;
+
+    // With 4000 input tokens the full backend's TTFT is about 200 ms and the
+    // idle backend's is about 800 ms, so the slower bucket unlocks after
+    // (800 - 200) * 0.25 = 150 ms of routing wait.
+    let insts = [
+        ("wait-and-widen-no-header-fast-full", 20_000.0, 4_u64),
+        ("wait-and-widen-no-header-slow-idle", 5_000.0, 0_u64),
+    ];
+    let mut backends = Vec::new();
+    for (inst_id, last_mean_input_tps, num_running_queries) in insts {
+        let backend =
+            RegisteredBackend::active_with_fast_updates(stargate.grpc_addr, model, inst_id).await;
+        backend.set_stats(CurrentModelStats {
+            last_mean_input_tps,
+            max_output_tps: 1000.0,
+            num_running_queries,
+            max_engine_concurrency: Some(4),
+            ..CurrentModelStats::default()
+        });
+        backends.push(backend);
+    }
+    wait_for_candidate_stats(
+        &stargate.handle.state(),
+        model,
+        &insts.map(
+            |(inference_server_id, last_mean_input_tps, _)| ExpectedCandidateStats {
+                inference_server_id,
+                last_mean_input_tps,
+            },
+        ),
+        Duration::from_secs(15),
+    )
+    .await;
+
+    // Gateways are not required to send x-max-wait-ms. Without it, a full
+    // first bucket must wait for the slower bucket instead of returning 503.
+    let chat = ChatRequests::new(stargate.http_addr, model);
+    for attempt in 0..5 {
+        let started_at = std::time::Instant::now();
+        let resp = chat
+            .with_input_tokens(&format!("req-wait-and-widen-no-header-{attempt}"), 4_000)
+            .send()
+            .await
+            .expect("request failed");
+        assert_eq!(resp.status(), 200, "attempt {attempt} was not routed");
+        assert_eq!(
+            response_header(&resp, "x-inference-server-id"),
+            "wait-and-widen-no-header-slow-idle"
+        );
+        assert!(
+            started_at.elapsed() >= Duration::from_millis(100),
+            "the slower bucket should open only after the routing wait"
+        );
+        let _ = resp.bytes().await;
+    }
+
+    stop_backends(&mut backends);
+    stargate.shutdown().await;
+}
+
+#[tokio::test]
 async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
     let stargate = RunningStargate::start(
         "test-sg-wait-and-widen-affinity",
@@ -1435,6 +1505,82 @@ async fn pulsar_routes_same_affinity_key_consistently() {
         chosen_ids.len(),
         1,
         "same pulsar affinity key should route consistently, saw: {chosen_ids:?}"
+    );
+
+    stop_backends(&mut backends);
+    stargate.shutdown().await;
+}
+
+#[tokio::test]
+async fn wait_and_widen_capacity_rejection_returns_overloaded_error() {
+    use prometheus::Encoder;
+
+    let model = "wait-and-widen-full-model";
+    let stargate = RunningStargate::start(
+        "test-sg-wait-and-widen-full",
+        Some(r#"{"default":"wait-and-widen"}"#),
+    )
+    .await;
+    let mut backends = vec![
+        RegisteredBackend::active_with_fast_updates(stargate.grpc_addr, model, "full-inst").await,
+    ];
+    backends[0].set_stats(CurrentModelStats {
+        last_mean_input_tps: 1000.0,
+        max_engine_concurrency: Some(1),
+        ..CurrentModelStats::default()
+    });
+    wait_for_routing(stargate.http_addr, model, Duration::from_secs(5)).await;
+
+    backends[0].set_stats(CurrentModelStats {
+        last_mean_input_tps: 1000.0,
+        num_running_queries: 1,
+        max_engine_concurrency: Some(1),
+        ..CurrentModelStats::default()
+    });
+    let state = stargate.handle.state();
+    let target = RoutingTargetKey {
+        routing_key: None,
+        model_id: model.to_string(),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let candidates = state.cluster_candidates_for_target(&target).await;
+        if candidates.len() == 1
+            && candidates[0].stats.max_engine_concurrency == 1
+            && candidates[0].stats.num_running_queries >= 1
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "full backend snapshot did not arrive: {candidates:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let response = ChatRequests::new(stargate.http_addr, model)
+        .request("req-wait-and-widen-full")
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        response_header(&response, "x-stargate-error-code"),
+        "overloaded_error"
+    );
+    let body: serde_json::Value = response.json().await.expect("overloaded body is JSON");
+    assert_eq!(body["error"]["code"], "overloaded_error");
+    let mut encoded = Vec::new();
+    prometheus::TextEncoder::new()
+        .encode(&stargate.handle.metrics().registry().gather(), &mut encoded)
+        .expect("metrics should encode");
+    let metrics = String::from_utf8(encoded).expect("metrics are UTF-8");
+    assert!(
+        metrics.contains(&format!(
+            r#"stargate_admission_rejections_total{{model="{model}",reason="routing_capacity_unavailable",routing_key=""}} 1"#
+        )),
+        "missing routing capacity rejection metric:\n{metrics}"
     );
 
     stop_backends(&mut backends);

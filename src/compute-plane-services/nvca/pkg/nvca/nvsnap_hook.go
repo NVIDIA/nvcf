@@ -143,6 +143,26 @@ func (c K8sComputeBackend) stampNvSnapAnnotations(ctx context.Context, pod *core
 	}
 	span.SetAttributes(otelattr.String("nvsnap.function_version_id", fvID))
 
+	// A model served from the NVCA model cache is not checkpointed or
+	// restored. The NvSnap capture redirects the engine's model path into
+	// its own volume, so the pod would download the model a second time
+	// and the checkpoint would carry a second copy next to the cache
+	// claim: two claims for one model. The two mechanisms are alternatives
+	// per function, not layers. The pod is the signal, not the request's
+	// cache artifacts: setupContainerModelCaching rewrites the model
+	// volume to the claim before this hook runs, and when caching was
+	// requested but declined or failed the pod keeps its emptyDir model
+	// and NvSnap is the mechanism that still applies.
+	if modelServedFromCache(pod, req) {
+		log.WithFields(logrus.Fields{
+			"functionVersionID": fvID,
+			"nca_id":            req.Spec.NCAId,
+			"cluster":           c.clusterName(),
+		}).Debug("nvsnap: model served from the NVCA model cache; pod is not stamped")
+		span.SetAttributes(otelattr.String("nvsnap.decision", "skipped_model_cached"))
+		return
+	}
+
 	cfsObj, err := c.dynClient.Resource(nvsnapFunctionStateGVR).Get(ctx, fvID, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).WithField("functionVersionID", fvID).
@@ -553,4 +573,38 @@ func markCFSWarmFromLookup(ctx context.Context, dc dynamic.Interface, fvID, hash
 		return fmt.Errorf("update status %s: %w", fvID, err)
 	}
 	return nil
+}
+
+// modelServedFromCache reports whether the pod's model volume was
+// rewritten to the NVCA model cache claim (setupContainerModelCaching
+// runs before Hook A and replaces the volume source with the read-only
+// PVC). The claim has to be NVCA's: the request's recorded cache
+// reference when it has one, else a claim named with the read-only cache
+// suffix. A user's own PersistentVolumeClaim on the model volume is not
+// a cache and does not switch NvSnap off.
+func modelServedFromCache(pod *corev1.Pod, req *nvcav2beta1.ICMSRequest) bool {
+	if pod == nil {
+		return false
+	}
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Name != ModelVolumeName || v.PersistentVolumeClaim == nil {
+			continue
+		}
+		claim := v.PersistentVolumeClaim.ClaimName
+		if req != nil && req.Status.CacheReferenceName != "" {
+			return claim == req.Status.CacheReferenceName
+		}
+		return strings.HasSuffix(claim, ROPVCSuffix)
+	}
+	return false
+}
+
+// clusterName is the backend's cluster name for log context; empty when
+// the backend cache is not wired (tests).
+func (c K8sComputeBackend) clusterName() string {
+	if c.bk8s == nil {
+		return ""
+	}
+	return c.bk8s.clusterName
 }

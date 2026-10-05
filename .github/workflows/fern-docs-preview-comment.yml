@@ -19,12 +19,9 @@
 # Downloads the fern/ artifact, builds a preview with DOCS_FERN_TOKEN, and
 # posts a stable :herb: comment on the PR.
 #
-# Not checking out the PR branch is not by itself sufficient. The artifact IS
-# the PR branch content, and `fern generate` processes it with DOCS_FERN_TOKEN
-# in the environment, so a fork could have its docs.yml and API specs handled
-# by a privileged process holding the token. The job is therefore restricted to
-# pull requests from this repository; a fork gets no preview rather than a
-# preview built with a secret.
+# Fern processes PR content with DOCS_FERN_TOKEN in the environment. Only
+# same-repository PRs may reach this job. Verify the source commit against the
+# current PR before checkout; the checkout supplies Git context for ref versions.
 #
 # Required configuration:
 # - Organization secret: DOCS_FERN_TOKEN (from `fern token` for the nvidia Fern org)
@@ -39,6 +36,7 @@ on:
 permissions:
   pull-requests: write
   actions: read
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.head_repository.full_name || github.repository }}-${{ github.event.workflow_run.head_branch || github.event.workflow_run.id }}
@@ -132,31 +130,49 @@ jobs:
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
 
+      - name: Verify the preview source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.metadata.outputs.pr_number }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_REF: ${{ steps.metadata.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/pulls/$PR_NUMBER" > /tmp/preview-pr.json
+          jq -e --arg repo "$GH_REPO" --arg sha "$EXPECTED_SHA" --arg ref "$EXPECTED_REF" \
+            '.state == "open" and .head.repo.full_name == $repo and .head.sha == $sha and .head.ref == $ref' \
+            /tmp/preview-pr.json > /dev/null
+
+      - name: Checkout the verified preview source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          path: source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '20'
+          node-version-file: source/fern/.node-version
 
-      - name: Install Fern CLI
-        run: |
-          set -euo pipefail
-          VERSION=$(jq -r .version fern/fern.config.json)
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
-            echo "::error::fern.config.json .version '$VERSION' is not a valid semver"
-            exit 1
-          fi
-          npm install -g "fern-api@${VERSION}"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/tools/go-toolchain/go.mod
 
       - name: Generate preview URL
         id: generate-docs
         env:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
-          HEAD_REF: ${{ steps.metadata.outputs.head_ref }}
-        working-directory: ./fern
+          DOCS_PREVIEW_ID: ${{ steps.metadata.outputs.head_ref }}
+          DOCS_PREVIEW_SKIP_COMMENT: '1'
+        working-directory: ./source
         run: |
           set -o pipefail
-          fern generate --docs --preview --id "$HEAD_REF" 2>&1 | tee /tmp/fern-output.log
-          URL=$(grep -oP 'Published docs to \K.*(?= \()' /tmp/fern-output.log || true)
+          ./tools/ci/preview-docs 2>&1 | tee /tmp/fern-output.log
+          URL=$(sed -n 's/^Preview URL: //p' /tmp/fern-output.log | tail -1)
           if [ -z "$URL" ]; then
             echo "::error::Failed to generate preview URL. See fern output above."
             exit 1

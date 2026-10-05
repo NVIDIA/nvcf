@@ -165,21 +165,38 @@ For more information, see the [Developer Certificate of Origin](https://develope
 
 ## Documentation Contributions
 
-Documentation content lives under `docs/`. Fern publishes one site with four products: Overview plus one product per Helm stack. Each stack product has its own version menu. `fern/docs.yml` declares the products and their versions, and navigation files live under `fern/products/`.
+Documentation lives under `docs/`. Fern publishes one docs edition menu with
+Overview, Self-Managed, Compute Plane, Observability, Manifest, and Release Notes
+tabs.
+Each edition records the exact three-stack combination; artifact releases keep
+their own versions.
 
-| Path | Audience | Published | Versioning role |
-|---|---|---|---|
-| `docs/overview/` | Customers | Yes | Unversioned shared content: compatibility matrix, quickstart, manifest, image mirroring, local development, shared images and samples. Publishes at `/nvcf/overview/`. |
-| `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/` | Customers | Yes | Top-of-tree content for one stack, published as that product's `dev` version at `/nvcf/<stack>/dev/`. |
-| `docs/<stack>-<version>/` | Customers on a stack release | Yes | Frozen content for one exact stack version, for example `docs/observability-1.3.2/`. Publishes at `/nvcf/<stack>/<version>/`. |
-| `docs/v0.5/`, `docs/v0.6.0/`, `docs/v0.6.1/`, `docs/cp-*/` | Customers on legacy releases | Yes | Frozen legacy full-tree content from before the per-stack split, attached to the Self-Managed Stack product. |
-| `docs/dev/` | Contributors / internal dev | Only if symlinked | Developer-oriented source pages. These are published only when a symlink from a product tree is listed in that product's Fern nav. |
-| `fern/docs.yml` | Docs site | Yes | Declares products, their versions, display names, slugs, and the nav file for each version. |
-| `fern/products/overview.yml`, `fern/products/<stack>/*.yml` | Docs site | Yes | Defines navigation and page order for one product version. Page paths are relative to the nav file. |
+| Path | Purpose |
+| --- | --- |
+| `docs/overview/` | Shared guides and generated compatibility/manifest content for the selected edition. |
+| `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/` | Current stack sources, published as Development from `main`. |
+| `docs/<stack>-<version>/`, `docs/v*/` | Frozen historical archives. Change only for an explicitly approved historical fix. |
+| `docs/dev/` | Contributor guides; published only when navigation or a navigated symlink includes them. |
+| `fern/docs.yml`, `fern/editions.yml` | Canonical selector and exact protected release-branch commits. |
+| `fern/navigation.yml` | Current six-tab navigation with explicit page slugs. |
+| `fern/changelog/` | Native release notes with dated MDX entries. |
+| `fern/products/` | Retained historical navigation. |
 
-A page belongs to exactly one product. Use the product tree that owns the page for changes that should appear in `dev`. Edit frozen trees only for fixes that must also apply to that released version. When adding, renaming, moving, or removing a published page, update the matching nav file under `fern/products/`. Links to pages in another product must be absolute site paths such as `/nvcf/overview/quickstart`, because Fern resolves relative links inside the rendering product.
+Edit current sources and update `fern/navigation.yml` when changing pages.
+Use relative source-file links across tabs to preserve the selected edition.
+Use an absolute product/version URL only for an intentional historical link.
+Do not rewrite archive sources or update an existing docs release branch.
 
-All navigation sections use `skip-slug: true`, so each page title becomes a flat URL slug within its product version. Keep page titles unique and descriptive within each product nav. Run `fern check` to validate the docs after any navigation or link change. Preview locally with `fern docs dev` from the `fern/` directory.
+Run `./tools/ci/check-docs` before submitting. Preview the working tree with
+`tools/ci/run-fern docs dev`, or validate the Development-first PR configuration:
+
+```bash
+tools/ci/preview-docs --check
+```
+
+Stable editions use protected `docs/releases/X.Y.Z` branches, not copied
+version folders or docs tags. See [the release workflow](docs/dev/docs-editions.md)
+for qualification, preparation, registration, corrections, and rollback.
 
 ---
 

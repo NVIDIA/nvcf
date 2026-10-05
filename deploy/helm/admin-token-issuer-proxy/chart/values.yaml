@@ -224,3 +224,9 @@ adminIssuerProxy:
   #                   - admin-issuer-proxy
   #           topologyKey: kubernetes.io/hostname
   affinity: {}
+
+  # Zone spread; set by the HA value layer, empty by default.
+  topologySpreadConstraints: []
+
+  # Rollout strategy; set by the HA value layer, empty by default.
+  strategy: {}

@@ -154,6 +154,12 @@ func newLLMRouterClientContainer(
 		"--backend-connectivity=reverse",
 		"--initial-input-tps=100",
 	}
+	// NVCF stores 1 when a deployment leaves maxRequestConcurrency unset, so a
+	// value of 1 cannot be told apart from the default. As an engine limit it
+	// would admit one request at a time, so only a larger value is passed.
+	if ls.MaxRequestConcurrency > 1 {
+		args = append(args, fmt.Sprintf("--max-engine-concurrency=%d", ls.MaxRequestConcurrency))
+	}
 	if healthPath := upstreamHealthPath(allEnvSet); healthPath != "" {
 		args = append(args, fmt.Sprintf("--upstream-health-path=%s", healthPath))
 	}

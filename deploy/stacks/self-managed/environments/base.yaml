@@ -193,8 +193,12 @@ api:
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
+# Remote config is passed to the NVCT API chart and overrides its packaged
+# application profile, mirroring api.remoteConfig.
 nvctApi:
   essBaseURL: ""
+  remoteConfig:
+    configData: {}
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to
@@ -720,3 +724,16 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# Control-plane high availability.
+# global.yaml.gotmpl maps mode onto chart values (replicaCount, affinity, zone
+# spread, PDB, update strategy).
+#   none      keep chart/env defaults (single-node, local, CI).
+#   preferred HA sizing; soft placement (schedules even if capacity is short).
+#   enforced  HA sizing; hard placement (Pending rather than co-locating).
+# preferred/enforced need >= 3 nodes (>= 3 zones for zone spread).
+# Optional overrides: global.affinity / global.topologySpreadConstraints.
+# Default preferred (real multi-node); set none for single-node / local / CI.
+# JetStream stream replicas follow the NATS server count (capped at 3).
+highAvailability:
+  mode: preferred

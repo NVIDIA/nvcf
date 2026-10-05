@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Sync .env image tags into the vendored operator chart defaults.
+# Sync .env image tags into the operator chart defaults.
 #
-# Keeps deployments/nvca-operator/{values.yaml,values.schema.json}
+# Keeps the published operator chart's {values.yaml,values.schema.json}
 # consistent with the canonical tags declared in .env. Run via:
 #
 #   make dotenv-dependencies-update
@@ -12,7 +12,7 @@ set -eu -o pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${repo_root}"
 
-chart_dir="deployments/nvca-operator"
+chart_dir="../../../deploy/helm/nvca-operator/nvca-operator"
 values_file="${chart_dir}/values.yaml"
 schema_file="${chart_dir}/values.schema.json"
 

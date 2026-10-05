@@ -2,20 +2,20 @@
 
 The image replaces the server binary from the upstream runtime image with a
 locally compiled OpenBao binary. The runtime filesystem, entrypoint, default
-configuration, user, and command remain from `openbao/openbao:2.6.2`.
+configuration, user, and command remain from `openbao/openbao:2.6.3`.
 The runtime image is pinned to multi-architecture manifest digest
-`sha256:11fd73a2102cda9c55d5d881a8c3210303146a7ec1e8ac76f526e175c6d24641`.
+`sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889`.
 The Go 1.27.0 Alpine builder is pinned to multi-architecture manifest digest
 `sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc`.
 
 ## Source
 
-The build uses the official `openbao-dist-v2.6.2.tar.xz` release asset. That
+The build uses the official `openbao-dist-v2.6.3.tar.xz` release asset. That
 asset includes the generated web UI used by upstream release binaries.
 
-- Version: `v2.6.2`
-- Source commit: `dd9c19c37a878cf4a81b18efb8d6f0599c7da923`
-- Source SHA-256: `a7784550a9db16f24e99d65a18c9b12a433707c79ef4c1f34262d3f48171c7a9`
+- Version: `v2.6.3`
+- Source commit: `63a65e6b907589dbb952c371a70260a065bf8bd7`
+- Source SHA-256: `471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69`
 - License: MPL-2.0
 
 `scripts/build-openbao.sh` verifies the source checksum before extracting it.
@@ -24,7 +24,8 @@ The MPL-2.0 license remains in the upstream runtime image at
 
 ## Dependency floors
 
-The source build updates these modules before compiling the server:
+The source build enforces these module and toolchain floors before compiling
+the server:
 
 - Go 1.27.0
 - `golang.org/x/crypto v0.56.0`
