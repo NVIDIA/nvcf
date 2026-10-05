@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -42,6 +43,15 @@ const (
 	// evictionFlushTimeout bounds the database writes made for the entries one
 	// eviction pass removes.
 	evictionFlushTimeout = 10 * time.Second
+
+	// wheelTick is how long the timing wheel spends on each slot. The wheel has one
+	// slot per tick of FlushInterval, so a flush is due when the wheel has made one
+	// full rotation.
+	wheelTick = time.Second
+
+	// maxFlushInterval bounds the timing wheel, which holds one slot for every
+	// wheelTick of FlushInterval and builds them all up front.
+	maxFlushInterval = time.Hour
 )
 
 var (
@@ -49,7 +59,19 @@ var (
 	errNilFlush             = errors.New("cache: flush function must not be nil")
 	errInvalidMaxSize       = errors.New("cache: MaxSize must be greater than 0")
 	errInvalidFlushInterval = errors.New("cache: FlushInterval must be greater than 0")
+	errFlushIntervalTooLong = errors.New("cache: FlushInterval must not exceed one hour")
 )
+
+// scheduler tracks when the flush of each pending key is due. The timing wheel
+// implements it.
+type scheduler interface {
+	// schedule makes key due after delay, unless it is already scheduled.
+	schedule(scheduledKey key, delay time.Duration) bool
+	// unschedule removes key so it never comes due.
+	unschedule(scheduledKey key) bool
+	start()
+	stop()
+}
 
 // FlushFunc writes one pending event to the database.
 type FlushFunc func(ctx context.Context, rec data_access.EventV3UpsertRecord) error
@@ -86,8 +108,8 @@ type cached struct {
 	recencyNode *list.Element
 }
 
-// Config holds the cache tunables. Both fields must be positive. The service
-// config owns the defaults.
+// Config holds the cache tunables. Both fields must be positive, and
+// FlushInterval at most one hour. The service config owns the defaults.
 type Config struct {
 	// MaxSize is the maximum number of entries before the least recently
 	// updated one is evicted.
@@ -109,6 +131,10 @@ type CachingDBHandler struct {
 
 	cfg   Config
 	flush FlushFunc
+	// wheel schedules the flush of each pending entry. It is called with entriesMu
+	// held, so its own lock is always taken after entriesMu, never before, and it
+	// must never call into the cache while holding that lock.
+	wheel scheduler
 
 	entriesMu sync.RWMutex
 	entries   map[key]*cached
@@ -133,7 +159,8 @@ func isNilHandler(handler data_access.DBHandlerV2) bool {
 
 // NewCachingDBHandler wraps inner with an empty cache. flush writes the pending
 // entries that eviction removes. It returns an error if inner, including a typed
-// nil, or flush is nil or cfg has a non-positive field.
+// nil, or flush is nil or cfg has a non-positive field, or FlushInterval is over
+// one hour. The handler's timing wheel does not run until Start is called.
 func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config, flush FlushFunc) (*CachingDBHandler, error) {
 	if isNilHandler(inner) {
 		return nil, errNilInnerHandler
@@ -147,14 +174,48 @@ func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config, flush FlushF
 	if cfg.FlushInterval <= 0 {
 		return nil, errInvalidFlushInterval
 	}
-	return &CachingDBHandler{
+	if cfg.FlushInterval > maxFlushInterval {
+		return nil, errFlushIntervalTooLong
+	}
+	handler := &CachingDBHandler{
 		DBHandlerV2: inner,
 		cfg:         cfg,
 		flush:       flush,
 		entries:     make(map[key]*cached),
 		recency:     list.New(),
-	}, nil
+	}
+	// One slot per tick of FlushInterval, rounded up.
+	slotCount := int(cfg.FlushInterval / wheelTick)
+	if cfg.FlushInterval%wheelTick > 0 {
+		slotCount++
+	}
+	wheel, err := newTimingWheel(slotCount, wheelTick, handler.flushDue)
+	if err != nil {
+		return nil, fmt.Errorf("cache: failed to create the timing wheel: %w", err)
+	}
+	handler.wheel = wheel
+	return handler, nil
 }
+
+// Start begins advancing the timing wheel in a background goroutine.
+func (handler *CachingDBHandler) Start() {
+	handler.wheel.start()
+}
+
+// Close stops the timing wheel and then closes the wrapped handler. Pending
+// entries are not written; what to do with them at shutdown is decided when the
+// cache is wired into the service.
+func (handler *CachingDBHandler) Close() error {
+	handler.wheel.stop()
+	return handler.DBHandlerV2.Close()
+}
+
+// flushDue receives the keys whose scheduled flush has come due. Writing them to
+// the database is added when the cache is wired into the service, so for now a due
+// key only leaves the wheel, and its entry stays pending without a scheduled flush.
+// The entry may also be gone by the time this runs, because eviction can remove it
+// between the wheel handing over the key and this call.
+func (handler *CachingDBHandler) flushDue(dueKeys []key) {}
 
 // lookup returns a copy of the entry for cachedKey, and whether it exists. It returns
 // a copy because the read lock is released on return; a pointer would let the
@@ -187,8 +248,8 @@ const (
 	// outcomeMiss means no entry existed. The event was stored as clean, so the
 	// caller must write it to the database now.
 	outcomeMiss outcome = iota
-	// outcomeBecamePending means a newer event replaced a clean entry. The
-	// caller must schedule a flush.
+	// outcomeBecamePending means a newer event replaced a clean entry. A flush
+	// has been scheduled on the timing wheel.
 	outcomeBecamePending
 	// outcomeAlreadyPending means a newer event replaced a pending entry. A flush
 	// is already scheduled and will pick up the latest value.
@@ -200,7 +261,8 @@ const (
 
 // processEvent records ev for cachedKey and reports what the caller must do. It compares and
 // updates under one write lock so concurrent events for a key cannot both
-// decide they are the newest. It does not write ev itself to the database, but
+// decide they are the newest. When the entry becomes pending, it schedules the
+// flush on the timing wheel. It does not write ev itself to the database, but
 // a miss can push the cache over MaxSize, and the pending entry evicted to make
 // room is written before processEvent returns.
 func (handler *CachingDBHandler) processEvent(cachedKey key, ev event, now time.Time) outcome {
@@ -243,7 +305,10 @@ func (handler *CachingDBHandler) recordEvent(cachedKey key, ev event, now time.T
 	if wasPending {
 		return outcomeAlreadyPending, nil
 	}
-	// Event has to be added to the timing wheel. This will be implemented in a later PR
+	// Scheduled while entriesMu is held, as eviction unschedules under it, so a key
+	// is in the wheel only while its entry is pending. Scheduling after the lock was
+	// released could race with an eviction and leave a pending entry unscheduled.
+	handler.wheel.schedule(cachedKey, handler.cfg.FlushInterval)
 	return outcomeBecamePending, nil
 }
 
@@ -262,8 +327,9 @@ func (handler *CachingDBHandler) evictOverflow() []data_access.EventV3UpsertReco
 // evictInactive removes the entries that have not been updated within the
 // inactivity TTL as of now, writes the pending ones, and returns how many it
 // evicted. Nothing calls it yet. A background goroutine must call it on a ticker,
-// not in a busy loop; the timing wheel's per-slot tick can drive it, and a pass
-// with nothing expired is cheap because the list is ordered by last update.
+// not in a busy loop. The wheel's fire function only runs for slots that have
+// keys, so it cannot drive this. A pass with nothing expired is cheap because the
+// list is ordered by last update.
 func (handler *CachingDBHandler) evictInactive(now time.Time) int {
 	evicted, pending := handler.removeInactive(now)
 	handler.flushEvicted(pending)
@@ -299,6 +365,9 @@ func (handler *CachingDBHandler) remove(node *list.Element) (data_access.EventV3
 	cachedKey := handler.recency.Remove(node).(key)
 	cachedEntry := handler.entries[cachedKey]
 	delete(handler.entries, cachedKey)
+	// A pending entry has a scheduled flush, which an eviction replaces by writing
+	// the entry now.
+	handler.wheel.unschedule(cachedKey)
 	if !cachedEntry.pending {
 		return data_access.EventV3UpsertRecord{}, false
 	}
