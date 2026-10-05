@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -34,6 +35,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes/fake"
@@ -179,45 +182,137 @@ func TestCheckTier2StatefulSets_StallBoundIsFifteenMinutes(t *testing.T) {
 	}
 }
 
-// A rollback reuses a ControllerRevision created long ago, and lowering a
-// partition creates none, so the revision alone dates neither: the spec write
-// that started the step does. Writes that start no rollout do not count: the
-// controller's status updates, an autoscaler's scale, or a label change.
-func TestCheckTier2StatefulSets_RollbackAndLoweredPartitionAreDatedBySpecWrite(t *testing.T) {
+// podNamed returns the pod called name in objs.
+func podNamed(objs []runtime.Object, name string) *corev1.Pod {
+	for _, o := range objs {
+		if p, ok := o.(*corev1.Pod); ok && p.Name == name {
+			return p
+		}
+	}
+	return nil
+}
+
+// onRevision puts pod name in objs on revision rev, Ready or not, created at
+// created.
+func onRevision(objs []runtime.Object, name, rev string, ready bool, created time.Time) []runtime.Object {
+	p := podNamed(objs, name)
+	p.Labels[appsv1.ControllerRevisionHashLabelKey] = rev
+	p.CreationTimestamp = metav1.NewTime(created)
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}
+	return objs
+}
+
+// A rollout is dated by its update revision, and since then by the pods it
+// replaces. A write to the spec that starts no rollout does not restart the
+// bound: helm re-dates its entry on a chart-version-only upgrade, and so does
+// a revisionHistoryLimit edit, as do the controller's status updates, an
+// autoscaler's scale and a label change.
+func TestCheckTier2StatefulSets_SpecWritesDoNotRestartTheBound(t *testing.T) {
 	longAgo, recent := installedAt, time.Now().Add(-time.Minute)
-	// The old pod is deleted and its replacement not yet created, and every
-	// remaining pod and the revision rolled back to date from the install.
-	between := func(stepStarted time.Time) []runtime.Object {
-		objs := rollTo(createdAt(makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"}), longAgo),
-			"nats-r0", longAgo)
+	wedged := func(writes ...metav1.ManagedFieldsEntry) []runtime.Object {
+		objs := rollTo(createdAt(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r2", nil), longAgo),
+			"nats-r2", longAgo)
 		sts := objs[0].(*appsv1.StatefulSet)
-		sts.ManagedFields = append(sts.ManagedFields, specWrite("kubectl-rollout", stepStarted))
+		sts.ManagedFields = append(sts.ManagedFields, writes...)
 		return objs
 	}
-	state := runTier2(between(recent))
-	require.NotNil(t, state.Tier2StatefulSetsOK)
-	assert.True(t, *state.Tier2StatefulSetsOK, "a rollback a minute ago is a rollout a minute old")
-
-	lowered := between(longAgo)
-	sts := lowered[0].(*appsv1.StatefulSet)
-	partition := int32(0)
-	sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
-		Type:          appsv1.RollingUpdateStatefulSetStrategyType,
-		RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
+	for name, objs := range map[string][]runtime.Object{
+		"chart-version-only upgrade": wedged(specWrite(installManager, recent)),
+		"revisionHistoryLimit edit": wedged(managedFields("kubectl-edit", "",
+			`{"f:spec":{"f:revisionHistoryLimit":{}}}`, recent)),
+		"status, scale and label writes": wedged(statusWrite(recent),
+			managedFields("hpa", "scale", `{"f:spec":{"f:replicas":{}}}`, recent),
+			managedFields("kubectl-label", "", `{"f:metadata":{"f:labels":{"f:team":{}}}}`, recent)),
+	} {
+		state, log := runTier2Logged(objs)
+		require.NotNil(t, state.Tier2StatefulSetsOK, name)
+		assert.False(t, *state.Tier2StatefulSetsOK, name)
+		assert.Contains(t, log, "rolling update is not progressing: no progress for", name)
 	}
-	sts.ManagedFields = append(sts.ManagedFields, specWrite("partition-controller", recent))
-	state = runTier2(lowered)
-	require.NotNil(t, state.Tier2StatefulSetsOK)
-	assert.True(t, *state.Tier2StatefulSetsOK, "a partition lowered a minute ago starts a new step")
 
-	unrelated := between(longAgo)
-	sts = unrelated[0].(*appsv1.StatefulSet)
-	sts.ManagedFields = append(sts.ManagedFields,
-		managedFields("hpa", "scale", `{"f:spec":{"f:replicas":{}}}`, recent),
-		managedFields("kubectl-label", "", `{"f:metadata":{"f:labels":{"f:team":{}}}}`, recent))
-	state = runTier2(unrelated)
+	// With the update revision unreadable, the spec write is all that dates
+	// the rollout.
+	state := runTier2(withoutRevision(wedged(specWrite(installManager, recent)), "nats-r2"))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
-	assert.False(t, *state.Tier2StatefulSetsOK, "status, scale and label writes start no rollout")
+	assert.True(t, *state.Tier2StatefulSetsOK)
+}
+
+// A rollback reuses a ControllerRevision created long ago, and lowering a
+// partition creates none, so the pods they replace date them: a replacement
+// on the update revision created, or a pod deleted.
+func TestCheckTier2StatefulSets_RollbackAndLoweredPartitionAreDatedByTheirPods(t *testing.T) {
+	longAgo, recent := installedAt, time.Now().Add(-time.Minute)
+	rollback := func(replacementCreated time.Time) []runtime.Object {
+		objs := rollTo(createdAt(rollingNATSWithDownPod([]string{"node-1", "node-2"}, "nats-r0", nil), longAgo),
+			"nats-r0", longAgo)
+		podNamed(objs, "nats-2").CreationTimestamp = metav1.NewTime(replacementCreated)
+		return objs
+	}
+	state := runTier2(rollback(recent))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "a rollback whose first replacement was created a minute ago")
+	state = runTier2(rollback(longAgo))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK, "a rollback whose replacement has been down since long ago")
+
+	terminating := rollback(longAgo)
+	deleted := metav1.NewTime(recent)
+	podNamed(terminating, "nats-2").DeletionTimestamp = &deleted
+	state = runTier2(terminating)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "a pod the rollback deleted a minute ago")
+
+	// A rollout staged at partition 2 updated nats-2 long ago; lowering the
+	// partition replaced nats-1.
+	lowered := func(replaced time.Time) []runtime.Object {
+		objs := rollTo(createdAt(makeQuorumSTS("nats", "nats-system", 3, 2,
+			[]string{"node-1", "node-2", "node-3"}), longAgo), "nats-r2", longAgo)
+		objs = onRevision(objs, "nats-2", "nats-r2", true, longAgo)
+		objs = onRevision(objs, "nats-1", "nats-r2", false, replaced)
+		partition := int32(0)
+		objs[0].(*appsv1.StatefulSet).Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
+			Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
+		}
+		return objs
+	}
+	state = runTier2(lowered(recent))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "a partition lowered a minute ago")
+	state = runTier2(lowered(longAgo))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK)
+}
+
+// A pod created anew is progress only when it is the rollout's newest step.
+// A node drain or a failure recreating an old-revision pod, or an already
+// updated pod above the newest step, does not restart the bound of a
+// rollout whose newest step has been down since long ago.
+func TestCheckTier2StatefulSets_RecreatedPodsAreNotProgress(t *testing.T) {
+	longAgo, recent := installedAt, time.Now().Add(-time.Minute)
+	wedged := func() []runtime.Object {
+		return rollTo(createdAt(makeQuorumSTS("nats", "nats-system", 3, 2,
+			[]string{"node-1", "node-2", "node-3"}), longAgo), "nats-r2", longAgo)
+	}
+	for name, objs := range map[string][]runtime.Object{
+		"old-revision pod recreated": onRevision(onRevision(wedged(), "nats-2", "nats-r2", false, longAgo),
+			"nats-0", "nats-r1", true, recent),
+		"updated pod recreated above the newest step": onRevision(onRevision(wedged(),
+			"nats-2", "nats-r2", true, recent), "nats-1", "nats-r2", false, longAgo),
+	} {
+		state := runTier2(objs)
+		require.NotNil(t, state.Tier2StatefulSetsOK, name)
+		assert.False(t, *state.Tier2StatefulSetsOK, name)
+	}
+
+	state := runTier2(onRevision(onRevision(wedged(), "nats-2", "nats-r2", true, longAgo),
+		"nats-1", "nats-r2", false, recent))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "the newest step was created a minute ago")
 }
 
 // The partition is decided by ordinal. Old-revision pods below it are held
@@ -539,6 +634,111 @@ func TestCheckTier1Deployments_ExceededDeadlineAtFullReadinessWarns(t *testing.T
 	state = runTier1Plain(tier1Rolling())
 	assert.NotContains(t, strings.Join(state.Warnings, "; "), "progressDeadlineSeconds",
 		"a Deployment that never exceeded its deadline is not reported")
+}
+
+// controlledBy is a controller reference to owner, of the given kind.
+func controlledBy(kind string, owner metav1.Object) []metav1.OwnerReference {
+	controller := true
+	return []metav1.OwnerReference{{
+		APIVersion: "apps/v1", Kind: kind, Name: owner.GetName(), UID: owner.GetUID(), Controller: &controller,
+	}}
+}
+
+// rolloutPod is a pod of owner on revision label rev, created at created.
+func rolloutPod(name, ns string, labels map[string]string, owner []metav1.OwnerReference, created time.Time,
+	ready bool) *corev1.Pod {
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, OwnerReferences: owner,
+			CreationTimestamp: metav1.NewTime(created)},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}},
+	}
+}
+
+// noDeadlineRollout is tier1Rolling with no progress deadline, rolling from
+// ReplicaSet api-old to api-new, created at started and written to its spec
+// then: two old pods Ready since the install and one updated pod, not yet
+// Ready, created at stepped.
+func noDeadlineRollout(started, stepped time.Time) []runtime.Object {
+	d := tier1Rolling()
+	noDeadline := int32(math.MaxInt32)
+	d.Spec.ProgressDeadlineSeconds = &noDeadline
+	d.UID = "uid-api"
+	d.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}
+	d.ManagedFields = []metav1.ManagedFieldsEntry{specWrite(installManager, started)}
+	d.Status.Replicas = 3
+	replicaSet := func(hash, revision string, created time.Time) *appsv1.ReplicaSet {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			Name: "api-" + hash, Namespace: "nvcf", UID: types.UID("uid-api-" + hash),
+			Labels:            map[string]string{"app": "api", appsv1.DefaultDeploymentUniqueLabelKey: hash},
+			Annotations:       map[string]string{deploymentRevisionAnnotation: revision},
+			OwnerReferences:   controlledBy("Deployment", d),
+			CreationTimestamp: metav1.NewTime(created),
+		}}
+	}
+	oldRS, newRS := replicaSet("old", "1", installedAt), replicaSet("new", "2", started)
+	pod := func(name string, rs *appsv1.ReplicaSet, created time.Time, ready bool) *corev1.Pod {
+		return rolloutPod(name, "nvcf", rs.Labels, controlledBy("ReplicaSet", rs), created, ready)
+	}
+	return []runtime.Object{d, oldRS, newRS, pod("api-old-a", oldRS, installedAt, true),
+		pod("api-old-b", oldRS, installedAt, true), pod("api-new-a", newRS, stepped, false)}
+}
+
+// A Deployment with no progress deadline is tolerated mid-rollout until the
+// bound passes without it moving. Its newest ReplicaSet dates the start, and
+// each pod of the new ReplicaSet or deletion since is progress, so a healthy
+// rollout longer than the bound passes. A spec write that starts no rollout,
+// or an old pod recreated, does not restart the bound.
+func TestCheckTier1Deployments_NoDeadlineRolloutIsDatedByItsReplicaSets(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	longAgo, twenty, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-20*time.Minute),
+		time.Now().Add(-time.Minute)
+	reapplied := noDeadlineRollout(longAgo, longAgo)
+	reapplied[0].(*appsv1.Deployment).ManagedFields = []metav1.ManagedFieldsEntry{specWrite(installManager, recent)}
+	recreated := noDeadlineRollout(longAgo, longAgo)
+	podNamed(recreated, "api-old-b").CreationTimestamp = metav1.NewTime(recent)
+	terminating := noDeadlineRollout(longAgo, longAgo)
+	deleted := metav1.NewTime(recent)
+	podNamed(terminating, "api-old-b").DeletionTimestamp = &deleted
+	for name, tc := range map[string]struct {
+		objs []runtime.Object
+		ok   bool
+	}{
+		"20 minutes in, an updated pod a minute ago": {objs: noDeadlineRollout(twenty, recent), ok: true},
+		"a minute in":                         {objs: noDeadlineRollout(recent, recent), ok: true},
+		"an old pod deleted a minute ago":     {objs: terminating, ok: true},
+		"no step for 20 minutes":              {objs: noDeadlineRollout(twenty, twenty)},
+		"spec re-applied, no rollout started": {objs: reapplied},
+		"an old pod recreated":                {objs: recreated},
+	} {
+		state := runTier1(t, false, routeClient(), tc.objs...)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
+	}
+
+	// The spec write dates the rollout only when the ReplicaSets cannot be
+	// read.
+	for written, ok := range map[time.Time]bool{recent: true, longAgo: false} {
+		objs := noDeadlineRollout(longAgo, longAgo)
+		objs[0].(*appsv1.Deployment).ManagedFields = []metav1.ManagedFieldsEntry{specWrite(installManager, written)}
+		client := gatewayDiscoveryClient(gatewayAPIGroup + "/v1/httproutes")
+		for _, o := range objs {
+			require.NoError(t, client.Tracker().Add(o))
+		}
+		client.PrependReactor("list", "replicasets", func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "replicasets"},
+				"", fmt.Errorf("denied"))
+		})
+		state := &ValidationState{Log: testLog()}
+		checkTier1Deployments(context.Background(), client, routeClient(), state)
+		require.NotNil(t, state.Tier1DeploymentsOK, written)
+		assert.Equal(t, ok, *state.Tier1DeploymentsOK, "spec written %s", time.Since(written).Round(time.Minute))
+	}
 }
 
 // -- Tier-1 proxies and Gateway coverage --

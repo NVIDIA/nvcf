@@ -3649,6 +3649,8 @@ func runTier1On(t *testing.T, state *ValidationState, routes dynamic.Interface, 
 			_, err = client.AppsV1().Deployments(v.Namespace).Create(context.Background(), v, metav1.CreateOptions{})
 		case *appsv1.DaemonSet:
 			_, err = client.AppsV1().DaemonSets(v.Namespace).Create(context.Background(), v, metav1.CreateOptions{})
+		default:
+			err = client.Tracker().Add(o)
 		}
 		require.NoError(t, err)
 	}

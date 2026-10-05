@@ -347,8 +347,22 @@ func assertInventoryMatches(t *testing.T, role Role, actions []ktesting.Action) 
 	assert.Empty(t, unused, "%s grants in %s that no request made", role, rbacInventoryFile)
 }
 
+// rolloutDatingActions dates a Deployment rollout no progress deadline
+// bounds, which reads the ReplicaSets and pods behind it.
+func rolloutDatingActions(t *testing.T) []ktesting.Action {
+	t.Helper()
+	recent := time.Now().Add(-time.Minute)
+	client := fake.NewSimpleClientset(noDeadlineRollout(recent, recent)...)
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, routeClient(), state)
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	require.True(t, *state.Tier1DeploymentsOK)
+	return client.Actions()
+}
+
 func TestRBACInventory_ControlPlane(t *testing.T) {
 	actions := controlPlaneRunActions(t)
+	actions = append(actions, rolloutDatingActions(t)...)
 	actions = append(actions, nodeToNodeActions(t)...)
 	actions = append(actions, namedStorageClassActions(t)...)
 	assertInventoryMatches(t, RoleControlPlane, actions)

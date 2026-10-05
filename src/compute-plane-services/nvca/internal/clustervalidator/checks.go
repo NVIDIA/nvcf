@@ -4112,14 +4112,14 @@ var rolloutProgressingReasons = map[string]bool{
 // never a rollout, a paused Deployment is held, not rolling, and one past
 // ProgressDeadlineExceeded is one the controller gave up on.
 //
-// No controller deadline covers two cases, so they are tolerated only for
-// stalledRolloutAfter from the last write to the spec: a generation the
-// controller has not observed, and a Deployment with no progress deadline
+// No controller deadline covers two cases, so they are tolerated only until
+// stalledRolloutAfter passes without the rollout moving (moved): a generation
+// the controller has not observed, and a Deployment with no progress deadline
 // (progressDeadlineSeconds at its MaxInt32 sentinel). The latter has no
 // Progressing condition at all, since the controller keeps it only to report
 // the deadline, so pods of an older ReplicaSet still running beside too few
 // updated ones are the rollout.
-func deploymentRollingOut(d *appsv1.Deployment, want int32, now time.Time) bool {
+func deploymentRollingOut(d *appsv1.Deployment, want int32, moved func() time.Time, now time.Time) bool {
 	if d.Spec.Paused || deploymentRolloutStalled(d) {
 		return false
 	}
@@ -4139,20 +4139,20 @@ func deploymentRollingOut(d *appsv1.Deployment, want int32, now time.Time) bool 
 	if !unobserved && hasProgressDeadline(d) {
 		return d.Status.UpdatedReplicas < want && progressing
 	}
-	if written, _ := specWrittenAt(d); now.Sub(written) > stalledRolloutAfter {
+	if !unobserved && (d.Status.UpdatedReplicas >= want || d.Status.Replicas <= d.Status.UpdatedReplicas) {
 		return false
 	}
-	return unobserved || (d.Status.UpdatedReplicas < want && d.Status.Replicas > d.Status.UpdatedReplicas)
+	return now.Sub(moved()) <= stalledRolloutAfter
 }
 
-// specWrittenAt is when obj's spec was last written, which dates the start of
-// its current rollout step: a template change, a rollback to an older
-// revision, a restart or a lowered partition. It is the latest managedFields
+// specWrittenAt is when obj's spec was last written: the latest managedFields
 // entry for the object itself that owns spec fields, and no earlier than the
 // object's creation. Status and scale writes are left out: they are a
 // controller reporting and an autoscaler resizing, not a new rollout.
 // recorded is false when no such entry exists, so only the creation time is
-// known.
+// known. The apiserver re-dates a manager's entry on any write by it, one that
+// starts no rollout included, so this can only restart a rollout's clock: it
+// dates a rollout only when what started it cannot be read.
 func specWrittenAt(obj metav1.Object) (latest time.Time, recorded bool) {
 	latest = obj.GetCreationTimestamp().Time
 	for _, mf := range obj.GetManagedFields() {
@@ -4186,6 +4186,122 @@ func deploymentRolloutStalled(d *appsv1.Deployment) bool {
 		}
 	}
 	return false
+}
+
+// deploymentRevisionAnnotation numbers a Deployment's ReplicaSets in rollout
+// order; the highest is its new ReplicaSet.
+const deploymentRevisionAnnotation = "deployment.kubernetes.io/revision"
+
+// rolloutDating dates Tier-1 rollouts for the stall bound. It reads the
+// cluster only when a rollout tolerance depends on it.
+type rolloutDating struct {
+	ctx    context.Context
+	client kubernetes.Interface
+}
+
+// rolloutMoved is when a rollout last moved: started, when it began, or since
+// then a pod it created (stepped) or the deletion of any pod it owns, since
+// the controller deletes each pod it replaces. Any other pod created anew,
+// such as one of an older revision recreated after an eviction or a failure,
+// is churn rather than the rollout.
+func rolloutMoved(started time.Time, pods []corev1.Pod, owned, stepped func(*corev1.Pod) bool) time.Time {
+	moved := started
+	for i := range pods {
+		p := &pods[i]
+		switch {
+		case !owned(p):
+		case p.DeletionTimestamp != nil:
+			moved = laterOf(moved, p.DeletionTimestamp.Time)
+		case stepped(p):
+			moved = laterOf(moved, p.CreationTimestamp.Time)
+		}
+	}
+	return moved
+}
+
+// deploymentMoved is when d's rollout last moved. A rollout begins with a new
+// ReplicaSet, so the newest one's creation dates its start; since then a pod
+// of the new ReplicaSet created, or any of d's pods deleted, is progress. Only
+// when the ReplicaSets cannot be read does the last write to d's spec date it.
+func (r *rolloutDating) deploymentMoved(d *appsv1.Deployment) time.Time {
+	sets, err := r.replicaSetsOf(d)
+	if err != nil || len(sets) == 0 {
+		written, _ := specWrittenAt(d)
+		return written
+	}
+	var started time.Time
+	newest := &sets[0]
+	for i := range sets {
+		started = laterOf(started, sets[i].CreationTimestamp.Time)
+		if replicaSetRevision(&sets[i]) > replicaSetRevision(newest) {
+			newest = &sets[i]
+		}
+	}
+	pods, err := r.podsSelectedBy(d.Namespace, d.Spec.Selector)
+	if err != nil {
+		// The ReplicaSets date the start; no step since is known.
+		return started
+	}
+	owned := func(p *corev1.Pod) bool {
+		for i := range sets {
+			if metav1.IsControlledBy(p, &sets[i]) {
+				return true
+			}
+		}
+		return false
+	}
+	return rolloutMoved(started, pods, owned, func(p *corev1.Pod) bool { return metav1.IsControlledBy(p, newest) })
+}
+
+// replicaSetsOf returns the ReplicaSets d controls.
+func (r *rolloutDating) replicaSetsOf(d *appsv1.Deployment) ([]appsv1.ReplicaSet, error) {
+	if d.Spec.Selector == nil {
+		return nil, errors.New("the Deployment has no selector")
+	}
+	selector, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
+	if err != nil {
+		return nil, err
+	}
+	list, err := observe(r.ctx, func(c context.Context) (*appsv1.ReplicaSetList, error) {
+		return r.client.AppsV1().ReplicaSets(d.Namespace).List(c, metav1.ListOptions{LabelSelector: selector.String()})
+	})
+	if err != nil {
+		return nil, err
+	}
+	var sets []appsv1.ReplicaSet
+	for i := range list.Items {
+		if metav1.IsControlledBy(&list.Items[i], d) {
+			sets = append(sets, list.Items[i])
+		}
+	}
+	return sets, nil
+}
+
+// replicaSetRevision is rs's rollout revision, 0 when it has none.
+func replicaSetRevision(rs *appsv1.ReplicaSet) int64 {
+	n, err := strconv.ParseInt(rs.Annotations[deploymentRevisionAnnotation], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// podsSelectedBy lists the pods in ns that sel matches.
+func (r *rolloutDating) podsSelectedBy(ns string, sel *metav1.LabelSelector) ([]corev1.Pod, error) {
+	if sel == nil {
+		return nil, errors.New("no pod selector")
+	}
+	selector, err := metav1.LabelSelectorAsSelector(sel)
+	if err != nil {
+		return nil, err
+	}
+	pods, err := observe(r.ctx, func(c context.Context) (*corev1.PodList, error) {
+		return r.client.CoreV1().Pods(ns).List(c, metav1.ListOptions{LabelSelector: selector.String()})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pods.Items, nil
 }
 
 // sharedTier1Namespaces hold third-party controllers NVCF installs beside, or
@@ -4227,6 +4343,7 @@ func checkTier1DeploymentsFor(
 	own.reportInvalid(state.Log, state)
 	scan := newTier1Scan(own, state)
 	scan.judgeController = state.PostInstall && own.envoyNotApplicable(ctx) == ""
+	scan.dates = &rolloutDating{ctx: ctx, client: client}
 	for _, ns := range scan.namespaces {
 		scan.scanNamespace(ctx, client, ns)
 	}
@@ -4258,6 +4375,7 @@ type tier1Scan struct {
 	// Deployment, and controllerErr is why it could not be read.
 	judgeController bool
 	controllerErr   error
+	dates           *rolloutDating
 
 	underReplicated []string
 	scaledToZero    []string
@@ -4349,7 +4467,7 @@ func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 			if servesNVCF(ns) {
 				s.ownedCount++
 			}
-			s.assess(deploymentReadiness(d))
+			s.assess(deploymentReadiness(d, s.dates))
 		}
 	}
 }
@@ -4370,7 +4488,7 @@ func (s *tier1Scan) assessEnvoyController(ctx context.Context) {
 		return
 	}
 	for i := range deploys {
-		s.assess(deploymentReadiness(&deploys[i]))
+		s.assess(deploymentReadiness(&deploys[i], s.dates))
 	}
 }
 
@@ -4386,7 +4504,7 @@ type workloadReadiness struct {
 	floor int32
 }
 
-func deploymentReadiness(d *appsv1.Deployment) workloadReadiness {
+func deploymentReadiness(d *appsv1.Deployment, dates *rolloutDating) workloadReadiness {
 	want := int32(1)
 	if d.Spec.Replicas != nil {
 		want = *d.Spec.Replicas
@@ -4394,7 +4512,7 @@ func deploymentReadiness(d *appsv1.Deployment) workloadReadiness {
 	return workloadReadiness{
 		ref:  d.Namespace + "/" + d.Name,
 		want: want, ready: d.Status.ReadyReplicas, updated: d.Status.UpdatedReplicas,
-		rolling: deploymentRollingOut(d, want, time.Now()),
+		rolling: deploymentRollingOut(d, want, func() time.Time { return dates.deploymentMoved(d) }, time.Now()),
 		stalled: deploymentRolloutStalled(d),
 		floor:   rolloutReadyFloor(d, want),
 	}
@@ -4558,13 +4676,13 @@ type envoyProxy struct {
 // cluster. Searching every namespace finds them wherever Envoy Gateway runs,
 // including a controller namespace the validator was not told about, and
 // GatewayNamespace mode's proxies beside their Gateways.
-func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoyProxy, error) {
+func listEnvoyProxies(ctx context.Context, client kubernetes.Interface, dates *rolloutDating) ([]envoyProxy, error) {
 	seen := map[string]bool{}
 	var out []envoyProxy
-	add := func(ns string, labels map[string]string, r workloadReadiness) {
-		if !seen[r.ref] && isEnvoyProxy(labels) {
-			seen[r.ref] = true
-			out = append(out, envoyProxy{namespace: ns, labels: labels, readiness: r})
+	add := func(kind, ns, name string, labels map[string]string, readiness func() workloadReadiness) {
+		if key := kind + "/" + ns + "/" + name; !seen[key] && isEnvoyProxy(labels) {
+			seen[key] = true
+			out = append(out, envoyProxy{namespace: ns, labels: labels, readiness: readiness()})
 		}
 	}
 	for _, label := range []string{owningGatewayNameLabel, owningGatewayClassLabel} {
@@ -4577,7 +4695,8 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 		}
 		for i := range deployments.Items {
 			d := &deployments.Items[i]
-			add(d.Namespace, d.Labels, deploymentReadiness(d))
+			add("deployment", d.Namespace, d.Name, d.Labels,
+				func() workloadReadiness { return deploymentReadiness(d, dates) })
 		}
 		daemonSets, err := observe(ctx, func(c context.Context) (*appsv1.DaemonSetList, error) {
 			return client.AppsV1().DaemonSets(metav1.NamespaceAll).List(c, opts)
@@ -4587,7 +4706,8 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 		}
 		for i := range daemonSets.Items {
 			ds := &daemonSets.Items[i]
-			add(ds.Namespace, ds.Labels, daemonSetReadiness(ds))
+			add("daemonset", ds.Namespace, ds.Name, ds.Labels,
+				func() workloadReadiness { return daemonSetReadiness(ds) })
 		}
 	}
 	return out, nil
@@ -4597,7 +4717,7 @@ func listEnvoyProxies(ctx context.Context, client kubernetes.Interface) ([]envoy
 // whatever its workload kind or namespace, with the same rollout tolerance as
 // any Deployment.
 func (s *tier1Scan) assessProxies(ctx context.Context, client kubernetes.Interface) {
-	s.proxies, s.proxyErr = listEnvoyProxies(ctx, client)
+	s.proxies, s.proxyErr = listEnvoyProxies(ctx, client, s.dates)
 	for i := range s.proxies {
 		s.assessProxy(ctx, &s.proxies[i])
 	}
@@ -5103,12 +5223,13 @@ func (s *tier2Scan) assessMembers(
 	// evidence: one the rollout will not replace or that can never start, or
 	// no progress at all for too long.
 	if oneDownRolling {
-		revisionCreated, revErr := updateRevisionCreated(ctx, client, ns, sts)
-		// Without a recorded spec write, only the revision dates the
-		// rollout: the creation time would date it from before it began.
-		started := revisionCreated
-		if written, recorded := specWrittenAt(sts); recorded {
-			started = laterOf(started, written)
+		// The update revision dates the rollout. A spec write is only the
+		// fallback when that cannot be read: it is re-dated by writes that
+		// start no rollout. Without a recorded one, the StatefulSet's
+		// creation would date the rollout from before it began.
+		started, revErr := updateRevisionCreated(ctx, client, ns, sts)
+		if written, recorded := specWrittenAt(sts); revErr != nil && recorded {
+			started = written
 		}
 		reason, undated := stalledRollout(sts, pods.Items, started, time.Now())
 		switch {
@@ -5117,13 +5238,13 @@ func (s *tier2Scan) assessMembers(
 				ns, sts.Name, sts.Status.ReadyReplicas, want, reason)
 			return rolling
 		case undated:
-			// A pod is missing and nothing dates the rollout, so how long it
-			// has been missing is unknown: tolerating it would be unbounded.
+			// A pod is down and nothing dates the rollout, so how long it has
+			// been down is unknown: tolerating it would be unbounded.
 			cause := "nothing records when it began"
 			if revErr != nil {
 				cause = readFailure("ControllerRevision "+ns+"/"+sts.Status.UpdateRevision, revErr)
 			}
-			s.warn(fmt.Sprintf("%s/%s: a pod is missing and when its rollout began is unknown: %s",
+			s.warn(fmt.Sprintf("%s/%s: a pod is down and when its rollout began is unknown: %s",
 				ns, sts.Name, cause))
 			s.unobserved = append(s.unobserved, ns+"/"+sts.Name)
 			return rolling
@@ -5577,27 +5698,30 @@ func (c quorumComponent) namespaceName() string {
 }
 
 // stalledRolloutAfter bounds how long a rollout no controller deadline covers
-// may go without progress. For a one-down StatefulSet rollout that is no pod
-// created or deleted, no new update revision and no write to its spec; for a
-// Deployment, no write to its spec. It is the bound for every wedge that
-// does not announce itself definitively: a replacement never created (refused
-// by admission or a quota), one stuck unschedulable or in ContainerCreating,
-// an image pull that keeps failing, a container that keeps crashing, or a
-// member that never joins. Each of those can also be a healthy rollout
-// waiting a minute for a node, a registry or a peer.
+// may go without progress: no new update revision or ReplicaSet, no pod
+// created by the rollout and no pod deleted. It is the bound for every wedge
+// that does not announce itself definitively: a replacement never created
+// (refused by admission or a quota), one stuck unschedulable or in
+// ContainerCreating, an image pull that keeps failing, a container that keeps
+// crashing, or a member that never joins. Each of those can also be a healthy
+// rollout waiting a minute for a node, a registry or a peer.
 var stalledRolloutAfter = 15 * time.Minute
 
 // stalledRollout reports why a one-down StatefulSet rollout cannot finish, or
-// "" when it still can. started is when the current rollout step began: the
-// later of the update revision's creation and the last write to the
-// StatefulSet's spec, which also dates a rollback to an older revision and a
-// lowered partition. It is zero when neither is known. undated reports that a
-// pod is missing and nothing dates the rollout, so whether it stalled cannot
-// be told.
+// "" when it still can. started is when the rollout began, the update
+// revision's creation, or zero when that is unknown. Since then the rollout
+// moves by deleting a pod, which the controller does to each pod it replaces
+// whatever its revision or readiness, and by creating its newest step: the
+// update-revision pod with the lowest ordinal, since it works down from the
+// highest. A rollback to an older revision or a lowered partition creates no
+// revision, so its first replacement dates it. Any other pod created anew is
+// churn, not progress: one of the old revision recreated after an eviction or
+// a failure, or an already updated one above the newest step. undated reports
+// that a pod is down and nothing dates the rollout, so whether it stalled
+// cannot be told.
 func stalledRollout(
 	sts *appsv1.StatefulSet, pods []corev1.Pod, started, now time.Time,
 ) (reason string, undated bool) {
-	lastProgress := started
 	owned := 0
 	for i := range pods {
 		p := &pods[i]
@@ -5605,35 +5729,48 @@ func stalledRollout(
 			continue
 		}
 		owned++
-		lastProgress = laterOf(lastProgress, p.CreationTimestamp.Time)
-		if p.DeletionTimestamp != nil {
-			// The controller deletes each pod it replaces, whatever its
-			// revision or readiness, so a terminating pod is the rollout
-			// moving. The time bound covers one that never finishes.
-			lastProgress = laterOf(lastProgress, p.DeletionTimestamp.Time)
-			continue
-		}
-		if isPodReady(p) {
+		if p.DeletionTimestamp != nil || isPodReady(p) {
+			// A terminating pod is the rollout moving; the time bound covers
+			// one that never finishes.
 			continue
 		}
 		if reason := stalledPodReason(sts, p); reason != "" {
 			return reason, false
 		}
 	}
-	if owned < int(*sts.Spec.Replicas) && started.IsZero() {
-		// A pod is missing and when the rollout began is unknown. A missing
-		// pod is usually the controller between deleting a pod and recreating
+	newestStep := rolloutNewestStep(sts, pods)
+	lastProgress := rolloutMoved(started, pods,
+		func(p *corev1.Pod) bool { return metav1.IsControlledBy(p, sts) },
+		func(p *corev1.Pod) bool { return p == newestStep })
+	if started.IsZero() && (owned < int(*sts.Spec.Replicas) || lastProgress.IsZero()) {
+		// A pod is down and when the rollout began is unknown. A missing pod
+		// is usually the controller between deleting a pod and recreating
 		// it, but one that is never recreated would be tolerated forever.
 		return "", true
 	}
-	if lastProgress.IsZero() {
-		return "", false
-	}
 	if idle := now.Sub(lastProgress); idle > stalledRolloutAfter {
-		return fmt.Sprintf("no progress for %s: no pod created or deleted, and no new revision or spec change, "+
-			"since %s", idle.Round(time.Minute), lastProgress.UTC().Format(time.RFC3339)), false
+		return fmt.Sprintf("no progress for %s: no new revision, no pod replaced and none deleted since %s",
+			idle.Round(time.Minute), lastProgress.UTC().Format(time.RFC3339)), false
 	}
 	return "", false
+}
+
+// rolloutNewestStep is the pod a StatefulSet rollout created last: of its
+// update-revision pods, the one with the lowest ordinal. It is nil when there
+// is none.
+func rolloutNewestStep(sts *appsv1.StatefulSet, pods []corev1.Pod) *corev1.Pod {
+	var newest *corev1.Pod
+	for i := range pods {
+		p := &pods[i]
+		if !metav1.IsControlledBy(p, sts) || p.DeletionTimestamp != nil ||
+			p.Labels[appsv1.ControllerRevisionHashLabelKey] != sts.Status.UpdateRevision {
+			continue
+		}
+		if ordinal := podOrdinal(sts, p); ordinal >= 0 && (newest == nil || ordinal < podOrdinal(sts, newest)) {
+			newest = p
+		}
+	}
+	return newest
 }
 
 // stalledPodReason reports why a down pod of a rolling StatefulSet will never
@@ -5695,7 +5832,7 @@ func podOrdinal(sts *appsv1.StatefulSet, p *corev1.Pod) int {
 // updateRevisionCreated is when the StatefulSet's update revision was
 // created, or the zero time and why the revision could not be read. A rollout
 // to a new template begins then; a rollback reuses an older revision and a
-// lowered partition creates none, which specWrittenAt dates instead.
+// lowered partition creates none, so their pods date them.
 func updateRevisionCreated(
 	ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet,
 ) (time.Time, error) {

@@ -71,9 +71,10 @@ rules:
     resources: ["storageclasses"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
-    # deployments: Tier-1 and the Envoy proxies. statefulsets: the Tier-2
-    # quorum and placement check.
-    resources: ["deployments", "statefulsets"]
+    # deployments: Tier-1 and the Envoy proxies. replicasets: the newest one
+    # dates a Deployment rollout no progress deadline bounds. statefulsets:
+    # the Tier-2 quorum and placement check.
+    resources: ["deployments", "replicasets", "statefulsets"]
     verbs: ["list"]
   - apiGroups: ["apps"]
     # list finds Envoy proxies run as DaemonSets and stale probe DaemonSets.
