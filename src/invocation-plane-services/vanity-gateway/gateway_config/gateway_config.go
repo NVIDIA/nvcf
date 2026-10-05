@@ -345,7 +345,7 @@ const (
 )
 
 // llmGatewaySections are the native protocol sections the LLM Gateway serves.
-var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings", "messages"}
+var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings", "anthropicMessages"}
 
 type V2Config struct {
 	OpenAI struct {
@@ -358,10 +358,8 @@ type V2Config struct {
 		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
 		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
 	} `json:"openai"`
-	Anthropic struct {
-		Messages map[string]ModelFunctionDetails `json:"messages"`
-	} `json:"anthropic"`
-	Vanity map[string]VanityEntry `json:"vanity"`
+	AnthropicMessages map[string]ModelFunctionDetails `json:"anthropicMessages"`
+	Vanity            map[string]VanityEntry          `json:"vanity"`
 }
 
 // sharedNotifications is a package-level channel shared across all config instances.
@@ -532,7 +530,7 @@ func (c *GatewayConfig) modelSections() map[string]map[string]ModelFunctionDetai
 		"openai.completions":      c.OpenAI.Completions,
 		"openai.embeddings":       c.OpenAI.Embeddings,
 		"openai.responses":        c.OpenAI.Responses,
-		"anthropic.messages":      c.Anthropic.Messages,
+		"anthropicMessages":       c.AnthropicMessages,
 		"openai.imageGenerations": c.OpenAI.ImageGenerations,
 		"openai.imageEdits":       c.OpenAI.ImageEdits,
 		"openai.imageVariations":  c.OpenAI.ImageVariations,
@@ -540,8 +538,10 @@ func (c *GatewayConfig) modelSections() map[string]map[string]ModelFunctionDetai
 }
 
 func sectionEndpoint(sectionName string) string {
-	_, endpoint, _ := strings.Cut(sectionName, ".")
-	return endpoint
+	if _, endpoint, ok := strings.Cut(sectionName, "."); ok {
+		return endpoint
+	}
+	return sectionName
 }
 
 func validateModelSection(sectionName string, entries map[string]ModelFunctionDetails) error {

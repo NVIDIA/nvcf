@@ -300,7 +300,7 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 		return nil, err
 	}
 
-	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.Anthropic.Messages), privateModelMatcher)
+	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.AnthropicMessages), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}

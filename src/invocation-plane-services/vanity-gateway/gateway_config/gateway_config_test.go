@@ -1550,8 +1550,8 @@ func llmModelConfig(section string, entry ModelFunctionDetails) *GatewayConfig {
 		cfg.OpenAI.ChatCompletions = entries
 	case "responses":
 		cfg.OpenAI.Responses = entries
-	case "messages":
-		cfg.Anthropic.Messages = entries
+	case "anthropicMessages":
+		cfg.AnthropicMessages = entries
 	case "embeddings":
 		cfg.OpenAI.Embeddings = entries
 	case "completions":
@@ -1680,7 +1680,7 @@ func TestMessagesConfigValidation(t *testing.T) {
 			entry := llmModel()
 			entry.CustomHeaders = tc.headers
 			entry.ShadowModelName = tc.shadow
-			cfg := llmModelConfig("messages", entry)
+			cfg := llmModelConfig("anthropicMessages", entry)
 			err := cfg.Validate()
 			if tc.wantError == "" {
 				require.NoError(t, err)
@@ -1699,23 +1699,23 @@ func TestAnthropicMessagesConfigNamespace(t *testing.T) {
    "openai": {"host": "api.example.com", "chatCompletions": {
     "chat": {"modelName": "chat-model", "functionID": "chat-function"}
    }},
-   "anthropic": {"messages": {
+   "anthropicMessages": {
     "native": {"modelName": "native-model", "functionID": "native-function", "functionType": "LLM"}
-   }}
+   }
   }
  }`), &cfg))
 	require.NoError(t, cfg.Validate())
 	require.True(t, cfg.HasLLMGatewayRoute())
 	require.Equal(t, "api.example.com", cfg.OpenAI.Host)
 	require.Equal(t, "chat-model", cfg.OpenAI.ChatCompletions["chat"].ModelName)
-	entry := cfg.Anthropic.Messages["native"]
+	entry := cfg.AnthropicMessages["native"]
 	require.Equal(t, "native-model", entry.ModelName)
 	// A model on another protocol cannot satisfy a Messages shadow target.
 	entry.ShadowModelName = "chat-model"
-	cfg.Anthropic.Messages["native"] = entry
-	require.ErrorContains(t, cfg.Validate(), "anthropic.messages.native: shadow target must reference another model in anthropic.messages")
+	cfg.AnthropicMessages["native"] = entry
+	require.ErrorContains(t, cfg.Validate(), "anthropicMessages.native: shadow target must reference another model in anthropicMessages")
 	entry.ShadowModelName = ""
 	entry.ModelName = ""
-	cfg.Anthropic.Messages["native"] = entry
-	require.ErrorContains(t, cfg.Validate(), "anthropic.messages.native: modelName is required")
+	cfg.AnthropicMessages["native"] = entry
+	require.ErrorContains(t, cfg.Validate(), "anthropicMessages.native: modelName is required")
 }

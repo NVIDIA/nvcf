@@ -707,7 +707,7 @@ func TestMessagesRoutingAndNativeToolLoop(t *testing.T) {
 	})
 	mappings := &config.GatewayConfig{}
 	mappings.OpenAI.Host = openAIHost
-	mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
 	require.NoError(t, mappings.Validate())
 	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
 	bodies := []string{
@@ -748,7 +748,7 @@ func TestMessagesShadowUsesSameNativeProtocol(t *testing.T) {
 	shadow := config.ModelFunctionDetails{ModelName: "native-shadow", FunctionID: "shadow-func", FunctionType: config.FunctionTypeLLM}
 	mappings := &config.GatewayConfig{}
 	mappings.OpenAI.Host = openAIHost
-	mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"primary": primary, "shadow": shadow}
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"primary": primary, "shadow": shadow}
 	require.NoError(t, mappings.Validate())
 	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
 	rec := httptest.NewRecorder()
@@ -775,7 +775,7 @@ func TestMessagesLocalErrorsUseNativeEnvelope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mappings := &config.GatewayConfig{}
 			mappings.OpenAI.Host = openAIHost
-			mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+			mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
 			mux := openAIMux(t, mappings, "http://nvcf.invalid", "http://llm.invalid")
 			rec := httptest.NewRecorder()
 			req := openAIRequest(t, "/v1/messages", tc.body)
@@ -804,7 +804,7 @@ func TestMessagesDiscoveryAndTraceProtocol(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{}`) }))
 	defer backend.Close()
 	mappings := llmMappings(llmModelEntry())
-	mappings.Anthropic.Messages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
 	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
 	rec := httptest.NewRecorder()
 	req := openAIRequest(t, "/v1/messages", `{"model":"`+publicModel+`","messages":[{}],"max_tokens":64}`)

@@ -294,7 +294,7 @@ The existing `MODEL_URI_ALLOWLIST_ENABLED` mode applies to Messages: an
 undeclared path is logged in the default mode and rejected in enforce mode.
 An absent or empty URI list keeps the existing allowlist behavior.
 
-For Vanity Gateway aliases, configure `v2config.anthropic.messages` on the
+For Vanity Gateway aliases, configure `v2config.anthropicMessages` on the
 existing shared API host, configured by `v2config.openai.host`. The section supports the same model mapping, custom-header
 validation, discovery, and shadow settings as other JSON endpoints. Shared
 `/v1/models` discovery includes Messages aliases and adds `supported_endpoints`
@@ -306,13 +306,11 @@ to these aliases so clients can distinguish Messages-only models:
     "openai": {
       "host": "api.example.com"
     },
-    "anthropic": {
-      "messages": {
-        "native-model": {
-          "modelName": "dummy-model",
-          "functionID": "<function-id>",
-          "functionType": "LLM"
-        }
+    "anthropicMessages": {
+      "native-model": {
+        "modelName": "dummy-model",
+        "functionID": "<function-id>",
+        "functionType": "LLM"
       }
     }
   }
