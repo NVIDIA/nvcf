@@ -2007,11 +2007,12 @@ func sweepLegacyOrphanN2NDaemonSets(
 // RBAC first. Namespaces younger than ttl are skipped in case they belong to
 // a concurrent run. One already Terminating is not deleted again, but its
 // probe pods are force-deleted: a pod on a node whose kubelet is gone would
-// otherwise hold it Terminating until the node returns. It reports whether a
-// later sweep has more to do: a namespace too young yet, or a failed request.
+// otherwise hold it Terminating until the node returns. It reports whether it
+// found any, or could not list them: until a namespace is gone, a later sweep
+// may still have to delete it, once old enough, or force its pods out.
 func sweepOrphanN2NNamespaces(
 	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
-) (more bool) {
+) (found bool) {
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -2032,8 +2033,8 @@ func sweepOrphanN2NNamespaces(
 		if !strings.HasPrefix(ns.Name, nodeToNodeNSPrefix) {
 			continue
 		}
+		found = true
 		if ns.CreationTimestamp.After(cutoff) {
-			more = true
 			continue // still within TTL; might be a concurrent run
 		}
 		if ns.DeletionTimestamp != nil {
@@ -2045,7 +2046,6 @@ func sweepOrphanN2NNamespaces(
 		delCancel()
 		if err != nil && !apierrors.IsNotFound(err) {
 			log.Warnf("N2N orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
-			more = true
 			continue
 		}
 		deleted++
@@ -2053,14 +2053,15 @@ func sweepOrphanN2NNamespaces(
 	if deleted > 0 {
 		printInfo(log, fmt.Sprintf("N2N orphan sweep: deleted %d stale probe namespace(s) older than %s", deleted, ttl))
 	}
-	return more
+	return found
 }
 
 // SweepLeftoverProbes deletes the probe namespaces validator runs left behind,
 // with the DaemonSets, pods and NetworkPolicies in them, once they are older
 // than a run can last. Every run sweeps them too, but a validator disabled or
 // uninstalled mid-run loses its RBAC before its cleanup runs, and no later run
-// comes. It reports whether a later sweep has more to do.
+// comes. It reports whether a later sweep has more to do: a probe namespace,
+// deleted or not, is not gone until it finishes terminating.
 func SweepLeftoverProbes(ctx context.Context, log *logrus.Entry, client kubernetes.Interface) (more bool) {
 	n2n := sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
 	enforcement := sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)

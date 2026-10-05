@@ -799,8 +799,8 @@ func TestProbeCleanup_DeniedDeleteSaysWhoReclaims(t *testing.T) {
 }
 
 // The operator's sweep reclaims both kinds of probe namespace once they are
-// past their TTL, and says when a later sweep has more to do: a namespace too
-// young to tell from a live run's, or a request that failed.
+// past their TTL, and says when a later sweep has more to do: while any probe
+// namespace is left, young, Terminating or just deleted, or a request failed.
 func TestSweepLeftoverProbes(t *testing.T) {
 	n2n := func(name string, age time.Duration) *corev1.Namespace {
 		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
@@ -833,9 +833,16 @@ func TestSweepLeftoverProbes(t *testing.T) {
 			assert.True(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset(young)))
 		})
 	}
+	t.Run("a Terminating namespace is looked at again", func(t *testing.T) {
+		terminating := n2n("stuck", time.Hour)
+		terminating.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+		terminating.Finalizers = []string{"kubernetes"}
+		assert.True(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset(terminating)))
+	})
 	t.Run("nothing left", func(t *testing.T) {
 		client := fake.NewSimpleClientset(n2n("stale", orphanN2NNamespaceTTL+time.Minute),
 			makeNetpolValidationNs("netpol-validation-stale", orphanNamespaceTTL+time.Minute))
+		assert.True(t, SweepLeftoverProbes(ctx, testLog(), client), "a deleted namespace may still be terminating")
 		assert.False(t, SweepLeftoverProbes(ctx, testLog(), client))
 		assert.False(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset()))
 	})

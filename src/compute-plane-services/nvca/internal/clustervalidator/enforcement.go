@@ -471,11 +471,11 @@ func cleanupTestNamespace(log *logrus.Entry, client kubernetes.Interface, ns str
 // that died before their deferred cleanup could fire (SIGKILL, OOM,
 // force-delete, node failure) or lost their RBAC first. Namespaces younger
 // than ttl are left alone in case they belong to a concurrent run. It reports
-// whether a later sweep has more to do: a namespace too young yet, or a
-// failed request.
+// whether it found any, or could not list them: until a namespace is gone, a
+// later sweep may still have to delete it.
 func sweepOrphanTestNamespaces(
 	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
-) (more bool) {
+) (found bool) {
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -497,8 +497,8 @@ func sweepOrphanTestNamespaces(
 		if !strings.HasPrefix(ns.Name, "netpol-validation-") {
 			continue
 		}
+		found = true
 		if ns.CreationTimestamp.After(cutoff) {
-			more = true
 			continue // still within TTL — might be a concurrent run
 		}
 		if ns.DeletionTimestamp != nil {
@@ -509,7 +509,6 @@ func sweepOrphanTestNamespaces(
 		delCancel()
 		if err != nil && !apierrors.IsNotFound(err) {
 			log.Warnf("Orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
-			more = true
 			continue
 		}
 		deleted++
@@ -519,7 +518,7 @@ func sweepOrphanTestNamespaces(
 			"Orphan sweep: deleted %d stale netpol-validation-* namespace(s) older than %s",
 			deleted, ttl))
 	}
-	return more
+	return found
 }
 
 // ---------------------------------------------------------------------------
