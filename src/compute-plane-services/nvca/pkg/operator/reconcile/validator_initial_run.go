@@ -42,9 +42,13 @@ import (
 // operator starts.
 const validatorSpecAnnotation = "nvca.nvcf.nvidia.io/cluster-validator-spec"
 
-// validatorRunPollInterval is how often the operator re-reads the CronJob. A
-// var so tests can shorten it.
-var validatorRunPollInterval = 30 * time.Second
+// validatorRunPollInterval is how often the operator re-reads the CronJob,
+// and validatorRunMaxBackoff the longest it waits while polls keep failing.
+// Vars so tests can shorten them.
+var (
+	validatorRunPollInterval = 30 * time.Second
+	validatorRunMaxBackoff   = 10 * time.Minute
+)
 
 // watchValidatorSpec runs the cluster-validator CronJob as a Job whenever the
 // newest Job the CronJob owns did not run its current spec: at install, and
@@ -60,9 +64,9 @@ var validatorRunPollInterval = 30 * time.Second
 // the operator keeps a validator-only change from rolling the operator
 // through its init container.
 //
-// It returns when ctx ends or the operator is not allowed to read the CronJob
-// or create the Job. Every other error is retried at the next poll; the
-// CronJob's own schedule runs regardless.
+// It returns when ctx ends or RBAC does not let the operator read the CronJob,
+// list the Jobs or create one. Every other error is retried, less often while
+// it repeats; the CronJob's own schedule runs regardless.
 func watchValidatorSpec(ctx context.Context, client kubernetes.Interface, namespace, cronJobName string) {
 	w := &validatorRunWatcher{
 		client:    client,
@@ -74,7 +78,7 @@ func watchValidatorSpec(ctx context.Context, client kubernetes.Interface, namesp
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(validatorRunPollInterval):
+		case <-time.After(w.nextPoll()):
 		}
 	}
 }
@@ -88,30 +92,54 @@ type validatorRunWatcher struct {
 	ran string
 	// reported is the last skip reason logged, so a wait is logged once.
 	reported string
-	// failing is set while API errors repeat, so only the first is a warning.
-	failing bool
+	// failures counts the polls in a row that failed, so only the first
+	// failure is a warning and the wait grows while they repeat.
+	failures int
 }
 
 // reconcile starts a run if the newest owned Job did not run the CronJob's
 // current spec and nothing is running. It reports whether to stop watching.
 func (w *validatorRunWatcher) reconcile(ctx context.Context) (stop bool) {
+	stop, failed := w.poll(ctx)
+	if failed {
+		w.failures++
+	} else {
+		w.failures = 0
+	}
+	return stop
+}
+
+// nextPoll is the poll interval, doubled for each failed poll in a row after
+// the first, up to validatorRunMaxBackoff. A denial that persists, such as an
+// admission webhook's, is then retried ever less often but never given up on.
+func (w *validatorRunWatcher) nextPoll() time.Duration {
+	wait := validatorRunPollInterval
+	for i := 1; i < w.failures && wait < validatorRunMaxBackoff; i++ {
+		wait *= 2
+	}
+	return min(wait, validatorRunMaxBackoff)
+}
+
+// poll is one pass of reconcile. failed says an API call failed, so the next
+// poll waits longer.
+func (w *validatorRunWatcher) poll(ctx context.Context) (stop, failed bool) {
 	cronJob, err := w.client.BatchV1().CronJobs(w.namespace).Get(ctx, w.name, metav1.GetOptions{})
 	if err != nil {
-		return w.apiError("read the cluster-validator CronJob", err)
+		return w.apiError("read the cluster-validator CronJob", "get", err)
 	}
 	spec := cronJob.Spec.JobTemplate.Annotations[validatorSpecAnnotation]
 	switch {
 	case spec == "":
 		w.skip("", "the CronJob carries no "+validatorSpecAnnotation+" annotation, so the spec a run used is unknown")
-		return false
+		return false, false
 	case spec == w.ran:
-		return false
+		return false, false
 	case cronJob.Spec.Suspend != nil && *cronJob.Spec.Suspend:
 		w.skip(spec, "the CronJob is suspended")
-		return false
+		return false, false
 	case len(cronJob.Status.Active) > 0:
 		w.skip(spec, "a scheduled run is in progress")
-		return false
+		return false, false
 	}
 
 	// Ownership, not the template's labels, identifies the CronJob's runs:
@@ -119,28 +147,30 @@ func (w *validatorRunWatcher) reconcile(ctx context.Context) (stop bool) {
 	// would otherwise hide the newest run and skip the rollback's own.
 	jobs, err := w.client.BatchV1().Jobs(w.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return w.apiError("list the cluster-validator Jobs", err)
+		return w.apiError("list the cluster-validator Jobs", "list", err)
 	}
 	owned := ownedJobs(jobs.Items, cronJob)
 	for _, job := range owned {
 		if !jobFinished(job) {
 			w.skip(spec, "run "+job.Name+" is in progress")
-			return false
+			return false, false
 		}
 	}
 	newest := ""
 	if len(owned) > 0 {
 		last := owned[len(owned)-1]
 		if last.Annotations[validatorSpecAnnotation] == spec {
-			w.ran, w.failing = spec, false
-			return false
+			w.ran = spec
+			return false, false
 		}
 		newest = string(last.UID)
 	}
 	return w.start(ctx, cronJob, spec, newest)
 }
 
-func (w *validatorRunWatcher) start(ctx context.Context, cronJob *batchv1.CronJob, spec, newest string) bool {
+func (w *validatorRunWatcher) start(
+	ctx context.Context, cronJob *batchv1.CronJob, spec, newest string,
+) (stop, failed bool) {
 	job := validatorRunJob(cronJob, spec, newest)
 	_, err := w.client.BatchV1().Jobs(w.namespace).Create(ctx, job, metav1.CreateOptions{})
 	switch {
@@ -154,31 +184,44 @@ func (w *validatorRunWatcher) start(ctx context.Context, cronJob *batchv1.CronJo
 			w.log.Warnf("Job %s exists but the cluster-validator CronJob does not own it; not starting a run "+
 				"for validator spec %s", job.Name, spec)
 		}
+	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
+		// The same Job would be rejected again, so this spec is not retried.
+		w.log.WithError(err).Warnf("the API server rejected cluster-validator run %s; not starting another "+
+			"for validator spec %s", job.Name, spec)
 	default:
-		return w.apiError("start a cluster-validator run", err)
+		return w.apiError("start a cluster-validator run", "create", err)
 	}
-	w.ran, w.failing = spec, false
-	return false
+	w.ran = spec
+	return false, false
 }
 
-// apiError logs err and reports whether to stop: only a denied request stops
-// the watch, since retrying cannot fix it.
-func (w *validatorRunWatcher) apiError(action string, err error) bool {
+// apiError logs err and reports whether to stop. Only RBAC refusing verb stops
+// the watch, since retrying cannot fix it. A ResourceQuota, an admission
+// webhook or a policy also answers 403, and an expired token 401, and those
+// can pass on a later poll.
+func (w *validatorRunWatcher) apiError(action, verb string, err error) (stop, failed bool) {
 	log := w.log.WithError(err)
 	switch {
-	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
+	case deniedByRBAC(err, verb):
 		log.Warnf("not allowed to %s; the operator starts no cluster-validator runs, "+
 			"and the summary waits for the CronJob's schedule", action)
-		return true
+		return true, true
 	case apierrors.IsNotFound(err):
 		log.Debugf("could not %s yet; waiting for it", action)
-	case w.failing:
+		return false, false
+	case w.failures > 0:
 		log.Debugf("could not %s; retrying", action)
 	default:
-		w.failing = true
-		log.Warnf("could not %s; retrying every %s", action, validatorRunPollInterval)
+		log.Warnf("could not %s; retrying, less often while it keeps failing", action)
 	}
-	return false
+	return false, true
+}
+
+// deniedByRBAC reports whether err is the authorizer refusing verb. Its 403
+// names the verb ("User ... cannot create resource ..."); the other 403s do
+// not.
+func deniedByRBAC(err error, verb string) bool {
+	return apierrors.IsForbidden(err) && strings.Contains(err.Error(), " cannot "+verb+" resource ")
 }
 
 func (w *validatorRunWatcher) skip(spec, reason string) {
@@ -240,7 +283,7 @@ func validatorRunJob(cronJob *batchv1.CronJob, spec, newest string) *batchv1.Job
 	controller := true
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        validatorRunJobName(cronJob.Name, spec, newest),
+			Name:        validatorRunJobName(cronJob, spec, newest),
 			Namespace:   cronJob.Namespace,
 			Labels:      jobLabels,
 			Annotations: annotations,
@@ -256,15 +299,16 @@ func validatorRunJob(cronJob *batchv1.CronJob, spec, newest string) *batchv1.Job
 	}
 }
 
-// validatorRunJobName is the CronJob's name and a hash of the spec and of the
-// Job it follows, within the 63 characters the job-name label allows. Replicas
-// racing for the same run pick the same name; a later return to the same spec
-// picks a new one.
-func validatorRunJobName(cronJobName, spec, newest string) string {
+// validatorRunJobName is the CronJob's name and a hash of the spec, of the Job
+// it follows and of the CronJob itself, within the 63 characters the job-name
+// label allows. Replicas racing for the same run pick the same name; a later
+// return to the same spec picks a new one, and so does a reinstalled CronJob,
+// whose predecessor's runs may outlive it.
+func validatorRunJobName(cronJob *batchv1.CronJob, spec, newest string) string {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(spec + "/" + newest))
+	_, _ = h.Write([]byte(spec + "/" + newest + "/" + string(cronJob.UID)))
 	suffix := fmt.Sprintf("-run-%08x", h.Sum32())
-	base := cronJobName
+	base := cronJob.Name
 	if limit := 63 - len(suffix); len(base) > limit {
 		base = strings.TrimRight(base[:limit], "-")
 	}

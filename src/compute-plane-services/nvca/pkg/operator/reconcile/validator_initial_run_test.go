@@ -20,6 +20,7 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -254,7 +255,7 @@ func TestValidatorRun_RespectsSuspendAndRunsInProgress(t *testing.T) {
 func TestValidatorRun_ForeignJobOfTheSameNameIsLeftAlone(t *testing.T) {
 	cronJob := validatorCronJobWithSpec("a")
 	squatter := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-		Name: validatorRunJobName(validatorCronJob, "a", ""), Namespace: validatorNS, UID: "squatter",
+		Name: validatorRunJobName(cronJob, "a", ""), Namespace: validatorNS, UID: "squatter",
 	}}
 	client, creates := validatorClient(cronJob, squatter)
 	w := newValidatorWatcher(client)
@@ -278,9 +279,9 @@ func TestValidatorRun_NoSpecAnnotationStartsNothing(t *testing.T) {
 }
 
 func fastValidatorPolls(t *testing.T) {
-	prev := validatorRunPollInterval
-	validatorRunPollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { validatorRunPollInterval = prev })
+	prevPoll, prevBackoff := validatorRunPollInterval, validatorRunMaxBackoff
+	validatorRunPollInterval, validatorRunMaxBackoff = 20*time.Millisecond, 80*time.Millisecond
+	t.Cleanup(func() { validatorRunPollInterval, validatorRunMaxBackoff = prevPoll, prevBackoff })
 }
 
 // startWatch runs the watch until the test ends, and waits for it to return
@@ -334,14 +335,21 @@ func TestWatchValidatorSpec_WaitsForTheCronJob(t *testing.T) {
 	require.Eventually(t, func() bool { return len(validatorJobs(t, client)) == 1 }, 5*time.Second, 10*time.Millisecond)
 }
 
-// A denied read or create stops the watch: retrying cannot fix RBAC.
-func TestWatchValidatorSpec_ForbiddenStops(t *testing.T) {
+// rbacDenied is the 403 the API server's authorizer returns.
+func rbacDenied(verb, resource string) error {
+	return apierrors.NewForbidden(batchv1.Resource(resource), "", fmt.Errorf(
+		`User "system:serviceaccount:%s:nvca-operator" cannot %s resource %q in API group "batch" `+
+			`in the namespace %q`, validatorNS, verb, resource, validatorNS))
+}
+
+// RBAC refusing the read, the list or the create stops the watch: retrying
+// cannot fix it.
+func TestWatchValidatorSpec_RBACDenialStops(t *testing.T) {
 	fastValidatorPolls(t)
-	for _, verb := range []string{"get", "create"} {
+	for _, call := range []struct{ verb, resource string }{{"get", "cronjobs"}, {"list", "jobs"}, {"create", "jobs"}} {
 		client, _ := validatorClient(validatorCronJobWithSpec("a"))
-		resource := map[string]string{"get": "cronjobs", "create": "jobs"}[verb]
-		client.PrependReactor(verb, resource, func(ktesting.Action) (bool, runtime.Object, error) {
-			return true, nil, apierrors.NewForbidden(batchv1.Resource(resource), "", errors.New("rbac"))
+		client.PrependReactor(call.verb, call.resource, func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, rbacDenied(call.verb, call.resource)
 		})
 		done := make(chan struct{})
 		go func() {
@@ -351,9 +359,121 @@ func TestWatchValidatorSpec_ForbiddenStops(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			t.Fatalf("a forbidden %s did not stop the watch", verb)
+			t.Fatalf("RBAC refusing %s %s did not stop the watch", call.verb, call.resource)
 		}
-		assert.Equal(t, 1, countVerb(client, "get", "cronjobs"), verb)
+		assert.Equal(t, 1, countVerb(client, "get", "cronjobs"), call.verb)
+	}
+}
+
+// A full Job quota, an admission webhook's denial and a rejected token pass
+// on a later poll, so they are retried rather than ending the watch for the
+// life of the operator.
+func TestWatchValidatorSpec_RetriesOtherDenials(t *testing.T) {
+	fastValidatorPolls(t)
+	jobs := batchv1.Resource("jobs")
+	for name, tc := range map[string]struct {
+		verb, resource string
+		err            error
+	}{
+		"quota": {"create", "jobs", apierrors.NewForbidden(jobs, "run", errors.New(
+			"exceeded quota: jobs, requested: count/jobs.batch=1, used: count/jobs.batch=5, limited: count/jobs.batch=5"))},
+		"webhook": {"create", "jobs", apierrors.NewForbidden(jobs, "run",
+			errors.New(`admission webhook "policy.example.com" denied the request: not now`))},
+		"token": {"get", "cronjobs", apierrors.NewUnauthorized("token expired")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, _ := validatorClient(validatorCronJobWithSpec("a"))
+			var calls atomic.Int32
+			client.PrependReactor(tc.verb, tc.resource, func(ktesting.Action) (bool, runtime.Object, error) {
+				if calls.Add(1) <= 3 {
+					return true, nil, tc.err
+				}
+				return false, nil, nil
+			})
+			startWatch(t, client)
+			require.Eventually(t, func() bool { return len(validatorJobs(t, client)) == 1 }, 5*time.Second, 10*time.Millisecond)
+			if tc.verb == "create" {
+				assert.Equal(t, int32(4), calls.Load(), "each denied create is retried, and none after the run starts")
+			}
+		})
+	}
+}
+
+// The wait grows while polls keep failing, up to a cap, and is back to the
+// poll interval after the first poll that does not fail.
+func TestValidatorRunWatcher_BacksOffWhileFailing(t *testing.T) {
+	client, _ := validatorClient(validatorCronJobWithSpec("a"))
+	var gets atomic.Int32
+	client.PrependReactor("get", "cronjobs", func(ktesting.Action) (bool, runtime.Object, error) {
+		if gets.Add(1) <= 7 {
+			return true, nil, apierrors.NewServiceUnavailable("etcd leader change")
+		}
+		return false, nil, nil
+	})
+	w := newValidatorWatcher(client)
+	assert.Equal(t, validatorRunPollInterval, w.nextPoll())
+	var waits []time.Duration
+	for range 7 {
+		require.False(t, w.reconcile(context.Background()))
+		waits = append(waits, w.nextPoll())
+	}
+	p := validatorRunPollInterval
+	assert.Equal(t, []time.Duration{
+		p, 2 * p, 4 * p, 8 * p, 16 * p, min(32*p, validatorRunMaxBackoff), validatorRunMaxBackoff,
+	}, waits)
+	require.False(t, w.reconcile(context.Background()))
+	assert.Equal(t, validatorRunPollInterval, w.nextPoll())
+	assert.Len(t, validatorJobs(t, client), 1)
+}
+
+// A run the API server rejects as invalid would be rejected again, so the
+// spec is not retried every poll; the next spec is tried.
+func TestValidatorRun_RejectedRunIsNotRetried(t *testing.T) {
+	client, _ := validatorClient(validatorCronJobWithSpec("a"))
+	var creates atomic.Int32
+	client.PrependReactor("create", "jobs", func(a ktesting.Action) (bool, runtime.Object, error) {
+		creates.Add(1)
+		if a.(ktesting.CreateAction).GetObject().(*batchv1.Job).Annotations[validatorSpecAnnotation] == "a" {
+			return true, nil, apierrors.NewInvalid(batchv1.SchemeGroupVersion.WithKind("Job").GroupKind(), "run", nil)
+		}
+		return false, nil, nil
+	})
+	w := newValidatorWatcher(client)
+	require.False(t, w.reconcile(context.Background()))
+	require.False(t, w.reconcile(context.Background()))
+	assert.Equal(t, int32(1), creates.Load())
+	assert.Zero(t, w.failures)
+
+	setCronJob(t, client, validatorCronJobWithSpec("b"))
+	require.False(t, w.reconcile(context.Background()))
+	assert.Equal(t, int32(2), creates.Load())
+	assert.Len(t, validatorJobs(t, client), 1)
+}
+
+// A reinstalled CronJob starts its own run even while a run of the same spec
+// left by its predecessor, owned by the old CronJob or orphaned, still exists.
+func TestValidatorRun_ReinstalledCronJobIgnoresItsPredecessorsRun(t *testing.T) {
+	predecessor := validatorCronJobWithSpec("a")
+	predecessor.UID = "old-cj-uid"
+	owned := pastValidatorJob(validatorRunJobName(predecessor, "a", ""), "a", time.Hour)
+	owned.OwnerReferences[0].UID = predecessor.UID
+	orphaned := owned.DeepCopy()
+	orphaned.OwnerReferences = nil
+	for name, leftover := range map[string]*batchv1.Job{"owned by the old CronJob": owned, "orphaned": orphaned} {
+		t.Run(name, func(t *testing.T) {
+			client, creates := validatorClient(validatorCronJobWithSpec("a"), leftover)
+			require.False(t, newValidatorWatcher(client).reconcile(context.Background()))
+			assert.Equal(t, int32(1), creates.Load())
+			jobs := validatorJobs(t, client)
+			require.Len(t, jobs, 2)
+			started := 0
+			for i := range jobs {
+				if ownedBy(&jobs[i], validatorCronJobWithSpec("a")) {
+					started++
+				}
+			}
+			assert.Equal(t, 1, started)
+		})
 	}
 }
 
@@ -378,13 +498,18 @@ func TestWatchValidatorSpec_StopsWithTheContext(t *testing.T) {
 // the CronJob is called, and is the same for racing replicas but differs for
 // another spec or another predecessor.
 func TestValidatorRunJobName(t *testing.T) {
-	long := strings.Repeat("a", 49) + "-" + strings.Repeat("b", 10)
-	name := validatorRunJobName(long, "spec", "uid-1")
+	cronJob := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{
+		Name: strings.Repeat("a", 49) + "-" + strings.Repeat("b", 10), UID: "cj-1",
+	}}
+	name := validatorRunJobName(cronJob, "spec", "uid-1")
 	assert.LessOrEqual(t, len(name), 63)
 	assert.True(t, strings.HasPrefix(name, strings.Repeat("a", 49)+"-run-"), "a cut name ends without a dash: %s", name)
-	assert.Equal(t, name, validatorRunJobName(long, "spec", "uid-1"))
-	assert.NotEqual(t, name, validatorRunJobName(long, "other", "uid-1"))
-	assert.NotEqual(t, name, validatorRunJobName(long, "spec", "uid-2"))
+	assert.Equal(t, name, validatorRunJobName(cronJob.DeepCopy(), "spec", "uid-1"))
+	assert.NotEqual(t, name, validatorRunJobName(cronJob, "other", "uid-1"))
+	assert.NotEqual(t, name, validatorRunJobName(cronJob, "spec", "uid-2"))
+	reinstalled := cronJob.DeepCopy()
+	reinstalled.UID = "cj-2"
+	assert.NotEqual(t, name, validatorRunJobName(reinstalled, "spec", "uid-1"))
 }
 
 // A disabled validator's summary is deleted so no agent republishes its old
