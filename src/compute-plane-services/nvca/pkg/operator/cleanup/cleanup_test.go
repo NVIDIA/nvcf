@@ -28,10 +28,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -1976,4 +1978,62 @@ func TestCleanupBackendResources_ConfiguredRequestsNamespaces(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{"team-borrowed", "unrelated"}, names,
 		"only a pre-existing configured namespace and unrelated namespaces may survive uninstall")
+}
+
+func TestCleanupBackendResources_RequestsNamespaceListFailures(t *testing.T) {
+	previousBackoff := requestsNamespaceListBackoff
+	requestsNamespaceListBackoff = wait.Backoff{Steps: 5, Duration: time.Millisecond, Factor: 1}
+	t.Cleanup(func() { requestsNamespaceListBackoff = previousBackoff })
+
+	unavailable := k8serrors.NewServiceUnavailable("apiserver unavailable")
+	forbidden := k8serrors.NewForbidden(corev1.Resource("namespaces"), "", errors.New("denied"))
+	tests := []struct {
+		name      string
+		failures  int
+		err       error
+		wantErr   bool
+		wantCalls int
+	}{
+		{name: "transient failure recovers within the retry budget", failures: 2, err: unavailable, wantCalls: 3},
+		{name: "persistent transient failure stops cleanup", failures: 100, err: unavailable, wantErr: true, wantCalls: 5},
+		{name: "non-transient failure stops cleanup without retrying", failures: 100, err: forbidden, wantErr: true, wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			k8sClient := fake.NewSimpleClientset(
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCASystemNamespace}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCARequestsNamespace}},
+			)
+			calls := 0
+			k8sClient.PrependReactor("list", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				listAction, ok := action.(k8stesting.ListAction)
+				if !ok || listAction.GetListRestrictions().Labels.String() != requestsNamespaceLabelSelector {
+					return false, nil, nil
+				}
+				calls++
+				if calls <= tt.failures {
+					return true, nil, tt.err
+				}
+				return false, nil, nil
+			})
+			dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{
+					{Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests"}: "ICMSRequestList",
+					testModelCacheBindingGVR: "ModelCacheBindingList",
+				})
+
+			err := CleanupBackendResources(ctx, k8sClient, dynamicClient, &nvidiaiov1.NVCFBackend{})
+			assert.Equal(t, tt.wantCalls, calls)
+			_, getErr := k8sClient.CoreV1().Namespaces().Get(ctx, DefaultNVCASystemNamespace, metav1.GetOptions{})
+			if !tt.wantErr {
+				require.NoError(t, err)
+				assert.True(t, k8serrors.IsNotFound(getErr), "cleanup should have completed")
+				return
+			}
+			require.Error(t, err, "callers must not remove the finalizer when requests namespaces are unknown")
+			assert.ErrorIs(t, err, tt.err)
+			assert.NoError(t, getErr, "cleanup must stop before deleting anything")
+		})
+	}
 }

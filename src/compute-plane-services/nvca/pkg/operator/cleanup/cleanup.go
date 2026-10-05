@@ -33,11 +33,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
@@ -133,10 +135,12 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	systemNS, requestsNS := BackendNamespaces(nb)
 
 	// A worker.requestsNamespace override, now or in an earlier configuration,
-	// puts ICMSRequests outside the NVCFBackend requests namespace.
+	// puts ICMSRequests outside the NVCFBackend requests namespace. Without this
+	// list the operator-created ones would be leaked once the finalizer is
+	// removed, so fail before deleting anything and let the uninstall retry.
 	configuredRequestsNamespaces, err := listRequestsNamespaces(ctx, k8sClient)
 	if err != nil {
-		log.WithError(err).Warn("failed to list configured requests namespaces")
+		return err
 	}
 	requestsNamespaces := sets.New(requestsNS, AgentRequestsNamespace(ctx, k8sClient, nb))
 	for _, ns := range configuredRequestsNamespaces {
@@ -778,9 +782,23 @@ const workloadNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-ty
 // requestsNamespaceLabelSelector selects requests namespaces prepared by the operator.
 const requestsNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-type=pod_spec"
 
+// requestsNamespaceListBackoff retries a transient list failure for about 7.5s
+// before uninstall cleanup gives up and is retried as a whole.
+var requestsNamespaceListBackoff = wait.Backoff{
+	Steps:    5,
+	Duration: 500 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.1,
+}
+
 func listRequestsNamespaces(ctx context.Context, k8sClient kubernetes.Interface) ([]corev1.Namespace, error) {
-	nsList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-		LabelSelector: requestsNamespaceLabelSelector,
+	var nsList *corev1.NamespaceList
+	err := retry.OnError(requestsNamespaceListBackoff, k8sutil.IsTransientK8sError, func() error {
+		var listErr error
+		nsList, listErr = k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+			LabelSelector: requestsNamespaceLabelSelector,
+		})
+		return listErr
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list requests namespaces: %w", err)
