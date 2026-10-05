@@ -1341,8 +1341,8 @@ func TestStargateProviderProxyOmitsPriorityWhenUnset(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.StatusCode)
 }
 
-// A chunked body lets Stargate answer before reading it and then drop the
-// connection, which poisons the client's connection pool.
+// Stargate checks its size limit against the declared length, so a known body
+// length must reach it as Content-Length, not chunked.
 func TestStargateProviderProxy_ContentLengthHeader_SendsFixedLengthBody(t *testing.T) {
 	t.Parallel()
 

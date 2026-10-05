@@ -31,8 +31,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
-// Stargate can answer before reading a chunked body and then drop the
-// connection, so every buffered body must reach it with a matching length.
+// Stargate checks its size limit against the declared length, so every
+// buffered body must reach it with a matching Content-Length.
 func TestGatewayUpstreamRequest_BufferedBody_SendsMatchingContentLength(t *testing.T) {
 	t.Parallel()
 
