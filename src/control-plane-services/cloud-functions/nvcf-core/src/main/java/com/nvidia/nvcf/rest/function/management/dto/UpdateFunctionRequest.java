@@ -72,8 +72,7 @@ public record UpdateFunctionRequest(
         LlmInvocationConfigDto llmInvocationConfig) {
 
     private static final String MESG_MODEL_CONFIG_UPDATE_REQUIRED =
-            "Invalid request: at least one of 'tokenRateLimit', 'routingMethod', 'uris', or "
-                    + "'tokenizer' must be specified";
+            "Invalid request: at least one of 'tokenRateLimit' or 'routingMethod' must be specified";
     private static final String MESG_DUPLICATE_MODEL_UPDATES =
             "Invalid request: duplicate model names are not allowed in 'modelUpdates'";
     private static final String MESG_FUNCTION_UPDATE_REQUIRED =
