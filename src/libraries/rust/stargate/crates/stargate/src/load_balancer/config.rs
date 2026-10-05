@@ -199,6 +199,12 @@ pub struct WaitAndWidenAlgorithmConfig {
     /// Keep public buckets closed for this many milliseconds after request arrival.
     /// Defaults to zero. Queue and TTFT selection still apply within the affinity group.
     pub cache_affinity_wait_ms: Option<u64>,
+    /// Pulsar wait-and-widen only: time between ranking-band openings after
+    /// the affinity wait. Defaults to `cache_affinity_wait_ms`.
+    pub band_widen_interval_ms: Option<u64>,
+    /// Pulsar wait-and-widen only: `max_queued` for candidates outside the
+    /// affinity group. Defaults to `0`, so overflow needs a free engine slot.
+    pub fallback_max_queued: Option<u64>,
     pub max_queue_time_floor_ms: Option<u64>,
     pub max_queue_time_ceil_ms: Option<u64>,
     pub ttft_bucket_size_ms: Option<u64>,

@@ -111,7 +111,7 @@ Choose based on the routing goal and available backend statistics:
 | Compare a small random sample using TTFT or another load signal. | `power-of-n` | Signals required by the configured comparator. |
 | Minimize estimated time to first token across heterogeneous or remote clusters while controlling which TTFT bands are eligible. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
 | Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `last_mean_input_tps` for every participating cluster. |
-| Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
+| Keep Pulsar affinity when possible, then widen gradually through the Pulsar ranking when the primary cannot meet capacity or queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
 
 Use `round-robin` for deterministic cycling and `random` for uniform random
 selection when routing should not depend on backend load statistics.
@@ -273,12 +273,32 @@ Minimal configuration:
 
 ## `pulsar-wait-and-widen`
 
-`pulsar-wait-and-widen` combines Pulsar ranking with the WaitAndWiden fallback.
-Without queue-SLO fields, an eligible Pulsar primary wins immediately.
+`pulsar-wait-and-widen` is `wait-and-widen` with the Pulsar ranking as the
+source of affinity. Without queue-SLO fields, an eligible Pulsar primary wins
+immediately.
 
-When queue-SLO fields are enabled or the primary is ineligible, the algorithm
-checks the primary and then exponentially wider ranking bands of 2, 4, 8, and
-so on. Within each band, `wait-and-widen` selects an eligible candidate.
+When queue-SLO fields are enabled or the primary is ineligible, the affinity
+group is the top `cache_affinity_backend_selection_count` clusters of the
+Pulsar ranking. The count defaults to `1`, the primary. WaitAndWiden selection
+runs within the group, and `cache_affinity_input_tokens_scale` discounts the
+request prefill there. Until `cache_affinity_wait_ms` (X) has elapsed, the proxy
+waits and rechecks the group instead of falling back.
+
+After X, the open set grows through the ranking one band per
+`band_widen_interval_ms` (S): ranks 1 through k+2 at X, k+6 at X+S, k+14 at
+X+2S, and so on until it covers every cluster. Here k is the affinity group
+size. WaitAndWiden selection runs over the open set at full prefill cost, and
+bucket unlocks count from X. If no open candidate is selectable, the proxy
+waits for the next band or bucket. It does not skip ahead. S defaults to X.
+With S set to `0`, every cluster opens at X, which matches `wait-and-widen`
+global fallback.
+
+```text
+elapsed < X          rank 1..k              (affinity group, discounted prefill)
+X <= elapsed < X+S   rank 1..k+2
+X+S <= ...  < X+2S   rank 1..k+6
+...                  every cluster
+```
 
 Minimal configuration:
 
@@ -291,7 +311,9 @@ Minimal configuration:
       "seed": "model-a-v1",
       "require_cache_affinity_key": true,
       "max_queue_time_floor_ms": 500,
-      "max_queue_time_ceil_ms": 2000
+      "max_queue_time_ceil_ms": 2000,
+      "cache_affinity_wait_ms": 300,
+      "band_widen_interval_ms": 100
     }
   }
 }
@@ -339,11 +361,11 @@ that algorithm's detailed configuration prevents startup.
 | `cache_affinity_wait_ms` | unsigned integer | `0` | Minimum elapsed time before global fallback. Global bucket widening starts at this time. |
 | `cache_affinity_input_tokens_scale` | number | `1.0` | Request-prefill multiplier during affinity selection, from `0.0` through `1.0`. Does not discount queued work or global selection. |
 
-The virtual-node and backend-selection-count fields are accepted in
-`pulsar-wait-and-widen` JSON but do not affect its selection. Pulsar ranking
-supplies that algorithm's affinity. A non-default
-`cache_affinity_input_tokens_scale` or `cache_affinity_wait_ms` is rejected at
-startup for `pulsar-wait-and-widen`; omitted values and the defaults are accepted.
+`pulsar-wait-and-widen` accepts `cache_affinity_virtual_nodes` but ignores it,
+because the Pulsar ranking supplies affinity. It uses
+`cache_affinity_backend_selection_count` as the affinity group size, defaulting
+to `1`, and applies `cache_affinity_wait_ms` and
+`cache_affinity_input_tokens_scale` as `wait-and-widen` does.
 
 `wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
 
@@ -376,8 +398,15 @@ bounds, so set the floor less than or equal to the ceiling.
 | `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
 
 `pulsar-wait-and-widen` supports the shared wait-and-widen fields in the table
-above, plus `consider_kv_free_tokens`. It rejects `comparator` and non-default
-affinity wait or prefill-scale settings.
+above, the cache-affinity fields described earlier, `consider_kv_free_tokens`,
+and:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `band_widen_interval_ms` | unsigned integer | `cache_affinity_wait_ms` | Time between ranking-band openings after the affinity wait. `0` opens every cluster at the end of the wait. Rejected for `wait-and-widen`. |
+| `fallback_max_queued` | unsigned integer | `0` | `max_queued` for candidates selected after the affinity wait. At `0`, overflow goes only to clusters with a free engine slot, so it never queues behind another key's primary work. Raise it only when overflow queueing is acceptable. Rejected for `wait-and-widen`. |
+
+It rejects `comparator`.
 
 ## Request algorithm overrides
 
@@ -451,8 +480,9 @@ Algorithm fallback is part of load-balancer selection:
   later buckets use elapsed request time and the existing explicit retry budget.
 - Pulsar fallback walks the stable ranking after exclusions or optional KV
   filtering.
-- Pulsar wait-and-widen fallback widens ranking bands and runs WaitAndWiden selection
-  within each band.
+- Pulsar wait-and-widen fallback opens one more ranking band per widen interval
+  after the affinity wait and runs WaitAndWiden selection over every open
+  candidate.
 
 Proxy retries can exclude a backend or cluster and run selection again. See
 [Multi-backend cluster routing](multi-backend-clusters.md#retries) for

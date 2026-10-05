@@ -58,11 +58,13 @@ pub(super) struct WaitAndWidenConfig {
     pub(super) cache_affinity_backend_selection_count: Option<usize>,
     pub(super) cache_affinity_input_tokens_scale: f64,
     pub(super) cache_affinity_wait: Duration,
+    pub(super) band_widen_interval: Duration,
     queue_slo: Option<RangeInclusive<Duration>>,
     pub(super) ttft_bucket_size: Duration,
     pub(super) next_bucket_unlock_factor: f64,
     pub(super) sample_count: usize,
     pub(super) max_queued: u64,
+    pub(super) fallback_max_queued: u64,
     pub(super) ignore_queue_time: bool,
     pub(super) ignore_input_processing_time: bool,
 }
@@ -87,6 +89,12 @@ impl WaitAndWidenConfig {
                 .validated_cache_affinity_input_tokens_scale()
                 .map_err(anyhow::Error::msg)?,
             cache_affinity_wait: Duration::from_millis(config.cache_affinity_wait_ms.unwrap_or(0)),
+            band_widen_interval: Duration::from_millis(
+                config
+                    .band_widen_interval_ms
+                    .or(config.cache_affinity_wait_ms)
+                    .unwrap_or(0),
+            ),
             queue_slo: config
                 .max_queue_time_floor_ms
                 .zip(config.max_queue_time_ceil_ms)
@@ -98,6 +106,7 @@ impl WaitAndWidenConfig {
             // Sampling at least one backend keeps the algorithm meaningful even when config sets n=0.
             sample_count: config.n.unwrap_or(2).max(1),
             max_queued: config.max_queued.unwrap_or(0),
+            fallback_max_queued: config.fallback_max_queued.unwrap_or(0),
             ignore_queue_time: config.ignore_queue_time.unwrap_or(false),
             ignore_input_processing_time: config.ignore_input_processing_time.unwrap_or(false),
         })
