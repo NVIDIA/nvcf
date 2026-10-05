@@ -10,6 +10,7 @@
 `cuda-checkpoint` (NVIDIA's official tool for GPU process checkpoint/restore) deadlocks on multi-GPU NCCL workloads. When a process has active NCCL communicators, `cuda-checkpoint --action lock` hangs indefinitely because the CUDA driver kernel module has cross-GPU state (NCCL ring buffers, peer-to-peer mappings, NVLink/NVSwitch state) that it cannot safely quiesce when processes are frozen.
 
 This is a confirmed upstream limitation:
+
 - [cuda-checkpoint#30](https://github.com/NVIDIA/cuda-checkpoint/issues/30) — NCCL deadlock on multi-GPU
 - [cuda-checkpoint#45](https://github.com/NVIDIA/cuda-checkpoint/issues/45) — Hangs with NVLink active
 - [cuda-checkpoint#27](https://github.com/NVIDIA/cuda-checkpoint/issues/27) — Multi-process CUDA IPC issues
@@ -97,7 +98,7 @@ For production, the fixed-size array should be replaced with a hash map (dev_ptr
 
 ## Checkpoint Flow
 
-```
+```text
 Agent                              Worker Process (per GPU)
   |                                    |
   | 1. Create quiesce trigger          | quiesce thread polling
@@ -120,7 +121,7 @@ Agent                              Worker Process (per GPU)
   |                                    |
 ```
 
-### Detailed checkpoint sequence (per process):
+### Detailed checkpoint sequence (per process)
 
 ```c
 void nvsnap_gpu_checkpoint(void) {
@@ -178,7 +179,7 @@ void nvsnap_gpu_checkpoint(void) {
 
 ## Restore Flow
 
-```
+```text
 CRIU restores process (no GPU state)
   |
   | Process resumes execution
@@ -199,7 +200,7 @@ CRIU restores process (no GPU state)
   |    | 3. Resume application
 ```
 
-### Detailed restore sequence (per process):
+### Detailed restore sequence (per process)
 
 ```c
 void nvsnap_gpu_restore(void) {
@@ -289,6 +290,7 @@ This is the single most critical aspect of the design, and the area with the mos
 ### Why it matters
 
 PyTorch tensors store `data_ptr()` as raw GPU virtual addresses (e.g. `0x7f1234000000`). These pointers are embedded throughout:
+
 - The tensor objects themselves (host memory, preserved by CRIU)
 - PyTorch's CUDACachingAllocator block metadata (host memory, preserved by CRIU)
 - cuDNN workspace pointers
@@ -322,6 +324,7 @@ The fundamental concern: addresses originally allocated by `cudaMalloc` come fro
 3. **Driver version dependence**: The CUDA driver's VA space layout may differ between driver versions, or even between reboots. An address that was valid in one session might not be reservable in another.
 
 We won't know if this works until we try it. The first experiment should be:
+
 - `cudaMalloc` a few buffers, note addresses
 - `cudaFree` them all + `cudaDeviceReset()`
 - Try `cuMemAddressReserve` at the same addresses
@@ -355,6 +358,7 @@ The "No" entries are the problem. When the application resumes after restore, it
 ### How PyTorch uses CUDA state
 
 PyTorch's typical usage:
+
 - **Streams**: Created at startup, stored in `CUDAStreamPool`. Used for all compute. Stale streams would cause kernel launch failures.
 - **cuBLAS/cuDNN handles**: Created per-device, cached globally. Used on every forward pass. Stale handles → segfault or CUDA error on first use.
 - **Events**: Used for synchronization (e.g. `record()` / `wait()`). Less critical — many are short-lived.
@@ -382,17 +386,17 @@ None of these is clean. Option 1 (full interposition) is the only viable path, b
 
 ### Medium Risk
 
-4. **PyTorch CUDACachingAllocator sub-allocation**: We track outer `cudaMalloc` blocks. PyTorch sub-allocates within them. If we restore the outer block at the same address, sub-allocation metadata (in host memory, preserved by CRIU) should remain valid. But if PyTorch's allocator also stores pointers to CUDA allocator internal structures, those would be stale.
+1. **PyTorch CUDACachingAllocator sub-allocation**: We track outer `cudaMalloc` blocks. PyTorch sub-allocates within them. If we restore the outer block at the same address, sub-allocation metadata (in host memory, preserved by CRIU) should remain valid. But if PyTorch's allocator also stores pointers to CUDA allocator internal structures, those would be stale.
 
-5. **cudaMallocAsync (stream-ordered pools)**: CUDA 11.2+ stream-ordered allocation uses memory pools. The pool state is internal to the driver. After `cudaDeviceReset()`, pools are gone. If the application uses `cudaMallocAsync`, we would need to intercept pool creation (`cudaMemPoolCreate`) and restore pool state.
+2. **cudaMallocAsync (stream-ordered pools)**: CUDA 11.2+ stream-ordered allocation uses memory pools. The pool state is internal to the driver. After `cudaDeviceReset()`, pools are gone. If the application uses `cudaMallocAsync`, we would need to intercept pool creation (`cudaMemPoolCreate`) and restore pool state.
 
-6. **Unified memory (cudaMallocManaged)**: Lives in both host and device address spaces. The GPU VA must match the host VA (they may be the same in unified addressing). Saving/restoring requires special handling.
+3. **Unified memory (cudaMallocManaged)**: Lives in both host and device address spaces. The GPU VA must match the host VA (they may be the same in unified addressing). Saving/restoring requires special handling.
 
 ### Low Risk
 
-7. **Performance**: D2H + H2D at PCIe Gen5 x16 bandwidth (~64 GB/s bidirectional). For 80GB: ~1.25s each direction. For 320GB across 4 GPUs (parallel): ~5s total. Acceptable for checkpoint/restore SLA.
+1. **Performance**: D2H + H2D at PCIe Gen5 x16 bandwidth (~64 GB/s bidirectional). For 80GB: ~1.25s each direction. For 320GB across 4 GPUs (parallel): ~5s total. Acceptable for checkpoint/restore SLA.
 
-8. **NCCL reconstruction**: Already implemented and tested for single-GPU. Multi-GPU NCCL reconstruction (with cross-rank barrier) needs testing but is a solved design.
+2. **NCCL reconstruction**: Already implemented and tested for single-GPU. Multi-GPU NCCL reconstruction (with cross-rank barrier) needs testing but is a solved design.
 
 ### Open Questions
 
@@ -427,6 +431,7 @@ None of these is clean. Option 1 (full interposition) is the only viable path, b
 - Claims to support NCCL workloads on multi-GPU
 
 Their implementation details are not public. Key unknowns:
+
 - How they handle GPU VA preservation
 - Whether they do full memory save/restore or something else
 - Whether they bypass cuda-checkpoint or use a modified version

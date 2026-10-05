@@ -95,10 +95,8 @@ chart currently route PathPrefix /, so duplicate hostnames are ambiguous.
 {{- define "nvcf-gateway.validateUniqueRootHTTPRouteHostnames" -}}
 {{- if .Values.nvcfGatewayRoutes.enabled -}}
 {{- $seenHostnames := dict -}}
-{{- $httpRouteKeys := list "nvcfApi" "nvctApi" "apiKeys" "invocation" "llmApiGateway" "llmInvocation" "vanityGateway" "sis" "nvcfUi" -}}
-{{- range $routeKey := $httpRouteKeys -}}
-  {{- $route := index $.Values.nvcfGatewayRoutes.routes $routeKey -}}
-  {{- if and $route $route.enabled -}}
+{{- range $routeKey, $route := .Values.nvcfGatewayRoutes.routes -}}
+  {{- if and (hasKey $route "hostnames") $route.enabled -}}
     {{- $routeName := tpl (toString (default $routeKey $route.name)) $ -}}
     {{- range $rawHostname := default (list) $route.hostnames -}}
       {{- $hostname := tpl (toString $rawHostname) $ | lower | trimSuffix "." -}}
@@ -110,4 +108,10 @@ chart currently route PathPrefix /, so duplicate hostnames are ambiguous.
   {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- end }}
+
+{{/* Name the cluster-scoped admission resources uniquely per Helm release. */}}
+{{- define "nvcf-gateway.hostnameConflictPolicyName" -}}
+{{- $releaseID := printf "%s/%s" .Release.Namespace .Release.Name -}}
+{{- printf "%s-hostnames-%s" (.Release.Name | trunc 43 | trimSuffix "-") ($releaseID | sha256sum | trunc 8) | trunc 63 | trimSuffix "-" -}}
 {{- end }}

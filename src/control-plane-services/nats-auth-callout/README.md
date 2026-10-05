@@ -1,3 +1,4 @@
+<!-- markdownlint-disable-next-line MD041 -->
 [Key Features](#key-features) | [Quick Start](#quick-start) | [Development](#development) | [Documentation](#documentation) | [Requirements](#requirements)
 
 # NVCF NATS Auth Callout Service

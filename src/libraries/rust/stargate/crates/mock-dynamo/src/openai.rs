@@ -26,11 +26,11 @@ use tracing::info;
 use crate::AppState;
 use crate::kv_cache::{KvCacheAccess, KvCacheStats, insert_kv_cache_headers};
 use crate::stats_stream::StatsStreamEvent;
-use crate::test_control::{TestEndpoint, TestRequestClass, request_class};
+use crate::test_control::{TestEndpoint, TestRequestClass, is_canary_request, request_class};
 use crate::timing::{
-    embedding_item_count, jitter_ms, non_streaming_delay, optional_header, prefill_delay,
-    request_embedding_tokens, request_input_tokens, request_output_tokens, response_input_tokens,
-    response_output_tokens, token_delay,
+    bounded_output_tokens, embedding_item_count, jitter_ms, non_streaming_delay, optional_header,
+    prefill_delay, request_embedding_tokens, request_input_tokens, response_input_tokens,
+    select_output_tokens, token_delay,
 };
 
 #[derive(Serialize)]
@@ -67,14 +67,22 @@ const DUMMY_TOKENS: &[&str] = &[
     " helpful", " AI", " assistant", ".", " Let", " me", " know", " what", " you", " need", ".",
     " I", "'m", " here", " to", " assist", " you", "!",
 ];
+const CANARY_ANSWER: &str = "2";
 
 #[derive(Deserialize)]
 pub(crate) struct ChatRequest {
     pub(crate) stream: Option<bool>,
+    stream_options: Option<ChatStreamOptions>,
     pub(crate) model: Option<String>,
     pub(crate) max_tokens: Option<usize>,
     #[serde(default)]
     pub(crate) messages: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct ChatStreamOptions {
+    #[serde(default)]
+    include_usage: bool,
 }
 
 #[derive(Deserialize)]
@@ -104,7 +112,10 @@ struct ChatCompletionChunk<'a> {
     id: &'a str,
     object: &'static str,
     model: &'a str,
-    choices: [ChunkChoice<'a>; 1],
+    choices: &'a [ChunkChoice<'a>],
+    // Omitted unless requested, then null until the final usage chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<Option<ChatUsage>>,
 }
 
 #[derive(Serialize)]
@@ -173,7 +184,7 @@ struct StreamResponseConfig {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamKind {
-    Chat,
+    Chat { canary: bool, include_usage: bool },
     Responses { created_at: u64 },
 }
 
@@ -194,13 +205,31 @@ pub(crate) async fn chat_completions(
             }),
         );
     }
-    let request_slot = state.acquire_request_slot().await;
     let input_tokens = request_input_tokens(&headers, &req);
-    let output_tokens = request_output_tokens(&headers, &req, state.num_tokens);
-    let stream = req.stream == Some(true);
+    let canary = is_canary_request(&headers);
     let id = format!("chatcmpl-mock-{}", rand_id());
-    info!(id = %id, model = %model, stream = stream, "received chat/completions request");
     let request_id = optional_header(&headers, "x-request-id").unwrap_or_else(|| id.clone());
+    let selected_output_tokens = if canary {
+        1
+    } else {
+        select_output_tokens(&headers, &request_id, state.output_tokens, req.max_tokens)
+    };
+    let Some(output_tokens) = bounded_output_tokens(
+        input_tokens,
+        selected_output_tokens,
+        state.context_length_tokens,
+    ) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "input token count {input_tokens} leaves no output capacity within the context length of {} tokens",
+                state.context_length_tokens
+            ),
+        );
+    };
+    let request_slot = state.acquire_request_slot().await;
+    let stream = req.stream == Some(true);
+    info!(id = %id, model = %model, stream = stream, "received chat/completions request");
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
     if stream {
         state.emit_counters(&request_id, &model, 0, 0, false);
@@ -232,7 +261,13 @@ pub(crate) async fn chat_completions(
             output_tokens,
             kv_cache_access,
             request_slot,
-            kind: StreamKind::Chat,
+            kind: StreamKind::Chat {
+                canary,
+                include_usage: req
+                    .stream_options
+                    .as_ref()
+                    .is_some_and(|options| options.include_usage),
+            },
         });
     }
 
@@ -244,12 +279,16 @@ pub(crate) async fn chat_completions(
     ))
     .await;
 
-    let content: String = DUMMY_TOKENS
-        .iter()
-        .cycle()
-        .take(output_tokens)
-        .copied()
-        .collect();
+    let content = if canary {
+        CANARY_ANSWER.to_string()
+    } else {
+        DUMMY_TOKENS
+            .iter()
+            .cycle()
+            .take(output_tokens)
+            .copied()
+            .collect()
+    };
 
     info!(id = %id, status = 200, "responding with JSON");
     state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
@@ -268,7 +307,7 @@ pub(crate) async fn chat_completions(
         usage: ChatUsage {
             prompt_tokens: input_tokens,
             completion_tokens: output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            total_tokens: input_tokens.saturating_add(output_tokens),
         },
     })
     .into_response();
@@ -292,12 +331,30 @@ pub(crate) async fn responses(
     state
         .record_request(&headers, TestEndpoint::Responses, &model)
         .await;
-    let request_slot = state.acquire_request_slot().await;
     let input_tokens = response_input_tokens(&headers, &req);
-    let output_tokens = response_output_tokens(&headers, &req, state.num_tokens);
     let id = format!("resp-mock-{}", rand_id());
+    let request_id = optional_header(&headers, "x-request-id").unwrap_or_else(|| id.clone());
+    let selected_output_tokens = select_output_tokens(
+        &headers,
+        &request_id,
+        state.output_tokens,
+        req.max_output_tokens,
+    );
+    let Some(output_tokens) = bounded_output_tokens(
+        input_tokens,
+        selected_output_tokens,
+        state.context_length_tokens,
+    ) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "input token count {input_tokens} leaves no output capacity within the context length of {} tokens",
+                state.context_length_tokens
+            ),
+        );
+    };
+    let request_slot = state.acquire_request_slot().await;
     info!(id = %id, model = %model, "received responses request");
-    let request_id = optional_header(&headers, "x-request-id").unwrap_or_default();
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
     state.emit_counters(&request_id, &model, 0, 0, false);
     let kv_cache_access = state
@@ -454,29 +511,52 @@ pub(crate) enum ChatStreamChunk<'a> {
     Role,
     Content(&'a str),
     Stop,
+    Usage {
+        input_tokens: usize,
+        output_tokens: usize,
+    },
 }
 
-pub(crate) fn chat_chunk_json(id: &str, model: &str, chunk: ChatStreamChunk<'_>) -> String {
-    let (role, content, finish_reason) = match chunk {
-        ChatStreamChunk::Role => (Some("assistant"), None, None),
-        ChatStreamChunk::Content(content) => (None, Some(content), None),
-        ChatStreamChunk::Stop => (None, None, Some("stop")),
-    };
+pub(crate) fn chat_chunk_json(
+    id: &str,
+    model: &str,
+    chunk: ChatStreamChunk<'_>,
+    include_usage: bool,
+) -> String {
+    let mut usage = include_usage.then_some(None);
+    let choice = match chunk {
+        ChatStreamChunk::Role => Some((Some("assistant"), None, None)),
+        ChatStreamChunk::Content(content) => Some((None, Some(content), None)),
+        ChatStreamChunk::Stop => Some((None, None, Some("stop"))),
+        ChatStreamChunk::Usage {
+            input_tokens,
+            output_tokens,
+        } => {
+            usage = Some(Some(ChatUsage {
+                prompt_tokens: input_tokens,
+                completion_tokens: output_tokens,
+                total_tokens: input_tokens.saturating_add(output_tokens),
+            }));
+            None
+        }
+    }
+    .map(|(role, content, finish_reason)| ChunkChoice {
+        index: 0,
+        delta: Delta { role, content },
+        finish_reason,
+    });
     serde_json::to_string(&ChatCompletionChunk {
         id,
         object: "chat.completion.chunk",
         model,
-        choices: [ChunkChoice {
-            index: 0,
-            delta: Delta { role, content },
-            finish_reason,
-        }],
+        choices: choice.as_slice(),
+        usage,
     })
     .expect("chat stream event should serialize")
 }
 
-fn chat_sse_event(id: &str, model: &str, chunk: ChatStreamChunk<'_>) -> Event {
-    Event::default().data(chat_chunk_json(id, model, chunk))
+fn chat_sse_event(id: &str, model: &str, chunk: ChatStreamChunk<'_>, include_usage: bool) -> Event {
+    Event::default().data(chat_chunk_json(id, model, chunk, include_usage))
 }
 
 fn stream_response(config: StreamResponseConfig) -> Response {
@@ -516,17 +596,23 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         state.emit_counters(&request_id, &model, input_tokens, 0, false);
 
-        if kind == StreamKind::Chat {
-            yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role));
+        if let StreamKind::Chat { include_usage, .. } = kind {
+            yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role, include_usage));
         }
 
         for i in 0..output_tokens {
             if i > 0 {
                 tokio::time::sleep(token_delay(&state, &request_id, i)).await;
             }
-            let token = DUMMY_TOKENS[i % DUMMY_TOKENS.len()];
+            let token = if matches!(kind, StreamKind::Chat { canary: true, .. }) {
+                CANARY_ANSWER
+            } else {
+                DUMMY_TOKENS[i % DUMMY_TOKENS.len()]
+            };
             let event = match kind {
-                StreamKind::Chat => chat_sse_event(&id, &model, ChatStreamChunk::Content(token)),
+                StreamKind::Chat { include_usage, .. } => {
+                    chat_sse_event(&id, &model, ChatStreamChunk::Content(token), include_usage)
+                }
                 StreamKind::Responses { .. } => {
                     output_text.push_str(token);
                     responses_sse_event(
@@ -546,7 +632,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         }
 
         let completed = match kind {
-            StreamKind::Chat => chat_sse_event(&id, &model, ChatStreamChunk::Stop),
+            StreamKind::Chat { include_usage, .. } => chat_sse_event(&id, &model, ChatStreamChunk::Stop, include_usage),
             StreamKind::Responses { created_at } => responses_sse_event(
                 "response.completed",
                 &serde_json::json!({
@@ -571,7 +657,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
                         "usage": {
                             "input_tokens": input_tokens,
                             "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens,
+                            "total_tokens": input_tokens.saturating_add(output_tokens),
                         },
                     },
                 }),
@@ -581,7 +667,10 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
 
-        if kind == StreamKind::Chat {
+        if let StreamKind::Chat { include_usage, .. } = kind {
+            if include_usage {
+                yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Usage { input_tokens, output_tokens }, true));
+            }
             yield Ok(Event::default().data("[DONE]"));
         }
     };

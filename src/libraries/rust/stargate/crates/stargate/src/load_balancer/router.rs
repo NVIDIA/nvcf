@@ -20,8 +20,8 @@ use crate::routing_state::RoutedClusterSnapshot;
 use super::target_state::LoadBalancerDefinition;
 use super::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
-    LoadBalancerCandidateChoice, LoadBalancerConfig, LoadBalancerModelConfig, LoadBalancerRequest,
-    LoadBalancerRoutingAlgorithmError, LoadBalancerTargetState,
+    LoadBalancerCandidateChoice, LoadBalancerConfig, LoadBalancerDecision, LoadBalancerModelConfig,
+    LoadBalancerRequest, LoadBalancerRoutingAlgorithmError, LoadBalancerTargetState,
 };
 
 #[cfg(test)]
@@ -53,6 +53,17 @@ pub struct LoadBalancerAlgorithmResolution {
 impl LoadBalancerAlgorithmResolution {
     pub fn config(&self) -> &LoadBalancerAlgorithmConfig {
         self.definition.config()
+    }
+
+    pub(crate) fn selection(
+        &self,
+        choice: LoadBalancerCandidateChoice,
+    ) -> LoadBalancerCandidateSelection {
+        LoadBalancerCandidateSelection {
+            choice,
+            effective_algorithm: self.config().algorithm(),
+            requested_algorithm: self.requested_algorithm.clone(),
+        }
     }
 }
 
@@ -181,20 +192,25 @@ impl LoadBalancerRouter {
         candidates: &[RoutedClusterSnapshot],
         resolution: &LoadBalancerAlgorithmResolution,
     ) -> Option<LoadBalancerCandidateSelection> {
+        self.decide_with_algorithm_resolution(target_state, request, candidates, resolution)
+            .selected()
+            .map(|choice| resolution.selection(choice))
+    }
+
+    /// Evaluate the resolved algorithm and preserve timed waits for the caller.
+    pub fn decide_with_algorithm_resolution(
+        &self,
+        target_state: &LoadBalancerTargetState,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+        resolution: &LoadBalancerAlgorithmResolution,
+    ) -> LoadBalancerDecision {
         if candidates.is_empty() {
-            return None;
+            return LoadBalancerDecision::Unavailable;
         }
 
         let lb = target_state.load_balancer(&resolution.definition);
-        let effective_algorithm = resolution.config().algorithm();
-        let requested_algorithm = resolution.requested_algorithm.clone();
-
-        lb.choose_candidate(request, candidates)
-            .map(|choice| LoadBalancerCandidateSelection {
-                choice,
-                effective_algorithm,
-                requested_algorithm,
-            })
+        lb.decide(request, candidates)
     }
 
     pub fn algorithm_name(&self, model_id: &str) -> String {

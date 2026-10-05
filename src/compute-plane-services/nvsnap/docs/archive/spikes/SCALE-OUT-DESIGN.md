@@ -128,6 +128,7 @@ In the 200-pod scenario, the math:
 | **multi-pod-per-node sharing** | each pod has own copy | **one mount serves N pods** |
 
 The pack cost (14 min) is one-time at capture and is **already async per the user's earlier accept**. The fan-out benefit at scale is real:
+
 - Atomic transfer means cascade can verify completion with one hash check, not 5,710
 - Single artifact is easier to schedule, evict, and pin
 - N pods on one node literally share the same `mmap`'d backing — no duplication
@@ -135,6 +136,7 @@ The pack cost (14 min) is one-time at capture and is **already async per the use
 The pod-spec change: rootfs restore manifest gets an `initContainer` that loop-mounts the EROFS, and an `emptyDir` for the writable overlay. The main container's `args` mount the overlay union as `/root/.cache/...`.
 
 **Expected impact:**
+
 - Cascade simplification (single-file transfers) cuts coordination overhead
 - 2 pods/node sharing one mount halves per-node disk footprint
 - vs. Priority 1+2 alone, this is incremental — but it's also the cleanest operational story

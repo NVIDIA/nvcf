@@ -263,6 +263,7 @@ func runSelfHostedComputePlaneRegister(c *cobra.Command, _ []string) error {
 		NATSURL:           selected.Endpoints.NATSURL,
 		SISHost:           validation.Profile.ControlPlane.Hosts.SIS,
 		ReValHost:         validation.Profile.ControlPlane.Hosts.ReVal,
+		NATSHost:          validation.Profile.ControlPlane.Hosts.NATS,
 		ProbeHTTP:         shouldProbeComputeRegisterHTTP(selected.Name),
 	}); err != nil {
 		return err
@@ -576,9 +577,9 @@ func writeComputePlaneNVCAValues(req computePlaneNVCAValuesRequest) error {
 		ClusterID:      req.Registration.ClusterID,
 		ClusterGroupID: req.Registration.ClusterGroupID,
 		NCAID:          req.NCAID,
-		Region:         req.Region,
 		SelfManaged: nvca.SelfManagedValues{
 			IdentitySource:                 req.IdentitySource,
+			Region:                         req.Region,
 			ICMSServiceURL:                 req.Endpoints.ICMSURL,
 			ICMSServiceHostHeaderOverride:  req.Hosts.SIS,
 			ReValServiceURL:                req.Endpoints.ReValURL,

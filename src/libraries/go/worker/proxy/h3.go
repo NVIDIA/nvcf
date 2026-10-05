@@ -36,6 +36,8 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/ca"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
 )
 
 var quicInsecure = os.Getenv("QUIC_INSECURE") == "true"
@@ -112,9 +114,14 @@ func (t *h3ConnectionCache) transport() (*quic.Transport, error) {
 	return t.transportLocked()
 }
 
+// listenUDP is a seam so tests can exercise the socket-bind failure path,
+// which is otherwise unreachable: binding an ephemeral UDP port essentially
+// never fails outside fd exhaustion.
+var listenUDP = net.ListenUDP
+
 func (t *h3ConnectionCache) transportLocked() (*quic.Transport, error) {
 	if t.quicTransport == nil {
-		udpConn, err := net.ListenUDP("udp", nil)
+		udpConn, err := listenUDP("udp", nil)
 		if err != nil {
 			return nil, err
 		}
@@ -138,6 +145,7 @@ func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Tra
 	// This check therefore has to come before both the reset and the
 	// increment, not after them.
 	if t.quicTransport == nil || t.quicTransport != dialed {
+		logSkip(&skippedStaleDial, nvcf.DialSkipStaleTransport, "dial predates the current transport", destination, dialErr)
 		return
 	}
 	if dialErr == nil {
@@ -145,6 +153,16 @@ func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Tra
 		return
 	}
 	if !isTransportDialFailure(ctx, dialErr) {
+		// Two very different reasons land here and they need telling apart: a
+		// cancelled context means the dial never got a verdict, while a
+		// non-timeout error means the socket reached something. Reporting them
+		// as one silent return makes "rotation never fired" indistinguishable
+		// from "rotation fired and did not help".
+		if cause := context.Cause(ctx); cause != nil {
+			logSkip(&skippedCtxCancelled, nvcf.DialSkipCtxCancelled, "dial context cancelled", destination, cause)
+		} else {
+			logSkip(&skippedNotTimeout, nvcf.DialSkipNotTimeout, "error is not a network timeout", destination, dialErr)
+		}
 		return
 	}
 	if t.dialFailures == nil {
@@ -156,6 +174,57 @@ func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Tra
 		return
 	}
 	t.rotateLocked(destination, failures)
+}
+
+// recordDialAttempt counts every dial and classifies its failure. It is
+// deliberately separate from noteDialResult: that function governs rotation
+// bookkeeping and is reached only from the default dial path, whereas every
+// dial regardless of path must be measured.
+func recordDialAttempt(ctx context.Context, dialErr error) {
+	nvcf.QuicDialCounter.Inc()
+	if dialErr != nil {
+		nvcf.QuicDialFailureCounter.WithLabelValues(dialFailureReason(ctx, dialErr)).Inc()
+	}
+}
+
+// dialFailureReason labels a failure for the metric. It mirrors
+// isTransportDialFailure so that the "timeout" series counts exactly the
+// failures that drive rotation, which is what makes the two comparable in an
+// alert expression.
+func dialFailureReason(ctx context.Context, dialErr error) string {
+	switch {
+	case isTransportDialFailure(ctx, dialErr):
+		return nvcf.DialFailureTimeout
+	case errors.Is(dialErr, ErrAuth):
+		return nvcf.DialFailureAuth
+	default:
+		return nvcf.DialFailureOther
+	}
+}
+
+// Occurrence counts for the skip paths. These back the log rate limiter only;
+// the exported series is nvcf.QuicDialSkipCounter, which is what alerts read.
+var (
+	skippedStaleDial    atomic.Int64
+	skippedCtxCancelled atomic.Int64
+	skippedNotTimeout   atomic.Int64
+)
+
+// logSkip records the skip and reports the first occurrence, then every
+// 1000th. Under a real blackhole these paths are hit thousands of times a
+// second, so logging each one would drown the signal it exists to provide.
+// The metric is incremented every time regardless; only the log is sampled.
+func logSkip(counter *atomic.Int64, reason, detail, destination string, err error) {
+	nvcf.QuicDialSkipCounter.WithLabelValues(reason).Inc()
+	n := counter.Add(1)
+	if n != 1 && n%1000 != 0 {
+		return
+	}
+	zap.L().Warn("dial failure did not count toward rotation",
+		zap.String("reason", detail),
+		zap.String("destination", destination),
+		zap.Int64("occurrences", n),
+		zap.Error(err))
 }
 
 func isTransportDialFailure(ctx context.Context, dialErr error) bool {
@@ -174,7 +243,7 @@ func isTransportDialFailure(ctx context.Context, dialErr error) bool {
 // rotation without any outward sign that it had failed.
 func (t *h3ConnectionCache) rotateLocked(destination string, failures int) {
 	old := t.quicTransport
-	udpConn, err := net.ListenUDP("udp", nil)
+	udpConn, err := listenUDP("udp", nil)
 	if err != nil {
 		// Keep the existing socket rather than leaving the worker with none.
 		// The next failure retries the rotation.
@@ -192,6 +261,7 @@ func (t *h3ConnectionCache) rotateLocked(destination string, failures int) {
 	t.quicTransport = &quic.Transport{Conn: udpConn}
 	clear(t.dialFailures)
 	closeTransport(old)
+	nvcf.QuicTransportRotationCounter.Inc()
 }
 
 // closeTransport releases a transport and its socket. Errors are logged rather
@@ -269,11 +339,12 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 			})
 		}()
 		t.clients[hostname] = cl
+		nvcf.QuicTunnelGauge.Inc()
 	}
 	select {
 	case <-cl.dialing:
 		if cl.dialErr != nil {
-			delete(t.clients, hostname)
+			t.deleteClientLocked(hostname)
 			return nil, false, cl.dialErr
 		}
 		select {
@@ -310,6 +381,10 @@ func (t *h3ConnectionCache) dial(ctx context.Context, hostname string) (*quic.Co
 	if dial == nil {
 		quicTransport, err := t.transport()
 		if err != nil {
+			// A dial that cannot get a socket is still a dial attempt. Without
+			// this, a worker unable to bind would report no dial activity at
+			// all rather than failures, which reads as idle instead of broken.
+			recordDialAttempt(ctx, err)
 			return nil, nil, err
 		}
 		dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
@@ -324,6 +399,11 @@ func (t *h3ConnectionCache) dial(ctx context.Context, hostname string) (*quic.Co
 		}
 	}
 	conn, err := dial(ctx, hostname, tlsConf, t.wrappedTransport.QUICConfig)
+	// Counted here rather than in noteDialResult so that a configured
+	// wrappedTransport.Dial is measured too. noteDialResult is reached only
+	// from the default dial path, so leaving the counters there would make
+	// the metrics silently go quiet if that field were ever set.
+	recordDialAttempt(ctx, err)
 	if err != nil {
 		zap.L().Warn("failed to dial quic connection", zap.Error(err), zap.String("hostname", hostname))
 		return nil, nil, err
@@ -357,14 +437,32 @@ func (t *h3ConnectionCache) removeClient(hostname string) {
 	if t.clients == nil {
 		return
 	}
+	t.deleteClientLocked(hostname)
+}
+
+// deleteClientLocked drops a cached client and keeps the tunnel gauge balanced
+// with it. The presence check is what keeps them balanced: removal is reached
+// from more than one path for the same hostname, and decrementing on a key
+// that is already gone would drive the gauge negative.
+func (t *h3ConnectionCache) deleteClientLocked(hostname string) {
+	if _, ok := t.clients[hostname]; !ok {
+		return
+	}
 	delete(t.clients, hostname)
+	nvcf.QuicTunnelGauge.Dec()
 }
 
 // Close closes the QUIC connections that this Transport has used.
 func (t *h3ConnectionCache) Close() error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
-	for _, cl := range t.clients {
+	for hostname, cl := range t.clients {
+		// Decrement here rather than relying on the cache-removal callback.
+		// cl.Close triggers that callback on another goroutine, which blocks
+		// on t.mutex until this function returns and then finds the map
+		// already nil, so it would never decrement and the gauge would leak.
+		delete(t.clients, hostname)
+		nvcf.QuicTunnelGauge.Dec()
 		if err := cl.Close(); err != nil {
 			return err
 		}

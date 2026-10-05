@@ -1431,6 +1431,8 @@ type InvokeFunctionResponse struct {
 // InvokeFunctionOptions represents options for function invocation
 type InvokeFunctionOptions struct {
 	InferenceURL        string // Function inference endpoint, or OpenAI path for LLM functions.
+	Path                string // Mapped request path for Vanity Gateway invocation.
+	VanityHost          string // Exact Vanity Gateway host header (preserves host without prefixing function ID).
 	ModelName           string // OpenAI model name for LLM functions.
 	PollDurationSeconds int    // Optional invocation hold-open duration in seconds
 }
@@ -1477,6 +1479,18 @@ func (c *Client) InvokeFunctionWithOptions(ctx context.Context, functionID, vers
 }
 
 func (c *Client) invokeURL(ctx context.Context, functionID, versionID string, options *InvokeFunctionOptions) (string, bool, error) {
+	if options != nil && options.VanityHost != "" {
+		reqPath := options.Path
+		if reqPath == "" {
+			reqPath = options.InferenceURL
+		}
+		if reqPath == "" {
+			return "", false, fmt.Errorf("path (or inference-url) is required for Vanity Gateway invocation")
+		}
+		fullURL, err := gatewayInvocationURL(c.invokeBaseURL(), reqPath)
+		return fullURL, false, err
+	}
+
 	funcDetails, err := c.GetFunctionDetails(ctx, functionID, versionID)
 	if err != nil {
 		if options != nil && options.InferenceURL != "" {
@@ -1614,7 +1628,7 @@ func (c *Client) newInvokeRequest(ctx context.Context, fullURL, functionID strin
 	}
 	req.Header.Set(headerContentType, contentTypeJSON)
 	req.Header.Set("Accept", "*/*")
-	c.applyInvokeRouting(req, functionID, isLLM)
+	c.applyInvokeRouting(req, functionID, isLLM, options)
 	applyInvokeOptions(req, options)
 	return req, nil
 }
@@ -1640,7 +1654,15 @@ func invokeRequestBody(functionID string, isLLM bool, requestBody map[string]int
 	return body, nil
 }
 
-func (c *Client) applyInvokeRouting(req *http.Request, functionID string, isLLM bool) {
+func (c *Client) applyInvokeRouting(req *http.Request, functionID string, isLLM bool, options *InvokeFunctionOptions) {
+	if options != nil && options.VanityHost != "" {
+		req.Host = options.VanityHost
+		if c.config.Debug {
+			log.Printf("DEBUG: Using Vanity Host header override: %s", req.Host)
+		}
+		return
+	}
+
 	if c.config.InvokeHost == "" {
 		return
 	}

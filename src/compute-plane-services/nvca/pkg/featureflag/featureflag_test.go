@@ -205,3 +205,7 @@ func TestHelmAllowCPUNodes_MutualExclusion(t *testing.T) {
 	// Reset for other tests
 	_ = parseFlags("-HelmAllowCPUNodes,+HelmResourceConstraints")
 }
+
+func TestModelCacheEncryptionDefaultOff(t *testing.T) {
+	assert.False(t, ModelCacheEncryption.Enabled())
+}

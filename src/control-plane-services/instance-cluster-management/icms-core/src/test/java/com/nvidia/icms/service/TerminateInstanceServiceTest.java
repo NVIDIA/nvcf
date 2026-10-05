@@ -28,6 +28,7 @@ import com.nvidia.icms.inbound.rest.model.SpotInstanceState;
 import com.nvidia.icms.inbound.rest.model.SpotRequestStatusCode;
 import com.nvidia.icms.inbound.rest.model.TerminateInstancesResponse;
 import com.nvidia.icms.outbound.cassandra.instance.InstanceV2Repository;
+import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
@@ -47,6 +48,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_INSTANCE_TYPE;
 import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_NCA_ID;
@@ -65,6 +67,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -194,6 +197,171 @@ class TerminateInstanceServiceTest {
         verify(instanceLifecycleService).terminateInstances(DUMMY_CUSTOMER_ID,
                                                        Set.of(nonByocInstanceEntity),
                                                        Map.of());
+    }
+
+    @Test
+    void terminateInstancesByGpuSpec_selectsNonRunningThenRunningOldestFirst() {
+        UUID deploymentId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        Instant now = Instant.now();
+        var oldestRunning = instance("running-old", SpotInstanceInternalState.RUNNING,
+                                     now.minusSeconds(30), deploymentId, gpuSpecId);
+        var newestStarting = instance("starting-new", SpotInstanceInternalState.STARTING,
+                                      now.minusSeconds(10), deploymentId, gpuSpecId);
+        var oldestStarting = instance("starting-old", SpotInstanceInternalState.STARTING,
+                                      now.minusSeconds(20), deploymentId, gpuSpecId);
+        var newestRunning = instance("running-new", SpotInstanceInternalState.RUNNING,
+                                     now, deploymentId, gpuSpecId);
+        var otherOwner = instance("other-owner", SpotInstanceInternalState.STARTING,
+                                  now.minusSeconds(40), deploymentId, gpuSpecId);
+        otherOwner.setNcaId("other-nca");
+
+        when(instanceV2Repository.findInstancesByGpuSpecificationId(deploymentId, gpuSpecId))
+                .thenReturn(List.of(oldestRunning, newestStarting, oldestStarting,
+                                    newestRunning, otherOwner));
+        when(instanceV2Repository.findInstancesByCustomerAndIds(
+                null, Set.of("starting-old", "starting-new", "running-old")))
+                .thenReturn(List.of(oldestStarting, newestStarting, oldestRunning));
+        var request = getDummyInstanceRequestEntity(
+                SpotInstanceRequestState.ACTIVE, SpotRequestStatusCode.FULFILLED,
+                DUMMY_OPEN_REQUEST_HAVING_INSTANCE_ID, now, ResourceProvider.OCI);
+        request.setNcaId(DUMMY_NON_BYOC_NCA_ID);
+        request.setDeploymentId(deploymentId);
+        request.setGpuSpecificationId(gpuSpecId);
+        when(instanceRequestV2Repository.findRequestById(
+                DUMMY_OPEN_REQUEST_HAVING_INSTANCE_ID)).thenReturn(Optional.of(request));
+        when(instanceLifecycleService.terminateInstances(
+                eq(DUMMY_CUSTOMER_ID), any(), eq(Map.of())))
+                .thenReturn(new TerminateInstancesResponse(List.of()));
+
+        terminateInstanceService.terminateInstances(
+                DUMMY_NON_BYOC_NCA_ID, deploymentId, gpuSpecId, 3, Map.of());
+
+        verify(instanceLifecycleService).terminateInstances(
+                eq(DUMMY_CUSTOMER_ID),
+                eq(Set.of(oldestStarting, newestStarting, oldestRunning)),
+                eq(Map.of()));
+    }
+
+    @Test
+    void terminateInstancesByGpuSpec_countExceedsInstances_terminatesAllAvailable() {
+        UUID deploymentId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        var instance = instance("instance", SpotInstanceInternalState.RUNNING,
+                                Instant.now(), deploymentId, gpuSpecId);
+
+        when(instanceV2Repository.findInstancesByGpuSpecificationId(deploymentId, gpuSpecId))
+                .thenReturn(List.of(instance));
+        when(instanceV2Repository.findInstancesByCustomerAndIds(null, Set.of("instance")))
+                .thenReturn(List.of(instance));
+        var request = getDummyInstanceRequestEntity(
+                SpotInstanceRequestState.ACTIVE, SpotRequestStatusCode.FULFILLED,
+                DUMMY_OPEN_REQUEST_HAVING_INSTANCE_ID, dummyInstant, ResourceProvider.OCI);
+        request.setNcaId(DUMMY_NON_BYOC_NCA_ID);
+        request.setDeploymentId(deploymentId);
+        request.setGpuSpecificationId(gpuSpecId);
+        when(instanceRequestV2Repository.findRequestById(
+                DUMMY_OPEN_REQUEST_HAVING_INSTANCE_ID)).thenReturn(Optional.of(request));
+        when(instanceLifecycleService.terminateInstances(
+                DUMMY_CUSTOMER_ID, Set.of(instance), Map.of()))
+                .thenReturn(new TerminateInstancesResponse(List.of()));
+
+        terminateInstanceService.terminateInstances(
+                DUMMY_NON_BYOC_NCA_ID, deploymentId, gpuSpecId, 2, Map.of());
+
+        verify(instanceLifecycleService).terminateInstances(
+                DUMMY_CUSTOMER_ID, Set.of(instance), Map.of());
+    }
+
+    @Test
+    void terminateInstancesByWorkload_selectsAcrossGpuSpecifications() {
+        UUID deploymentId = UUID.randomUUID();
+        UUID firstGpuSpecId = UUID.randomUUID();
+        UUID secondGpuSpecId = UUID.randomUUID();
+        Instant now = Instant.now();
+        var starting = instance("starting", SpotInstanceInternalState.STARTING,
+                                now, deploymentId, firstGpuSpecId);
+        var running = instance("running", SpotInstanceInternalState.RUNNING,
+                               now.minusSeconds(10), deploymentId, secondGpuSpecId);
+
+        when(instanceV2Repository.findInstancesByDeploymentId(deploymentId))
+                .thenReturn(List.of(running, starting));
+        when(instanceV2Repository.findInstancesByCustomerAndIds(null, Set.of("starting")))
+                .thenReturn(List.of(starting));
+        var request = getDummyInstanceRequestEntity(
+                SpotInstanceRequestState.ACTIVE, SpotRequestStatusCode.FULFILLED,
+                DUMMY_OPEN_REQUEST_HAVING_INSTANCE_ID, now, ResourceProvider.OCI);
+        request.setNcaId(DUMMY_NON_BYOC_NCA_ID);
+        request.setDeploymentId(deploymentId);
+        request.setGpuSpecificationId(firstGpuSpecId);
+        when(instanceRequestV2Repository.findRequestById(
+                DUMMY_OPEN_REQUEST_HAVING_INSTANCE_ID)).thenReturn(Optional.of(request));
+        when(instanceLifecycleService.terminateInstances(
+                DUMMY_CUSTOMER_ID, Set.of(starting), Map.of()))
+                .thenReturn(new TerminateInstancesResponse(List.of()));
+
+        terminateInstanceService.terminateInstances(
+                DUMMY_NON_BYOC_NCA_ID, deploymentId, null, 1, Map.of());
+
+        verify(instanceV2Repository).findInstancesByDeploymentId(deploymentId);
+        verify(instanceV2Repository, never())
+                .findInstancesByGpuSpecificationId(any(), any());
+        verify(instanceLifecycleService).terminateInstances(
+                DUMMY_CUSTOMER_ID, Set.of(starting), Map.of());
+    }
+
+    @Test
+    void terminateInstancesByGpuSpec_withNoOwnedInstances_returnsEmptyResponse() {
+        UUID deploymentId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        var instance = instance("instance", SpotInstanceInternalState.RUNNING,
+                                Instant.now(), deploymentId, gpuSpecId);
+        instance.setNcaId("other-nca");
+        when(instanceV2Repository.findInstancesByGpuSpecificationId(deploymentId, gpuSpecId))
+                .thenReturn(List.of(instance));
+
+        var response = terminateInstanceService.terminateInstances(
+                DUMMY_NON_BYOC_NCA_ID, deploymentId, gpuSpecId, 1, Map.of());
+
+        assertTrue(response.getTerminatingInstances().isEmpty());
+        verify(instanceV2Repository, never()).findInstancesByCustomerAndIds(any(), any());
+        verify(instanceLifecycleService, never()).terminateInstances(any(), any(), any());
+    }
+
+    @Test
+    void terminateInstancesByGpuSpec_excludesIneligibleInstances() {
+        UUID deploymentId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        var shuttingDown = instance("shutting-down", SpotInstanceInternalState.SHUTTING_DOWN,
+                                    Instant.now(), deploymentId, gpuSpecId);
+        var closed = instance("closed", SpotInstanceInternalState.STARTING,
+                              Instant.now(), deploymentId, gpuSpecId);
+        closed.setRequestState(SpotInstanceRequestState.CLOSED);
+        when(instanceV2Repository.findInstancesByGpuSpecificationId(deploymentId, gpuSpecId))
+                .thenReturn(List.of(shuttingDown, closed));
+
+        var response = terminateInstanceService.terminateInstances(
+                DUMMY_NON_BYOC_NCA_ID, deploymentId, gpuSpecId, 2, Map.of());
+
+        assertTrue(response.getTerminatingInstances().isEmpty());
+        verify(instanceV2Repository, never()).findInstancesByCustomerAndIds(any(), any());
+        verify(instanceLifecycleService, never()).terminateInstances(any(), any(), any());
+    }
+
+    private InstanceV2Entity instance(
+            String instanceId,
+            SpotInstanceInternalState state,
+            Instant createTime,
+            UUID deploymentId,
+            UUID gpuSpecId) {
+        var instance = getDummyInstanceEntity(
+                state, SpotInstanceRequestState.ACTIVE, createTime, ResourceProvider.OCI);
+        instance.setInstanceId(instanceId);
+        instance.setRequestId(DUMMY_OPEN_REQUEST_HAVING_INSTANCE_ID);
+        instance.setNcaId(DUMMY_NON_BYOC_NCA_ID);
+        instance.setDeploymentId(deploymentId);
+        instance.setGpuSpecificationId(gpuSpecId);
+        return instance;
     }
 
     @Test

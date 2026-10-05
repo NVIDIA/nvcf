@@ -1,0 +1,29 @@
+{
+  "name": "nemotron-asr-streaming",
+  "description": "Nemotron ASR Streaming NIM (en-US) deployed as a gRPC function",
+  "containerImage": "nvcr.io/nim/nvidia/nemotron-asr-streaming:latest",
+  "inferenceUrl": "/grpc",
+  "inferencePort": 50051,
+  "apiBodyFormat": "CUSTOM",
+  "containerEnvironment": [
+    {
+      "key": "NIM_TAGS_SELECTOR",
+      "value": "name=nemotron-asr-streaming,type=en-US,batch_size=128"
+    },
+    {
+      "key": "NIM_GRPC_API_PORT",
+      "value": "50051"
+    },
+    {
+      "key": "NGC_API_KEY",
+      "value": "<ngc-api-key>"
+    }
+  ],
+  "health": {
+    "protocol": "gRPC",
+    "uri": "/",
+    "port": 50051,
+    "timeout": "PT20S",
+    "expectedStatusCode": 200
+  }
+}

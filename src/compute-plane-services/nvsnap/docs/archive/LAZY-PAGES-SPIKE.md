@@ -29,6 +29,7 @@ Three independent blockers:
 ### Page Split Analysis
 
 Even in the best case (lazy pages working for CPU memory only):
+
 - GPU memory dominates checkpoint size for inference workloads
 - vLLM TinyLlama: ~26GB GPU vs ~2GB CPU pages — lazy loading CPU pages saves <8% of restore I/O
 - For larger models (8B, 70B), the ratio is even more GPU-heavy
@@ -36,6 +37,7 @@ Even in the best case (lazy pages working for CPU memory only):
 ## Test Script
 
 `scripts/test-lazy-pages.sh` — runs three progressive tests:
+
 1. CPU-only baseline (verifies kernel/CRIU support)
 2. GPU workload lazy restore attempt
 3. Page split analysis of existing checkpoints

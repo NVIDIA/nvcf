@@ -19,6 +19,7 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -33,9 +34,19 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	fakenvcaop "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
+)
+
+var (
+	testICMSRequestGVR = schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests",
+	}
+	testModelCacheBindingGVR = schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "modelcachebindings",
+	}
 )
 
 func TestBackendNamespaces(t *testing.T) {
@@ -1173,7 +1184,8 @@ func TestCleanupBackendResources(t *testing.T) {
 			k8sClient := fake.NewSimpleClientset(objs...)
 			dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
 				map[schema.GroupVersionResource]string{
-					icmsGVR: "ICMSRequestList",
+					icmsGVR:                  "ICMSRequestList",
+					testModelCacheBindingGVR: "ModelCacheBindingList",
 				})
 
 			err := CleanupBackendResources(ctx, k8sClient, dynamicClient, tt.backend)
@@ -1235,7 +1247,8 @@ func TestCleanupBackendResources_WithICMSRequests(t *testing.T) {
 	)
 	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			icmsGVR: "ICMSRequestList",
+			icmsGVR:                  "ICMSRequestList",
+			testModelCacheBindingGVR: "ModelCacheBindingList",
 		},
 		dynamicObjs...)
 
@@ -1245,6 +1258,121 @@ func TestCleanupBackendResources_WithICMSRequests(t *testing.T) {
 	remaining, err := dynamicClient.Resource(icmsGVR).Namespace(DefaultNVCARequestsNamespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, remaining.Items)
+}
+
+func TestCleanupBackendResources_WithModelCacheBindings(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	icmsGVR := schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests",
+	}
+	bindingGVR := schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "modelcachebindings",
+	}
+	binding := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "nvca.nvcf.nvidia.io/v2beta1",
+		"kind":       "ModelCacheBinding",
+		"metadata": map[string]interface{}{
+			"name":       "model-cache-test",
+			"namespace":  DefaultModelCacheInitNamespace,
+			"finalizers": []interface{}{"nvca.nvcf.nvidia.io/model-cache-binding-finalizer"},
+		},
+	}}
+	k8sClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCASystemNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCARequestsNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultModelCacheInitNamespace}},
+	)
+	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+		scheme,
+		map[schema.GroupVersionResource]string{
+			icmsGVR:    "ICMSRequestList",
+			bindingGVR: "ModelCacheBindingList",
+		},
+		binding,
+	)
+	backend := &nvidiaiov1.NVCFBackend{ObjectMeta: metav1.ObjectMeta{Name: "test-backend"}}
+
+	err := CleanupBackendResources(ctx, k8sClient, dynamicClient, backend)
+	require.NoError(t, err)
+	remaining, err := dynamicClient.Resource(bindingGVR).Namespace(DefaultModelCacheInitNamespace).List(
+		ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, remaining.Items)
+}
+
+func TestCleanupBackendResources_PropagatesModelCacheBindingFailure(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		verb       string
+		finalizers []interface{}
+		wantError  string
+	}{
+		{
+			name:       "finalizer update fails",
+			verb:       "update",
+			finalizers: []interface{}{"nvca.nvcf.nvidia.io/model-cache-binding-finalizer"},
+			wantError:  "remove finalizers from model-cache binding",
+		},
+		{
+			name:      "binding delete fails",
+			verb:      "delete",
+			wantError: "delete model-cache binding",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			injected := errors.New("injected binding cleanup failure")
+			binding := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "nvca.nvcf.nvidia.io/v2beta1",
+				"kind":       "ModelCacheBinding",
+				"metadata": map[string]interface{}{
+					"name":       "model-cache-test",
+					"namespace":  DefaultModelCacheInitNamespace,
+					"finalizers": tt.finalizers,
+				},
+			}}
+			dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+				runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{
+					testICMSRequestGVR:       "ICMSRequestList",
+					testModelCacheBindingGVR: "ModelCacheBindingList",
+				},
+				binding,
+			)
+			dynamicClient.PrependReactor(
+				tt.verb,
+				"modelcachebindings",
+				func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, injected
+				},
+			)
+			k8sClient := fake.NewSimpleClientset(
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCASystemNamespace}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCARequestsNamespace}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultModelCacheInitNamespace}},
+			)
+
+			err := CleanupBackendResources(
+				ctx,
+				k8sClient,
+				dynamicClient,
+				&nvidiaiov1.NVCFBackend{ObjectMeta: metav1.ObjectMeta{Name: "test-backend"}},
+			)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, injected)
+			assert.ErrorContains(t, err, "failed to delete model-cache bindings in namespace")
+			assert.ErrorContains(t, err, tt.wantError)
+			_, getErr := dynamicClient.Resource(testModelCacheBindingGVR).
+				Namespace(DefaultModelCacheInitNamespace).
+				Get(ctx, binding.GetName(), metav1.GetOptions{})
+			require.NoError(t, getErr, "failed cleanup must leave the binding for retry")
+			_, getErr = k8sClient.CoreV1().Namespaces().Get(
+				ctx, DefaultModelCacheInitNamespace, metav1.GetOptions{})
+			require.NoError(t, getErr, "failed cleanup must retain the binding namespace")
+		})
+	}
 }
 
 func TestCleanupBackendResources_WithWebhooks(t *testing.T) {
@@ -1271,7 +1399,8 @@ func TestCleanupBackendResources_WithWebhooks(t *testing.T) {
 	)
 	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			icmsGVR: "ICMSRequestList",
+			icmsGVR:                  "ICMSRequestList",
+			testModelCacheBindingGVR: "ModelCacheBindingList",
 		})
 
 	err := CleanupBackendResources(ctx, k8sClient, dynamicClient, backend)
@@ -1515,7 +1644,8 @@ func TestCountICMSRequests_EmptyNamespace(t *testing.T) {
 
 	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			icmsGVR: "ICMSRequestList",
+			icmsGVR:                  "ICMSRequestList",
+			testModelCacheBindingGVR: "ModelCacheBindingList",
 		})
 
 	count, err := CountICMSRequests(ctx, dynamicClient, DefaultNVCARequestsNamespace)
@@ -1718,7 +1848,8 @@ func TestCleanupBackendResources_WithWorkloadNamespaces(t *testing.T) {
 	)
 	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			icmsGVR: "ICMSRequestList",
+			icmsGVR:                  "ICMSRequestList",
+			testModelCacheBindingGVR: "ModelCacheBindingList",
 		})
 
 	err := CleanupBackendResources(ctx, k8sClient, dynamicClient, backend)

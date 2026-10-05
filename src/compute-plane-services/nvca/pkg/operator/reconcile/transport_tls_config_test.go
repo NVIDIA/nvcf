@@ -200,6 +200,25 @@ func TestGetRawAgentConfigToMerge_MalformedIsFatal(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid agent-config-merge")
 }
 
+func TestGetRawAgentConfigToMerge_InvalidQuantityIsRecoverable(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{clients: clients, operatorNamespace: NVCAOperatorNamespace}
+
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName},
+		Data:       map[string]string{agentConfigFile: "agent:\n  BYOOResources:\n    requests:\n      cpu: notaquantity\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	_, found, err := bc.getRawAgentConfigToMerge(ctx)
+	require.Error(t, err)
+	assert.False(t, found)
+	assert.False(t, nvcaoperatorerrors.IsFatal(err))
+	assert.True(t, isInvalidAgentConfigError(err))
+	assert.Contains(t, err.Error(), "invalid agent-config-merge")
+}
+
 func TestGetAgentConfigToMerge_RejectsInvalidDirectMergeTransportTLSAsFatal(t *testing.T) {
 	tests := []struct {
 		name      string

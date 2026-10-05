@@ -27,6 +27,14 @@ type ICMSRequestListerExpansion interface{}
 // ICMSRequestNamespaceLister.
 type ICMSRequestNamespaceListerExpansion interface{}
 
+// ModelCacheBindingListerExpansion allows custom methods to be added to
+// ModelCacheBindingLister.
+type ModelCacheBindingListerExpansion interface{}
+
+// ModelCacheBindingNamespaceListerExpansion allows custom methods to be added to
+// ModelCacheBindingNamespaceLister.
+type ModelCacheBindingNamespaceListerExpansion interface{}
+
 // StorageRequestListerExpansion allows custom methods to be added to
 // StorageRequestLister.
 type StorageRequestListerExpansion interface{}

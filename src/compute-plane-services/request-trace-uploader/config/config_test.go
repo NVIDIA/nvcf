@@ -107,6 +107,9 @@ func TestLoadRejectsInvalidRequiredValues(t *testing.T) {
 		{name: "missing backend", env: map[string]string{EnvSourceDir: "/records"}},
 		{name: "unknown backend", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "s3"}},
 		{name: "prefix with separator", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvSegmentPrefix: "nested/prefix"}},
+		{name: "http objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "http://minio.internal:9000"}},
+		{name: "schemeless objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "minio.internal:9000"}},
+		{name: "hostless objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "https://"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,6 +117,100 @@ func TestLoadRejectsInvalidRequiredValues(t *testing.T) {
 				t.Fatal("Load() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsAnHTTPSObjectStoreEndpoint(t *testing.T) {
+	cfg, _, err := Load(testLookup(map[string]string{
+		EnvSourceDir:           "/records",
+		EnvBackend:             "objectstore",
+		EnvObjectStoreEndpoint: "https://minio.internal:9000",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ObjectStore.Endpoint != "https://minio.internal:9000" {
+		t.Fatalf("endpoint = %q, want the configured https endpoint", cfg.ObjectStore.Endpoint)
+	}
+}
+
+func TestLoadParsesObjectStoreDryRun(t *testing.T) {
+	cfg, _, err := Load(testLookup(map[string]string{
+		EnvSourceDir:         "/records",
+		EnvBackend:           "objectstore",
+		EnvObjectStoreDryRun: "true",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.ObjectStore.DryRun {
+		t.Fatal("ObjectStore.DryRun = false, want true")
+	}
+}
+
+func TestLoadDefaultsObjectStoreDryRunToFalse(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir: "/records",
+		EnvBackend:   "objectstore",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if cfg.ObjectStore.DryRun {
+		t.Fatal("ObjectStore.DryRun = true, want false by default")
+	}
+}
+
+func TestLoadDefaultsDebugVerbosityToBasic(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir: "/records",
+		EnvBackend:   "debug",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if cfg.DebugVerbosity != DebugVerbosityBasic {
+		t.Fatalf("debug verbosity = %q, want %q", cfg.DebugVerbosity, DebugVerbosityBasic)
+	}
+}
+
+func TestLoadAcceptsDetailedDebugVerbosity(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir:      "/records",
+		EnvBackend:        "debug",
+		EnvDebugVerbosity: "detailed",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if cfg.DebugVerbosity != DebugVerbosityDetailed {
+		t.Fatalf("debug verbosity = %q, want %q", cfg.DebugVerbosity, DebugVerbosityDetailed)
+	}
+}
+
+func TestLoadFallsBackForInvalidDebugVerbosity(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir:      "/records",
+		EnvBackend:        "debug",
+		EnvDebugVerbosity: "verbose",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DebugVerbosity != DebugVerbosityBasic {
+		t.Fatalf("debug verbosity = %q, want the safe default %q", cfg.DebugVerbosity, DebugVerbosityBasic)
+	}
+	if len(warnings) != 1 || warnings[0] != EnvDebugVerbosity {
+		t.Fatalf("warnings = %v, want [%q]", warnings, EnvDebugVerbosity)
 	}
 }
 

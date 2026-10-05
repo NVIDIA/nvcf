@@ -21,6 +21,7 @@ Use `down` for normal teardown. Use `uninstall` for GitOps (commit YAML; Argo/Fl
 | `--no-apply` | `install` / `uninstall` (primitives) | **Yes.** `helmfile template` for install; `helm get manifest` for uninstall. | YAML on stdout |
 
 So:
+
 - `down --plan-only --cluster-name=X` — show me the orchestrator phases without invoking anything.
 - `uninstall --no-apply --compute-plane --cluster-name=X` — give me the YAML I'd `kubectl delete -f -`.
 
@@ -48,6 +49,7 @@ nvcf-cli self-hosted down --cluster-name=ncp-local
 ### 1. Confirm scope with the user
 
 Ask:
+
 - "Tearing down everything (compute planes + control plane + ICMS rows) or just one compute plane?"
 - "Are there ACTIVE function deployments on this cluster? `nvcf-cli function deploy list` to check." (Important — `down` will refuse without `--drain-active=true|prompt` if any are ACTIVE.)
 - "Should we wipe persistent state (Cassandra data, OpenBao seal keys, sr-default user data)? Default is to **preserve** them. `--remove-persistent` opts in to deletion. **Loss is unrecoverable.**"
@@ -114,6 +116,7 @@ Note: `--no-apply` does NOT include the ICMS `cluster delete` (helm doesn't mana
 If `down` partial-fails mid-way, **re-run the same command**. The orchestrator is idempotent: `helm uninstall` skips releases that are already gone, and `cluster delete --ignore-missing` skips ICMS rows that are already gone. Phase 4 + 6 emit `phase: skipped (already clean)` on the second run.
 
 If a `phase_failed` event surfaces:
+
 - `errCategory: "helm_pending_upgrade", retryClass: "after_remediation"` → run `helm rollback <release> 0 --kube-context=…` (the message includes the exact release name) then re-run `down`. Do NOT auto-rollback without user confirmation.
 - `errCategory: "compute_plane", retryClass: "after_remediation"` with message about ACTIVE deployments → user passed `--drain-active=false` but deployments exist. Re-run with `--drain-active=true` or `--drain-active=prompt` and confirm with the user.
 - Other categories → surface `errMessage` + each `remediation` string verbatim. STOP. Do not propose retry without user input.
@@ -121,6 +124,7 @@ If a `phase_failed` event surfaces:
 ## Always confirm
 
 For every `nvcf-cli self-hosted down` or `uninstall` invocation, especially with destructive flags:
+
 - State the exact `--cluster-name` (or `--all`).
 - State what's lost (e.g. "all function deployments scheduled on `ncp-local` will stop; compute plane will deregister from ICMS").
 - If `--remove-persistent` is being considered, state that Cassandra rows + OpenBao seal keys will be deleted and that this is unrecoverable.

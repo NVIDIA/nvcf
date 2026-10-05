@@ -304,6 +304,13 @@ func (r *Reconciler) tryRemoveFinalizerInTerminatingNamespace(ctx context.Contex
 	if !controllerutil.ContainsFinalizer(st, StorageRequestFinalizer) {
 		return false, reconcile.Result{}, nil
 	}
+	// A persisted durable model cache owns objects in the global init
+	// namespace and cluster-scoped PVs. Namespace termination does not prove
+	// those resources are gone, so it cannot bypass cleanup. Annotation-free
+	// legacy requests keep the historical escape hatch.
+	if requiresStrictModelCacheCleanup(st) {
+		return false, reconcile.Result{}, nil
+	}
 	ns := &corev1.Namespace{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil || ns.DeletionTimestamp == nil {
 		return false, reconcile.Result{}, nil
@@ -321,6 +328,22 @@ func (r *Reconciler) tryRemoveFinalizerInTerminatingNamespace(ctx context.Contex
 	}
 	log.V(1).Info("Removed finalizer from StorageRequest in terminating namespace")
 	return true, reconcile.Result{}, nil
+}
+
+func requiresStrictModelCacheCleanup(st *nvcav1new.StorageRequest) bool {
+	if st == nil || st.Spec.Type != nvcav1new.ModelCacheRequest {
+		return false
+	}
+	raw := st.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return false
+	}
+	selection, err := ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		// An invalid persisted decision must not bypass cleanup protection.
+		return true
+	}
+	return selection.Mode == ModelCacheSelectionDurable
 }
 
 // getICMSRequestName returns the ICMS request name from the StorageRequest.
@@ -494,9 +517,12 @@ func (r *Reconciler) doReconcile(
 		res  reconcile.Result
 		rerr error
 	)
-	if stCopy.DeletionTimestamp == nil {
+	if stCopy.DeletionTimestamp == nil && !controllerutil.ContainsFinalizer(stCopy, StorageRequestFinalizer) {
+		// Persist cleanup ownership before any provider resource is created. The
+		// next reconcile performs provisioning only after observing the finalizer.
 		controllerutil.AddFinalizer(stCopy, StorageRequestFinalizer)
-
+		res = reconcile.Result{Requeue: true}
+	} else if stCopy.DeletionTimestamp == nil {
 		switch stCopy.Spec.Type {
 		case nvcav1new.ModelCacheRequest:
 			res, rerr = r.doModelCache(ctx, *st, stCopy, icmsReq)

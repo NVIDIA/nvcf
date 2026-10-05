@@ -173,6 +173,130 @@ func Test_containerRequestsStaticGPU(t *testing.T) {
 	}
 }
 
+func TestNVLinkDomainSchedulingParametersNarrowRequiredNodeAffinity(t *testing.T) {
+	cliqueReq := corev1.NodeSelectorRequirement{
+		Key:      GPUCliqueNodeLabel,
+		Operator: corev1.NodeSelectorOpExists,
+	}
+	hostnameReq := corev1.NodeSelectorRequirement{
+		Key:      "kubernetes.io/hostname",
+		Operator: corev1.NodeSelectorOpIn,
+		Values:   []string{"selected-node-a", "selected-node-b"},
+	}
+	instanceTypeReq := corev1.NodeSelectorRequirement{
+		Key:      "nvidia.com/instance-type",
+		Operator: corev1.NodeSelectorOpIn,
+		Values:   []string{"gb200"},
+	}
+	nameField := corev1.NodeSelectorRequirement{
+		Key:      "metadata.name",
+		Operator: corev1.NodeSelectorOpIn,
+		Values:   []string{"selected-node-a"},
+	}
+	newRequiredNodeAffinity := func(terms ...corev1.NodeSelectorTerm) *corev1.Affinity {
+		return &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: terms,
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		affinity *corev1.Affinity
+		applyN   int
+		want     []corev1.NodeSelectorTerm
+	}{
+		{
+			name:   "no affinity yields a single clique term",
+			applyN: 1,
+			want: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{cliqueReq},
+			}},
+		},
+		{
+			name:     "empty required selector yields a single clique term",
+			affinity: newRequiredNodeAffinity(),
+			applyN:   1,
+			want: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{cliqueReq},
+			}},
+		},
+		{
+			name: "clique requirement is ANDed into an existing hostname term",
+			affinity: newRequiredNodeAffinity(corev1.NodeSelectorTerm{
+				MatchExpressions: []corev1.NodeSelectorRequirement{hostnameReq},
+			}),
+			applyN: 1,
+			want: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{hostnameReq, cliqueReq},
+			}},
+		},
+		{
+			name: "every existing term gets the clique requirement",
+			affinity: newRequiredNodeAffinity(
+				corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{hostnameReq}},
+				corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{instanceTypeReq}},
+			),
+			applyN: 1,
+			want: []corev1.NodeSelectorTerm{
+				{MatchExpressions: []corev1.NodeSelectorRequirement{hostnameReq, cliqueReq}},
+				{MatchExpressions: []corev1.NodeSelectorRequirement{instanceTypeReq, cliqueReq}},
+			},
+		},
+		{
+			name: "existing match fields are preserved",
+			affinity: newRequiredNodeAffinity(corev1.NodeSelectorTerm{
+				MatchFields: []corev1.NodeSelectorRequirement{nameField},
+			}),
+			applyN: 1,
+			want: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{cliqueReq},
+				MatchFields:      []corev1.NodeSelectorRequirement{nameField},
+			}},
+		},
+		{
+			name: "repeated mutation does not duplicate the clique requirement",
+			affinity: newRequiredNodeAffinity(corev1.NodeSelectorTerm{
+				MatchExpressions: []corev1.NodeSelectorRequirement{hostnameReq},
+			}),
+			applyN: 3,
+			want: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{hostnameReq, cliqueReq},
+			}},
+		},
+	}
+
+	setters := []struct {
+		name  string
+		apply func(pod *corev1.Pod)
+	}{
+		{
+			name:  "preferred",
+			apply: func(pod *corev1.Pod) { SetPreferredNVLinkDomainSchedulingParameters("foo", pod) },
+		},
+		{
+			name:  "required",
+			apply: func(pod *corev1.Pod) { SetRequiredNVLinkDomainSchedulingParameters("foo", "0", pod) },
+		},
+	}
+
+	for _, setter := range setters {
+		for _, tt := range tests {
+			t.Run(setter.name+"/"+tt.name, func(t *testing.T) {
+				pod := &corev1.Pod{Spec: corev1.PodSpec{Affinity: tt.affinity.DeepCopy()}}
+				for i := 0; i < tt.applyN; i++ {
+					setter.apply(pod)
+				}
+				got := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+				assert.Equal(t, tt.want, got.NodeSelectorTerms)
+			})
+		}
+	}
+}
+
 func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 	type spec struct {
 		name       string

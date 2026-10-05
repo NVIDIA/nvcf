@@ -17,9 +17,13 @@ install_kubeconform() {
 run_lint() {
   local chart_name=${1}
   shift
-  local chart_dir="${repo_root}/deployments/${chart_name}"
-  local values_file="${repo_root}/deployments/${chart_name}/values.yaml"
-  local args=()
+  local chart_dir="${repo_root}/../../../deploy/helm/nvca-operator/${chart_name}"
+  local values_file="${repo_root}/../../../deploy/helm/nvca-operator/${chart_name}/values.yaml"
+  # The chart ships no default NGC service key. An ngc-managed install supplies
+  # one, and the generated image pull secret requires it, so lint renders the
+  # way a real install does. Helm applies --set-string after --set, so a caller
+  # cannot replace this with --set; pass --set-string to override it.
+  local args=(--set-string "ngcConfig.serviceKey=lint-service-key")
 
   # Process arguments
   while [[ $# -gt 0 ]]; do
@@ -51,10 +55,10 @@ assert_eq() {
   local message=${3}
 
   if [[ "${got}" != "${want}" ]]; then
-    printf '✗ %s: got %q, want %q\n' "${message}" "${got}" "${want}" >&2
+    printf 'FAIL %s: got %q, want %q\n' "${message}" "${got}" "${want}" >&2
     return 1
   fi
-  printf '✓ %s\n' "${message}"
+  printf 'ok %s\n' "${message}"
 }
 
 assert_pre_delete_cleanup_rbac() {
@@ -63,33 +67,185 @@ assert_pre_delete_cleanup_rbac() {
   trap 'rm -f "${rendered}"' RETURN
 
   local release_name="test-release"
-  local cleanup_name="${release_name}-nvca-operator-pre-delete-cleanup"
 
-  helm template "${release_name}" "${repo_root}/deployments/nvca-operator" \
+  helm template "${release_name}" "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
     --set "ngcConfig.serviceKey=fakekey" >"${rendered}"
 
+  # Read the hook object name from the render rather than rebuilding it here.
+  # The chart may set fullnameOverride, so a name assembled from the release
+  # name does not necessarily match what the chart emits.
+  local cleanup_name
+  cleanup_name="$(yq -r 'select(.kind == "Job" and (.metadata.name | test("pre-delete-cleanup"))) | .metadata.name' "${rendered}")"
+  test -n "${cleanup_name}" || { echo "pre-delete cleanup Job not rendered" >&2; return 1; }
+  export CLEANUP_NAME="${cleanup_name}"
+
   assert_eq "${cleanup_name}" \
-    "$(yq 'select(.kind == "Job" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .spec.template.spec.serviceAccountName' "${rendered}")" \
+    "$(yq 'select(.kind == "Job" and .metadata.name == strenv(CLEANUP_NAME)) | .spec.template.spec.serviceAccountName' "${rendered}")" \
     "pre-delete cleanup Job uses hook-scoped ServiceAccount"
   assert_eq "pre-delete" \
-    "$(yq 'select(.kind == "ServiceAccount" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook"' "${rendered}")" \
+    "$(yq 'select(.kind == "ServiceAccount" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook"' "${rendered}")" \
     "pre-delete cleanup ServiceAccount is a pre-delete hook"
   assert_eq "-20" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-weight"' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook-weight"' "${rendered}")" \
     "pre-delete cleanup RBAC runs before cleanup Job"
   assert_eq "${cleanup_name}" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .subjects[0].name' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .subjects[0].name' "${rendered}")" \
     "pre-delete cleanup ClusterRoleBinding binds hook ServiceAccount"
   assert_eq "${cleanup_name}" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .roleRef.name' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .roleRef.name' "${rendered}")" \
     "pre-delete cleanup ClusterRoleBinding uses hook ClusterRole"
   assert_eq "before-hook-creation,hook-succeeded" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
     "pre-delete cleanup ClusterRoleBinding is removed by Helm after job succeeds"
   assert_eq "before-hook-creation" \
-    "$(yq 'select(.kind == "ClusterRole" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRole" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
     "pre-delete cleanup hook RBAC is kept for the running Job"
 }
+
+assert_storage_capability_catalog() (
+  local chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
+  local catalog="files/nvcf-storage-capabilities-v1alpha1.yaml"
+  local schema="files/nvcf-storage-capabilities-v1alpha1.schema.json"
+  local template="templates/storage-capabilities-configmap.yaml"
+  local rendered missing_chart schema_python tmpdir invalid_catalog schema_check
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "${tmpdir}"' EXIT
+  missing_chart="${tmpdir}/missing-chart"
+  schema_python="${tmpdir}/venv/bin/python"
+  python3 -m venv --system-site-packages "${tmpdir}/venv"
+  "${schema_python}" -m pip install --disable-pip-version-check --quiet \
+    --requirement "${repo_root}/scripts/requirements-lint.txt"
+  schema_check='import json,sys,yaml,jsonschema; schema=json.load(open(sys.argv[1])); jsonschema.Draft202012Validator.check_schema(schema); jsonschema.Draft202012Validator(schema).validate(yaml.safe_load(open(sys.argv[2])))'
+
+  rendered="${tmpdir}/rendered.yaml"
+  helm template test-release "${chart}" --namespace nvca-system \
+    --set-string "ngcConfig.serviceKey=lint-service-key" \
+    --show-only "${template}" >"${rendered}"
+  assert_eq "nvcf-storage-capabilities" "$(yq -r ".metadata.name" "${rendered}")" \
+    "storage capability ConfigMap uses the stable name"
+  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
+    "storage capability ConfigMap is owned by the chart release namespace"
+  assert_eq "$(<"${chart}/${catalog}")" \
+    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
+    "storage capability ConfigMap embeds the exact catalog payload"
+  "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${chart}/${catalog}"
+
+  invalid_catalog="${tmpdir}/invalid-catalog.yaml"
+  for mutation in \
+    'del((.drivers[] | select(.name == "csi.weka.io")).accessModes)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).accessModes = null'; do
+    yq "${mutation}" "${chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null accessModes" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null accessModes"
+
+  for mutation in \
+    'del((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = null'; do
+    yq "${mutation}" "${chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null readerMountOptions"
+
+  yq '(.drivers[] | select(.name == "nvmesh-csi.excelero.com")).readerMountOptions = ["ro", " norecovery", "nouuid"]' \
+    "${chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject readerMountOptions with surrounding whitespace" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects readerMountOptions with surrounding whitespace"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).transitions.regularModelCache = "roxReadOnly"' \
+    "${chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a declared transition" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a declared transition, the flow is derived"
+
+  for options in \
+    '["ro", "rw", "norecovery", "nouuid"]' \
+    '["ro", "recovery", "norecovery", "nouuid"]' \
+    '["ro", "norecovery", "uuid", "nouuid"]'; do
+    yq "(.drivers[] | select(.name == \"nvmesh-csi.excelero.com\")).readerMountOptions = ${options}" \
+      "${chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject conflicting readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects conflicting readerMountOptions"
+
+  yq '((.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
+      ((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = [])' \
+    "${chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a ReadOnlyMany reader shape without ro" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a ReadOnlyMany reader shape without a read-only mount"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadOnlyMany"]' \
+    "${chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject ReadOnlyMany with no writer mode" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects ReadOnlyMany with no writer mode"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteMany"]' \
+    "${chart}/${catalog}" >"${invalid_catalog}"
+  if ! "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${invalid_catalog}"; then
+    echo "Expected schema to accept a shared claim driver with no reader options" >&2
+    return 1
+  fi
+  echo "PASS: schema accepts a shared claim driver with no reader options"
+
+  yq 'del((.drivers[] | select(.name == "csi.weka.io")).name)' \
+    "${chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a driver with no name" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a driver with no name"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).unexpected = true' \
+    "${chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject an unknown driver field" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects an unknown driver field"
+
+  mkdir -p "${missing_chart}"
+  cp -a "${chart}/." "${missing_chart}/"
+  rm -f "${missing_chart}/${catalog}"
+  if helm template test-release "${missing_chart}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}" 2>&1; then
+    echo "Expected rendering without the storage capability catalog to fail" >&2
+    return 1
+  fi
+  grep -q "required NVCF storage capability catalog" "${rendered}"
+  echo "PASS: storage capability catalog schema, render, and payload"
+)
+
+assert_storage_capability_catalog
 
 # The Bazel-built NVCA operator image is distroless, so the rendered workload
 # commands must execute the packaged binaries directly. A /tini wrapper would
@@ -114,16 +270,37 @@ assert_distroless_operator_commands() {
     "${chart_label} cleanup Job starts the packaged binary directly"
 }
 
-assert_distroless_operator_commands "${repo_root}/deployments/nvca-operator" "service chart"
 assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 install_kubeconform
 assert_pre_delete_cleanup_rbac
-run_lint nvca-operator --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator
 run_lint nvca-operator --set "generateImagePullSecret=false" --set "imagePullSecretName=foo-bar-image-pull"
+
+# The chart ships no default service key, so generating the pull secret has
+# nothing to authenticate with. Refusing to render is what keeps a placeholder
+# from reaching a cluster as a pull secret that fails at image pull instead.
+echo -e "\nTesting NGC service key validation..."
+missing_key_output="$(mktemp)"
+if helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=" \
+  > "${missing_key_output}" 2>&1; then
+  echo "Expected render without an NGC service key to fail"
+  cat "${missing_key_output}"
+  rm -f "${missing_key_output}"
+  exit 1
+fi
+if ! grep -q "NGC service key is required to create a pull secret" "${missing_key_output}"; then
+  echo "Expected the missing service key to be reported by name"
+  cat "${missing_key_output}"
+  rm -f "${missing_key_output}"
+  exit 1
+fi
+rm -f "${missing_key_output}"
+echo -e "Test passed"
 
 echo -e "\nTesting self-managed endpoint validation..."
 missing_endpoint_output="$(mktemp)"
-if helm template test-release "${repo_root}/deployments/nvca-operator" \
+if helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --set "generateImagePullSecret=false" \
   --set "ngcConfig.clusterSource=self-managed" \
   --set-string "clusterID=id" \
@@ -170,7 +347,7 @@ assert_service_oauth_nil_safe() {
   shift
   local render_output
   render_output="$(mktemp)"
-  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+  if ! helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "$@" \
     --values "${reuse_values_file}" > "${render_output}" 2>&1; then
     echo "Expected ${label} cluster-dto to render without agent.serviceOAuth defaults"
     cat "${render_output}"
@@ -184,7 +361,7 @@ assert_service_oauth_nil_safe() {
     exit 1
   fi
   rm -f "${render_output}"
-  echo "✓ ${label} cluster-dto renders nil-safely without agent.serviceOAuth defaults"
+  echo "ok ${label} cluster-dto renders nil-safely without agent.serviceOAuth defaults"
 }
 
 assert_service_oauth_nil_safe "helm-managed" \
@@ -234,7 +411,6 @@ assert_helm_managed_vault_address() {
   done
 }
 
-assert_helm_managed_vault_address "${repo_root}/deployments/nvca-operator" "service chart"
 assert_helm_managed_vault_address "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 
 assert_service_oauth_nil_safe "self-managed" \
@@ -262,7 +438,7 @@ assert_transport_trust_config() {
   local render_output
   render_output="$(mktemp)"
 
-  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+  if ! helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "$@" \
     --show-only templates/operator-config-cm.yaml > "${render_output}" 2>&1; then
     echo "Expected ${label} workload transport trust ConfigMap to render"
     cat "${render_output}"
@@ -290,7 +466,7 @@ assert_transport_trust_config() {
     exit 1
   fi
   rm -f "${render_output}"
-  echo "✓ ${label} workload transport trust ConfigMap renders"
+  echo "ok ${label} workload transport trust ConfigMap renders"
 }
 
 assert_transport_trust_config "default" "" "" "" --set "ngcConfig.serviceKey=fakekey"
@@ -308,49 +484,48 @@ bash "${repo_root}/scripts/test_transport_trust_validation.sh"
 
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)
-run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns"
 
 # Test with both source namespace and label selector (should add args)
-run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "agent.secretMirror.labelSelector=mirror=true" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "agent.secretMirror.labelSelector=mirror=true"
 
 # Test custom annotations feature
-run_lint nvca-operator --values "${repo_root}/test/test-custom-annotations.yaml" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --values "${repo_root}/test/test-custom-annotations.yaml"
 
 # Test both features together
 run_lint nvca-operator \
   --set "agent.secretMirror.sourceNamespace=custom-ns" \
   --set "agent.secretMirror.labelSelector=mirror=true" \
-  --values "${repo_root}/test/test-custom-annotations.yaml" \
-  --set "ngcConfig.serviceKey=fakekey"
+  --values "${repo_root}/test/test-custom-annotations.yaml"
 
 # Test network policies feature
-run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml"
 
 # Test network policies with annotations
-run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml" --values "${repo_root}/test/test-custom-annotations.yaml" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml" --values "${repo_root}/test/test-custom-annotations.yaml"
 
 # Test ConfigMaps contain expected structure when custom values provided
 echo "Testing ConfigMap structure with custom values..."
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --values "${repo_root}/test/test-network-policies.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap created" || echo "✗ Network policies ConfigMap missing"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap created" || echo "FAIL Network policies ConfigMap missing"
 
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --values "${repo_root}/test/test-custom-annotations.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Custom annotations ConfigMap created" || echo "✗ Custom annotations ConfigMap missing"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Custom annotations ConfigMap created" || echo "FAIL Custom annotations ConfigMap missing"
 
 # Test ConfigMaps are created even without custom values (always created behavior)
 echo "Testing ConfigMaps are always created..."
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Annotations ConfigMap always created" || echo "✗ Annotations ConfigMap not created"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Annotations ConfigMap always created" || echo "FAIL Annotations ConfigMap not created"
 
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap always created" || echo "✗ Network policies ConfigMap not created"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap always created" || echo "FAIL Network policies ConfigMap not created"

@@ -4,7 +4,7 @@
 
 NVIDIA Cloud Functions provides a comprehensive observability solution through two main approaches:
 
-1. **NGC UI/CLI Observability**
+1. NGC UI/CLI Observability
 
    1. Basic metrics in the Overview tab
    1. Log data with time ranges in the Logs tab
@@ -13,7 +13,7 @@ NVIDIA Cloud Functions provides a comprehensive observability solution through t
 
    See details on using the built-in observability features below.
 
-1. **External Observability Integration**
+1. External Observability Integration
 
    1. Send telemetry data to your organization's observability platforms
    1. Support for logs, metrics, and traces
@@ -25,19 +25,19 @@ NVIDIA Cloud Functions provides a comprehensive observability solution through t
 
 The NGC UI provides basic observability through three main tabs:
 
-1. **Overview Tab**
+1. Overview Tab
 
    1. Provides real-time status and performance metrics
    1. Shows instance counts and request statistics
    1. Displays basic function or task information
 
-1. **Logs Tab**
+1. Logs Tab
 
    1. Access to container and event logs
    1. Real-time log streaming capabilities
    1. Search and filtering functionality
 
-1. **Metrics Tab**
+1. Metrics Tab
 
    1. Detailed performance indicators
    1. Time-series data visualization
@@ -49,22 +49,22 @@ You can access these tabs by navigating to your function in the NGC UI. Each tab
 
 The Overview tab provides access to your function's current status and performance metrics, offering real-time insights into your function's operation and health.
 
-1. **Basic Function or Task Metrics**
-   
+1. Basic Function or Task Metrics
+
    1. Current function or task status (Running, Stopped, Error)
    1. Last updated timestamp
    1. Function or task version
    1. Runtime environment details
 
-1. **Instance Counts**
-   
+1. Instance Counts
+
    1. Active instances
    1. Pending instances
    1. Failed instances
    1. Historical instance trends
 
-1. **Request Statistics**
-   
+1. Request Statistics
+
    1. Total requests processed
    1. Current request rate
    1. Success/failure ratios
@@ -89,15 +89,15 @@ The Logs tab enables monitoring through detailed log access.
 
 NVCF displays logs related to:
 
-* Deployment stages
+- Deployment stages
 
-  * Function or Task Creation
-  * Function or Task Deployment
+  - Function or Task Creation
+  - Function or Task Deployment
 
-* Function or task invocation logs
+- Function or task invocation logs
 
-* Real-time logs (listed in the UI under the Live Tail tab)
-  * For detailed information about real-time logging capabilities, see the NGC UI Logs tab described above.
+- Real-time logs (listed in the UI under the Live Tail tab)
+  - For detailed information about real-time logging capabilities, see the NGC UI Logs tab described above.
 
 ### Viewing Metrics
 
@@ -107,19 +107,19 @@ NVCF displays logs related to:
 
 The Metrics view displays:
 
-**Summary Statistics**
+Summary Statistics
 
-* Total Invocations - Number of function calls in the selected time period
-* Average Inference Time - Mean processing time for function calls
-* Total Instance Count - Current number of running instances
-* Failures - Count of failed executions
+- Total Invocations - Number of function calls in the selected time period
+- Average Inference Time - Mean processing time for function calls
+- Total Instance Count - Current number of running instances
+- Failures - Count of failed executions
 
-**Time Series Graphs**
+Time Series Graphs
 
-* Invocation Activity and Queue Depth - Shows request patterns and queued requests
-* Average Inference Time - Processing duration trends
-* Instances Over Time - Shows scaling behavior
-* Success Rate - Function reliability metrics
+- Invocation Activity and Queue Depth - Shows request patterns and queued requests
+- Average Inference Time - Processing duration trends
+- Instances Over Time - Shows scaling behavior
+- Success Rate - Function reliability metrics
 
 Use the time range selector (e.g., Past 1 Hour) in the top right to adjust the view period.
 
@@ -145,18 +145,18 @@ To export function or task telemetry through external observability platforms, y
 
 The OpenTelemetry collector uses the following ports:
 
-* OTLP (OpenTelemetry Protocol)
+- OTLP (OpenTelemetry Protocol)
 
-  * OTLP gRPC: Port 14357
-  * OTLP HTTP: Port 14358
+  - OTLP gRPC: Port 14357
+  - OTLP HTTP: Port 14358
 
-* Metrics
+- Metrics
 
-  * Port 18888 - Used for collector metrics
+  - Port 18888 - Used for collector metrics
 
-* Health Check
+- Health Check
 
-  * Port 13133 - Used for health check endpoint
+  - Port 13133 - Used for health check endpoint
 
 <Note>
 These ports are reserved for the OpenTelemetry collector and should not be used by your functions or tasks.
@@ -168,7 +168,7 @@ Telemetry endpoints can only be configured when creating a new function or deplo
 
 A Telemetry Endpoint is a configuration that specifies where telemetry data is sent. This is allowed for all functions or tasks to be configured to send telemetry data to an external observability platform.
 
-1. **Configure External Telemetry Endpoints**
+1. Configure External Telemetry Endpoints
 
 <Note>
 Remember that to collect custom metrics, logs, and traces from your function's or task's code, you must instrument your application using OpenTelemetry. System-level metrics (CPU, memory, GPU) are collected automatically.
@@ -177,16 +177,16 @@ Remember that to collect custom metrics, logs, and traces from your function's o
    You can configure telemetry endpoints using either the web UI or the NGC CLI:
 
    Web UI Method:
-   
-   - Navigate to your NGC organization settings
-   - Select "Settings" in your Cloud Functions NGC organization
-   - Scroll to the bottom of the page
-   - Click "Add Telemetry Endpoint"
+
+- Navigate to your NGC organization settings
+- Select "Settings" in your Cloud Functions NGC organization
+- Scroll to the bottom of the page
+- Click "Add Telemetry Endpoint"
 
 ![nvcf_add_telemetry_endpoint.png](images/nvcf_add_telemetry_endpoint.png)
 
-   - Select your desired endpoint type (Grafana Cloud or Datadog)
-   - Configure the endpoint with the required credentials
+- Select your desired endpoint type (Grafana Cloud or Datadog)
+- Configure the endpoint with the required credentials
 
 <details>
 <summary>Grafana Cloud</summary>
@@ -195,7 +195,7 @@ Follow these steps to set up Grafana Cloud integration with NVCF:
 
 Web UI Method:
 
-1. **Access Grafana Cloud**
+1. Access Grafana Cloud
 
 1. For new users:
 
@@ -207,15 +207,14 @@ Web UI Method:
 1. Visit https://grafana.com/auth/sign-in
 1. Log in with your credentials
 
-1. **Configure OpenTelemetry**
+1. Configure OpenTelemetry
 
 1. In the top menu bar, locate "My Account"
 1. Expand the Details section by clicking the icon
 
 ![grafana_cloud_portal.png](images/grafana_cloud_portal.png)
 
-
-1. **Access OpenTelemetry Settings**
+1. Access OpenTelemetry Settings
 
 1. In your Grafana Cloud stack, locate the OpenTelemetry card
 1. Click "Configure" to access the OpenTelemetry configuration
@@ -227,18 +226,17 @@ Web UI Method:
 
 ![grafana_cloud_stack.png](images/grafana_cloud_stack.png)
 
-
-1. **Locate OTLP Configuration Details**
+1. Locate OTLP Configuration Details
 
 1. The OTLP endpoint section will display:
 
-1. OTLP Endpoint URL (e.g., https://otlp-gateway-prod-us-west-0.grafana.net/otlp)
+1. OTLP Endpoint URL (e.g., `https://otlp-gateway-prod-us-west-0.grafana.net/otlp`)
 1. Instance ID (a numeric identifier for your instance)
 1. API Token section with option to "Generate now"
 
 1. Use the "Copy to Clipboard" buttons to easily copy these values into the NVCF Telemetry Endpoint configuration.
 
-**Alternative: Create Grafana Telemetry Endpoint via CLI**
+Alternative: Create Grafana Telemetry Endpoint via CLI
 
 As an alternative to the web UI, you can create the Grafana Cloud telemetry endpoint using the NGC CLI:
 
@@ -250,7 +248,6 @@ ngc cloud-function telemetry-endpoint create --name grafana-cloud-metrics \
 --endpoint https://otlp-gateway-prod-us-west-0.grafana.net/otlp \
 --key your-grafana-api-token
 ```
-
 
 <Warning>
 Keep your API Token secure and never share it publicly. If your token is compromised, you can generate a new one and update your configuration.
@@ -265,19 +262,19 @@ Follow these steps to set up Datadog integration with NVCF:
 
 Web UI Method:
 
-1. **Sign Up for Datadog**
+1. Sign Up for Datadog
 
 1. Visit the [Datadog Getting Started page](https://docs.datadoghq.com/getting_started/site/)
 1. Complete the registration process for a new Datadog account
 
-1. **Configure API Key**
+1. Configure API Key
 
 1. Log in to your Datadog account
 1. Navigate to Organization Settings (found in the bottom left corner of the page)
 1. Select API Keys from the left menu
 1. Either click "+New Key" to create a new API key or copy an existing one from the list
 
-1. **Get Telemetry Endpoint**
+1. Get Telemetry Endpoint
 
 1. Your endpoint URL will be displayed in the browser address bar
 1. Available endpoints based on your instance location:
@@ -290,7 +287,7 @@ Web UI Method:
 
 1. For more details on Datadog sites and endpoints, see the [Datadog site documentation](https://docs.datadoghq.com/getting_started/site/)
 
-1. **Configure in NVCF Web UI**
+1. Configure in NVCF Web UI
 
 1. Input the configuration details:
 
@@ -306,8 +303,7 @@ Web UI Method:
 
 ![nvcf_datadog_endpoint.png](images/nvcf_datadog_endpoint.png)
 
-
-**Alternative: Create Datadog Telemetry Endpoint via CLI**
+Alternative: Create Datadog Telemetry Endpoint via CLI
 
 As an alternative to the web UI, you can create the Datadog telemetry endpoint using the NGC CLI:
 
@@ -320,7 +316,6 @@ ngc cloud-function telemetry-endpoint create --name datadog-metrics \
 --endpoint datadoghq.com \
 --key your-datadog-api-key
 ```
-
 
 <Note>
 Make sure to keep your API key secure and never share it publicly. If your key is compromised, you can generate a new one and update your configuration.
@@ -354,7 +349,7 @@ Make sure to keep your API key secure and never share it publicly. If your key i
 - Endpoint configurations cannot be updated - delete and recreate to change settings
 </Note>
 
-1. **Add Telemetry Endpoint to Function or Task**
+1. Add Telemetry Endpoint to Function or Task
 
    Telemetry endpoints can only be configured when creating a new function or deploying a new version. You cannot add a telemetry endpoint to an existing function deployment.
 
@@ -371,7 +366,7 @@ Make sure to keep your API key secure and never share it publicly. If your key i
 If you need to change the telemetry endpoint for an existing function, you must deploy a new version of that function with the updated telemetry configuration.
 </Note>
 
-1. **Verify Deployment**
+1. Verify Deployment
 
    After deploying the function with the telemetry endpoint, verify that the telemetry data is flowing correctly to your observability platform.
 
@@ -396,7 +391,6 @@ If you don't see your custom metrics, logs, or traces in your observability plat
 
 ![grafana_verify_metrics.png](images/grafana_verify_metrics.png)
 
-
 </details>
 
 <details>
@@ -414,14 +408,13 @@ If you don't see your custom metrics, logs, or traces in your observability plat
 
 ![datadog_metrics.png](images/datadog_metrics.png)
 
-
 <Note>
 The OpenTelemetry collector version, image and configuration are managed entirely by NVCF and cannot be modified by users.
 </Note>
 
 </details>
 
-1. **Delete a Function or Task and Remove Telemetry Endpoint**
+1. Delete a Function or Task and Remove Telemetry Endpoint
 
    To remove a telemetry endpoint, you must first cancel all deployments and remove all functions that use that endpoint. The endpoint cannot be removed while any functions are still using it, even if those functions are not currently deployed.
 
@@ -468,11 +461,11 @@ Make sure to export any necessary telemetry data before removing endpoints.
 </Warning>
 
 When you select a telemetry endpoint, NVCF:
-   
-* Deploys a dedicated OpenTelemetry collector with your function or task
-* Automatically configures authentication and endpoint connections
-* Enables collection of metrics, logs, and traces from your function or task
-* Directs telemetry data to your organization's observability platform
+
+- Deploys a dedicated OpenTelemetry collector with your function or task
+- Automatically configures authentication and endpoint connections
+- Enables collection of metrics, logs, and traces from your function or task
+- Directs telemetry data to your organization's observability platform
 
 ### Resource Management
 
@@ -498,16 +491,16 @@ NVCF ensures secure telemetry handling by storing credentials securely in the NG
 
 If issues occur with telemetry collection:
 
-* Your function or task continues to run normally
-* Error messages are logged for troubleshooting
-* Health status is monitored and reported
-* Automatic retry logic handles temporary failures
+- Your function or task continues to run normally
+- Error messages are logged for troubleshooting
+- Health status is monitored and reported
+- Automatic retry logic handles temporary failures
 
 The collector's health can be monitored through:
 
-* Status checks in the NGC UI
-* Metrics in your observability platform
-* Built-in health endpoints
+- Status checks in the NGC UI
+- Metrics in your observability platform
+- Built-in health endpoints
 
 ## Appendix A: Terminology
 
@@ -526,9 +519,9 @@ The following metrics are collected through the OpenTelemetry collector deployed
 
 Key metrics include:
 
-* Function or task invocation metrics
-* Resource utilization metrics
-* Platform metrics related to the function or task
+- Function or task invocation metrics
+- Resource utilization metrics
+- Platform metrics related to the function or task
 
 <Note>
 Metrics are filtered based on deployment type and configuration. Not all metrics may be available for all deployment scenarios.

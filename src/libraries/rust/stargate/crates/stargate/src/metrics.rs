@@ -101,6 +101,7 @@ define_stargate_metrics! {
         routing_selections_total("routing_selections_total", "Total number of primary and ranked fallback cluster choices used for upstream attempts", ["routing_key", "model", "algorithm", "selection"]);
         routing_kv_free_token_fallback_selections_total("routing_kv_free_token_fallback_selections_total", "Total number of selected routes reached after a higher-ranked candidate was skipped by KV free-token eligibility", ["routing_key", "model", "algorithm"]);
         proxy_retry_exhausted_total("proxy_retry_exhausted_total", "Total number of proxy requests that exhausted retry options", ["routing_key", "model", "reason"]);
+        proxy_ambiguous_delivery_total("proxy_ambiguous_delivery_total", "Total number of proxy requests stopped because delivery may have occurred", []);
         admission_rejections_total("admission_rejections_total", "Total number of requests rejected by local admission control", ["routing_key", "model", "reason"]);
         quic_connection_evictions_total("quic_connection_evictions_total", "Total number of QUIC connection pool evictions", ["inference_server_id", "reason"]);
         quic_hot_path_reconnect_total("quic_hot_path_reconnect_total", "Total number of direct QUIC reconnects attempted on the proxy hot path", ["inference_server_id", "result"]);
@@ -108,8 +109,8 @@ define_stargate_metrics! {
     }
     histograms {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
-        proxy_duration_seconds("proxy_duration_seconds", "Time to first byte from upstream", ["routing_key", "model", "inference_server_id"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]);
-        routing_duration_seconds("routing_duration_seconds", "Time spent selecting a inference server", ["routing_key", "model"], [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1]);
+        proxy_duration_seconds("proxy_duration_seconds", "Time to first byte from upstream", ["routing_key", "model", "inference_server_id"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
+        routing_duration_seconds("routing_duration_seconds", "Time spent selecting an inference server", ["routing_key", "model"], [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
     }
     gauges {
         active_inference_servers("active_inference_servers", "Active inference servers available for a routing target", ["routing_key", "model"]);
@@ -130,7 +131,7 @@ macro_rules! metric_accessors {
         $(
             #[inline]
             pub fn $name(&self, $($arg: $arg_type),*) -> $return_type {
-                self.$name.with_label_values(&[$($label),*])
+                self.$name.with_label_values::<&str>(&[$($label),*])
             }
         )*
     };
@@ -143,6 +144,8 @@ impl StargateMetrics {
 
     pub fn new_with_prefix(prefix: &str) -> anyhow::Result<Arc<Self>> {
         let metrics = Arc::new(Self::register(prefix)?);
+        metrics.requests_total(None, "", "", "404").inc_by(0);
+        metrics.proxy_ambiguous_delivery_total().inc_by(0);
         for outcome in stargate_tls::TlsReloadOutcome::ALL {
             metrics
                 .tls_reloads_total
@@ -189,6 +192,7 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, routing_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str, selection: &str) => [routing_key.unwrap_or(""), model, algorithm, selection];
         GenericCounter<AtomicU64>, routing_kv_free_token_fallback_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str) => [routing_key.unwrap_or(""), model, algorithm];
         GenericCounter<AtomicU64>, proxy_retry_exhausted_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
+        GenericCounter<AtomicU64>, proxy_ambiguous_delivery_total() => [];
         GenericCounter<AtomicU64>, admission_rejections_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, quic_connection_evictions_total(inference_server_id: &str, reason: &str) => [inference_server_id, reason];
         GenericCounter<AtomicU64>, quic_hot_path_reconnect_total(inference_server_id: &str, result: &str) => [inference_server_id, result];
@@ -321,6 +325,8 @@ mod tests {
     #[test]
     fn default_metrics_prefix_keeps_stargate_metric_names() {
         let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let initial = metrics.gather_text().expect("metrics should encode");
+        assert!(initial.contains("stargate_proxy_ambiguous_delivery_total 0\n"));
 
         metrics
             .requests_total(None, "model-a", "server-a", "200")
@@ -331,5 +337,37 @@ mod tests {
             body.contains("stargate_requests_total"),
             "default stargate requests counter missing:\n{body}"
         );
+    }
+
+    #[test]
+    fn duration_histograms_distinguish_affinity_holds_and_long_request_waits() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        for histogram in [
+            metrics.routing_duration_seconds(Some("routing-a"), "model-a"),
+            metrics.proxy_duration_seconds(Some("routing-a"), "model-a", "server-a"),
+        ] {
+            for seconds in [0.2, 2.0, 60.0] {
+                histogram.observe(seconds);
+            }
+        }
+        let families = metrics.registry.gather();
+        for name in [
+            "stargate_routing_duration_seconds",
+            "stargate_proxy_duration_seconds",
+        ] {
+            let family = families
+                .iter()
+                .find(|family| family.name() == name)
+                .unwrap();
+            let histogram = family.get_metric()[0].get_histogram();
+            for (bound, count) in [(0.1, 0), (1.0, 1), (10.0, 2), (60.0, 3)] {
+                let bucket = histogram
+                    .get_bucket()
+                    .iter()
+                    .find(|bucket| bucket.upper_bound() == bound)
+                    .expect("finite bucket should cover request waits");
+                assert_eq!(bucket.cumulative_count(), count, "{name} at {bound}s");
+            }
+        }
     }
 }

@@ -27,7 +27,6 @@ limitations under the License.
 - fix(cve): resolve cve in go-jose (CVE-2024-28180, BDSA-2023-3257 ) [KAZD-10650]
 - fix(cve): resolve cve in google.golang.org/protobuf [KAZD-10647]
 
-
 #### Chore/Build
 
 - build(distroless): upgrade distroless version from 3.1.9 to 4.0.1 [KAZD-10649]
@@ -47,7 +46,6 @@ limitations under the License.
 - chore(upgrade): update consul/api dep to v1.32.1 [KAZD-9320]
 - chore(build): upgrade go to 1.23.10
 
-
 ## Previous Releases
 
 ### v1.0.4
@@ -63,13 +61,12 @@ limitations under the License.
 **Released**: 2025-04-28
 
 #### Warning
+
 All clients should skip using v1.0.3 and use v1.0.4 which corrects a new issue introduced in 1.0.3 regarding output of agent templates.
 
 #### Fixes
 
 - fix(leases): fix secret lease time drift [KAZD-9048]
-
-
 
 ### v1.0.2
 
@@ -79,7 +76,6 @@ All clients should skip using v1.0.3 and use v1.0.4 which corrects a new issue i
 
 - fix(init): revert behavior of ESS_AGENT_INIT to check for presence and value = `true` [KAZD-8180]
 - fix(log): use namespace of agent for log message instead of server response headers [KAZD-8168]
-
 
 ### v1.0.1
 
@@ -92,10 +88,10 @@ All clients should skip using v1.0.3 and use v1.0.4 which corrects a new issue i
 - feat(exit_on_client_error): only exit agent on template when 40X response happens on the first attempt to render template [KAZD-7945]
 
 #### Chore/Build
+
 - build(docker): upgrade go distroless docker image to 3.1.3 to resolve libssl CVEs [KAZD-7891]
 
 <br/>
-
 
 ### v1.0.0
 

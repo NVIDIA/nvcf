@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -96,7 +97,6 @@ public class FunctionDeploymentStagesService {
                      e);
         }
     }
-
 
     public FndsMessageV2Model toFndsMessageModel(
             InstanceV2Entity instanceEntity, String functionId, String functionVersionId,

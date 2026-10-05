@@ -30,10 +30,10 @@ nv-boot-parent  (extends spring-boot-starter-parent 4.0.7)
 
 ## Minimum Requirements
 
-* [Eclipse Temurin OpenJDK 25](https://adoptium.net/temurin/releases/)
-* [Bazelisk](https://github.com/bazelbuild/bazelisk)
-* [Git 2.15.2](https://git-scm.com/downloads) or higher
-* [Docker](https://docs.docker.com/get-docker/)
+- [Eclipse Temurin OpenJDK 25](https://adoptium.net/temurin/releases/)
+- [Bazelisk](https://github.com/bazelbuild/bazelisk)
+- [Git 2.15.2](https://git-scm.com/downloads) or higher
+- [Docker](https://docs.docker.com/get-docker/)
 
 ## Building
 

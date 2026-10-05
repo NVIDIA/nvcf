@@ -338,6 +338,9 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 	resetComputePlaneFlags(t)
 
 	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+	})
 
 	prevFetcher := fetchClusterIdentity
 	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
@@ -366,9 +369,10 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 	assert.Equal(t, "https://api.example.test", got.GatewayHTTPURL)
 	assert.Equal(t, "https://sis.example.test", got.ICMSURL)
 	assert.Equal(t, "https://reval.example.test", got.ReValURL)
-	assert.Equal(t, "tls://nats.example.test:4222", got.NATSURL)
+	assert.Equal(t, "tls://api.example.test:4222", got.NATSURL)
 	assert.Equal(t, "sis.example.test", got.SISHost)
 	assert.Equal(t, "reval.example.test", got.ReValHost)
+	assert.Equal(t, "nats.example.test", got.NATSHost)
 	assert.False(t, got.ProbeHTTP)
 }
 
@@ -442,8 +446,11 @@ func TestComputePlaneRegisterDryRunRejectsMissingSharedGatewayHostsBeforeIdentit
 	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
 		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = profile.ControlPlane.Gateway.HTTPURL
 		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = profile.ControlPlane.Gateway.HTTPURL
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+		profile.ControlPlane.Hosts.API = ""
 		profile.ControlPlane.Hosts.SIS = ""
 		profile.ControlPlane.Hosts.ReVal = ""
+		profile.ControlPlane.Hosts.NATS = ""
 	})
 
 	fetchCalls := 0
@@ -465,10 +472,14 @@ func TestComputePlaneRegisterDryRunRejectsMissingSharedGatewayHostsBeforeIdentit
 
 	err := rootCmd.Execute()
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.gateway.httpURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.api")
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
 	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
 	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.nats")
 	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after profile validation failure")
 }
 

@@ -21,4 +21,6 @@ package v2beta1
 
 type ICMSRequestExpansion interface{}
 
+type ModelCacheBindingExpansion interface{}
+
 type StorageRequestExpansion interface{}

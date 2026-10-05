@@ -37,6 +37,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccoun
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.NotNull;
@@ -139,6 +140,11 @@ public class NvcaClusterRepository {
 
     public List<ClustersByAuthorizedAccountsEntity> getAllClustersInAuthorizedAccount(
             String ncaId) {
+        if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
+            return clusterRepository.getAllClustersForAuthorizationKey(ncaId).stream()
+                    .map(entity -> toClustersByAuthorizedAccountsEntity(entity, entity.getNcaId()))
+                    .collect(Collectors.toList());
+        }
         return clustersByAuthorizedAccountsRepo.findAllByKeyNcaIdKey(ncaId);
     }
 
@@ -180,7 +186,9 @@ public class NvcaClusterRepository {
 
         // insert in group only if group is not already present
         Optional<ClusterGroupByGroupIdEntity> optionalClusterGroupByGroupIdEntity =
-                clusterRepository.getClusterGroupInfoByClusterGroupId(
+                // need to use strictly lagacy read here as consolidated tabel is already updated
+                // this will be gone on clean up phase.
+                clusterRepository.getLegacyClusterGroupInfoByClusterGroupId(
                         entity.getClusterGroupId());
         if (optionalClusterGroupByGroupIdEntity.isPresent()) {
             return;

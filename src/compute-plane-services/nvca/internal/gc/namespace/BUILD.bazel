@@ -16,6 +16,7 @@ go_library(
         "//src/compute-plane-services/nvca/internal/metrics/gctypes",
         "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
         "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
+        "//src/compute-plane-services/nvca/pkg/storage",
         "//src/compute-plane-services/nvca/pkg/types",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//src/compute-plane-services/nvca/vendor/github.com/sourcegraph/conc/pool",
@@ -40,6 +41,7 @@ go_test(
     deps = [
         "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
         "//src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake",
+        "//src/compute-plane-services/nvca/pkg/storage",
         "//src/compute-plane-services/nvca/pkg/types",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",

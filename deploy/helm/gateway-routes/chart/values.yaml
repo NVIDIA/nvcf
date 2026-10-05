@@ -20,6 +20,11 @@ nvcfGatewayRoutes:
   # Enable/disable ingress deployment
   enabled: true
 
+  # Reject HTTPRoutes that reuse a hostname owned by an enabled chart route on
+  # the configured shared Gateway listener. Requires Kubernetes 1.30 or later.
+  hostnameConflictPolicy:
+    enabled: true
+
   # Domain for hostname routing
   domain: "localhost"
 

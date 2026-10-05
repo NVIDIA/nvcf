@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -1082,6 +1083,8 @@ func (a *Agent) Start(ctx context.Context) error {
 	health.HTTPAddReadinessRoute(server.Router, a.readinessCheckGetter)
 	// Provides /version
 	server.AddVersionRoute(ctx)
+	// Provides /info
+	server.AddInfoRoute(ctx)
 	// Provides /metrics
 	nvcametrics.AddMetricsRoute(server.Router, log, nvcametrics.FromContext(ctx).GetDefaultLabelPairs(), "nvca")
 	// Provides /livez
@@ -1174,6 +1177,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithInfraOverheadGetter(infraOverheadGetter).
 		WithSecretMirrorConfig(a.SecretMirrorSourceNamespace, a.SecretMirrorLabelSelector).
 		WithEnvOverrides(a.FunctionEnvOverrides, a.TaskEnvOverrides).
+		WithNotFoundInstanceStatusReporter(func(ctx context.Context, reqID, instanceID string) error {
+			return a.handleNotFoundInstanceStatusSyncAction(ctx, reqID, instanceID, ICMSInstanceReconcileTerminateAndUpdate)
+		}).
 		Start(ctx)
 	if err != nil {
 		log.WithError(err).Error("Failed to configure the Backend K8s Cache")
@@ -2185,6 +2191,31 @@ func (a *Agent) RenewICMSQueueCreds(ctx context.Context) error {
 	})
 }
 
+// allWorkloadsConfirmedTerminated reports whether every active ICMSRequest's instances have
+// been confirmed terminated (backing Pod/MiniService actually gone, not just deletion
+// requested) and reported. It mirrors evictAllWorkloads' request filtering so the two stay
+// in sync on what counts as "still needs eviction".
+func (a *Agent) allWorkloadsConfirmedTerminated(ctx context.Context) bool {
+	allReqs, err := a.backendk8scache.icmsRequestLister.List(labels.Everything())
+	if err != nil {
+		return false
+	}
+
+	for _, req := range allReqs {
+		if req.Status.RequestStatus == nvcav2beta1.ICMSRequestStatusFailed ||
+			req.Status.RequestStatus == nvcav2beta1.ICMSRequestStatusFailureAcknowledged {
+			continue
+		}
+		if len(req.Status.Instances) == 0 {
+			continue
+		}
+		if !a.backendk8scache.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
+			return false
+		}
+	}
+	return true
+}
+
 // evictAllWorkloads directly purges all workload instances and sends termination status updates to ICMS.
 func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 	log := core.GetLogger(ctx).WithFields(logrus.Fields{
@@ -2225,17 +2256,21 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			instanceIDs = append(instanceIDs, instanceID)
 		}
 
-		// Initialize terminatedInstances map with existing instances
+		// terminatedInstances tracks instances PurgeInstanceID confirms terminated in this
+		// pass. It must start empty: PurgeInstanceID treats any pre-existing entry for an
+		// instance ID as "already handled" and skips it, so seeding this from
+		// req.Status.Instances (which holds each instance's current, non-terminated status)
+		// would make every instance look already-terminated and PurgeInstanceID would never
+		// report success for any of them.
 		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
-		if len(req.Status.Instances) != 0 {
-			terminatedInstances = req.Status.Instances
-		}
 
 		// Use PurgeInstanceID to directly terminate each instance
 		var terminatedCount int
+		var purgedInstanceIDs []string
 		for _, instanceID := range instanceIDs {
 			if a.backendk8scache.icmsRequestHelper.PurgeInstanceID(ctx, req, terminatedInstances, instanceID) {
 				terminatedCount++
+				purgedInstanceIDs = append(purgedInstanceIDs, instanceID)
 			}
 		}
 
@@ -2246,8 +2281,13 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 				"totalInstances":  len(instanceIDs),
 			}).Info("Successfully terminated instances during maintenance eviction")
 
-			// Update the request status with the terminated instances
-			req.Status.Instances = terminatedInstances
+			// Update the request status: overlay the newly terminated instances onto the
+			// existing set so instances not yet confirmed terminated in this pass (e.g.
+			// still blocked by a finalizer) are preserved rather than dropped.
+			updatedInstances := make(map[string]nvcav2beta1.InstanceStatus, len(req.Status.Instances))
+			maps.Copy(updatedInstances, req.Status.Instances)
+			maps.Copy(updatedInstances, terminatedInstances)
+			req.Status.Instances = updatedInstances
 			req.Status.RequestStatus = nvcav2beta1.ICMSRequestStatusInProgress
 			req.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
 
@@ -2264,8 +2304,10 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			}
 		}
 
-		// Send termination status updates to ICMS for each terminated instance.
-		for _, instanceID := range instanceIDs {
+		// Send termination status updates to ICMS only for instances PurgeInstanceID
+		// actually confirmed terminated; an instance whose backing Pod/MiniService is
+		// still present must not be reported as terminated.
+		for _, instanceID := range purgedInstanceIDs {
 			updateRequest := &types.ICMSInstanceStatusUpdateRequest{
 				Status:           types.ICMSRequestInstanceTerminatedByService,
 				InstanceState:    types.ICMSInstanceTerminated,
@@ -2297,6 +2339,14 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 	return nil
 }
 
+const (
+	// selfDestructEvictionRetries bounds how many times handleSelfDestruct retries
+	// evictAllWorkloads before giving up on confirming every instance terminated.
+	selfDestructEvictionRetries = 3
+	// selfDestructEvictionRetryInterval is the delay between eviction retry attempts.
+	selfDestructEvictionRetryInterval = 2 * time.Second
+)
+
 // handleSelfDestruct implements the self-destruct sequence when instructed by ICMS.
 // It evicts all workloads and stops ICMS communication (except termination updates during eviction).
 func (a *Agent) handleSelfDestruct(ctx context.Context) error {
@@ -2307,12 +2357,34 @@ func (a *Agent) handleSelfDestruct(ctx context.Context) error {
 	log.Warn("Starting self-destruct sequence - evicting workloads and stopping ICMS communication")
 
 	// Step 1: Evict all existing workloads (termination updates will still be sent to ICMS).
+	// evictAllWorkloads only reports an instance terminated once its backing Pod/MiniService
+	// is confirmed gone, so a single pass can leave instances unconfirmed if deletion hasn't
+	// converged yet (e.g. still blocked by a finalizer). Retry a bounded number of times,
+	// stopping as soon as everything is confirmed, so those instances get more chances to be
+	// reported while ICMS communication is still active below. This is a best-effort bound,
+	// not a guarantee: self-destruct proceeds regardless once retries are exhausted, since it
+	// was explicitly instructed by ICMS and must not hang indefinitely.
 	log.Info("Evicting all existing workloads")
-	if err := a.evictAllWorkloads(ctx); err != nil {
-		log.WithError(err).Error("Failed to evict workloads during self-destruct")
-		// Continue with self-destruct even if eviction fails partially
-	} else {
-		log.Info("Successfully evicted all workloads")
+	for attempt := 1; attempt <= selfDestructEvictionRetries; attempt++ {
+		if err := a.evictAllWorkloads(ctx); err != nil {
+			log.WithError(err).WithField("attempt", attempt).Warn("Failed to evict workloads during self-destruct")
+		}
+
+		if a.allWorkloadsConfirmedTerminated(ctx) {
+			log.Info("Successfully evicted all workloads")
+			break
+		}
+
+		if attempt == selfDestructEvictionRetries {
+			log.Warn("Exhausted eviction retries during self-destruct; some instances may not be confirmed terminated")
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			log.WithError(ctx.Err()).Warn("Context canceled while retrying eviction during self-destruct")
+		case <-time.After(selfDestructEvictionRetryInterval):
+		}
 	}
 
 	// Step 2: Mark agent as self-destructed (this will stop further ICMS communication).

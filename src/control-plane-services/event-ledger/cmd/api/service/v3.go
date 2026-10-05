@@ -131,6 +131,23 @@ type EventsV3Response struct {
 	Events    []EventV3Item `json:"events"`
 }
 
+// Context field names used in the canonical context string and as query params.
+const (
+	contextFieldClusterID          = "cluster_id"
+	contextFieldDeploymentID       = "deployment_id"
+	contextFieldGPUSpecificationID = "gpu_specification_id"
+	contextFieldInstanceID         = "instance_id"
+	contextFieldResourceID         = "resource_id"
+)
+
+// Query parameters for the optional generic attribute filter on GetEventsV3.
+// They let callers correlate events by any producer-supplied details attribute
+// (e.g. a request id) without the ledger exposing resource-specific concepts.
+const (
+	queryParamAttributeKey   = "attribute_key"
+	queryParamAttributeValue = "attribute_value"
+)
+
 // ContextV3 represents the context components that identify the scope of an event
 // This is the internal representation, not tied to any wire format
 type ContextV3 struct {
@@ -138,6 +155,12 @@ type ContextV3 struct {
 	DeploymentID       string
 	GPUSpecificationID string
 	ClusterID          string
+	// ResourceID is a generic, optional context field. It lets a producer supply
+	// a unique identifier for events that have no other distinguishing context
+	// field (e.g. an ICMSRequest, keyed by its request id), so distinct resources
+	// do not collapse onto the same dedup key. It is empty for Pod events, which
+	// are already uniquely identified by instance_id.
+	ResourceID string
 }
 
 // cloudEventWireFormat represents the CloudEvents extensions wire format
@@ -149,6 +172,7 @@ type cloudEventWireFormat struct {
 	DeploymentID       string         `mapstructure:"deploymentId"`
 	GPUSpecificationID string         `mapstructure:"gpuSpecificationId"`
 	ClusterID          string         `mapstructure:"clusterId"`
+	ResourceID         string         `mapstructure:"resourceId"`
 	UnmappedExtensions map[string]any `mapstructure:",remain"`
 }
 
@@ -162,6 +186,7 @@ type otlpAttributesWireFormat struct {
 	DeploymentID       string         `mapstructure:"deployment_id"`
 	GPUSpecificationID string         `mapstructure:"gpu_specification_id"`
 	ClusterID          string         `mapstructure:"cluster_id"`
+	ResourceID         string         `mapstructure:"resource_id"`
 	UnmappedAttributes map[string]any `mapstructure:",remain"`
 }
 
@@ -257,10 +282,11 @@ func (s *Server) PostK8sEventV3(w http.ResponseWriter, r *http.Request) {
 
 // EventProcessingResult holds the results of processing a batch of events
 type EventProcessingResult struct {
-	SuccessCount    int
-	FailureCount    int
-	ProcessedEvents []ProcessedEventSummary
-	LastError       error
+	SuccessCount     int
+	FailureCount     int
+	ProcessedEvents  []ProcessedEventSummary
+	LastError        error
+	AuthorizationErr error
 }
 
 // processOTLPEvents extracts and stores K8s events from OTLP log records
@@ -272,8 +298,13 @@ func (s *Server) processOTLPEvents(traceCtx context.Context, req *collectorlogsv
 	for _, rl := range req.ResourceLogs {
 		for _, sl := range rl.ScopeLogs {
 			for _, lr := range sl.LogRecords {
-				event, err := extractK8sEvent(lr)
+				event, err := extractK8sEvent(traceCtx, lr)
 				if err != nil {
+					if errors.Is(err, errClusterAuthorization) {
+						logger.WarnContext(traceCtx, "Aborting batch", zap.Error(err))
+						result.AuthorizationErr = err
+						return result
+					}
 					logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
 					result.FailureCount++
 					result.LastError = err
@@ -364,15 +395,18 @@ func deduplicateEvents(events []*EventV3) []*EventV3 {
 }
 
 // eventContextToCanonical converts a ContextV3 struct to a canonical string representation
-// Format: key1=value1,key2=value2 (alphabetical order: cluster_id, deployment_id, gpu_specification_id, instance_id)
-// Validates that values contain only alphanumeric characters and dashes. Instance IDs may also
-// contain dots between non-empty segments. Empty fields are omitted.
+// Format: key1=value1,key2=value2 in a fixed field order:
+// cluster_id, deployment_id, gpu_specification_id, instance_id, resource_id.
+// Validates that values contain only alphanumeric characters and dashes; instance IDs
+// may also contain dots between non-empty segments. Empty fields are omitted, so events
+// that do not set resource_id (e.g. Pods) produce the same context string as before it
+// was introduced.
 func eventContextToCanonical(eventContext ContextV3) (string, error) {
 	// Helper to validate field values
 	validate := func(name, value string) error {
 		pattern := contextFieldPattern
 		allowedCharacters := "alphanumeric characters and dashes"
-		if name == "instance_id" {
+		if name == contextFieldInstanceID {
 			pattern = instanceIDFieldPattern
 			allowedCharacters = "alphanumeric characters, dashes, and dots between segments"
 		}
@@ -388,36 +422,54 @@ func eventContextToCanonical(eventContext ContextV3) (string, error) {
 		return nil
 	}
 
-	// Validate all fields
-	if err := validate("cluster_id", eventContext.ClusterID); err != nil {
-		return "", err
-	}
-	if err := validate("deployment_id", eventContext.DeploymentID); err != nil {
-		return "", err
-	}
-	if err := validate("gpu_specification_id", eventContext.GPUSpecificationID); err != nil {
-		return "", err
-	}
-	if err := validate("instance_id", eventContext.InstanceID); err != nil {
-		return "", err
+	// Ordered fields: order defines the canonical string layout and must stay
+	// stable, since the context string is the storage/dedup key.
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{contextFieldClusterID, eventContext.ClusterID},
+		{contextFieldDeploymentID, eventContext.DeploymentID},
+		{contextFieldGPUSpecificationID, eventContext.GPUSpecificationID},
+		{contextFieldInstanceID, eventContext.InstanceID},
+		{contextFieldResourceID, eventContext.ResourceID},
 	}
 
-	// Build canonical string in alphabetical order (with underscores)
-	parts := make([]string, 0, 4)
-	if eventContext.ClusterID != "" {
-		parts = append(parts, "cluster_id="+eventContext.ClusterID)
-	}
-	if eventContext.DeploymentID != "" {
-		parts = append(parts, "deployment_id="+eventContext.DeploymentID)
-	}
-	if eventContext.GPUSpecificationID != "" {
-		parts = append(parts, "gpu_specification_id="+eventContext.GPUSpecificationID)
-	}
-	if eventContext.InstanceID != "" {
-		parts = append(parts, "instance_id="+eventContext.InstanceID)
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if err := validate(f.name, f.value); err != nil {
+			return "", err
+		}
+		if f.value != "" {
+			parts = append(parts, f.name+"="+f.value)
+		}
 	}
 
 	return strings.Join(parts, ","), nil
+}
+
+// errClusterAuthorization is checked with errors.Is by the batch processors
+// to abort on a bindNVCAClusterID rejection, instead of skipping it like an
+// ordinary per-event validation error.
+var errClusterAuthorization = errors.New("cluster_id does not match the authorized cluster")
+
+// bindNVCAClusterID makes an SIS-verified NVCA cluster identity authoritative
+// over whatever cluster_id a request payload claims: a missing payload value
+// is populated from it, and a mismatching one is rejected outright, so a PSAT
+// valid for one cluster cannot write events attributed to another. Requests
+// with no NVCA identity in context (SIS/Spot JWT callers) are unaffected.
+func bindNVCAClusterID(ctx context.Context, payloadClusterID string) (string, error) {
+	identity, ok := middleware.NVCAIdentityFromContext(ctx)
+	if !ok {
+		return payloadClusterID, nil
+	}
+	if payloadClusterID == "" {
+		return identity.ClusterID, nil
+	}
+	if payloadClusterID != identity.ClusterID {
+		return "", fmt.Errorf("%w: %q", errClusterAuthorization, payloadClusterID)
+	}
+	return payloadClusterID, nil
 }
 
 // extractK8sEvent converts an OTLP log record to EventV3
@@ -426,7 +478,9 @@ func eventContextToCanonical(eventContext ContextV3) (string, error) {
 //   - namespace (string): Tenant identifier
 //   - source (string): Event source identifier
 //   - Context fields (optional): instance_id, deployment_id, gpu_specification_id, cluster_id
-func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
+//   - resource_id (optional): generic unique identifier for events that have no
+//     other distinguishing context field (e.g. an ICMSRequest keyed by its request id).
+func extractK8sEvent(ctx context.Context, lr *logsv1.LogRecord) (*EventV3, error) {
 	// Step 1: Convert OTLP protobuf attributes to map
 	attrs := make(map[string]any)
 	for _, attr := range lr.Attributes {
@@ -440,11 +494,16 @@ func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
 	}
 
 	// Step 3: Convert wire format to internal context representation
+	clusterID, err := bindNVCAClusterID(ctx, wireFormat.ClusterID)
+	if err != nil {
+		return nil, err
+	}
 	contextV3 := ContextV3{
 		InstanceID:         wireFormat.InstanceID,
 		DeploymentID:       wireFormat.DeploymentID,
 		GPUSpecificationID: wireFormat.GPUSpecificationID,
-		ClusterID:          wireFormat.ClusterID,
+		ClusterID:          clusterID,
+		ResourceID:         wireFormat.ResourceID,
 	}
 
 	canonicalContext, err := eventContextToCanonical(contextV3)
@@ -497,7 +556,7 @@ func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
 //   - namespace (required)
 //   - Context fields (optional, camelCase): instanceId, deploymentId, gpuSpecificationId, clusterId
 //     Note: CloudEvents spec forbids underscores in extension names, so we use camelCase
-func extractCloudEvent(ce *cloudevents.Event) (*EventV3, error) {
+func extractCloudEvent(ctx context.Context, ce *cloudevents.Event) (*EventV3, error) {
 	// Validate required CloudEvents fields per spec (using CloudEvents field names in errors)
 	if strings.TrimSpace(ce.ID()) == "" {
 		return nil, errors.New("missing required field: id")
@@ -516,11 +575,16 @@ func extractCloudEvent(ce *cloudevents.Event) (*EventV3, error) {
 	}
 
 	// Convert wire format to internal context representation
+	clusterID, err := bindNVCAClusterID(ctx, wireFormat.ClusterID)
+	if err != nil {
+		return nil, err
+	}
 	contextV3 := ContextV3{
 		InstanceID:         wireFormat.InstanceID,
 		DeploymentID:       wireFormat.DeploymentID,
 		GPUSpecificationID: wireFormat.GPUSpecificationID,
-		ClusterID:          wireFormat.ClusterID,
+		ClusterID:          clusterID,
+		ResourceID:         wireFormat.ResourceID,
 	}
 
 	canonicalContext, err := eventContextToCanonical(contextV3)
@@ -569,8 +633,13 @@ func (s *Server) processCloudEvents(traceCtx context.Context, cloudEvents []*clo
 			continue
 		}
 
-		event, err := extractCloudEvent(cloudEvent)
+		event, err := extractCloudEvent(traceCtx, cloudEvent)
 		if err != nil {
+			if errors.Is(err, errClusterAuthorization) {
+				logger.WarnContext(traceCtx, "Aborting batch", zap.Error(err))
+				result.AuthorizationErr = err
+				return result
+			}
 			logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
 			result.FailureCount++
 			result.LastError = err
@@ -695,6 +764,12 @@ func (s *Server) storeK8sEvent(traceCtx context.Context, event *EventV3) error {
 // sendEventResponse sends the HTTP response for event processing
 func (s *Server) sendEventResponse(w http.ResponseWriter, traceCtx context.Context, result EventProcessingResult) {
 	logger := logging.GetLogger(traceCtx)
+
+	if result.AuthorizationErr != nil {
+		logger.WarnContext(traceCtx, "Rejecting batch", zap.Error(result.AuthorizationErr))
+		sendProblemDetail(w, http.StatusForbidden, "Forbidden", result.AuthorizationErr.Error())
+		return
+	}
 
 	// Prepare response based on results
 	if result.SuccessCount == 0 && result.FailureCount == 0 {
@@ -950,7 +1025,13 @@ func (s *Server) GetStatsV3(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetEventsV3 handles GET requests to /v3/ledger/namespace/{namespace}/context/{context}/events
-// Returns all events for a specific namespace and context, ordered by timestamp descending
+// Returns all events for a specific namespace and context, ordered by timestamp descending.
+//
+// An optional generic attribute filter (attribute_key + attribute_value) narrows
+// the result to events whose details.attributes[attribute_key] equals
+// attribute_value. This lets callers correlate events by any producer-supplied
+// attribute (e.g. a request id) using the existing event types, without the
+// ledger exposing resource-specific concepts.
 func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 	traceCtx := r.Context()
 	logger := logging.GetLogger(traceCtx)
@@ -969,13 +1050,33 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract context components from query parameters
+	// Extract context components from query parameters. resource_id lets callers
+	// look up rows keyed by a generic resource identifier (e.g. an ICMSRequest);
+	// omitting it yields the same Pod-shaped lookup as before.
 	queryParams := r.URL.Query()
 	contextV3 := ContextV3{
-		InstanceID:         queryParams.Get("instance_id"),
-		DeploymentID:       queryParams.Get("deployment_id"),
-		GPUSpecificationID: queryParams.Get("gpu_specification_id"),
-		ClusterID:          queryParams.Get("cluster_id"),
+		InstanceID:         queryParams.Get(contextFieldInstanceID),
+		DeploymentID:       queryParams.Get(contextFieldDeploymentID),
+		GPUSpecificationID: queryParams.Get(contextFieldGPUSpecificationID),
+		ClusterID:          queryParams.Get(contextFieldClusterID),
+		ResourceID:         queryParams.Get(contextFieldResourceID),
+	}
+
+	// Optional generic attribute filter. When set, only events whose
+	// details.attributes[attributeKey] equals attributeValue are returned.
+	// Both parameters must be supplied together: the only valid states are
+	// "both empty" (filter disabled) and "both set" (filter applied). A
+	// value-only request would otherwise silently disable the filter and
+	// return every event, so it is rejected.
+	attributeKey := queryParams.Get(queryParamAttributeKey)
+	attributeValue := queryParams.Get(queryParamAttributeValue)
+	if (attributeKey == "") != (attributeValue == "") {
+		logger.WarnContext(traceCtx, "Incomplete attribute filter query parameters",
+			zap.Bool("has_attribute_key", attributeKey != ""),
+			zap.Bool("has_attribute_value", attributeValue != ""))
+		sendProblemDetail(w, http.StatusBadRequest, "Bad Request",
+			fmt.Sprintf("%s and %s must be provided together", queryParamAttributeKey, queryParamAttributeValue))
+		return
 	}
 
 	// Convert ContextV3 to canonical string
@@ -989,10 +1090,15 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Context is optional - allow empty string to query events with no context
+	// Log the attribute key for troubleshooting, but not the raw attribute value:
+	// the value is arbitrary caller-supplied input, so we record only its presence
+	// to avoid writing potentially sensitive data to logs (CWE-532).
 	logger.InfoContext(traceCtx, "Retrieving events for namespace and context",
 		zap.String("namespace", namespace),
 		zap.String("context", eventContext),
-		zap.Any("context_components", contextV3))
+		zap.Any("context_components", contextV3),
+		zap.String("attribute_key", attributeKey),
+		zap.Bool("has_attribute_value", attributeValue != ""))
 
 	// Retrieve all events for this namespace+context
 	records, err := s.conns.DbHandlerV2.GetEventsV3(traceCtx, namespace, eventContext)
@@ -1035,6 +1141,11 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Apply the optional generic attribute filter.
+		if !attributeMatches(details, attributeKey, attributeValue) {
+			continue
+		}
+
 		response.Events = append(response.Events, EventV3Item{
 			EventName: record.EventName,
 			Source:    record.Source,
@@ -1051,6 +1162,20 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 		zap.Int("event_count", len(response.Events)))
 
 	sendJSONResponse(w, http.StatusOK, response)
+}
+
+// attributeMatches reports whether an event's details satisfy the optional
+// generic attribute filter. An empty key disables the filter (matches all).
+// Otherwise the attribute must be present and its string form must equal value.
+func attributeMatches(details EventDetails, key, value string) bool {
+	if key == "" {
+		return true
+	}
+	raw, ok := details.Attributes[key]
+	if !ok {
+		return false
+	}
+	return fmt.Sprintf("%v", raw) == value
 }
 
 // sendProblemDetail sends an RFC 9457 problem details response

@@ -30,7 +30,7 @@ ess:
     # This sets the pull policy for images.
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: 0.4.13
+    tag: "0.5.0"
 
   namespace: ""
 
@@ -62,6 +62,11 @@ ess:
   # nodeSelector:
   #   nvc.nvidia.com/workload: "control-plane"
   nodeSelector: {}
+
+  # HA hooks; set by the HA value layer, off by default.
+  affinity: {}
+  topologySpreadConstraints: []
+  strategy: {}
 
   # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
   service:

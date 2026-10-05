@@ -16,7 +16,10 @@
  */
 package com.nvidia.nvct.service.ess;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.nvidia.nvct.util.NvctConstants.NGC_API_KEY;
+import static com.nvidia.nvct.util.TestConstants.REGISTRY_CRED_ID_DOCKER;
 import static com.nvidia.nvct.util.TestConstants.TEST_NCA_ID;
 import static com.nvidia.nvct.util.TestConstants.TEST_ICMS_REQ_ID_1;
 import static com.nvidia.nvct.util.TestConstants.TEST_TASK_ID_1;
@@ -30,6 +33,7 @@ import com.nvidia.nvct.rest.task.dto.SecretDto;
 import com.nvidia.nvct.service.task.TaskService;
 import com.nvidia.nvct.util.MockEssServer;
 import java.util.Set;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterAll;
@@ -214,6 +218,52 @@ class EssServiceTest {
         // Fetch secrets without saving secrets for a task.
         var secretDtos = essService.getSecrets(TEST_TASK_ID_1);
         assertThat(secretDtos).isNotNull().isEmpty();
+    }
+
+    @Test
+    void testRegistryCredentialSecretServedFromCache() {
+        // The EssService cache is a shared singleton, so the credential may already be cached by
+        // another test. Assert on the delta of the second read instead of an absolute request count.
+        var essRequest = getRequestedFor(urlPathMatching(
+                "/v1/accounts/[^/]+/registry-credentials/" + REGISTRY_CRED_ID_DOCKER)).build();
+
+        var first = essService.getRegistryCredentialSecret(TEST_NCA_ID, REGISTRY_CRED_ID_DOCKER);
+        var essRequestsAfterFirstRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
+
+        var second = essService.getRegistryCredentialSecret(TEST_NCA_ID, REGISTRY_CRED_ID_DOCKER);
+        var essRequestsAfterSecondRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
+
+        assertThat(first).isPresent();
+        assertThat(second).isPresent();
+        assertThat(second.get().value()).isEqualTo(first.get().value());
+
+        // The second read is served from the cache and does not hit ESS again.
+        assertThat(essRequestsAfterSecondRead).isEqualTo(essRequestsAfterFirstRead);
+    }
+
+    @Test
+    void testMissingRegistryCredentialSecretIsNotCached() {
+        // A random id is never cached by another test, so counts start from zero.
+        var unknownRegistryCredentialId = UUID.randomUUID();
+        var essRequest = getRequestedFor(urlPathMatching(
+                "/v1/accounts/[^/]+/registry-credentials/" + unknownRegistryCredentialId)).build();
+
+        var first = essService.getRegistryCredentialSecret(TEST_NCA_ID, unknownRegistryCredentialId);
+        var essRequestsAfterFirstRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
+
+        var second = essService.getRegistryCredentialSecret(TEST_NCA_ID, unknownRegistryCredentialId);
+        var essRequestsAfterSecondRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
+
+        assertThat(first).isEmpty();
+        assertThat(second).isEmpty();
+
+        // A missing secret is not cached, so each read hits ESS.
+        assertThat(essRequestsAfterFirstRead).isEqualTo(1);
+        assertThat(essRequestsAfterSecondRead).isEqualTo(2);
     }
 
     @Test

@@ -43,7 +43,7 @@ llmRequestRouter:
   image:
     registry: ""
     repository: ""
-    tag: "0.14.2"
+    tag: "0.18.0"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -245,7 +245,10 @@ llmRequestRouter:
 
   transport:
     quicConnectTimeoutMs: 2000
-    quicRequestTimeoutMs: 30000
+    # Wait for response headers from Pylon. Engines may hold headers while a
+    # request is queued, so keep this above the longest queue wait callers
+    # should tolerate.
+    quicRequestTimeoutMs: 300000
     reverseTunnelListenAddr: "0.0.0.0:50072"
     reverseTunnelConnectTimeoutMs: 10000
 
