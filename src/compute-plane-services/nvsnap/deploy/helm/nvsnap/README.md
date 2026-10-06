@@ -41,7 +41,7 @@ The defaults in `values.yaml` are the conventional production setup (all four co
 | `--set global.imagePullSecrets[0]=my-secret` | Use a different pull-secret name |
 | `--set agent.enabled=false` | Server-only install (no agents on GPU nodes) |
 | `--set server.enabled=false --set blobstore.enabled=false` | Agent-only install (no UI, no durable backstop) |
-| `--set webhook.enabled=false` | Skip cert-manager + admission webhook; agent runs without auto-inject |
+| `--set webhook.enabled=false` | Skip cert-manager + admission webhook; agent runs without pod mutation |
 | `--set webhook.inject=false` | Keep the webhook Service and cert but drop the registration: no pod is mutated until set back to true (see Disabling injection) |
 | `--set server.service.type=ClusterIP` | Use port-forward instead of LoadBalancer |
 | `--set agent.runtime=crio` | CRI-O variant (default: containerd) |

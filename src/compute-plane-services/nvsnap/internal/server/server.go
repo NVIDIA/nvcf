@@ -1759,40 +1759,35 @@ func (s *Server) runRestore(name, namespace, nodeName, checkpointID, newPodName 
 		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, err.Error())
 		return
 	}
-	containerID := ""
-	if len(placeholderPod.Status.ContainerStatuses) > 0 {
-		cid := placeholderPod.Status.ContainerStatuses[0].ContainerID
-		containerID = strings.TrimPrefix(cid, "containerd://")
-	}
-
-	// Step 5: Trigger restore
-	log.Info("Triggering restore in placeholder pod")
-	triggerReq, _ := json.Marshal(map[string]interface{}{
-		"checkpointId":           checkpointID,
-		"placeholderContainerId": containerID,
+	log.Info("Restoring into placeholder pod")
+	restoreReq, _ := json.Marshal(map[string]interface{}{
+		"checkpointId":         checkpointID,
+		"newPodName":           newPodName,
+		"placeholderPodName":   placeholderPod.Name,
+		"placeholderNamespace": placeholderPod.Namespace,
 	})
-	triggerHTTPReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("http://%s:%d/v1/restore/trigger", ip, s.config.AgentPort),
-		bytes.NewReader(triggerReq))
+	restoreHTTPReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s:%d/v1/restore", ip, s.config.AgentPort),
+		bytes.NewReader(restoreReq))
 	if err != nil {
-		log.WithError(err).Error("Trigger restore build failed")
+		log.WithError(err).Error("Restore request build failed")
 		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, err.Error())
 		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, err.Error())
 		return
 	}
-	triggerHTTPReq.Header.Set("Content-Type", "application/json")
-	resp2, err := s.httpClient.Do(triggerHTTPReq)
+	restoreHTTPReq.Header.Set("Content-Type", "application/json")
+	resp2, err := s.httpClient.Do(restoreHTTPReq)
 	if err != nil {
-		log.WithError(err).Error("Trigger restore failed")
+		log.WithError(err).Error("Restore request failed")
 		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, err.Error())
 		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, err.Error())
 		return
 	}
 	defer func() { _ = resp2.Body.Close() }()
-	triggerBody, _ := io.ReadAll(resp2.Body)
+	restoreBody, _ := io.ReadAll(resp2.Body)
 	if resp2.StatusCode != http.StatusOK {
-		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, string(triggerBody))
-		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, string(triggerBody))
+		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, string(restoreBody))
+		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, string(restoreBody))
 		return
 	}
 

@@ -42,12 +42,6 @@ type WebhookConfig struct {
 	KeyFile    string // PEM key
 	Path       string // default "/mutate"
 
-	// AutoInject configures the image refs the webhook stamps into
-	// auto-injected init containers when a pod carries
-	// nvsnap.io/auto-inject: "true". Empty fields disable that branch
-	// (the webhook fails open and admits the pod unchanged).
-	AutoInject webhook.AutoInjectImages
-
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When set, restore pods admitted with
 	// nvsnap.io/restore-from get a nvsnap-l2-wait init container that
@@ -177,8 +171,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// transfer at restore time. EnsureCaptureLocal is still wired
 		// behind the agent's HTTP API for future "any GPU node" flows
 		// where an init container fetches the bytes asynchronously.
-		Log:        a.log.WithField("subsys", "webhook.mutate"),
-		AutoInject: cfg.AutoInject,
+		Log: a.log.WithField("subsys", "webhook.mutate"),
 		// nvsnap#147: L2 restore gating. When L2WaitImage is set,
 		// the webhook prepends a nvsnap-l2-wait init container that
 		// blocks the main container on pvc_promote_state == "ready".
@@ -188,7 +181,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// (helm sets it from .Values.agent.l2.waitImage).
 		L2WaitImage:     a.config.Webhook.L2WaitImage,
 		NvSnapServerURL: a.config.CatalogURL,
-		// nvsnap#147: restore-entrypoint hostPath inject. Empty =
+		// nvsnap#147: node bundle hostPath for the rootfs L2 restore. Empty =
 		// default "/var/lib/nvsnap/bundle" (matches the agent
 		// DaemonSet's nvsnap-bundle-stage initContainer destination).
 		HostBundleRoot: a.config.Webhook.HostBundleRoot,

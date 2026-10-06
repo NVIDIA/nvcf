@@ -41,7 +41,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
@@ -291,7 +290,6 @@ type Agent struct {
 	runtime    runtime.Runtime
 	containerd *containerd.Client // non-nil only when runtime is containerd (for containerd-specific calls)
 	cuda       *cuda.Manager
-	criu       *criu.Manager
 	server     *http.Server
 
 	// captureBackend is the rootfs-only auto-capture loop's backend
@@ -452,16 +450,10 @@ func New(cfg Config) (*Agent, error) {
 			log.WithField("detectionMethod", detectionMethod).Info("Detected containerized environment, enabling nsenter mode")
 		}
 	}
-	log.WithField("useNsenter", useNsenter).Info("Initializing CUDA and CRIU managers")
+	log.WithField("useNsenter", useNsenter).Info("Initializing CUDA manager")
 
 	// Initialize CUDA manager (with nsenter support for containerized agents)
 	cudaManager := cuda.New(cfg.CudaCheckpointPath, useNsenter, log)
-
-	// Initialize CRIU manager (with nsenter support for containerized agents)
-	criuManager, err := criu.New(log, cfg.CRIUPath, useNsenter)
-	if err != nil {
-		log.WithError(err).Warn("CRIU initialization failed (optional)")
-	}
 
 	// Create checkpoint directory
 	if err := os.MkdirAll(cfg.CheckpointDir, 0o755); err != nil {
@@ -474,7 +466,6 @@ func New(cfg Config) (*Agent, error) {
 		runtime:    rt,
 		containerd: containerdClient,
 		cuda:       cudaManager,
-		criu:       criuManager,
 		peerLoad:   newPeerLoadTracker(),
 		fsStore:    newFSStore(cfg.FSStorePath, log),
 		overlay:    NewOverlayManager(cfg.OverlayRoot, log, nil),
@@ -547,7 +538,6 @@ func (a *Agent) Run(ctx context.Context) error {
 	router.HandleFunc("/health", a.healthHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoint", a.checkpointHandler).Methods("POST")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
-	router.HandleFunc("/v1/restore/trigger", a.triggerRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
 	// A ready rank's cache tree for the agent collecting its set
@@ -555,7 +545,6 @@ func (a *Agent) Run(ctx context.Context) error {
 	router.HandleFunc("/v1/cache-rank/{key}/{ordinal}", a.cacheRankHandler).Methods("GET")
 	router.HandleFunc("/v1/containers", a.listContainersHandler).Methods("GET")
 	router.HandleFunc("/v1/gpu/processes", a.gpuProcessesHandler).Methods("GET")
-	router.HandleFunc("/v1/gpu/restore", a.gpuRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints/{id}", a.deleteCheckpointHandler).Methods("DELETE")
 	router.HandleFunc("/v1/checkpoints/{id}/files", a.listCheckpointFilesHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoints/{id}/file", a.readCheckpointFileHandler).Methods("GET")
@@ -921,25 +910,6 @@ func (a *Agent) gpuProcessesHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Trigger restore in a placeholder pod
-func (a *Agent) triggerRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	var req TriggerRestoreRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	result, err := a.TriggerRestore(r.Context(), req)
-	if err != nil {
-		a.log.WithError(err).Error("Trigger restore failed")
-		http.Error(w, fmt.Sprintf("trigger restore failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
-}
-
 // Get placeholder pod manifest
 func (a *Agent) getPlaceholderManifestHandler(w http.ResponseWriter, r *http.Request) {
 	var req PlaceholderManifestRequest
@@ -957,75 +927,6 @@ func (a *Agent) getPlaceholderManifestHandler(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "text/yaml")
 	_, _ = w.Write([]byte(manifest))
-}
-
-// GPU restore handler - called by restore-entrypoint after CRIU restore
-func (a *Agent) gpuRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		CheckpointID string `json:"checkpointId"`
-		PID          int    `json:"pid"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-	// Body-supplied, unlike the {id} routes the middleware covers.
-	if err := validPathSegment("checkpointId", req.CheckpointID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	log := a.log.WithFields(logrus.Fields{
-		"checkpointId": req.CheckpointID,
-		"pid":          req.PID,
-	})
-	log.Info("GPU restore requested")
-
-	// Load checkpoint metadata to check if GPU was used
-	checkpointDir := filepath.Join(a.config.CheckpointDir, req.CheckpointID)
-	metadataPath := filepath.Join(checkpointDir, "metadata.json")
-	metadataBytes, err := os.ReadFile(metadataPath)
-	if err != nil {
-		log.WithError(err).Warn("Could not read metadata, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "no metadata"})
-		return
-	}
-
-	var metadata CheckpointMetadata
-	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
-		log.WithError(err).Warn("Invalid metadata, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "invalid metadata"})
-		return
-	}
-
-	if metadata.GPUPID == 0 {
-		log.Info("No GPU process in checkpoint, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "no GPU"})
-		return
-	}
-
-	// Restore GPU state
-	log.Info("Restoring GPU state")
-	if err := a.cuda.Restore(r.Context(), req.PID); err != nil {
-		log.WithError(err).Error("GPU restore failed")
-		http.Error(w, fmt.Sprintf("GPU restore failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Unlock GPU
-	log.Info("Unlocking GPU")
-	if err := a.cuda.Unlock(r.Context(), req.PID); err != nil {
-		log.WithError(err).Error("GPU unlock failed")
-		http.Error(w, fmt.Sprintf("GPU unlock failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	log.Info("GPU restore completed")
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 // List files in a checkpoint directory
