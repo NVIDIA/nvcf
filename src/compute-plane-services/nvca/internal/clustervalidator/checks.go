@@ -2010,72 +2010,97 @@ func sweepLegacyOrphanN2NDaemonSets(
 	}
 }
 
+// probeNamespaceKind is a kind of probe namespace validator runs create: the
+// labels every validator version stamps on it, the prefix of its generated
+// name, and the labels of the run's pods inside. The orphan sweep deletes
+// cluster-wide, so it requires all of them.
+type probeNamespaceKind struct {
+	name, selector, prefix, podSelector string
+}
+
+var n2nProbeNamespaces = probeNamespaceKind{
+	name:        nodeToNodeNSPrefix + "*",
+	selector:    n2nSelector(n2nNamespaceComponent, ""),
+	prefix:      nodeToNodeNSPrefix,
+	podSelector: n2nSelector("", ""),
+}
+
 // sweepOrphanN2NNamespaces deletes any nvcf-n2n-validation-* namespaces older
 // than ttl, taking the DaemonSet and checker pod inside with them. These are
 // left behind when the validator process is killed with SIGKILL (OOM,
 // force-delete, node failure) before the deferred cleanup fires, or loses its
-// RBAC first. Namespaces younger than ttl are skipped in case they belong to
-// a concurrent run. One already Terminating is not deleted again, but its
-// probe pods are force-deleted: a pod on a node whose kubelet is gone would
-// otherwise hold it Terminating until the node returns. It reports whether it
-// found any, or could not list them: until a namespace is gone, a later sweep
-// may still have to delete it, once old enough, or force its pods out.
+// RBAC first.
 func sweepOrphanN2NNamespaces(
 	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
-) (found bool) {
+) (more bool, err error) {
+	return sweepProbeNamespaces(ctx, log, client, n2nProbeNamespaces, ttl)
+}
+
+// sweepProbeNamespaces deletes the namespaces of kind older than ttl.
+// Namespaces younger than ttl are skipped in case they belong to a concurrent
+// run. One already Terminating is not deleted again, but its probe pods are
+// force-deleted: a pod on a node whose kubelet is gone would otherwise hold it
+// Terminating until the node returns. more reports whether a later sweep has
+// work left: a namespace still too young to delete, or one this sweep deleted,
+// whose pods that sweep forces out should they hold it. A Terminating
+// namespace leaves none once its pods are forced out. err joins the requests
+// that failed.
+func sweepProbeNamespaces(
+	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, kind probeNamespaceKind, ttl time.Duration,
+) (more bool, err error) {
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-
-	nsList, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{
-		LabelSelector: n2nSelector(n2nNamespaceComponent, ""),
-	})
+	nsList, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{LabelSelector: kind.selector})
 	if err != nil {
-		log.Warnf("N2N orphan sweep: failed to list namespaces: %v", err)
-		return true
+		return false, fmt.Errorf("list the %s namespaces: %w", kind.name, err)
 	}
 
 	cutoff := time.Now().Add(-ttl)
 	deleted := 0
+	var errs []error
 	for i := range nsList.Items {
 		ns := &nsList.Items[i]
 		// Belt and braces: the label selector should be sufficient, but require
 		// the name prefix too so a mislabelled namespace is never deleted.
-		if !strings.HasPrefix(ns.Name, nodeToNodeNSPrefix) {
+		if !strings.HasPrefix(ns.Name, kind.prefix) {
 			continue
 		}
-		found = true
-		if ns.CreationTimestamp.After(cutoff) {
-			continue // still within TTL; might be a concurrent run
+		switch {
+		case ns.CreationTimestamp.After(cutoff):
+			more = true // still within TTL; might be a concurrent run
+		case ns.DeletionTimestamp != nil:
+			if err := deleteProbePods(ctx, client, ns.Name, kind.podSelector); err != nil {
+				errs = append(errs, err)
+			}
+		default:
+			delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
+			err := client.CoreV1().Namespaces().Delete(delCtx, ns.Name, metav1.DeleteOptions{})
+			delCancel()
+			if err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete namespace %s: %w", ns.Name, err))
+				continue
+			}
+			deleted++
+			more = true
 		}
-		if ns.DeletionTimestamp != nil {
-			forceDeleteProbePods(log, client, ns.Name, n2nSelector("", ""))
-			continue
-		}
-		delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
-		err := client.CoreV1().Namespaces().Delete(delCtx, ns.Name, metav1.DeleteOptions{})
-		delCancel()
-		if err != nil && !apierrors.IsNotFound(err) {
-			log.Warnf("N2N orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
-			continue
-		}
-		deleted++
 	}
 	if deleted > 0 {
-		printInfo(log, fmt.Sprintf("N2N orphan sweep: deleted %d stale probe namespace(s) older than %s", deleted, ttl))
+		printInfo(log, fmt.Sprintf("Orphan sweep: deleted %d stale %s namespace(s) older than %s",
+			deleted, kind.name, ttl))
 	}
-	return found
+	return more, errors.Join(errs...)
 }
 
 // SweepLeftoverProbes deletes the probe namespaces validator runs left behind,
 // with the DaemonSets, pods and NetworkPolicies in them, once they are older
 // than a run can last. Every run sweeps them too, but a validator disabled or
 // uninstalled mid-run loses its RBAC before its cleanup runs, and no later run
-// comes. It reports whether a later sweep has more to do: a probe namespace,
-// deleted or not, is not gone until it finishes terminating.
-func SweepLeftoverProbes(ctx context.Context, log *logrus.Entry, client kubernetes.Interface) (more bool) {
-	n2n := sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
-	enforcement := sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
-	return n2n || enforcement
+// comes. more reports whether a later sweep has work left, and err the
+// requests that failed, after which a later sweep may also have more to do.
+func SweepLeftoverProbes(ctx context.Context, log *logrus.Entry, client kubernetes.Interface) (more bool, err error) {
+	n2n, n2nErr := sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
+	enforcement, enforcementErr := sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
+	return n2n || enforcement, errors.Join(n2nErr, enforcementErr)
 }
 
 // probeCleanupFailure says why a run left its probe namespace behind. A
@@ -2091,26 +2116,47 @@ func probeCleanupFailure(ns string, ttl time.Duration, err error) string {
 }
 
 // forceDeleteProbePods deletes the pods selector matches in ns with no grace
+// period, all within one budget, on a context of its own so a cancelled run
+// still cleans up.
+func forceDeleteProbePods(log *logrus.Entry, client kubernetes.Interface, ns, selector string) {
+	warnEach(log, "Failed to clean up probe pods", deleteProbePods(context.Background(), client, ns, selector))
+}
+
+// warnEach logs every error err joins as a warning of its own line.
+func warnEach(log *logrus.Entry, what string, err error) {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, err := range joined.Unwrap() {
+			warnEach(log, what, err)
+		}
+		return
+	}
+	if err != nil {
+		log.Warnf("%s: %v", what, err)
+	}
+}
+
+// deleteProbePods deletes the pods selector matches in ns with no grace
 // period, all within one budget. A pod on a node whose kubelet is gone is never
 // confirmed terminated, so a graceful delete leaves it, and the namespace
 // holding it, Terminating until the node returns; the probe pods tolerate
 // every taint, so they are never evicted from such a node either.
-func forceDeleteProbePods(log *logrus.Entry, client kubernetes.Interface, ns, selector string) {
-	ctx, cancel := context.WithTimeout(context.Background(), nodeToNodeDeleteTimeout)
+func deleteProbePods(ctx context.Context, client kubernetes.Interface, ns, selector string) error {
+	ctx, cancel := context.WithTimeout(ctx, nodeToNodeDeleteTimeout)
 	defer cancel()
 	pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		log.Warnf("Failed to list probe pods in %s for cleanup: %v", ns, err)
-		return
+		return fmt.Errorf("list the probe pods in %s: %w", ns, err)
 	}
 	grace := int64(0)
+	var errs []error
 	for i := range pods.Items {
 		name := pods.Items[i].Name
 		err := client.CoreV1().Pods(ns).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: &grace})
 		if err != nil && !apierrors.IsNotFound(err) {
-			log.Warnf("Failed to delete probe pod %s/%s: %v", ns, name, err)
+			errs = append(errs, fmt.Errorf("delete probe pod %s/%s: %w", ns, name, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // checkNodeToNode verifies overlay-network connectivity across the nodes that

@@ -20,7 +20,6 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -95,10 +94,15 @@ func (e *enforcementEnv) probeWithDelay(role string, delay int) (bool, error) {
 	)
 }
 
-// enforcementNSSelector matches the two labels every validator version has
-// stamped on its enforcement test namespace. The orphan sweep deletes
-// namespaces cluster-wide, so it requires both, and the name prefix too.
-const enforcementNSSelector = "app=netpol-validation,purpose=enforcement-test"
+// enforcementProbeNamespaces are the enforcement test namespaces. Every
+// validator version has stamped both labels of the selector on them, and
+// app=netpol-test on the server and probe pods inside.
+var enforcementProbeNamespaces = probeNamespaceKind{
+	name:        "netpol-validation-*",
+	selector:    "app=netpol-validation,purpose=enforcement-test",
+	prefix:      "netpol-validation-",
+	podSelector: "app=netpol-test",
+}
 
 // orphanNamespaceTTL is the age beyond which a netpol-validation-* namespace
 // is considered orphaned (deferred cleanup in a previous run didn't fire
@@ -481,61 +485,16 @@ func cleanupTestNamespace(log *logrus.Entry, client kubernetes.Interface, ns str
 	}
 }
 
-// sweepOrphanTestNamespaces lists the netpol-validation-* namespaces that carry
-// both enforcementNSSelector labels and deletes any whose age exceeds ttl. One
-// with the prefix and only one of the labels is not a validator's and is never
+// sweepOrphanTestNamespaces deletes the netpol-validation-* namespaces older
+// than ttl that carry both enforcementProbeNamespaces labels. One with the
+// prefix and only one of the labels is not a validator's and is never
 // deleted. Used to reclaim leaks from prior runs that died before their
 // deferred cleanup could fire (SIGKILL, OOM, force-delete, node failure) or
-// lost their RBAC first. Namespaces younger than ttl are left alone in case
-// they belong to a concurrent run. It reports
-// whether it found any, or could not list them: until a namespace is gone, a
-// later sweep may still have to delete it.
+// lost their RBAC first.
 func sweepOrphanTestNamespaces(
 	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
-) (found bool) {
-	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	nsList, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{
-		LabelSelector: enforcementNSSelector,
-	})
-	if err != nil {
-		log.Warnf("Orphan sweep: failed to list namespaces: %v", err)
-		return true
-	}
-	if len(nsList.Items) == 0 {
-		return false
-	}
-
-	cutoff := time.Now().Add(-ttl)
-	deleted := 0
-	for i := range nsList.Items {
-		ns := &nsList.Items[i]
-		if !strings.HasPrefix(ns.Name, "netpol-validation-") {
-			continue
-		}
-		found = true
-		if ns.CreationTimestamp.After(cutoff) {
-			continue // still within TTL — might be a concurrent run
-		}
-		if ns.DeletionTimestamp != nil {
-			continue // already being deleted, so not this sweep's to count
-		}
-		delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
-		err := client.CoreV1().Namespaces().Delete(delCtx, ns.Name, metav1.DeleteOptions{})
-		delCancel()
-		if err != nil && !apierrors.IsNotFound(err) {
-			log.Warnf("Orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
-			continue
-		}
-		deleted++
-	}
-	if deleted > 0 {
-		printInfo(log, fmt.Sprintf(
-			"Orphan sweep: deleted %d stale netpol-validation-* namespace(s) older than %s",
-			deleted, ttl))
-	}
-	return found
+) (more bool, err error) {
+	return sweepProbeNamespaces(ctx, log, client, enforcementProbeNamespaces, ttl)
 }
 
 // ---------------------------------------------------------------------------

@@ -339,13 +339,15 @@ func Run(
 	// cleanup in checkNetworkPolicyEnforcement only fires on normal control
 	// flow). Runs unconditionally so orphans get reclaimed even if enforcement
 	// is currently disabled.
-	sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
+	_, err := sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
+	warnEach(log, "Orphan sweep", err)
 	// Only the control-plane role runs the node-to-node probe, but either
 	// role's validator may run on a cluster, so every run reclaims the probe
 	// namespaces a killed probe left behind. Legacy probe DaemonSets were only
 	// ever created by the control-plane check set, and only its role is
 	// granted DaemonSets, so only it sweeps them.
-	sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
+	_, err = sweepOrphanN2NNamespaces(ctx, log, client, orphanN2NNamespaceTTL)
+	warnEach(log, "Orphan sweep", err)
 	if role == RoleControlPlane {
 		sweepLegacyOrphanN2NDaemonSets(ctx, log, client, orphanN2NNamespaceTTL)
 	}

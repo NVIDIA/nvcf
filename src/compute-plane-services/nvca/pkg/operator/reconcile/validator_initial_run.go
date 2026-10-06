@@ -313,22 +313,55 @@ func validatorRunJobName(cronJob *batchv1.CronJob, spec, newest string) string {
 }
 
 // validatorProbeSweepInterval is how often the operator sweeps again while a
-// cluster-validator's probe namespaces are left. A var so tests can shorten it.
-var validatorProbeSweepInterval = time.Minute
+// cluster-validator's probe namespaces are left, and validatorProbeSweepRetries
+// how often in a row a failed sweep is retried before it gives up. Vars so
+// tests can change them.
+var (
+	validatorProbeSweepInterval = time.Minute
+	validatorProbeSweepRetries  = 5
+)
 
 // sweepValidatorProbes deletes the probe namespaces cluster-validator runs left
 // behind. A validator disabled during its node-to-node or NetworkPolicy probe
 // loses its RBAC before its cleanup runs, and no later run comes to sweep, so
 // the operator, which outlives it, sweeps at start. While the validator is
-// disabled it keeps sweeping until none are left: one from the interrupted run
-// is not deleted before it is old enough that no running probe can own it.
+// disabled it keeps sweeping until nothing is left to do: one from the
+// interrupted run is not deleted before it is old enough that no running probe
+// can own it. A namespace already Terminating has its probe pods forced out
+// and is then left to finish. A sweep whose requests fail is retried, with the
+// wait doubling up to validatorRunMaxBackoff, validatorProbeSweepRetries times;
+// then the operator gives up until its next start, with one warning.
 func sweepValidatorProbes(ctx context.Context, client kubernetes.Interface, untilClean bool) {
 	log := core.GetLogger(ctx).WithField("sweep", "cluster-validator probes")
-	for clustervalidator.SweepLeftoverProbes(ctx, log, client) && untilClean {
+	wait := validatorProbeSweepInterval
+	for failures := 0; ; {
+		more, err := clustervalidator.SweepLeftoverProbes(ctx, log, client)
+		switch {
+		case err == nil:
+			failures, wait = 0, validatorProbeSweepInterval
+		case !untilClean:
+			log.WithError(err).Warn("could not sweep the probe namespaces cluster-validator runs left; " +
+				"the validator's own runs sweep them")
+			return
+		case failures >= validatorProbeSweepRetries:
+			log.WithError(err).Warnf("could not sweep the probe namespaces cluster-validator runs left, "+
+				"%d times in a row; the operator sweeps again at its next start", failures+1)
+			return
+		default:
+			if failures > 0 {
+				wait = min(2*wait, validatorRunMaxBackoff)
+			}
+			failures++
+			more = true
+			log.WithError(err).Debug("could not sweep the probe namespaces cluster-validator runs left; retrying")
+		}
+		if !more || !untilClean {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(validatorProbeSweepInterval):
+		case <-time.After(wait):
 		}
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -665,4 +666,116 @@ func TestSweepValidatorProbes_LeavesNamespacesNoValidatorCreated(t *testing.T) {
 			assert.True(t, apierrors.IsNotFound(err), "got %v", err)
 		})
 	}
+}
+
+func fastProbeSweeps(t *testing.T) {
+	prev := validatorProbeSweepInterval
+	validatorProbeSweepInterval = 10 * time.Millisecond
+	t.Cleanup(func() { validatorProbeSweepInterval = prev })
+}
+
+// runProbeSweep runs the disabled validator's sweep loop and reports whether
+// it returned within the wait. The loop is stopped when the test ends.
+func runProbeSweep(t *testing.T, ctx context.Context, client *fake.Clientset, wait time.Duration) bool {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sweepValidatorProbes(ctx, client, true)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	select {
+	case <-done:
+		return true
+	case <-time.After(wait):
+		return false
+	}
+}
+
+// An enforcement probe namespace held Terminating by a probe pod on a node
+// whose kubelet is gone has its probe pods forced out, as a node-to-node one
+// does, and leaves nothing more for the sweep to do: the disabled validator's
+// sweep ends instead of listing every namespace each minute for the life of
+// the operator.
+func TestSweepValidatorProbes_TerminatingNamespacesEndTheSweep(t *testing.T) {
+	fastProbeSweeps(t)
+	now := metav1.Now()
+	terminating := func(ns *corev1.Namespace) *corev1.Namespace {
+		ns.DeletionTimestamp, ns.Finalizers = &now, []string{"kubernetes"}
+		return ns
+	}
+	netpol := terminating(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "netpol-validation-x7k2pq", CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
+		Labels: map[string]string{"app": "netpol-validation", "purpose": "enforcement-test"},
+	}})
+	n2n := terminating(probeNamespace("stuck", time.Hour))
+	pod := func(ns, name string, labels map[string]string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+			Spec:       corev1.PodSpec{NodeName: "dead-node"},
+		}
+	}
+	netpolProbe := pod(netpol.Name, "netpol-server", map[string]string{"app": "netpol-test", "role": "server"})
+	n2nProbe := pod(n2n.Name, "nvcf-n2n-server-abc",
+		map[string]string{"app.kubernetes.io/managed-by": "nvcf-cluster-validator"})
+	unrelated := pod(netpol.Name, "unrelated", nil)
+	client := fake.NewSimpleClientset(netpol, n2n, netpolProbe, n2nProbe, unrelated)
+	var forced []string
+	client.PrependReactor("delete", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		del := a.(ktesting.DeleteActionImpl)
+		if g := del.DeleteOptions.GracePeriodSeconds; g != nil && *g == 0 {
+			forced = append(forced, del.Name)
+		}
+		return false, nil, nil
+	})
+
+	require.True(t, runProbeSweep(t, context.Background(), client, 2*time.Second),
+		"the sweep kept going with only Terminating namespaces left")
+	assert.ElementsMatch(t, []string{netpolProbe.Name, n2nProbe.Name}, forced)
+	_, err := client.CoreV1().Pods(netpol.Name).Get(context.Background(), unrelated.Name, metav1.GetOptions{})
+	assert.NoError(t, err, "a pod the validator did not create is left alone")
+	assert.Equal(t, 2, countVerb(client, "list", "namespaces"), "one pass, one list per probe kind")
+}
+
+// A list that keeps failing is retried, less often each time, a bounded
+// number of times; then the sweep stops with one warning rather than one
+// every minute for the life of the operator.
+func TestSweepValidatorProbes_PersistentFailureStopsWithOneWarning(t *testing.T) {
+	fastProbeSweeps(t)
+	client := fake.NewSimpleClientset(probeNamespace("stale", time.Hour))
+	client.PrependReactor("list", "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServiceUnavailable("etcd leader change")
+	})
+	ctx, hook := core.WithTestingLogger(context.Background())
+
+	require.True(t, runProbeSweep(t, ctx, client, 5*time.Second), "the sweep never gave up")
+	assert.Equal(t, 2*(validatorProbeSweepRetries+1), countVerb(client, "list", "namespaces"))
+	var warnings []string
+	for _, e := range hook.AllEntries() {
+		if e.Level <= logrus.WarnLevel {
+			warnings = append(warnings, e.Message)
+		}
+	}
+	assert.Len(t, warnings, 1, "got %q", warnings)
+}
+
+// A list that fails for a while is retried, and the sweep finishes its work
+// once it passes.
+func TestSweepValidatorProbes_RetriesAFailedList(t *testing.T) {
+	fastProbeSweeps(t)
+	client := fake.NewSimpleClientset(probeNamespace("stale", time.Hour))
+	var lists atomic.Int32
+	client.PrependReactor("list", "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+		if lists.Add(1) <= 4 {
+			return true, nil, apierrors.NewServiceUnavailable("etcd leader change")
+		}
+		return false, nil, nil
+	})
+
+	require.True(t, runProbeSweep(t, context.Background(), client, 5*time.Second))
+	_, err := client.CoreV1().Namespaces().Get(context.Background(), "nvcf-n2n-validation-stale", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "got %v", err)
 }

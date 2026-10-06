@@ -803,8 +803,10 @@ func TestProbeCleanup_DeniedDeleteSaysWhoReclaims(t *testing.T) {
 }
 
 // The operator's sweep reclaims both kinds of probe namespace once they are
-// past their TTL, and says when a later sweep has more to do: while any probe
-// namespace is left, young, Terminating or just deleted, or a request failed.
+// past their TTL, and says when a later sweep has more to do: while a probe
+// namespace is too young to delete, or was just deleted. A Terminating one
+// has its probe pods forced out and leaves nothing more to do. A failed
+// request is reported.
 func TestSweepLeftoverProbes(t *testing.T) {
 	n2n := func(name string, age time.Duration) *corev1.Namespace {
 		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
@@ -817,13 +819,18 @@ func TestSweepLeftoverProbes(t *testing.T) {
 		_, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 		return err == nil
 	}
+	sweep := func(t *testing.T, client kubernetes.Interface) bool {
+		more, err := SweepLeftoverProbes(ctx, testLog(), client)
+		require.NoError(t, err)
+		return more
+	}
 
 	t.Run("young ones wait", func(t *testing.T) {
 		client := fake.NewSimpleClientset(
 			n2n("stale", orphanN2NNamespaceTTL+time.Minute), n2n("young", time.Minute),
 			makeNetpolValidationNs("netpol-validation-stale", orphanNamespaceTTL+time.Minute),
 			makeNetpolValidationNs("netpol-validation-young", time.Minute))
-		assert.True(t, SweepLeftoverProbes(ctx, testLog(), client))
+		assert.True(t, sweep(t, client))
 		assert.False(t, exists(client, nodeToNodeNSPrefix+"stale"))
 		assert.False(t, exists(client, "netpol-validation-stale"))
 		assert.True(t, exists(client, nodeToNodeNSPrefix+"young"))
@@ -834,29 +841,58 @@ func TestSweepLeftoverProbes(t *testing.T) {
 		"enforcement":  makeNetpolValidationNs("netpol-validation-young", time.Minute),
 	} {
 		t.Run("a young "+kind+" namespace waits", func(t *testing.T) {
-			assert.True(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset(young)))
+			assert.True(t, sweep(t, fake.NewSimpleClientset(young)))
 		})
 	}
-	t.Run("a Terminating namespace is looked at again", func(t *testing.T) {
-		terminating := n2n("stuck", time.Hour)
-		terminating.DeletionTimestamp = &metav1.Time{Time: time.Now()}
-		terminating.Finalizers = []string{"kubernetes"}
-		assert.True(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset(terminating)))
-	})
+	for kind, tc := range map[string]struct {
+		ns  *corev1.Namespace
+		pod map[string]string
+	}{
+		"node-to-node": {n2n("stuck", orphanN2NNamespaceTTL+time.Minute), n2nLabels("", "stuck")},
+		"enforcement": {makeNetpolValidationNs("netpol-validation-stuck", orphanNamespaceTTL+time.Minute),
+			map[string]string{"app": "netpol-test", "role": "server"}},
+	} {
+		t.Run("a Terminating "+kind+" namespace has its probe pods forced out", func(t *testing.T) {
+			tc.ns.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+			tc.ns.Finalizers = []string{"kubernetes"}
+			probe := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "probe", Namespace: tc.ns.Name, Labels: tc.pod}}
+			other := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: tc.ns.Name}}
+			client := fake.NewSimpleClientset(tc.ns, probe, other)
+			var forced []string
+			client.PrependReactor("delete", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+				del := a.(ktesting.DeleteActionImpl)
+				require.NotNil(t, del.DeleteOptions.GracePeriodSeconds)
+				assert.Zero(t, *del.DeleteOptions.GracePeriodSeconds)
+				forced = append(forced, del.Name)
+				return false, nil, nil
+			})
+			assert.False(t, sweep(t, client), "nothing more for a later sweep to do")
+			assert.Equal(t, []string{"probe"}, forced)
+			assert.True(t, exists(client, tc.ns.Name), "a Terminating namespace is not deleted again")
+		})
+	}
 	t.Run("nothing left", func(t *testing.T) {
 		client := fake.NewSimpleClientset(n2n("stale", orphanN2NNamespaceTTL+time.Minute),
 			makeNetpolValidationNs("netpol-validation-stale", orphanNamespaceTTL+time.Minute))
-		assert.True(t, SweepLeftoverProbes(ctx, testLog(), client), "a deleted namespace may still be terminating")
-		assert.False(t, SweepLeftoverProbes(ctx, testLog(), client))
-		assert.False(t, SweepLeftoverProbes(ctx, testLog(), fake.NewSimpleClientset()))
+		assert.True(t, sweep(t, client), "a deleted namespace may still be terminating")
+		assert.False(t, sweep(t, client))
+		assert.False(t, sweep(t, fake.NewSimpleClientset()))
 	})
-	for _, verb := range []string{"list", "delete"} {
-		t.Run(verb+" failure", func(t *testing.T) {
-			client := fake.NewSimpleClientset(n2n("stale", orphanN2NNamespaceTTL+time.Minute))
-			client.PrependReactor(verb, "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+	for _, call := range []struct{ verb, resource string }{
+		{"list", "namespaces"}, {"delete", "namespaces"}, {"list", "pods"}, {"delete", "pods"},
+	} {
+		t.Run(call.verb+" "+call.resource+" failure", func(t *testing.T) {
+			stuck := makeNetpolValidationNs("netpol-validation-stuck", orphanNamespaceTTL+time.Minute)
+			stuck.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+			probe := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+				Name: "probe", Namespace: stuck.Name, Labels: map[string]string{"app": "netpol-test"},
+			}}
+			client := fake.NewSimpleClientset(n2n("stale", orphanN2NNamespaceTTL+time.Minute), stuck, probe)
+			client.PrependReactor(call.verb, call.resource, func(ktesting.Action) (bool, runtime.Object, error) {
 				return true, nil, apierrors.NewServiceUnavailable("etcd leader change")
 			})
-			assert.True(t, SweepLeftoverProbes(ctx, testLog(), client))
+			_, err := SweepLeftoverProbes(ctx, testLog(), client)
+			assert.ErrorContains(t, err, "etcd leader change")
 		})
 	}
 }
