@@ -229,9 +229,8 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(chart, monitoring.CHART)
         self.assertTrue(self.recipe.state['serve'])
         self.assertEqual(self.recipe.state['runtimeSha256'], 'a'*64)
-        password = self.recipe.work/'grafana-admin-password'
-        self.assertEqual(password.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(password.read_text().strip(), values['grafana']['adminPassword'])
+        self.assertTrue(values['grafana']['adminPassword'])
+        self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
 
     def test_reinstall_recovers_original_password_and_rejects_foreign_secrets(self):
         secret = {'metadata': {'annotations': {'meta.helm.sh/release-name': self.monitor.release,

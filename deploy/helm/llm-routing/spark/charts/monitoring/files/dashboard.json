@@ -50,6 +50,7 @@
       {
         "name": "model",
         "type": "query",
+        "description": "Filters gateway and router metrics. Pylon, operator and backend metrics follow the namespace filter.",
         "datasource": {
           "type": "prometheus",
           "uid": "demo-metrics"
@@ -232,7 +233,7 @@
       "id": 5,
       "title": "Gateway request latency p95",
       "type": "timeseries",
-      "description": "",
+      "description": "Includes the full response duration.",
       "datasource": {
         "type": "prometheus",
         "uid": "demo-metrics"

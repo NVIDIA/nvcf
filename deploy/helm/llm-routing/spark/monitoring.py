@@ -209,7 +209,6 @@ class Monitoring:
         else:
             require(not existing, 'Existing monitoring release has lost its credential Secret. Restore it before upgrading.')
             password = secrets.token_urlsafe(36)
-        self.save(r.work/'grafana-admin-password', password+'\n')
         values['grafana']['adminPassword'] = password
         r.helm_apply(self.release, CHART, values)
         r.stamp('monitoring', {'release': self.release})

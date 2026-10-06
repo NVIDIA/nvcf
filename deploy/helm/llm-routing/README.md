@@ -46,8 +46,6 @@ Use your existing kubeconfig.
 
 Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](spark/BUILDING.md).
 
-New configurations also enable [demo monitoring](spark/MONITORING.md). Monitoring uses cached images or pulls them automatically. For an offline installation, [preload monitoring images](spark/MONITORING.md#offline-images) before `stack`. Set `monitoring.enabled=false` to skip it.
-
 ### Deploy in order
 
 Run each command in order and continue after it succeeds.
@@ -100,6 +98,19 @@ Check the node placement, ready replicas and model endpoint status.
 python3 spark.py chat 'What is 17 multiplied by 19? Give one short sentence.'
 python3 spark.py chat 'Explain what a GPU does in two sentences.' --stream
 ```
+
+## Monitoring
+
+From `deploy/helm/llm-routing/spark`, install monitoring and view the dashboard:
+
+```bash
+python3 spark.py monitoring
+python3 spark.py dashboard
+```
+
+Open `http://127.0.0.1:13000/d/llm-demo`. Viewing requires no login. Keep the command running, or press Ctrl-C to close the tunnel. Use `--port` to change the local port.
+
+See [advanced monitoring configuration](spark/MONITORING.md) for settings, admin access, verification and uninstall.
 
 ## Maintenance
 
@@ -229,10 +240,6 @@ Memory and runtime limits:
 Both model persistent volume claims (PVCs) remain after uninstall.
 
 ## Optional configuration
-
-### Demo monitoring
-
-Run `python3 spark.py monitoring` to install monitoring, then `python3 spark.py dashboard` to view it without login. See the [monitoring guide](spark/MONITORING.md) for admin access, optional verification, offline images and removal.
 
 ### Alternative container runtimes and external configuration
 
