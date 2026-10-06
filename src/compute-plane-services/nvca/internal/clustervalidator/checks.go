@@ -2334,6 +2334,9 @@ type n2nProbe struct {
 	checkers int
 	// dialled is the path the first checker that reported dialled.
 	dialled *n2nPath
+	// reachedBefore counts the nodes a checker already reached when a
+	// follow-up checker dials the probe pods that started after it.
+	reachedBefore int
 }
 
 func newN2NProbe(client kubernetes.Interface, state *ValidationState, image string) *n2nProbe {
@@ -2694,7 +2697,7 @@ func (p *n2nProbe) judge(ctx context.Context, run checkerRun) {
 	case report.stopped:
 		p.notObserved(fmt.Sprintf("the checker stopped after %d unreachable server pods, all on nodes lost "+
 			"during the probe, so the others were not dialled", len(report.unreachable)), "")
-	case reached < 1:
+	case reached < 1 && p.reachedBefore == 0:
 		p.notObserved("no server pod on a node still to probe answered the checker", "")
 	default:
 		p.verified(ctx, run.node, reached)
@@ -2732,24 +2735,41 @@ func (p *n2nProbe) judgeUnnamed(ctx context.Context, run checkerRun, report chec
 }
 
 // verified passes the row, unless a node whose probe pod showed no sandbox
-// event, or whose events could not be read, is still one to probe: a CNI plugin that hangs setting up the pod
-// network reports nothing until the container runtime times it out, which is
-// after the probe stops waiting, so that node's overlay is untested and the
-// row is unknown. Silence is no evidence of a fault either, so it never fails
-// the row.
+// event when the wait ended, or whose events could not be read, is still one
+// to probe: a CNI plugin that hangs setting up the pod network reports nothing
+// until the container runtime times it out, which is after the probe stops
+// waiting, so that node's overlay is untested and the row is unknown. Silence
+// is no evidence of a fault either, so it never fails the row. The silent pods
+// and their events are read again first: one that has since got its sandbox or
+// IP started late rather than in a hung CNI plugin. One now Running with an IP
+// is dialled from the same node by a follow-up checker, when the run has time
+// for one; one still starting, or one the run has no time to dial, leaves the
+// row unknown as having started late.
 func (p *n2nProbe) verified(ctx context.Context, node string, reached int) {
-	if silent := p.stillSilent(ctx); len(silent) > 0 {
-		if p.eventsErr != nil {
-			p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
-				"scheduled and got no pod IP within %s, and its events, which would say why, were not read: %s",
-				node, reached, strings.Join(silent, ", "), nodeToNodeDSTimeout,
-				readFailure("the probe pod events", p.eventsErr)), "")
-			return
+	reached += p.reachedBefore
+	again := p.readSilentAgain(ctx)
+	switch {
+	case again.failed:
+		return
+	case len(again.silent) > 0:
+		p.silentUnknown(node, reached, again)
+		return
+	case len(again.starting) > 0:
+		rec := ""
+		if again.imageProblem {
+			rec = nodeToNodeImagePullRecommendation
 		}
-		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
-			"scheduled and showed no pod sandbox event within %s, as when the CNI plugin hangs setting up the "+
-			"pod network", node, reached, strings.Join(silent, ", "), nodeToNodeDSTimeout),
-			nodeToNodeSilentSandboxRecommendation)
+		names := make([]string, 0, len(again.starting))
+		for _, gap := range again.starting {
+			name, _, _ := strings.Cut(gap, ": ")
+			names = append(names, name)
+		}
+		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s "+
+			"started only after the checker ran and cannot be dialled yet (%s), so its overlay was not tested",
+			node, reached, strings.Join(names, ", "), strings.Join(again.starting, "; ")), rec)
+		return
+	case len(again.late) > 0:
+		p.followUp(ctx, node, reached, again.late)
 		return
 	}
 	printSuccess(p.log, fmt.Sprintf("Node-to-node overlay verified: %s -> %d node(s) reachable on port %d",
@@ -2758,20 +2778,111 @@ func (p *n2nProbe) verified(ctx context.Context, node string, reached int) {
 	p.state.NodeToNodeOK = &ok
 }
 
-// stillSilent returns the nodes whose probe pod showed no sandbox event that
-// are still ones to probe when re-read. A failed re-read keeps them all.
-func (p *n2nProbe) stillSilent(ctx context.Context) []string {
+// silentUnknown leaves the row unknown for the probe pods still silent.
+func (p *n2nProbe) silentUnknown(node string, reached int, again silentAgain) {
+	silent := strings.Join(again.silent, ", ")
+	if again.readErr != nil {
+		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
+			"scheduled and got no pod IP within %s, and it could not be read again: %s", node, reached, silent,
+			nodeToNodeDSTimeout, readFailure("the probe pods", again.readErr)), "")
+		return
+	}
+	if p.eventsErr != nil {
+		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
+			"scheduled and got no pod IP within %s, and its events, which would say why, were not read: %s",
+			node, reached, silent, nodeToNodeDSTimeout, readFailure("the probe pod events", p.eventsErr)), "")
+		return
+	}
+	p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s was "+
+		"scheduled and showed no pod sandbox event within %s, as when the CNI plugin hangs setting up the "+
+		"pod network", node, reached, silent, nodeToNodeDSTimeout), nodeToNodeSilentSandboxRecommendation)
+}
+
+// silentAgain is what a second read showed of the probe pods that were
+// silent when the wait ended, on nodes still to probe.
+type silentAgain struct {
+	// silent are still silent, or could not be read again (readErr).
+	silent  []string
+	readErr error
+	// late have since started, Running with an IP, so a checker can dial them.
+	late []corev1.Pod
+	// starting are the nodes, with why, whose pod has since got its sandbox
+	// or IP but cannot be dialled yet.
+	starting     []string
+	imageProblem bool
+	// failed: a sandbox that has since failed failed the row.
+	failed bool
+}
+
+// readSilentAgain reads again the nodes, the probe pods and their events for
+// the probe pods that were silent when the wait ended. A node no longer to
+// probe explains its own pod and is dropped.
+func (p *n2nProbe) readSilentAgain(ctx context.Context) silentAgain {
 	if len(p.silent) == 0 {
-		return nil
+		return silentAgain{}
 	}
 	lost := p.lostNodes(ctx, p.silent)
-	var silent []string
+	var nodes []string
 	for _, n := range p.silent {
 		if _, ok := lost[n]; !ok {
-			silent = append(silent, n)
+			nodes = append(nodes, n)
 		}
 	}
-	return silent
+	if len(nodes) == 0 {
+		return silentAgain{}
+	}
+	pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+		return p.client.CoreV1().Pods(p.ns).List(c, metav1.ListOptions{
+			LabelSelector: n2nSelector(n2nServerComponent, p.instance),
+		})
+	})
+	if err != nil {
+		return silentAgain{silent: nodes, readErr: err}
+	}
+	sandboxes, eventsErr := probeSandboxEvents(ctx, p.client, p.ns)
+	p.eventsErr = eventsErr
+	outcome := classifyProbeNodes(pods.Items, nodes, sandboxes, eventsErr)
+	if len(outcome.networkFaults) > 0 && p.failOnSandboxFaults(ctx, &outcome) {
+		return silentAgain{failed: true}
+	}
+	again := silentAgain{silent: outcome.silent, late: outcome.running, imageProblem: outcome.imageProblem}
+	for _, gap := range outcome.gaps {
+		if node, _, _ := strings.Cut(gap, ": "); !slices.Contains(outcome.silent, node) {
+			again.starting = append(again.starting, gap)
+		}
+	}
+	return again
+}
+
+// followUp dials, from the checker's node, the server pods that started after
+// the checker ran, and judges the row on what it reports, counting the nodes
+// already reached. Without time left for a checker the row is unknown.
+func (p *n2nProbe) followUp(ctx context.Context, node string, reached int, late []corev1.Pod) {
+	names := make([]string, 0, len(late))
+	for i := range late {
+		names = append(names, late[i].Spec.NodeName)
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < nodeToNodeCheckerTimeout+observeTimeout {
+		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s "+
+			"started only after the checker ran, and the run has no time left to dial it", node, reached,
+			strings.Join(names, ", ")), "")
+		return
+	}
+	printInfo(p.log, fmt.Sprintf("  The probe pod on %s started after the checker ran; dialling it from %s",
+		strings.Join(names, ", "), node))
+	p.silent, p.reachedBefore = nil, reached
+	run, unobserved := p.runChecker(ctx, late, []string{node})
+	if unobserved != "" {
+		rec := ""
+		if run.imageProblem {
+			rec = nodeToNodeImagePullRecommendation
+		}
+		p.notObserved(fmt.Sprintf("the overlay was verified from %s to %d node(s), but the probe pod on %s "+
+			"started only after the checker ran, and the checker sent to dial it did not report: %s", node,
+			reached, strings.Join(names, ", "), unobserved), rec)
+		return
+	}
+	p.judge(ctx, run)
 }
 
 // unreachable fails the row: the checker ran and could not connect to the

@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -997,5 +998,127 @@ func TestSuite_NodeToNodeRecheckOfPathsNoLongerProbed(t *testing.T) {
 		require.NotNil(t, results[0].NodeToNodeOK, name)
 		assert.False(t, *results[0].NodeToNodeOK, "%s: the pair still cannot reach each other", name)
 		assert.Contains(t, strings.Join(results[0].Warnings, "; "), "node-3", "%s: node-3 is a coverage gap", name)
+	}
+}
+
+// lateStart is a 3-node probe whose node-3 pod is silent when the wait ends
+// and starts while the first checker runs: start moves it on.
+type lateStart struct {
+	f       *n2nFixture
+	started atomic.Bool
+}
+
+func newLateStart(t *testing.T, start func(t *testing.T, ls *lateStart), checker func(n int) *corev1.Pod) *lateStart {
+	t.Helper()
+	ls := &lateStart{}
+	silent := probePod("node-3", "Pending", "", "ContainerCreating")
+	silent.Name = "s-3"
+	servers := append(runningServers("node-1", "node-2"), silent)
+	ls.f = newN2NFixture(t, readyNodes(3), servers, []corev1.Event{podEvent("s-3", "Scheduled", 0)},
+		func() (*corev1.Pod, error) {
+			if !ls.started.Swap(true) {
+				start(t, ls)
+			}
+			return checker(len(ls.f.checkerNodes)), nil
+		})
+	return ls
+}
+
+// update replaces the probe pod on node-3 with what mutate makes of it.
+func (ls *lateStart) update(t *testing.T, mutate func(*corev1.Pod)) {
+	t.Helper()
+	gvr := corev1.SchemeGroupVersion.WithResource("pods")
+	obj, err := ls.f.client.Tracker().Get(gvr, ls.f.ds.Namespace, "s-3")
+	require.NoError(t, err)
+	p := obj.(*corev1.Pod).DeepCopy()
+	mutate(p)
+	require.NoError(t, ls.f.client.Tracker().Update(gvr, p, ls.f.ds.Namespace))
+}
+
+// events makes the events list return evs once the pod has started.
+func (ls *lateStart) events(evs ...corev1.Event) {
+	ls.f.client.PrependReactor("list", "events", func(ktesting.Action) (bool, runtime.Object, error) {
+		if !ls.started.Load() {
+			return false, nil, nil
+		}
+		return true, &corev1.EventList{Items: evs}, nil
+	})
+}
+
+// A probe pod that gets its sandbox and IP after the checker started is no
+// hung CNI plugin. The checker's node dials it in a follow-up, and the row
+// follows what that reports.
+func TestCheckNodeToNode_SilentPodThatStartsLateIsDialledFromTheSameNode(t *testing.T) {
+	running := func(t *testing.T, ls *lateStart) {
+		ls.update(t, func(p *corev1.Pod) {
+			p.Status = runningProbePod("s-3", "node-3", ipOf("node-3")).Status
+		})
+	}
+	reachable := newLateStart(t, running, func(int) *corev1.Pod { return checkerPod(0) })
+	reachable.events(podEvent("s-3", "Started", 1))
+	log, buf := bufferLog()
+	state := &ValidationState{Log: log}
+	checkNodeToNode(context.Background(), reachable.f.client, state, enforcementDefaultImg)
+	require.NotNil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
+	assert.True(t, *state.NodeToNodeOK)
+	assert.Contains(t, buf.String(), "-> 2 node(s) reachable")
+	require.Len(t, reachable.f.checkerNodes, 2)
+	assert.Equal(t, reachable.f.checkerNodes[0], reachable.f.checkerNodes[1], "the follow-up runs on the same node")
+	assert.NotContains(t, state.Recommendations, nodeToNodeSilentSandboxRecommendation)
+	assert.Empty(t, reachable.f.leftovers(t))
+
+	unreachable := newLateStart(t, running, func(n int) *corev1.Pod {
+		if n == 2 {
+			return checkerReported(nodeToNodeUnreachableExit, "unreachable: "+ipOf("node-3"))
+		}
+		return checkerPod(0)
+	})
+	state = runN2N(unreachable.f)
+	require.NotNil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
+	assert.False(t, *state.NodeToNodeOK, "the follow-up could not reach the pod that started late")
+}
+
+// A probe pod that started late is unknown, as having started late and with
+// no hung-CNI advice, when it cannot be dialled yet or the run has no time
+// left for a follow-up checker.
+func TestCheckNodeToNode_SilentPodThatStartsLateWithoutAFollowUpIsUnknown(t *testing.T) {
+	for name, tc := range map[string]struct {
+		start  func(t *testing.T, ls *lateStart)
+		events []corev1.Event
+		ctx    func() (context.Context, context.CancelFunc)
+		want   string
+	}{
+		"sandbox created, no IP yet": {
+			start:  func(*testing.T, *lateStart) {},
+			events: []corev1.Event{podEvent("s-3", "Pulling", 1)},
+			want:   "the probe pod on node-3 started only after the checker ran and cannot be dialled yet",
+		},
+		"no time left to dial it": {
+			start: func(t *testing.T, ls *lateStart) {
+				ls.update(t, func(p *corev1.Pod) {
+					p.Status = runningProbePod("s-3", "node-3", ipOf("node-3")).Status
+				})
+			},
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), nodeToNodeCheckerTimeout/2)
+			},
+			want: "the probe pod on node-3 started only after the checker ran, and the run has no time left to dial it",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ls := newLateStart(t, tc.start, func(int) *corev1.Pod { return checkerPod(0) })
+			ls.events(tc.events...)
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.ctx != nil {
+				ctx, cancel = tc.ctx()
+			}
+			defer cancel()
+			state := &ValidationState{Log: testLog()}
+			checkNodeToNode(ctx, ls.f.client, state, enforcementDefaultImg)
+			assert.Nil(t, state.NodeToNodeOK)
+			assert.Contains(t, strings.Join(state.Warnings, "; "), tc.want)
+			assert.NotContains(t, state.Recommendations, nodeToNodeSilentSandboxRecommendation)
+			assert.Len(t, ls.f.checkerNodes, 1, "no follow-up checker")
+		})
 	}
 }
