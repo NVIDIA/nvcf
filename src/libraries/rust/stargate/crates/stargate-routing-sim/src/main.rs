@@ -59,6 +59,7 @@ enum Command {
     },
     /// Send one region's share of a config's workload to a deployed Stargate.
     Drive {
+        /// Simulation config (JSON) that defines the workload.
         #[arg(long)]
         config: PathBuf,
         /// Stargate HTTP base URL, for example http://router:8000.
@@ -67,8 +68,10 @@ enum Command {
         /// Topology region whose Stargates this process represents.
         #[arg(long)]
         region: String,
+        /// Fleet-wide offered rate. Use the same value for every region.
         #[arg(long)]
         rate_rps: f64,
+        /// Workload seed. Use the same value for every region.
         #[arg(long)]
         seed: u64,
         /// Per-request algorithm sent as x-routing-method.

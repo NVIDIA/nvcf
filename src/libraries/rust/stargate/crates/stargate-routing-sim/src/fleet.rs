@@ -193,6 +193,7 @@ mod tests {
         FleetRecord {
             run: "run-a".to_string(),
             region: "usw2".to_string(),
+            request_id: format!("run-a-{arrival_s}"),
             session: 1,
             turn: 0,
             attempt: 0,

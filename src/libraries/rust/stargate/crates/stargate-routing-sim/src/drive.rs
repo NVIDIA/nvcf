@@ -27,6 +27,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
@@ -64,6 +65,8 @@ pub struct DriveArgs {
 pub struct FleetRecord {
     pub run: String,
     pub region: String,
+    /// `x-request-id` sent with the request, unique within the run.
+    pub request_id: String,
     pub session: u32,
     pub turn: u32,
     pub attempt: u32,
@@ -74,7 +77,7 @@ pub struct FleetRecord {
     pub status: Option<u16>,
     /// `x-stargate-error-code`, a transport error, or `timeout`.
     pub error: Option<String>,
-    /// Time from arrival to the first streamed chunk.
+    /// Time from arrival to the first streamed `data:` event.
     pub ttft_us: Option<Micros>,
     /// Time from arrival to the end of the response.
     pub e2e_us: Option<Micros>,
@@ -88,19 +91,19 @@ pub struct FleetRecord {
 
 impl FleetRecord {
     pub fn succeeded(&self) -> bool {
-        self.e2e_us.is_some() && self.error.is_none()
+        self.ttft_us.is_some() && self.e2e_us.is_some() && self.error.is_none()
     }
 }
 
 struct Driver {
     args: DriveArgs,
     plan: WorkloadPlan,
-    stargate_regions: Vec<usize>,
-    region_index: usize,
     client: reqwest::Client,
     start: Instant,
     records: mpsc::UnboundedSender<FleetRecord>,
     tracker: TaskTracker,
+    /// Numbers requests so every `x-request-id` is unique.
+    sent: AtomicU64,
 }
 
 pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
@@ -115,9 +118,15 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
     let weights: Vec<f64> = stargates.iter().map(|(_, weight)| *weight).collect();
     let plan = plan(&args.config.workload, &weights, args.rate_rps, args.seed);
     let client = reqwest::Client::builder()
-        .pool_idle_timeout(Duration::from_secs(90))
         .build()
         .context("building HTTP client")?;
+    let stargate_regions: Vec<usize> = stargates.iter().map(|(region, _)| *region).collect();
+    let initial: Vec<PlannedRequest> = plan
+        .requests
+        .iter()
+        .filter(|request| stargate_regions[request.stargate] == region_index)
+        .cloned()
+        .collect();
 
     let file = tokio::fs::File::create(&args.records)
         .await
@@ -135,22 +144,14 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
 
     let start = wait_for_start(args.start_at_unix_ms).await?;
     let driver = Arc::new(Driver {
-        stargate_regions: stargates.iter().map(|(region, _)| *region).collect(),
-        region_index,
         client,
         start,
         records,
         tracker: TaskTracker::new(),
+        sent: AtomicU64::new(0),
         plan,
         args,
     });
-    let initial: Vec<PlannedRequest> = driver
-        .plan
-        .requests
-        .iter()
-        .filter(|request| driver.owns(request))
-        .cloned()
-        .collect();
     for request in initial {
         let at = request.arrival;
         driver.spawn_request(request, at);
@@ -171,17 +172,20 @@ async fn wait_for_start(start_at_unix_ms: u64) -> anyhow::Result<Instant> {
     if start_at + 1000 < now_ms {
         bail!("start time {start_at_unix_ms} is already in the past");
     }
-    let delay = Duration::from_millis(u64::try_from(start_at.saturating_sub(now_ms))?);
-    let start = Instant::now() + delay;
+    let now = Instant::now();
+    // A start up to one second late keeps the shared start instant, so this
+    // region's arrivals stay aligned with the other regions.
+    let start = if start_at >= now_ms {
+        now + Duration::from_millis(u64::try_from(start_at - now_ms)?)
+    } else {
+        now.checked_sub(Duration::from_millis(u64::try_from(now_ms - start_at)?))
+            .unwrap_or(now)
+    };
     tokio::time::sleep_until(start).await;
     Ok(start)
 }
 
 impl Driver {
-    fn owns(&self, request: &PlannedRequest) -> bool {
-        self.stargate_regions[request.stargate] == self.region_index
-    }
-
     fn now(&self) -> Micros {
         u64::try_from(self.start.elapsed().as_micros()).unwrap_or(Micros::MAX)
     }
@@ -226,7 +230,8 @@ impl Driver {
     }
 
     /// Retries a failed growing-session turn with backoff. Returns false when
-    /// the session is abandoned.
+    /// nothing is retried: for fixed sessions, or when the session is
+    /// abandoned.
     fn schedule_retry(self: &Arc<Self>, request: &PlannedRequest, failed_at: Micros) -> bool {
         let Some(growing) = &self.args.config.workload.growing else {
             return false;
@@ -251,9 +256,21 @@ impl Driver {
     async fn send(&self, request: &PlannedRequest, at: Micros) -> FleetRecord {
         let args = &self.args;
         let config = &args.config;
+        // Fixed sessions repeat session, turn, and attempt, so a sequence
+        // number keeps IDs unique; Pylon tracks live requests by ID.
+        let request_id = format!(
+            "{}-{}-{}-s{}-t{}-a{}",
+            args.run_label,
+            args.region,
+            self.sent.fetch_add(1, Ordering::Relaxed),
+            request.session,
+            request.turn,
+            request.attempt
+        );
         let mut record = FleetRecord {
             run: args.run_label.clone(),
             region: args.region.clone(),
+            request_id: request_id.clone(),
             session: request.session,
             turn: request.turn,
             attempt: request.attempt,
@@ -268,10 +285,6 @@ impl Driver {
             reused_input_tokens: None,
             abandoned_session: false,
         };
-        let request_id = format!(
-            "{}-s{}-t{}-a{}",
-            args.run_label, request.session, request.turn, request.attempt
-        );
         let body = serde_json::json!({
             "model": config.stargate.model_id,
             "messages": [{"role": "user", "content": "x"}],
@@ -327,13 +340,19 @@ impl Driver {
         if !status.is_success() {
             record.error =
                 Some(header("x-stargate-error-code").unwrap_or_else(|| format!("http-{status}")));
+            // Read the short error body so the connection returns to the pool.
+            let _ = response.bytes().await;
             return record;
         }
         let mut body = response.bytes_stream();
         while let Some(chunk) = body.next().await {
             match chunk {
-                // MockDynamo sends the role chunk when the first token is ready.
-                Ok(_) if record.ttft_us.is_none() => {
+                // MockDynamo sends the role event when the first token is
+                // ready. Skip SSE keep-alive comments.
+                Ok(chunk)
+                    if record.ttft_us.is_none()
+                        && chunk.windows(5).any(|window| window == b"data:") =>
+                {
                     record.ttft_us = Some(self.now().saturating_sub(at));
                 }
                 Ok(_) => {}
@@ -370,7 +389,7 @@ mod tests {
 
     use super::*;
 
-    /// Two regions with one Stargate each; region "b" gets no traffic.
+    /// Two regions with one Stargate each and equal traffic.
     fn config() -> SimConfig {
         serde_json::from_value(serde_json::json!({
             "name": "driver test",
@@ -378,7 +397,7 @@ mod tests {
             "topology": {
                 "regions": [
                     {"name": "a", "stargates": 1, "backends": 1, "traffic_weight": 1.0},
-                    {"name": "b", "stargates": 1, "backends": 1, "traffic_weight": 0.0}
+                    {"name": "b", "stargates": 1, "backends": 1, "traffic_weight": 1.0}
                 ],
                 "rtt_ms": [[0, 10], [10, 0]],
                 "intra_region_rtt_ms": 1.0
@@ -424,6 +443,7 @@ mod tests {
         assert_eq!(header("x-routing-method"), "round-robin");
         assert_eq!(header("authorization"), "Bearer client-token");
         let request_id = header("x-request-id");
+        assert!(request_id.starts_with("run-1-a-"));
         seen.request_ids.lock().unwrap().push(request_id.clone());
         if request_id.contains("-t1-a0") {
             return Response::builder()
@@ -488,8 +508,27 @@ mod tests {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         std::fs::remove_file(&records).ok();
+        let config = config();
+        let plan = plan(&config.workload, &[1.0, 1.0], 20.0, 7);
+        let owned: HashSet<u32> = plan
+            .requests
+            .iter()
+            .filter(|request| request.stargate == 0)
+            .map(|request| request.session)
+            .collect();
         let sessions: HashSet<u32> = written.iter().map(|record| record.session).collect();
-        assert!(!sessions.is_empty());
+        assert!(!owned.is_empty());
+        assert_eq!(
+            sessions, owned,
+            "the driver sends exactly region a's sessions"
+        );
+        let request_ids: HashSet<&str> = written
+            .iter()
+            .map(|record| record.request_id.as_str())
+            .collect();
+        assert_eq!(request_ids.len(), written.len(), "request IDs are unique");
+        assert_eq!(seen.request_ids.lock().unwrap().len(), written.len());
+        let mut complete_sessions = 0;
         for session in sessions {
             let mut turns: Vec<&FleetRecord> = written
                 .iter()
@@ -508,6 +547,9 @@ mod tests {
                 expected[..outcomes.len()],
                 "session {session}"
             );
+            if outcomes.len() == expected.len() {
+                complete_sessions += 1;
+            }
             for record in turns.iter().filter(|record| record.succeeded()) {
                 assert_eq!(record.cluster_id.as_deref(), Some("backend-a"));
                 assert_eq!(record.reused_input_tokens, Some(100));
@@ -519,5 +561,9 @@ mod tests {
                 assert_eq!(failed.status, Some(503));
             }
         }
+        assert!(
+            complete_sessions > 0,
+            "some session ran every turn, including a retried one"
+        );
     }
 }

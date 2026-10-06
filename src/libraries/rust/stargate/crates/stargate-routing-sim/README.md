@@ -41,18 +41,23 @@ objects use the same JSON shape as Stargate per-model load-balancer config.
 fleet run and a simulation of the same config and seed see identical
 sessions. Requests carry `x-input-tokens`, `x-output-tokens`, and
 `x-cache-affinity-key` instead of prompt text; MockDynamo honors all three.
-Run one driver per region with a shared start time. Each driver sends the
-requests planned for its region's Stargates:
+Run one driver per region with a shared start time and the same config,
+seed, and fleet-wide `--rate-rps`. Each driver sends the requests planned for
+its region's Stargates. Driver hosts need synchronized clocks, because the
+start time is wall-clock Unix milliseconds:
 
 ```sh
+START_MS=$(( ($(date +%s) + 60) * 1000 ))
 stargate-routing-sim drive --config bench.json --region usw2 \
   --endpoint http://router:8000 --rate-rps 300 --seed 1 \
   --routing-method pulsar-wait-and-widen --run-label pulsar-300-s1 \
-  --start-at-unix-ms 1791000000000 --records usw2.jsonl
+  --start-at-unix-ms "$START_MS" --records usw2.jsonl
 ```
 
 Then summarize all regions' records with the same measurement window and
-TTFT SLO as the simulator:
+TTFT SLO as the simulator. The optional `--backend-gpus` file is a JSON object
+that maps backend cluster IDs to GPU worker counts, for example
+`{"usw2-backend-0": 1}`:
 
 ```sh
 stargate-routing-sim summarize-fleet --config bench.json \
