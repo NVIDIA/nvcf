@@ -1361,8 +1361,44 @@ func TestWriterScript_WaitsForWritableLanding(t *testing.T) {
 // A reader waiting on the completion marker falls back the moment the
 // failure marker appears, with the reason in its log, instead of waiting
 // out its deadline; the deadline fallback stays as the last resort.
+// A reader whose landing is the read-only view of the shared primary
+// cannot download into it: on a failure or past its deadline it stops
+// with the reason instead of writing, and the agent recreates it on its
+// own download path.
+func TestReaderScript_NoInPlaceFallbackOnReadOnlyView(t *testing.T) {
+	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800, false)
+	if strings.Contains(script, "hf download org/model") {
+		t.Errorf("a read-only landing must not run the download:\n%s", script)
+	}
+	if strings.Count(script, "exit 1") != 2 || !strings.Contains(script, "cat /model/.nvsnap-failed") {
+		t.Errorf("both branches stop with an error, the failure branch with the reason:\n%s", script)
+	}
+}
+
+// On a shared filesystem the reader's landing is the read-only view, so
+// its wait init carries no in-place fallback download.
+func TestModelVolume_SharedFilesystem_ReaderHasNoInPlaceFallback(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	bindClaims(kc, "fss.csi.oraclecloud.com")
+	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := stockVLLMPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait string
+	for _, c := range viewMV(pod, patches).newInits {
+		if c.Name == injectedDownloadInit {
+			wait = c.Args[0]
+		}
+	}
+	if wait == "" || strings.Contains(wait, "hf download") || strings.Contains(wait, "snapshot_download") {
+		t.Errorf("the reader's wait must not download into the read-only view:\n%s", wait)
+	}
+}
+
 func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
-	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800)
+	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800, true)
 	failed := strings.Index(script, "if [ -f /model/.nvsnap-failed ]")
 	deadline := strings.Index(script, "if [ $d -ge 1800 ]")
 	if failed < 0 || deadline < 0 || failed > deadline {
@@ -1374,7 +1410,7 @@ func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
 	if !strings.Contains(script, "cat /model/.nvsnap-failed") {
 		t.Errorf("the reader logs the recorded reason:\n%s", script)
 	}
-	none := readerScript("", "/model/.nvsnap-complete", 60)
+	none := readerScript("", "/model/.nvsnap-complete", 60, true)
 	if strings.Count(none, "no download step to fall back to") != 2 {
 		t.Errorf("without a download step both branches exit cleanly:\n%s", none)
 	}

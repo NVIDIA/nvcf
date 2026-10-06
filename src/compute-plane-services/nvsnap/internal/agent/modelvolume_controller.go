@@ -414,17 +414,20 @@ func (c *ModelVolumeController) failJob(ctx context.Context, job *batchv1.Job, u
 	if err := c.Provisioner.ReleaseWriterView(ctx, uri, job.Namespace); err != nil {
 		log.WithError(err).Warn("model volume: release writer view failed; the reaper retires it with the namespace")
 	}
-	// Readers already admitted hold views of the primary and wait on the
-	// completion marker; the failure marker next to it sends them to their
-	// fallback now rather than at their deadline. One agent is enough:
-	// the Job's node writes it.
+	// Readers already admitted hold read-only views of the primary and
+	// wait on the completion marker; the failure marker next to it gives
+	// them the reason, and the readers are recreated on their own
+	// download. One agent is enough: the Job's node does it.
 	if c.Provisioner.Cfg.SharedWhileWriting() && c.jobRanHere(ctx, job) {
 		sysNS := c.Provisioner.Cfg.SystemNamespace()
 		if err := c.markFailed(ctx, uri, sysNS, c.Provisioner.Cfg.ClaimName(uri), reason); err != nil {
-			log.WithError(err).Warn("model volume: failure marker not written; readers fall back at their deadline")
+			log.WithError(err).Warn("model volume: failure marker not written")
 		} else {
-			log.Info("model volume: failure marker written; waiting readers fall back now")
+			log.Info("model volume: failure marker written; waiting readers log the reason")
 		}
+		// Their landing is the read-only view of the primary, so they
+		// cannot fall back in place: recreate them on their own download.
+		c.releaseReaders(ctx, uri, false, log)
 	}
 }
 
@@ -651,23 +654,39 @@ func (c *ModelVolumeController) giveUp(ctx context.Context, uri, jobNS, reason s
 	if err := c.Provisioner.DeleteJob(ctx, uri, jobNS); err != nil {
 		log.WithError(err).Warn("model volume: delete staging job failed")
 	}
-	sel := modelvolume.IdentityLabel + "=" + modelvolume.Key(uri) + "," + modelvolume.RoleLabel + "=reader," + modelvolume.PendingLabel + "=true"
+	c.releaseReaders(ctx, uri, true, log)
+	c.mu.Lock()
+	delete(c.attempts, uri)
+	c.mu.Unlock()
+}
+
+// releaseReaders deletes the readers of uri that still wait for the
+// model, so their controllers recreate them and admission, seeing the
+// failure record, leaves them on their own download. pendingOnly limits
+// it to readers pending on a view that will not come; otherwise every
+// reader that is not Ready goes, including those waiting on a read-only
+// view of a shared primary whose download failed.
+func (c *ModelVolumeController) releaseReaders(ctx context.Context, uri string, pendingOnly bool, log logrus.FieldLogger) {
+	sel := modelvolume.IdentityLabel + "=" + modelvolume.Key(uri) + "," + modelvolume.RoleLabel + "=reader"
+	if pendingOnly {
+		sel += "," + modelvolume.PendingLabel + "=true"
+	}
 	pods, err := c.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: sel})
 	if err != nil {
-		log.WithError(err).Warn("model volume: list pending readers failed")
+		log.WithError(err).Warn("model volume: list waiting readers failed")
 		return
 	}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		if err := c.Kube.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			log.WithError(err).WithField("reader", p.Namespace+"/"+p.Name).Warn("model volume: release pending reader failed")
+		if rootfsonly.IsPodReady(p) {
 			continue
 		}
-		log.WithField("reader", p.Namespace+"/"+p.Name).Info("model volume: released pending reader to its own download")
+		if err := c.Kube.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).WithField("reader", p.Namespace+"/"+p.Name).Warn("model volume: release waiting reader failed")
+			continue
+		}
+		log.WithField("reader", p.Namespace+"/"+p.Name).Info("model volume: released waiting reader to its own download")
 	}
-	c.mu.Lock()
-	delete(c.attempts, uri)
-	c.mu.Unlock()
 }
 
 // captureModel turns a Ready pod's engine-downloaded landing volume into

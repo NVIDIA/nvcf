@@ -516,7 +516,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 			orig := shellJoin(append(append([]string{}, init.Command...), init.Args...))
 			script := writerScript(orig, imarker)
 			if !writer {
-				script = readerScript(orig, imarker, deadline)
+				script = readerScript(orig, imarker, deadline, m.readerFallsBackInPlace())
 			}
 			return []PatchOp{
 				{Op: "replace", Path: fmt.Sprintf("/spec/initContainers/%d/command", i), Value: []string{"/bin/sh", "-c"}},
@@ -539,7 +539,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 	// The injected init sees the landing at downloadMount (see there); the
 	// marker is the same file in the volume whatever path it is read at.
 	marker = path.Join(downloadMount, modelvolume.MarkerFile)
-	script := readerScript(download, marker, deadline)
+	script := readerScript(download, marker, deadline, m.readerFallsBackInPlace())
 	if writer {
 		if download == "" {
 			return nil // engine writes; completion is Ready, marked by the agent
@@ -611,15 +611,30 @@ func writerScript(download, marker string) string {
 	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[4]srm -f %[5]s\n%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir), wait, failed)
 }
 
-// readerScript waits for the marker; past the deadline it runs the
-// download itself (decided: always fall back, never deadlock).
-func readerScript(download, marker string, deadline int) string {
+// readerScript waits for the marker. With inPlace, past the deadline or
+// on a recorded failure it runs the download itself (decided: always fall
+// back, never deadlock). Without it the landing is the read-only view of
+// the shared primary, where nothing can be written: the init stops with
+// the reason, and the agent recreates the pod, which admission then
+// leaves on its own download.
+func readerScript(download, marker string, deadline int, inPlace bool) string {
 	fallback := "echo 'nvsnap: no download step to fall back to'; exit 0"
 	if download != "" {
 		fallback = download
 	}
+	if !inPlace {
+		fallback = "echo 'nvsnap: the shared model volume is read-only here; the pod is recreated on its own download'; exit 1"
+	}
 	failed := shellQuote(path.Join(path.Dir(marker), modelvolume.FailedMarkerFile))
 	return fmt.Sprintf("set -e\nd=0\nwhile [ ! -f %[1]s ]; do if [ -f %[4]s ]; then echo \"nvsnap: shared download failed: $(cat %[4]s 2>/dev/null)\"; %[3]s; exit 0; fi; if [ $d -ge %[2]d ]; then echo 'nvsnap: marker deadline passed; downloading locally'; %[3]s; exit 0; fi; sleep 5; d=$((d+5)); done\necho 'nvsnap: model complete, skipping download'\n", shellQuote(marker), deadline, fallback, failed)
+}
+
+// readerFallsBackInPlace reports whether a reader's landing can take its
+// own fallback download: a PVC reader's landing is the read-only view of
+// the primary, a hostPath landing is a writable directory until the agent
+// binds the volume over it.
+func (m *Mutator) readerFallsBackInPlace() bool {
+	return m.ModelVolume == nil || m.ModelVolume.Cfg.ReaderMode() != modelvolume.ReaderPVC
 }
 
 func (m *Mutator) waitDeadlineSeconds() int {
