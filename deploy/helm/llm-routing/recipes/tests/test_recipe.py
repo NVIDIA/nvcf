@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import stat
 import subprocess
 import tarfile
@@ -63,6 +64,7 @@ class RecipeTests(unittest.TestCase):
         stale.mkdir()
         (stale/'unrelated.txt').write_text('leave this old copy alone\n')
         recipe_path = seed/'deploy/helm/llm-routing/recipes'
+        shutil.copytree(HERE/'glm-5.3', recipe_path/'glm-5.3')
         with patch.object(tool, 'HERE', recipe_path), \
              patch.object(tool, 'run') as run:
             recipe = tool.Recipe(self.config, self.recipe.work)
@@ -425,7 +427,7 @@ class RecipeTests(unittest.TestCase):
     def test_attached_installation_requires_glm_verification_before_update(self):
         self.recipe.state = {'attachedExisting': True}
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), patch.object(tool, 'run') as run, patch.object(tool, 'output') as output:
-            with self.assertRaisesRegex(RuntimeError, 'Verify GLM'):
+            with self.assertRaisesRegex(RuntimeError, 'Verify the model'):
                 self.recipe.update('gateway', 'next-tag')
         run.assert_not_called()
         output.assert_not_called()
@@ -439,8 +441,8 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(len(values['model']['lock']['files']), 6)
 
     def qualification_job(self, suffix, condition='Failed', release=None):
-        release = release or self.recipe.glm
-        return {'metadata': {'name': self.recipe.glm+suffix, 'uid': suffix,
+        release = release or self.recipe.backend
+        return {'metadata': {'name': self.recipe.backend+suffix, 'uid': suffix,
                              'annotations': {'meta.helm.sh/release-name': release,
                                              'meta.helm.sh/release-namespace': self.config['namespace']}},
                 'status': {'conditions': [{'type': condition, 'status': 'True'}]}}
@@ -452,7 +454,7 @@ class RecipeTests(unittest.TestCase):
     def test_qualification_retry_archives_before_helm_and_persists_new_attempts(self):
         self.recipe.state = {'runtimeSha256': 'a'*64, 'download': True}
         jobs = [self.qualification_job('-qualify-5', 'Complete'),
-                self.qualification_job('-chain-3', 'Failed', self.recipe.glm+'-chain')]
+                self.qualification_job('-chain-3', 'Failed', self.recipe.backend+'-chain')]
         pods = [self.qualification_pod('old-qualification', jobs[0]),
                 self.qualification_pod('failed-chain', jobs[1], 'Failed')]
         pods.append({'metadata': {'name': 'unrelated'}, 'status': {'phase': 'Running'}})
@@ -472,8 +474,8 @@ class RecipeTests(unittest.TestCase):
             self.recipe.backend_phase('qualify', retry=True)
         self.assertEqual(helm.call_args_list[0].args[2]['qualification']['attempt'], 6)
         self.assertEqual(helm.call_args_list[1].args[2]['chain']['attempt'], 4)
-        self.assertEqual(logs.call_args_list[0].kwargs['job'], self.recipe.glm+'-qualify-6')
-        self.assertEqual(logs.call_args_list[1].kwargs['job'], self.recipe.glm+'-chain-4')
+        self.assertEqual(logs.call_args_list[0].kwargs['job'], self.recipe.backend+'-qualify-6')
+        self.assertEqual(logs.call_args_list[1].kwargs['job'], self.recipe.backend+'-chain-4')
         resumed = tool.Recipe(self.config, self.tmp.name)
         self.assertTrue(resumed.state['qualify'])
         self.assertEqual(resumed.backend_values('qualify')['qualification']['attempt'], 6)
@@ -570,7 +572,7 @@ class RecipeTests(unittest.TestCase):
         values['recipeSource'] = {'revision': 'an-older-build'}
         pods = [{'metadata': {'name': 'llm-api-gateway-old', 'uid': 'g1'}, 'status': {'phase': 'Running'}},
                 {'metadata': {'name': 'unrelated-workload', 'uid': 'u1'}, 'status': {'phase': 'Running'}},
-                {'metadata': {'name': self.recipe.glm+'-leader', 'uid': 'm1'}, 'status': {'phase': 'Running'}}]
+                {'metadata': {'name': self.recipe.backend+'-leader', 'uid': 'm1'}, 'status': {'phase': 'Running'}}]
         after = copy.deepcopy(pods)
         after[0]['metadata']['uid'] = 'g2'
         with patch.object(self.recipe, 'source_check') as source, patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(tool, 'run') as run:
@@ -750,15 +752,15 @@ class RecipeTests(unittest.TestCase):
             helm.assert_not_called()
 
     def test_explicit_release_and_repository_mapping(self):
-        self.config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'glm': 'custom-model'}
+        self.config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'model': 'custom-model'}
         self.config['images']['repositories'] = {'gateway': 'registry.example.com/another/gateway'}
         recipe = tool.Recipe(self.config, self.tmp.name)
         self.assertEqual(recipe.stack, 'custom-front')
-        self.assertEqual(recipe.glm, 'custom-model')
+        self.assertEqual(recipe.backend, 'custom-model')
         self.assertEqual(recipe.image('gateway', 'new'), 'registry.example.com/another/gateway:new')
 
     def test_existing_attachment_ownership_failure_makes_no_mutation(self):
-        self.config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'glm': 'custom-model'}
+        self.config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'model': 'custom-model'}
         key = pathlib.Path(self.tmp.name)/'key'
         key.write_text('test-only-key')
         self.config['apiKeyFile'] = str(key)

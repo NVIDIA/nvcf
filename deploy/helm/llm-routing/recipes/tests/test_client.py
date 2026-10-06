@@ -14,7 +14,7 @@ HERE = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('recipe_client', HERE/'client.py')
 client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
-MODEL = json.loads((HERE/'backend.defaults.json').read_text())['model']['servedName']
+MODEL = json.loads((HERE/'glm-5.3/recipe.json').read_text())['servedName']
 
 
 def discovery_documents(model=MODEL):
@@ -181,7 +181,7 @@ class ClientTests(unittest.TestCase):
         instance.auth.return_value = [{'status': status} for status in [401]*6+[200]]
         instance.discovery.return_value = {'registry': discovery_documents()[2]}
         stdout = io.StringIO()
-        with patch('sys.argv', ['client.py', '--mode', 'verify', '--cluster-id', 'expected-cluster']), patch.object(client, 'Client', return_value=instance), contextlib.redirect_stdout(stdout):
+        with patch('sys.argv', ['client.py', '--mode', 'verify', '--model', MODEL, '--cluster-id', 'expected-cluster']), patch.object(client, 'Client', return_value=instance), contextlib.redirect_stdout(stdout):
             client.main()
         calls = instance.completion.call_args_list
         self.assertEqual([call.args[0] for call in calls], [MODEL]*4)
@@ -197,7 +197,7 @@ class ClientTests(unittest.TestCase):
     def test_verify_cli_rejects_an_incorrect_glm_answer(self):
         instance = Mock(key=None)
         instance.completion.return_value = {'model': MODEL, 'content': '5'}
-        with patch('sys.argv', ['client.py', '--mode', 'verify']), patch.object(client, 'Client', return_value=instance):
+        with patch('sys.argv', ['client.py', '--mode', 'verify', '--model', MODEL]), patch.object(client, 'Client', return_value=instance):
             with self.assertRaisesRegex(RuntimeError, 'Incorrect answer'):
                 client.main()
         instance.completion.assert_called_once()

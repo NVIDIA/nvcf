@@ -41,7 +41,7 @@ class ReinitializationTests(unittest.TestCase):
         before = copy.deepcopy(self.config)
         with patch.object(setup, 'items', side_effect=lambda ctx, resource, **kw: copy.deepcopy(self.resources[resource])), \
              patch.object(setup.subprocess, 'check_output', return_value=json.dumps(releases or [])) as helm:
-            setup.validate_reinitialization(self.config)
+            setup.validate_reinitialization(self.config, self.config['releasePrefix'] + '-glm')
         command = helm.call_args.args[0]
         self.assertEqual(command[:5], ['helm', '--kube-context', self.config['context'], '-n', self.namespace])
         self.assertIn('--pending', command)

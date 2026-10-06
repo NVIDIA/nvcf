@@ -23,13 +23,13 @@ class LoadResumeTests(unittest.TestCase):
         self.recipe = tool.Recipe(config, self.tmp.name)
         self.recipe.state = {'download': True, 'runtimeSha256': 'a'*64}
         self.values = self.recipe.backend_values('serve')
-        self.release = {'name': self.recipe.glm, 'namespace': config['namespace'],
+        self.release = {'name': self.recipe.backend, 'namespace': config['namespace'],
                         'version': 6, 'info': {'status': 'deployed'}}
         self.resources = []
         for suffix, role, container, component in [('', 'leader', 'llama', 'model-server'),
                 ('-rpc-worker', 'worker', 'rpc', 'rpc-worker'), ('-artifacts', 'leader', 'artifacts', 'artifacts')]:
-            name = self.recipe.glm+suffix
-            labels = {'app.kubernetes.io/instance': self.recipe.glm, 'app.kubernetes.io/component': component}
+            name = self.recipe.backend+suffix
+            labels = {'app.kubernetes.io/instance': self.recipe.backend, 'app.kubernetes.io/component': component}
             self.resources.append({'kind': 'Deployment', 'metadata': self.metadata(name, generation=2),
                 'spec': {'replicas': 1, 'selector': {'matchLabels': labels}, 'template': {
                     'metadata': {'labels': labels, 'annotations': {'checksum/runtime': self.recipe.state['runtimeSha256']}},
@@ -42,14 +42,14 @@ class LoadResumeTests(unittest.TestCase):
         for resource in self.resources:
             pod = resource['spec']['template']['spec']
             volume = 'rpc-cache' if resource['metadata']['name'].endswith('-rpc-worker') else 'artifacts'
-            pod['volumes'] = [{'name': volume, 'persistentVolumeClaim': {'claimName': self.recipe.glm+'-'+volume}}]
+            pod['volumes'] = [{'name': volume, 'persistentVolumeClaim': {'claimName': self.recipe.backend+'-'+volume}}]
             pod['containers'][0]['volumeMounts'] = [{'name': volume, 'mountPath': '/'+volume}]
         env = {'FIRST_SHARD': self.values['model']['firstShard'], 'SERVED_MODEL': self.values['model']['servedName'],
-               'RPC_ENDPOINT': self.recipe.glm+'-rpc-worker:50052', 'SERVER_ARGS': json.dumps(self.values['model']['args'])}
+               'RPC_ENDPOINT': self.recipe.backend+'-rpc-worker:50052', 'SERVER_ARGS': json.dumps(self.values['model']['args'])}
         self.resources[0]['spec']['template']['spec']['containers'][0]['env'] = [
             {'name': key, 'value': value} for key, value in env.items()]
         for suffix in ('-artifacts', '-rpc-cache'):
-            name = self.recipe.glm+suffix
+            name = self.recipe.backend+suffix
             self.resources.append({'kind': 'PersistentVolumeClaim', 'metadata': self.metadata(name),
                 'spec': {'volumeName': name+'-volume', 'storageClassName': config['storageClass']},
                 'status': {'phase': 'Bound'}})
@@ -62,7 +62,7 @@ class LoadResumeTests(unittest.TestCase):
 
     def metadata(self, name, **extra):
         return {'name': name, 'namespace': self.recipe.c['namespace'], 'uid': name+'-uid',
-                'annotations': {'meta.helm.sh/release-name': self.recipe.glm,
+                'annotations': {'meta.helm.sh/release-name': self.recipe.backend,
                                 'meta.helm.sh/release-namespace': self.recipe.c['namespace']},
                 'labels': {'app.kubernetes.io/managed-by': 'Helm'}, **extra}
 
@@ -70,12 +70,12 @@ class LoadResumeTests(unittest.TestCase):
         self.commands.append(command)
         if 'exec' not in command:
             self.assertEqual(kwargs.get('timeout'), 45)
-        if command == self.recipe.hm+['status', self.recipe.glm, '-o', 'json']:
+        if command == self.recipe.hm+['status', self.recipe.backend, '-o', 'json']:
             self.status_calls += 1
             return json.dumps(self.next_release if self.status_calls > 1 and self.next_release else self.release)
-        if command == self.recipe.hm+['get', 'values', self.recipe.glm, '--revision', '6', '-o', 'json']:
+        if command == self.recipe.hm+['get', 'values', self.recipe.backend, '--revision', '6', '-o', 'json']:
             return json.dumps(self.values)
-        if command == self.recipe.kc+['get', 'deployment', self.recipe.glm, '--ignore-not-found', '-o', 'json']:
+        if command == self.recipe.kc+['get', 'deployment', self.recipe.backend, '--ignore-not-found', '-o', 'json']:
             return self.existing
         if command[:len(self.recipe.kc)+1] == self.recipe.kc+['get']:
             self.resource_calls += 1
@@ -112,11 +112,11 @@ class LoadResumeTests(unittest.TestCase):
 
     def test_first_load_keeps_memory_preflight_and_helm_apply(self):
         self.values = self.recipe.backend_values('download')
-        self.attempt().assert_called_once_with(self.recipe.glm, HERE/'charts/gguf-backend',
+        self.attempt().assert_called_once_with(self.recipe.backend, HERE/'charts/gguf-backend',
                                     self.recipe.backend_values('serve'), '70m', jobs=False)
         memory = [command for command in self.commands if 'exec' in command]
         self.assertEqual(len(memory), 2)
-        self.assertTrue(any('deploy/'+self.recipe.glm+'-rpc-leader' in command for command in memory))
+        self.assertTrue(any('deploy/'+self.recipe.backend+'-rpc-leader' in command for command in memory))
         self.assertTrue(self.recipe.state['serve'])
 
     def test_pending_and_failed_release_never_adopts_ready_resources(self):
@@ -163,7 +163,7 @@ class LoadResumeTests(unittest.TestCase):
             with self.subTest(index=index):
                 self.resources = copy.deepcopy(original)
                 mutate(self.resources)
-                self.attempt('GLM|Missing').assert_not_called()
+                self.attempt('[Mm]odel|Missing').assert_not_called()
 
     def test_revision_or_resource_replacement_during_check_is_rejected(self):
         self.next_release = copy.deepcopy(self.release)

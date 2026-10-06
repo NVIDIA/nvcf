@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Chat with GLM and validate direct or authenticated gateway responses without logging keys."""
+"""Chat with the recipe model and validate direct or authenticated gateway responses without logging keys."""
 import argparse
 import datetime
 import http.client
@@ -168,7 +168,7 @@ def main():
     parser.add_argument('--url', default='https://127.0.0.1:18443')
     parser.add_argument('--ca-file')
     parser.add_argument('--api-key-file')
-    parser.add_argument('--model', default='GLM-5.3-UD-IQ2_M')
+    parser.add_argument('--model', required=True, help='Served model name from the recipe definition.')
     parser.add_argument('--cluster-id', help='Require a healthy registration from this cluster during gateway discovery checks.')
     parser.add_argument('--mode', choices=['chat', 'verify', 'auth', 'discovery'], default='chat')
     parser.add_argument('--stream', action='store_true')

@@ -30,7 +30,7 @@ class CliTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.config = json.loads((HERE/'config.example.json').read_text())
         self.config['context'] = 'team-context'
-        self.config['releases'] = {'stack': 'test-stack', 'operator': 'test-operator', 'glm': 'test-glm'}
+        self.config['releases'] = {'stack': 'test-stack', 'operator': 'test-operator', 'model': 'test-glm'}
         self.work = tool.default_work_dir('team-context')
 
     def write_config(self, config=None, path=None):
@@ -346,7 +346,7 @@ class CliTests(unittest.TestCase):
         before = (self.work/'config.json').read_bytes()
         with patch.object(tool.cluster_setup, 'validate_reinitialization') as inspect, redirect_stdout(io.StringIO()):
             tool.main(['init'])
-        inspect.assert_called_once_with(self.config)
+        inspect.assert_called_once_with(self.config, self.config['releases']['model'])
         self.assertEqual((self.work/'config.json').read_bytes(), before)
         self.assertEqual((self.work/'api-key').read_text(), 'keep-me')
         self.assertFalse((self.work/'state.json').exists())
@@ -360,7 +360,7 @@ class CliTests(unittest.TestCase):
         self.write_config()
         with patch.object(tool.cluster_setup, 'validate_reinitialization') as inspect, redirect_stdout(io.StringIO()):
             tool.main(['--context', 'team-context', 'init'])
-        inspect.assert_called_once_with(self.config)
+        inspect.assert_called_once_with(self.config, self.config['releases']['model'])
         self.assertFalse((self.work/'state.json').exists())
         self.assertEqual(list(self.work.glob('before-reinit-*')), [])
 

@@ -25,7 +25,6 @@ sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
 import console_output
-MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
               'router': 'src/libraries/rust/stargate', 'pylon': 'src/libraries/rust/stargate',
               'operator': 'src/compute-plane-services/pylon-operator'}
@@ -52,21 +51,62 @@ def output(command, **kwargs):
     return console_output.output(command, **kwargs)
 
 
+RECIPE_KEYS = ('name', 'releaseName', 'llamaCppRevision', 'servedName', 'endpointName', 'firstShard',
+               'artifactsSize', 'rpcCacheSize', 'canary', 'serverArgs', 'runtimeEnv')
+# The tool derives these from nodes.model; a recipe that sets them would conflict.
+PLACEMENT_FLAGS = ('--device', '-dev', '--tensor-split', '-ts', '--rpc')
+QUALIFICATION_ATTEMPT = 2
+NAME = r'[a-z0-9]([-a-z0-9]*[a-z0-9])?'
+
+
+def available_recipes():
+    return sorted(path.parent.name for path in HERE.glob('*/recipe.json'))
+
+
+def recipe_name(c):
+    name = c.get('recipe')
+    if name is None:
+        names = available_recipes()
+        require(len(names) == 1, 'Set recipe in the configuration. Available: ' + ', '.join(names))
+        name = names[0]
+    return name
+
+
+def load_recipe(name):
+    names = available_recipes()
+    require(name in names, 'Unknown recipe: ' + str(name) + '. Available: ' + ', '.join(names))
+    folder = HERE/name
+    definition = json.loads((folder/'recipe.json').read_text())
+    missing = [key for key in RECIPE_KEYS if key not in definition]
+    require(not missing, 'Recipe ' + name + ' is missing: ' + ', '.join(missing))
+    require(definition['name'] == name, 'Recipe name must match its folder: ' + name)
+    require(re.fullmatch(NAME, definition['releaseName']) is not None, 'Invalid releaseName in recipe ' + name)
+    flags = sorted({arg.split('=', 1)[0] for arg in definition['serverArgs']} & set(PLACEMENT_FLAGS))
+    require(not flags, 'Recipe ' + name + ' must not set placement arguments (' + ', '.join(flags) +
+            '). The tool derives them from nodes.model.')
+    lock = json.loads((folder/'model.lock.json').read_text())
+    require(definition['firstShard'] in [item['rfilename'] for item in lock['files']],
+            'Recipe ' + name + ' firstShard is not in its model lock.')
+    definition['lock'] = lock
+    return definition
+
+
 def validate(c):
+    load_recipe(recipe_name(c))
     for key in ('context', 'namespace', 'releasePrefix', 'clusterId', 'storageClass', 'runtimeClass'):
         require(isinstance(c.get(key), str) and bool(c[key].strip()), key + ' must be explicit.')
     for key in ('namespace', 'releasePrefix', 'clusterId'):
         require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', c[key]) is not None, 'Invalid ' + key)
     require(len(c['releasePrefix']) <= 30, 'releasePrefix must be at most 30 characters.')
     require(all(c['nodes'].get(role) for role in ('leader', 'worker', 'control')), 'All three placement roles are required.')
-    require(c['nodes']['leader'] != c['nodes']['worker'], 'GLM needs exactly two distinct GPU nodes.')
+    require(c['nodes']['leader'] != c['nodes']['worker'], 'The model needs two distinct GPU nodes.')
     require(c['images']['pullPolicy'] in ('Never', 'IfNotPresent', 'Always'), 'Invalid pull policy.')
     require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', c['images']['tag']) is not None, 'Invalid image tag.')
     require('/' in c['images']['prefix'] and not c['images']['prefix'].endswith('/'), 'Use registry/path as image prefix.')
     require(not c['images'].get('pullSecrets'), 'Pylon does not propagate image-pull secrets. Use nodes with registry access or pre-import all application images.')
     require(c.get('caConfigMap'), 'caConfigMap is required for verified QUIC and client TLS.')
-    require(not c.get('retainedModels'), 'Verification targets GLM. Remove retainedModels from the configuration.')
-    require(not c.get('testFixture'), 'The recipe deploys GLM. Remove testFixture from the configuration.')
+    require(not c.get('retainedModels'), 'Verification targets the recipe model. Remove retainedModels from the configuration.')
+    require(not c.get('testFixture'), 'The recipe deploys its own model. Remove testFixture from the configuration.')
 
 
 
@@ -175,18 +215,23 @@ def discover_config(context, namespace=None):
     require(owner(router) == stack, 'Gateway and router belong to different releases.')
     control = placement(gateway)
     require(placement(router) == control, 'This recipe requires gateway and router on the same control node.')
-    endpoint = get('inferenceendpoint', 'glm53-iq2')
-    glm = owner(endpoint)
-    require(endpoint['spec']['service']['name'] == glm and endpoint['spec']['modelName'] == 'GLM-5.3-UD-IQ2_M',
-            'Existing endpoint is not the GLM deployment supported by this recipe.')
-    leader = get('deployment', glm)
-    worker = get('deployment', glm+'-rpc-worker')
-    service = get('service', glm)
-    require(all(owner(d) == glm for d in (leader, worker, service)), 'Unexpected GLM resource ownership.')
-    backend = values(glm)
+    endpoints = json.loads(output(kc+['get', 'inferenceendpoints', '-o', 'json']))['items']
+    require(len(endpoints) == 1, 'Expected one InferenceEndpoint in namespace '+namespace+'.')
+    endpoint = endpoints[0]
+    matches = [name for name in available_recipes()
+               if (load_recipe(name)['endpointName'], load_recipe(name)['servedName'])
+               == (endpoint['metadata']['name'], endpoint['spec']['modelName'])]
+    require(len(matches) == 1, 'Existing endpoint does not match a recipe in this checkout: '+endpoint['metadata']['name'])
+    model = owner(endpoint)
+    require(endpoint['spec']['service']['name'] == model, 'Existing endpoint does not serve its own Helm release.')
+    leader = get('deployment', model)
+    worker = get('deployment', model+'-rpc-worker')
+    service = get('service', model)
+    require(all(owner(d) == model for d in (leader, worker, service)), 'Unexpected model resource ownership.')
+    backend = values(model)
     nodes = {'control': control, 'leader': placement(leader), 'worker': placement(worker)}
     targets = {t['id']: t['node'] for t in backend['targets']}
-    require(all(targets.get(role) == nodes[role] for role in ('leader', 'worker')), 'GLM placement differs from Helm values.')
+    require(all(targets.get(role) == nodes[role] for role in ('leader', 'worker')), 'Model placement differs from Helm values.')
     releases = json.loads(output(hm+['list', '-o', 'json']))
     operators = []
     for release in releases:
@@ -226,7 +271,7 @@ def discover_config(context, namespace=None):
                 importers.append((release['name'], config))
     require(len(importers) <= 1, 'Multiple image import configurations match the control node.')
     containerd = None
-    prefix = glm.removesuffix('-glm')[:30]
+    prefix = model.removesuffix('-'+load_recipe(matches[0])['releaseName'])[:30]
     if importers:
         name, config = importers[0]
         require(name.endswith('-images'), 'Image importer release must end in -images.')
@@ -237,8 +282,8 @@ def discover_config(context, namespace=None):
     if '/' not in image_prefix:
         image_prefix += '/attached'
     # TLS private material and existing caller/cluster key hashes are intentionally omitted.
-    config = {'context': context, 'namespace': namespace, 'releasePrefix': prefix, 'clusterId': v['clusterId'],
-              'releases': {'stack': stack, 'operator': operator, 'glm': glm}, 'nodes': nodes,
+    config = {'context': context, 'namespace': namespace, 'recipe': matches[0], 'releasePrefix': prefix, 'clusterId': v['clusterId'],
+              'releases': {'stack': stack, 'operator': operator, 'model': model}, 'nodes': nodes,
               'storageClass': backend['artifacts']['storageClassName'], 'runtimeClass': backend['runtimeClassName'],
               'images': {'prefix': image_prefix, 'tag': image['tag'], 'pullPolicy': image['pullPolicy'],
                          'pullSecrets': [], 'repositories': images},
@@ -265,11 +310,12 @@ class Recipe:
         self.identity = identity
         self.kc = ['kubectl', '--context', config['context'], '-n', config['namespace']]
         self.hm = ['helm', '--kube-context', config['context'], '-n', config['namespace']]
+        self.definition = load_recipe(recipe_name(config))
         releases = config.get('releases', {})
-        self.glm = releases.get('glm', config['releasePrefix'] + '-glm')
+        self.backend = releases.get('model', config['releasePrefix'] + '-' + self.definition['releaseName'])
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
         self.stack = releases.get('stack', config['releasePrefix'] + '-stack')
-        for name in (self.glm, self.operator, self.stack):
+        for name in (self.backend, self.operator, self.stack):
             require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', name) is not None and len(name) <= 53, 'Invalid release name.')
 
     def reinitialize(self, config_path):
@@ -277,7 +323,7 @@ class Recipe:
                 'A temporary gateway key still needs cleanup. No progress was reset.')
         if self.state.get('inventory'):
             self.bound_cluster()
-        cluster_setup.validate_reinitialization(self.c)
+        cluster_setup.validate_reinitialization(self.c, self.backend)
         if self.state_path.exists():
             require(json.loads(self.state_path.read_text()) == self.state,
                     'Progress changed during inspection. Stop concurrent recipe commands and retry init.')
@@ -337,20 +383,28 @@ class Recipe:
         print('Using source checkout:', self.source)
 
     def backend_values(self, phase='serve', register=False, render=False):
-        values = json.loads((HERE/'backend.defaults.json').read_text())
-        values.update(phase=phase, image=self.c['runtimeImage'], runtimeClassName=self.c['runtimeClass'])
-        values['targets'] = [{'id': r, 'node': self.c['nodes'][r]} for r in ('leader', 'worker')]
-        values['artifacts'] = {'storageClassName': self.c['storageClass'], 'size': '400Gi'}
-        values['rpc']['cache'].update(storageClassName=self.c['storageClass'], enabled=phase == 'serve')
-        if phase != 'serve':
-            values['rpc']['resources'] = {'requests': {'cpu': '2', 'memory': '2Gi', 'nvidia.com/gpu': 1},
-                                          'limits': {'cpu': '8', 'memory': '8Gi', 'nvidia.com/gpu': 1}}
-        values['runtime']['sha256'] = self.state.get('runtimeSha256', 'a'*64 if render else '')
-        values['model']['lock'] = MODEL
-        values['model']['register'] = register
-        values['qualification']['attempt'] = self.state.get('qualificationAttempt', values['qualification']['attempt'])
-        values.setdefault('chain', {}).update(runtimeRelease=self.glm, artifactClaim=self.glm+'-artifacts', attempt=self.state.get('chainAttempt', 1))
-        return values
+        d = self.definition
+        if phase == 'serve':
+            rpc_resources = {'requests': {'cpu': '2', 'memory': '110Gi', 'nvidia.com/gpu': 1},
+                             'limits': {'cpu': '8', 'memory': '114Gi', 'nvidia.com/gpu': 1}}
+        else:
+            rpc_resources = {'requests': {'cpu': '2', 'memory': '2Gi', 'nvidia.com/gpu': 1},
+                             'limits': {'cpu': '8', 'memory': '8Gi', 'nvidia.com/gpu': 1}}
+        return {
+            'phase': phase, 'image': self.c['runtimeImage'], 'runtimeClassName': self.c['runtimeClass'],
+            'targets': [{'id': r, 'node': self.c['nodes'][r]} for r in ('leader', 'worker')],
+            'artifacts': {'storageClassName': self.c['storageClass'], 'size': d['artifactsSize']},
+            'build': {'revision': d['llamaCppRevision'], 'cudaArchitectures': '121a-real', 'parallel': 8},
+            'runtime': {'sha256': self.state.get('runtimeSha256', 'a'*64 if render else ''), 'env': dict(d['runtimeEnv'])},
+            'qualification': {'attempt': self.state.get('qualificationAttempt', QUALIFICATION_ATTEMPT)},
+            'model': {'lock': d['lock'], 'servedName': d['servedName'], 'firstShard': d['firstShard'],
+                      'endpointName': d['endpointName'], 'register': register, 'canary': dict(d['canary']),
+                      'args': d['serverArgs'] + ['--device', 'CUDA0,RPC0', '--tensor-split', '1,1']},
+            'rpc': {'resources': rpc_resources,
+                    'cache': {'enabled': phase == 'serve', 'size': d['rpcCacheSize'], 'storageClassName': self.c['storageClass']}},
+            'chain': {'runtimeRelease': self.backend, 'artifactClaim': self.backend+'-artifacts',
+                      'attempt': self.state.get('chainAttempt', 1)},
+        }
 
     def operator_values(self):
         return {'fullnameOverride': self.operator, 'clusterId': self.c['clusterId'],
@@ -422,12 +476,12 @@ class Recipe:
         if self.state and not self.state.get('attachedExisting'):
             self.bound_cluster()
             require(all(self.state.get(phase) for phase in ('stack', 'serve', 'registered')),
-                    'Saved installation is incomplete. Finish installing and registering GLM before attaching.')
+                    'Saved installation is incomplete. Finish installing and registering model before attaching.')
             live = discover_config(self.c['context'], self.c['namespace'])
             for field in ('context', 'namespace', 'clusterId', 'nodes', 'runtimeClass',
                           'runtimeImage', 'storageClass', 'caConfigMap'):
                 require(live[field] == self.c[field], 'Existing installation differs from saved configuration: '+field)
-            require(live['releases'] == {'stack': self.stack, 'operator': self.operator, 'glm': self.glm},
+            require(live['releases'] == {'stack': self.stack, 'operator': self.operator, 'model': self.backend},
                     'Existing Helm releases differ from the saved installation.')
             for component in COMPONENTS:
                 require(live['images']['repositories'][component] == self.repository(component),
@@ -438,13 +492,13 @@ class Recipe:
             return
         if self.state:
             self.bound_cluster()
-        require(set(self.c.get('releases', {})) >= {'stack', 'operator', 'glm'}, 'Set explicit releases.stack, releases.operator and releases.glm.')
+        require(set(self.c.get('releases', {})) >= {'stack', 'operator', 'model'}, 'Set explicit releases.stack, releases.operator and releases.model.')
         key = pathlib.Path(self.c['apiKeyFile']).expanduser().resolve(strict=True) if self.c.get('apiKeyFile') else None
         nodes = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
         names = {n['metadata']['name'] for n in nodes}
         require(set(self.c['nodes'].values()) <= names, 'Configured placement nodes do not exist.')
         owners = {'llm-api-gateway': self.stack, 'llm-request-router': self.stack,
-                  self.operator: self.operator, self.glm: self.glm, self.glm+'-rpc-worker': self.glm}
+                  self.operator: self.operator, self.backend: self.backend, self.backend+'-rpc-worker': self.backend}
         for deployment, release in owners.items():
             obj = json.loads(output(self.kc+['get', 'deployment', deployment, '-o', 'json']))
             annotations = obj['metadata'].get('annotations', {})
@@ -454,8 +508,8 @@ class Recipe:
         for component, chart, service in [('gateway', 'llm-api-gateway', 'llmApiGateway'), ('router', 'llm-request-router', 'llmRequestRouter')]:
             live = values[chart][service]['image']
             require(live['registry']+'/'+live['repository'] == self.repository(component), 'Existing image repository differs: '+component)
-        endpoint = json.loads(output(self.kc+['get', 'inferenceendpoint', 'glm53-iq2', '-o', 'json']))
-        require(endpoint['spec']['service']['name'] == self.glm and endpoint['spec']['modelName'] == 'GLM-5.3-UD-IQ2_M', 'Existing GLM endpoint differs from the recipe.')
+        endpoint = json.loads(output(self.kc+['get', 'inferenceendpoint', self.definition['endpointName'], '-o', 'json']))
+        require(endpoint['spec']['service']['name'] == self.backend and endpoint['spec']['modelName'] == self.definition['servedName'], 'Existing model endpoint differs from the recipe.')
         ca = json.loads(output(self.kc+['get', 'configmap', self.c['caConfigMap'], '-o', 'json']))['data']['ca.crt']
         save(self.work/'ca.crt', ca)
         self.stamp('attachedExisting')
@@ -474,7 +528,7 @@ class Recipe:
         require(all(current.get(name) == old.get(name) for name in self.c['nodes'].values()), 'The selected node identities changed or the context points to another cluster.')
 
     def logs(self, component, release=None, job=None):
-        selector = 'app.kubernetes.io/instance='+(release or self.glm)+',app.kubernetes.io/component='+component
+        selector = 'app.kubernetes.io/instance='+(release or self.backend)+',app.kubernetes.io/component='+component
         # Job labels live on pod templates in these charts, so select pods.
         pods = json.loads(output(self.kc+['get', 'pods', '-l', selector, '-o', 'json']))['items']
         if job:
@@ -498,13 +552,13 @@ class Recipe:
 
     def retry_qualification(self):
         require(not self.state.get('qualify'), 'Qualification already passed. Retry is for an unsuccessful qualification phase.')
-        prefixes = {'qualificationAttempt': self.glm+'-qualify-', 'chainAttempt': self.glm+'-chain-'}
+        prefixes = {'qualificationAttempt': self.backend+'-qualify-', 'chainAttempt': self.backend+'-chain-'}
         jobs = json.loads(output(self.kc+['get', 'jobs', '-o', 'json']))['items']
         jobs = [job for job in jobs if any(re.fullmatch(re.escape(prefix)+r'\d+', job['metadata']['name']) for prefix in prefixes.values())]
         require(bool(jobs), 'No qualification or chain Jobs to retry.')
         for job in jobs:
             name = job['metadata']['name']
-            release = self.glm+'-chain' if name.startswith(prefixes['chainAttempt']) else self.glm
+            release = self.backend+'-chain' if name.startswith(prefixes['chainAttempt']) else self.backend
             owner = job['metadata'].get('annotations', {})
             require(owner.get('meta.helm.sh/release-name') == release and owner.get('meta.helm.sh/release-namespace') == self.c['namespace'], 'Unexpected Job ownership: '+name)
             require(any(c['type'] in ('Complete', 'Failed') and c['status'] == 'True' for c in job.get('status', {}).get('conditions', [])), 'Job is still active: '+name)
@@ -533,51 +587,51 @@ class Recipe:
     def resume_load(self):
         """Recover the local load checkpoint without changing an already deployed model."""
         def release():
-            item = json.loads(output(self.hm+['status', self.glm, '-o', 'json'], timeout=45))
-            require(item.get('name') == self.glm and item.get('namespace') == self.c['namespace'],
-                    'Unexpected GLM Helm release identity.')
+            item = json.loads(output(self.hm+['status', self.backend, '-o', 'json'], timeout=45))
+            require(item.get('name') == self.backend and item.get('namespace') == self.c['namespace'],
+                    'Unexpected model Helm release identity.')
             require(item.get('info', {}).get('status') == 'deployed',
-                    'GLM Helm release is '+str(item.get('info', {}).get('status'))+
+                    'Model Helm release is '+str(item.get('info', {}).get('status'))+
                     '. Resolve the Helm operation, then rerun load.')
             return item['version']
 
         revision = release()
-        values = json.loads(output(self.hm+['get', 'values', self.glm, '--revision', str(revision), '-o', 'json'], timeout=45))
+        values = json.loads(output(self.hm+['get', 'values', self.backend, '--revision', str(revision), '-o', 'json'], timeout=45))
         if values.get('phase') != 'serve':
-            require(values.get('phase') == 'download', 'GLM Helm release is not at the completed download or serve phase.')
-            existing = output(self.kc+['get', 'deployment', self.glm, '--ignore-not-found', '-o', 'json'], timeout=45)
+            require(values.get('phase') == 'download', 'Model Helm release is not at the completed download or serve phase.')
+            existing = output(self.kc+['get', 'deployment', self.backend, '--ignore-not-found', '-o', 'json'], timeout=45)
             require(not existing.strip(), 'A model Deployment already exists outside the expected serve phase.')
-            require(release() == revision, 'GLM Helm revision changed while checking load. Retry after the operation completes.')
+            require(release() == revision, 'Model Helm revision changed while checking load. Retry after the operation completes.')
             return False
-        require(values == self.backend_values('serve'), 'Deployed GLM values differ from this load configuration.')
+        require(values == self.backend_values('serve'), 'Deployed model values differ from this load configuration.')
         expected = {
-            ('Deployment', self.glm): ('leader', 'llama', 'model-server'),
-            ('Deployment', self.glm+'-rpc-worker'): ('worker', 'rpc', 'rpc-worker'),
-            ('Deployment', self.glm+'-artifacts'): ('leader', 'artifacts', 'artifacts'),
-            ('PersistentVolumeClaim', self.glm+'-artifacts'): None,
-            ('PersistentVolumeClaim', self.glm+'-rpc-cache'): None,
+            ('Deployment', self.backend): ('leader', 'llama', 'model-server'),
+            ('Deployment', self.backend+'-rpc-worker'): ('worker', 'rpc', 'rpc-worker'),
+            ('Deployment', self.backend+'-artifacts'): ('leader', 'artifacts', 'artifacts'),
+            ('PersistentVolumeClaim', self.backend+'-artifacts'): None,
+            ('PersistentVolumeClaim', self.backend+'-rpc-cache'): None,
         }
         names = [('deployment/' if kind == 'Deployment' else 'pvc/')+name for kind, name in expected]
 
         def ready_resources():
             items = json.loads(output(self.kc+['get', *names, '-o', 'json'], timeout=45))['items']
             require({(item.get('kind'), item['metadata']['name']) for item in items} == set(expected)
-                    and len(items) == len(expected), 'Missing GLM resources while resuming load.')
+                    and len(items) == len(expected), 'Missing model resources while resuming load.')
             identities = {}
             for item in items:
                 meta, spec, status = item['metadata'], item['spec'], item.get('status', {})
                 name, kind = meta['name'], item['kind']
                 owner = meta.get('annotations', {})
                 require(meta.get('namespace') == self.c['namespace'] and not meta.get('deletionTimestamp')
-                        and owner.get('meta.helm.sh/release-name') == self.glm
+                        and owner.get('meta.helm.sh/release-name') == self.backend
                         and owner.get('meta.helm.sh/release-namespace') == self.c['namespace']
                         and meta.get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm',
-                        'Unexpected GLM resource ownership: '+name)
-                require(meta.get('uid'), 'Missing GLM resource identity: '+name)
+                        'Unexpected model resource ownership: '+name)
+                require(meta.get('uid'), 'Missing model resource identity: '+name)
                 if kind == 'PersistentVolumeClaim':
                     require(status.get('phase') == 'Bound' and spec.get('volumeName')
                             and spec.get('storageClassName') == self.c['storageClass'],
-                            'GLM storage is not bound as configured: '+name)
+                            'Model storage is not bound as configured: '+name)
                     identities[kind+'/'+name] = [meta['uid'], spec['volumeName']]
                     continue
                 generation = meta.get('generation')
@@ -586,48 +640,48 @@ class Recipe:
                         and all(status.get(field, 0) == 1 for field in
                                 ('replicas', 'updatedReplicas', 'readyReplicas', 'availableReplicas'))
                         and not status.get('unavailableReplicas', 0),
-                        'GLM Deployment is not ready at its current generation: '+name+'. Wait, then rerun load.')
+                        'Model Deployment is not ready at its current generation: '+name+'. Wait, then rerun load.')
                 role, container, component = expected[(kind, name)]
                 template = spec['template']
-                labels = {'app.kubernetes.io/instance': self.glm, 'app.kubernetes.io/component': component}
+                labels = {'app.kubernetes.io/instance': self.backend, 'app.kubernetes.io/component': component}
                 require(all(template['metadata'].get('labels', {}).get(key) == value for key, value in labels.items())
                         and spec.get('selector', {}).get('matchLabels') == labels,
-                        'Unexpected GLM Deployment selector: '+name)
+                        'Unexpected model Deployment selector: '+name)
                 pod = template['spec']
                 require(pod.get('nodeSelector', {}).get('kubernetes.io/hostname') == self.c['nodes'][role],
-                        'GLM Deployment targets another node: '+name)
+                        'Model Deployment targets another node: '+name)
                 containers = pod.get('containers', [])
                 require(len(containers) == 1 and containers[0].get('name') == container
                         and containers[0].get('image') == self.c['runtimeImage'],
-                        'GLM Deployment image differs: '+name)
+                        'Model Deployment image differs: '+name)
                 volume = 'rpc-cache' if component == 'rpc-worker' else 'artifacts'
                 volumes = {item['name']: item for item in pod.get('volumes', [])}
                 mounts = {item['name']: item for item in containers[0].get('volumeMounts', [])}
-                require(volumes.get(volume, {}).get('persistentVolumeClaim', {}).get('claimName') == self.glm+'-'+volume
+                require(volumes.get(volume, {}).get('persistentVolumeClaim', {}).get('claimName') == self.backend+'-'+volume
                         and mounts.get(volume, {}).get('mountPath') == '/'+volume,
-                        'GLM Deployment storage differs: '+name)
+                        'Model Deployment storage differs: '+name)
                 if component == 'model-server':
                     env = {item['name']: item.get('value') for item in containers[0].get('env', [])}
                     require(env.get('FIRST_SHARD') == values['model']['firstShard']
                             and env.get('SERVED_MODEL') == values['model']['servedName']
-                            and env.get('RPC_ENDPOINT') == self.glm+'-rpc-worker:50052'
+                            and env.get('RPC_ENDPOINT') == self.backend+'-rpc-worker:50052'
                             and json.loads(env.get('SERVER_ARGS') or 'null') == values['model']['args'],
-                            'GLM model or RPC connection differs: '+name)
+                            'Model model or RPC connection differs: '+name)
                 if component != 'artifacts':
                     require(pod.get('runtimeClassName') == self.c['runtimeClass']
                             and template['metadata'].get('annotations', {}).get('checksum/runtime') == self.state['runtimeSha256']
                             and all(str(containers[0].get('resources', {}).get(field, {}).get('nvidia.com/gpu')) == '1'
                                     for field in ('requests', 'limits')),
-                            'GLM GPU or runtime configuration differs: '+name)
+                            'Model GPU or runtime configuration differs: '+name)
                 identities[kind+'/'+name] = [meta['uid'], generation]
             return identities
 
         identities = ready_resources()
         require(ready_resources() == identities and release() == revision,
-                'GLM resources or Helm revision changed while resuming load. Retry after the operation completes.')
-        save(self.work/'evidence'/'load-resume.json', {'release': self.glm, 'revision': revision, 'resources': identities})
+                'Model resources or Helm revision changed while resuming load. Retry after the operation completes.')
+        save(self.work/'evidence'/'load-resume.json', {'release': self.backend, 'revision': revision, 'resources': identities})
         self.stamp('serve')
-        print('Resumed completed GLM load. Run verify-direct next.')
+        print('Resumed completed model load. Run verify-direct next.')
         return True
 
     def backend_phase(self, phase, retry=False):
@@ -640,7 +694,7 @@ class Recipe:
             if self.resume_load():
                 return
             for role in ('leader', 'worker'):
-                raw = output(self.kc+['exec', 'deploy/'+self.glm+'-rpc-'+role, '-c', 'rpc', '--', 'cat', '/proc/meminfo'])
+                raw = output(self.kc+['exec', 'deploy/'+self.backend+'-rpc-'+role, '-c', 'rpc', '--', 'cat', '/proc/meminfo'])
                 available = next(int(line.split()[1])*1024 for line in raw.splitlines() if line.startswith('MemAvailable:'))
                 require(available > 113*1024**3, 'Insufficient actual host memory on '+role)
         if phase == 'qualify':
@@ -651,7 +705,7 @@ class Recipe:
             self.stamp('qualify', False)
         values = self.backend_values(phase)
         timeout = {'preflight': '30m', 'build': '120m', 'qualify': '20m', 'download': '360m', 'serve': '70m'}[phase]
-        self.helm_apply(self.glm, HERE/'charts/gguf-backend', values, timeout, jobs=phase != 'serve')
+        self.helm_apply(self.backend, HERE/'charts/gguf-backend', values, timeout, jobs=phase != 'serve')
         if phase in ('preflight', 'build', 'download'):
             records = self.logs(phase)
             require(bool(records), phase+' did not record PASS.')
@@ -661,13 +715,14 @@ class Recipe:
             if phase == 'build':
                 self.stamp('runtimeSha256', records[-1]['runtimeSHA256'])
             if phase == 'download':
-                require(records[-1]['verifiedBytes'] == MODEL['weightFileBytes'] and records[-1]['verifiedFiles'] == 6, 'Model download incomplete.')
+                lock = self.definition['lock']
+                require(records[-1]['verifiedBytes'] == lock['weightFileBytes'] and records[-1]['verifiedFiles'] == len(lock['files']), 'Model download incomplete.')
         elif phase == 'qualify':
-            records = self.logs('qualification', job=self.glm+'-qualify-'+str(values['qualification']['attempt']))
+            records = self.logs('qualification', job=self.backend+'-qualify-'+str(values['qualification']['attempt']))
             require(bool(records), 'RPC qualification did not record PASS.')
             chain = self.backend_values('chain')
-            self.helm_apply(self.glm+'-chain', HERE/'charts/gguf-backend', chain, '15m', jobs=True)
-            records = self.logs('chain-check', job=self.glm+'-chain-'+str(chain['chain']['attempt']))
+            self.helm_apply(self.backend+'-chain', HERE/'charts/gguf-backend', chain, '15m', jobs=True)
+            records = self.logs('chain-check', job=self.backend+'-chain-'+str(chain['chain']['attempt']))
             require(bool(records), 'RPC chain check did not record PASS.')
         self.stamp(phase)
 
@@ -699,15 +754,15 @@ class Recipe:
     def register(self):
         require(not self.state.get('attachedExisting'), 'Do not re-register or adopt an attached existing backend.')
         self.bound_cluster()
-        require(self.state.get('serve') and self.state.get('direct') and self.state.get('stack'), 'Load, directly verify GLM, and deploy the stack before registration.')
-        self.helm_apply(self.glm, HERE/'charts/gguf-backend', self.backend_values(register=True), '10m')
+        require(self.state.get('serve') and self.state.get('direct') and self.state.get('stack'), 'Load, directly verify the model, and deploy the stack before registration.')
+        self.helm_apply(self.backend, HERE/'charts/gguf-backend', self.backend_values(register=True), '10m')
         for condition in ('Ready', 'TransportReady', 'Registered'):
-            run(self.kc+['wait', 'inferenceendpoint/glm53-iq2', '--for=condition='+condition, '--timeout=300s'])
+            run(self.kc+['wait', 'inferenceendpoint/'+self.definition['endpointName'], '--for=condition='+condition, '--timeout=300s'])
         self.stamp('registered')
 
     @contextlib.contextmanager
     def forward(self, gateway, port):
-        service = 'llm-api-gateway' if gateway else self.glm
+        service = 'llm-api-gateway' if gateway else self.backend
         remote_port = '8080' if gateway else '8000'
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', port))
@@ -734,7 +789,7 @@ class Recipe:
         require(self.state.get('stack'), 'Attach to or deploy the stack first.')
         url = 'https://127.0.0.1:' + str(port)
         command = [sys.executable, str(HERE/'client.py'), '--mode', 'chat', '--url', url,
-                   '--ca-file', str(self.work/'ca.crt')]
+                   '--model', self.definition['servedName'], '--ca-file', str(self.work/'ca.crt')]
         with self.forward(True, port):
             existing_key = self.state['stack'].get('apiKeyFile')
             access = contextlib.nullcontext(existing_key) if existing_key else gateway_access.temporary_gateway_key(self, url)
@@ -750,7 +805,7 @@ class Recipe:
             require(self.state.get('stack'), 'Deploy or attach to the stack first.')
         url = ('https' if gateway else 'http')+'://127.0.0.1:'+str(port)
         command = [sys.executable, str(HERE/'client.py'), '--mode', 'verify', '--url', url,
-                   '--output', str(self.work/'evidence'/('gateway.json' if gateway else 'direct.json'))]
+                   '--model', self.definition['servedName'], '--output', str(self.work/'evidence'/('gateway.json' if gateway else 'direct.json'))]
         if gateway:
             command += ['--ca-file', str(self.work/'ca.crt'), '--cluster-id', self.c['clusterId']]
         self.stamp('gateway' if gateway else 'direct', False)
@@ -919,7 +974,7 @@ finally:
     def update(self, component, tag):
         self.bound_cluster()
         self.source_check()
-        require(not self.state.get('attachedExisting') or self.state.get('gateway'), 'Verify GLM through the attached gateway before its first update.')
+        require(not self.state.get('attachedExisting') or self.state.get('gateway'), 'Verify the model through the attached gateway before its first update.')
         chart, service = {'gateway': ('llm-api-gateway', 'llmApiGateway'), 'router': ('llm-request-router', 'llmRequestRouter')}[component]
         require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', tag) is not None, 'Invalid image tag.')
         values = json.loads(output(self.hm+['get', 'values', self.stack, '-o', 'json']))
@@ -970,11 +1025,11 @@ finally:
         started = time.monotonic()
         observation = {'started': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'interruptionObserved': False}
         try:
-            self.helm_apply(self.glm, HERE/'charts/gguf-backend', down, wait=False)
+            self.helm_apply(self.backend, HERE/'charts/gguf-backend', down, wait=False)
             time.sleep(15)
             down_pods = json.loads(output(self.kc+['get', 'pods', '-o', 'json']))
             save(self.work/'evidence/recovery-down.json', down_pods)
-            require(not any(p['metadata']['name'].startswith(self.glm+'-rpc-worker-') and p['status']['phase'] == 'Running' for p in down_pods['items']), 'Worker is still running. Restore and inspect the rollout.')
+            require(not any(p['metadata']['name'].startswith(self.backend+'-rpc-worker-') and p['status']['phase'] == 'Running' for p in down_pods['items']), 'Worker is still running. Restore and inspect the rollout.')
             try:
                 with self.forward(False, port):
                     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
@@ -990,7 +1045,7 @@ finally:
                 observation['interruptionObserved'] = True
                 observation['failureType'] = type(error).__name__
         finally:
-            self.helm_apply(self.glm, HERE/'charts/gguf-backend', values, '70m')
+            self.helm_apply(self.backend, HERE/'charts/gguf-backend', values, '70m')
             observation['restoreSeconds'] = time.monotonic() - started
             save(self.work/'evidence/recovery.json', observation)
         require(observation['interruptionObserved'], 'Worker interruption was not demonstrated. Recovery restored the model but this test did not prove the failure path.')
@@ -1002,7 +1057,7 @@ finally:
         renders = [('stack', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', self.stack_values('a'*64, 'b'*64, 'offline-demo-ui-placeholder')),
                    ('operator', self.source/'deploy/helm/pylon-operator/pylon-operator', self.operator_values())]
         for phase in ('preflight', 'build', 'qualify', 'chain', 'download', 'serve'):
-            renders.append(('glm-'+phase, HERE/'charts/gguf-backend', self.backend_values(phase, register=phase=='serve', render=True)))
+            renders.append((self.definition['releaseName']+'-'+phase, HERE/'charts/gguf-backend', self.backend_values(phase, register=phase=='serve', render=True)))
         for name, chart, values in renders:
             path = self.work/'render'/(name+'-values.json')
             save(path, values)

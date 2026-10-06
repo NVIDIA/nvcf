@@ -1,6 +1,7 @@
 {
   "context": "llm-routing-demo",
   "namespace": "llm-routing-poc",
+  "recipe": "glm-5.3",
   "releasePrefix": "llm-poc",
   "clusterId": "llm-routing-poc",
   "nodes": {

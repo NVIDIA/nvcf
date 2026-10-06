@@ -128,12 +128,14 @@ def discover_config(context, namespace=None):
     return config
 
 
-def validate_reinitialization(config):
-    """Inspect an uninstalled demo before allowing local progress to be reset."""
+def validate_reinitialization(config, backend):
+    """Inspect an uninstalled demo before allowing local progress to be reset.
+
+    backend is the model Helm release name chosen by the recipe tool.
+    """
     context, namespace = config['context'], config['namespace']
     prefix = config['releasePrefix']
     releases = config.get('releases', {})
-    glm = releases.get('glm', prefix + '-glm')
     operator = releases.get('operator', prefix + '-operator')
     stack = releases.get('stack', prefix + '-stack')
     try:
@@ -190,7 +192,7 @@ def validate_reinitialization(config):
             'Workloads still exist in the saved namespace. Finish uninstalling before init.')
     claims = items(context, 'persistentvolumeclaims', namespace=namespace)
     volumes = {item['metadata']['name']: item for item in items(context, 'persistentvolumes')} if claims else {}
-    expected = {glm + '-artifacts': (glm, 'leader'), glm + '-rpc-cache': (glm, 'worker'),
+    expected = {backend + '-artifacts': (backend, 'leader'), backend + '-rpc-cache': (backend, 'worker'),
                 prefix + '-monitoring-metrics': (prefix + '-monitoring', 'control')}
     for claim in claims:
         name = claim['metadata']['name']

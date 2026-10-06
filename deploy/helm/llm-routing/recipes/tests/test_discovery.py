@@ -64,6 +64,8 @@ class DiscoveryTests(unittest.TestCase):
             if '--all-namespaces' in command:
                 self.assertLess(command.index('get'), command.index('--all-namespaces'))
             return json.dumps({'items': self.deployments})
+        if 'inferenceendpoints' in command:
+            return json.dumps({'items': [self.resources[('inferenceendpoint', 'glm53-iq2')]]})
         offset = command.index('get')
         return json.dumps(self.resources[tuple(command[offset+1:offset+3])])
 
@@ -76,7 +78,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_discovers_distinct_repositories_import_settings_and_omits_credentials(self):
         config = self.discover()
         self.assertEqual(config['context'], 'my-context')
-        self.assertEqual(config['releases'], {'stack': 'team-stack', 'operator': 'operator', 'glm': 'team-glm'})
+        self.assertEqual(config['releases'], {'stack': 'team-stack', 'operator': 'operator', 'model': 'team-glm'})
         self.assertEqual(config['images']['repositories'], {'gateway': 'registry.example.com/gateway', 'router': 'other.example.com/router',
                                                          'operator': 'operator.example.com/operator', 'pylon': 'worker.example.com/pylon'})
         self.assertEqual(config['containerd']['runAsUser'], 4567)
@@ -113,7 +115,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_model_service_foreign_ownership_is_rejected(self):
         self.resources['service', 'team-glm']['metadata']['annotations']['meta.helm.sh/release-name'] = 'someone-else'
-        with self.assertRaisesRegex(RuntimeError, 'GLM resource ownership'):
+        with self.assertRaisesRegex(RuntimeError, 'model resource ownership'):
             self.discover()
 
     def test_unrelated_operator_is_ignored(self):

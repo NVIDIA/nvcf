@@ -26,7 +26,7 @@ class AttachReuseTests(unittest.TestCase):
         self.count += 1
         config = json.loads((HERE/'config.example.json').read_text())
         if explicit:
-            config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'glm': 'custom-model'}
+            config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'model': 'custom-model'}
             config['images']['repositories'] = {
                 name: 'registry.example.com/custom/'+name for name in tool.COMPONENTS}
         recipe = tool.Recipe(config, pathlib.Path(self.tmp.name)/str(self.count))
@@ -43,7 +43,7 @@ class AttachReuseTests(unittest.TestCase):
         tool.save(recipe.work/'config.json', config)
         tool.save(recipe.state_path, recipe.state)
         live = copy.deepcopy(config)
-        live['releases'] = {'stack': recipe.stack, 'operator': recipe.operator, 'glm': recipe.glm}
+        live['releases'] = {'stack': recipe.stack, 'operator': recipe.operator, 'model': recipe.backend}
         live['images']['repositories'] = {name: recipe.repository(name) for name in tool.COMPONENTS}
         live['apiKeyFile'] = None
         return recipe, live
