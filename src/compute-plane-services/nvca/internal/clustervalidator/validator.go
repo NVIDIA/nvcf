@@ -118,6 +118,9 @@ type ValidationState struct {
 	// reads failed. Their bool is then no result: the key is left out of the
 	// summary and the row is shown as unknown.
 	Unobserved map[string]bool
+	// NotReadyUnconfirmed marks a Not-Ready verdict that rests only on first
+	// results the run had no time left to recheck.
+	NotReadyUnconfirmed bool
 	// NetworkChecksErr is why the network-checks ConfigMap could not be
 	// loaded. Any check it configures may be critical, so a load failure is a
 	// critical unknown rather than an absent config.
@@ -244,10 +247,11 @@ const RequireSummaryEnv = "VALIDATOR_REQUIRE_SUMMARY"
 const StartupGateEnv = "VALIDATOR_STARTUP_GATE"
 
 // ExitNotReady is the exit code of a RequireSummaryEnv run that published a
-// Not-Ready verdict. The run already ran the critical checks behind it a
-// second time, so the chart's podFailurePolicy fails the Job on it rather than
-// rerunning the whole suite. Other runs keep exit code 1 for Not-Ready, which
-// launchers grade on.
+// Not-Ready verdict its recheck confirmed. The run already ran the critical
+// checks behind it a second time, so the chart's podFailurePolicy fails the Job
+// on it rather than rerunning the whole suite. A Not-Ready the run had no time
+// to recheck exits 1, for the Job to retry. Other runs keep exit code 1 for
+// Not-Ready, which launchers grade on.
 const ExitNotReady = 3
 
 // ErrNotReady is the error Run returns, as a *NotReadyError, when the cluster
@@ -266,8 +270,11 @@ var ErrInterrupted = errors.New("the validation run was interrupted")
 
 // NotReadyError is an NVCF-Not-Ready verdict. Failed counts the critical
 // checks that ran and failed; Unobserved counts those that could not run.
+// Unconfirmed marks a verdict that rests only on first results the run had no
+// time left to recheck.
 type NotReadyError struct {
 	Failed, Unobserved int
+	Unconfirmed        bool
 }
 
 func (e *NotReadyError) Error() string { return ErrNotReady.Error() }
@@ -288,7 +295,7 @@ func ExitCode(err error) int {
 	switch {
 	case envTrue(StartupGateEnv) && notReady.Failed == 0:
 		return 0
-	case envTrue(RequireSummaryEnv):
+	case envTrue(RequireSummaryEnv) && !notReady.Unconfirmed:
 		return ExitNotReady
 	default:
 		return 1
@@ -372,11 +379,26 @@ func Run(
 	return summaryErr
 }
 
+// A run's work after its deadline (VALIDATOR_TIMEOUT) is bounded too, and a
+// launcher's Job deadline must leave room for it past that timeout: the
+// nvca-operator chart reserves both bounds in nvcaop.clusterValidatorTiming.
+const (
+	// ProbeCleanupBound is the longest the cleanup of a check the deadline cut
+	// short takes: the node-to-node probe deletes its DaemonSet, pods and
+	// namespace one after another, each within nodeToNodeDeleteTimeout. The
+	// enforcement check's probe pod and namespace take less. Only one check is
+	// in flight when the deadline passes, and a later one creates nothing.
+	ProbeCleanupBound = 3 * nodeToNodeDeleteTimeout
+	// SummaryWriteBound is the longest the summary write takes: one observed
+	// call, on a context the deadline does not cancel.
+	SummaryWriteBound = observeBound
+)
+
 // publishSummary writes the summary to summaryNamespace, the agent's watch
 // namespace, for the agent to publish as metrics. Preflight runs
-// (emitMetrics=false) write nothing. The write gets its own budget: a run
-// that spent its deadline on the checks must still publish what they found.
-// Run does not call it for an interrupted run.
+// (emitMetrics=false) write nothing. The write gets its own budget,
+// SummaryWriteBound: a run that spent its deadline on the checks must still
+// publish what they found. Run does not call it for an interrupted run.
 func publishSummary(
 	ctx context.Context, client kubernetes.Interface, state *ValidationState, startedAt time.Time,
 	summaryErr error, summaryNamespace string, emitMetrics bool,
@@ -680,7 +702,9 @@ func printSummary(state *ValidationState) error {
 	log.Infof("Validation completed at %s", time.Now().UTC().Format("2006-01-02 15:04:05 UTC"))
 
 	if !isReady {
-		return &NotReadyError{Failed: failedCritical, Unobserved: len(unknownCritical)}
+		return &NotReadyError{
+			Failed: failedCritical, Unobserved: len(unknownCritical), Unconfirmed: state.NotReadyUnconfirmed,
+		}
 	}
 	return nil
 }

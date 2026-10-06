@@ -207,6 +207,7 @@ func (su *suite) recheck(
 		"transient error does not decide it: %s", strings.Join(names, ", ")))
 	if ctx.Err() != nil || !sleepCtx(ctx, recheckDelay) {
 		printWarning(log, "The run has no time left to recheck them; their first results stand")
+		recheckCutShort(state, checks, results, 0)
 		return
 	}
 	hadConfig := su.netCfg != nil
@@ -226,6 +227,7 @@ func (su *suite) recheck(
 			if ctx.Err() != nil {
 				printWarning(log, fmt.Sprintf("The run ended during the recheck of %s; it and the checks after it "+
 					"keep their first results", c.name))
+				recheckCutShort(state, checks, results, i)
 				return
 			}
 			switch {
@@ -253,6 +255,31 @@ func clearedWarning(name string, saw []string) string {
 		w += "; the first run saw: " + shortMessage(strings.Join(saw[:min(len(saw), 3)], "; "))
 	}
 	return w
+}
+
+// recheckCutShort records on state that the run's time ran out before the
+// checks from checks[from] on could run again: each of them that blocks keeps
+// its first result, with a warning that it is unconfirmed. When no check the
+// recheck did run still blocks, the Not-Ready verdict rests on those first
+// results alone and is unconfirmed.
+func recheckCutShort(state *ValidationState, checks []check, results []*ValidationState, from int) {
+	var names []string
+	for j := from; j < len(checks); j++ {
+		if checks[j].blocks(results[j]) {
+			names = append(names, checks[j].name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	state.Warnings = append(state.Warnings, fmt.Sprintf("Recheck: the run's time ran out before %s could run "+
+		"again, so what the first pass saw stands unconfirmed", strings.Join(names, ", ")))
+	state.NotReadyUnconfirmed = true
+	for j := range from {
+		if checks[j].blocks(results[j]) {
+			state.NotReadyUnconfirmed = false
+		}
+	}
 }
 
 // fork returns a state for one check to record its result on: s's settings

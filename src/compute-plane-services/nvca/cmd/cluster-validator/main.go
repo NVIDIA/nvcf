@@ -38,11 +38,13 @@ const (
 	podNamespaceFile     = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
 	// runTimeoutEnv bounds the checks, as a Go duration or whole seconds. A
-	// launcher sets it below its Job's activeDeadlineSeconds, so the run ends
-	// with time left to publish its summary instead of being killed first.
+	// launcher sets it below its Job's activeDeadlineSeconds by at least
+	// clustervalidator.ProbeCleanupBound and SummaryWriteBound, so the run ends
+	// with time left to clean up and publish its summary instead of being
+	// killed first.
 	runTimeoutEnv = "VALIDATOR_TIMEOUT"
-	// defaultRunTimeout leaves a minute of the chart Job's 600s
-	// activeDeadlineSeconds for the summary write.
+	// defaultRunTimeout bounds a run whose launcher sets no runTimeoutEnv,
+	// such as the operator's init container, which has no deadline.
 	defaultRunTimeout = 9 * time.Minute
 )
 

@@ -84,6 +84,7 @@ render "${full}" --values "${full_values}"
 job_env_names="NVCF_ENVOY_GATEWAY_NAMESPACE NVCF_EXTERNAL_COMPONENTS NVCF_GATEWAY_NAMES NVCF_N2N_PROBE_IMAGE"
 job_env_names+=" NVCF_OPENBAO_NAMESPACE NVCF_STORAGE_CLASS VALIDATOR_CONFIG_NAME VALIDATOR_CONFIG_NAMESPACE"
 job_env_names+=" VALIDATOR_POST_INSTALL VALIDATOR_REQUIRE_SUMMARY VALIDATOR_ROLE VALIDATOR_SUMMARY_NAMESPACE"
+job_env_names+=" VALIDATOR_TIMEOUT"
 assert_eq "${job_env_names}" "$(yq "${job_env} | .name" "${full}" | sort | xargs)" \
   "validator Job sets exactly the env the validator reads"
 assert_eq "eg-system" "$(env_value "${job_env}" NVCF_ENVOY_GATEWAY_NAMESPACE "${full}")" "Envoy Gateway namespace"
@@ -113,7 +114,20 @@ assert_eq "infra" "$(yq "${pod} | .tolerations[] | select(.key == \"dedicated\")
   "extra toleration is rendered whole"
 assert_eq "infra" "$(yq "${pod} | .nodeSelector.\"node-pool\"" "${full}")" "the Job follows the operator's nodeSelector"
 assert_eq "2" "$(yq "${job} | .spec.backoffLimit" "${full}")" "backoffLimit"
-assert_eq "600" "$(yq "${job} | .spec.activeDeadlineSeconds" "${full}")" "activeDeadlineSeconds"
+# After VALIDATOR_TIMEOUT the run may still delete the probe of a check the
+# timeout cut short, then write its summary: the validator bounds these by
+# clustervalidator.ProbeCleanupBound (60s) and SummaryWriteBound (73s). The pod
+# also needs time to be scheduled and pull its image before the run starts, so
+# the Job's deadline must leave room for all of it.
+probe_cleanup_bound=60 summary_write_bound=73 pod_start_slack=120
+run_timeout="$(env_value "${job_env}" VALIDATOR_TIMEOUT "${full}")"
+[[ "${run_timeout}" =~ ^[0-9]+s$ ]] || fail "VALIDATOR_TIMEOUT is whole seconds: got '${run_timeout}'"
+deadline="$(yq "${job} | .spec.activeDeadlineSeconds" "${full}")"
+[[ "${deadline}" =~ ^[0-9]+$ ]] || fail "activeDeadlineSeconds is whole seconds: got '${deadline}'"
+budget=$((${run_timeout%s} + probe_cleanup_bound + summary_write_bound + pod_start_slack))
+((deadline >= budget)) ||
+  fail "activeDeadlineSeconds ${deadline} leaves no room past VALIDATOR_TIMEOUT ${run_timeout} for the pod start," \
+    "the probe cleanup and the summary write (${budget}s needed)"
 assert_eq "120" "$(yq "${pod} | .terminationGracePeriodSeconds" "${full}")" \
   "an interrupted run has time to delete its probe resources"
 failure_rules="${job} | .spec.podFailurePolicy.rules[]"

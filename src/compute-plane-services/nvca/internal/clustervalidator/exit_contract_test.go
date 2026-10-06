@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,6 +100,16 @@ func TestPrintSummary_EveryCriticalRowBlocksTheVerdict(t *testing.T) {
 	assert.NoError(t, printSummary(state), "NotReady workers and unconfirmed NetworkPolicies are warnings")
 }
 
+// The nvca-operator chart's validator Job reserves 60s past VALIDATOR_TIMEOUT
+// for the probe cleanup and 75s for the summary write
+// (nvcaop.clusterValidatorTiming), and its chart test checks the rendered Job
+// against 60s and 73s. A bound that changes here must change there too.
+func TestPostDeadlineBounds_MatchTheChartsReserve(t *testing.T) {
+	assert.Equal(t, 60*time.Second, ProbeCleanupBound)
+	assert.GreaterOrEqual(t, ProbeCleanupBound, 2*enforcementDeleteTimeout, "the enforcement cleanup fits too")
+	assert.Equal(t, 73*time.Second, SummaryWriteBound)
+}
+
 func TestExitCode(t *testing.T) {
 	failed := &NotReadyError{Failed: 1, Unobserved: 1}
 	unobserved := &NotReadyError{Unobserved: 2}
@@ -115,6 +126,8 @@ func TestExitCode(t *testing.T) {
 		{name: "launcher-graded unobserved", err: unobserved, want: 1},
 		{name: "published Not-Ready in a Job", requireSummary: "true", err: failed, want: ExitNotReady},
 		{name: "unpublished run in a Job is retried", requireSummary: "true", err: notPublished, want: 1},
+		{name: "Not-Ready the run had no time to recheck is retried", requireSummary: "true",
+			err: &NotReadyError{Failed: 1, Unconfirmed: true}, want: 1},
 		{name: "startup gate on an observed failure", startupGat: "true", err: failed, want: 1},
 		{name: "startup gate on unobserved rows only", startupGat: "true", err: unobserved, want: 0},
 	} {

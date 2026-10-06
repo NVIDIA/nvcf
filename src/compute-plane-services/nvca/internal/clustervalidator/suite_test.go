@@ -344,7 +344,9 @@ func TestRun_RecheckRunsTheChecksOfAConfigMapItLoaded(t *testing.T) {
 }
 
 // A check the run's deadline cuts short on the recheck reports the deadline,
-// not the cluster: its first result stands, and the summary is published.
+// not the cluster: its first result stands, and the summary is published. That
+// Not-Ready was never confirmed, so the summary says so and the run exits to be
+// retried rather than failing its Job.
 func TestRun_RecheckCutShortKeepsTheFirstResult(t *testing.T) {
 	var lookups atomic.Int32
 	stubDNS(t, func(ctx context.Context) bool {
@@ -360,12 +362,88 @@ func TestRun_RecheckCutShortKeepsTheFirstResult(t *testing.T) {
 
 	out, err := runPublishing(ctx, t, client, "", "", RoleComputePlane)
 	require.ErrorIs(t, err, ErrNotReady, out)
-	assert.Equal(t, ExitNotReady, ExitCode(err))
+	assert.Equal(t, 1, ExitCode(err), "an unconfirmed Not-Ready is retried")
 	assert.Contains(t, out, "The run ended during the recheck of Control Plane")
 
 	s := readPublishedSummary(t, client, recheckSummaryNS)
 	assert.False(t, s.VerdictReady)
 	assert.False(t, s.Checks[CheckKeyControlPlane])
+	assert.Contains(t, strings.Join(s.Warnings, "\n"),
+		"Recheck: the run's time ran out before Control Plane could run again")
+}
+
+// A run with no time left for its recheck publishes its first results, says
+// the recheck did not run, and exits to be retried.
+func TestRun_RecheckWithNoTimeLeftIsRetried(t *testing.T) {
+	stubDNS(t, func(context.Context) bool { return false })
+	prev := recheckDelay
+	recheckDelay = time.Minute
+	t.Cleanup(func() { recheckDelay = prev })
+	client := readyComputeCluster()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	out, err := runPublishing(ctx, t, client, "", "", RoleComputePlane)
+	require.ErrorIs(t, err, ErrNotReady, out)
+	assert.Equal(t, 1, ExitCode(err))
+	assert.Contains(t, out, "The run has no time left to recheck them")
+
+	s := readPublishedSummary(t, client, recheckSummaryNS)
+	assert.False(t, s.VerdictReady)
+	assert.Contains(t, strings.Join(s.Warnings, "\n"),
+		"Recheck: the run's time ran out before Control Plane could run again")
+}
+
+// A Not-Ready that a check the recheck did run still holds is confirmed, even
+// when the run's time ran out before a later check could run again; one that
+// rests only on first results is not. Either way the unrechecked check is named.
+func TestSuite_RecheckCutShortConfirmsOnlyWhatRanAgain(t *testing.T) {
+	webhooks := func(againOK bool) check {
+		var runs int
+		return check{
+			name: "Admission Webhooks",
+			run: func(_ context.Context, s *ValidationState) {
+				runs++
+				s.WebhooksSupported = runs > 1 && againOK
+			},
+			adopt:    func(dst, src *ValidationState) { dst.WebhooksSupported = src.WebhooksSupported },
+			critical: func(s *ValidationState) outcome { return flagOutcome(s.WebhooksSupported, false) },
+		}
+	}
+	for name, tc := range map[string]struct {
+		againOK, unconfirmed bool
+	}{
+		"the earlier check still fails": {againOK: false, unconfirmed: false},
+		"the earlier check now passes":  {againOK: true, unconfirmed: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var gpuRuns int
+			gpu := check{
+				name: GPUResourcesLabel,
+				run: func(_ context.Context, s *ValidationState) {
+					if gpuRuns++; gpuRuns > 1 {
+						cancel()
+					}
+				},
+				adopt:    func(dst, src *ValidationState) { dst.GPUAvailable = src.GPUAvailable },
+				critical: func(s *ValidationState) outcome { return flagOutcome(s.GPUAvailable, false) },
+			}
+			checks := []check{webhooks(tc.againOK), gpu}
+			state := &ValidationState{Log: testLog()}
+			results := make([]*ValidationState, len(checks))
+			for i, c := range checks {
+				results[i] = state.fork()
+				c.run(ctx, results[i])
+			}
+
+			(&suite{}).recheck(ctx, state, checks, results, make([][]string, len(checks)))
+			assert.Equal(t, tc.unconfirmed, state.NotReadyUnconfirmed)
+			assert.Equal(t, []string{"Recheck: the run's time ran out before " + GPUResourcesLabel +
+				" could run again, so what the first pass saw stands unconfirmed"}, state.Warnings)
+		})
+	}
 }
 
 // gpuCheck is a critical check whose runs come out as runs says, in turn,

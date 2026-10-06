@@ -48,6 +48,18 @@ const RequestTimeout = 30 * time.Second
 // and adopted by createOrAdopt.
 const defaultObserveTimeout = 2*RequestTimeout + 10*time.Second
 
+// defaultObserveRetryInterval is observe's wait between attempts.
+const defaultObserveRetryInterval = 2 * time.Second
+
+// minObserveAttempt is the shortest an attempt may be: one that starts after a
+// retry pause has crossed the window's end still gets an answer.
+const minObserveAttempt = time.Second
+
+// observeBound is the longest one observed call takes with the default
+// timings: the window, a retry pause begun just before it closed, and the
+// shortest attempt after that.
+const observeBound = defaultObserveTimeout + defaultObserveRetryInterval + minObserveAttempt
+
 // observeTimeout bounds how long observe retries one call,
 // observeAttemptTimeout caps one attempt at the client's request timeout, and
 // observeRetryInterval is the wait between attempts. Vars so tests need not
@@ -55,7 +67,7 @@ const defaultObserveTimeout = 2*RequestTimeout + 10*time.Second
 var (
 	observeTimeout        = defaultObserveTimeout
 	observeAttemptTimeout = RequestTimeout
-	observeRetryInterval  = 2 * time.Second
+	observeRetryInterval  = defaultObserveRetryInterval
 )
 
 // retryable reports whether a failed call may succeed if repeated: what
@@ -79,13 +91,12 @@ func retryable(err error) bool {
 // for at most observeTimeout and never past ctx. An attempt may use what is
 // left of that budget up to the client's request timeout, not a poll loop's
 // pollAttemptTimeout: a LIST on a large cluster can take longer than that cap,
-// and every attempt cut off there fails the same way. The one-second floor is
-// attemptContext's: an attempt that starts after a retry pause has crossed the
-// deadline still gets an answer.
+// and every attempt cut off there fails the same way. An attempt gets at least
+// minObserveAttempt, so a call ends within observeBound.
 func observe[T any](ctx context.Context, fn func(context.Context) (T, error)) (T, error) {
 	deadline := time.Now().Add(observeTimeout)
 	for {
-		attempt := min(max(time.Until(deadline), time.Second), observeAttemptTimeout)
+		attempt := min(max(time.Until(deadline), minObserveAttempt), observeAttemptTimeout)
 		attemptCtx, cancel := context.WithTimeout(ctx, attempt)
 		v, err := fn(attemptCtx)
 		cancel()

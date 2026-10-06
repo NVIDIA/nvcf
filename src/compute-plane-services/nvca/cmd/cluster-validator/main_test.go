@@ -95,7 +95,4 @@ func TestRunTimeout(t *testing.T) {
 			t.Errorf("runTimeout(%q) = (%v, %v), want (%v, %v)", tt.in, got, ok, tt.want, tt.wantOK)
 		}
 	}
-	if defaultRunTimeout >= 600*time.Second {
-		t.Errorf("defaultRunTimeout %v must end before the chart Job's 600s activeDeadlineSeconds", defaultRunTimeout)
-	}
 }

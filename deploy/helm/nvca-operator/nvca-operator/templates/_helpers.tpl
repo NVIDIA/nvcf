@@ -479,19 +479,37 @@ control-plane role the operator starts a run when the newest Job lacks it.
 {{- end -}}
 
 {{/*
+The time budget of one cluster-validator Job run, in seconds. The checks end
+at runTimeout (VALIDATOR_TIMEOUT). After it, a check the deadline cut short
+deletes its probe (probeCleanup, clustervalidator.ProbeCleanupBound) and the
+run writes its summary (summaryWrite, clustervalidator.SummaryWriteBound).
+podStart covers scheduling and the image pull before the run starts. The Job's
+activeDeadlineSeconds is their sum, so it does not kill a run that is still
+cleaning up or publishing.
+*/}}
+{{- define "nvcaop.clusterValidatorTiming" -}}
+runTimeout: 540
+probeCleanup: 60
+summaryWrite: 75
+podStart: 120
+{{- end -}}
+
+{{/*
 The cluster-validator CronJob's Job spec. Under the control-plane role the
 operator also starts runs from the CronJob itself, so the two cannot drift.
 */}}
 {{- define "nvcaop.clusterValidatorJobSpec" -}}
 {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
+{{- $timing := include "nvcaop.clusterValidatorTiming" . | fromYaml -}}
 parallelism: 1
 completions: 1
 backoffLimit: 2
-activeDeadlineSeconds: 600
-# A published Not-Ready verdict exits 3. The run already ran the critical
-# checks behind it a second time, so it fails the Job at once rather than
-# rerunning the suite; any other failure, including a summary the run could
-# not write, is retried.
+activeDeadlineSeconds: {{ add $timing.runTimeout $timing.probeCleanup $timing.summaryWrite $timing.podStart }}
+# A published Not-Ready verdict that its recheck confirmed exits 3. The run
+# already ran the critical checks behind it a second time, so it fails the Job
+# at once rather than rerunning the suite. Any other failure is retried,
+# including a summary the run could not write and a Not-Ready the run had no
+# time left to recheck.
 podFailurePolicy:
   rules:
     - action: FailJob
@@ -559,6 +577,10 @@ template:
           # fails and is retried rather than completing.
           - name: VALIDATOR_REQUIRE_SUMMARY
             value: "true"
+          # The checks end here, which leaves the rest of
+          # activeDeadlineSeconds for the cleanup and the summary write.
+          - name: VALIDATOR_TIMEOUT
+            value: {{ printf "%ds" (int $timing.runTimeout) | quote }}
           {{- with $cv.externalComponents }}
           # Quorum components the stack does not run in-cluster, so Tier-2
           # does not report them missing.
