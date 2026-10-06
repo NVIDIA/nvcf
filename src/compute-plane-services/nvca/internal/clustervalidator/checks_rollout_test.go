@@ -52,9 +52,11 @@ var installedAt = time.Now().Add(-24 * time.Hour)
 const installManager = "helm"
 
 // specWrite is the managedFields entry a write to an object's spec by manager
-// leaves, at t.
+// leaves, at t. Like the entry of the manager that created a StatefulSet, it
+// owns the defaulted update strategy along with the template.
 func specWrite(manager string, t time.Time) metav1.ManagedFieldsEntry {
-	return managedFields(manager, "", `{"f:metadata":{"f:labels":{}},"f:spec":{"f:template":{}}}`, t)
+	return managedFields(manager, "", `{"f:metadata":{"f:labels":{}},"f:spec":{"f:template":{},`+
+		`"f:updateStrategy":{"f:rollingUpdate":{"f:partition":{}},"f:type":{}}}}`, t)
 }
 
 // statusWrite is the entry a controller's status update leaves, at t.

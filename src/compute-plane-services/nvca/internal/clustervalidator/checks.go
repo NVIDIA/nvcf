@@ -4508,11 +4508,21 @@ func ownsField(raw []byte, path []string) bool {
 
 // partitionWrittenAt is when sts's rollout partition was last written, which
 // is when lowering it started a rollout step: the partition's owner, such as a
-// staged rollout's patch, writes nothing else. A manager that owns the
-// partition and other fields too, such as a chart that renders it, re-dates
-// it on each of its writes.
-func partitionWrittenAt(sts *appsv1.StatefulSet) (time.Time, bool) {
-	return lastWriteOwning(sts, "f:spec", "f:updateStrategy", "f:rollingUpdate", "f:partition")
+// staged rollout's patch, writes nothing else. An entry that also owns the
+// template is left out. The manager that creates a StatefulSet owns its
+// defaulted partition along with the template, so each of its writes, a
+// chart-version-only helm upgrade too, re-dates the partition. A partition
+// lowered by such a manager is dated by the pods the rollout replaces.
+func partitionWrittenAt(sts *appsv1.StatefulSet) (latest time.Time, recorded bool) {
+	for _, mf := range sts.GetManagedFields() {
+		if mf.Subresource != "" || mf.Time == nil || mf.FieldsV1 == nil ||
+			!ownsField(mf.FieldsV1.Raw, []string{"f:spec", "f:updateStrategy", "f:rollingUpdate", "f:partition"}) ||
+			ownsField(mf.FieldsV1.Raw, []string{"f:spec", "f:template"}) {
+			continue
+		}
+		latest, recorded = laterOf(latest, mf.Time.Time), true
+	}
+	return latest, recorded
 }
 
 // hasProgressDeadline reports whether the Deployment controller tracks a
