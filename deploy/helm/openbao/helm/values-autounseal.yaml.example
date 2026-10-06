@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Example values overlay for OpenBao auto-unseal. Apply on top of values.yaml.
+#
+# This turns on server.autoUnseal, adds a seal stanza so each node unseals
+# through the seal on start, and drops the Shamir auto-unseal sidecar and its
+# unseal Secret volume. The init hook then initializes with recovery keys.
+#
+# The seal block below uses AWS KMS as a concrete example. For Azure Key Vault,
+# GCP KMS, HashiCorp/OpenBao Transit, or a PKCS#11 HSM, replace just the seal
+# stanza with that provider's block (see the OpenBao seal documentation); the
+# rest of this overlay is identical.
+#
+# The server pod needs the provider's unwrap permission on the key, granted out
+# of band. For AWS KMS that is kms:Encrypt, kms:Decrypt and kms:DescribeKey, for
+# example through an EKS Pod Identity or IRSA role. Automatic key rotation is
+# safe where the provider keeps the key id and can still decrypt the previously
+# wrapped root key.
+
+openbao:
+  server:
+    autoUnseal:
+      enabled: true
+      recovery:
+        shares: 5
+        threshold: 3
+
+    # Override the raft config to add the seal stanza. Keep the rest in sync
+    # with values.yaml; only the seal block is new here.
+    ha:
+      raft:
+        config: |
+          ui = true
+          storage "raft" {
+            path = "/openbao/data/"
+            retry_join {
+              leader_api_addr = "http://openbao-server-0.openbao-server-internal:8200"
+            }
+            retry_join {
+              leader_api_addr = "http://openbao-server-1.openbao-server-internal:8200"
+            }
+            retry_join {
+              leader_api_addr = "http://openbao-server-2.openbao-server-internal:8200"
+            }
+          }
+          listener "tcp" {
+              tls_disable = 1
+              address = "[::]:8200"
+              cluster_address = "[::]:8201"
+
+              custom_response_headers {
+                "default" = {
+                  "X-Custom-Header" = ["HOSTNAME"],
+                },
+              }
+          }
+          # Example: AWS KMS. Swap this block for azurekeyvault, gcpckms,
+          # transit, or pkcs11 to use a different provider.
+          seal "awskms" {
+            region     = "<region>"
+            kms_key_id = "<kms-key-id>"
+          }
+          plugin_directory = "/openbao/plugins/"
+          service_registration "kubernetes" {}
+          disable_standby_reads = true
+
+    # KMS unseals the server, so the Shamir unseal sidecar and its Secret volume
+    # are not used. Drop them.
+    extraContainers: []
+    volumes: []
+    volumeMounts: []

@@ -79,6 +79,25 @@ openbao:
 
     podManagementPolicy: Parallel
 
+    # Auto-unseal through a KMS or HSM seal (for example awskms, azurekeyvault,
+    # gcpckms, transit, or pkcs11). Default off, so the server uses a Shamir seal
+    # and the auto-unseal sidecar. When on, the init hook initializes with
+    # recovery keys instead of a Shamir unseal key and the empty unseal Secret is
+    # not created.
+    #
+    # Enabling this flag alone is not enough. The deployer must also, in their
+    # values overlay: add the matching seal stanza to server.ha.raft.config (for
+    # example a seal "awskms" block), set server.extraContainers to [] to drop
+    # the auto-unseal sidecar, and remove the unseal volume and volumeMount. See
+    # values-autounseal.yaml.example.
+    autoUnseal:
+      enabled: false
+      # Recovery keys replace unseal keys under an auto-unseal seal. They do not
+      # unseal; they authorize root regeneration and rekey.
+      recovery:
+        shares: 5
+        threshold: 3
+
     # enable HA
     ha:
       enabled: true

@@ -59,6 +59,58 @@ get_root_token() {
     kubectl get secret ${statefulset}-root-token -n ${namespace} -o jsonpath='{.data.root_token}' | base64 -d
 }
 
+# Resolve the seal mode to use for init and unseal, into the global
+# RESOLVED_SEAL_MODE ("auto" or "shamir"). Returns non-zero (fail closed) on an
+# unreadable status or a mismatch, rather than guessing a path that could
+# discard the only copy of a key.
+#
+# AUTO_UNSEAL is the chart's declared intent (server.autoUnseal.enabled), which
+# also gates whether the unseal Secret exists. `bao status` reports the server's
+# actual seal: recovery_seal=true for an auto-unseal (KMS or HSM) seal such as
+# awskms, azurekeyvault, gcpckms, transit, or pkcs11; false for Shamir. These
+# must agree: a flag set without the matching seal stanza (or the reverse) would
+# otherwise take a path whose Secret does not exist.
+#
+# `bao status` exits 0 when unsealed and 2 when sealed; both return valid JSON.
+# Any other exit (1) is a real error. jq -r is used, not jq -e, because a valid
+# `false` makes jq -e exit non-zero.
+RESOLVED_SEAL_MODE=""
+resolve_seal_mode() {
+    local namespace=$1
+    local statefulset=$2
+    local declared="${AUTO_UNSEAL:-false}"
+
+    local out rc
+    out=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
+        bao status -format=json 2>/dev/null)
+    rc=$?
+    if [ "${rc}" != "0" ] && [ "${rc}" != "2" ]; then
+        log_error "Could not read seal status from ${statefulset}-0 (bao status exit ${rc})"
+        return 1
+    fi
+
+    # Missing or false recovery_seal both mean "not auto-unseal" (Shamir); only
+    # an explicit true selects the auto path. `// false` keeps an uninitialized
+    # server whose status omits the field on the Shamir path, matching the
+    # pre-existing default behavior.
+    local server_mode="shamir"
+    if [ "$(printf '%s' "${out}" | jq -r '.recovery_seal // false' 2>/dev/null)" = "true" ]; then
+        server_mode="auto"
+    fi
+
+    if [ "${declared}" = "true" ] && [ "${server_mode}" != "auto" ]; then
+        log_error "server.autoUnseal.enabled is set but the server reports no auto-unseal seal. Add the seal stanza to server.ha.raft.config (see values-autounseal.yaml.example)."
+        return 1
+    fi
+    if [ "${declared}" != "true" ] && [ "${server_mode}" = "auto" ]; then
+        log_error "The server reports an auto-unseal seal but server.autoUnseal.enabled is not set. Enable it so the unseal Secret and init path match the seal."
+        return 1
+    fi
+
+    RESOLVED_SEAL_MODE="${server_mode}"
+    return 0
+}
+
 # Runtime version-skew check: verify that the auto-unseal-sidecar container's
 # image tag matches the openbao server container's image tag in the live
 # StatefulSet spec. This complements the template-time guard in
@@ -188,29 +240,78 @@ initialize_cluster() {
     log_info "All OpenBao pods are ready"
 
     log_info "Initializing OpenBao cluster"
-    local init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
-        bao operator init \
-        -key-shares=1 \
-        -key-threshold=1 \
-        -format=json)
-
-    # Extract keys
-    local unseal_key=$(echo ${init_output} | jq -r '.unseal_keys_b64[0]')
-    local root_token=$(echo ${init_output} | jq -r '.root_token')
-
-    # Check if unseal key is empty
-    if [ -z "${unseal_key}" ]; then
-        log_error "Failed to get unseal key from initialization output"
+    if ! resolve_seal_mode "${namespace}" "${statefulset}"; then
         return 1
     fi
-
-    # Update the secret with the new unseal key
-    kubectl patch secret ${statefulset}-unseal \
-        --patch "data:
+    local init_output
+    local root_token
+    if [ "${RESOLVED_SEAL_MODE}" = "auto" ]; then
+        # Auto-unseal seal: initialize with recovery keys, not an unseal key.
+        # Recovery keys regenerate the root token and rekey; they never unseal
+        # (the seal does that), so no unseal key or unseal Secret is needed.
+        local recovery_shares="${RECOVERY_SHARES:-5}"
+        local recovery_threshold="${RECOVERY_THRESHOLD:-3}"
+        log_info "Auto-unseal seal detected; initializing with ${recovery_shares} recovery shares (threshold ${recovery_threshold})"
+        init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
+            bao operator init \
+            -recovery-shares=${recovery_shares} \
+            -recovery-threshold=${recovery_threshold} \
+            -format=json)
+        root_token=$(echo ${init_output} | jq -r '.root_token')
+        if [ -z "${root_token}" ] || [ "${root_token}" = "null" ]; then
+            log_error "Failed to get root token from initialization output"
+            return 1
+        fi
+        # Persist the recovery keys before anything else can discard them: once
+        # the server is initialized, `operator init` cannot reproduce them, so a
+        # failed write here would lose the only copy and make break-glass
+        # recovery impossible. Retry, and fail the init if it cannot be stored
+        # rather than reporting success without keys.
+        local recovery_keys
+        recovery_keys=$(echo ${init_output} | jq -c '.recovery_keys_b64')
+        if [ -z "${recovery_keys}" ] || [ "${recovery_keys}" = "null" ]; then
+            log_error "Initialization did not return recovery keys (.recovery_keys_b64 is null). Aborting."
+            return 1
+        fi
+        local persisted=false
+        for attempt in 1 2 3; do
+            if kubectl create secret generic ${statefulset}-recovery-keys \
+                -n ${namespace} \
+                --from-literal=recovery_keys_b64="${recovery_keys}" \
+                --dry-run=client -o yaml | kubectl apply -f -; then
+                persisted=true
+                break
+            fi
+            log_warn "Could not persist recovery keys (attempt ${attempt}/3); retrying..."
+            sleep 3
+        done
+        if [ "${persisted}" != "true" ]; then
+            log_error "Failed to store recovery keys in Secret '${statefulset}-recovery-keys'. The server is initialized but the keys are not saved, so break-glass recovery is impossible. Tear down with cleanup.sh and reinitialize."
+            return 1
+        fi
+        log_warn "Recovery keys stored in Secret '${statefulset}-recovery-keys'. Export them to a break-glass store and delete this Secret."
+    else
+        # Shamir seal: a single unseal key, stored for the auto-unseal sidecar.
+        init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
+            bao operator init \
+            -key-shares=1 \
+            -key-threshold=1 \
+            -format=json)
+        local unseal_key=$(echo ${init_output} | jq -r '.unseal_keys_b64[0]')
+        root_token=$(echo ${init_output} | jq -r '.root_token')
+        if [ -z "${unseal_key}" ] || [ "${unseal_key}" = "null" ]; then
+            log_error "Failed to get unseal key from initialization output"
+            return 1
+        fi
+        if ! kubectl patch secret ${statefulset}-unseal \
+            --patch "data:
     unseal_key: $(echo -n "${unseal_key}" | base64)" \
-        -n ${namespace}
-
-    log_info "Updated Kubernetes secret '${statefulset}-unseal' with unseal key"
+            -n ${namespace}; then
+            log_error "Failed to store unseal key in Secret '${statefulset}-unseal'. The server is initialized but the unseal key is not saved; tear down with cleanup.sh and reinitialize."
+            return 1
+        fi
+        log_info "Updated Kubernetes secret '${statefulset}-unseal' with unseal key"
+    fi
 
     # Store root token in a new secret
     log_info "Creating secret '${statefulset}-root-token' with root token..."
@@ -229,9 +330,33 @@ get_unseal_key() {
 unseal_cluster() {
     local namespace=$1
     local statefulset=$2
-    local unseal_key=$(get_unseal_key "${namespace}" "${statefulset}")
 
     log_section "Unsealing OpenBao cluster"
+
+    if ! resolve_seal_mode "${namespace}" "${statefulset}"; then
+        return 1
+    fi
+    if [ "${RESOLVED_SEAL_MODE}" = "auto" ]; then
+        # The auto-unseal seal unseals each node on start, and retry_join in the
+        # raft config joins the peers. No manual unseal or raft join is needed;
+        # wait for every pod to report unsealed.
+        log_info "Auto-unseal seal detected; waiting for all pods to unseal"
+        local end=$((SECONDS + 120))
+        for i in {0..2}; do
+            while [ "$(kubectl exec ${statefulset}-${i} -c openbao -n ${namespace} -- bao status -format=json 2>/dev/null | jq -r '.sealed' 2>/dev/null)" != "false" ]; do
+                if [ $SECONDS -gt $end ]; then
+                    log_error "Timeout waiting for pod ${statefulset}-${i} to auto-unseal"
+                    return 1
+                fi
+                log_info "Waiting for ${statefulset}-${i} to auto-unseal..."
+                sleep 5
+            done
+        done
+        log_info "All pods auto-unsealed"
+        return 0
+    fi
+
+    local unseal_key=$(get_unseal_key "${namespace}" "${statefulset}")
 
     # First unseal the primary node (pod 0)
     log_info "Unsealing primary pod ${statefulset}-0"
