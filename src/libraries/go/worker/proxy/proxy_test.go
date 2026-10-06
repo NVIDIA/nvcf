@@ -1050,7 +1050,7 @@ func Test_TCPConn(t *testing.T) {
 		StatefulConfig: &pb.WorkerInvokeFunctionRequest_StatefulConfig{
 			ConnectionConfigs: []*pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig{{
 				Config: &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_Http1Config{Http1Config: &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_HTTP1ConnectionConfig{
-					ProxyURI:                "https://localhost:10085/v1/proxy",
+					ProxyURI:                "http://localhost:10085/v1/proxy",
 					ProxyAuthorizationToken: "dummy-token",
 				}},
 			}},

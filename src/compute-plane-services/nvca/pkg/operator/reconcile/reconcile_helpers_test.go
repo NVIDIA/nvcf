@@ -29,9 +29,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/kubeclients"
@@ -458,6 +461,62 @@ func TestBackendK8sCache_CreateOrUpdateServiceAccount(t *testing.T) {
 		created, err := clientset.CoreV1().ServiceAccounts("default").Get(ctx, "test-sa", metav1.GetOptions{})
 		assert.NoError(t, err)
 		assert.Equal(t, "test-sa", created.Name)
+	})
+
+	t.Run("create that loses the race to the ServiceAccount controller still applies settings", func(t *testing.T) {
+		// The controller created "default" between our Get and Create.
+		clientset := fake.NewSimpleClientset(&corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "team-x"},
+		})
+		getCalls := 0
+		clientset.PrependReactor("get", "serviceaccounts", func(k8stesting.Action) (bool, runtime.Object, error) {
+			getCalls++
+			if getCalls == 1 {
+				return true, nil, k8serrors.NewNotFound(corev1.Resource("serviceaccounts"), "default")
+			}
+			return false, nil, nil
+		})
+		bc := &BackendK8sCache{clients: &kubeclients.KubeClients{K8s: clientset}}
+
+		sa := &corev1.ServiceAccount{
+			ObjectMeta:                   metav1.ObjectMeta{Name: "default", Namespace: "team-x"},
+			AutomountServiceAccountToken: boolPtr(false),
+		}
+		require.NoError(t, bc.createOrUpdateServiceAccount(ctx, sa))
+
+		got, err := clientset.CoreV1().ServiceAccounts("team-x").Get(ctx, "default", metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, got.AutomountServiceAccountToken)
+		assert.False(t, *got.AutomountServiceAccountToken)
+	})
+
+	t.Run("update existing serviceaccount preserves live fields", func(t *testing.T) {
+		clientset := fake.NewSimpleClientset(&corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "default",
+				Namespace:   "team-x",
+				Labels:      map[string]string{"team": "platform"},
+				Annotations: map[string]string{"owner": "platform-team"},
+			},
+			Secrets:          []corev1.ObjectReference{{Name: "default-token"}},
+			ImagePullSecrets: []corev1.LocalObjectReference{{Name: "registry-creds"}},
+		})
+		bc := &BackendK8sCache{clients: &kubeclients.KubeClients{K8s: clientset}}
+
+		sa := &corev1.ServiceAccount{
+			ObjectMeta:                   metav1.ObjectMeta{Name: "default", Namespace: "team-x"},
+			AutomountServiceAccountToken: boolPtr(false),
+		}
+		require.NoError(t, bc.createOrUpdateServiceAccount(ctx, sa))
+
+		got, err := clientset.CoreV1().ServiceAccounts("team-x").Get(ctx, "default", metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, got.AutomountServiceAccountToken)
+		assert.False(t, *got.AutomountServiceAccountToken)
+		assert.Equal(t, "platform", got.Labels["team"])
+		assert.Equal(t, "platform-team", got.Annotations["owner"])
+		assert.Equal(t, []corev1.ObjectReference{{Name: "default-token"}}, got.Secrets)
+		assert.Equal(t, []corev1.LocalObjectReference{{Name: "registry-creds"}}, got.ImagePullSecrets)
 	})
 }
 
