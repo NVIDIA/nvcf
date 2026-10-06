@@ -45,10 +45,6 @@ pyzmq
   License: BSD-3-Clause (see upstream LICENSE.md).
 
 ----
-go-criu
-  Upstream: https://github.com/checkpoint-restore/go-criu
-  NvSnap fork: maintained by the NvSnap project
-  License: Apache-2.0 (see upstream LICENSE).
 
 ----
 NVIDIA cuda-checkpoint

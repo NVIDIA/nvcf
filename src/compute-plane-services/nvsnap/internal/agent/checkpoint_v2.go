@@ -27,17 +27,14 @@ limitations under the License.
 // as foreign namespaces and recreate them isolated at restore, which
 // breaks the GPU driver's resume). CRIU then sees the container's mount
 // tree natively (no ExtMnt) and binds unix sockets in its own namespace
-// on restore (no setns). This removes the whole userspace interception
-// stack (libnvsnap_intercept, patched uvloop/libuv/libzmq, sitecustomize,
-// restore-entrypoint) that the legacy path injected into every workload.
+// on restore (no setns). No userspace interception is injected into the
+// workload; the retired legacy engine needed a preload library and
+// patched event-loop libraries for that.
 //
-// SCOPE: this does NOT yet restore io_uring / libuv event-loop kernel
-// state. vLLM's uvloop aborts post-restore with io_uring enabled, so the
-// vllm-small manifest still sets USE_LIBUV=0 / UV_USE_IO_URING=0 and
-// preloads nvsnap_cr.so (verified: with those levers removed the restored
-// process aborts in uvloop.run, 2026-07-13). Restoring the rings at the
-// CRIU layer to drop those levers is tracked separately (NVCF-9641,
-// io_uring ring-restore work item).
+// io_uring rings are dumped and restored by the bundled CRIU (quiesced
+// ring state, SQPOLL, worker threads and the SQ-array identity map), so
+// engines run with stock libuv and uvloop and no preload or event-loop
+// environment override.
 //
 // The images land in <container>/opt/nvsnap-imgs (overlay upperdir) and are
 // moved host-side into the standard checkpoint directory afterwards, so
@@ -58,6 +55,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -266,15 +264,21 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// so --compress only touches sparse CPU-side pages. Not worth the dump-time
 	// CPU by default. Opt in per node via NVSNAP_CRIU_V2_COMPRESS:
 	//   "page"          per-page LZ4
-	//   "region[:SIZE]" region LZ4 (SIZE default 256K, max 4M)
+	//   "block[:SIZE]"  block LZ4 (SIZE default 256K, max 4M); "region" is
+	//                   the same thing under the flag's earlier name
 	//   "" / "off"      no compression (default)
+	// Upstream CRIU renamed --compress-region to --compress-block when it
+	// unified the two modes; the bundled binary decides which spelling the
+	// dump gets (see criuCompressBlockFlag).
 	switch mode := os.Getenv("NVSNAP_CRIU_V2_COMPRESS"); {
 	case mode == "page":
 		args = append(args, "--compress")
-	case mode == "region" || mode == "region:":
-		args = append(args, "--compress-region", "256K")
+	case mode == "region" || mode == "region:" || mode == "block" || mode == "block:":
+		args = append(args, bundledCompressBlockFlag(), "256K")
 	case strings.HasPrefix(mode, "region:"):
-		args = append(args, "--compress-region", strings.TrimPrefix(mode, "region:"))
+		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "region:"))
+	case strings.HasPrefix(mode, "block:"):
+		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "block:"))
 	default: // "" / "off": no compression
 	}
 	if leaveRunning {
@@ -502,4 +506,30 @@ func tailOfFile(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
+}
+
+// criuCompressBlockFlag returns the block-compression option the given
+// `criu --help` text advertises: "--compress-block" on CRIU with the unified
+// compression mode, "--compress-region" on the earlier spelling.
+func criuCompressBlockFlag(help string) string {
+	if strings.Contains(help, "--compress-block") {
+		return "--compress-block"
+	}
+	return "--compress-region"
+}
+
+var (
+	bundledCompressFlagOnce sync.Once
+	bundledCompressFlag     string
+)
+
+// bundledCompressBlockFlag probes the bundled criu once for the spelling it
+// understands. A failed probe falls back to the earlier name, which the
+// binaries shipped before the upstream rename accept.
+func bundledCompressBlockFlag() string {
+	bundledCompressFlagOnce.Do(func() {
+		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
+		bundledCompressFlag = criuCompressBlockFlag(string(out))
+	})
+	return bundledCompressFlag
 }

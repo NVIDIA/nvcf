@@ -156,6 +156,20 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
 	cmd := exec.CommandContext(rctx, "nsenter", args...)
+	// criu forks the restorer and the restored tree below it. A failed
+	// restore has been seen leave criu waiting on its restorer tasks for
+	// good ("Restoring FAILED" logged, process alive 20 min later,
+	// 2026-10-04), and killing only nsenter would orphan that tree. Run
+	// the whole thing in its own process group, kill the group on cancel,
+	// and cancel as soon as the restore log reports failure.
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = 10 * time.Second
+	go cancelWhenRestoreFailed(rctx, filepath.Join(checkpointDir, "restore.log"), restoreFailureGrace, cancel, log)
 	// No LD_LIBRARY_PATH: the bundle's libraries carry RPATH=$ORIGIN (see
 	// Dockerfile.base), so criu resolves its dependency graph from
 	// /criu-bundle/lib on its own. Setting it here would leak the bundle's
@@ -170,11 +184,13 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// in the agent's cgroup: wrong accounting, and an agent restart or
 	// rollout kills it. In the placeholder's cgroup its lifecycle follows
 	// the placeholder pod (deleting the pod kills the restored tree).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if cgFD, cerr := placeholderCgroupDirFD(procBase, hostPID); cerr != nil {
 		log.WithError(cerr).Warn("criu-v2: could not open placeholder cgroup; restored tree will live in the agent's cgroup")
 	} else {
 		defer func() { _ = syscall.Close(cgFD) }()
-		cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: cgFD}
+		cmd.SysProcAttr.UseCgroupFD = true
+		cmd.SysProcAttr.CgroupFD = cgFD
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -375,4 +391,42 @@ func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout tim
 		"criu-v2: placeholder never reserved its pid range (highest pid %d < %d after %s): "+
 			"the ns_last_pid bump is missing or failed, and CRIU's exact-pid forks would "+
 			"collide with this pod's own processes", lastSeen, reservedPIDFloor, timeout)
+}
+
+// restoreFailureGrace is how long a criu that has logged "Restoring FAILED"
+// gets to exit on its own before the agent kills its process group.
+const restoreFailureGrace = 30 * time.Second
+
+// restoreLogReportsFailure reports whether a CRIU restore log says the
+// restore failed. CRIU writes the line once, after it has given up.
+func restoreLogReportsFailure(content string) bool {
+	return strings.Contains(content, "Restoring FAILED")
+}
+
+// cancelWhenRestoreFailed polls the restore log until ctx ends. Once the log
+// reports a failed restore it waits grace for criu to exit, then cancels,
+// which kills the criu process group through cmd.Cancel.
+func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Duration, cancel context.CancelFunc, log *logrus.Entry) {
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		b, err := os.ReadFile(logPath)
+		if err != nil || !restoreLogReportsFailure(string(b)) {
+			continue
+		}
+		log.WithField("grace", grace.String()).Warn("criu-v2: restore log reports failure; waiting for criu to exit before killing it")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(grace):
+			log.Error("criu-v2: criu did not exit after a failed restore; killing its process group")
+			cancel()
+			return
+		}
+	}
 }

@@ -42,12 +42,6 @@ type WebhookConfig struct {
 	KeyFile    string // PEM key
 	Path       string // default "/mutate"
 
-	// AutoInject configures the image refs the webhook stamps into
-	// auto-injected init containers when a pod carries
-	// nvsnap.io/auto-inject: "true". Empty fields disable that branch
-	// (the webhook fails open and admits the pod unchanged).
-	AutoInject webhook.AutoInjectImages
-
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When set, restore pods admitted with
 	// nvsnap.io/restore-from get a nvsnap-l2-wait init container that
@@ -57,6 +51,11 @@ type WebhookConfig struct {
 	// finishes snap+clone (whichever is faster between kubelet's
 	// retry cadence and snap+clone wall time).
 	L2WaitImage string
+
+	// CacheSalt is folded into every cache identity the webhook composes
+	// (rootfsonly.HashInputComposer.Salt). Bump it to start fresh captures
+	// cluster-wide; empty leaves identities unchanged.
+	CacheSalt string
 
 	// HostBundleRoot is the on-host path the agent DaemonSet stages
 	// the restore bundle into (default /var/lib/nvsnap/bundle). Function
@@ -155,8 +154,15 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// One-downloader election for chart pods; nil when off or L2 is
 		// off (docs/proposals/helm-chart-cache-election.md).
 		Elector: a.elector,
+		// Write-once model volume for Helm functions; nil when off.
+		ModelVolume:       a.modelVolume,
+		CacheVolume:       a.cacheVolume,
+		ModelWaitDeadline: a.config.ModelVolume.WaitDeadline,
+		ModelHostRoot:     a.modelHostRoot(),
+		ViewMinter:        a.modelViewMinter(),
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
+			Salt:            a.config.Webhook.CacheSalt,
 		},
 		// EnsureLocal is intentionally left nil for the demo / for-speed
 		// flow. The Mutator emits nodeAffinity = CapturedOnNodes, which
@@ -165,8 +171,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// transfer at restore time. EnsureCaptureLocal is still wired
 		// behind the agent's HTTP API for future "any GPU node" flows
 		// where an init container fetches the bytes asynchronously.
-		Log:        a.log.WithField("subsys", "webhook.mutate"),
-		AutoInject: cfg.AutoInject,
+		Log: a.log.WithField("subsys", "webhook.mutate"),
 		// nvsnap#147: L2 restore gating. When L2WaitImage is set,
 		// the webhook prepends a nvsnap-l2-wait init container that
 		// blocks the main container on pvc_promote_state == "ready".
@@ -176,7 +181,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// (helm sets it from .Values.agent.l2.waitImage).
 		L2WaitImage:     a.config.Webhook.L2WaitImage,
 		NvSnapServerURL: a.config.CatalogURL,
-		// nvsnap#147: restore-entrypoint hostPath inject. Empty =
+		// nvsnap#147: node bundle hostPath for the rootfs L2 restore. Empty =
 		// default "/var/lib/nvsnap/bundle" (matches the agent
 		// DaemonSet's nvsnap-bundle-stage initContainer destination).
 		HostBundleRoot: a.config.Webhook.HostBundleRoot,
@@ -210,4 +215,13 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		}
 	}()
 	return nil
+}
+
+// modelViewMinter is the webhook's view minter; nil (a nil interface)
+// when there is none.
+func (a *Agent) modelViewMinter() webhook.ViewMinter {
+	if a.modelMinter == nil {
+		return nil
+	}
+	return a.modelMinter
 }

@@ -63,12 +63,7 @@ set_chart_tag() {
 declare -A IMAGES=(
     [nvsnap-agent]="$NVSNAP_APP_VERSION"
     [nvsnap-server]="$NVSNAP_SERVER_VERSION"
-    [nvsnap-init]="$NVSNAP_INIT_VERSION"
     [nvsnap-blobstore]="$NVSNAP_BLOBSTORE_VERSION"
-    [uvloop-builder]="$NVSNAP_UVLOOP_VERSION"
-    [libuv-builder]="$NVSNAP_LIBUV_VERSION"
-    [libzmq-builder]="$NVSNAP_LIBZMQ_VERSION"
-    [pyzmq-builder]="$NVSNAP_PYZMQ_VERSION"
 )
 
 for name in "${!IMAGES[@]}"; do

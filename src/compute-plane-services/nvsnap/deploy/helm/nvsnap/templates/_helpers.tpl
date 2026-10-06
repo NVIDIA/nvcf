@@ -55,7 +55,7 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{/*
 Per-component labels and selector labels.
 
-Components: agent, server, blobstore, webhook.
+Components: agent, server, webhook.
 
 Selector labels include only stable identity (name + instance + component);
 they're embedded in Deployment/DaemonSet.spec.selector which is immutable
@@ -88,18 +88,7 @@ app: nvsnap-server
 app.kubernetes.io/component: server
 {{- end }}
 
-{{- define "nvsnap.blobstore.selectorLabels" -}}
-app: nvsnap-blobstore
-app.kubernetes.io/name: nvsnap-blobstore
-app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: blobstore
-{{- end }}
 
-{{- define "nvsnap.blobstore.labels" -}}
-{{ include "nvsnap.labels" . }}
-app: nvsnap-blobstore
-app.kubernetes.io/component: blobstore
-{{- end }}
 
 {{/*
 Image references. Each helper resolves <registry>/<repository>:<tag>
@@ -135,9 +124,6 @@ registry. Keeping our registry under our own namespace prevents that.
 {{- include "nvsnap.image" (dict "ctx" . "registry" .Values.server.image.registry "repository" .Values.server.image.repository "tag" .Values.server.image.tag) -}}
 {{- end }}
 
-{{- define "nvsnap.blobstore.image" -}}
-{{- include "nvsnap.image" (dict "ctx" . "registry" .Values.blobstore.image.registry "repository" .Values.blobstore.image.repository "tag" .Values.blobstore.image.tag) -}}
-{{- end }}
 
 {{- /* nvsnap.l2wait.image — image ref for the nvsnap-l2-wait init
        container (nvsnap#147). Uses the agent.l2.waitImage block;
@@ -154,17 +140,6 @@ registry. Keeping our registry under our own namespace prevents that.
        nvsnap-bundle-stage initContainer, and the webhook injects
        hostPath mounts from there onto function pods. No
        cross-registry mirror required. */ -}}
-
-{{- define "nvsnap.builder.image" -}}
-{{- /* args: ctx, name (e.g. "uvloop-builder"). Same mandatory-tag rule
-       as nvsnap.image — if nvsnap.builderTag is empty the user has to
-       set it explicitly. */ -}}
-{{- $reg := .ctx.Values.nvsnap.imageRegistry -}}
-{{- if not .ctx.Values.nvsnap.builderTag -}}
-{{- fail (printf "nvsnap.builder.image: nvsnap.builderTag is required (rendering %q)" .name) -}}
-{{- end -}}
-{{- printf "%s/%s:%s" $reg .name .ctx.Values.nvsnap.builderTag -}}
-{{- end }}
 
 {{/*
 Image-pull-secrets block, rendered if any are configured. Used at the

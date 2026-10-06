@@ -68,9 +68,8 @@ var (
 
 // Config holds server configuration.
 type Config struct {
-	Address      string
-	AgentPort    int    // Port of nvsnap-agent on nodes (default: 8081)
-	BlobstoreURL string // Base URL of nvsnap-blobstore (default: in-cluster service)
+	Address   string
+	AgentPort int // Port of nvsnap-agent on nodes (default: 8081)
 	// ManifestNamespace is where the agent's ConfigMapBackend writes
 	// rootfs capture manifest CMs. The agent writes them in its own
 	// namespace (nvsnap-system), NOT the source pod's namespace, so
@@ -109,9 +108,6 @@ type Server struct {
 func New(cfg Config, kubeClient kubernetes.Interface, dynClient dynamic.Interface, catalog *db.DB) *Server {
 	if cfg.AgentPort == 0 {
 		cfg.AgentPort = 8081
-	}
-	if cfg.BlobstoreURL == "" {
-		cfg.BlobstoreURL = "http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000"
 	}
 	if cfg.ManifestNamespace == "" {
 		cfg.ManifestNamespace = "nvsnap-system"
@@ -222,7 +218,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/checkpoints/{id}/peers", s.listPeersCheckpoint).Methods("GET")
 	// Phase 5d.2: agent registers a checkpoint in the catalog after
 	// a direct API-driven capture. Anchors all later catalog ops
-	// (peer-add, blob-uploaded, sources routing).
+	// (peer-add, sources routing).
 	api.HandleFunc("/checkpoints/register", s.registerCheckpoint).Methods("POST")
 	// nvsnap#59: content-addressed lookup. NVCA's Hook A POSTs the
 	// canonical workload identity (imageRef + modelID + flags +
@@ -230,10 +226,6 @@ func (s *Server) setupRoutes() {
 	// Returns matches sorted freshest-first. Indexed by hash + image_ref
 	// in the catalog DB.
 	api.HandleFunc("/checkpoints/lookup", s.lookupCheckpoint).Methods("POST")
-	// Phase 5d.2: agent uploader reports successful blob-store upload.
-	// Sets the s3_uri column so /sources can return it as the tier-3
-	// fallback for cross-node restore.
-	api.HandleFunc("/checkpoints/{id}/blob-uploaded", s.blobUploadedCheckpoint).Methods("POST")
 	// nvsnap#63 / nvsnap#76: agent-driven L2 PVC state machine. The
 	// PerCapturePVCBackend on the agent walks pending → writing →
 	// snapshotting → ready (or → failed) and POSTs each transition
@@ -297,11 +289,6 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/demo/pods", s.demoPods).Methods("GET")
 	api.HandleFunc("/demo/manifest", s.demoManifest).Methods("GET")
 	api.HandleFunc("/demo/test-pods", s.demoCleanTestPods).Methods("DELETE")
-
-	// Blobstore: proxy aggregation endpoints from nvsnap-blobstore for
-	// the UI. Read-only; raw blob/manifest endpoints are not exposed.
-	api.HandleFunc("/blobstore/stats", s.blobstoreStats).Methods("GET")
-	api.HandleFunc("/blobstore/captures", s.blobstoreListCaptures).Methods("GET")
 
 	// Middleware (applied to matched routes)
 	s.router.Use(metrics.InstrumentRoute())
@@ -1009,7 +996,7 @@ func (s *Server) deleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 	// checkpoint still exists -- answering 404 would claim it is gone.
 	// CatalogRetained separates the two.
 	if !result.AnySuccess && !result.CatalogRetained {
-		s.writeError(w, http.StatusNotFound, "checkpoint not found in any tier (agent, peers, blobstore, catalog)")
+		s.writeError(w, http.StatusNotFound, "checkpoint not found in any tier (agent, peers, catalog)")
 		return
 	}
 
@@ -1085,7 +1072,6 @@ func (s *Server) deleteCheckpointByHash(w http.ResponseWriter, r *http.Request) 
 type cascadeDeleteResult struct {
 	OriginAgents int // count of agent host paths DELETE-d successfully (origin + peers merged)
 	PeerAgents   int // back-compat audit detail — peers subset of OriginAgents
-	Blobstores   int // count of blobstore captures DELETE-d (per row)
 	CRDsDeleted  int // count of GPUCheckpoint CRDs deleted (per row)
 	CatalogRows  int // count of catalog rows deleted (one per sibling sharing the hash)
 	L2PVCs       int // count of L2 PVCs deleted (rox + rwx, per hash)
@@ -1117,9 +1103,6 @@ func (r *cascadeDeleteResult) Summary() string {
 	parts := []string{}
 	if r.OriginAgents > 0 {
 		parts = append(parts, fmt.Sprintf("%d agent path(s)", r.OriginAgents))
-	}
-	if r.Blobstores > 0 {
-		parts = append(parts, fmt.Sprintf("%d blobstore capture(s)", r.Blobstores))
 	}
 	if r.CRDsDeleted > 0 {
 		parts = append(parts, fmt.Sprintf("%d GPUCheckpoint CRD(s)", r.CRDsDeleted))
@@ -1316,28 +1299,7 @@ func (s *Server) cascadeDeletePerRow(
 		}
 	}
 
-	// 2. Blobstore capture for this row's agentID. CAS refcount on
-	//    shared blobs drops to zero only when every sibling row's
-	//    capture has been deleted; that's why this runs per row.
-	if s.config.BlobstoreURL != "" {
-		url := fmt.Sprintf("%s/v1/capture/%s", s.config.BlobstoreURL, urlPathEscape(agentID))
-		req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, url, http.NoBody)
-		if resp, err := client.Do(req); err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusNoContent {
-				result.Blobstores++
-				result.AnySuccess = true
-			} else if resp.StatusCode != http.StatusNotFound {
-				result.Errors = append(result.Errors,
-					fmt.Sprintf("blobstore DELETE %s returned %d", agentID, resp.StatusCode))
-			}
-		} else {
-			result.Errors = append(result.Errors,
-				"blobstore DELETE "+agentID+" failed: "+err.Error())
-		}
-	}
-
-	// 3. GPUCheckpoint CRD — per row. NotFound is fine (CRD already
+	// 2. GPUCheckpoint CRD — per row. NotFound is fine (CRD already
 	//    evicted, or never created — agent-register rows have no CRD).
 	if row.Namespace != "" {
 		err := s.dynClient.Resource(checkpointGVR).Namespace(row.Namespace).
@@ -1798,40 +1760,35 @@ func (s *Server) runRestore(name, namespace, nodeName, checkpointID, newPodName 
 		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, err.Error())
 		return
 	}
-	containerID := ""
-	if len(placeholderPod.Status.ContainerStatuses) > 0 {
-		cid := placeholderPod.Status.ContainerStatuses[0].ContainerID
-		containerID = strings.TrimPrefix(cid, "containerd://")
-	}
-
-	// Step 5: Trigger restore
-	log.Info("Triggering restore in placeholder pod")
-	triggerReq, _ := json.Marshal(map[string]interface{}{
-		"checkpointId":           checkpointID,
-		"placeholderContainerId": containerID,
+	log.Info("Restoring into placeholder pod")
+	restoreReq, _ := json.Marshal(map[string]interface{}{
+		"checkpointId":         checkpointID,
+		"newPodName":           newPodName,
+		"placeholderPodName":   placeholderPod.Name,
+		"placeholderNamespace": placeholderPod.Namespace,
 	})
-	triggerHTTPReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("http://%s:%d/v1/restore/trigger", ip, s.config.AgentPort),
-		bytes.NewReader(triggerReq))
+	restoreHTTPReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s:%d/v1/restore", ip, s.config.AgentPort),
+		bytes.NewReader(restoreReq))
 	if err != nil {
-		log.WithError(err).Error("Trigger restore build failed")
+		log.WithError(err).Error("Restore request build failed")
 		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, err.Error())
 		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, err.Error())
 		return
 	}
-	triggerHTTPReq.Header.Set("Content-Type", "application/json")
-	resp2, err := s.httpClient.Do(triggerHTTPReq)
+	restoreHTTPReq.Header.Set("Content-Type", "application/json")
+	resp2, err := s.httpClient.Do(restoreHTTPReq)
 	if err != nil {
-		log.WithError(err).Error("Trigger restore failed")
+		log.WithError(err).Error("Restore request failed")
 		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, err.Error())
 		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, err.Error())
 		return
 	}
 	defer func() { _ = resp2.Body.Close() }()
-	triggerBody, _ := io.ReadAll(resp2.Body)
+	restoreBody, _ := io.ReadAll(resp2.Body)
 	if resp2.StatusCode != http.StatusOK {
-		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, string(triggerBody))
-		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, string(triggerBody))
+		s.updateRestoreCRD(ctx, name, namespace, "Failed", newPodName, string(restoreBody))
+		_ = s.catalog.UpdateRestoreStatus(name, "Failed", newPodName, string(restoreBody))
 		return
 	}
 
@@ -2425,36 +2382,6 @@ func (s *Server) listAuditLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "count": len(entries)})
-}
-
-// --- Blobstore proxy ---
-
-func (s *Server) blobstoreStats(w http.ResponseWriter, r *http.Request) {
-	s.proxyBlobstore(w, r, "/v1/stats")
-}
-
-func (s *Server) blobstoreListCaptures(w http.ResponseWriter, r *http.Request) {
-	s.proxyBlobstore(w, r, "/v1/captures")
-}
-
-// proxyBlobstore forwards a GET to nvsnap-blobstore and streams the
-// response body back. Read-only — UI only consumes aggregation
-// endpoints, not raw blob/manifest reads.
-func (s *Server) proxyBlobstore(w http.ResponseWriter, r *http.Request, path string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, s.config.BlobstoreURL+path, http.NoBody)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, "blobstore unreachable: "+err.Error())
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
 }
 
 // --- HTTP helpers ---

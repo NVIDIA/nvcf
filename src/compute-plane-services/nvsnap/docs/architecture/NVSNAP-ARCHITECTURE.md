@@ -35,7 +35,6 @@ flowchart TB
         subgraph sys["namespace: nvsnap-system"]
             ds["nvsnap-agent (DaemonSet)<br/>CRIU · cuda-checkpoint · L2 writer<br/>+ in-process webhook"]:::agent
             srv["nvsnap-server<br/>REST API + UI + catalog (SQLite)"]:::cp
-            blob["nvsnap-blobstore<br/>(durable CAS backstop)"]:::store
             obs["grafana · jaeger · prometheus"]:::cp
         end
         node["GPU node NVMe<br/>/mnt/.../nvsnap/{cache,staging,overlays}"]:::agent
@@ -71,7 +70,6 @@ flowchart TB
   catalog (SQLite on a PVC). Dispatches captures, tracks
   `pvc_promote_state`, serves the cross-cluster replicate API, reverse-
   proxies the observability stack into one pane.
-- **nvsnap-blobstore** — content-addressed durable store (L3 backstop).
 - **NVCA** (operator + agent/webhook) — the NGC autoscaler. Hook A stamps
   restore intent on admission; Hook B drives the post-Ready capture. State
   lives in the per-function-version `NvSnapFunctionState` (CFS) CRD.
@@ -168,11 +166,8 @@ flowchart TB
     l1 -- miss --> l2
     l2{"L2: per-capture<br/>rox PVC (this cluster)?"}:::store
     l2 -- hit --> done
-    l2 -- miss --> l3
-    l3{"L3: nvsnap-blobstore<br/>(durable CAS)?"}:::store
-    l3 -- hit --> done
-    l3 -- miss --> l4
-    l4{"L4: GCS bucket<br/>(cross-cluster)?"}:::store
+    l2 -- miss --> l4
+    l4{"L4: object store bucket<br/>(cross-cluster)?"}:::store
     l4 -- hit --> pull["replicate → local L2<br/>(replay rox)"]:::store
     l4 -- miss --> coldc(["cold start"]):::ext
     pull --> done

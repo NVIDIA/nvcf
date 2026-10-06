@@ -32,6 +32,7 @@ package checkpointstore
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/dynamic"
@@ -81,6 +82,47 @@ type StorageProfile struct {
 	// PrewarmParallelism is the number of concurrent readers in the sweep.
 	// 0 means DefaultPrewarmParallelism.
 	PrewarmParallelism int `json:"prewarmParallelism,omitempty"`
+	// PrewarmMaxBytes caps the volume size the sweep is applied to, as a
+	// Kubernetes quantity ("256Gi"). A tree larger than the node's page
+	// cache evicts its own early pages while the sweep reads the late
+	// ones, so the engine finds most of it cold anyway and the sweep only
+	// costs time (GB300, 2026-10-01: a 1.56 TB tree on a 902 GiB node,
+	// about 12 min per pod for nothing). Empty means DefaultPrewarmMaxBytes.
+	PrewarmMaxBytes string `json:"prewarmMaxBytes,omitempty"`
+	// ModelVolume configures the write-once model volume for Helm
+	// functions (docs/proposals/helm-shared-model-volume.md). One
+	// lifecycle on every storage: primary in the nvsnap namespace, views
+	// per reader namespace, local compile caches shared through a cache
+	// set. Mode "block" is the default for shared-volume strategies
+	// (NVMesh): the download is staged and copied into a claim sized from
+	// it. Mode "rwx" is for a ReadWriteMany class of a distributed
+	// filesystem that can be read while written (OCI FSS, Weka, Lustre):
+	// the primary exists at admission and the download Job writes through
+	// a read-write view. Both need strategy shared-volume, which mints the
+	// views; NFS classes need file locking to work on the mount (for
+	// example `local_lock=all` on an NFSv3 export without lockd), since the
+	// Hugging Face tooling locks files while downloading. Empty mode with
+	// no default leaves Helm functions untouched.
+	ModelVolume *ModelVolumeProfile `json:"modelVolume,omitempty"`
+}
+
+// ModelVolumeProfile is the per-storage-class model volume setting.
+type ModelVolumeProfile struct {
+	// Mode is "rwx" or "block".
+	Mode string `json:"mode"`
+	// StorageClass for the volume; empty uses the L2 class.
+	StorageClass string `json:"storageClass,omitempty"`
+	// Size of an rwx-mode claim, created at admission before anything is
+	// downloaded, so a ceiling. Empty means "512Gi". Block-mode claims
+	// ignore it: they are sized from the downloaded bytes.
+	Size string `json:"size,omitempty"`
+	// MinSize is the floor for a block-mode claim sized from the download.
+	// Empty means "1Gi".
+	MinSize string `json:"minSize,omitempty"`
+	// ReaderMode for block volumes: "pvc" (default; policy-friendly, pods
+	// wait on volume binding) or "hostPath" (schedules at once, agent binds;
+	// needed under gang schedulers, requires hostPath allowed by policy).
+	ReaderMode string `json:"readerMode,omitempty"`
 }
 
 // DefaultPrewarmParallelism is the reader count when a profile does not set
@@ -90,6 +132,23 @@ const DefaultPrewarmParallelism = 6
 // PrewarmEnabled reports the profile's prewarm default (on when unset).
 func (p StorageProfile) PrewarmEnabled() bool {
 	return p.Prewarm == nil || *p.Prewarm
+}
+
+// DefaultPrewarmMaxBytes is the largest volume the sweep is applied to
+// when a profile does not set prewarmMaxBytes: 256 GiB fits the page cache
+// of every GPU node class in use with room for the engine.
+const DefaultPrewarmMaxBytes = int64(256) << 30
+
+// PrewarmLimit returns the largest volume size the sweep is applied to.
+func (p StorageProfile) PrewarmLimit() int64 {
+	if p.PrewarmMaxBytes == "" {
+		return DefaultPrewarmMaxBytes
+	}
+	q, err := resource.ParseQuantity(p.PrewarmMaxBytes)
+	if err != nil || q.Value() <= 0 {
+		return DefaultPrewarmMaxBytes
+	}
+	return q.Value()
 }
 
 // PrewarmWorkers returns the reader count, defaulted and clamped to >= 1.
@@ -111,7 +170,11 @@ var builtinProfiles = map[string]StorageProfile{
 	// AWS EBS — RWO only ⇒ per-pod clone.
 	"ebs.csi.aws.com": {Strategy: StrategySnapshotClone, SnapshotClass: "ebs-snapshot-class", ReadOnlyMany: false},
 	// Zero-copy shared-volume backends.
-	"nvmesh-csi.excelero.com":      {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", MountOptions: []string{"ro", "norecovery", "nouuid"}},
+	// Prewarm on with eight readers: an NVMesh volume reads 270 MB/s per
+	// stream and scales to 2.1 GB/s at eight (dev1 2026-09-28), while the
+	// engine's mmap load is a single stream (15 GB in 33 s). The sweep
+	// must split files into ranges to use that; see webhook prewarmCommand.
+	"nvmesh-csi.excelero.com":      {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", MountOptions: []string{"ro", "norecovery", "nouuid"}, PrewarmParallelism: 8},
 	"efs.csi.aws.com":              {Strategy: StrategySharedVolume, VolumeHandleTransform: "none"},
 	"filestore.csi.storage.gke.io": {Strategy: StrategySharedVolume, VolumeHandleTransform: "none"},
 }

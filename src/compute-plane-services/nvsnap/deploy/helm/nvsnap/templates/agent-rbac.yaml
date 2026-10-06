@@ -41,6 +41,8 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
+    # patch: the model volume controller un-pends readers once their
+    # volume is bound (internal/agent/modelvolume_controller.go).
     # v0.0.51: create+delete needed for the mount-holder pod in the
     # source workload's namespace (see
     # internal/checkpointstore/mount_holder.go +
@@ -48,12 +50,17 @@ rules:
     # compliant pause pod owned by the rwx PVC; the agent creates it
     # to trigger kubelet to mount the PVC, then deletes it after the
     # in-process file-tree copy finishes.
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]
+    verbs: ["get"]
+  # namespaces (get): the model volume reaper checks whether the namespace
+  # a read-only model PV is bound in still exists before removing the PV.
+  - apiGroups: [""]
+    resources: ["namespaces"]
     verbs: ["get"]
   # nvsnap#63: L2 per-capture PVC backend. The agent provisions a
   # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
@@ -63,8 +70,10 @@ rules:
   # nvsnap-system); we keep them ClusterRole for now so the agent can
   # operate in any namespace via flag.
   - apiGroups: [""]
+    # update/patch: the model volume controller labels the writer claim
+    # complete (internal/agent/modelvolume_controller.go).
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
   # persistentvolumes (cluster-scoped): the shared-volume promoter
   # (NVMesh/EFS cachedir + ember path) Gets the writer's bound primary PV,
   # Updates its reclaim policy to Retain, and Creates a secondary
@@ -77,6 +86,11 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # StatefulSet replicas give the webhook a group's size, so a cache set
+  # is only collected once every rank is ready.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]

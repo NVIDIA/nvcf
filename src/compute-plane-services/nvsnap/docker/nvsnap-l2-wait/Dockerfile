@@ -18,7 +18,8 @@
 
 # Stage 1: build a static, stripped binary. CGO disabled so the
 # resulting binary has no glibc dependency — scratch-runnable.
-FROM golang:1.25-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS build
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/root/go/pkg/mod \
@@ -28,7 +29,7 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 RUN --mount=type=cache,target=/root/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build \
         -trimpath \
         -ldflags='-s -w -extldflags=-static' \
