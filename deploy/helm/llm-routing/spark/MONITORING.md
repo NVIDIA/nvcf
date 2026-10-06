@@ -44,11 +44,24 @@ Set `apiKeyFile` to an existing caller-key file for traffic verification. Otherw
 
 ## Dashboard
 
+Print the Grafana password, then start the local tunnel:
+
 ```bash
+(
+  set -eu
+  context="$(python3 spark.py context)"
+  : "${context:?Context lookup returned an empty value}"
+  kubectl --context "$context" -n llm-spark-poc \
+    get secret llm-poc-monitoring-grafana-admin -o json |
+    python3 -c 'import base64, json, sys; print(base64.b64decode(json.load(sys.stdin)["data"]["admin-password"]).decode())'
+)
+
 python3 spark.py dashboard --port 13000
 ```
 
-Open `http://127.0.0.1:13000/d/llm-demo`. Sign in as `admin` using the work directory's `grafana-admin-password` file. Keep the command running. Ctrl-C closes the tunnel.
+The lookup uses the default namespace and release prefix. If customized, replace `llm-spark-poc` and `llm-poc-monitoring-grafana-admin` (`releasePrefix` plus `-monitoring-grafana-admin`). Pass the same `--context`, `--config` or `--work-dir` options to both recipe commands.
+
+Open `http://127.0.0.1:13000/d/llm-demo` and sign in as `admin` with the printed password. Keep the command running. Ctrl-C closes the tunnel. Installation also saves the password as `grafana-admin-password` under the `workDir` shown by `python3 spark.py paths`.
 
 ## Uninstall
 
