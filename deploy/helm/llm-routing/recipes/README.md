@@ -1,3 +1,3 @@
-# Spark recipe implementation
+# Recipe tool implementation
 
-Use the [standalone Spark and GLM runbook](../README.md). This directory contains its pinned dependencies, runner, model charts, client and regression tests.
+Use the [LLM routing recipes runbook](../README.md). This directory contains the `recipe.py` tool, its model charts, client and regression tests. Each subfolder with a `recipe.json`, such as `glm-5.3`, is one recipe.
