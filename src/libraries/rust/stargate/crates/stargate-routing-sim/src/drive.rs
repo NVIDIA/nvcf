@@ -114,6 +114,17 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
         .iter()
         .position(|region| region.name == args.region)
         .with_context(|| format!("region {} is not in the topology", args.region))?;
+    // Fail at startup rather than recording a whole run of failures.
+    if !(args.rate_rps.is_finite() && args.rate_rps > 0.0) {
+        bail!("rate must be positive, got {}", args.rate_rps);
+    }
+    let endpoint = reqwest::Url::parse(&args.endpoint)
+        .with_context(|| format!("invalid endpoint {}", args.endpoint))?;
+    if !matches!(endpoint.scheme(), "http" | "https") {
+        bail!("endpoint {} must use http or https", args.endpoint);
+    }
+    reqwest::header::HeaderValue::from_str(&format!("{}-{}", args.run_label, args.region))
+        .context("run label and region must be valid header values")?;
     let stargates = args.config.stargates();
     let weights: Vec<f64> = stargates.iter().map(|(_, weight)| *weight).collect();
     let plan = plan(&args.config.workload, &weights, args.rate_rps, args.seed);
@@ -345,13 +356,13 @@ impl Driver {
             return record;
         }
         let mut body = response.bytes_stream();
+        let mut unscanned = Vec::new();
         while let Some(chunk) = body.next().await {
             match chunk {
                 // MockDynamo sends the role event when the first token is
-                // ready. Skip SSE keep-alive comments.
+                // ready.
                 Ok(chunk)
-                    if record.ttft_us.is_none()
-                        && chunk.windows(5).any(|window| window == b"data:") =>
+                    if record.ttft_us.is_none() && first_data_event(&mut unscanned, &chunk) =>
                 {
                     record.ttft_us = Some(self.now().saturating_sub(at));
                 }
@@ -365,6 +376,20 @@ impl Driver {
         record.e2e_us = Some(self.now().saturating_sub(at));
         record
     }
+}
+
+/// Whether the stream so far contains an SSE `data:` field, skipping
+/// keep-alive comments. `unscanned` carries the end of the previous chunk so
+/// a field split across chunks is still found.
+fn first_data_event(unscanned: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    const FIELD: &[u8] = b"data:";
+    unscanned.extend_from_slice(chunk);
+    if unscanned.windows(FIELD.len()).any(|window| window == FIELD) {
+        return true;
+    }
+    let keep_from = unscanned.len().saturating_sub(FIELD.len() - 1);
+    unscanned.drain(..keep_from);
+    false
 }
 
 fn transport_error(error: &reqwest::Error) -> String {
@@ -426,6 +451,39 @@ mod tests {
             "policies": [{"name": "rr", "load_balancer": {"algorithm": "round-robin"}}]
         }))
         .expect("test config parses")
+    }
+
+    #[tokio::test]
+    async fn drive_rejects_invalid_arguments_before_starting() {
+        let args = |rate_rps: f64, endpoint: &str| DriveArgs {
+            config: config(),
+            endpoint: endpoint.to_string(),
+            region: "a".to_string(),
+            rate_rps,
+            seed: 1,
+            routing_method: None,
+            run_label: "run-1".to_string(),
+            start_at_unix_ms: u64::MAX,
+            records: PathBuf::from("/nonexistent/records.jsonl"),
+            api_key: None,
+        };
+        for (rate_rps, endpoint, message) in [
+            (-1.0, "http://127.0.0.1:1", "rate"),
+            (f64::NAN, "http://127.0.0.1:1", "rate"),
+            (10.0, "router:8000", "http"),
+            (10.0, "not a url", "endpoint"),
+        ] {
+            let error = drive(args(rate_rps, endpoint)).await.expect_err(endpoint);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn first_data_event_skips_comments_and_spans_chunks() {
+        let mut unscanned = Vec::new();
+        assert!(!first_data_event(&mut unscanned, b": keep-alive\n\n"));
+        assert!(!first_data_event(&mut unscanned, b"da"));
+        assert!(first_data_event(&mut unscanned, b"ta: {}\n\n"));
     }
 
     #[derive(Default)]
