@@ -23,6 +23,9 @@ valid. `nvsnap-gpu-suspend` drives the shim and the CUDA checkpoint API.
 The sources are under `docker/agent/gpushare/`. Both binaries are built in the
 agent base image (`Dockerfile.base`, `gpushare-builder` stage, CUDA 13 headers)
 and installed in `/criu-bundle/`. Tests are under `tests/gpushare/`.
+`make check-gpushare` compiles both binaries and the tests for amd64 and arm64
+with warnings as errors, in the same CUDA image (Docker, no GPU); the
+`nvsnap gpushare` workflow runs the same check in CI.
 
 ## How it works
 
