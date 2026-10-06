@@ -460,6 +460,14 @@ class RenderedStackTests(unittest.TestCase):
         chart_values = yaml.safe_load(
             (STACK_DIR / "charts/stargate-dev-mockdc/values.yaml").read_text()
         )
+        region = yaml.safe_load(
+            (STACK_DIR / "environments" / "us-west-2.yaml").read_text()
+        )
+        backend_settings = {
+            f"{mockdc['name']}-{backend.replace('backend', 'backend-')}": settings
+            for mockdc in region["clusters"]["mockdcs"]
+            for backend, settings in mockdc["mockDynamo"].items()
+        }
         inference_server_ids = set()
         cluster_ids = set()
         for path, deployment in deployments:
@@ -495,15 +503,29 @@ class RenderedStackTests(unittest.TestCase):
             )
             self.assertIn("--active-canary-interval-ms=0", arguments)
             self.assertIn("--engine-stats-stream=auto", arguments)
-            self.assertIn(
-                f"--max-engine-concurrency={chart_values['pylon']['maxEngineConcurrency']}",
-                arguments,
-            )
             mock_dynamo = next(
                 container
                 for container in deployment["spec"]["template"]["spec"]["containers"]
                 if container["name"] == "mock-dynamo"
             )
+            backend_id = next(
+                value.split("=", 1)[1]
+                for value in arguments
+                if value.startswith("--inference-server-id=")
+            )
+            gpu_workers = backend_settings[backend_id].get("numGpuWorkers")
+            if gpu_workers:
+                max_num_seqs = backend_settings[backend_id].get("maxNumSeqs", 25)
+                self.assertIn(
+                    f"--max-engine-concurrency={gpu_workers * max_num_seqs}", arguments
+                )
+                self.assertIn(f"--num-gpu-workers={gpu_workers}", mock_dynamo["args"])
+                self.assertIn("--engine-model=batched", mock_dynamo["args"])
+            else:
+                self.assertIn(
+                    f"--max-engine-concurrency={chart_values['pylon']['maxEngineConcurrency']}",
+                    arguments,
+                )
             self.assertIn("--disable-stats-stream", mock_dynamo["args"])
             self.assertIn(
                 "--grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt", arguments

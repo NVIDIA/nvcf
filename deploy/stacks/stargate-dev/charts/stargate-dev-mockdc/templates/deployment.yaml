@@ -11,6 +11,13 @@
 {{- end -}}
 {{- $backends := list .Values.mockDynamo.backend0 .Values.mockDynamo.backend1 -}}
 {{- range $index, $mock := $backends }}
+{{- /* A backend with numGpuWorkers runs the batched engine as a multi-GPU
+deployment, and its Pylon advertises the deployment's concurrency. */}}
+{{- $maxNumSeqs := $mock.maxNumSeqs | default 25 }}
+{{- $engineConcurrency := $.Values.pylon.maxEngineConcurrency }}
+{{- if $mock.numGpuWorkers }}
+{{- $engineConcurrency = mul $mock.numGpuWorkers $maxNumSeqs }}
+{{- end }}
 {{- $backendId := printf "%s-backend-%d" $clusterId $index -}}
 {{- if gt $index 0 }}
 ---
@@ -72,7 +79,14 @@ spec:
           args:
             - --http-listen-addr=0.0.0.0:8090
             - --model-name={{ $modelName }}
+            {{- if $mock.numGpuWorkers }}
+            - --engine-model=batched
+            - --num-gpu-workers={{ $mock.numGpuWorkers }}
+            - --max-num-seqs={{ $maxNumSeqs }}
+            - --kv-cache-capacity-tokens={{ $mock.kvCacheCapacityTokens | default 400000 | int64 }}
+            {{- else }}
             - --profile={{ $mock.profile }}
+            {{- end }}
             - --health-delay-ms={{ $mock.healthDelayMs }}
             {{- if not $mock.statsStreamEnabled }}
             - --disable-stats-stream
@@ -116,7 +130,7 @@ spec:
             - --kv-cache-stats-path=/kv-cache/stats
             - --active-canary-interval-ms={{ $.Values.pylon.activeCanaryIntervalMs }}
             - --engine-stats-stream={{ $.Values.pylon.engineStatsStream }}
-            - --max-engine-concurrency={{ $.Values.pylon.maxEngineConcurrency }}
+            - --max-engine-concurrency={{ $engineConcurrency }}
             {{- if $.Values.pylon.doCalibration }}
             - --do-calibration
             - --calibration-max-concurrency={{ $.Values.pylon.calibrationMaxConcurrency }}

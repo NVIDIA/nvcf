@@ -28,9 +28,13 @@ clusters:
         backend0:
           profile: h100-llama-3.1-8b
           healthDelayMs: 0
+          numGpuWorkers: 14
+          kvCacheCapacityTokens: 1000000
         backend1:
           profile: h100-llama-3.1-8b
           healthDelayMs: 0
+          numGpuWorkers: 6
+          kvCacheCapacityTokens: 1000000
     - name: mockdc-ue1-b
       kubeContext: mockdc-ue1-b
       nodeInstanceType: t3.medium
@@ -40,9 +44,13 @@ clusters:
         backend0:
           profile: h100-llama-3.1-8b
           healthDelayMs: 0
+          numGpuWorkers: 12
+          kvCacheCapacityTokens: 1000000
         backend1:
           profile: h100-llama-3.1-8b
           healthDelayMs: 0
+          numGpuWorkers: 9
+          kvCacheCapacityTokens: 1000000
 
 router:
   # A non-empty object replaces the complete default routing policy.

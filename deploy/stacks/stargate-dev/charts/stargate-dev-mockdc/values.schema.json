@@ -87,7 +87,10 @@
       "properties": {
         "profile": {"enum": ["h100-llama-3.1-8b"]},
         "healthDelayMs": {"type": "integer", "minimum": 0},
-        "statsStreamEnabled": {"type": "boolean"}
+        "statsStreamEnabled": {"type": "boolean"},
+        "numGpuWorkers": {"type": "integer", "minimum": 1},
+        "maxNumSeqs": {"type": "integer", "minimum": 1},
+        "kvCacheCapacityTokens": {"type": "integer", "minimum": 1}
       }
     }
   }

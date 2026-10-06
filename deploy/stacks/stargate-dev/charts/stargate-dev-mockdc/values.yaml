@@ -22,6 +22,11 @@ images:
 
 imagePullSecrets: []
 
+# Setting numGpuWorkers on a backend runs MockDynamo's batched engine as a
+# deployment of that many GPU workers, each with maxNumSeqs sequences
+# (default 25) and kvCacheCapacityTokens of KV cache (default 400000). Pylon
+# then advertises numGpuWorkers x maxNumSeqs as its engine concurrency.
+# Without numGpuWorkers the backend runs the named profile.
 mockDynamo:
   backend0:
     profile: h100-llama-3.1-8b
@@ -46,8 +51,8 @@ resources:
       cpu: 100m
       memory: 128Mi
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: "1"
+      memory: 1Gi
   pylon:
     requests:
       cpu: 100m
