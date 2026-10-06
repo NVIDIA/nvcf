@@ -55,8 +55,8 @@ const (
 	// placeholder mounts the checkpoint's copy at the same path, because
 	// the restored processes keep the path they saved to.
 	GPUShareStoreInContainer = webhook.GPUShareStorePath
-	// gpushareCkptSubdir holds the per-pid chunk lists and the GPU map.
-	gpushareCkptSubdir = "ckpt"
+	// gpushareGPUMapFile, in the store root, lists the capture's GPU UUIDs.
+	gpushareGPUMapFile = "gpus"
 	// GPUShareCheckpointSubdir is where a checkpoint keeps its store copy,
 	// relative to the checkpoint directory.
 	GPUShareCheckpointSubdir = "gpushare"
@@ -237,7 +237,11 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, log *logrus.E
 	if err != nil {
 		return "", err
 	}
-	args := append([]string{"--timeout-ms", "120000", "--store", store, "--ckpt-dir", store + "/" + gpushareCkptSubdir, "suspend"}, intsToStrings(pids)...)
+	// The per-pid chunk lists go in the store root: the mount guarantees it
+	// exists, while a subdirectory would have to be created inside the
+	// workload's mount namespace, which the agent cannot do through
+	// /proc/<pid>/root (and the tool does not create --ckpt-dir).
+	args := append([]string{"--timeout-ms", "120000", "--store", store, "--ckpt-dir", store, "suspend"}, intsToStrings(pids)...)
 	t0 := time.Now()
 	out, err := gpushareTool(ctx, hostPID, 30*time.Minute, args...)
 	if err != nil {

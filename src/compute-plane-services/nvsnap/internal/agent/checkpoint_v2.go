@@ -597,13 +597,9 @@ func (a *Agent) gpushareCollectStore(containerInfo *containerd.ContainerInfo, ro
 	}
 	// The GPU map goes in from the agent's side, into the checkpoint it owns:
 	// the agent cannot create files inside a container's mounts through
-	// /proc/<pid>/root. Restore finds it at <store>/ckpt/gpus because the
+	// /proc/<pid>/root. Restore finds it at <store>/gpus because the
 	// placeholder mounts this directory at the store path.
-	ckpt := filepath.Join(dst, gpushareCkptSubdir)
-	if err := os.MkdirAll(ckpt, 0o755); err != nil {
-		return fmt.Errorf("gpushare: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(ckpt, "gpus"), []byte(gpuMap), 0o644); err != nil { //nolint:gosec // GPU UUIDs, read back by the restore tool
+	if err := os.WriteFile(filepath.Join(dst, gpushareGPUMapFile), []byte(gpuMap), 0o644); err != nil { //nolint:gosec // GPU UUIDs, read back by the restore tool
 		return fmt.Errorf("gpushare: write GPU map: %w", err)
 	}
 	return nil

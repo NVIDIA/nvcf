@@ -154,7 +154,7 @@ func TestGeneratePlaceholderManifest_GPUShare(t *testing.T) {
 	ckptRoot := t.TempDir()
 	id := "ckpt-1"
 	dir := filepath.Join(ckptRoot, id)
-	if err := os.MkdirAll(filepath.Join(dir, GPUShareCheckpointSubdir, gpushareCkptSubdir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, GPUShareCheckpointSubdir), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	meta := CheckpointMetadata{
@@ -167,7 +167,7 @@ func TestGeneratePlaceholderManifest_GPUShare(t *testing.T) {
 		t.Fatal(err)
 	}
 	gpuMap := "GPU-a\nGPU-b\nGPU-c\nGPU-d\n"
-	if err := os.WriteFile(filepath.Join(dir, GPUShareCheckpointSubdir, gpushareCkptSubdir, "gpus"), []byte(gpuMap), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, GPUShareCheckpointSubdir, gpushareGPUMapFile), []byte(gpuMap), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	a := &Agent{config: Config{CheckpointDir: ckptRoot, CheckpointHostDir: "/var/lib/containerd/nvsnap-checkpoints"}}
@@ -270,7 +270,7 @@ func TestVisibleGPUUUIDs(t *testing.T) {
 func TestGPUShareCollectStore(t *testing.T) {
 	root := t.TempDir()
 	podStore := filepath.Join(root, GPUSharePodStoresSubdir, "uid-1")
-	for _, f := range []string{"chunks/ab/abcd", "ckpt/gpu-51.chunks"} {
+	for _, f := range []string{"chunks/ab/abcd", "gpu-51.chunks"} {
 		p := filepath.Join(podStore, f)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -285,12 +285,12 @@ func TestGPUShareCollectStore(t *testing.T) {
 	if err := a.gpushareCollectStore(ci, "/nonexistent-container-root", ckptDir, "GPU-a\nGPU-b\n"); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"chunks/ab/abcd", "ckpt/gpu-51.chunks"} {
+	for _, f := range []string{"chunks/ab/abcd", "gpu-51.chunks"} {
 		if b, err := os.ReadFile(filepath.Join(ckptDir, GPUShareCheckpointSubdir, f)); err != nil || string(b) != f {
 			t.Errorf("%s not moved into the checkpoint: %v", f, err)
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(ckptDir, GPUShareCheckpointSubdir, gpushareCkptSubdir, "gpus")); err != nil || string(b) != "GPU-a\nGPU-b\n" {
+	if b, err := os.ReadFile(filepath.Join(ckptDir, GPUShareCheckpointSubdir, gpushareGPUMapFile)); err != nil || string(b) != "GPU-a\nGPU-b\n" {
 		t.Errorf("GPU map = %q, %v", b, err)
 	}
 	left, err := os.ReadDir(podStore)

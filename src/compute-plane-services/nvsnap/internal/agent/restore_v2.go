@@ -203,7 +203,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 
 	if gs != nil {
 		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
-		gpuMap := gs.StorePath + "/" + gpushareCkptSubdir + "/gpus"
+		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
 		if err := gpushareResume(ctx, hostPID, gs.PIDs, gpuMap, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")

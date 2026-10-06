@@ -212,7 +212,7 @@ func (a *Agent) GeneratePlaceholderManifest(ctx context.Context, req Placeholder
 
 	gpus := 1
 	if metadata.GPUShare != nil {
-		gpus = gpushareGPUCount(filepath.Join(checkpointDir, GPUShareCheckpointSubdir, gpushareCkptSubdir, "gpus"))
+		gpus = gpushareGPUCount(filepath.Join(checkpointDir, GPUShareCheckpointSubdir, gpushareGPUMapFile))
 	}
 	gsMounts, gsVolumes := a.gpushareRestoreMounts(&metadata, req.CheckpointID)
 
