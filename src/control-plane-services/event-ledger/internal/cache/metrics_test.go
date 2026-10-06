@@ -41,8 +41,9 @@ var (
 	failedFlush      = attribute.String("result", "failure")
 )
 
-// noopMeter is for tests that do not look at metrics.
-func noopMeter() metric.Meter {
+// discardMeter returns a meter that drops every measurement, for tests that do
+// not look at metrics.
+func discardMeter() metric.Meter {
 	return noop.NewMeterProvider().Meter("cache-test")
 }
 
@@ -329,7 +330,7 @@ func TestNewCachingDBHandler_ReturnsAnErrorWhenAnInstrumentCannotBeCreated(t *te
 	instrumentErr := errors.New("instrument rejected")
 	for _, instrumentName := range []string{hitsMetricName, missesMetricName, evictionsMetricName, flushesMetricName, entriesMetricName} {
 		t.Run(instrumentName, func(t *testing.T) {
-			meter := failingMeter{Meter: noopMeter(), failOn: instrumentName, err: instrumentErr}
+			meter := failingMeter{Meter: discardMeter(), failOn: instrumentName, err: instrumentErr}
 
 			handler, err := NewCachingDBHandler(&fakeDB{}, testConfig(), discardFlush, meter)
 

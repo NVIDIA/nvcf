@@ -224,7 +224,7 @@ func TestNewCachingDBHandler_FlushIntervalLimitBoundsTheWheel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler, err := NewCachingDBHandler(&fakeDB{}, Config{MaxSize: 10, FlushInterval: tt.flushInterval}, discardFlush, noopMeter())
+			handler, err := NewCachingDBHandler(&fakeDB{}, Config{MaxSize: 10, FlushInterval: tt.flushInterval}, discardFlush, discardMeter())
 
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
@@ -252,7 +252,7 @@ func TestNewCachingDBHandler_DoesNotStartTheWheel(t *testing.T) {
 
 func TestStart_AdvancesTheHandlersWheel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		handler, err := NewCachingDBHandler(&closeTrackingDB{}, Config{MaxSize: 10, FlushInterval: 5 * time.Second}, discardFlush, noopMeter())
+		handler, err := NewCachingDBHandler(&closeTrackingDB{}, Config{MaxSize: 10, FlushInterval: 5 * time.Second}, discardFlush, discardMeter())
 		require.NoError(t, err)
 		makePending(handler, keyN(1), 1)
 
@@ -276,7 +276,7 @@ func TestStart_AdvancesTheHandlersWheel(t *testing.T) {
 func TestClose_StopsTheWheelAndClosesTheWrappedHandler(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		inner := &closeTrackingDB{}
-		handler, err := NewCachingDBHandler(inner, evictionConfig(10), discardFlush, noopMeter())
+		handler, err := NewCachingDBHandler(inner, evictionConfig(10), discardFlush, discardMeter())
 		require.NoError(t, err)
 		handler.Start()
 
@@ -293,7 +293,7 @@ func TestClose_StopsTheWheelAndClosesTheWrappedHandler(t *testing.T) {
 
 func TestClose_WithoutStartClosesTheWrappedHandler(t *testing.T) {
 	inner := &closeTrackingDB{}
-	handler, err := NewCachingDBHandler(inner, evictionConfig(10), discardFlush, noopMeter())
+	handler, err := NewCachingDBHandler(inner, evictionConfig(10), discardFlush, discardMeter())
 	require.NoError(t, err)
 
 	require.NoError(t, handler.Close())
@@ -304,7 +304,7 @@ func TestClose_WithoutStartClosesTheWrappedHandler(t *testing.T) {
 func TestClose_ReturnsTheWrappedHandlersError(t *testing.T) {
 	closeErr := errors.New("database close failed")
 	inner := &closeTrackingDB{closeErr: closeErr}
-	handler, err := NewCachingDBHandler(inner, evictionConfig(10), discardFlush, noopMeter())
+	handler, err := NewCachingDBHandler(inner, evictionConfig(10), discardFlush, discardMeter())
 	require.NoError(t, err)
 	handler.Start()
 
