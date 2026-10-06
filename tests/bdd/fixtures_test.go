@@ -289,6 +289,15 @@ func TestNCPRegistrationFixtureDefersNVCAChartAndStackDefaults(t *testing.T) {
 	}
 }
 
+func TestSelfManagedLocalBDDMultiFixtureWiresHTTPWorkerCallback(t *testing.T) {
+	fixture := loadYAMLMap(t, "fixtures/self-managed-local-bdd-multi.yaml")
+	got, exists := nestedYAMLValue(fixture, "global", "workerEndpoints", "invocationServiceURL")
+	const want = "http://invocation.nvcf.svc.cluster.local:8080"
+	if !exists || got != want {
+		t.Fatalf("global.workerEndpoints.invocationServiceURL = %v (exists %t), want %q", got, exists, want)
+	}
+}
+
 func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *testing.T) {
 	fixtureBytes, err := os.ReadFile("fixtures/self-managed-local-bdd-multi.yaml")
 	if err != nil {
@@ -493,7 +502,12 @@ func TestSelfManagedLocalBDDFixturesDeferRequestRouterDefaults(t *testing.T) {
 			if len(fixture.Addons.LLM.PKI) != 0 {
 				t.Fatalf("%s repeats the stack's managed PKI defaults: %#v", fixturePath, fixture.Addons.LLM.PKI)
 			}
-			for _, key := range []string{"essServiceURL", "invocationServiceURL"} {
+			defaultEndpoints := []string{"essServiceURL"}
+			// Multi-cluster HTTP callbacks need an explicit compute-reachable alias.
+			if !strings.HasSuffix(fixturePath, "-multi.yaml") {
+				defaultEndpoints = append(defaultEndpoints, "invocationServiceURL")
+			}
+			for _, key := range defaultEndpoints {
 				if _, exists := fixture.Global.WorkerEndpoints[key]; exists {
 					t.Fatalf("%s repeats the stack default for global.workerEndpoints.%s", fixturePath, key)
 				}

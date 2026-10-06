@@ -29,6 +29,10 @@ on:
       - 'tools/ci/check-doc-version-sync'
       - 'tools/ci/check-doc-editions'
       - 'tools/ci/preview-docs'
+      - 'tools/ci/check-doc-links'
+      - 'tools/ci/run-lychee'
+      - 'tools/ci/docs-links.toml'
+      - 'tools/scripts/test/test-check-doc-links'
       - 'tools/docs-version-sync/**'
       - 'tools/scripts/test/test-run-fern'
       - 'tools/scripts/test/test-preview-docs'
@@ -39,7 +43,7 @@ on:
         description: Publish an isolated hosted preview from this branch
         type: choice
         default: none
-        options: [none, edition]
+        options: [none, edition, canonical]
 
 permissions:
   contents: read
@@ -70,6 +74,7 @@ jobs:
         run: |
           bash tools/scripts/test/test-run-fern
           bash tools/scripts/test/test-preview-docs
+          bash tools/scripts/test/test-check-doc-links
 
       - name: Test docs version and edition tooling
         run: go test -C tools/docs-version-sync ./...
@@ -103,6 +108,7 @@ jobs:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
           DOCS_PREVIEW_ID: nvcf-${{ github.run_id }}
           DOCS_PREVIEW_SKIP_COMMENT: '1'
+          DOCS_PREVIEW_CONFIG: ${{ inputs.preview == 'canonical' && 'fern/docs.yml' || '' }}
         run: |
           set -euo pipefail
           ./tools/ci/preview-docs | tee "$RUNNER_TEMP/docs-preview.log"
