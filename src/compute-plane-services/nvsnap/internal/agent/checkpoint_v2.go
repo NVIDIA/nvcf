@@ -27,17 +27,14 @@ limitations under the License.
 // as foreign namespaces and recreate them isolated at restore, which
 // breaks the GPU driver's resume). CRIU then sees the container's mount
 // tree natively (no ExtMnt) and binds unix sockets in its own namespace
-// on restore (no setns). This removes the whole userspace interception
-// stack (libnvsnap_intercept, patched uvloop/libuv/libzmq, sitecustomize,
-// restore-entrypoint) that the legacy path injected into every workload.
+// on restore (no setns). No userspace interception is injected into the
+// workload; the retired legacy engine needed a preload library and
+// patched event-loop libraries for that.
 //
-// SCOPE: this does NOT yet restore io_uring / libuv event-loop kernel
-// state. vLLM's uvloop aborts post-restore with io_uring enabled, so the
-// vllm-small manifest still sets USE_LIBUV=0 / UV_USE_IO_URING=0 and
-// preloads nvsnap_cr.so (verified: with those levers removed the restored
-// process aborts in uvloop.run, 2026-07-13). Restoring the rings at the
-// CRIU layer to drop those levers is tracked separately (NVCF-9641,
-// io_uring ring-restore work item).
+// io_uring rings are dumped and restored by the bundled CRIU (quiesced
+// ring state, SQPOLL, worker threads and the SQ-array identity map), so
+// engines run with stock libuv and uvloop and no preload or event-loop
+// environment override.
 //
 // The images land in <container>/opt/nvsnap-imgs (overlay upperdir) and are
 // moved host-side into the standard checkpoint directory afterwards, so

@@ -40,7 +40,7 @@ import (
 // Phase 5d.1 restore-side cascading peer fetch.
 //
 // EnsureLocal makes a checkpoint locally available on this agent's
-// node before restore-entrypoint runs. Three priority tiers:
+// node before the in-namespace restore runs. Three priority tiers:
 //
 //	1. Same-node hostPath — already there, zero transit.
 //	2. Peer agent HTTP — any node in the catalog's peer list serves

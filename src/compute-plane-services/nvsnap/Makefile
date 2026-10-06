@@ -9,12 +9,12 @@ CONTAINER_TOOL ?= docker
 GO_FLAGS ?= -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD_DIR ?= bin
 
-.PHONY: all build agent restore-entrypoint nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds placeholder generate
+.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate
 
 all: build
 
 # Build all binaries
-build: agent restore-entrypoint nvsnap-server
+build: agent nvsnap-server
 
 # Build the agent binary
 agent:
@@ -28,30 +28,12 @@ nvsnap-server:
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/nvsnap-server ./cmd/nvsnap-server
 
-# Build the restore-entrypoint binary (for self-restoring placeholders)
-restore-entrypoint:
-	@echo "Building restore-entrypoint..."
-	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/restore-entrypoint ./cmd/restore-entrypoint
 
 # Build container image for agent
 docker-build: agent
 	@echo "Building container image $(FULL_IMAGE)..."
 	$(CONTAINER_TOOL) build -t $(FULL_IMAGE) -f docker/agent/Dockerfile .
 
-# Build placeholder image (requires BASE_IMAGE arg)
-# Example: make placeholder BASE_IMAGE=nvcr.io/nvidia/pytorch:24.10-py3
-placeholder:
-	@if [ -z "$(BASE_IMAGE)" ]; then echo "Set BASE_IMAGE (e.g., make placeholder BASE_IMAGE=nvcr.io/nvidia/pytorch:24.10-py3)"; exit 1; fi
-	@echo "Building placeholder image for $(BASE_IMAGE)..."
-	$(CONTAINER_TOOL) build -t nvsnap-placeholder:latest \
-		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
-		-f placeholder/Dockerfile .
-
-# Build vLLM-specific placeholder
-placeholder-vllm:
-	@echo "Building vLLM placeholder image..."
-	$(CONTAINER_TOOL) build -t nvsnap-placeholder-vllm:latest -f placeholder/Dockerfile.vllm .
 
 # Push container image
 docker-push: docker-build
@@ -122,13 +104,10 @@ help:
 	@echo "NVSNAP Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build             - Build all binaries (agent, restore-entrypoint)"
+	@echo "  build             - Build all binaries (agent, server)"
 	@echo "  agent             - Build agent binary"
-	@echo "  restore-entrypoint- Build restore-entrypoint binary"
 	@echo "  docker-build      - Build agent container image"
 	@echo "  docker-push       - Push agent container image"
-	@echo "  placeholder       - Build placeholder image (requires BASE_IMAGE)"
-	@echo "  placeholder-vllm  - Build vLLM-specific placeholder image"
 	@echo "  install-crds      - Install CRDs to cluster"
 	@echo "  deploy            - Deploy agent DaemonSet"
 	@echo "  undeploy          - Remove deployment"

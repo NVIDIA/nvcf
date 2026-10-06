@@ -88,12 +88,6 @@ nvsnap:
   imagePullSecrets:
     - nvsnap-pull-secret
 
-  # Tag used for dependency builder images (uvloop-builder, libuv-builder,
-  # libzmq-builder). The agent passes these to its in-process webhook so
-  # it can auto-inject the right init container into BYOC workload pods.
-  # Must match what's actually been built+pushed to imageRegistry —
-  # there's no AppVersion fallback (see _helpers.tpl).
-  builderTag: "v0.0.1"
 
 # ─── NvSnap Agent (DaemonSet on GPU nodes) ───────────────────────────────
 
@@ -501,7 +495,7 @@ webhook:
   # webhook port.
   #
   # Requires cert-manager installed in the cluster. Set to false if
-  # you don't have cert-manager or don't want the auto-inject webhook.
+  # you do not have cert-manager or do not want the admission webhook.
   enabled: true
 
   # Master switch for pod mutation. Every nvsnap mechanism that touches

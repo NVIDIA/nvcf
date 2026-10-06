@@ -76,7 +76,7 @@ type Checkpoint struct {
 
 // PVC promote-state values. Restore-side polls these via
 // /api/v1/checkpoints/lookup; the nvsnap-init container blocks until it
-// sees "ready" or "failed" before exec'ing restore-entrypoint. Exact
+// sees "ready" or "failed" before the restore proceeds. Exact
 // strings are part of the wire contract — don't rename without bumping
 // the migration.
 const (
