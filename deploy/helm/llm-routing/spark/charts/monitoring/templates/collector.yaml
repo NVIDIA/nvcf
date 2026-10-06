@@ -1,0 +1,129 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-collector
+---
+{{- range $namespace := .Values.namespaces }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-scrape
+  namespace: {{ $namespace | quote }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-scrape
+  namespace: {{ $namespace | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $.Release.Name }}-scrape
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Release.Name }}-collector
+    namespace: {{ $.Release.Namespace }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-collector
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+        path: /health
+    receivers:
+      prometheus:
+        config:
+          global:
+            scrape_interval: {{ .Values.scrapeInterval }}
+            scrape_timeout: {{ .Values.scrapeTimeout }}
+          scrape_configs:
+{{- range .Values.targets }}
+            - job_name: {{ .name | quote }}
+              metrics_path: {{ default "/metrics" .path | quote }}
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces:
+                    names: {{ $.Values.namespaces | toJson }}
+                  selectors:
+                    - role: pod
+                      label: {{ .selector | quote }}
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_phase]
+                  regex: Running
+                  action: keep
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  regex: {{ .portName | quote }}
+                  action: keep
+{{- if .port }}
+                - source_labels: [__address__]
+                  regex: '(.*):[0-9]+'
+                  replacement: '$${1}:{{ .port }}'
+                  target_label: __address__
+{{- end }}
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
+                - source_labels: [__meta_kubernetes_pod_label_pylon_nvidia_com_endpoint]
+                  target_label: inference_endpoint
+                - target_label: component
+                  replacement: {{ .name | quote }}
+{{- if .runtime }}
+                - target_label: backend_runtime
+                  replacement: {{ .runtime | quote }}
+{{- end }}
+                - target_label: monitoring_release
+                  replacement: {{ $.Release.Name | quote }}
+{{- end }}
+            - job_name: monitoring-collector
+              static_configs:
+                - targets: [127.0.0.1:8888]
+                  labels:
+                    component: monitoring-collector
+                    monitoring_release: {{ .Release.Name | quote }}
+                    namespace: {{ .Release.Namespace | quote }}
+            - job_name: monitoring-storage
+              static_configs:
+                - targets: [{{ printf "%s-victoria-metrics:8428" .Release.Name | quote }}]
+                  labels:
+                    component: monitoring-storage
+                    monitoring_release: {{ .Release.Name | quote }}
+                    namespace: {{ .Release.Namespace | quote }}
+            - job_name: monitoring-grafana
+              static_configs:
+                - targets: [{{ printf "%s-grafana:3000" .Release.Name | quote }}]
+                  labels:
+                    component: monitoring-grafana
+                    monitoring_release: {{ .Release.Name | quote }}
+                    namespace: {{ .Release.Namespace | quote }}
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 80
+      batch: {}
+    exporters:
+      prometheusremotewrite:
+        endpoint: http://{{ .Release.Name }}-victoria-metrics:8428/api/v1/write
+        resource_to_telemetry_conversion:
+          enabled: true
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [memory_limiter, batch]
+          exporters: [prometheusremotewrite]
+{{- end }}

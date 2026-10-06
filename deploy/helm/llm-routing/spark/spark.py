@@ -24,6 +24,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
+import monitoring
+import monitoring_setup
 import console_output
 MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
@@ -66,6 +68,7 @@ def validate(c):
     require(not c['images'].get('pullSecrets'), 'Pylon does not propagate image-pull secrets. Use nodes with registry access or pre-import all application images.')
     require(c.get('caConfigMap'), 'caConfigMap is required for verified QUIC and client TLS.')
     require(not c.get('retainedModels'), 'Verification targets GLM. Remove retainedModels from the configuration.')
+    monitoring.settings(c)
     require(not c.get('testFixture'), 'The recipe deploys GLM. Remove testFixture from the configuration.')
 
 
@@ -112,7 +115,7 @@ def cli_settings(args):
     config = None
     if args.config:
         path = args.config.expanduser()
-        require(path.exists() or args.phase == 'init', 'Configuration file does not exist. Run init or attach-existing first.')
+        require(path.exists() or args.phase in ('init', 'attach-monitoring'), 'Configuration file does not exist. Run init, attach-existing or attach-monitoring first.')
         if path.exists():
             config = json.loads(path.read_text())
     work = args.work_dir.expanduser().resolve() if args.work_dir else None
@@ -249,16 +252,18 @@ def discover_config(context, namespace=None):
 
 
 class Recipe:
-    def __init__(self, config, work, source=None):
+    def __init__(self, config, work, source=None, monitoring_only=False):
         self.c = config
-        validate(config)
         self.work = pathlib.Path(work).expanduser().resolve()
         repo = HERE.parents[3]
         require(not self.work.is_relative_to(repo), 'Keep generated work and credentials outside the checkout.')
-        self.work.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.source = pathlib.Path(source).expanduser().resolve() if source else repo
         self.state_path = self.work/'state.json'
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
+        require(monitoring_only or not self.state.get('attachedMonitoring'),
+                'This work directory is attached for monitoring. Use the deployment owner work directory for other phases.')
+        (monitoring_setup.validate if monitoring_only else validate)(config)
+        self.work.mkdir(parents=True, exist_ok=True, mode=0o700)
         identity = {k: config[k] for k in ('context', 'namespace', 'releasePrefix', 'clusterId', 'nodes')}
         identity['releases'] = config.get('releases', {})
         require(not self.state or self.state['identity'] == identity, 'Work directory belongs to a different installation.')
@@ -266,10 +271,10 @@ class Recipe:
         self.kc = ['kubectl', '--context', config['context'], '-n', config['namespace']]
         self.hm = ['helm', '--kube-context', config['context'], '-n', config['namespace']]
         releases = config.get('releases', {})
-        self.glm = releases.get('glm', config['releasePrefix'] + '-glm')
+        self.glm = None if monitoring_only else releases.get('glm', config['releasePrefix'] + '-glm')
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
         self.stack = releases.get('stack', config['releasePrefix'] + '-stack')
-        for name in (self.glm, self.operator, self.stack):
+        for name in filter(None, (self.glm, self.operator, self.stack)):
             require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', name) is not None and len(name) <= 53, 'Invalid release name.')
 
     def reinitialize(self, config_path):
@@ -372,6 +377,9 @@ class Recipe:
             registry, repository = self.repository(component).split('/', 1)
             values[chart] = {service: {'replicaCount': 1, 'nodeSelector': {'kubernetes.io/hostname': self.c['nodes']['control']},
                                       'image': {'registry': registry, 'repository': repository, 'tag': self.c['images']['tag'], 'pullPolicy': self.c['images']['pullPolicy']}}}
+        if monitoring.enabled(self.c):
+            for chart, service in [('llm-api-gateway', 'llmApiGateway'), ('llm-request-router', 'llmRequestRouter')]:
+                values[chart][service]['metrics'] = {'enabled': True}
         return values
 
     def helm_apply(self, release, chart, values, timeout='5m', wait=True, jobs=False):
@@ -465,6 +473,9 @@ class Recipe:
         print('Existing installation inspected. Run verify-gateway next.')
         if values.get('sparkRecipeChartsSha256') != self.chart_digest():
             console_output.warn('Image updates require matching recorded charts. Use a coordinated stack installation first.')
+
+    def attach_monitoring(self):
+        monitoring_setup.attach(self, output, save)
 
     def bound_cluster(self):
         require(self.state.get('inventory'), 'Run inventory for this installation first.')
@@ -695,6 +706,8 @@ class Recipe:
         ca = json.loads(output(self.kc+['get', 'configmap', self.c['caConfigMap'], '-o', 'json']))['data']['ca.crt']
         save(self.work/'ca.crt', ca)
         self.stamp('stack', {'apiKeyFile': str(key_path), 'source': self.source_identity()})
+        if monitoring.enabled(self.c):
+            monitoring.Monitoring(self, run, output, save).install()
 
     def register(self):
         require(not self.state.get('attachedExisting'), 'Do not re-register or adopt an attached existing backend.')
@@ -803,22 +816,23 @@ class Recipe:
     def components(self):
         return list(COMPONENTS)
 
-    def import_images(self, archive, allow, component=None, tag=None):
+    def import_images(self, archive, allow, component=None, tag=None, monitoring_only=False):
         require(allow, 'Import requires --allow-containerd-import, which grants the Jobs access to node runtime sockets.')
         self.bound_cluster()
         import tarfile
         archive = pathlib.Path(archive).resolve(strict=True)
-        require(archive.stat().st_size < 1024**3, 'The default importer has a 1 GiB archive volume. Review and enlarge its chart before importing a larger archive.')
+        archive_limit = monitoring.MAX_ARCHIVE_BYTES if monitoring_only else 1024**3
+        require(archive.stat().st_size < archive_limit, 'The importer archive limit is '+str(archive_limit // 1024**3)+' GiB.')
         with tarfile.open(archive) as tar:
             manifest = json.load(tar.extractfile('manifest.json'))
         tags = {value for entry in manifest for value in entry.get('RepoTags', [])}
-        expected = [self.image(name, tag) for name in ([component] if component else self.components())]
+        expected = monitoring.image_list(self) if monitoring_only else [self.image(name, tag) for name in ([component] if component else self.components())]
         for image in expected:
             aliases = {image, image.removeprefix('docker.io/'), image.removeprefix('docker.io/library/')}
             require(bool(tags & aliases), 'Archive is missing the configured image: '+image)
         cfg = self.c.get('containerd')
         require(cfg, 'No image importer was discovered. Use registry distribution or configure containerd import settings.')
-        nodes = [self.c['nodes']['control']] if component in ('gateway', 'router') else cfg.get('nodeNames', sorted(set(self.c['nodes'].values())))
+        nodes = [self.c['nodes']['control']] if monitoring_only or component in ('gateway', 'router') else cfg.get('nodeNames', sorted(set(self.c['nodes'].values())))
         with archive.open('rb') as stream:
             archive_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
         release = self.c['releasePrefix']+'-images'
@@ -841,6 +855,7 @@ class Recipe:
             require(status.get('version') == previous.get('revision'), 'Image import revision changed. Do not replace another attempt.')
         values = {'enabled': True, 'nodeNames': nodes, 'archiveNode': cfg.get('archiveNode', self.c['nodes']['control']),
                   'archiveName': 'arm64-images.tar', 'archiveSha256': archive_hash,
+                  'archiveSizeLimit': str(archive_limit // 1024**3)+'Gi',
                   'runAsUser': cfg.get('runAsUser', 1000), 'socketPath': cfg['socketPath']}
         self.helm_apply(release, HERE/'charts/image-loader', values, wait=False)
         status = json.loads(output(self.hm+['status', release, '-o', 'json']))
@@ -888,7 +903,7 @@ try:
         os.chmod(partial, 0o600)
         while chunk := sys.stdin.buffer.read(1024 * 1024):
             size += len(chunk)
-            if size > expected_size or size >= 1024**3:
+            if size > expected_size:
                 raise RuntimeError('Uploaded archive exceeds its expected size')
             checksum.update(chunk)
             target.write(chunk)
@@ -1003,12 +1018,18 @@ finally:
                    ('operator', self.source/'deploy/helm/pylon-operator/pylon-operator', self.operator_values())]
         for phase in ('preflight', 'build', 'qualify', 'chain', 'download', 'serve'):
             renders.append(('glm-'+phase, HERE/'charts/gguf-backend', self.backend_values(phase, register=phase=='serve', render=True)))
+        if monitoring.enabled(self.c):
+            values = monitoring.chart_values(self)
+            values['grafana']['adminPassword'] = 'offline-render-only'
+            renders.append(('monitoring', monitoring.CHART, values))
         for name, chart, values in renders:
             path = self.work/'render'/(name+'-values.json')
             save(path, values)
             # Offline: no kube context, lookup, or API traffic. Generated TLS stays private.
             run(['helm', 'lint', chart, '-f', path])
-            save(self.work/'render'/(name+'.yaml'), output(['helm', 'template', self.c['releasePrefix']+'-'+name, chart, '-n', self.c['namespace'], '-f', path]))
+            release = {'stack': self.stack, 'operator': self.operator, 'glm-chain': self.glm+'-chain',
+                       'monitoring': self.c['releasePrefix']+'-monitoring'}.get(name, self.glm)
+            save(self.work/'render'/(name+'.yaml'), output(['helm', 'template', release, chart, '-n', self.c['namespace'], '-f', path]))
         print('Helm lint/render passed for', len(renders), 'configurations.')
 
 
@@ -1019,7 +1040,7 @@ def main(argv=None, console=None):
     parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
-    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover'])
+    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
     parser.add_argument('--component', choices=list(COMPONENTS))
@@ -1029,11 +1050,15 @@ def main(argv=None, console=None):
     parser.add_argument('--result', type=pathlib.Path)
     parser.add_argument('--port', type=int, default=18443)
     parser.add_argument('--confirm-model-interruption', action='store_true')
+    parser.add_argument('--verify-traffic', action='store_true', help='Send gateway verification requests and check monitoring counter increases.')
+    parser.add_argument('--model', help='Served model to use with verify-monitoring --verify-traffic. Defaults to monitoring.model or gateway discovery.')
     parser.add_argument('--retry', action='store_true', help='Archive an unsuccessful qualification and run new qualification and chain Jobs.')
     args = parser.parse_intermixed_args(argv)
     if console:
         console.phase = args.phase
     require(args.phase == 'chat' or (args.prompt is None and not args.stream), 'Prompt and --stream are supported only for chat.')
+    require(not args.verify_traffic or args.phase == 'verify-monitoring', '--verify-traffic requires verify-monitoring.')
+    require(args.model is None or (args.phase == 'verify-monitoring' and args.verify_traffic), '--model requires verify-monitoring --verify-traffic.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
     try:
         context, work, config_path, config = cli_settings(args)
@@ -1079,10 +1104,14 @@ def execute(args, parser, context, work, config_path, config):
         return
     discovered = config is None
     if discovered:
-        require(args.phase == 'attach-existing', 'Run attach-existing first, or provide --config for a new installation.')
+        require(args.phase in ('attach-existing', 'attach-monitoring'), 'Run attach-existing first for deployment commands, or attach-monitoring for monitoring.')
         require(not (work/'state.json').exists(), 'Saved state is missing its configuration. Use a new work directory.')
-        config = discover_config(context, args.namespace)
-    recipe = Recipe(config, work, args.source_dir)
+        require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
+        config = (monitoring_setup.discover_config(context, args.namespace, output) if args.phase == 'attach-monitoring'
+                  else discover_config(context, args.namespace))
+    monitoring_only = args.phase in ('attach-monitoring', 'monitoring', 'dashboard', 'verify-monitoring',
+                                    'monitoring-images', 'export-monitoring-images', 'import-monitoring-images', 'cleanup-key')
+    recipe = Recipe(config, work, args.source_dir, monitoring_only=monitoring_only)
     if args.phase == 'prepare': recipe.prepare()
     elif args.phase == 'render': recipe.render()
     elif args.phase == 'inventory': recipe.inventory()
@@ -1092,6 +1121,11 @@ def execute(args, parser, context, work, config_path, config):
             save(config_path, config)
             print('Discovered configuration:', config_path)
         print('Run verify-gateway next.')
+    elif args.phase == 'attach-monitoring':
+        recipe.attach_monitoring()
+        if discovered:
+            save(config_path, config)
+            print('Discovered monitoring configuration:', config_path)
     elif args.phase == 'build-images':
         try:
             recipe.build_images(args.component, args.tag)
@@ -1103,6 +1137,14 @@ def execute(args, parser, context, work, config_path, config):
             run(['docker', 'push', recipe.image(name, args.tag)])
     elif args.phase == 'import-images':
         recipe.import_images(args.archive or recipe.work/'arm64-images.tar', args.allow_containerd_import, args.component, args.tag)
+    elif args.phase == 'monitoring': monitoring.Monitoring(recipe, run, output, save).install()
+    elif args.phase == 'dashboard': monitoring.Monitoring(recipe, run, output, save).dashboard(args.port)
+    elif args.phase == 'verify-monitoring': monitoring.Monitoring(recipe, run, output, save).verify(args.port, args.verify_traffic, args.model)
+    elif args.phase == 'monitoring-images': print('\n'.join(monitoring.image_list(recipe)))
+    elif args.phase == 'export-monitoring-images':
+        monitoring.Monitoring(recipe, run, output, save).export_images(args.archive or recipe.work/'monitoring-arm64-images.tar')
+    elif args.phase == 'import-monitoring-images':
+        recipe.import_images(args.archive or recipe.work/'monitoring-arm64-images.tar', args.allow_containerd_import, monitoring_only=True)
     elif args.phase == 'stack': recipe.deploy_stack()
     elif args.phase in ('preflight', 'build-runtime', 'qualify', 'download', 'load'):
         recipe.backend_phase({'build-runtime': 'build', 'load': 'serve'}.get(args.phase, args.phase), retry=args.retry)

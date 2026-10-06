@@ -144,9 +144,9 @@ class RecipeTests(unittest.TestCase):
              patch.object(spark, 'output', side_effect=output):
             self.recipe.render()
         self.assertEqual(operations[0], ('helm', 'dependency', 'build'))
-        self.assertEqual(sum(operation[:2] == ('helm', 'lint') for operation in operations), 8)
-        self.assertEqual(sum(operation == ('helm', 'template') for operation in operations), 8)
-        self.assertEqual(len(list((self.recipe.work/'render').glob('*.yaml'))), 8)
+        self.assertEqual(sum(operation[:2] == ('helm', 'lint') for operation in operations), 9)
+        self.assertEqual(sum(operation == ('helm', 'template') for operation in operations), 9)
+        self.assertEqual(len(list((self.recipe.work/'render').glob('*.yaml'))), 9)
 
     def test_render_dependency_failure_stops_before_rendered_files_or_templates(self):
         with patch.object(self.recipe, 'source_check'), patch.object(spark, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
@@ -282,6 +282,7 @@ class RecipeTests(unittest.TestCase):
             helm.assert_not_called()
 
     def test_stack_generates_private_key_hash_and_only_glm_stack_components(self):
+        self.config['monitoring']['enabled'] = False
         encoded = __import__('base64').b64encode(b'private-cluster-token').decode()
         responses = [json.dumps({'data': {'cluster-token': encoded}}), json.dumps({'data': {'ca.crt': 'public-ca'}})]
         operations = []
@@ -334,6 +335,7 @@ class RecipeTests(unittest.TestCase):
                         self.recipe.inventory()
 
     def test_stack_reuses_ui_key_in_existing_release(self):
+        self.config['monitoring']['enabled'] = False
         encoded = __import__('base64').b64encode(b'private-cluster-token').decode()
         responses = [json.dumps({'data': {'cluster-token': encoded}}), json.dumps({'data': {'ca.crt': 'public-ca'}})]
         with patch.object(self.recipe, 'prepare'), patch.object(self.recipe, 'bound_cluster'), \

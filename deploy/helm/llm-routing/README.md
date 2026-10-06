@@ -46,6 +46,8 @@ Use your existing kubeconfig.
 
 Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](spark/BUILDING.md).
 
+New configurations also enable [demo monitoring](spark/MONITORING.md). For local image imports, [preload monitoring images](spark/MONITORING.md#offline-images) before `stack`. Set `monitoring.enabled=false` to skip it.
+
 ### Deploy in order
 
 Run each command in order and continue after it succeeds.
@@ -153,6 +155,8 @@ Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
 ### Uninstall
 
+If monitoring is installed, [remove it first](spark/MONITORING.md#uninstall).
+
 Run the entire block, including parentheses, from `deploy/helm/llm-routing/spark` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
 
 The namespace and release names below are the default K3s recipe values. If you changed `namespace`, `releasePrefix` or `releases` in your saved configuration, replace these names to match. The model chain release is the GLM release name plus `-chain`, and the image-import release is the release prefix plus `-images`.
@@ -226,6 +230,10 @@ Both model persistent volume claims (PVCs) remain after uninstall.
 
 ## Optional configuration
 
+### Demo monitoring
+
+After registering a model, follow [monitoring verification](spark/MONITORING.md#verification) and [open Grafana](spark/MONITORING.md#dashboard). The guide also covers installation on an existing stack, offline images and removal.
+
 ### Alternative container runtimes and external configuration
 
 For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](spark/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
@@ -279,6 +287,7 @@ python3 spark.py verify-gateway
 From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks.
 
 ```bash
+python3 -m pip install -r tests/requirements-monitoring.txt
 python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s charts/gguf-backend/tests -v
 python3 spark.py render

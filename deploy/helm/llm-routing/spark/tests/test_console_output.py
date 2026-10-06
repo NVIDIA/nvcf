@@ -164,6 +164,53 @@ class ConsoleOutputTests(unittest.TestCase):
         self.assertEqual(self.stdout.getvalue(), 'inventory passed.\n')
         self.assertEqual(self.stderr.getvalue(), '')
 
+    def test_monitoring_image_list_remains_a_cli_payload(self):
+        arguments = self.cli_arguments()[:-1] + ['monitoring-images']
+        images = ['example/collector:1', 'example/metrics:2', 'example/dashboard:3']
+        with self.captured(), patch.object(spark, 'Recipe'), \
+             patch.object(spark.monitoring, 'image_list', return_value=images):
+            status = spark.cli(arguments)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(self.stdout.getvalue(), '\n'.join(images) + '\n')
+        self.assertEqual(self.stderr.getvalue(), '')
+
+    def test_dashboard_instructions_are_visible_while_tunnel_is_running(self):
+        arguments = self.cli_arguments()[:-1] + ['dashboard', '--port', '13000']
+
+        def dashboard(port):
+            print('Dashboard: http://127.0.0.1:' + str(port) + '/d/llm-demo', flush=True)
+            self.assertIn('http://127.0.0.1:13000/d/llm-demo', self.stdout.getvalue())
+            raise RuntimeError('Grafana tunnel disconnected')
+
+        with self.captured(), patch.object(spark, 'Recipe'), \
+             patch.object(spark.monitoring, 'Monitoring') as monitor:
+            monitor.return_value.dashboard.side_effect = dashboard
+            status = spark.cli(arguments)
+
+        self.assertEqual(status, 1)
+        self.assertIn('Grafana tunnel disconnected', self.stderr.getvalue())
+        self.assertIn('monitoring-port-forward.log', self.stderr.getvalue())
+        self.assertNotIn('passed.', self.stdout.getvalue())
+
+    def test_monitoring_export_keeps_archive_path_and_hides_tool_chatter(self):
+        arguments = self.cli_arguments()[:-1] + ['export-monitoring-images']
+
+        def export(archive):
+            print('Docker layer details')
+            print('Monitoring image archive:', archive)
+
+        with self.captured(), patch.object(spark, 'Recipe') as recipe, \
+             patch.object(spark.monitoring, 'Monitoring') as monitor:
+            recipe.return_value.work = self.work
+            monitor.return_value.export_images.side_effect = export
+            status = spark.cli(arguments)
+
+        self.assertEqual(status, 0)
+        self.assertIn('export-monitoring-images passed.', self.stdout.getvalue())
+        self.assertIn(str(self.work/'monitoring-arm64-images.tar'), self.stdout.getvalue())
+        self.assertNotIn('Docker layer details', self.stdout.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

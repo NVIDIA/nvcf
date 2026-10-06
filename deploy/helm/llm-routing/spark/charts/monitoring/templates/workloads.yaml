@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- if .Values.enabled }}
+{{- if empty .Values.namespaces }}{{ fail "namespaces must name the recipe namespaces to scrape" }}{{ end }}
+{{- if empty .Values.targets }}{{ fail "targets must list the component scrape targets" }}{{ end }}
+{{- $secret := required "grafana.adminSecret must name a Secret with admin-user and admin-password" .Values.grafana.adminSecret }}
+{{- range $component, $settings := dict "collector" .Values.collector "victoria-metrics" .Values.victoriaMetrics "grafana" .Values.grafana }}
+{{- $port := index (dict "collector" 13133 "victoria-metrics" 8428 "grafana" 3000) $component }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-{{ $component }}
+  labels: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $component }}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $component }}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $component }}}
+      annotations:
+        checksum/config: {{ printf "%s%s%s" (include (print $.Template.BasePath "/collector.yaml") $) (include (print $.Template.BasePath "/grafana.yaml") $) (toJson $.Values) | sha256sum }}
+    spec:
+      {{- if eq $component "collector" }}
+      serviceAccountName: {{ $.Release.Name }}-collector
+      automountServiceAccountToken: true
+      {{- else }}
+      automountServiceAccountToken: false
+      {{- end }}
+      nodeSelector: {{ toJson $.Values.nodeSelector }}
+      imagePullSecrets: {{ toJson $.Values.imagePullSecrets }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ ternary 472 10001 (eq $component "grafana") }}
+        runAsGroup: {{ ternary 472 10001 (eq $component "grafana") }}
+        fsGroup: {{ ternary 472 10001 (eq $component "grafana") }}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: {{ $component }}
+          image: {{ $settings.image | quote }}
+          imagePullPolicy: {{ $.Values.imagePullPolicy }}
+          resources: {{ toJson $settings.resources }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          ports: [{name: http, containerPort: {{ $port }}}]
+          readinessProbe:
+            httpGet: {path: {{ ternary "/api/health" "/health" (eq $component "grafana") }}, port: http}
+            initialDelaySeconds: 5
+          {{- if eq $component "collector" }}
+          args: [--config=/etc/otel/config.yaml]
+          {{- else if eq $component "victoria-metrics" }}
+          args:
+            - -storageDataPath=/storage
+            - -retentionPeriod={{ $.Values.victoriaMetrics.retentionPeriod }}
+            - -memory.allowedPercent=60
+          {{- else }}
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: admin-user}}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: admin-password}}
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "false"}
+            - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
+            - {name: GF_PLUGINS_PREINSTALL_DISABLED, value: "true"}
+            - {name: GF_LOG_MODE, value: console}
+          {{- end }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            {{- if eq $component "collector" }}
+            - {name: config, mountPath: /etc/otel, readOnly: true}
+            {{- else if eq $component "victoria-metrics" }}
+            - {name: data, mountPath: /storage}
+            {{- else }}
+            - {name: data, mountPath: /var/lib/grafana}
+            - {name: datasource, mountPath: /etc/grafana/provisioning/datasources, readOnly: true}
+            - {name: provider, mountPath: /etc/grafana/provisioning/dashboards, readOnly: true}
+            - {name: dashboard, mountPath: /var/lib/grafana/dashboards, readOnly: true}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}
+        {{- if eq $component "collector" }}
+        - name: config
+          configMap: {name: {{ $.Release.Name }}-collector}
+        {{- else if eq $component "victoria-metrics" }}
+        - name: data
+          {{- if $.Values.victoriaMetrics.storage.enabled }}
+          persistentVolumeClaim: {claimName: {{ $.Release.Name }}-metrics}
+          {{- else }}
+          emptyDir: {sizeLimit: {{ $.Values.victoriaMetrics.storage.size }}}
+          {{- end }}
+        {{- else }}
+        - name: data
+          emptyDir: {sizeLimit: 512Mi}
+        {{- range $name, $key := dict "datasource" "datasource.yaml" "provider" "dashboard.yaml" "dashboard" "dashboard.json" }}
+        - name: {{ $name }}
+          configMap:
+            name: {{ $.Release.Name }}-grafana
+            items: [{key: {{ $key }}, path: {{ $key }}}]
+        {{- end }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-{{ $component }}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $component }}}
+  ports: [{name: http, port: {{ $port }}, targetPort: http}]
+---
+{{- end }}
+{{- if .Values.victoriaMetrics.storage.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-metrics
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.victoriaMetrics.storage.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.victoriaMetrics.storage.size }}
+{{- end }}
+{{- end }}
