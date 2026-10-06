@@ -311,6 +311,7 @@ static int do_unlock(int pid)
 
 struct lock_job {
     pthread_t thread;
+    int started;  /* thread created: join it, then read ret */
     int pid;
     unsigned timeout_ms;
     int ret;
@@ -333,9 +334,8 @@ static int lock_all(const int *pids, int n, unsigned timeout_ms)
         CUprocessState s;
         jobs[i].pid = pids[i];
         jobs[i].timeout_ms = timeout_ms;
-        jobs[i].ret = 1; /* 1 = not started */
         if (get_state(pids[i], &s) < 0) { failures++; continue; }
-        if (s == CU_PROCESS_STATE_LOCKED) { jobs[i].ret = 0; continue; }
+        if (s == CU_PROCESS_STATE_LOCKED) continue;
         if (s != CU_PROCESS_STATE_RUNNING) {
             fprintf(stderr, "pid=%d cannot lock from state %s\n",
                     pids[i], state_name(s));
@@ -347,11 +347,11 @@ static int lock_all(const int *pids, int n, unsigned timeout_ms)
             failures++;
             continue;
         }
-        jobs[i].ret = 2; /* 2 = thread running */
+        jobs[i].started = 1;
     }
     for (int i = 0; i < n; i++) {
-        if (jobs[i].ret != 2) continue;
-        pthread_join(jobs[i].thread, NULL);
+        if (!jobs[i].started) continue;
+        pthread_join(jobs[i].thread, NULL);  /* ret is the thread's only after this */
         if (jobs[i].ret != 0) failures++;
     }
 
@@ -424,12 +424,13 @@ static int full_save(const int *pids, int n, unsigned timeout_ms)
 static int full_restore(const int *pids, int n)
 {
     /* Restore every CHECKPOINTED pid; LOCKED pids were already restored
-     * (e.g. by a previous partial run), so re-running is safe. */
+     * and RUNNING ones also unlocked (e.g. by a previous run that failed
+     * later, in "remap"), so re-running is safe and lets a resume retry. */
     int failures = 0, *todo = calloc(n, sizeof(int)), nt = 0;
     for (int i = 0; i < n; i++) {
         CUprocessState s;
         if (get_state(pids[i], &s) < 0) { failures++; continue; }
-        if (s == CU_PROCESS_STATE_LOCKED) continue;
+        if (s == CU_PROCESS_STATE_LOCKED || s == CU_PROCESS_STATE_RUNNING) continue;
         if (s != CU_PROCESS_STATE_CHECKPOINTED) {
             fprintf(stderr, "pid=%d cannot restore from state %s\n",
                     pids[i], state_name(s));
@@ -446,8 +447,11 @@ static int full_restore(const int *pids, int n)
         return -1;
     }
 
-    for (int i = 0; i < n; i++)
-        if (do_unlock(pids[i]) < 0) failures++;
+    for (int i = 0; i < n; i++) {
+        CUprocessState s;
+        if (get_state(pids[i], &s) < 0) failures++;
+        else if (s == CU_PROCESS_STATE_LOCKED && do_unlock(pids[i]) < 0) failures++;
+    }
     return failures ? -1 : 0;
 }
 
@@ -650,15 +654,67 @@ static int remap_all(const int *pids, int n)
 
 #define STATE_DIR "/tmp/nvsnap-gpu-suspend"
 
-static void state_path(char *buf, size_t len, int pid, const char *ext)
+/* The state directory has a predictable path in /tmp, where another user
+ * could create it first and plant symlinks for this tool (often root) to
+ * follow. Use it only if it is a directory owned by us that no one else can
+ * write to, and open files in it relative to it, never through a symlink. */
+static int state_dir(void)
 {
-    snprintf(buf, len, STATE_DIR "/%d.%s", pid, ext);
+    static int fd = -1;
+    struct stat st;
+    if (fd >= 0) return fd;
+    if (mkdir(STATE_DIR, 0700) != 0 && errno != EEXIST) {
+        fprintf(stderr, STATE_DIR ": %s\n", strerror(errno));
+        return -1;
+    }
+    int d = open(STATE_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (d < 0 || fstat(d, &st) != 0 || st.st_uid != geteuid() || (st.st_mode & 077)) {
+        fprintf(stderr, STATE_DIR ": not a directory of uid %d with mode 0700 (%s); refusing to use it\n",
+                (int)geteuid(), d < 0 ? strerror(errno) : "wrong owner or mode");
+        if (d >= 0) close(d);
+        return -1;
+    }
+    return fd = d;
 }
 
-static void write_file(const char *path, const char *text)
+/* Name of pid's state file in the state directory. */
+static void state_path(char *buf, size_t len, int pid, const char *ext)
 {
-    FILE *fp = fopen(path, "w");
-    if (fp) { fputs(text, fp); fclose(fp); }
+    snprintf(buf, len, "%d.%s", pid, ext);
+}
+
+static int state_open(const char *name, int flags)
+{
+    int d = state_dir();
+    return d < 0 ? -1 : openat(d, name, flags | O_NOFOLLOW | O_CLOEXEC, 0600);
+}
+
+static FILE *state_fopen(const char *name)
+{
+    int fd = state_open(name, O_RDONLY);
+    FILE *fp = fd >= 0 ? fdopen(fd, "r") : NULL;
+    if (fd >= 0 && !fp) close(fd);
+    return fp;
+}
+
+static int state_exists(const char *name)
+{
+    int d = state_dir();
+    return d >= 0 && faccessat(d, name, F_OK, AT_SYMLINK_NOFOLLOW) == 0;
+}
+
+static void state_unlink(const char *name)
+{
+    int d = state_dir();
+    if (d >= 0) unlinkat(d, name, 0);
+}
+
+static void write_file(const char *name, const char *text)
+{
+    int fd = state_open(name, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) return;
+    ssize_t __attribute__((unused)) w = write(fd, text, strlen(text));
+    close(fd);
 }
 
 /* Wait until every thread of pid is in stopped state ('T'). */
@@ -821,7 +877,7 @@ out:
             printf("stop: all pids SIGSTOPped, holder exiting (%s)\n", ok_stop ? "ok" : "FAILED");
             for (int i = 0; i < n; i++) {
                 state_path(path, sizeof(path), pids[i], "holder");
-                unlink(path);
+                state_unlink(path);
             }
             write_file(result, ok_stop ? "ok\n" : "fail\n");
             free(fz);
@@ -836,17 +892,17 @@ out:
     printf("thawed all pids\n");
     for (int i = 0; i < n; i++) {
         state_path(path, sizeof(path), pids[i], "holder");
-        unlink(path);
+        state_unlink(path);
     }
     write_file(result, "ok\n");
     free(fz);
     return 0;
 }
 
-static void cat_file(const char *path, long from)
+static void cat_file(const char *name, long from)
 {
     char line[512];
-    FILE *fp = fopen(path, "r");
+    FILE *fp = state_fopen(name);
     if (!fp) return;
     fseek(fp, from, SEEK_SET);
     while (fgets(line, sizeof(line), fp)) fputs(line, stdout);
@@ -858,10 +914,10 @@ static int suspend(const int *pids, int n, unsigned timeout_ms)
     char log[256], path[256];
     int fds[2];
 
-    mkdir(STATE_DIR, 0700);
+    if (state_dir() < 0) return -1;
     state_path(path, sizeof(path), pids[0], "holder");
-    if (access(path, F_OK) == 0) {
-        fprintf(stderr, "pid=%d already suspended (%s exists)\n", pids[0], path);
+    if (state_exists(path)) {
+        fprintf(stderr, "pid=%d already suspended (" STATE_DIR "/%s exists)\n", pids[0], path);
         return -1;
     }
     state_path(log, sizeof(log), pids[0], "log");
@@ -873,7 +929,7 @@ static int suspend(const int *pids, int n, unsigned timeout_ms)
     if (child == 0) {
         close(fds[0]);
         setsid();
-        int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        int fd = state_open(log, O_WRONLY | O_CREAT | O_TRUNC);
         if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); }
         int nul = open("/dev/null", O_RDONLY);
         if (nul >= 0) { dup2(nul, 0); close(nul); }
@@ -889,7 +945,7 @@ static int suspend(const int *pids, int n, unsigned timeout_ms)
         waitpid(child, NULL, 0);
         return -1;
     }
-    printf("suspended; holder pid=%d (log: %s)\n", child, log);
+    printf("suspended; holder pid=%d (log: " STATE_DIR "/%s)\n", child, log);
     return 0;
 }
 
@@ -899,7 +955,7 @@ static int resume(const int *pids, int n, unsigned timeout_s)
 {
     char hp[256];
     state_path(hp, sizeof(hp), pids[0], "holder");
-    if (access(hp, F_OK) == 0)
+    if (state_exists(hp))
         return signal_holder(pids, SIGUSR1, timeout_s);
     return resume_unheld(pids, n);
 }
@@ -911,30 +967,30 @@ static int signal_holder(const int *pids, int sig, unsigned timeout_s)
     state_path(result, sizeof(result), pids[0], "result");
     state_path(log, sizeof(log), pids[0], "log");
 
-    FILE *fp = fopen(path, "r");
-    if (!fp) { fprintf(stderr, "pid=%d is not suspended (no %s)\n", pids[0], path); return -1; }
+    FILE *fp = state_fopen(path);
+    if (!fp) { fprintf(stderr, "pid=%d is not suspended (no " STATE_DIR "/%s)\n", pids[0], path); return -1; }
     int holder_pid = 0;
     if (fscanf(fp, "%d", &holder_pid) != 1) holder_pid = 0;
     fclose(fp);
     if (holder_pid <= 0 || kill(holder_pid, 0) != 0) {
         fprintf(stderr, "holder for pid=%d is gone; pids are no longer frozen\n", pids[0]);
-        unlink(path);
+        state_unlink(path);
         return -1;
     }
 
     struct stat st;
-    long log_off = stat(log, &st) == 0 ? (long)st.st_size : 0;
-    unlink(result);
+    long log_off = state_dir() >= 0 && fstatat(state_dir(), log, &st, AT_SYMLINK_NOFOLLOW) == 0 ? (long)st.st_size : 0;
+    state_unlink(result);
     if (kill(holder_pid, sig) != 0) { perror("kill holder"); return -1; }
-    for (unsigned waited = 0; access(result, F_OK) != 0; waited++) {
+    for (unsigned waited = 0; !state_exists(result); waited++) {
         if (waited >= timeout_s * 10) { fprintf(stderr, "holder timed out\n"); return -1; }
         usleep(100000);
     }
     char buf[16] = "";
-    fp = fopen(result, "r");
+    fp = state_fopen(result);
     if (fp) { if (!fgets(buf, sizeof(buf), fp)) buf[0] = 0; fclose(fp); }
     cat_file(log, log_off);
-    unlink(result);
+    state_unlink(result);
     if (strncmp(buf, "ok", 2) != 0) {
         fprintf(stderr, "holder reported failure; pids stay frozen + CHECKPOINTED (retry)\n");
         return -1;

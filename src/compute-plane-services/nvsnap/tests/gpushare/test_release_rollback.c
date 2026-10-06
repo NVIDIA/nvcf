@@ -21,7 +21,9 @@ SPDX-License-Identifier: Apache-2.0
  *      X, is already checkpointed).
  *
  * Then a normal suspend and resume, with a second shared allocation that E
- * has freed while I still maps it (it must stay reserved and unmapped).
+ * has freed while I still maps it (it must stay reserved and unmapped), and
+ * a resume that fails after the driver restore (the chunk store is gone)
+ * and succeeds when run again once the store is back.
  *
  * Build: gcc -O2 -I/usr/local/cuda/include -o test_release_rollback test_release_rollback.c \
  *            -L/usr/local/cuda/lib64/stubs -lcuda
@@ -235,6 +237,18 @@ int main(int argc, char **argv)
     EXPECT(run(args, pids, &ok, &bad) == 0, "suspend");
     EXPECT(run("resume", pids, &ok, &bad) == 0, "resume");
     works("after 4");
+
+    printf("--- 5. resume fails after the driver restore, then a retry completes\n");
+    char st[700], moved[700];
+    snprintf(st, sizeof st, "%s/s5", dir);
+    snprintf(moved, sizeof moved, "%s/s5.away", dir);
+    snprintf(args, sizeof args, "--store %s --ckpt-dir %s/c5 suspend", st, dir);
+    EXPECT(run(args, pids, &ok, &bad) == 0, "suspend to a chunk store");
+    EXPECT(rename(st, moved) == 0, "chunk store moved away");
+    EXPECT(run("resume", pids, &ok, &bad) != 0, "resume fails (chunks missing)");
+    EXPECT(rename(moved, st) == 0, "chunk store back");
+    EXPECT(run("resume", pids, &ok, &bad) == 0, "resume again completes");
+    works("after 5");
 
 out:
     for (int i = 0; i < 3; i++) {

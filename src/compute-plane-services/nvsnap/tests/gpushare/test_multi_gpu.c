@@ -13,7 +13,9 @@ SPDX-License-Identifier: Apache-2.0
  * keeping the saved memory in host RAM, then again with a chunk store.
  * Checks: peer writes work before and after, on buffers allocated before
  * and after the restore and after peer access is disabled and enabled
- * again; the contents of both buffers survive.
+ * again; the contents of both buffers survive. Also a cuMem allocation the
+ * child exports and imports itself, given access by GPU 0 and GPU 1 in two
+ * separate cuMemSetAccess calls: both must keep access across restores.
  *
  * Build: gcc -O2 -I/usr/local/cuda/include -o test_multi_gpu test_multi_gpu.c \
  *            -L/usr/local/cuda/lib64/stubs -lcuda
@@ -43,8 +45,8 @@ static const char *ptx =
 
 static CUcontext ctx[2];
 static CUfunction fill[2];
-static CUdeviceptr buf[3];  /* on GPU 0, GPU 1, and GPU 0 (allocated after restore) */
-static const uint32_t pat[3] = { 0xA0A0A0A0, 0xB1B1B1B1, 0xC0C0C0C0 };
+static CUdeviceptr buf[4];  /* on GPU 0, GPU 1, GPU 0 (allocated after restore), import of a GPU 0 cuMem allocation */
+static const uint32_t pat[4] = { 0xA0A0A0A0, 0xB1B1B1B1, 0xC0C0C0C0, 0xD0D0D0D0 };
 
 /* A kernel on GPU g stores v at buf[i][0] (on the other GPU). */
 static void peer_write(int g, int i, uint32_t v)
@@ -60,7 +62,7 @@ static int check(int i, uint32_t v)
 {
     uint32_t *h = malloc(SIZE);
     CK(cuCtxSetCurrent(ctx[i == 1]));
-    CK(cuMemcpyDtoH(h, buf[i], SIZE));
+    CK(cuMemcpyDtoH(h, buf[i], SIZE));  /* buf[3]: read on GPU 0 */
     int bad = h[0] != v;
     for (size_t k = 1; !bad && k < SIZE / 4; k++) bad = h[k] != pat[i];
     if (bad) fprintf(stderr, "buf %d: [0]=%#x (want %#x) [1]=%#x\n", i, h[0], v, h[1]);
@@ -73,6 +75,36 @@ static void alloc(int i)
     CK(cuCtxSetCurrent(ctx[i == 1]));
     CK(cuMemAlloc(&buf[i], SIZE));
     CK(cuMemsetD32(buf[i], pat[i], SIZE / 4));
+    CK(cuCtxSynchronize());
+}
+
+/* buf[3]: a cuMem allocation on GPU 0, exported as a POSIX fd and imported
+ * again (as a peer process would), mapped, and given access by GPU 0 and
+ * GPU 1 in two separate cuMemSetAccess calls. */
+static void import_self(void)
+{
+    CUmemAllocationProp p = { .type = CU_MEM_ALLOCATION_TYPE_PINNED,
+        .location = { CU_MEM_LOCATION_TYPE_DEVICE, 0 },
+        .requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR };
+    CUmemGenericAllocationHandle h, h2;
+    CUdeviceptr va;
+    int fd;
+    CK(cuCtxSetCurrent(ctx[0]));
+    CK(cuMemCreate(&h, SIZE, &p, 0));
+    CK(cuMemAddressReserve(&va, SIZE, 0, 0, 0));  /* the exporter's own mapping */
+    CK(cuMemMap(va, SIZE, 0, h, 0));
+    CUmemAccessDesc a0 = { { CU_MEM_LOCATION_TYPE_DEVICE, 0 }, CU_MEM_ACCESS_FLAGS_PROT_READWRITE };
+    CUmemAccessDesc a1 = { { CU_MEM_LOCATION_TYPE_DEVICE, 1 }, CU_MEM_ACCESS_FLAGS_PROT_READWRITE };
+    CK(cuMemSetAccess(va, SIZE, &a0, 1));
+    CK(cuMemExportToShareableHandle(&fd, h, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0));
+    CK(cuMemImportFromShareableHandle(&h2, (void *)(uintptr_t)fd, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR));
+    close(fd);
+    CK(cuMemAddressReserve(&buf[3], SIZE, 0, 0, 0));
+    CK(cuMemMap(buf[3], SIZE, 0, h2, 0));
+    CK(cuMemSetAccess(buf[3], SIZE, &a0, 1));
+    CK(cuMemSetAccess(buf[3], SIZE, &a1, 1));
+    CK(cuMemRelease(h2));
+    CK(cuMemsetD32(buf[3], pat[3], SIZE / 4));
     CK(cuCtxSynchronize());
 }
 
@@ -107,12 +139,14 @@ static void child(int cmd, int rep)
                 CK(cuCtxSetCurrent(ctx[g]));
                 CK(cuCtxEnablePeerAccess(ctx[!g], 0));
             }
+            import_self();
             break;
         case 'w':
             gen++;
             peer_write(1, 0, gen);  /* GPU 1 writes GPU 0's buffer */
             peer_write(0, 1, gen);  /* and back */
-            r = check(0, gen) || check(1, gen);
+            peer_write(1, 3, gen);  /* GPU 1 writes the import; GPU 0 reads it */
+            r = check(0, gen) || check(1, gen) || check(3, gen);
             break;
         case 'n':
             alloc(2);

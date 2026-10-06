@@ -548,39 +548,46 @@ static const char *errstr(CUresult r)
 
 static int n_legacy;  /* imports through the driver's own CUDA IPC */
 
-/* ── Launch gate ──────────────────────────────────────────────────────── */
+/* ── Gates ─────────────────────────────────────────────────────────────── */
 
+/* Two gates hold the app's CUDA calls during a checkpoint. "quiesce" closes
+ * the launch gate (kernels, graphs) and drains the GPU, then closes the
+ * memory gate (copies, memsets, stream memory operations) and drains again.
+ * Copies wait for the drain to finish before they are held: NCCL's proxy
+ * thread issues copies that its kernels in flight need to complete. */
+struct gate { int closed, inflight; };
+static struct gate lgate, mgate;
 static pthread_mutex_t gate_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t gate_cv = PTHREAD_COND_INITIALIZER;
-static int gated;     /* launches wait while set */
-static int inflight;  /* launches past the gate, not yet returned */
+#define gated (lgate.closed)
 
-static void gate_enter(void)
+static void gate_enter(struct gate *g)
 {
     for (;;) {
-        __atomic_add_fetch(&inflight, 1, __ATOMIC_SEQ_CST);
-        if (!__atomic_load_n(&gated, __ATOMIC_SEQ_CST)) return;
-        __atomic_sub_fetch(&inflight, 1, __ATOMIC_SEQ_CST);
+        __atomic_add_fetch(&g->inflight, 1, __ATOMIC_SEQ_CST);
+        if (!__atomic_load_n(&g->closed, __ATOMIC_SEQ_CST)) return;
+        __atomic_sub_fetch(&g->inflight, 1, __ATOMIC_SEQ_CST);
         pthread_mutex_lock(&gate_mu);
-        while (gated) pthread_cond_wait(&gate_cv, &gate_mu);
+        while (g->closed) pthread_cond_wait(&gate_cv, &gate_mu);
         pthread_mutex_unlock(&gate_mu);
     }
 }
 
-static void gate_exit(void) { __atomic_sub_fetch(&inflight, 1, __ATOMIC_SEQ_CST); }
+static void gate_exit(struct gate *g) { __atomic_sub_fetch(&g->inflight, 1, __ATOMIC_SEQ_CST); }
 
-/* Close the gate and wait for launches already past it. */
-static int gate_close(int ms)
+/* Close the gate and wait for calls already past it. */
+static int gate_close(struct gate *g, int ms)
 {
-    __atomic_store_n(&gated, 1, __ATOMIC_SEQ_CST);
-    for (int i = 0; i < ms && __atomic_load_n(&inflight, __ATOMIC_SEQ_CST); i++) usleep(1000);
-    return __atomic_load_n(&inflight, __ATOMIC_SEQ_CST) ? -1 : 0;
+    __atomic_store_n(&g->closed, 1, __ATOMIC_SEQ_CST);
+    for (int i = 0; i < ms && __atomic_load_n(&g->inflight, __ATOMIC_SEQ_CST); i++) usleep(1000);
+    return __atomic_load_n(&g->inflight, __ATOMIC_SEQ_CST) ? -1 : 0;
 }
 
+/* Open both gates. */
 static void gate_open(void)
 {
     pthread_mutex_lock(&gate_mu);
-    gated = 0;
+    lgate.closed = mgate.closed = 0;
     pthread_cond_broadcast(&gate_cv);
     pthread_mutex_unlock(&gate_mu);
 }
@@ -643,7 +650,8 @@ static void do_quiesce(char *reply, size_t n)
     /* Busy: GPU work waits on work a gated thread has not launched yet
      * (e.g. a peer's NCCL kernel). Reopen the gate; the tool retries. */
     CUresult r;
-    if (gate_close(2000) < 0 || timed_sync(2000, &r) < 0) {
+    if (gate_close(&lgate, 2000) < 0 || timed_sync(2000, &r) < 0 ||
+        gate_close(&mgate, 2000) < 0 || timed_sync(2000, &r) < 0) {
         gate_open();
         snprintf(reply, n, "err busy (GPU work did not drain)");
         pthread_mutex_unlock(&mu);
@@ -1389,21 +1397,35 @@ static CUresult w_release(CUmemGenericAllocationHandle h)
     return r;
 }
 
+/* cuMemSetAccess changes the access of the locations it names and keeps
+ * the others': merge, so that remap grants all of them again. */
+static void acc_merge(struct map *m, const CUmemAccessDesc *d, size_t n)
+{
+    for (size_t k = 0; k < n; k++) {
+        int j = 0;
+        while (j < m->nacc && (m->acc[j].location.type != d[k].location.type ||
+                               m->acc[j].location.id != d[k].location.id)) j++;
+        if (d[k].flags == CU_MEM_ACCESS_FLAGS_PROT_NONE) {
+            if (j < m->nacc) m->acc[j] = m->acc[--m->nacc];
+        } else if (j < m->nacc) {
+            m->acc[j] = d[k];
+        } else if (m->nacc < MAX_ACC) {
+            m->acc[m->nacc++] = d[k];
+        } else {
+            logf_("access for %#llx: more than %d locations, not all restored", (unsigned long long)m->va, MAX_ACC);
+        }
+    }
+}
+
 static CUresult w_set_access(CUdeviceptr va, size_t size, const CUmemAccessDesc *d, size_t n)
 {
     CUresult r = REAL(r_set_access, "cuMemSetAccess")(va, size, d, n);
-    if (r != CUDA_SUCCESS || n > MAX_ACC) return r;
+    if (r != CUDA_SUCCESS) return r;
     pthread_mutex_lock(&mu);
     for (int i = 0; i < n_maps; i++)
-        if (maps[i].va >= va && maps[i].va < va + size) {
-            memcpy(maps[i].acc, d, n * sizeof(*d));
-            maps[i].nacc = n;
-        }
+        if (maps[i].va >= va && maps[i].va < va + size) acc_merge(&maps[i], d, n);
     for (int i = 0; i < n_mcmaps; i++)
-        if (mcmaps[i].va >= va && mcmaps[i].va < va + size) {
-            memcpy(mcmaps[i].acc, d, n * sizeof(*d));
-            mcmaps[i].nacc = n;
-        }
+        if (mcmaps[i].va >= va && mcmaps[i].va < va + size) acc_merge(&mcmaps[i], d, n);
     pthread_mutex_unlock(&mu);
     return r;
 }
@@ -2092,10 +2114,7 @@ static CUresult peer_access(CUcontext peer, int on)
     for (int i = 0; r == CUDA_SUCCESS && i < n_maps; i++) {
         struct map *m = &maps[i];
         if (!m->ipc || m->gone || m->acc[0].location.id != owner) continue;
-        int j = 1;
-        while (j < m->nacc && m->acc[j].location.id != me) j++;
-        if (on && j == m->nacc && m->nacc < MAX_ACC) m->acc[m->nacc++] = a;
-        if (!on && j < m->nacc) m->acc[j] = m->acc[--m->nacc];
+        acc_merge(m, &a, 1);
         if (!imps[m->imp].released) r = REAL(r_set_access, "cuMemSetAccess")(m->va, m->size, &a, 1);
     }
     pthread_mutex_unlock(&mu);
@@ -2117,12 +2136,14 @@ static CUresult w_peer_off(CUcontext peer)
 
 /* Gated launches. Each has a default-stream and a per-thread-stream
  * (_ptsz) entry point, which cuGetProcAddress returns under one name. */
-#define GATED(name, params, args) \
+#define GATED_G(g, name, params, args) \
     static CUresult (*r_##name) params, (*r_##name##_ptsz) params; \
     static CUresult w_##name params \
-    { gate_enter(); CUresult r_ = REAL(r_##name, #name) args; gate_exit(); return r_; } \
+    { gate_enter(&g); CUresult r_ = REAL(r_##name, #name) args; gate_exit(&g); return r_; } \
     static CUresult w_##name##_ptsz params \
-    { gate_enter(); CUresult r_ = REAL(r_##name##_ptsz, #name "_ptsz") args; gate_exit(); return r_; }
+    { gate_enter(&g); CUresult r_ = REAL(r_##name##_ptsz, #name "_ptsz") args; gate_exit(&g); return r_; }
+#define GATED(name, params, args) GATED_G(lgate, name, params, args)
+#define GATED_M(name, params, args) GATED_G(mgate, name, params, args)
 
 GATED(cuLaunchKernel, (CUfunction f, unsigned gx, unsigned gy, unsigned gz, unsigned bx, unsigned by,
       unsigned bz, unsigned sh, CUstream st, void **p, void **x), (f, gx, gy, gz, bx, by, bz, sh, st, p, x))
@@ -2130,6 +2151,56 @@ GATED(cuLaunchKernelEx, (const CUlaunchConfig *c, CUfunction f, void **p, void *
 GATED(cuLaunchCooperativeKernel, (CUfunction f, unsigned gx, unsigned gy, unsigned gz, unsigned bx,
       unsigned by, unsigned bz, unsigned sh, CUstream st, void **p), (f, gx, gy, gz, bx, by, bz, sh, st, p))
 GATED(cuGraphLaunch, (CUgraphExec g, CUstream st), (g, st))
+
+/* Copies, memsets and stream memory operations wait in the memory gate: an
+ * app thread past the drain must not touch memory "release" is freeing. The
+ * synchronous ones have a per-thread-default-stream (_ptds) entry point. */
+#define GATED_DS(name, params, args) \
+    static CUresult (*r_##name) params, (*r_##name##_ptds) params; \
+    static CUresult w_##name params \
+    { gate_enter(&mgate); CUresult r_ = REAL(r_##name, #name) args; gate_exit(&mgate); return r_; } \
+    static CUresult w_##name##_ptds params \
+    { gate_enter(&mgate); CUresult r_ = REAL(r_##name##_ptds, #name "_ptds") args; gate_exit(&mgate); return r_; }
+
+GATED_DS(cuMemcpy, (CUdeviceptr d, CUdeviceptr s, size_t n), (d, s, n))
+GATED_DS(cuMemcpyPeer, (CUdeviceptr d, CUcontext dc, CUdeviceptr s, CUcontext sc, size_t n), (d, dc, s, sc, n))
+GATED_DS(cuMemcpyHtoD_v2, (CUdeviceptr d, const void *s, size_t n), (d, s, n))
+GATED_DS(cuMemcpyDtoH_v2, (void *d, CUdeviceptr s, size_t n), (d, s, n))
+GATED_DS(cuMemcpyDtoD_v2, (CUdeviceptr d, CUdeviceptr s, size_t n), (d, s, n))
+GATED_DS(cuMemcpy2D_v2, (const CUDA_MEMCPY2D *c), (c))
+GATED_DS(cuMemcpy2DUnaligned_v2, (const CUDA_MEMCPY2D *c), (c))
+GATED_DS(cuMemcpy3D_v2, (const CUDA_MEMCPY3D *c), (c))
+GATED_DS(cuMemcpy3DPeer, (const CUDA_MEMCPY3D_PEER *c), (c))
+GATED_DS(cuMemsetD8_v2, (CUdeviceptr d, unsigned char v, size_t n), (d, v, n))
+GATED_DS(cuMemsetD16_v2, (CUdeviceptr d, unsigned short v, size_t n), (d, v, n))
+GATED_DS(cuMemsetD32_v2, (CUdeviceptr d, unsigned int v, size_t n), (d, v, n))
+GATED_DS(cuMemsetD2D8_v2, (CUdeviceptr d, size_t p, unsigned char v, size_t w, size_t h), (d, p, v, w, h))
+GATED_DS(cuMemsetD2D16_v2, (CUdeviceptr d, size_t p, unsigned short v, size_t w, size_t h), (d, p, v, w, h))
+GATED_DS(cuMemsetD2D32_v2, (CUdeviceptr d, size_t p, unsigned int v, size_t w, size_t h), (d, p, v, w, h))
+GATED_M(cuMemcpyAsync, (CUdeviceptr d, CUdeviceptr s, size_t n, CUstream st), (d, s, n, st))
+GATED_M(cuMemcpyPeerAsync, (CUdeviceptr d, CUcontext dc, CUdeviceptr s, CUcontext sc, size_t n, CUstream st),
+      (d, dc, s, sc, n, st))
+GATED_M(cuMemcpyHtoDAsync_v2, (CUdeviceptr d, const void *s, size_t n, CUstream st), (d, s, n, st))
+GATED_M(cuMemcpyDtoHAsync_v2, (void *d, CUdeviceptr s, size_t n, CUstream st), (d, s, n, st))
+GATED_M(cuMemcpyDtoDAsync_v2, (CUdeviceptr d, CUdeviceptr s, size_t n, CUstream st), (d, s, n, st))
+GATED_M(cuMemcpy2DAsync_v2, (const CUDA_MEMCPY2D *c, CUstream st), (c, st))
+GATED_M(cuMemcpy3DAsync_v2, (const CUDA_MEMCPY3D *c, CUstream st), (c, st))
+GATED_M(cuMemcpy3DPeerAsync, (const CUDA_MEMCPY3D_PEER *c, CUstream st), (c, st))
+GATED_M(cuMemsetD8Async, (CUdeviceptr d, unsigned char v, size_t n, CUstream st), (d, v, n, st))
+GATED_M(cuMemsetD16Async, (CUdeviceptr d, unsigned short v, size_t n, CUstream st), (d, v, n, st))
+GATED_M(cuMemsetD32Async, (CUdeviceptr d, unsigned int v, size_t n, CUstream st), (d, v, n, st))
+GATED_M(cuMemsetD2D8Async, (CUdeviceptr d, size_t p, unsigned char v, size_t w, size_t h, CUstream st),
+      (d, p, v, w, h, st))
+GATED_M(cuMemsetD2D16Async, (CUdeviceptr d, size_t p, unsigned short v, size_t w, size_t h, CUstream st),
+      (d, p, v, w, h, st))
+GATED_M(cuMemsetD2D32Async, (CUdeviceptr d, size_t p, unsigned int v, size_t w, size_t h, CUstream st),
+      (d, p, v, w, h, st))
+GATED_M(cuStreamWriteValue32_v2, (CUstream st, CUdeviceptr a, cuuint32_t v, unsigned f), (st, a, v, f))
+GATED_M(cuStreamWriteValue64_v2, (CUstream st, CUdeviceptr a, cuuint64_t v, unsigned f), (st, a, v, f))
+GATED_M(cuStreamWaitValue32_v2, (CUstream st, CUdeviceptr a, cuuint32_t v, unsigned f), (st, a, v, f))
+GATED_M(cuStreamWaitValue64_v2, (CUstream st, CUdeviceptr a, cuuint64_t v, unsigned f), (st, a, v, f))
+GATED_M(cuStreamBatchMemOp_v2, (CUstream st, unsigned n, CUstreamBatchMemOpParams *p, unsigned f), (st, n, p, f))
+GATED_M(cuLaunchHostFunc, (CUstream st, CUhostFn fn, void *u), (st, fn, u))
 
 static void *wrapper_for(const char *name, void *real);
 
@@ -2177,7 +2248,19 @@ static const struct { const char *name; void *wrapper; void **real; } hooks[] = 
     { "cuCtxEnablePeerAccess", w_peer_on, (void **)&r_peer_on },
     { "cuCtxDisablePeerAccess", w_peer_off, (void **)&r_peer_off },
 #define G(name) { #name, w_##name, (void **)&r_##name }, { #name "_ptsz", w_##name##_ptsz, (void **)&r_##name##_ptsz }
+#define GD(name) { #name, w_##name, (void **)&r_##name }, { #name "_ptds", w_##name##_ptds, (void **)&r_##name##_ptds }
     G(cuLaunchKernel), G(cuLaunchKernelEx), G(cuLaunchCooperativeKernel), G(cuGraphLaunch),
+    GD(cuMemcpy), GD(cuMemcpyPeer), GD(cuMemcpyHtoD_v2), GD(cuMemcpyDtoH_v2), GD(cuMemcpyDtoD_v2),
+    GD(cuMemcpy2D_v2), GD(cuMemcpy2DUnaligned_v2), GD(cuMemcpy3D_v2), GD(cuMemcpy3DPeer),
+    GD(cuMemsetD8_v2), GD(cuMemsetD16_v2), GD(cuMemsetD32_v2),
+    GD(cuMemsetD2D8_v2), GD(cuMemsetD2D16_v2), GD(cuMemsetD2D32_v2),
+    G(cuMemcpyAsync), G(cuMemcpyPeerAsync), G(cuMemcpyHtoDAsync_v2), G(cuMemcpyDtoHAsync_v2),
+    G(cuMemcpyDtoDAsync_v2), G(cuMemcpy2DAsync_v2), G(cuMemcpy3DAsync_v2), G(cuMemcpy3DPeerAsync),
+    G(cuMemsetD8Async), G(cuMemsetD16Async), G(cuMemsetD32Async),
+    G(cuMemsetD2D8Async), G(cuMemsetD2D16Async), G(cuMemsetD2D32Async),
+    G(cuStreamWriteValue32_v2), G(cuStreamWriteValue64_v2), G(cuStreamWaitValue32_v2),
+    G(cuStreamWaitValue64_v2), G(cuStreamBatchMemOp_v2), G(cuLaunchHostFunc),
+#undef GD
 #undef G
 };
 
@@ -2189,7 +2272,7 @@ static void *bind_hook(size_t i, void *real)
 }
 
 /* cuGetProcAddress takes unversioned names and returns the current
- * version ("cuMemAlloc" → cuMemAlloc_v2), or the _ptsz variant for
+ * version ("cuMemAlloc" → cuMemAlloc_v2), or the _ptsz/_ptds variant for
  * per-thread default streams: match the hook by the function returned. */
 static void *wrapper_for(const char *name, void *real)
 {
@@ -2199,7 +2282,8 @@ static void *wrapper_for(const char *name, void *real)
         if (strncmp(hooks[i].name, name, len)) continue;
         const char *suf = hooks[i].name + len;
         if (!*suf) exact = i;
-        else if ((!strcmp(suf, "_v2") || !strcmp(suf, "_ptsz")) && real == cuda_sym(hooks[i].name))
+        else if ((!strcmp(suf, "_v2") || !strcmp(suf, "_ptsz") || !strcmp(suf, "_ptds") ||
+                  !strcmp(suf, "_v2_ptsz") || !strcmp(suf, "_v2_ptds")) && real == cuda_sym(hooks[i].name))
             return bind_hook(i, real);
     }
     return exact >= 0 ? bind_hook(exact, real) : real;

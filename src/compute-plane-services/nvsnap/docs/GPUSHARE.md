@@ -35,7 +35,7 @@ Each process that loads the shim runs a control thread on the abstract socket
 
 | Command | Who | What it does |
 | --- | --- | --- |
-| `quiesce` | all pids, before any release | Holds kernel and graph launches, drains the GPU, checks that everything shared can be released. |
+| `quiesce` | all pids, before any release | Holds kernel and graph launches, copies, memsets and stream memory operations; drains the GPU; checks that everything shared can be released. |
 | `release` | all pids at once | Unmaps imported memory and multicast objects and unregisters host memory. Saves the shim's own cuMem allocations, to host memory or to a chunk store. |
 | *(driver)* | | `cuCheckpointProcessLock` / `Checkpoint`, in parallel. |
 | `load` | all pids at once, after restore | Re-creates the saved allocations at the same addresses. |
@@ -143,7 +143,11 @@ name. So:
 
 - Driver: NVLS multicast restore on GB300 needs a driver that lets a
   restored process create and join multicast objects. 610.57.04 does;
-  580.173.02 does not.
+  580.173.02 does not. On x86 with driver 580.126.16 (RTX PRO 6000), the
+  driver's own restore of processes that share GPU memory with each other
+  (vLLM with TP=2) fails with `CUDA_ERROR_UNKNOWN`, with or without the
+  shim's own steps; processes that share nothing restore there. Validated
+  driver: 610.57.04.
 - IMEX and fabric handles: pods with an IMEX channel do not restore yet.
   After a restore, the driver refuses to export fabric-capable memory.
 - Scope: memory shared across nodes (multi-node NVLink) is not tracked, so
@@ -154,6 +158,16 @@ name. So:
   socket, and its checkpoint is refused.
 - glibc: the shim is built on Ubuntu 22.04 and needs glibc 2.35 or later in
   the workload image.
+- Held calls: while suspended, the shim holds the CUDA calls that use device
+  memory: launches, copies, memsets and stream memory operations, made
+  through the CUDA runtime or the driver's entry-point lookup (PyTorch,
+  NCCL and vLLM all are). Copies to or from CUDA arrays, managed-memory
+  prefetches and batched copies (`cuMemcpyBatchAsync`) are not held, nor are
+  calls a program links directly against `libcuda`.
+- State files: `nvsnap-gpu-suspend` keeps its state in
+  `/tmp/nvsnap-gpu-suspend`. It refuses to run if that directory exists and
+  is not owned by its user with mode 0700, so another user cannot redirect
+  its writes.
 - Host memory: without `--store`, the GPU memory the shim saves is kept in
   host RAM. Size the pod's memory limit for it.
 - Store garbage collection is not implemented. A store only grows: delete a
