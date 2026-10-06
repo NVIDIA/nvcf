@@ -164,7 +164,7 @@ async fn proxy_openai_request(
             Err(status) => Err(status),
         };
         let mut response = result.unwrap_or_else(IntoResponse::into_response);
-        unread_body.discard_or_close(&mut response).await;
+        unread_body.close_if_unread(&mut response);
         response
     }
     .instrument(span)
