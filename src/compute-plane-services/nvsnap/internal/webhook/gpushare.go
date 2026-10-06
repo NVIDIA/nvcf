@@ -34,8 +34,11 @@ const (
 	GPUShareAnnotation = "nvsnap.io/gpushare"
 	// GPUShareStorePath is where a GPU container sees its chunk store: a
 	// per-pod directory on the node's local checkpoint disk. A restore
-	// placeholder mounts the checkpoint's copy at the same path.
-	GPUShareStorePath = "/var/run/nvsnap/gpushare"
+	// placeholder mounts the checkpoint's copy at the same path. It is a
+	// top-level directory on purpose: the agent reaches it through
+	// /proc/<pid>/root, where an absolute symlink on the way (/var/run is
+	// one in many images) resolves against the agent's root instead.
+	GPUShareStorePath = "/nvsnap-gpushare"
 	// GPUShareLibPath is the preloaded library, from the node bundle the
 	// agent DaemonSet stages and mounts at nvsnapToolsMountPath.
 	GPUShareLibPath = nvsnapToolsMountPath + "/libnvsnap_gpushare.so"

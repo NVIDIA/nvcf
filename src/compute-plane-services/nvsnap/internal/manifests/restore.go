@@ -281,7 +281,7 @@ spec:
         # gpushare: the shim at the path the processes mapped it from, and
         # the checkpoint's chunk store where they saved their GPU memory.
         - { name: nvsnap-gpushare-lib, mountPath: /nvsnap, readOnly: true }
-        - { name: nvsnap-gpushare-store, mountPath: /var/run/nvsnap/gpushare }
+        - { name: nvsnap-gpushare-store, mountPath: /nvsnap-gpushare }
 {{- end }}
 
   volumes:

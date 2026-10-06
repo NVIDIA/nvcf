@@ -259,3 +259,13 @@ func TestMutate_GPUShareOnly(t *testing.T) {
 		t.Fatalf("gpushare placement missing from Mutate's patches: %v", ops)
 	}
 }
+
+// The store path must be a single top-level directory: the agent reaches it
+// through /proc/<pid>/root, where an absolute symlink on the way (/var/run
+// is one in the vLLM image) resolves against the agent's root, and the
+// capture then reports the store missing.
+func TestGPUShareStorePathIsTopLevel(t *testing.T) {
+	if !strings.HasPrefix(GPUShareStorePath, "/") || strings.Count(GPUShareStorePath, "/") != 1 {
+		t.Fatalf("GPUShareStorePath %q must be a top-level directory", GPUShareStorePath)
+	}
+}

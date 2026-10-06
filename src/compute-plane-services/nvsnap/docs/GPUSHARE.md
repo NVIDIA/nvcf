@@ -154,7 +154,7 @@ At admission, the webhook changes every container that requests GPUs:
   `/nvsnap` and appends `/nvsnap/libnvsnap_gpushare.so` to `LD_PRELOAD`,
   keeping any value the pod sets;
 - mounts a per-pod directory of the node's checkpoint disk at
-  `/var/run/nvsnap/gpushare` (the chunk store), using the pod uid as the
+  `/nvsnap-gpushare` (the chunk store), using the pod uid as the
   subdirectory so pods never see each other's saved memory.
 
 At capture, the agent finds the processes of the dumped session that load the
@@ -166,7 +166,7 @@ path in the checkpoint metadata. A process that uses the GPU without the shim
 fails the capture. Multi-GPU captures are accepted when the shim is loaded.
 
 At restore, the placeholder must mount the bundle at the shim's path and the
-checkpoint's `gpushare` directory at `/var/run/nvsnap/gpushare`. The agent's
+checkpoint's `gpushare` directory at `/nvsnap-gpushare`. The agent's
 generated placeholder and the e2e templates do both. The agent runs CRIU,
 then `nvsnap-gpu-suspend resume` with the checkpoint's GPU map, limited to the
 GPUs the placeholder was allocated (`NVIDIA_VISIBLE_DEVICES`).
