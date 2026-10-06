@@ -210,11 +210,22 @@ func countDistinctGPUDevices(pids []int, log *logrus.Entry) int {
 		"--query-compute-apps=pid,gpu_bus_id",
 		"--format=csv,noheader")
 	// nvidia-smi needs the driver's shared libraries
+	// This container's libdir FIRST. The driver tree ships its own libc.so.6,
+	// and putting it ahead of ours makes the loader mix it with this image's
+	// ld-linux, which aborts with "undefined symbol: __tunable_is_initialized".
+	// nvidia-smi then never runs, the query "fails", and every workload is
+	// reported as single-GPU. Same ordering rule as the cuda-checkpoint wrapper.
 	cmd.Env = append(os.Environ(),
-		"LD_LIBRARY_PATH=/host/run/nvidia/driver/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64")
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/host/run/nvidia/driver/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64")
 	out, err := cmd.Output()
 	if err != nil {
-		log.WithError(err).WithField("path", nvidiaSmi).Warn("nvidia-smi query failed, assuming single GPU")
+		// Fail-open is deliberate but dangerous: a detection failure silently
+		// classifies a multi-GPU workload as single-GPU, which both skips the
+		// multi-GPU handling and hides the fact that it was skipped. Logged at
+		// error so it is visible, because the symptom otherwise is a capture
+		// that looks entirely normal.
+		log.WithError(err).WithField("path", nvidiaSmi).
+			Error("nvidia-smi query failed; assuming single GPU - a multi-GPU workload will be MISCLASSIFIED")
 		return 1
 	}
 
@@ -1966,11 +1977,49 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// context state on restore). Multi-GPU workloads MUST use the
 	// rootfs-only path (nvsnap.io/capture label → agent watcher →
 	// per-capture PVC). Reject CRIU API calls for multi-GPU early.
-	if distinctGPUs > 1 {
+	// EXPERIMENT (nvsnap/multigpu-nvls): the multi-GPU CRIU path used to be
+	// rejected here outright, on the grounds that cuda-checkpoint blocks on
+	// peer state and the D2H/intercept path could never reconstruct CUDA
+	// context state on restore. That rejection also made the entire multi-GPU
+	// branch below unreachable, so the D2H machinery could not be exercised at
+	// all -- including to find out whether it still fails the same way.
+	//
+	// The fence is lifted on this branch so the path can be measured rather
+	// than assumed. Restore is expected to be the wall; capture is not.
+	// NVSNAP_MULTI_GPU_CRIU=1 opts in; anything else keeps the old refusal, so
+	// no cluster picks this up by accident.
+	//
+	// NVSNAP_FORCE_MULTI_GPU=1 additionally forces the multi-GPU branch on when
+	// device counting says otherwise. Detection fails open (nvidia-smi errors
+	// return 1), and a silent misclassification would make the experiment look
+	// like it ran when it did not.
+	// Two independent switches, because they select different engines and
+	// conflating them sends the run down the path you did not mean to test.
+	//
+	// NVSNAP_MULTI_GPU_CRIU=1 lifts the fence and leaves isMultiGPU false, so a
+	// multi-GPU workload takes the ORDINARY criu-v2 path: in-namespace dump,
+	// cuda_plugin driving cuda-checkpoint per rank, no interception stack and
+	// no D2H. This is the interesting one - it inherits the CRIU-layer fixes
+	// (io_uring ring restore, in-namespace mounts) that made the injection
+	// stack unnecessary for single GPU, instead of reviving it.
+	//
+	// NVSNAP_LEGACY_MULTI_GPU_D2H=1 selects the OLD path instead: cgroup
+	// freeze, NCCL quiesce, P2P disable, D2H save, skipping cuda-checkpoint.
+	// That path needs the interposer plus the forked libzmq/libuv preloaded
+	// into the workload, and its restore half has never worked.
+	multiGPUCRIU := os.Getenv("NVSNAP_MULTI_GPU_CRIU") == "1"
+	legacyD2H := os.Getenv("NVSNAP_LEGACY_MULTI_GPU_D2H") == "1"
+	if distinctGPUs > 1 && !multiGPUCRIU && !legacyD2H {
 		return nil, fmt.Errorf("multi-GPU CRIU is unsupported (distinctGPUs=%d, gpuPIDs=%v); use the rootfs-only path: label the source pod nvsnap.io/capture=true and apply a fresh pod with nvsnap.io/restore-from=<hash>", distinctGPUs, gpuPIDs)
 	}
-	isMultiGPU := false
-	useCUDAInterposition := false
+	isMultiGPU := legacyD2H
+	useCUDAInterposition := legacyD2H
+	if distinctGPUs > 1 {
+		log.WithFields(logrus.Fields{
+			"distinctGPUs": distinctGPUs,
+			"engine":       map[bool]string{true: "legacy-d2h", false: "criu-v2"}[legacyD2H],
+		}).Warn("EXPERIMENTAL: multi-GPU capture is enabled on this agent")
+	}
 
 	// Create checkpoint directory early so NvSnap can write GPU saves
 	// directly to the final location (no temp files, no copy).
