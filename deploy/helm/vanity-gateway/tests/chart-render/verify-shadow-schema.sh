@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Verify the values schema for the per-target shadows list: the list and its
-# entries are validated the way the gateway validates them, in any letter
-# case; the two forms never mix; multipart image endpoints take no shadows.
-# The legacy shadow fields are not under test here; their schema is unchanged.
+# Verify the values schema for legacy and per-target shadow configuration: the
+# two forms never mix, sampling methods are ordered, sticky request sampling is
+# limited to supported endpoints, and multipart image endpoints take no
+# shadows.
 #
 # Rejection needles are key names or route path fragments, because the Helm
 # version decides the error message format (dotted paths on 3.18, JSON
@@ -108,6 +108,31 @@ write_values chatCompletions "            shadows:
                 samplingMethod: \"\""
 assert_renders "an empty shadows samplingMethod renders"
 
+for section in chatCompletions responses; do
+  write_values "${section}" "            promptCacheKeyHeaders:
+              - x-session-id
+              - x-request-group
+            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod:
+                  - promptCacheKey
+                  - firstMessageHash
+                  - random"
+  assert_renders "ordered sticky sampling and prompt cache headers render in ${section}"
+
+  write_values "${section}" "            promptCacheKeyHeaders: []
+            shadowModelName: acme/a-model-next
+            shadowSamplingMethod: firstMessageHash"
+  assert_renders "legacy sticky sampling and disabled header lookup render in ${section}"
+done
+
+write_values completions "            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod:
+                  - perBearerKey
+                  - random"
+assert_renders "ordered bearer sampling renders on a non-sticky endpoint"
+
 # The gateway reads the shadows key and entry keys in any letter case.
 write_values chatCompletions "            Shadows:
               - modelname: acme/a-model-next
@@ -121,11 +146,11 @@ write_values chatCompletions "            Shadows:
                 percentage: 500"
 assert_rejected "Shadows" "a shadows list is validated in any letter case"
 
-# The mixed-form rule only evaluates when a shadows key is present, so a
-# legacy-only route is untouched by it, even one the gateway would reject.
-write_values chatCompletions "            shadowpercentage: 500
-            shadowSamplingMethod: Random"
-assert_renders "a legacy-only route is not touched by the shadows rules"
+# A valid legacy-only route remains supported.
+write_values chatCompletions "            shadowModelName: acme/a-model-next
+            shadowPercentage: 50
+            shadowSamplingMethod: random"
+assert_renders "a legacy-only route renders"
 
 # The forms are exclusive in any spelling: shadows plus any legacy key, even
 # zero-valued, fails.
@@ -169,6 +194,47 @@ write_values chatCompletions "            shadows:
               - modelName: acme/a-model-next
                 samplingMethod: perUser"
 assert_rejected "samplingMethod" "an unknown shadows samplingMethod is rejected"
+
+INVALID_METHOD_LISTS=(
+  "[]"
+  '[""]'
+  '["perBearerKey", "perBearerKey"]'
+  '["perBearerKey", "perUser"]'
+  '["random", "perBearerKey"]'
+)
+for methods in "${INVALID_METHOD_LISTS[@]}"; do
+  write_values chatCompletions "            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod: ${methods}"
+  assert_rejected "samplingMethod" "invalid per-target sampling methods ${methods} are rejected"
+done
+
+write_values chatCompletions "            shadowModelName: acme/a-model-next
+            shadowSamplingMethod:
+              - firstMessageHash
+              - random
+              - perBearerKey"
+assert_rejected "shadowSamplingMethod" "a legacy method after random is rejected"
+
+for section in completions embeddings imageGenerations; do
+  write_values "${section}" "            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod: promptCacheKey"
+  assert_rejected "samplingMethod" "promptCacheKey is rejected in ${section}"
+
+  write_values "${section}" "            shadowModelName: acme/a-model-next
+            shadowSamplingMethod: firstMessageHash"
+  assert_rejected "shadowSamplingMethod" "legacy firstMessageHash is rejected in ${section}"
+
+  write_values "${section}" "            promptCacheKeyHeaders:
+              - x-session-id"
+  assert_rejected "promptCacheKeyHeaders" "promptCacheKeyHeaders is rejected in ${section}"
+done
+
+for headers in 'null' '[""]' '["bad header"]' '["x-session-id", "x-session-id"]' '["Authorization"]' '["pRoXy-AuThOrIzAtIoN"]'; do
+  write_values chatCompletions "            promptCacheKeyHeaders: ${headers}"
+  assert_rejected "promptCacheKeyHeaders" "invalid promptCacheKeyHeaders ${headers} are rejected"
+done
 
 write_values chatCompletions "            shadows:
               - modelName: acme/a-model-next
