@@ -394,33 +394,36 @@ func (bc *BackendK8sCache) createOrUpdateClusterRoleBinding(ctx context.Context,
 func (bc *BackendK8sCache) createOrUpdateServiceAccount(ctx context.Context, sa *v1.ServiceAccount) error {
 	// get and create if not exists, updated if it does
 	_, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			_, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Create(ctx, sa, metav1.CreateOptions{})
-			if err != nil && !k8serrors.IsAlreadyExists(err) {
-				return fmt.Errorf("failed to create %v serviceAccount, err: %v", sa.Name, err)
-			}
-		} else {
-			return fmt.Errorf("failed to get %v serviceAccount, err: %v", sa.Name, err)
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get %v serviceAccount, err: %w", sa.Name, err)
+	}
+	if k8serrors.IsNotFound(err) {
+		_, err = bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Create(ctx, sa, metav1.CreateOptions{})
+		if err == nil {
+			return nil
 		}
-	} else {
-		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-			saLatest, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, sa, metav1.UpdateOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to get latest version of serviceAccount: %v", err)
-			}
-
-			// Update the AutomountServiceAccountToken field directly on the latest ServiceAccount object
-			saLatest.AutomountServiceAccountToken = sa.AutomountServiceAccountToken
-
-			_, updateErr := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, saLatest, metav1.UpdateOptions{})
-			return updateErr
-		})
-
-		if retryErr != nil {
-			return fmt.Errorf("failed to update %v serviceAccount, err: %v", sa.Name, retryErr)
+		if !k8serrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create %v serviceAccount, err: %w", sa.Name, err)
 		}
+		// In a new namespace the ServiceAccount controller can create "default"
+		// first; fall through so the desired settings are still applied.
+	}
+
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+		saLatest, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get latest version of serviceAccount: %w", err)
+		}
+
+		// Update the AutomountServiceAccountToken field directly on the latest ServiceAccount object
+		saLatest.AutomountServiceAccountToken = sa.AutomountServiceAccountToken
+
+		_, updateErr := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, saLatest, metav1.UpdateOptions{})
+		return updateErr
+	})
+	if retryErr != nil {
+		return fmt.Errorf("failed to update %v serviceAccount, err: %w", sa.Name, retryErr)
 	}
 	return nil
 }
