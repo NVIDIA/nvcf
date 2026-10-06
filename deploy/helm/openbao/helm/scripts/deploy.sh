@@ -89,12 +89,21 @@ resolve_seal_mode() {
         return 1
     fi
 
-    # Missing or false recovery_seal both mean "not auto-unseal" (Shamir); only
-    # an explicit true selects the auto path. `// false` keeps an uninitialized
-    # server whose status omits the field on the Shamir path, matching the
-    # pre-existing default behavior.
+    # Parse recovery_seal, failing closed on unparseable or non-boolean status.
+    # A missing field stays on the Shamir path (matches the pre-existing default
+    # for an uninitialized server); only an explicit boolean true selects auto.
+    # jq -r (not -e) is used so a valid false does not look like a jq failure.
+    local recovery_seal
+    recovery_seal=$(printf '%s' "${out}" | jq -rs '
+        if (length != 1) or ((.[0] | type) != "object") then error("invalid status")
+        elif (.[0] | has("recovery_seal") | not) then false
+        elif (.[0].recovery_seal | type) != "boolean" then error("recovery_seal not boolean")
+        else .[0].recovery_seal end' 2>/dev/null) || {
+        log_error "Could not parse seal status from ${statefulset}-0"
+        return 1
+    }
     local server_mode="shamir"
-    if [ "$(printf '%s' "${out}" | jq -r '.recovery_seal // false' 2>/dev/null)" = "true" ]; then
+    if [ "${recovery_seal}" = "true" ]; then
         server_mode="auto"
     fi
 
