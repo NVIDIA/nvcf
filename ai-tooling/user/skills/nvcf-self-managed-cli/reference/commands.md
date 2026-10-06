@@ -7,9 +7,9 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | Command | Purpose | Output | Notes |
 |---|---|---|---|
 | `self-hosted check --pre [flags]` | Pre-flight validation (no admin creds) | streaming events | Per-role with `--control-plane-context` / `--compute-plane-context`; `--local-only` skips kubectl |
-| `self-hosted check --control-plane [--wait DUR]` | Every CP release healthy | streaming events | Polls until pass or `--wait` elapses |
-| `self-hosted check --compute-plane --cluster-name=X [--wait DUR]` | Per-cluster worker state | streaming events | NVCA + operator + JWKS-fingerprint match |
-| `self-hosted check --all [--wait DUR]` | Fan-out over all of the above | streaming events | |
+| `self-hosted check --control-plane` | Not implemented yet | streaming events | Reports a failed check and exits 2; use `self-hosted status` for component health |
+| `self-hosted check --compute-plane` | Not implemented yet | streaming events | Reports a failed check and exits 2; use `cluster-agent validate` for compute-plane health |
+| `self-hosted check --all [--wait DUR]` | Fan-out over the implemented checks (currently the `--pre` set) | streaming events | |
 | `self-hosted install --control-plane` | Render control-plane manifests | YAML on stdout | Pipe to `kubectl apply -f -` |
 | `self-hosted install --compute-plane --cluster-name=X` | Register cluster + render compute manifests | YAML on stdout | One invocation per GPU cluster |
 | `self-hosted up --cluster-name=X` | One-shot first install (both planes) | (empty) stdout, progress on stderr | Always installs both planes; for compute-only use `add-compute-plane` |

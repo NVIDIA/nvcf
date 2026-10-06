@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/progress"
 )
 
@@ -341,6 +342,134 @@ func TestCheck_SplitClusterMode(t *testing.T) {
 	}
 	assert.Contains(t, categories, "control-plane-cluster", "expected control-plane-cluster in split mode")
 	assert.Contains(t, categories, "compute-plane-cluster", "expected compute-plane-cluster in split mode")
+}
+
+// resetCheckFlags clears check-flag globals before and after the test; cobra
+// keeps flag values across Execute calls, so earlier tests leak into later ones.
+func resetCheckFlags(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		selfHostedWait = ""
+		checkLocalOnly = false
+		checkPre = false
+		checkControlPlane = false
+		checkComputePlane = false
+		checkAll = false
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+func finalEvent(t *testing.T, lines []map[string]any) map[string]any {
+	t.Helper()
+	for _, l := range lines {
+		if l["event"] == "final" {
+			return l
+		}
+	}
+	t.Fatal("no final event emitted")
+	return nil
+}
+
+// TestCheck_UnimplementedCategoryFlagsFail verifies --control-plane and
+// --compute-plane report a failed check and exit 2 instead of a vacuous pass.
+func TestCheck_UnimplementedCategoryFlagsFail(t *testing.T) {
+	tests := []struct {
+		flag, id string
+	}{
+		{"--control-plane", "control-plane-health"},
+		{"--compute-plane", "compute-plane-health"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.flag, func(t *testing.T) {
+			resetCheckFlags(t)
+			var stderr bytes.Buffer
+			rootCmd.SetErr(&stderr)
+			rootCmd.SetOut(&bytes.Buffer{})
+
+			rootCmd.SetArgs([]string{"self-hosted", "check", tt.flag, "--json"})
+			err := rootCmd.Execute()
+
+			var exitErr *ExitCodeError
+			require.ErrorAs(t, err, &exitErr)
+			assert.Equal(t, 2, exitErr.Code)
+
+			lines := parseJSONLLines(t, stderr.String())
+			var found bool
+			for _, l := range lines {
+				if l["event"] == "check_completed" && l["id"] == tt.id {
+					found = true
+					assert.Equal(t, false, l["passed"])
+					assert.Equal(t, "error", l["severity"])
+					assert.Contains(t, l["message"], "not implemented")
+				}
+			}
+			assert.True(t, found, "expected a failed %s check_completed event", tt.id)
+
+			final := finalEvent(t, lines)
+			assert.Equal(t, false, final["success"])
+			assert.Equal(t, "failed", final["verdict"])
+			assert.EqualValues(t, 1, final["failedCount"])
+			assert.EqualValues(t, 0, final["passedCount"])
+		})
+	}
+}
+
+// TestCheck_UnimplementedCategoryWaitFailsFast verifies --wait does not poll
+// for a check that cannot ever pass.
+func TestCheck_UnimplementedCategoryWaitFailsFast(t *testing.T) {
+	resetCheckFlags(t)
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--wait", "1m", "--json"})
+	start := time.Now()
+	err := rootCmd.Execute()
+
+	var exitErr *ExitCodeError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 2, exitErr.Code)
+	assert.Less(t, time.Since(start), 4*time.Second, "must not wait out the poll interval")
+	assert.Equal(t, false, finalEvent(t, parseJSONLLines(t, stderr.String()))["success"])
+}
+
+// TestCheck_AllDoesNotReportUnimplemented verifies --all keeps meaning "every
+// available check" and does not add the unimplemented-category failures.
+func TestCheck_AllDoesNotReportUnimplemented(t *testing.T) {
+	resetCheckFlags(t)
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--local-only", "--json"})
+	_ = rootCmd.Execute()
+
+	for _, l := range parseJSONLLines(t, stderr.String()) {
+		assert.NotEqual(t, "control-plane-health", l["id"])
+		assert.NotEqual(t, "compute-plane-health", l["id"])
+	}
+}
+
+func TestEnsureChecksRan(t *testing.T) {
+	t.Run("empty results become a failure", func(t *testing.T) {
+		sink := &recordingSink{}
+		got := ensureChecksRan(context.Background(), sink, nil)
+		require.Len(t, got, 1)
+		assert.Equal(t, "no-checks-run", got[0].ID)
+		assert.False(t, got[0].Passed)
+		assert.True(t, anyFailed(got))
+		assert.NotEmpty(t, sink.events, "the failure must reach the renderer")
+	})
+	t.Run("existing results are untouched", func(t *testing.T) {
+		sink := &recordingSink{}
+		in := []selfhosted.CheckResult{{ID: "x", Passed: true, Severity: "info"}}
+		got := ensureChecksRan(context.Background(), sink, in)
+		assert.Equal(t, in, got)
+		assert.Empty(t, sink.events)
+	})
 }
 
 // parseJSONLLines splits s into non-empty lines, skips any non-JSON lines

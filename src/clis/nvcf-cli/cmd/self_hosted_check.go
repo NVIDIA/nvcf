@@ -73,9 +73,9 @@ var selfHostedCheckCmd = &cobra.Command{
 func init() {
 	selfHostedCmd.AddCommand(selfHostedCheckCmd)
 	selfHostedCheckCmd.Flags().BoolVar(&checkPre, "pre", false, "Run pre-flight (local-host + cluster readiness)")
-	selfHostedCheckCmd.Flags().BoolVar(&checkControlPlane, "control-plane", false, "Run control-plane health checks")
+	selfHostedCheckCmd.Flags().BoolVar(&checkControlPlane, "control-plane", false, "Run control-plane health checks (not yet implemented: reports a failure and exits non-zero)")
 	selfHostedCheckCmd.Flags().BoolVar(&checkComputePlane, "compute-plane", false,
-		"Run compute-plane health checks. Requires --cluster-name.")
+		"Run compute-plane health checks (not yet implemented: reports a failure and exits non-zero)")
 	selfHostedCheckCmd.Flags().BoolVar(&checkAll, "all", false, "Run all check categories")
 	selfHostedCheckCmd.Flags().StringVar(&checkClusterName, "cluster-name", "", "Cluster name for compute-plane checks")
 	selfHostedCheckCmd.Flags().BoolVar(&checkLocalOnly, "local-only", false, "Run local-host checks only (no kubectl contact)")
@@ -194,8 +194,8 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 				Message:  "forced failure (test seam)",
 			}}, results...)
 		}
-		// control-plane / compute-plane wired in M3/M4 — placeholder no-op for M2.
-		return results
+		results = append(results, unimplementedCategoryResults(ctx, sink)...)
+		return ensureChecksRan(ctx, sink, results)
 	}
 
 	if selfHostedWait == "" {
@@ -204,7 +204,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		emitCheckFinal(ctx, sink, lastResults)
 		maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
 		if anyFailed(lastResults) {
-			return &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
+			return failedChecksExit(lastResults)
 		}
 		return nil
 	}
@@ -221,6 +221,12 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 	for {
 		lastResults = runOnce()
+		if hasUnimplementedCheck(lastResults) {
+			// Polling cannot make an unimplemented check pass.
+			emitCheckFinal(ctx, sink, lastResults)
+			maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
+			return failedChecksExit(lastResults)
+		}
 		if !anyFailed(lastResults) {
 			emitCheckFinal(ctx, sink, lastResults)
 			maybeShowClusterValidatorLogs(c.ErrOrStderr(), lastResults)
@@ -238,6 +244,76 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			return ctx.Err()
 		}
 	}
+}
+
+const (
+	checkIDControlPlaneHealth = "control-plane-health"
+	checkIDComputePlaneHealth = "compute-plane-health"
+	checkIDNoChecksRun        = "no-checks-run"
+)
+
+// emitFailedCheck emits one failed check as a complete category, so renderers
+// and --json consumers see the same event sequence as for a real check.
+func emitFailedCheck(ctx context.Context, sink progress.EventSink, category, id, message string) selfhosted.CheckResult {
+	res := selfhosted.CheckResult{
+		ID:       id,
+		Category: category,
+		Severity: "error",
+		Passed:   false,
+		Message:  message,
+	}
+	_ = sink.Emit(ctx, progress.CheckStarted{Category: category, ID: id, Message: message})
+	_ = sink.Emit(ctx, progress.CheckCompleted{
+		Category: category,
+		ID:       id,
+		Passed:   false,
+		Severity: res.Severity,
+		Message:  message,
+	})
+	_ = sink.Emit(ctx, progress.CategoryCompleted{Category: category, FailedCount: 1})
+	return res
+}
+
+// unimplementedCategoryResults reports --control-plane and --compute-plane as
+// failed checks. Neither flag has probes behind it yet, and a silent no-op
+// reads as a passing health check.
+func unimplementedCategoryResults(ctx context.Context, sink progress.EventSink) []selfhosted.CheckResult {
+	var out []selfhosted.CheckResult
+	if checkControlPlane {
+		out = append(out, emitFailedCheck(ctx, sink, "control-plane", checkIDControlPlaneHealth,
+			"control-plane health checks are not implemented; nothing was verified"))
+	}
+	if checkComputePlane {
+		out = append(out, emitFailedCheck(ctx, sink, "compute-plane", checkIDComputePlaneHealth,
+			"compute-plane health checks are not implemented; nothing was verified"))
+	}
+	return out
+}
+
+// ensureChecksRan turns a run that checked nothing into a failure, so an empty
+// result set can never read as a pass.
+func ensureChecksRan(ctx context.Context, sink progress.EventSink, results []selfhosted.CheckResult) []selfhosted.CheckResult {
+	if len(results) > 0 {
+		return results
+	}
+	return append(results, emitFailedCheck(ctx, sink, "check", checkIDNoChecksRun,
+		"no checks were run; nothing was verified"))
+}
+
+func hasUnimplementedCheck(results []selfhosted.CheckResult) bool {
+	for _, r := range results {
+		if r.ID == checkIDControlPlaneHealth || r.ID == checkIDComputePlaneHealth {
+			return true
+		}
+	}
+	return false
+}
+
+func failedChecksExit(results []selfhosted.CheckResult) error {
+	if hasUnimplementedCheck(results) {
+		return &ExitCodeError{Code: 2, Msg: "requested health checks are not implemented"}
+	}
+	return &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
 }
 
 // maybeShowClusterValidatorLogs prints the cleaned cluster-validator transcript
