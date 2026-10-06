@@ -26,6 +26,7 @@ use crate::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
 use stargate_runtime::OwnedTask;
 
 use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregator};
+
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
 const DEFAULT_MIN_INPUT_TOKENS: u64 = 1;

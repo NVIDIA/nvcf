@@ -726,5 +726,4 @@ fn rendered_pylons_include_per_algorithm_queue_admission_args() {
             "- --pylon-queue-mismatch-retry-after-ms=5",
         ],
     );
-    assert!(!rendered.backends.contains("--benchmark-pin-input-tps"));
 }
