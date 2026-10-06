@@ -423,6 +423,9 @@ func (s *Server) updatePVCPromoteStateByHash(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "no checkpoint found for hash", http.StatusNotFound)
 		return
 	}
+	// One-downloader election: ready releases the gated followers of this
+	// hash, failed evicts them for re-election (election_release.go).
+	s.electionReleaser().onPromoteState(r.Context(), hash, req.State)
 	_ = s.catalog.LogAudit(&db.AuditEntry{
 		Action: "checkpoint.pvc_promote_state", Resource: "checkpoint_hash", ResourceID: hash,
 		Actor:   "agent",

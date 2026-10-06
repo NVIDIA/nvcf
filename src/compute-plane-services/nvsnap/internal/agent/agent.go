@@ -43,6 +43,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
@@ -158,6 +159,11 @@ type Config struct {
 	// empty.
 	L2 L2BackendConfig
 
+	// Election turns on the one-downloader-per-hash admission election
+	// for chart-shaped model workloads. Needs L2 (the followers mount the
+	// promoted rox); ignored when L2 is off.
+	Election ElectionConfig
+
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
 	// Replication.ObjectStore.Provider AND HomeBucket are both non-empty,
@@ -203,6 +209,17 @@ type ObjectStoreConfig struct {
 	// pull miss against HomeBucket. A capture pulled from a peer is also
 	// cached into HomeBucket so the next local restore reads home.
 	PeerBuckets []string
+}
+
+// ElectionConfig configures the admission election
+// (docs/proposals/helm-chart-cache-election.md).
+type ElectionConfig struct {
+	// Enabled turns the election on. Default off until qualified.
+	Enabled bool
+	// Deadline bounds a leader's cold start plus capture; past it the
+	// server evicts the gated followers for re-election. Zero means
+	// election.DefaultDeadline.
+	Deadline time.Duration
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
@@ -274,6 +291,9 @@ type Agent struct {
 	// its prewarm policy; the promoter strategy is already baked into
 	// l2Backend.
 	l2Profile *checkpointstore.StorageProfile
+	// elector is the admission election, built with the L2 backend when
+	// Election.Enabled; nil keeps the webhook on its explicit paths.
+	elector election.Elector
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path

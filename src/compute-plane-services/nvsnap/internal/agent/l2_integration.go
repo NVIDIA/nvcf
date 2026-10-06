@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 )
 
 // storageProfilesConfigMap is the optional per-cluster overlay that
@@ -191,6 +192,10 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	// driver in the nvsnap-storage-profiles ConfigMap instead.
 	promoter, profile, err := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
 	a.l2Profile = profile
+	if a.config.Election.Enabled {
+		a.elector = &election.LeaseElector{KubeClient: kc, Namespace: cfg.Namespace, Deadline: a.config.Election.Deadline}
+		log.WithField("deadline", a.config.Election.Deadline).Info("admission election enabled (one downloader per hash)")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("L2 disabled: %w", err)
 	}

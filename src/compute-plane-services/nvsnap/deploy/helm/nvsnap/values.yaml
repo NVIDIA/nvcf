@@ -107,6 +107,20 @@ agent:
   # capture (no gemm capture, no prewarm).
   podCacheDir: "/opt/nvsnap"
 
+  # One downloader per cache hash for chart-shaped model workloads
+  # (docs/proposals/helm-chart-cache-election.md). At admission the
+  # webhook composes the cache hash of every GPU pod that names a model;
+  # if a promoted capture exists the pod restores from it, otherwise one
+  # pod is elected to capture and the rest are held by a scheduling gate
+  # (no node, no GPU) until nvsnap-server sees the promote and releases
+  # them. Needs agent.l2. Off until qualified on a cluster.
+  election:
+    enabled: false
+    # Bound on the leader's cold start plus capture. Past it the server
+    # evicts the gated followers so their controller recreates them and a
+    # new leader is elected.
+    deadline: 60m
+
   # cacheEnvTemplate is the cachedir env set (nvsnap #244), rendered into
   # the nvsnap-cachedir-env ConfigMap when podCacheDir is set. The agent
   # webhook reads it on CAPTURE inject — edit it (helm value or

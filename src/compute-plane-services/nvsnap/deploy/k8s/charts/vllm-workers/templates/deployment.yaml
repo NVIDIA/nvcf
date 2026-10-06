@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels: { app: {{ .Release.Name }} }
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: { app: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.excludeNodes }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: {{ toJson . }}
+      {{- end }}
+      tolerations:
+        - { key: "nvidia.com/gpu", operator: Exists, effect: NoSchedule }
+      {{- with .Values.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
+      containers:
+        - name: vllm
+          image: {{ .Values.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -e
+              nohup setsid vllm serve --model {{ .Values.model }} --host 0.0.0.0 --port 8000 --max-model-len {{ .Values.maxModelLen }} --tensor-parallel-size {{ .Values.tensorParallel }} --gpu-memory-utilization {{ .Values.gpuMemoryUtilization }} {{ .Values.extraArgs }} > /vllm.out 2>&1 < /dev/null &
+              tail -F /vllm.out &
+              while true; do sleep 30; done
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: HF_HOME, value: "/root/.cache/huggingface" }
+            - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "1" }
+            - { name: HF_HUB_DISABLE_XET, value: "1" }
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports: [{ containerPort: 8000, name: http }]
+          readinessProbe:
+            httpGet: { path: /v1/models, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: {{ .Values.readinessFailureThreshold }}
+          resources:
+            limits: { nvidia.com/gpu: {{ .Values.tensorParallel | quote }} }
+          volumeMounts: [{ name: shm, mountPath: /dev/shm }]
+      volumes:
+        - name: shm
+          emptyDir: { medium: Memory, sizeLimit: {{ .Values.shmSize }} }
