@@ -64,6 +64,30 @@ func endpoint() *pylonv1alpha1.InferenceEndpoint {
 	return endpointNamed(testNamespace, testName, testUID)
 }
 
+func TestCanaryTimingIsScopedToEndpoint(t *testing.T) {
+	cfg := testConfig()
+	original := endpoint()
+	base := Deployment(original, cfg, 1)
+	custom := original.DeepCopy()
+	custom.Spec.Canary = &pylonv1alpha1.CanarySpec{
+		TimeoutSeconds:  ptr.To(int32(180)),
+		IntervalSeconds: ptr.To(int32(60)),
+	}
+	args := Args(custom, cfg)
+	assert.Contains(t, args, "--bringup-canary-timeout-ms=180000")
+	assert.Contains(t, args, "--active-canary-interval-ms=60000")
+	assert.NotEqual(t, base.Spec.Template.Annotations[SpecHashAnnotation], Deployment(custom, cfg, 1).Spec.Template.Annotations[SpecHashAnnotation])
+	assert.Equal(t, base.Spec.Template, Deployment(original, cfg, 1).Spec.Template)
+	custom.Spec.Canary = &pylonv1alpha1.CanarySpec{}
+	assert.Equal(t, base.Spec.Template, Deployment(custom, cfg, 1).Spec.Template)
+	custom.Spec.Canary.TimeoutSeconds = ptr.To(int32(30))
+	assert.Contains(t, Args(custom, cfg), "--bringup-canary-timeout-ms=30000")
+	assert.NotContains(t, strings.Join(Args(custom, cfg), " "), "--active-canary-interval-ms")
+	custom.Spec.Canary = &pylonv1alpha1.CanarySpec{IntervalSeconds: ptr.To(int32(90))}
+	assert.Contains(t, Args(custom, cfg), "--active-canary-interval-ms=90000")
+	assert.NotContains(t, strings.Join(Args(custom, cfg), " "), "--bringup-canary-timeout-ms")
+}
+
 func endpointNamed(namespace, name string, uid types.UID) *pylonv1alpha1.InferenceEndpoint {
 	return &pylonv1alpha1.InferenceEndpoint{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: uid, Generation: 1},

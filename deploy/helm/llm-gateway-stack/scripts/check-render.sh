@@ -82,7 +82,7 @@ count() {  # count <manifest> <kind> <name>
 }
 
 deployment() {  # deployment <manifest> <name> <expression>
-  yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$2\") | $3" "$1"
+  yq -o=json -I=0 "select(.kind == \"Deployment\" and .metadata.name == \"$2\")" "$1" | jq -r "$3"
 }
 
 secret_value() {  # secret_value <manifest> <secret> <key>: decoded value
@@ -106,7 +106,7 @@ has_env() {  # has_env <manifest> <deployment> <name>
 }
 
 gateway_config() {  # gateway_config <manifest> <key>: ConfigMap value, or the empty string
-  yq -r "select(.kind == \"ConfigMap\" and .metadata.name == \"${gateway}\") | .data.$2 // \"\"" "$1"
+  yq -o=json -I=0 "select(.kind == \"ConfigMap\" and .metadata.name == \"${gateway}\")" "$1" | jq -r ".data.$2 // \"\""
 }
 
 gateway_config_has() {  # gateway_config_has <manifest> <key>
@@ -118,11 +118,11 @@ volume_secret() {  # volume_secret <manifest> <deployment> <volume>: Secret name
 }
 
 vault_annotations() {  # vault_annotations <manifest> <deployment>
-  deployment "$1" "$2" '(.spec.template.metadata.annotations // {}) | keys | map(select(test("^vault\.hashicorp\.com/"))) | length'
+  deployment "$1" "$2" '(.spec.template.metadata.annotations // {}) | keys | map(select(test("^vault[.]hashicorp[.]com/"))) | length'
 }
 
 san_annotation() {  # san_annotation <manifest> <secret>
-  yq -r "select(.kind == \"Secret\" and .metadata.name == \"$2\") | .metadata.annotations[\"llm-gateway-stack.nvidia.com/subject-alt-names\"] // \"\"" "$1"
+  yq -o=json -I=0 "select(.kind == \"Secret\" and .metadata.name == \"$2\")" "$1" | jq -r '.metadata.annotations["llm-gateway-stack.nvidia.com/subject-alt-names"] // ""'
 }
 
 assert_pem() {  # assert_pem <label> <expected block type> <value>
@@ -333,3 +333,14 @@ assert_render_fails "llm-api-gateway.llmApiGateway.namespace must be empty or th
   --set llm-api-gateway.llmApiGateway.namespace=elsewhere
 
 echo "llm-gateway-stack render checks passed"
+
+# The UI credential belongs to this release and must match its registered hash.
+ui_key="offline-demo-ui-key"
+ui_sha="$(printf '%s' "${ui_key}" | shasum -a 256 | cut -d ' ' -f 1)"
+ui_keys="$(printf '%s' "${api_keys_json}" | jq -c --arg hash "${ui_sha}" '.keys + [{id: "demo-ui", sha256: $hash}]')"
+render "${tmp_dir}/demo-ui.yaml" --set-string "demoUiApiKey=${ui_key}" --set-json "apiKeys=${ui_keys}"
+[ "$(secret_value "${tmp_dir}/demo-ui.yaml" demo-ui-api-key api-key)" = "${ui_key}" ] || fail "UI Secret must contain the supplied key"
+[ "$(secret_value "${tmp_dir}/demo-ui.yaml" "${api_keys_secret}" api-keys.json | jq -c '.keys')" = "${ui_keys}" ] || fail "UI key must preserve existing caller keys"
+[ "$(count "${manifest}" Secret demo-ui-api-key)" = "0" ] || fail "UI Secret must be absent without a supplied key"
+assert_render_fails "demoUiApiKey requires its matching demo-ui hash" --set-string "demoUiApiKey=${ui_key}"
+echo "PASS: demo UI API key and Secret"

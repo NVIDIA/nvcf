@@ -62,6 +62,23 @@ type HealthCheck struct {
 	Path string `json:"path"`
 }
 
+// CanarySpec overrides the timing of Pylon's inference health checks.
+type CanarySpec struct {
+	// TimeoutSeconds bounds a canary request, including backend queue time.
+	// When omitted, Pylon uses its default timeout.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=300
+	// +optional
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
+
+	// IntervalSeconds is the period between active inference checks.
+	// When omitted, Pylon uses its default interval. Checks cannot be disabled.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3600
+	// +optional
+	IntervalSeconds *int32 `json:"intervalSeconds,omitempty"`
+}
+
 // GPUSpec carries an explicit GPU type for status.gpu.
 type GPUSpec struct {
 	// Product is the GPU product name reported in status.gpu, for example
@@ -89,6 +106,10 @@ type InferenceEndpointSpec struct {
 	// Health is the backend health endpoint, served on service.port.
 	// +required
 	Health HealthCheck `json:"health"`
+
+	// Canary optionally overrides inference check timing for this endpoint.
+	// +optional
+	Canary *CanarySpec `json:"canary,omitempty"`
 
 	// MaxEngineConcurrency is a concurrency hint for Pylon's queue estimate.
 	// +kubebuilder:validation:Minimum=1
