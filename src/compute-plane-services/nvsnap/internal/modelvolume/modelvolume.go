@@ -599,11 +599,35 @@ func (p *Provisioner) MarkCompleteClaim(ctx context.Context, uri, ns, name strin
 	if pvc.Spec.VolumeName == "" {
 		return fmt.Errorf("claim %s/%s has no bound volume", ns, name)
 	}
-	pv, err := p.Kube.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("get volume %s: %w", pvc.Spec.VolumeName, err)
+	// The claim is released only once the PV is complete and retained:
+	// with a Delete reclaim policy, releasing the last claim of a volume
+	// whose completion did not persist would destroy the model.
+	if err := p.persistComplete(ctx, pvc.Spec.VolumeName, uri, ns, meta); err != nil {
+		return err
 	}
-	if pv.Labels[CompleteLabel] != "true" {
+	if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("release writer claim %s/%s: %w", ns, name, err)
+	}
+	return nil
+}
+
+// completeConflictRetries bounds the re-reads after a conflicting update of
+// the primary PV (a CSI controller or another agent writing it meanwhile).
+const completeConflictRetries = 5
+
+// persistComplete labels pvName complete and sets Retain, retrying update
+// conflicts against a freshly read PV. It returns nil only once the stored
+// PV carries both.
+func (p *Provisioner) persistComplete(ctx context.Context, pvName, uri, ns string, meta map[string]string) error {
+	for attempt := 0; ; attempt++ {
+		pv, err := p.Kube.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get volume %s: %w", pvName, err)
+		}
+		if pv.Labels[CompleteLabel] == "true" && pv.Labels[p.Cfg.Label()] == Key(uri) &&
+			pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+			return nil
+		}
 		if pv.Labels == nil {
 			pv.Labels = map[string]string{}
 		}
@@ -620,14 +644,16 @@ func (p *Provisioner) MarkCompleteClaim(ctx context.Context, uri, ns, name strin
 			pv.Annotations[k] = v
 		}
 		pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-		if _, err := p.Kube.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
-			return fmt.Errorf("label volume %s complete: %w", pv.Name, err)
+		_, err = p.Kube.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+		switch {
+		case err == nil:
+			return nil
+		case !apierrors.IsConflict(err):
+			return fmt.Errorf("label volume %s complete: %w", pvName, err)
+		case attempt+1 >= completeConflictRetries:
+			return fmt.Errorf("label volume %s complete: still conflicting after %d attempts: %w", pvName, completeConflictRetries, err)
 		}
 	}
-	if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("release writer claim %s/%s: %w", ns, name, err)
-	}
-	return nil
 }
 
 // ReleaseWriterView releases the read-write view a download Job wrote
