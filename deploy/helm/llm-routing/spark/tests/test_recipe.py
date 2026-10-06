@@ -302,6 +302,25 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(self.recipe.components(), ['gateway', 'router', 'pylon', 'operator'])
         self.assertEqual(self.recipe.state['stack']['apiKeyFile'], str(key_path.resolve()))
 
+    def test_stack_reuses_ui_key_in_existing_release(self):
+        encoded = __import__('base64').b64encode(b'private-cluster-token').decode()
+        responses = [json.dumps({'data': {'cluster-token': encoded}}), json.dumps({'data': {'ca.crt': 'public-ca'}})]
+        with patch.object(self.recipe, 'prepare'), patch.object(self.recipe, 'bound_cluster'), \
+             patch.object(self.recipe, 'helm_apply') as helm, patch.object(spark, 'output', side_effect=responses*2):
+            self.recipe.deploy_stack()
+            first = copy.deepcopy(helm.call_args.args[2])
+            self.recipe.deploy_stack()
+        values = helm.call_args.args[2]
+        self.assertEqual([call.args[0] for call in helm.call_args_list], [self.recipe.operator, self.recipe.stack]*2)
+        self.assertEqual(values['apiKeys'], first['apiKeys'])
+        self.assertEqual([key['id'] for key in values['apiKeys']], ['poc-client', 'demo-ui'])
+        key = (self.recipe.work/'demo-ui-api-key').read_text().strip()
+        self.assertEqual(values['demoUiApiKey'], key)
+        self.assertEqual(values['apiKeys'][1]['sha256'], hashlib.sha256(key.encode()).hexdigest())
+        self.assertNotEqual(values['apiKeys'][0]['sha256'], values['apiKeys'][1]['sha256'])
+        self.assertEqual(stat.S_IMODE((self.recipe.work/'demo-ui-api-key').stat().st_mode), 0o600)
+        self.assertNotIn('inferenceWriteTimeout', values['llm-api-gateway']['llmApiGateway'].get('config', {}))
+
     def test_stack_dependency_failure_stops_before_operator_or_key_creation(self):
         self.recipe.state = {'inventory': {'nodes': {'control': 'node-uid'}}}
         original = copy.deepcopy(self.recipe.state)

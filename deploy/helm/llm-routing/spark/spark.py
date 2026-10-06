@@ -360,10 +360,13 @@ class Recipe:
                 'watchNamespaces': [self.c['namespace']], 'trustBundle': {'configMap': self.c['caConfigMap']},
                 'devInsecureTransport': False, 'nodeSelector': {'kubernetes.io/hostname': self.c['nodes']['control']}}
 
-    def stack_values(self, token_hash, key_hash):
+    def stack_values(self, token_hash, key_hash, ui_key=None):
         values = {'clusterId': self.c['clusterId'], 'clusterCredential': {'sha256': token_hash},
                   'apiKeys': [{'id': 'poc-client', 'sha256': key_hash}], 'tls': copy.deepcopy(self.c['tls']),
                   'sparkRecipeSource': self.source_identity()}
+        if ui_key is not None:
+            values['apiKeys'].append({'id': 'demo-ui', 'sha256': hashlib.sha256(ui_key.encode()).hexdigest()})
+            values['demoUiApiKey'] = ui_key
         values['tls'].setdefault('selfSigned', {})['caName'] = self.c['caConfigMap']
         for component, chart, service in [('gateway', 'llm-api-gateway', 'llmApiGateway'), ('router', 'llm-request-router', 'llmRequestRouter')]:
             registry, repository = self.repository(component).split('/', 1)
@@ -685,7 +688,12 @@ class Recipe:
             save(key_path, secrets.token_urlsafe(48)+'\n')
         key = key_path.read_text().strip()
         require(bool(key), 'API-key file is empty.')
-        values = self.stack_values(token_hash, hashlib.sha256(key.encode()).hexdigest())
+        ui_key_path = self.work/'demo-ui-api-key'
+        if not ui_key_path.exists():
+            save(ui_key_path, secrets.token_urlsafe(48)+'\n')
+        ui_key = ui_key_path.read_text().strip()
+        require(bool(ui_key) and ui_key != key, 'The demo UI needs a nonempty, separate API key.')
+        values = self.stack_values(token_hash, hashlib.sha256(key.encode()).hexdigest(), ui_key)
         self.helm_apply(self.stack, self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', values)
         ca = json.loads(output(self.kc+['get', 'configmap', self.c['caConfigMap'], '-o', 'json']))['data']['ca.crt']
         save(self.work/'ca.crt', ca)
@@ -992,7 +1000,7 @@ finally:
 
     def render(self):
         self.prepare()
-        renders = [('stack', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', self.stack_values('a'*64, 'b'*64)),
+        renders = [('stack', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', self.stack_values('a'*64, 'b'*64, 'offline-demo-ui-placeholder')),
                    ('operator', self.source/'deploy/helm/pylon-operator/pylon-operator', self.operator_values())]
         for phase in ('preflight', 'build', 'qualify', 'chain', 'download', 'serve'):
             renders.append(('glm-'+phase, HERE/'charts/gguf-backend', self.backend_values(phase, register=phase=='serve', render=True)))

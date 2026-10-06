@@ -333,3 +333,14 @@ assert_render_fails "llm-api-gateway.llmApiGateway.namespace must be empty or th
   --set llm-api-gateway.llmApiGateway.namespace=elsewhere
 
 echo "llm-gateway-stack render checks passed"
+
+# The UI credential belongs to this release and must match its registered hash.
+ui_key="offline-demo-ui-key"
+ui_sha="$(printf '%s' "${ui_key}" | shasum -a 256 | cut -d ' ' -f 1)"
+ui_keys="$(printf '%s' "${api_keys_json}" | jq -c --arg hash "${ui_sha}" '.keys + [{id: "demo-ui", sha256: $hash}]')"
+render "${tmp_dir}/demo-ui.yaml" --set-string "demoUiApiKey=${ui_key}" --set-json "apiKeys=${ui_keys}"
+[ "$(secret_value "${tmp_dir}/demo-ui.yaml" demo-ui-api-key api-key)" = "${ui_key}" ] || fail "UI Secret must contain the supplied key"
+[ "$(secret_value "${tmp_dir}/demo-ui.yaml" "${api_keys_secret}" api-keys.json | jq -c '.keys')" = "${ui_keys}" ] || fail "UI key must preserve existing caller keys"
+[ "$(count "${manifest}" Secret demo-ui-api-key)" = "0" ] || fail "UI Secret must be absent without a supplied key"
+assert_render_fails "demoUiApiKey requires its matching demo-ui hash" --set-string "demoUiApiKey=${ui_key}"
+echo "PASS: demo UI API key and Secret"

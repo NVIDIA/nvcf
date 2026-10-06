@@ -39,13 +39,18 @@ clusterCredential:
   sha256Hashes: []
 
 # Caller API keys. Each entry is an id and the lowercase hex SHA-256 of the key;
-# the keys themselves never enter this chart. Ids are 1 to 128 letters, digits,
+# plaintext keys are not stored in this list. Ids are 1 to 128 letters, digits,
 # '.', '_' or '-' and start with a letter or digit. Ids and digests must be
 # unique. At least one entry is required while apiKeysSecret.create is true.
 #   apiKeys:
 #     - id: demo
 #       sha256: <output of: printf '%s' "$API_KEY" | shasum -a 256>
 apiKeys: []
+
+# Optional plaintext UI key, supplied from a private file by the Spark recipe.
+# Creates Secret demo-ui-api-key (field api-key) in this release's namespace.
+# apiKeys must also contain its matching hash under id demo-ui.
+demoUiApiKey: ""
 
 apiKeysSecret:
   # Render the gateway's key file Secret from apiKeys, named by
