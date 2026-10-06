@@ -70,15 +70,8 @@ Use `--model <model-id>` to override model selection. The model must support cha
 
 ## Uninstall
 
-Run the whole block. Replace the default namespace and release name if customized (`releasePrefix` plus `-monitoring`). Pass any installation selection options before `context`.
-
 ```bash
-(
-  set -eu
-  context="$(python3 spark.py context)"
-  : "${context:?Context lookup returned an empty value}"
-  helm --kube-context "$context" -n llm-spark-poc uninstall llm-poc-monitoring --ignore-not-found --wait --timeout 3m
-)
+python3 spark.py uninstall-monitoring
 ```
 
 Metrics storage is retained. Reinstall with `python3 spark.py monitoring`, which creates a new Grafana password. For full teardown, continue with [routing uninstall](../README.md#uninstall).

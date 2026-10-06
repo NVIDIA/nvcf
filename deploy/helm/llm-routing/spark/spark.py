@@ -1040,7 +1040,7 @@ def main(argv=None, console=None):
     parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
-    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
+    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'uninstall-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
     parser.add_argument('--component', choices=list(COMPONENTS))
@@ -1123,7 +1123,7 @@ def execute(args, parser, context, work, config_path, config):
         require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
         config = copy.deepcopy(config)
         config.setdefault('monitoring', {})['enabled'] = True
-    monitoring_only = args.phase in ('attach-monitoring', 'monitoring', 'dashboard', 'verify-monitoring',
+    monitoring_only = args.phase in ('attach-monitoring', 'monitoring', 'dashboard', 'verify-monitoring', 'uninstall-monitoring',
                                     'monitoring-images', 'export-monitoring-images', 'import-monitoring-images', 'cleanup-key')
     recipe = Recipe(config, work, args.source_dir, monitoring_only=monitoring_only)
     if args.phase in ('monitoring', 'dashboard'):
@@ -1167,6 +1167,7 @@ def execute(args, parser, context, work, config_path, config):
         return monitor
     elif args.phase == 'dashboard': monitoring.Monitoring(recipe, run, output, save).dashboard(args.port, admin=args.admin)
     elif args.phase == 'verify-monitoring': monitoring.Monitoring(recipe, run, output, save).verify(args.port, args.verify_traffic, args.model)
+    elif args.phase == 'uninstall-monitoring': monitoring.Monitoring(recipe, run, output, save).uninstall()
     elif args.phase == 'monitoring-images': print('\n'.join(monitoring.image_list(recipe)))
     elif args.phase == 'export-monitoring-images':
         monitoring.Monitoring(recipe, run, output, save).export_images(args.archive or recipe.work/'monitoring-arm64-images.tar')

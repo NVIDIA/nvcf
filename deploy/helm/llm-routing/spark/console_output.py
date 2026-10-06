@@ -40,6 +40,7 @@ NEXT_CHECK = {
     'monitoring': 'Check the monitoring release and its workload logs',
     'dashboard': 'Check monitoring-port-forward.log and Grafana readiness',
     'verify-monitoring': 'Check evidence/monitoring.json and monitoring-port-forward.log',
+    'uninstall-monitoring': 'Check the saved cluster identity and monitoring Helm release',
     'export-monitoring-images': 'Check pinned monitoring images and free disk space',
     'import-monitoring-images': 'Check the archive and image-import Job evidence',
 }

@@ -194,13 +194,17 @@ class Monitoring:
         self.run, self.output, self.save = run, output, save
         self.release = recipe.c['releasePrefix']+'-monitoring'
 
+    def release_exists(self):
+        existing = json.loads(self.output(self.recipe.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled', '--superseded', '--uninstalling', '--filter', '^'+re.escape(self.release)+'$', '-o', 'json']))
+        require(all(item['chart'].startswith('llm-demo-monitoring-') for item in existing), 'Monitoring release belongs to another chart.')
+        return bool(existing)
+
     def install(self):
         r = self.recipe
         require(enabled(r.c), 'Set monitoring.enabled=true in the saved configuration.')
         r.bound_cluster()
         values = chart_values(r)
-        existing = json.loads(self.output(r.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled', '--superseded', '--uninstalling', '--filter', '^'+re.escape(self.release)+'$', '-o', 'json']))
-        require(all(item['chart'].startswith('llm-demo-monitoring-') for item in existing), 'Monitoring release belongs to another chart.')
+        existing = self.release_exists()
         secret = json.loads(self.output(r.kc+['get', 'secret', values['grafana']['adminSecret'], '--ignore-not-found', '-o', 'json']) or '{}')
         if secret:
             owner = secret['metadata'].get('annotations', {})
@@ -213,6 +217,18 @@ class Monitoring:
         r.helm_apply(self.release, CHART, values)
         r.stamp('monitoring', {'release': self.release})
         print('Monitoring installed.')
+
+    def uninstall(self):
+        r = self.recipe
+        r.bound_cluster()
+        if self.release_exists():
+            self.run(r.hm+['uninstall', self.release, '--ignore-not-found', '--wait', '--timeout', '3m'])
+        if 'monitoring' in r.state:
+            require(r.state_path.exists() and json.loads(r.state_path.read_text()) == r.state,
+                    'Monitoring was removed, but local progress changed. No progress was overwritten.')
+            del r.state['monitoring']
+            self.save(r.state_path, r.state)
+        print('Monitoring removed. Metrics storage retained.')
 
     def export_images(self, archive):
         images = image_list(self.recipe)

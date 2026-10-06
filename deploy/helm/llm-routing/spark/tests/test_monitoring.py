@@ -258,6 +258,81 @@ class MonitoringTests(unittest.TestCase):
         self.output.assert_not_called()
         self.recipe.helm_apply.assert_not_called()
 
+    def test_uninstall_uses_saved_identity_and_preserves_other_state_and_files(self):
+        self.config.update(context='custom-context', namespace='custom-namespace', releasePrefix='custom')
+        self.config['monitoring']['enabled'] = False
+        self.recipe = spark.Recipe(self.config, self.tmp.name, monitoring_only=True)
+        self.recipe.bound_cluster = Mock()
+        monitor = monitoring.Monitoring(self.recipe, Mock(), self.output, spark.save)
+        self.recipe.stamp('serve', {'release': 'keep-model'})
+        before = copy.deepcopy(self.recipe.state)
+        self.recipe.stamp('monitoring', {'release': monitor.release})
+        spark.save(self.recipe.work/'api-key', 'keep-key')
+        config = copy.deepcopy(self.config)
+        self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
+        monitor.uninstall()
+        self.recipe.bound_cluster.assert_called_once()
+        self.output.assert_called_once_with(self.recipe.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled', '--superseded', '--uninstalling', '--filter', r'^custom\-monitoring$', '-o', 'json'])
+        monitor.run.assert_called_once_with(['helm', '--kube-context', 'custom-context', '-n', 'custom-namespace',
+                                             'uninstall', 'custom-monitoring', '--ignore-not-found', '--wait', '--timeout', '3m'])
+        self.assertEqual(json.loads(self.recipe.state_path.read_text()), before)
+        self.assertEqual(self.recipe.state, before)
+        self.assertEqual(self.config, config)
+        self.assertEqual((self.recipe.work/'api-key').read_text(), 'keep-key')
+
+    def test_uninstall_absent_release_clears_only_checkpoint_and_is_repeatable(self):
+        self.recipe.stamp('serve', True)
+        before = copy.deepcopy(self.recipe.state)
+        self.recipe.stamp('monitoring', {'release': self.monitor.release})
+        self.output.return_value = '[]'
+        self.monitor.uninstall()
+        self.monitor.uninstall()
+        self.monitor.run.assert_not_called()
+        self.assertEqual(json.loads(self.recipe.state_path.read_text()), before)
+
+    def test_uninstall_works_without_monitoring_checkpoint_or_credentials(self):
+        self.recipe.stamp('serve', True)
+        before = self.recipe.state_path.read_bytes()
+        self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
+        self.monitor.uninstall()
+        self.monitor.run.assert_called_once()
+        self.assertEqual(self.recipe.state_path.read_bytes(), before)
+
+    def test_uninstall_failures_preserve_checkpoint(self):
+        self.recipe.stamp('monitoring', {'release': self.monitor.release})
+        before = self.recipe.state_path.read_bytes()
+        for problem in ('cluster', 'lookup', 'chart', 'helm'):
+            with self.subTest(problem=problem):
+                self.recipe.bound_cluster.reset_mock(side_effect=True)
+                self.output.reset_mock(side_effect=True)
+                self.monitor.run.reset_mock(side_effect=True)
+                self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
+                if problem == 'cluster':
+                    self.recipe.bound_cluster.side_effect = RuntimeError('Wrong cluster')
+                elif problem == 'lookup':
+                    self.output.side_effect = RuntimeError('Helm lookup failed')
+                elif problem == 'chart':
+                    self.output.return_value = json.dumps([{'chart': 'unrelated-chart-0.1.0'}])
+                else:
+                    self.monitor.run.side_effect = RuntimeError('Helm uninstall failed')
+                with self.assertRaises(RuntimeError):
+                    self.monitor.uninstall()
+                if problem == 'cluster':
+                    self.output.assert_not_called()
+                if problem != 'helm':
+                    self.monitor.run.assert_not_called()
+                self.assertEqual(self.recipe.state_path.read_bytes(), before)
+                self.assertEqual(self.recipe.state, json.loads(before))
+
+    def test_uninstall_preserves_concurrent_local_progress(self):
+        self.recipe.stamp('monitoring', {'release': self.monitor.release})
+        updated = dict(self.recipe.state, serve={'release': 'new-progress'})
+        self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
+        self.monitor.run.side_effect = lambda command: spark.save(self.recipe.state_path, updated)
+        with self.assertRaisesRegex(RuntimeError, 'Monitoring was removed, but local progress changed'):
+            self.monitor.uninstall()
+        self.assertEqual(json.loads(self.recipe.state_path.read_text()), updated)
+
     def test_metrics_verification_rejects_missing_failed_or_stale_components(self):
         result = {'status': 'success', 'data': {'result': [
             {'metric': {'component': 'gateway', 'pod': 'gateway-a'}, 'value': [0, '1']},

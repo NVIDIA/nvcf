@@ -353,6 +353,29 @@ class CliTests(unittest.TestCase):
             dashboard.assert_called_once_with(port, admin=admin)
         self.assertEqual(((self.work/'config.json').read_bytes(), (self.work/'state.json').read_bytes()), before)
 
+    def test_uninstall_monitoring_uses_saved_configuration_without_attachment_or_dashboard(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        with patch.object(spark.monitoring_setup, 'discover_config') as discover, \
+             patch.object(spark.Recipe, 'attach_monitoring') as attach, \
+             patch.object(spark.monitoring, 'Monitoring') as monitor:
+            spark.main(['uninstall-monitoring'])
+        monitor.return_value.uninstall.assert_called_once_with()
+        monitor.return_value.install.assert_not_called()
+        monitor.return_value.dashboard.assert_not_called()
+        discover.assert_not_called()
+        attach.assert_not_called()
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), self.config)
+
+    def test_uninstall_requires_saved_configuration_before_discovery(self):
+        with patch.object(spark.monitoring_setup, 'discover_config') as discover, \
+             patch.object(spark.monitoring, 'Monitoring') as monitor, \
+             self.assertRaises(RuntimeError):
+            spark.main(['uninstall-monitoring'])
+        discover.assert_not_called()
+        monitor.assert_not_called()
+        self.assertFalse(self.work.exists())
+
     def test_admin_flag_is_rejected_before_file_or_context_discovery(self):
         for phase in ('paths', 'monitoring', 'attach-monitoring', 'verify-gateway'):
             with self.subTest(phase=phase), patch.dict(os.environ, {'SPARK_CONTEXT': ''}), \

@@ -201,6 +201,7 @@ class MonitoringSetupTests(unittest.TestCase):
             spark.main(args+['attach-monitoring'])
         self.assertEqual(json.loads((self.work/'config.json').read_text()), self.config)
         for phase, method, expected in [('monitoring', 'install', ()), ('dashboard', 'dashboard', (13000,)),
+                                         ('uninstall-monitoring', 'uninstall', ()),
                                          ('verify-monitoring', 'verify', (18443, False, None)),
                                          ('export-monitoring-images', 'export_images', (self.work/'monitoring-arm64-images.tar',))]:
             with self.subTest(phase=phase), patch.object(spark.monitoring, 'Monitoring') as monitor:
