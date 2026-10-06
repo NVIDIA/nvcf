@@ -50,7 +50,9 @@ func (h *CachingDBHandler) insert(cachedKey key, e entry) {
 	h.entries[cachedKey] = cachedEntry
 }
 
-func noopFlush(context.Context, data_access.EventV3UpsertRecord) error { return nil }
+// discardFlush is a FlushFunc that drops what it is given, for tests that do not
+// look at what is written.
+func discardFlush(context.Context, data_access.EventV3UpsertRecord) error { return nil }
 
 // flushRecorder is a FlushFunc that records what it is asked to write.
 type flushRecorder struct {
@@ -483,7 +485,7 @@ func TestInactiveTTL_IsFlushIntervalPlusTenPercent(t *testing.T) {
 }
 
 func TestNewCachingDBHandler_NilInnerHandlerFails(t *testing.T) {
-	h, err := NewCachingDBHandler(nil, testConfig(), noopFlush)
+	h, err := NewCachingDBHandler(nil, testConfig(), discardFlush)
 
 	require.ErrorIs(t, err, errNilInnerHandler)
 	assert.Nil(t, h)
@@ -492,7 +494,7 @@ func TestNewCachingDBHandler_NilInnerHandlerFails(t *testing.T) {
 func TestNewCachingDBHandler_TypedNilInnerHandlerFails(t *testing.T) {
 	var typedNilHandler *fakeDB
 
-	handler, err := NewCachingDBHandler(typedNilHandler, testConfig(), noopFlush)
+	handler, err := NewCachingDBHandler(typedNilHandler, testConfig(), discardFlush)
 
 	require.ErrorIs(t, err, errNilInnerHandler)
 	assert.Nil(t, handler)
@@ -508,7 +510,7 @@ func TestNewCachingDBHandler_NilFlushFails(t *testing.T) {
 func TestNewCachingDBHandler_KeepsInnerHandler(t *testing.T) {
 	inner := &fakeDB{}
 
-	h, err := NewCachingDBHandler(inner, testConfig(), noopFlush)
+	h, err := NewCachingDBHandler(inner, testConfig(), discardFlush)
 
 	require.NoError(t, err)
 	assert.Same(t, inner, h.DBHandlerV2)
@@ -517,7 +519,7 @@ func TestNewCachingDBHandler_KeepsInnerHandler(t *testing.T) {
 func TestNewCachingDBHandler_KeepsConfig(t *testing.T) {
 	cfg := Config{MaxSize: 10, FlushInterval: 5 * time.Second}
 
-	h, err := NewCachingDBHandler(&fakeDB{}, cfg, noopFlush)
+	h, err := NewCachingDBHandler(&fakeDB{}, cfg, discardFlush)
 
 	require.NoError(t, err)
 	assert.Equal(t, cfg, h.cfg)
@@ -537,7 +539,7 @@ func TestNewCachingDBHandler_RejectsNonPositiveConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, err := NewCachingDBHandler(&fakeDB{}, tt.cfg, noopFlush)
+			h, err := NewCachingDBHandler(&fakeDB{}, tt.cfg, discardFlush)
 
 			require.ErrorIs(t, err, tt.wantErr)
 			assert.Nil(t, h)
