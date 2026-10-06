@@ -167,6 +167,7 @@ original order. Repeated options and empty values are preserved.
 |------|---------|
 | `Given I use NVCF CLI config {string}` | Interpolates and stores the supplied config argument without resolving or checking the path. Later lifecycle steps pass it to `--config`. |
 | `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
+| `When I successfully create function {string} from Helm chart {string} with CLI options:` | Runs `function create --name <name> --helm-chart <chart>` followed by the option rows. |
 | `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
 | `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows and suppresses secret-bearing stdout. |
 | `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |

@@ -67,6 +67,7 @@ pub(super) struct ProxyRequestRun<'a> {
     failed_cluster_ids: HashSet<String>,
     pub(super) attempt_counters: ProxyAttemptCounters,
     pub(super) last_attempt_capacity_rejected: bool,
+    routing_capacity_rejected: bool,
 }
 
 impl<'a> ProxyRequestRun<'a> {
@@ -86,6 +87,7 @@ impl<'a> ProxyRequestRun<'a> {
             failed_cluster_ids: HashSet::new(),
             attempt_counters: ProxyAttemptCounters::default(),
             last_attempt_capacity_rejected: false,
+            routing_capacity_rejected: false,
         }
     }
 
@@ -115,6 +117,7 @@ impl<'a> ProxyRequestRun<'a> {
     }
 
     async fn run_routing_attempt(&mut self) -> Option<Result<Response<Body>, StatusCode>> {
+        self.routing_capacity_rejected = false;
         let target_snapshot = self
             .app
             .state
@@ -173,6 +176,7 @@ impl<'a> ProxyRequestRun<'a> {
             return None;
         }
         let Some(choice) = decision.selected() else {
+            self.routing_capacity_rejected = true;
             return self
                 .resolve_no_routing_choice(num_candidates, eligible_candidate_count)
                 .await;
@@ -276,6 +280,7 @@ impl<'a> ProxyRequestRun<'a> {
                     failed_cluster_count: self.failed_cluster_ids.len(),
                     routing_retry_attempts: self.routing_retry_attempts,
                     capacity_rejected: self.last_attempt_capacity_rejected,
+                    routing_capacity_rejected: self.routing_capacity_rejected,
                 }))
             }
         }

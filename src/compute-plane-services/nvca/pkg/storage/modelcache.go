@@ -929,7 +929,7 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 			// If the primary PV data is not found at this point, something went wrong during initialization
 			// or state is outside of the storage controller's control.
 			if apierrors.IsNotFound(ppvErr) {
-				return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonPVCSetupFailed, fmt.Errorf("primary PV not found after init: %w", ppvErr))
+				return reconcile.Result{}, r.primaryMissing(ctx, &st, stCopy, ppvErr)
 			}
 			return reconcile.Result{}, ppvErr
 		}
@@ -1449,6 +1449,49 @@ func (r *Reconciler) handleLease(ctx context.Context,
 	return res, holdsLease, nil
 }
 
+// primaryMissing handles a Creating or Ready request whose primary PV has
+// disappeared. Failing the request runs the cleanup, which deletes the
+// request's secondary PV and claim; for a Ready request with a bound
+// secondary that is a running function losing its model volume, so that one
+// case is left as it is and the loss is reported instead. A Creating request
+// has not published its reader status yet, so preserving it would stall the
+// transition forever (the MiniService keeps waiting for storage); it fails
+// terminally as before and the caller handles the failure.
+func (r *Reconciler) primaryMissing(ctx context.Context, st, stCopy *nvcav1new.StorageRequest, ppvErr error) error {
+	log := logf.FromContext(ctx)
+	if st.Status.Phase == nvcav1new.StorageReady {
+		inUse, err := r.secondaryInUse(ctx, stCopy)
+		if err != nil {
+			return err
+		}
+		if inUse {
+			log.Error(ppvErr, "Primary PV is gone while the secondary is bound; leaving the storage request as is",
+				"cacheHandle", stCopy.Spec.ModelCache.CacheHandle)
+			r.eventRecorder.Eventf(stCopy, "Warning", "ModelCachePrimaryMissing",
+				"primary PV for cache handle %s not found; secondary kept while in use", stCopy.Spec.ModelCache.CacheHandle)
+			return nil
+		}
+	}
+	return r.terminalErrorWithMetricErr(modelcachetypes.ReasonPVCSetupFailed, fmt.Errorf("primary PV not found after init: %w", ppvErr))
+}
+
+// secondaryInUse reports whether the request's read-only claim exists, is
+// bound and is not being deleted: a workload may be serving from it.
+func (r *Reconciler) secondaryInUse(ctx context.Context, st *nvcav1new.StorageRequest) (bool, error) {
+	if st.Spec.ModelCache == nil || st.Spec.ModelCache.CacheHandle == "" {
+		return false, nil
+	}
+	roPVC := &corev1.PersistentVolumeClaim{}
+	err := r.Client.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + st.Spec.ModelCache.CacheHandle, Namespace: st.Namespace}, roPVC)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return roPVC.DeletionTimestamp == nil && roPVC.Status.Phase == corev1.ClaimBound, nil
+}
+
 func (r *Reconciler) getPrimaryPV(ctx context.Context, st *nvcav1new.StorageRequest) (*corev1.PersistentVolume, error) {
 	log := logf.FromContext(ctx)
 	// No primary PV will be found for a cache handle unless finalizePrimaryPVOnSuccessfulInit
@@ -1961,6 +2004,16 @@ func newDerivedModelCacheReaderPVC(
 			},
 		},
 	}
+}
+
+// volumeHandleKey identifies the NVMesh volume behind a handle regardless of
+// which namespace the handle was issued for: the primary's handle ends in the
+// init namespace, each secondary's in its function namespace.
+func volumeHandleKey(volumeHandle string) string {
+	if i := strings.LastIndex(volumeHandle, ":"); i != -1 {
+		return volumeHandle[:i]
+	}
+	return volumeHandle
 }
 
 func updateSecondaryPVVolumeHandle(volumeHandle, namespace string) (string, error) {

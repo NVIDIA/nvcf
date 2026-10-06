@@ -607,7 +607,8 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"function create --name bdd-helm-function",
 		"--helm-chart https://charts.example.test/inference-test.tgz",
 		"--helm-chart-service entrypoint",
-		"--inference-url /echo --inference-port 8000") {
+		"--inference-url /echo --inference-port 8000",
+		"--health-uri /health --health-port 8000 --health-timeout PT30S") {
 		t.Fatal("Helm sample function was not created through the chart-rendering path")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
@@ -1392,6 +1393,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		key  string
 		want string
 	}{
+		{key: "global.workerEndpoints.invocationServiceURL", want: "http://invocation.nvcf.svc.cluster.local:8080"},
 		{key: "global.workerEndpoints.llmRequestRouterAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
 		{key: "addons.llm.requestRouter.chartPath", want: "../../../helm/llm-request-router/llm-request-router"},
 		{key: "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
@@ -1459,7 +1461,8 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"function create --name bdd-multi-helm-function",
 		"--helm-chart https://charts.example.test/inference-test.tgz",
 		"--helm-chart-service entrypoint",
-		"--inference-url /echo --inference-port 8000") {
+		"--inference-url /echo --inference-port 8000",
+		"--health-uri /health --health-port 8000 --health-timeout PT30S") {
 		t.Fatal("multi-cluster Helm sample function was not created through the chart-rendering path")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,

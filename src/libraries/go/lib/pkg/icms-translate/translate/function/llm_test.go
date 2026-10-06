@@ -89,7 +89,7 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			allEnvSet: map[string]string{
 				"LLM_REQUEST_ROUTER_ADDRESS": "llm-router.example.com:443",
 				"INFERENCE_PORT":             "8080",
-				maxRequestConcurrencyEnv:     "11",
+				"MAX_REQUEST_CONCURRENCY":    "11",
 			},
 			tcfg:       TranslateConfig{},
 			instanceID: "inst-123",
@@ -143,20 +143,37 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			},
 		},
 		{
-			name: "legacy environment value is used when deployment field is absent",
+			name: "environment value alone does not set engine concurrency",
 			ls:   &LaunchSpecification{},
 			allEnvSet: map[string]string{
 				"STARGATE_ADDRESS":                  "stargate.example.com:443",
 				"INFERENCE_PORT":                    "8080",
 				"HELM_CHART_INFERENCE_SERVICE_NAME": "my-inference-svc",
-				maxRequestConcurrencyEnv:            "32",
+				"MAX_REQUEST_CONCURRENCY":           "32",
 			},
 			tcfg:       TranslateConfig{},
 			instanceID: "inst-789",
 			isHelm:     true,
 			validate: func(t *testing.T, c corev1.Container) {
 				assert.Contains(t, c.Args, "--upstream-http-base-url=http://my-inference-svc:8080")
-				assert.Equal(t, []string{"--max-engine-concurrency=32"}, maxEngineConcurrencyArgs(c.Args))
+				assert.Empty(t, maxEngineConcurrencyArgs(c.Args))
+			},
+		},
+		{
+			name: "default deployment concurrency of 1 does not set engine concurrency",
+			ls: &LaunchSpecification{
+				MaxRequestConcurrency: 1,
+			},
+			allEnvSet: map[string]string{
+				"LLM_REQUEST_ROUTER_ADDRESS": "llm-router.example.com:443",
+				"INFERENCE_PORT":             "8080",
+				"MAX_REQUEST_CONCURRENCY":    "1",
+			},
+			tcfg:       TranslateConfig{},
+			instanceID: "inst-default",
+			isHelm:     false,
+			validate: func(t *testing.T, c corev1.Container) {
+				assert.Empty(t, maxEngineConcurrencyArgs(c.Args))
 			},
 		},
 		{

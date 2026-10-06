@@ -281,17 +281,20 @@ Beyond placement, HA also raises the data-durability settings:
 Streams default to a single replica. When NATS runs more than one server, the
 stack derives the JetStream replica factor (RF) from the server count, capped
 at **3** as the NATS documentation recommends, so the HA cluster of 3 servers
-gets RF=3. It is set on the two services that create streams: `nvcf-api` (via
-`NVCF_NATS_REPLICAS`) and `invocation-service` (via `NATS_PROPERTIES__REPLICAS`).
-To override it for one service, set that variable in `api.env` or
-`invocation.env`. JetStream streams use Raft quorum: RF=3 tolerates the loss of
+gets RF=3. It is set on the three services that create streams: `nvcf-api` (via
+`NVCF_NATS_REPLICAS`), `invocation-service` (via `NATS_PROPERTIES__REPLICAS`), and
+`icms` (the `sis` release, via `ICMS_NATS_REPLICAS`, for `CreateNvcaFunctionTaskStream` and
+`TerminateNvcaStream`). To override it for nvcf-api or invocation-service, set
+that variable in `api.env` or `invocation.env`. JetStream streams use Raft quorum: RF=3 tolerates the loss of
 one replica. **RF=2 is not sufficient** — a 2-member Raft group loses quorum
 the moment either replica is unavailable, so it provides no resilience benefit
 over RF=1.
 
 RF applies when a stream is **created**. Streams already created at RF=1 are not
 rewritten by changing this value — after enabling HA, recreate or edit those
-streams (for example `nats stream edit`) to raise their replica factor.
+streams (for example `nats stream edit`) to raise their replica factor. The
+exception is `icms`, which raises its two streams to the configured RF when it
+starts and on its periodic stream validation.
 
 #### Cassandra replication and consistency
 
@@ -451,7 +454,7 @@ in this order:
    (`nvcr.io` / `helm.ngc.nvidia.com`), no action is needed. If you mirror to a
    private registry, re-mirror the stack's charts and images **before** syncing —
    otherwise pods fail with `ImagePullBackOff`. See
-   [Image Mirroring](/nvcf/overview/image-mirroring) and the [Artifact Manifest](/nvcf/overview/manifest).
+   [Image Mirroring](../overview/image-mirroring.md) and the [Artifact Manifest](../overview/manifest.md).
 3. **Choose the mode.** HA is on by default (`preferred`), so an environment
    file that does not set `highAvailability.mode` **activates HA on upgrade**.
    Confirm the [cluster prerequisites](#cluster-prerequisites) first — `preferred`
@@ -496,7 +499,7 @@ in this order:
 
 - [Control Plane Operations](./control-plane-operations.md) — service reference,
   key rotation, and upgrade runbooks.
-- [Infrastructure Sizing](/nvcf/overview/infrastructure-sizing) — node pool sizing
+- [Infrastructure Sizing](../overview/infrastructure-sizing.md) — node pool sizing
   guidance.
 - [Helmfile Installation](./helmfile-installation.md) — how environment values
   and `global.yaml.gotmpl` are applied.

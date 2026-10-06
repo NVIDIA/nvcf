@@ -137,6 +137,62 @@ func TestChatCompletionsForwardsExtensionFieldsUpstream(t *testing.T) {
 	}
 }
 
+func TestMultimodalInputsReachUpstream(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, path, field, input string
+	}{
+		{"chat text", "/v1/chat/completions", "messages", `[{"role":"user","content":"Describe this."}]`},
+		{"chat image", "/v1/chat/completions", "messages", `[{"role":"user","content":[{"type":"text","text":"Describe this."},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]`},
+		{"chat audio", "/v1/chat/completions", "messages", `[{"role":"user","content":[{"type":"text","text":"Transcribe this."},{"type":"audio_url","audio_url":{"url":"data:audio/ogg;base64,T2dnUw==","extension":"preserve"}}]}]`},
+		{"chat video", "/v1/chat/completions", "messages", `[{"role":"user","content":[{"type":"text","text":"Describe this."},{"type":"video_url","video_url":{"url":"data:video/mp4;base64,AAAA","fps":1}}]}]`},
+		{"responses text", "/v1/responses", "input", `[{"role":"user","content":[{"type":"input_text","text":"Describe this."}]}]`},
+		{"responses image", "/v1/responses", "input", `[{"role":"user","content":[{"type":"input_text","text":"Describe this."},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]`},
+		{"responses audio", "/v1/responses", "input", `[{"role":"user","content":[{"type":"input_text","text":"Transcribe this."},{"type":"input_audio","input_audio":{"data":"T2dnUw==","format":"ogg"}}]}]`},
+		{"responses typed audio", "/v1/responses", "input", `[{"type":"message","role":"user","content":[{"type":"input_text","text":"Transcribe this."},{"type":"input_audio","input_audio":{"data":"T2dnUw==","format":"ogg"}}]}]`},
+	}
+	for _, tt := range tests {
+		for _, stream := range []bool{false, true} {
+			for _, status := range []int{http.StatusOK, http.StatusBadRequest, http.StatusInternalServerError} {
+				t.Run(tt.name+"/stream="+strconv.FormatBool(stream)+"/backend="+strconv.Itoa(status), func(t *testing.T) {
+					requests := make(chan []byte, 1)
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Errorf("read upstream request: %v", err)
+						}
+						requests <- body
+						if status != http.StatusOK {
+							w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+							w.WriteHeader(status)
+							_, _ = io.WriteString(w, `{"error":{"message":"backend rejected input","type":"backend_error"}}`)
+							return
+						}
+						w.Header().Set(echo.HeaderContentType, "text/event-stream")
+						if tt.path == "/v1/responses" {
+							_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":0,\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"created_at\":1,\"output\":[]}}\n\n")
+						} else {
+							_, _ = io.WriteString(w, passthroughChatUpstreamSSE)
+						}
+					}))
+					defer upstream.Close()
+					e := newPassthroughAPI(t, upstream.URL)
+					body := `{"model":"fn-alpha/company-name/model-name","` + tt.field + `":` + tt.input + `,"stream":` + strconv.FormatBool(stream) + `}`
+					rec := servePassthroughRequest(t, e, tt.path, body)
+					require.Equal(t, status, rec.Code, rec.Body.String())
+					require.Len(t, requests, 1, "request must reach upstream")
+					outbound := jsonObject(t, <-requests)
+					require.JSONEq(t, tt.input, string(outbound[tt.field]))
+					if status != http.StatusOK {
+						require.Contains(t, rec.Body.String(), "backend rejected input")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestChatCompletionsUnaryReturnsReasoningContentAndLogprobs(t *testing.T) {
 	t.Parallel()
 

@@ -134,13 +134,20 @@ impl ProxyRequestRun<'_> {
             selected.expected_queue_ms,
         );
         let upstream_start = Instant::now();
+        let mut request_body_started = false;
         let upstream = proxy_via_quic_streaming(
             self.app,
             &chosen.registration,
             self.request.method.clone(),
             &self.request.path_and_query,
             attempt_headers,
-            || self.request.replay_body.body_for_attempt(),
+            || {
+                let body = self.request.replay_body.body_for_attempt()?;
+                // After handing the body to the tunnel, a transport failure
+                // cannot establish whether the backend applied this POST.
+                request_body_started = true;
+                Ok(body)
+            },
         )
         .instrument(upstream_span.clone())
         .await;
@@ -154,6 +161,7 @@ impl ProxyRequestRun<'_> {
                     &self.app.retry,
                     retry_budget_has_remaining(self.request.retry_deadline),
                     self.attempt_counters.connect_retries,
+                    request_body_started,
                     self.request.replay_body.replay_readiness(),
                 ) {
                     RetryDecision::Final(disposition) => {
@@ -361,6 +369,10 @@ fn finish_attempt(
     }
     let upstream = match disposition {
         FinalRetryDisposition::PassThrough | FinalRetryDisposition::ReplayIncomplete(_) => upstream,
+        FinalRetryDisposition::AmbiguousDelivery => {
+            metrics.proxy_ambiguous_delivery_total().inc();
+            upstream
+        }
         FinalRetryDisposition::Exhausted(retry_reason) => {
             metrics
                 .proxy_retry_exhausted_total(run.routing_key(), run.model_id(), &retry_reason)

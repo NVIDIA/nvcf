@@ -377,6 +377,7 @@ message ClientInvokeResponse {
     repeated FunctionVersion functionVersions = 2;
     string clientAuthSubject = 3;
     string clientNcaId = 4;
+    string clientOwnerNcaId = 5;
 }
 
 message StatefulSessionTracking {

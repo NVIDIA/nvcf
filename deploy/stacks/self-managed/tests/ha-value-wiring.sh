@@ -100,6 +100,9 @@ fi
 if awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-off.yaml" | grep -q "NVCF_NATS_REPLICAS:"; then
   fail "api: JetStream RF env leaked while highAvailability.mode=none"
 fi
+if awk '/^sis:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-off.yaml" | grep -q "ICMS_NATS_REPLICAS:"; then
+  fail "icms (sis release): JetStream RF env leaked while highAvailability.mode=none"
+fi
 render_chart_values invocation-service "$work_dir/invocation-off.yaml" "$core" || fail "render invocation (ha none)"
 if grep -q "NATS_PROPERTIES__REPLICAS:" "$work_dir/invocation-off.yaml"; then
   fail "invocation: JetStream RF env leaked while highAvailability.mode=none"
@@ -139,6 +142,8 @@ awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-on.yaml" | grep -q "po
   fail "api: expected podDisruptionBudget when highAvailability.mode=preferred"
 grep -q 'NVCF_NATS_REPLICAS: "3"' "$work_dir/api-on.yaml" ||
   fail "api: expected JetStream RF NVCF_NATS_REPLICAS=3 when highAvailability.mode=preferred"
+awk '/^sis:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-on.yaml" | grep -q 'ICMS_NATS_REPLICAS: "3"' ||
+  fail "icms (sis release): expected JetStream RF ICMS_NATS_REPLICAS=3 when highAvailability.mode=preferred"
 
 render_chart_values invocation-service "$work_dir/invocation-on.yaml" "$core" || fail "render invocation (preferred)"
 grep -q 'NATS_PROPERTIES__REPLICAS: "3"' "$work_dir/invocation-on.yaml" ||

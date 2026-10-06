@@ -39,6 +39,7 @@ mod retry;
 mod routing;
 mod run;
 mod trace;
+mod unread_body;
 mod upstream;
 pub(crate) use diagnostics::DebugConfig;
 use diagnostics::{debug_state, http_list_models};
@@ -50,6 +51,7 @@ pub use retry::ProxyRetryConfig;
 use retry::{ReplayableRequestBody, retry_budget_deadline};
 use run::{PreparedProxyRequest, ProxyRequestRun};
 use trace::{RequestTraceFields, proxy_openai_request_span, record_request_to_span};
+use unread_body::track_unread_body;
 use upstream::prepare_forwarded_headers;
 
 const HEADER_ROUTING_METHOD: &str = "x-routing-method";
@@ -179,16 +181,22 @@ async fn proxy_openai_request(
     app: ProxyAppState,
     req: Request,
     endpoint: OpenAiProxyEndpoint,
-) -> Result<Response<Body>, ProxyRequestError> {
+) -> Response<Body> {
     let request_start = Instant::now();
     let (parts, body) = req.into_parts();
+    let (body, unread_body) = track_unread_body(body);
     let span = proxy_openai_request_span(&parts.headers);
     async move {
-        let request = prepare_proxy_request(&app, parts, body, endpoint, request_start)?;
-        ProxyRequestRun::new(&app, request)
-            .execute()
-            .await
-            .map_err(Into::into)
+        let result = match prepare_proxy_request(&app, parts, body, endpoint, request_start) {
+            Ok(request) => ProxyRequestRun::new(&app, request)
+                .execute()
+                .await
+                .map_err(ProxyRequestError::from),
+            Err(error) => Err(error),
+        };
+        let mut response = result.unwrap_or_else(IntoResponse::into_response);
+        unread_body.close_if_unread(&mut response);
+        response
     }
     .instrument(span)
     .await

@@ -22,7 +22,7 @@ use crate::common::{
     DummyState, SelfDiscovery, TunnelTestCase, base_config, bind_ephemeral,
     direct_registration_config, dummy_chat, init_crypto, make_stargate_runtime,
     make_stargate_runtime_for_tunnel_case, make_stargate_runtime_with_lb,
-    reverse_registration_config, start_dummy_inst, wait_for_routing,
+    reverse_registration_config, start_dummy_inst, strict_queue_mismatch_retry, wait_for_routing,
     wait_for_routing_with_cache_affinity, wait_until, with_proxy_headers,
 };
 use axum::Router;
@@ -611,6 +611,7 @@ impl ProxyFixture {
         );
         tunnel_config.tunnel_protocol = protocol;
         tunnel_config.forwarding.runtime_state = runtime_state.clone();
+        tunnel_config.forwarding.queue_mismatch_retry = strict_queue_mismatch_retry();
         let tunnel = start_quic_http_tunnel(tunnel_config)
             .await
             .expect("capturing backend tunnel failed to start");
@@ -2282,6 +2283,7 @@ async fn transport_local_shared_cluster_failover_stays_within_selected_cluster()
             cluster_id: "shared-failover-cluster".to_string(),
             inference_server_url: "http://127.0.0.1:1".to_string(),
             min_update_interval: Duration::from_millis(100),
+            stats_update_coalesce: Duration::from_millis(10),
             reverse_tunnel: true,
             forwarding: pylon_lib::TunnelForwardingConfig {
                 runtime_state: bad_runtime.clone(),
@@ -2428,6 +2430,111 @@ async fn unknown_model_returns_404_no_eligible_candidates() {
         .await
         .expect("no-candidates response body should be json");
     assert_eq!(body["code"], "no_eligible_candidates");
+
+    finish_stargate(handle).await;
+}
+
+#[tokio::test]
+async fn early_response_announces_close_and_accepts_the_late_body() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    async fn read_response(
+        stream: &mut BufReader<TcpStream>,
+    ) -> std::io::Result<(u16, Option<String>)> {
+        let mut status_line = String::new();
+        if stream.read_line(&mut status_line).await? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        let status = status_line
+            .split(' ')
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .ok_or(std::io::ErrorKind::InvalidData)?;
+        let mut content_length = 0;
+        let mut connection = None;
+        loop {
+            let mut line = String::new();
+            if stream.read_line(&mut line).await? == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
+            if line == "\r\n" {
+                break;
+            }
+            let line = line.to_ascii_lowercase();
+            if let Some(value) = line.strip_prefix("content-length:") {
+                content_length = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| std::io::ErrorKind::InvalidData)?;
+            }
+            if let Some(value) = line.strip_prefix("connection:") {
+                connection = Some(value.trim().to_string());
+            }
+        }
+        stream.read_exact(&mut vec![0; content_length]).await?;
+        Ok((status, connection))
+    }
+
+    let (_, http_addr, handle) = start_stargate("test-sg-early-response-close").await;
+    let small =
+        r#"{"model":"nonexistent","messages":[{"role":"user","content":"hi"}]}"#.to_string();
+    // Still being sent when the router has answered and hyper has closed the connection.
+    let large = format!(
+        r#"{{"model":"nonexistent","input":"{}"}}"#,
+        "x".repeat(2 << 20)
+    );
+    let cases = [
+        ("small, content-length", &small, false),
+        ("small, chunked", &small, true),
+        ("2 MiB, content-length", &large, false),
+        ("2 MiB, chunked", &large, true),
+    ];
+    for (label, body, is_chunked) in cases {
+        let (framing_header, framed_body) = if is_chunked {
+            (
+                "Transfer-Encoding: chunked".to_string(),
+                format!("{:x}\r\n{body}\r\n0\r\n\r\n", body.len()),
+            )
+        } else {
+            (format!("Content-Length: {}", body.len()), body.clone())
+        };
+        let head = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: {http_addr}\r\n\
+             Content-Type: application/json\r\n{framing_header}\r\n\
+             X-Model: nonexistent\r\nX-Request-Id: early-response\r\nX-Input-Tokens: 1\r\n\r\n",
+        );
+        let mut client = BufReader::new(TcpStream::connect(http_addr).await.unwrap());
+        client.get_mut().write_all(head.as_bytes()).await.unwrap();
+        // The router rejects from the headers alone; the body follows its decision.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        client
+            .get_mut()
+            .write_all(framed_body.as_bytes())
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{label}: connection reset while sending the body: {error}")
+            });
+        let (status, connection) =
+            tokio::time::timeout(Duration::from_secs(5), read_response(&mut client))
+                .await
+                .expect("response timed out")
+                .unwrap_or_else(|error| panic!("{label}: response lost: {error}"));
+        assert_eq!(status, 404, "{label}");
+        assert_eq!(
+            connection.as_deref(),
+            Some("close"),
+            "{label}: the router must announce the close"
+        );
+        let closed =
+            tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut Vec::new()))
+                .await
+                .expect("close timed out");
+        assert!(
+            closed.is_ok(),
+            "{label}: connection reset instead of closed: {closed:?}"
+        );
+    }
 
     finish_stargate(handle).await;
 }
@@ -3318,4 +3425,112 @@ async fn pulsar_missing_input_tokens_header_returns_400() {
         .await
         .assert_missing_header("req-no-input-tokens", ("x-cache-affinity-key", "prefix-a"))
         .await;
+}
+
+#[tokio::test]
+async fn submitted_post_is_not_replayed_after_header_timeout() {
+    init_crypto();
+    let model = "review-duplicate-post";
+    let hits = Arc::new(AtomicUsize::new(0));
+    let backend_hits = hits.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backend_addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/v1/chat/completions", post(move |req: Request| {
+            let hits = backend_hits.clone();
+            async move {
+                axum::body::to_bytes(req.into_body(), 1024 * 1024).await.unwrap();
+                let prior = hits.fetch_add(1, Ordering::SeqCst);
+                if prior == 0 {
+                    tokio::time::sleep(Duration::from_millis(900)).await;
+                }
+                Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+                    .unwrap()
+            }
+        }));
+    let backend_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let (grpc_addr, grpc_listener) = bind_ephemeral();
+    let (model_addr, model_listener) = bind_ephemeral();
+    let (http_addr, http_listener) = bind_ephemeral();
+    let mut config = base_config("review-post-retry", grpc_addr, http_addr);
+    config.model_discovery_listen_addr = model_addr;
+    config.proxy_transport.quic.request_timeout = Duration::from_millis(300);
+    let listeners = BoundStargateListeners::from_prebound(
+        &config,
+        grpc_listener,
+        model_listener,
+        http_listener,
+        None,
+    )
+    .unwrap();
+    let discovery = SelfDiscovery::new("review-post-retry", grpc_addr, http_addr);
+    let handle = StargateRuntime::new(config, Box::new(discovery), listeners, None)
+        .start()
+        .await
+        .unwrap();
+    let mut fixture = ProxyFixture::new(grpc_addr, http_addr, handle);
+    let tunnel = start_quic_http_tunnel(QuicHttpTunnelConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        format!("http://{backend_addr}"),
+    ))
+    .await
+    .unwrap();
+    fixture.register(
+        active_registration_config_with_state(
+            grpc_addr,
+            "review-backend",
+            "",
+            format!("quic://{}", tunnel.listen_addr()),
+            format!("http://{backend_addr}"),
+            active_runtime(model),
+        ),
+        "review registration failed",
+    );
+    fixture.own_tunnel(tunnel);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture
+            .handle
+            .state()
+            .list_active_models(None, &[model.to_string()])
+            .await
+            .is_empty()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let response = fixture
+        .chat_request(model, "one-user-request")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    let accepted = hits.load(Ordering::SeqCst);
+    let ambiguous = fixture
+        .handle
+        .metrics()
+        .registry()
+        .gather()
+        .into_iter()
+        .find(|family| family.name() == "stargate_proxy_ambiguous_delivery_total");
+    fixture.shutdown().await;
+    backend_task.abort();
+    let _ = backend_task.await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        accepted, 1,
+        "one POST was accepted {accepted} times; final status={status}, body={body}"
+    );
+    let ambiguous = ambiguous.expect("ambiguous delivery counter missing");
+    assert_eq!(ambiguous.get_metric().len(), 1);
+    assert!(ambiguous.get_metric()[0].get_label().is_empty());
+    assert_eq!(ambiguous.get_metric()[0].get_counter().value(), 1.0);
 }

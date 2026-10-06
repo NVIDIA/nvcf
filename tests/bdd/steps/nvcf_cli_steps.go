@@ -41,6 +41,7 @@ const vanityRouteNotFoundError = "Error: failed to invoke function: API error 40
 func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I use NVCF CLI config "([^"]*)"$`, sc.iUseNVCFCLIConfig)
 	ctx.Step(`^I successfully create function "([^"]*)" from image "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateFunction)
+	ctx.Step(`^I successfully create function "([^"]*)" from Helm chart "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateHelmFunction)
 	ctx.Step(`^I successfully deploy the function selected by NVCF CLI with options:$`, sc.iSuccessfullyDeploySelectedFunction)
 	ctx.Step(`^I successfully generate a function API key with CLI options:$`, sc.iSuccessfullyGenerateFunctionAPIKey)
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI over HTTP with timeout "([^"]*)" seconds and poll duration "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionHTTP)
@@ -66,6 +67,17 @@ func (sc *ScenarioContext) iSuccessfullyCreateFunction(
 ) error {
 	return sc.runNVCFCLIWithOptions(ctx, []string{
 		"function", "create", "--name", name, "--image", image,
+	}, table)
+}
+
+func (sc *ScenarioContext) iSuccessfullyCreateHelmFunction(
+	ctx context.Context,
+	name,
+	chart string,
+	table *godog.Table,
+) error {
+	return sc.runNVCFCLIWithOptions(ctx, []string{
+		"function", "create", "--name", name, "--helm-chart", chart,
 	}, table)
 }
 
