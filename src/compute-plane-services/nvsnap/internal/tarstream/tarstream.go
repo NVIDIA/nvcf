@@ -10,10 +10,12 @@ package tarstream
 
 import (
 	"archive/tar"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -113,6 +115,17 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 			continue
 		}
 		target := filepath.Join(dest, rel)
+		// Each symlink passes the lexical check above on its own, but links
+		// resolve through one another ("d -> .", then "d/f -> ../x"), so
+		// no entry may be created beneath a symlink, and an entry replaces
+		// a symlink at its own path rather than following it. Write never
+		// emits an entry under a symlink, so one here is a corrupt stream.
+		if err := realParents(dest, rel); err != nil {
+			return files, bytes, err
+		}
+		if err := dropSymlink(target); err != nil {
+			return files, bytes, err
+		}
 		mode := os.FileMode(hdr.Mode) & os.ModePerm
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -136,7 +149,7 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 					mode = 0o777
 				}
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o600)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, mode|0o600)
 			if err != nil {
 				return files, bytes, err
 			}
@@ -164,4 +177,70 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 			}
 		}
 	}
+}
+
+// realParents fails when a directory component of rel below dest is a
+// symlink. Components that do not exist yet are created as directories.
+func realParents(dest, rel string) error {
+	dir := filepath.Dir(rel)
+	if dir == "." {
+		return nil
+	}
+	cur := dest
+	for _, part := range strings.Split(dir, string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("tarstream: entry %s lies under symlink %s", rel, cur)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("tarstream: entry %s lies under non-directory %s", rel, cur)
+		}
+	}
+	return nil
+}
+
+// dropSymlink removes a symlink at target, so the entry replaces it.
+func dropSymlink(target string) error {
+	fi, err := os.Lstat(target)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	return os.Remove(target)
+}
+
+// ExtractFresh unpacks a stream into an empty staging directory next to
+// dest and replaces dest with it only when the whole stream extracted. A
+// retried transfer therefore never merges into what an interrupted
+// attempt left, and a failed one leaves dest as it was.
+func ExtractFresh(r io.Reader, dest string, worldWritable bool) (files int, bytes int64, err error) {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return 0, 0, err
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(dest), filepath.Base(dest)+".partial-")
+	if err != nil {
+		return 0, 0, err
+	}
+	defer os.RemoveAll(staging)
+	if files, bytes, err = Extract(r, staging, worldWritable); err != nil {
+		return files, bytes, err
+	}
+	if worldWritable {
+		_ = os.Chmod(staging, 0o777)
+	} else {
+		_ = os.Chmod(staging, 0o755)
+	}
+	if err := os.RemoveAll(dest); err != nil {
+		return files, bytes, err
+	}
+	if err := os.Rename(staging, dest); err != nil {
+		return files, bytes, err
+	}
+	return files, bytes, nil
 }

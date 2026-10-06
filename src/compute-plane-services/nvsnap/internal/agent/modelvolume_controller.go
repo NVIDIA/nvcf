@@ -1181,7 +1181,10 @@ func (c *ModelVolumeController) fetchRankHTTP(ctx context.Context, uri string, r
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("peer returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	_, _, err = tarstream.Extract(resp.Body, dst, false)
+	// Every attempt extracts into a fresh staging tree published only when
+	// complete: a retry must not extract over what an interrupted attempt
+	// left behind.
+	_, _, err = tarstream.ExtractFresh(resp.Body, dst, false)
 	return err
 }
 
