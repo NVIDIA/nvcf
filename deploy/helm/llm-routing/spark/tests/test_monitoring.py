@@ -511,8 +511,10 @@ class MonitoringTests(unittest.TestCase):
         proc = Mock()
         proc.poll.return_value = None
         with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)), \
+             patch.object(monitoring.dashboard_login, 'open_dashboard') as login, \
              patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(stream):
             self.monitor.dashboard(13000)
+        login.assert_not_called()
         self.output.assert_not_called()
         self.assertIn('/d/llm-demo', stream.getvalue())
         self.assertIn('No login required', stream.getvalue())
@@ -534,14 +536,42 @@ class MonitoringTests(unittest.TestCase):
         self.output.return_value = json.dumps(self.admin_secret())
         console = console_output.Console()
         with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)), \
+             patch.object(monitoring.dashboard_login, 'open_dashboard') as login, \
              patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(stream):
             console.run('dashboard', self.recipe.work, lambda: self.monitor.dashboard(13000, admin=True))
         self.output.assert_called_once_with(self.recipe.kc+['get', 'secret', self.monitor.release+'-grafana-admin', '-o', 'json'])
-        self.assertIn('http://127.0.0.1:13000/login', stream.getvalue())
-        self.assertIn('User: admin', stream.getvalue())
-        self.assertIn('Password: current-password', stream.getvalue())
+        login.assert_called_once_with(13000, ('admin', 'current-password'), proc)
+        self.assertIn('http://127.0.0.1:13000/d/llm-demo', stream.getvalue())
+        self.assertIn('Signed in as admin.', stream.getvalue())
+        self.assertNotIn('current-password', stream.getvalue())
+        self.assertNotIn('Password:', stream.getvalue())
         self.assertIsNone(console.log_path)
         self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
+
+    def test_failed_or_interrupted_admin_login_closes_the_tunnel(self):
+        import contextlib
+        import io
+        self.output.return_value = json.dumps(self.admin_secret())
+        for error in (RuntimeError('Grafana admin sign-in failed'), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__):
+                closed = Mock()
+                @contextlib.contextmanager
+                def forward(*args):
+                    try:
+                        yield Mock()
+                    finally:
+                        closed()
+                stream = io.StringIO()
+                with patch.object(self.monitor, 'forward', side_effect=forward), \
+                     patch.object(monitoring.dashboard_login, 'open_dashboard', side_effect=error), \
+                     contextlib.redirect_stdout(stream):
+                    if isinstance(error, RuntimeError):
+                        with self.assertRaisesRegex(RuntimeError, 'sign-in failed'):
+                            self.monitor.dashboard(13000, admin=True)
+                    else:
+                        self.monitor.dashboard(13000, admin=True)
+                closed.assert_called_once_with()
+                self.assertEqual(stream.getvalue(), '')
 
     def test_admin_access_rejects_foreign_or_malformed_credentials_before_tunneling(self):
         import contextlib

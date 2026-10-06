@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 
 from client import Client
+import dashboard_login
 import gateway_access
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -298,15 +299,12 @@ class Monitoring:
         self.recipe.bound_cluster()
         credentials = self.admin_credentials() if admin else None
         with self.forward('grafana', port, 3000) as proc:
-            path = '/login' if admin else '/d/llm-demo'
-            print('Dashboard: http://127.0.0.1:'+str(port)+path, flush=True)
-            if credentials:
-                print('User:', credentials[0], flush=True)
-                print('Password:', credentials[1], flush=True)
-            else:
-                print('Viewer access. No login required.', flush=True)
-            print('Press Ctrl-C to close the tunnel.', flush=True)
             try:
+                if credentials:
+                    dashboard_login.open_dashboard(port, credentials, proc)
+                print('Dashboard: http://127.0.0.1:'+str(port)+'/d/llm-demo', flush=True)
+                print('Signed in as admin.' if admin else 'No login required for viewing.', flush=True)
+                print('Press Ctrl-C to close the tunnel.', flush=True)
                 while True:
                     require(proc.poll() is None, 'Grafana tunnel disconnected. Rerun dashboard after restoring access.')
                     time.sleep(1)

@@ -50,7 +50,7 @@ To reopen the dashboard after installation:
 python3 spark.py dashboard
 ```
 
-For admin access, stop the tunnel and run `python3 spark.py dashboard --admin`. This prints the login URL and credentials from the cluster Secret. Admin manages users, permissions and data sources. Viewing uses anonymous Viewer access, including through the internal Service. Save lasting dashboard and data-source changes in the chart. Keep generated Helm values private.
+For admin access, stop the tunnel and run `python3 spark.py dashboard --admin`. This opens your browser and signs in automatically. Sign out in Grafana to return to Viewer access. Admin manages users, permissions and data sources. Save lasting dashboard and data-source changes in the chart. Keep generated Helm values private.
 
 ## Verification
 

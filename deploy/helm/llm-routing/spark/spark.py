@@ -1049,7 +1049,7 @@ def main(argv=None, console=None):
     parser.add_argument('--allow-containerd-import', action='store_true')
     parser.add_argument('--result', type=pathlib.Path)
     parser.add_argument('--port', type=int, help='Local port; defaults to 13000 for monitoring/dashboard and 18443 for other commands.')
-    parser.add_argument('--admin', action='store_true', help='Show administrator login credentials with dashboard.')
+    parser.add_argument('--admin', action='store_true', help='Open the dashboard in your browser, signed in as admin.')
     parser.add_argument('--confirm-model-interruption', action='store_true')
     parser.add_argument('--verify-traffic', action='store_true', help='Send gateway verification requests and check monitoring counter increases.')
     parser.add_argument('--model', help='Served model to use with verify-monitoring --verify-traffic. Defaults to monitoring.model or gateway discovery.')
