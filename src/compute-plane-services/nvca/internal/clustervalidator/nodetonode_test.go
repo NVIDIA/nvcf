@@ -53,6 +53,11 @@ import (
 	ktesting "k8s.io/client-go/testing"
 )
 
+// checkNodeToNode runs a first node-to-node pass, with no failure to recheck.
+func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *ValidationState, image string) {
+	probeNodeToNode(ctx, client, state, image, nil)
+}
+
 // readyNodes returns n Ready nodes named node-1..node-n.
 func readyNodes(n int) []*corev1.Node {
 	nodes := make([]*corev1.Node, n)

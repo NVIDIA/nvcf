@@ -2160,7 +2160,13 @@ func deleteProbePods(ctx context.Context, client kubernetes.Interface, ns, selec
 	return errors.Join(errs...)
 }
 
-// checkNodeToNode verifies overlay-network connectivity across the nodes that
+// n2nPath is a checker's node and the nodes whose server pods it dialled.
+type n2nPath struct {
+	checker string
+	targets []string
+}
+
+// probeNodeToNode verifies overlay-network connectivity across the nodes that
 // can run work, using a DaemonSet-based probe. A server DaemonSet runs on every
 // Ready, uncordoned node that is not fenced off (nodeToNodeTargets); a checker
 // pod on one of them, picked at random each run, connects to the server pod
@@ -2184,22 +2190,13 @@ func deleteProbePods(ctx context.Context, client kubernetes.Interface, ns, selec
 //
 // Critical: broken overlay means NVCF services on different nodes cannot
 // communicate, causing cascade failures across every API call.
-func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *ValidationState, image string) {
-	probeNodeToNode(ctx, client, state, image, nil)
-}
-
-// n2nPath is a checker's node and the nodes whose server pods it dialled.
-type n2nPath struct {
-	checker string
-	targets []string
-}
-
-// probeNodeToNode is checkNodeToNode, dialling the paths of retest when it is
-// set: a recheck of a failure dials from the same node to the same nodes,
-// those of them still to probe, since a checker on another node tests other
-// paths and its pass says nothing about the path that failed. A checker node
-// no longer to probe leaves the row unknown, so the failure stands. It returns
-// the path its checker dialled, or nil when no checker reported.
+//
+// A recheck of a failure passes the path that failed as retest: it dials from
+// the same node to the same nodes, those of them still to probe, since a
+// checker on another node tests other paths and its pass says nothing about
+// the path that failed. A checker node no longer to probe leaves the row
+// unknown, so the failure stands. It returns the path its checker dialled, or
+// nil when no checker reported.
 func probeNodeToNode(
 	ctx context.Context, client kubernetes.Interface, state *ValidationState, image string, retest *n2nPath,
 ) *n2nPath {
