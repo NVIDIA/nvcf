@@ -644,19 +644,38 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	for _, e := range m.cacheEnvFor(root, "") {
 		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
+	// The cache env moves HOME, and an engine that relies on the Hugging
+	// Face default finds its cache through HOME: it would look under the
+	// cachedir and miss the model mounted at the default path
+	// (LocalEntryNotFoundError under HF_HUB_OFFLINE). Pin the cache to
+	// where the model is mounted.
+	pinned := pinsHFHome(main, land)
+	if pinned {
+		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_HOME", Value: land.Path}))
+	}
 	// transformers writes trust_remote_code module sources to
 	// HF_MODULES_CACHE, which defaults to $HF_HOME/modules. Charts that
 	// point HF_HOME at the model directory then write into the shared
 	// volume, which is read-only for every reader (GB300, 2026-09-30:
 	// "Read-only file system: /config/models/modules"). Keep that cache
 	// with the other per-pod caches unless the chart placed it itself.
-	if hfHomeUnderLanding(main, land) && !hasEnv(main, "HF_MODULES_CACHE") {
+	if (pinned || hfHomeUnderLanding(main, land)) && !hasEnv(main, "HF_MODULES_CACHE") {
 		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: path.Join(root, "hf_modules")}))
 	}
 	// The local cachedir the capture reads, and the per-key cache set
 	// that shares the compile caches between pods of one configuration.
 	patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
 	return m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
+}
+
+// pinsHFHome reports whether the engine reads its model through the Hugging
+// Face default cache, which nvsnap mounted at the default path: the
+// container names no cache location of its own, by value or by reference.
+func pinsHFHome(main *corev1.Container, land modelid.Landing) bool {
+	if path.Clean(land.Path) != modelid.DefaultHFHome {
+		return false
+	}
+	return !hasEnv(main, "HF_HOME") && !hasEnv(main, "HF_HUB_CACHE")
 }
 
 // hfHomeUnderLanding reports whether the container's literal HF_HOME is

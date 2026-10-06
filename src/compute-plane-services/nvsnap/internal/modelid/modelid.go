@@ -123,6 +123,10 @@ type Result struct {
 	Source string
 }
 
+// DefaultHFHome is where Hugging Face tooling caches when the engine sets
+// neither HF_HOME nor HF_HUB_CACHE, assuming the image's HOME is /root.
+const DefaultHFHome = defaultHFHome
+
 const (
 	defaultHFHome = "/root/.cache/huggingface"
 	kserveDest    = "/mnt/models"

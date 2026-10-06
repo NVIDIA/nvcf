@@ -1039,6 +1039,45 @@ func TestModelVolume_HFHomeOnLanding_ModulesCacheMovedOffVolume(t *testing.T) {
 	}
 }
 
+// An engine that names no Hugging Face cache reads the default under
+// HOME, where nvsnap mounts the model. The cache env moves HOME to the
+// cachedir, so without a pinned HF_HOME the engine looks there and, with
+// the hub offline, fails with LocalEntryNotFoundError.
+func TestModelVolume_DefaultHFCache_PinsHFHomeToLanding(t *testing.T) {
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset())
+	pod := stockVLLMPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.env["HOME"] != "/opt/nvsnap/cache" {
+		t.Fatalf("precondition: HOME is moved to the cachedir, got %q (env %v)", v.env["HOME"], v.env)
+	}
+	if v.env["HF_HOME"] != "/root/.cache/huggingface" {
+		t.Errorf("HF_HOME must pin the cache to the mounted model, got %q (env %v)", v.env["HF_HOME"], v.env)
+	}
+	if v.env["HF_MODULES_CACHE"] != "/opt/nvsnap/cache/hf_modules" {
+		t.Errorf("a pinned HF_HOME is on the read-only landing; HF_MODULES_CACHE must leave it, got %q", v.env["HF_MODULES_CACHE"])
+	}
+
+	for name, env := range map[string]corev1.EnvVar{
+		"HF_HOME by value":     {Name: "HF_HOME", Value: "/data/hf"},
+		"HF_HOME by reference": {Name: "HF_HOME", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{Key: "hf"}}},
+		"HF_HUB_CACHE":         {Name: "HF_HUB_CACHE", Value: "/data/hub"},
+	} {
+		own := stockVLLMPod()
+		own.Spec.Containers[0].Env = append(own.Spec.Containers[0].Env, env)
+		patches, err := m.Mutate(context.Background(), own)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := viewMV(own, patches).env["HF_HOME"]; ok {
+			t.Errorf("%s: the chart's cache location is respected, got HF_HOME patch %q", name, got)
+		}
+	}
+}
+
 // The sweep is for the default single-thread loader: an engine that reads
 // in parallel (fastsafetensors, the Run:ai streamer) gets none, whatever
 // the volume size.
