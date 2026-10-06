@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # vLLM TP=2 pod for validating nvsnap-gpu-suspend on a real workload.
 #   kubectl create ns nvsnap-gpushare
-#   kubectl create configmap gpushare-src -n nvsnap-gpushare \
-#     --from-file=docker/agent/gpushare/gpushare.c --from-file=docker/agent/gpushare/gpushare.h
-#   kubectl apply -n nvsnap-gpushare -f tests/k8s/vllm-tp2.yaml
-#   tests/k8s/vllm_ckpt_cycle.sh nvsnap-gpushare vllm-tp2
+#   (copy nvsnap-pull-secret into it: docs/PULL-SECRET-SETUP.md)
+#   kubectl apply -n nvsnap-gpushare -f tests/gpushare/k8s/vllm-tp2.yaml
+#   tests/gpushare/k8s/vllm_ckpt_cycle.sh nvsnap-gpushare vllm-tp2
 #
 # vLLM runs with default settings. The TP ranks share GPU memory (custom
 # all-reduce, NCCL cuMem P2P), which the driver cannot restore on its own:
-# libnvsnap_gpushare.so (LD_PRELOAD, built at start from the ConfigMap)
-# releases and re-maps it around the checkpoint.
+# libnvsnap_gpushare.so (LD_PRELOAD) releases and re-maps it around the
+# checkpoint. It and nvsnap-gpu-suspend come from the agent base image's
+# /criu-bundle (the binaries nvsnap ships; keep the tag in step with
+# NVSNAP_BASE_VERSION in scripts/versions.sh).
 apiVersion: v1
 kind: Pod
 metadata:
@@ -19,16 +20,20 @@ metadata:
     app: vllm-tp2
 spec:
   restartPolicy: Never
+  imagePullSecrets: [{name: nvsnap-pull-secret}]
+  initContainers:
+  - name: gpushare
+    image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.23
+    command: [cp, /criu-bundle/libnvsnap_gpushare.so, /criu-bundle/nvsnap-gpu-suspend, /opt/gpushare/]
+    volumeMounts:
+    - {name: gpushare, mountPath: /opt/gpushare}
   containers:
   - name: vllm
     image: vllm/vllm-openai:v0.20.0
     command: ["/bin/bash", "-c"]
     args:
     - |
-      mkdir -p /opt/wc
-      gcc -O2 -fPIC -shared -I/opt/wc -I/usr/local/cuda/include -o /opt/wc/libnvsnap_gpushare.so \
-        /wc-src/gpushare.c -ldl -lpthread || exit 1
-      LD_PRELOAD=/opt/wc/libnvsnap_gpushare.so exec vllm serve --model=Qwen/Qwen2.5-7B-Instruct \
+      LD_PRELOAD=/opt/gpushare/libnvsnap_gpushare.so exec vllm serve --model=Qwen/Qwen2.5-7B-Instruct \
         --tensor-parallel-size=2 --gpu-memory-utilization=0.3 --max-model-len=4096 --port=8000
     ports:
     - containerPort: 8000
@@ -37,16 +42,17 @@ spec:
       periodSeconds: 5
     resources:
       requests: {nvidia.com/gpu: 2, cpu: "8", memory: 64Gi}
-      # Checkpointed GPU memory lives in the process's host RAM.
-      limits: {nvidia.com/gpu: 2, memory: 200Gi}
+      # Checkpointed GPU memory lives in the process's host RAM: about
+      # utilization x GPU memory per rank (2 x 0.3 x 288 GB on GB300).
+      limits: {nvidia.com/gpu: 2, memory: 400Gi}
     securityContext:
       capabilities:
         add: [SYS_PTRACE]  # suspend freezes the vLLM threads via ptrace
     volumeMounts:
     - {name: dshm, mountPath: /dev/shm}
-    - {name: wc-src, mountPath: /wc-src}
+    - {name: gpushare, mountPath: /opt/gpushare}
   volumes:
-  - name: wc-src
-    configMap: {name: gpushare-src}
+  - name: gpushare
+    emptyDir: {}
   - name: dshm
     emptyDir: {medium: Memory, sizeLimit: 16Gi}

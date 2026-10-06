@@ -40,7 +40,26 @@ Each process that loads the shim runs a control thread on the abstract socket
 | `resume` | each pid | Binds multicast memory and reopens launches. |
 
 The shim backs `cuMemAlloc` of 2 MiB or more with exportable cuMem allocations,
-so that CUDA IPC works across a restore.
+so that CUDA IPC works across a restore. cuMem memory is reachable only from
+the devices granted with `cuMemSetAccess`, so the shim also follows
+`cuCtxEnablePeerAccess` and `cuCtxDisablePeerAccess`, granting each peer
+access to the allocations it covers. A process that drives several GPUs
+keeps its peer access, and each allocation is saved and loaded on its own
+device.
+
+### Control socket access
+
+Abstract sockets have no file permissions: any process in the pod's network
+namespace can connect, which includes sidecars and, with `hostNetwork`, the
+whole node. The control thread therefore checks the peer's credentials
+(`SO_PEERCRED`). It serves only a peer that is in the workload's pid
+namespace and runs as root or as the workload's user. Clients, both the
+shim's own requests to other processes and `nvsnap-gpu-suspend`, talk to a
+socket only if it belongs to the pid in its name. Two consequences:
+
+- `nvsnap-gpu-suspend` must run in the workload's pid and network
+  namespaces, for example through `kubectl exec` or `nsenter -t <pid> -p -n`.
+- All processes that share GPU memory must be in one pid namespace.
 
 ## Usage
 
@@ -54,13 +73,15 @@ nvsnap-gpu-suspend suspend <pids...>
 nvsnap-gpu-suspend resume <pids...>
 
 # For CRIU: save GPU memory to a chunk store, hand off to CRIU, and restore
-# elsewhere.
+# elsewhere. Record which GPUs the checkpoint used, for --gpu-map.
+nvsnap-gpu-suspend gpus > /ckpt/<id>/gpus
 nvsnap-gpu-suspend --store /ckpt/store --ckpt-dir /ckpt/<id> --cache /cache suspend <pids...>
 nvsnap-gpu-suspend stop <pids...>          # then: criu dump
 # ... criu restore (in a new pod or on another node) ...
 nvsnap-gpu-suspend --gpu-map /ckpt/<id>/gpus --cache /cache resume <pids...>
 
-# Node cache.
+# Node cache: fill it, ahead of a restore or in the background after one,
+# and evict from it.
 nvsnap-gpu-suspend cache-prefetch /ckpt/store /ckpt/<id> /cache
 nvsnap-gpu-suspend cache-gc /cache <max-GiB>
 ```
@@ -73,56 +94,83 @@ under `<store>/chunks/xx/<hash>`:
 - A chunk that is already in the store is not written again. Model weights
   repeat across checkpoints of the same model, so they are stored once.
 - All-zero chunks are not stored at all.
-- Each chunk is written to a temporary file, flushed with `fdatasync`, then
-  renamed, so a crash never leaves a chunk name pointing at partial data.
-- Chunk files use `O_DIRECT`.
+- Each chunk is written to a temporary file with a random name, created
+  exclusively, then flushed with `fdatasync` and renamed. Writers in other
+  pods can share a store or a cache, and a crash never leaves a chunk name
+  pointing at partial data.
+- Chunk files use `O_DIRECT`. If a filesystem accepts `O_DIRECT` but fails
+  the I/O, the shim falls back to buffered I/O.
 
 `<ckpt-dir>/gpu-<pid>.chunks` lists the chunks each checkpoint uses, for
 accounting and garbage collection. The CRIU image then holds only host process
 memory.
 
 The optional node cache (`--cache`) is a local directory with the same layout.
-Saves copy chunks into it. Loads read the cache first and fill it from the
-store. `cache-gc` evicts least-recently-used chunks.
+Saves copy chunks into it, and loads read the cache first. A load that misses
+the cache reads the store and does not fill the cache, because cache writes
+would slow the restore down. `cache-prefetch` fills it instead, and
+`cache-gc` evicts least-recently-used chunks.
+
+Chunks are named by a fast 128-bit hash, which is not cryptographic, and a
+load trusts the name. Whoever can write to a store or cache can therefore
+make another workload restore wrong data. A cryptographic hash alone would
+not prevent that: the writer could still store wrong data under the right
+name. Give each tenant, meaning each set of workloads that trust each
+other, its own store and its own cache directory. Weights are still stored
+once per tenant.
 
 ## Requirements and limits
 
-- **Driver.** NVLS multicast restore on GB300 needs a driver that lets a
+- Driver: NVLS multicast restore on GB300 needs a driver that lets a
   restored process create and join multicast objects. 610.57.04 does;
   580.173.02 does not.
-- **IMEX / fabric handles.** Pods with an IMEX channel do not restore yet:
-  after a restore, the driver refuses to export fabric-capable memory.
-- **Scope.** Memory shared across nodes (multi-node NVLink) is not tracked, so
+- IMEX and fabric handles: pods with an IMEX channel do not restore yet.
+  After a restore, the driver refuses to export fabric-capable memory.
+- Scope: memory shared across nodes (multi-node NVLink) is not tracked, so
   its checkpoint is refused. Exporters are found among the processes on the
-  same node.
-- **glibc.** The shim is built on Ubuntu 22.04 and needs glibc 2.35 or later in
+  same node, in the same pid namespace.
+- `hostNetwork`: such pods share the node's abstract socket names. If two of
+  them run a process with the same pid, the second cannot bind its control
+  socket, and its checkpoint is refused.
+- glibc: the shim is built on Ubuntu 22.04 and needs glibc 2.35 or later in
   the workload image.
-- **Host memory.** Without `--store`, the GPU memory the shim saves is kept in
+- Host memory: without `--store`, the GPU memory the shim saves is kept in
   host RAM. Size the pod's memory limit for it.
+- Store garbage collection is not implemented. A store only grows: delete a
+  checkpoint's directory and the store's chunks that no remaining
+  `gpu-*.chunks` list names. Temporary files left in a store by a crash
+  are not removed either. `cache-gc` covers the node cache only.
 
 ## Validation
 
-All results below are for vLLM 0.20.0 at default flags, Qwen2.5-72B-Instruct,
-TP=4 on 4x GB300, driver 610.57.04. In every case the output after restore
-matched the output before checkpoint byte for byte.
+All results are with vLLM 0.20.0 at default flags on 4x GB300 with driver
+610.57.04, unless noted otherwise. In every case the output after restore
+matched the output before the checkpoint byte for byte.
 
-**In-place suspend/resume (Qwen2.5-7B, TP=4):** 3 out of 3 cycles passed.
+In-place suspend and resume, Qwen2.5-7B-Instruct, TP=4: 3 out of 3 cycles
+passed. Each suspend took about 6.5 s, and each resume about 5.9 s.
 
-**Checkpoint on one node, restore on another, from a network-block-storage
-PVC:**
+Checkpoint on one node and restore on another, Qwen2.5-72B-Instruct, TP=4,
+with the store on a network block storage PVC and the node cache on local
+NVMe:
 
-| Phase | Time |
-| --- | --- |
-| New pod to first token | 87.6 s |
-| Same, with the restore node's cache prefetched | ~56 s |
-| GPU chunk load, from the PVC | 29.2 s |
-| GPU chunk load, from the node cache | 7.6 s |
+| Phase | Restore from the store | Restore from the node cache |
+| --- | --- | --- |
+| New pod to first token | 87.8 s | 66.7 s |
+| GPU memory load | 30.1 s | 7.7 s |
+| `criu restore` (processes, host memory) | 18.0 s | 18.3 s |
 
-For comparison, a cold start on a fresh node, including the model download,
-took 1350 s.
+The first checkpoint wrote 159 GiB to the store, and a second checkpoint of
+the same model wrote 20 GiB. A cold start of the same model, including a
+136 GB model download, took 363 s to the first token, or 242 s without the
+download.
 
-**Store growth:** the first checkpoint wrote 159 GiB to the store. A second
-checkpoint of the same model wrote 20 GiB.
+The GPU tests in `tests/gpushare/` pass on GB300 (driver 610) and on RTX
+PRO 6000 (x86, driver 580). `test_multi_gpu` covers a single process driving
+two GPUs with peer access. `test_ipc_release` and `test_cumem_release` are
+probes of the driver without the shim. On both platforms, the driver cannot
+checkpoint or re-export memory shared through its own CUDA IPC, which is
+why the shim replaces it.
 
-To reproduce, run `tests/gpushare/k8s/vllm_criu_bench.sh` (see its header) and
-`tests/gpushare/k8s/vllm_ckpt_cycle.sh`.
+To reproduce, run `tests/gpushare/k8s/vllm_criu_bench.sh` (see its header)
+and `tests/gpushare/k8s/vllm_ckpt_cycle.sh`.

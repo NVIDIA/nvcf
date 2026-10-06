@@ -54,7 +54,14 @@ SPDX-License-Identifier: Apache-2.0
  * Multicast (NVLS) needs a driver that lets a restored process create and
  * join multicast objects: 610.57.04 on GB300 does, 580.173.02 does not.
  *
- * Messages are SOCK_SEQPACKET text, replies start with "ok" or "err".
+ * A process may drive several GPUs: peer access the app enables
+ * (cuCtxEnablePeerAccess) is granted on the cuMem memory behind cuMemAlloc,
+ * and each allocation is saved and re-created on its own device.
+ *
+ * Messages are SOCK_SEQPACKET text, replies start with "ok" or "err". The
+ * control thread serves only peers in its pid namespace running as root or
+ * as its user, and clients talk only to the process a socket is named for
+ * (SO_PEERCRED): abstract sockets have no permissions.
  */
 #ifndef NVSNAP_GPUSHARE_H
 #define NVSNAP_GPUSHARE_H

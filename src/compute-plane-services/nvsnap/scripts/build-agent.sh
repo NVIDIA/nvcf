@@ -210,8 +210,11 @@ build_base() {
     cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/cuda-checkpoint-wrapper.sh"
 
     # gpushare sources (Dockerfile.base's gpushare-builder stage builds
-    # libnvsnap_gpushare.so and nvsnap-gpu-suspend from them).
-    cp -r "${PROJECT_ROOT}/docker/agent/gpushare" "${BUILD_CTX}/gpushare"
+    # libnvsnap_gpushare.so and nvsnap-gpu-suspend from them). Sources
+    # only: binaries from a local build would look up to date to make and
+    # end up in the image, possibly for the wrong architecture.
+    mkdir -p "${BUILD_CTX}/gpushare"
+    cp "${PROJECT_ROOT}"/docker/agent/gpushare/{Makefile,*.c,*.h} "${BUILD_CTX}/gpushare/"
 
     # PLATFORMS with a comma builds a multi-arch manifest with buildx and
     # pushes it straight to the registry (multi-platform images cannot be

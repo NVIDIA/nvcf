@@ -1,14 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # vLLM TP=2 pod that can be CRIU-dumped and restored into a NEW pod.
-# Used by tests/k8s/vllm_criu_migrate.sh; run criu-build.yaml on the node first.
+# Used by tests/gpushare/k8s/vllm_criu_bench.sh; run criu-build.yaml on the
+# node first, and copy nvsnap-pull-secret into the namespace
+# (docs/PULL-SECRET-SETUP.md).
 #
 # vLLM runs with default settings — NCCL cuMem P2P and custom all-reduce
 # (CUDA IPC) between the TP workers — under LD_PRELOAD=libnvsnap_gpushare.so,
-# which releases/re-maps that shared GPU memory around the checkpoint. It is built at start from the ConfigMap:
-#   kubectl create configmap gpushare-src -n <ns> \
-#     --from-file=docker/agent/gpushare/gpushare.c --from-file=docker/agent/gpushare/gpushare.h
-# into the shared node dir, so a restore pod maps the identical file.
+# which releases/re-maps that shared GPU memory around the checkpoint. It and
+# nvsnap-gpu-suspend come from the agent base image's /criu-bundle (the
+# binaries nvsnap ships; keep the tag in step with NVSNAP_BASE_VERSION in
+# scripts/versions.sh), copied into the shared node dir so a restore pod maps
+# the identical file.
 #
 # Differences from vllm-tp2.yaml, each needed for CRIU restore elsewhere:
 #  - CRIU capabilities (SYS_ADMIN, SYS_PTRACE, NET_ADMIN, CHECKPOINT_RESTORE,
@@ -35,7 +38,13 @@ metadata:
     app: vllm-criu
 spec:
   restartPolicy: Never
+  imagePullSecrets: [{name: nvsnap-pull-secret}]
   initContainers:
+  - name: gpushare
+    image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.23
+    command: [sh, -c, "mkdir -p /ckpt/wc && cp /criu-bundle/libnvsnap_gpushare.so /criu-bundle/nvsnap-gpu-suspend /ckpt/wc/"]
+    volumeMounts:
+    - {name: ckpt, mountPath: /ckpt}
   - name: fetch-model
     image: vllm/vllm-openai:v0.20.0
     command: [python3, -c, "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-7B-Instruct')"]
@@ -51,9 +60,6 @@ spec:
     - |
       mkdir -p "$HOME" "$TMPDIR"
       if [ "$MODE" = serve ]; then
-        mkdir -p /ckpt/wc
-        gcc -O2 -fPIC -shared -I/ckpt/wc -I/usr/local/cuda/include -o /ckpt/wc/libnvsnap_gpushare.so \
-          /wc-src/gpushare.c -ldl -lpthread || exit 1
         export LD_PRELOAD=/ckpt/wc/libnvsnap_gpushare.so
         for i in $(seq 2000); do /bin/true; done  # push vLLM PIDs past 2000
         vllm serve --model=Qwen/Qwen2.5-7B-Instruct --tensor-parallel-size=2 \
@@ -89,10 +95,7 @@ spec:
     volumeMounts:
     - {name: dshm, mountPath: /dev/shm}
     - {name: ckpt, mountPath: /ckpt}
-    - {name: wc-src, mountPath: /wc-src}
   volumes:
-  - name: wc-src
-    configMap: {name: gpushare-src}
   - name: dshm
     emptyDir: {medium: Memory, sizeLimit: 16Gi}
   - name: ckpt

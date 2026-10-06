@@ -36,7 +36,9 @@ SPDX-License-Identifier: Apache-2.0
  *
  * --cache DIR (suspend, resume): node-local cache of the chunk store (e.g. on
  * NVMe; same layout): saved chunks are copied into it, and loads read it
- * first, filling it from the store. The cache is never the only copy.
+ * first. A load does not fill it (that would slow the restore down):
+ * cache-prefetch does, e.g. in the background once resumed. The cache is
+ * never the only copy.
  *   cache-prefetch S C DIR   copy checkpoint C's chunks from store S into DIR
  *   cache-gc DIR MAX-GiB     LRU-evict DIR's chunks to 80% of MAX-GiB
  *
@@ -70,7 +72,7 @@ SPDX-License-Identifier: Apache-2.0
  * sequential lock-then-checkpoint loop can hang forever. With a timeout
  * the lock fails, everything is rolled back, and the caller can retry.
  */
-#define _GNU_SOURCE  /* O_DIRECT, gettid */
+#define _GNU_SOURCE  /* O_DIRECT */
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -82,6 +84,7 @@ SPDX-License-Identifier: Apache-2.0
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ptrace.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -557,8 +560,19 @@ static int ctl(int pid, const char *cmd)
         close(s);
         return 1;
     }
+    /* An abstract name can be bound by anyone in the network namespace:
+     * talk only to pid itself (so this tool must run in its pid namespace). */
+    struct ucred cr;
+    socklen_t cl = sizeof(cr);
+    if (getsockopt(s, SOL_SOCKET, SO_PEERCRED, &cr, &cl) != 0 || cr.pid != pid) {
+        close(s);
+        printf("pid=%d %s: err control socket @" GPUSHARE_SOCK_FMT " is not pid %d's (peer pid %d)\n",
+               pid, cmd, pid, pid, cl == sizeof(cr) ? cr.pid : -1);
+        return -1;
+    }
     /* "release"/"load" move the saved GPU memory: allow for slow disks. */
-    struct timeval tv = { strncmp(cmd, "release", 7) && strcmp(cmd, "load") ? 120 : 3600, 0 };
+    int slow = !strncmp(cmd, "release", 7) || !strncmp(cmd, "load", 4);
+    struct timeval tv = { slow ? 3600 : 120, 0 };
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     char rep[256] = "err no reply (timeout)";
     if (send(s, cmd, strlen(cmd) + 1, MSG_NOSIGNAL) < 0) snprintf(rep, sizeof(rep), "err send: %s", strerror(errno));
@@ -945,7 +959,41 @@ static void chunk_file(const char *root, const char *hash, char *out, size_t n)
 static int open_direct(const char *path, int flags)
 {
     int fd = open(path, flags | O_DIRECT | O_CLOEXEC, 0644);
-    return fd >= 0 ? fd : open(path, flags | O_CLOEXEC, 0644);
+    return fd >= 0 || errno == EEXIST ? fd : open(path, flags | O_CLOEXEC, 0644);
+}
+
+/* Read up to len bytes (wr: write len bytes) of buf; returns the count.
+ * Some filesystems accept O_DIRECT at open and fail the I/O with EINVAL:
+ * carry on buffered. */
+static ssize_t full_io(int fd, int wr, char *buf, size_t len)
+{
+    size_t done = 0;
+    while (done < len) {
+        ssize_t k = wr ? write(fd, buf + done, len - done) : read(fd, buf + done, len - done);
+        int fl;
+        if (k < 0 && errno == EINVAL && (fl = fcntl(fd, F_GETFL)) >= 0 && (fl & O_DIRECT) &&
+            fcntl(fd, F_SETFL, fl & ~O_DIRECT) == 0) continue;
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0) return -1;
+        if (k == 0) break;
+        done += k;
+    }
+    return done;
+}
+
+/* Create a temp file next to dst, under a random name: writers in other
+ * pods (same pids, other pid namespaces) share the cache. */
+static int open_tmp(const char *dst, char *tmp, size_t n, int direct)
+{
+    for (int i = 0; i < 8; i++) {
+        unsigned long long r;
+        if (getrandom(&r, sizeof(r), 0) != sizeof(r)) return -1;
+        snprintf(tmp, n, "%s.%016llx.tmp", dst, r);
+        int fd = direct ? open_direct(tmp, O_WRONLY | O_CREAT | O_EXCL)
+                        : open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        if (fd >= 0 || errno != EEXIST) return fd;
+    }
+    return -1;
 }
 
 static void *prefetch_thread(void *arg)
@@ -963,8 +1011,7 @@ static void *prefetch_thread(void *arg)
         if (access(dst, F_OK) == 0) { __atomic_add_fetch(&p->cached, 1, __ATOMIC_RELAXED); continue; }
         chunk_file(p->store, p->hashes[i], src, sizeof(src));
         int in = open_direct(src, O_RDONLY);
-        ssize_t len = in < 0 ? -1 : 0, k;
-        while (in >= 0 && len < (ssize_t)CHUNK_MAX && (k = read(in, (char *)buf + len, CHUNK_MAX - len)) > 0) len += k;
+        ssize_t len = in < 0 ? -1 : full_io(in, 0, buf, CHUNK_MAX);
         if (in >= 0) close(in);
         *strrchr(dst, '/') = 0;  /* <cache>/chunks/xx: create both levels */
         *strrchr(dst, '/') = 0;
@@ -972,16 +1019,13 @@ static void *prefetch_thread(void *arg)
         dst[strlen(dst)] = '/';
         mkdir(dst, 0755);
         dst[strlen(dst)] = '/';
-        snprintf(tmp, sizeof(tmp), "%s.prefetch.%d.tmp", dst, (int)gettid());
-        int out = len > 0 ? (len % 4096 ? open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644)
-                                        : open_direct(tmp, O_WRONLY | O_CREAT | O_TRUNC)) : -1;
-        ssize_t w = 0;
-        while (out >= 0 && w < len && (k = write(out, (char *)buf + w, len - w)) > 0) w += k;
+        int out = len > 0 ? open_tmp(dst, tmp, sizeof(tmp), len % 4096 == 0) : -1;
+        ssize_t w = out >= 0 ? full_io(out, 1, buf, len) : 0;
         /* synced before the rename: a crash never leaves a torn chunk under its name */
         if (out >= 0 && w == len && fdatasync(out) != 0) w = -1;
         if (out >= 0) close(out);
-        if (len <= 0 || w < len || rename(tmp, dst) != 0) {
-            unlink(tmp);
+        if (len <= 0 || out < 0 || w < len || rename(tmp, dst) != 0) {
+            if (out >= 0) unlink(tmp);
             fprintf(stderr, "prefetch %s failed\n", p->hashes[i]);
             __atomic_add_fetch(&p->failed, 1, __ATOMIC_RELAXED);
             continue;

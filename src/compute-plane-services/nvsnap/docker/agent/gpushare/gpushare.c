@@ -33,6 +33,7 @@ SPDX-License-Identifier: Apache-2.0
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -161,9 +162,11 @@ struct xreg {
 };
 
 #define VEC(T, name) static T *name; static int n_##name, cap_##name
+/* Out of memory: losing track of an allocation would corrupt a restore. */
 #define PUSH(name, v) do { if (n_##name == cap_##name) { \
-    cap_##name = cap_##name ? 2 * cap_##name : 16; \
-    name = realloc(name, cap_##name * sizeof(*name)); } \
+    void *p_ = realloc(name, (cap_##name ? 2 * cap_##name : 16) * sizeof(*name)); \
+    if (!p_) { logf_("out of memory"); abort(); } \
+    name = p_; cap_##name = cap_##name ? 2 * cap_##name : 16; } \
     name[n_##name++] = (v); } while (0)
 #define DEL(name, i) (name[i] = name[--n_##name])
 
@@ -341,6 +344,21 @@ static int sock_addr(int pid, struct sockaddr_un *a)
     return offsetof(struct sockaddr_un, sun_path) + 1 + n;
 }
 
+/* Abstract sockets have no permissions: anything in the network namespace
+ * (a sidecar; with hostNetwork, the whole node) can connect or bind a name.
+ * As a server (pid 0), accept a peer that runs as root or as us and is in
+ * our pid namespace (pid 0 here: a sidecar or a host process). As a
+ * client, talk only to process pid itself, never to whoever bound its name. */
+static int peer_ok(int s, int pid)
+{
+    struct ucred c;
+    socklen_t l = sizeof(c);
+    if (getsockopt(s, SOL_SOCKET, SO_PEERCRED, &c, &l) != 0) return 0;
+    if (pid ? c.pid == pid : c.pid != 0 && (c.uid == 0 || c.uid == geteuid())) return 1;
+    logf_("control socket: refused peer pid %d uid %u%s", c.pid, c.uid, pid ? " (expected the socket's owner)" : "");
+    return 0;
+}
+
 /* One request/reply to another process's control thread. */
 static int request(int pid, const char *txt, int fd_in, char *reply, size_t n, int *fd_out)
 {
@@ -349,7 +367,7 @@ static int request(int pid, const char *txt, int fd_in, char *reply, size_t n, i
     int s = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     struct timeval tv = { 30, 0 };
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    int rc = (s >= 0 && connect(s, (struct sockaddr *)&a, len) == 0 &&
+    int rc = (s >= 0 && connect(s, (struct sockaddr *)&a, len) == 0 && peer_ok(s, pid) &&
               msg_send(s, txt, fd_in) == 0 && msg_recv(s, reply, n, fd_out) == 0) ? 0 : -1;
     if (s >= 0) close(s);
     return rc;
@@ -445,6 +463,17 @@ static void pop_ctx(int dev)
     if (dev < 0) return;
     CU(cuCtxPopCurrent, &c);
     CU(cuDevicePrimaryCtxRelease, dev);
+}
+
+/* Push dev's primary context (pop_ctx undoes it): a process may drive
+ * several GPUs, and an allocation is copied on its own device. */
+static int push_dev_ctx(CUdevice dev)
+{
+    CUcontext c;
+    if (CU(cuDevicePrimaryCtxRetain, &c, dev) != CUDA_SUCCESS) return -1;
+    if (CU(cuCtxPushCurrent, c) == CUDA_SUCCESS) return dev;
+    CU(cuDevicePrimaryCtxRelease, dev);
+    return -1;
 }
 
 /* Wait for all work on every active primary context. */
@@ -674,6 +703,7 @@ static void do_release(char *reply, size_t n, const char *args)
             pthread_mutex_unlock(&mu);
             return;
         }
+        mkdir(store, 0755);
         snprintf(path, sizeof(path), "%s/chunks", store);
         mkdir(path, 0755);
         snprintf(path, sizeof(path), "%s/gpu-%d.chunks", ckdir, getpid());
@@ -1099,7 +1129,7 @@ static void *ctl_main(void *arg)
     for (;;) {
         int s = accept4(listen_fd, NULL, NULL, SOCK_CLOEXEC);
         if (s < 0) { if (errno == EINTR || errno == ECONNABORTED) continue; break; }
-        serve(s);
+        if (peer_ok(s, 0)) serve(s);
         close(s);
     }
     return arg;
@@ -1390,6 +1420,21 @@ static CUmemAccessDesc rw_on(CUdevice dev)
     return a;
 }
 
+/* Peer access the app enabled (cuCtxEnablePeerAccess), [owner][accessor].
+ * cuMemAlloc memory gets it from the driver; cuMem memory (ours, w_alloc)
+ * only through cuMemSetAccess on each allocation. */
+static unsigned char peer_acc[MAX_DEV][MAX_DEV];
+
+/* Access for an allocation on dev: dev, and its peers (mu held). */
+static int valloc_access(CUdevice dev, CUmemAccessDesc *a)
+{
+    int n = 0;
+    a[n++] = rw_on(dev);
+    for (int d = 0; dev < MAX_DEV && d < MAX_DEV; d++)
+        if (peer_acc[dev][d]) a[n++] = rw_on(d);
+    return n;
+}
+
 static CUmemAllocationProp valloc_prop(CUdevice dev)
 {
     CUmemAllocationProp p = { .type = CU_MEM_ALLOCATION_TYPE_PINNED,
@@ -1407,14 +1452,18 @@ static CUresult w_alloc(CUdeviceptr *dptr, size_t size)
     size_t gran = 0;
     CUresult r = CU(cuMemGetAllocationGranularity, &gran, &p, CU_MEM_ALLOC_GRANULARITY_MINIMUM);
     if (r != CUDA_SUCCESS) return r;
+    if (!gran) return CUDA_ERROR_INVALID_VALUE;
     size = (size + gran - 1) / gran * gran;
     CUmemGenericAllocationHandle h;
     CUdeviceptr va = 0;
     if ((r = CU(cuMemCreate, &h, size, &p, 0)) != CUDA_SUCCESS) return r;
     if ((r = CU(cuMemAddressReserve, &va, size, 0, 0, 0)) != CUDA_SUCCESS) goto free_h;
     if ((r = REAL(r_map, "cuMemMap")(va, size, 0, h, 0)) != CUDA_SUCCESS) goto free_va;
-    CUmemAccessDesc a = rw_on(dev);
-    if ((r = REAL(r_set_access, "cuMemSetAccess")(va, size, &a, 1)) != CUDA_SUCCESS) goto unmap;
+    CUmemAccessDesc a[MAX_DEV + 1];
+    pthread_mutex_lock(&mu);
+    int na = valloc_access(dev, a);
+    pthread_mutex_unlock(&mu);
+    if ((r = REAL(r_set_access, "cuMemSetAccess")(va, size, a, na)) != CUDA_SUCCESS) goto unmap;
     pthread_mutex_lock(&mu);
     PUSH(vallocs, ((struct valloc){ va, size, h, dev, 0, NULL, NULL }));
     pthread_mutex_unlock(&mu);
@@ -1497,8 +1546,29 @@ static void chunk_path(const char *root, const struct chunk *c, char *out, size_
  * buffered I/O for odd lengths or filesystems without O_DIRECT. */
 static int chunk_open(const char *path, int flags, size_t len)
 {
-    int fd = len % 4096 ? -1 : open(path, flags | O_DIRECT | O_CLOEXEC, 0644);
-    return fd >= 0 ? fd : open(path, flags | O_CLOEXEC, 0644);
+    if (len % 4096 == 0) {
+        int fd = open(path, flags | O_DIRECT | O_CLOEXEC, 0644);
+        if (fd >= 0 || errno == EEXIST) return fd;
+    }
+    return open(path, flags | O_CLOEXEC, 0644);
+}
+
+/* Read (pread from 0) or write len bytes of stage; returns bytes moved.
+ * Some filesystems accept O_DIRECT at open and fail the I/O (EINVAL, e.g.
+ * a larger alignment): carry on buffered. */
+static size_t chunk_io(int fd, int wr, size_t len)
+{
+    size_t done = 0;
+    while (done < len) {
+        ssize_t k = wr ? write(fd, (char *)stage + done, len - done) : pread(fd, (char *)stage + done, len - done, done);
+        int fl;
+        if (k < 0 && errno == EINVAL && (fl = fcntl(fd, F_GETFL)) >= 0 && (fl & O_DIRECT) &&
+            fcntl(fd, F_SETFL, fl & ~O_DIRECT) == 0) continue;
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) break;
+        done += k;
+    }
+    return done;
 }
 
 static int all_zero(const void *p, size_t len)
@@ -1510,7 +1580,9 @@ static int all_zero(const void *p, size_t len)
 }
 
 /* Write the chunk in stage to path: a temp file, synced, then renamed, so
- * neither concurrent writers nor a crash expose a partial one. */
+ * neither concurrent writers nor a crash expose a partial one. Writers in
+ * other pods (other pid namespaces, same pids) share the store and the
+ * cache: the temp name is random and created exclusively. */
 static int chunk_write(char *path, size_t len)
 {
     char tmp[560];
@@ -1520,18 +1592,17 @@ static int chunk_write(char *path, size_t len)
     path[strlen(path)] = '/';
     mkdir(path, 0755);
     path[strlen(path)] = '/';
-    snprintf(tmp, sizeof(tmp), "%s.%d.tmp", path, getpid());
-    int fd = chunk_open(tmp, O_WRONLY | O_CREAT | O_TRUNC, len);
-    if (fd < 0) return -1;
-    size_t w = 0;
-    while (w < len) {
-        ssize_t k = write(fd, (char *)stage + w, len - w);
-        if (k <= 0) break;
-        w += k;
+    int fd = -1;
+    for (int i = 0; fd < 0 && i < 8; i++) {
+        uint64_t r;
+        if (getrandom(&r, sizeof(r), 0) != sizeof(r)) return -1;
+        snprintf(tmp, sizeof(tmp), "%s.%016llx.tmp", path, (unsigned long long)r);
+        if ((fd = chunk_open(tmp, O_WRONLY | O_CREAT | O_EXCL, len)) < 0 && errno != EEXIST) return -1;
     }
+    if (fd < 0) return -1;
     /* Data on disk before the name: after a crash, a chunk name must never
      * point at torn data (dedupe and cache hits trust the name). */
-    int ok = w == len && fdatasync(fd) == 0;
+    int ok = chunk_io(fd, 1, len) == len && fdatasync(fd) == 0;
     close(fd);
     if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
     return 0;
@@ -1560,7 +1631,10 @@ static CUresult chunk_put(const struct chunk *c, size_t len)
 }
 
 /* Read chunk c into stage: from the node cache if there (marking it used,
- * for cache-gc's LRU), else from the store, then into the cache. */
+ * for cache-gc's LRU), else from the store. A miss does not fill the cache:
+ * that would put cache writes on the restore's critical path. Saves write
+ * through to it, and nvsnap-gpu-suspend cache-prefetch fills it (e.g. in
+ * the background after a restore). */
 static int chunk_get(const struct chunk *c, size_t len)
 {
     char path[512];
@@ -1571,25 +1645,32 @@ static int chunk_get(const struct chunk *c, size_t len)
             if (!from_cache) logf_("chunk %s: %s", path, strerror(errno));
             continue;
         }
-        size_t got = 0;
-        while (got < len) {
-            ssize_t k = pread(fd, (char *)stage + got, len - got, got);
-            if (k <= 0) break;
-            got += k;
-        }
+        size_t got = chunk_io(fd, 0, len);
         if (got == len && from_cache) futimens(fd, NULL);
         close(fd);
         if (got < len) continue;
         if (from_cache) st_hit += len;
-        else { st_miss += len; cache_put(c, len); }
+        else st_miss += len;
         return 0;
     }
     return -1;
 }
 
+static CUresult valloc_save(struct valloc *v);
+
 static CUresult valloc_drop(struct valloc *v)
 {
     if (v->dropped) return CUDA_SUCCESS;
+    int dev = push_dev_ctx(v->dev);
+    if (dev < 0) return CUDA_ERROR_INVALID_CONTEXT;
+    CUresult r = valloc_save(v);
+    pop_ctx(dev);
+    return r;
+}
+
+/* valloc_drop, with v's device current. */
+static CUresult valloc_save(struct valloc *v)
+{
     CUresult r = CUDA_SUCCESS;
     if (store[0]) {
         if ((r = stage_get()) != CUDA_SUCCESS) return r;
@@ -1618,17 +1699,30 @@ static CUresult valloc_drop(struct valloc *v)
     return CUDA_SUCCESS;
 }
 
+static CUresult valloc_load(struct valloc *v);
+
 static CUresult valloc_restore(struct valloc *v)
 {
     if (!v->dropped) return CUDA_SUCCESS;
+    int dev = push_dev_ctx(v->dev);
+    if (dev < 0) return CUDA_ERROR_INVALID_CONTEXT;
+    CUresult r = valloc_load(v);
+    pop_ctx(dev);
+    return r;
+}
+
+/* valloc_restore, with v's device current. */
+static CUresult valloc_load(struct valloc *v)
+{
     if (v->chunks && stage_get() != CUDA_SUCCESS) return CUDA_ERROR_OUT_OF_MEMORY;
     CUmemAllocationProp p = valloc_prop(v->dev);
     CUmemGenericAllocationHandle h;
     CUresult r = CU(cuMemCreate, &h, v->size, &p, 0);
     if (r != CUDA_SUCCESS) return r;
-    CUmemAccessDesc a = rw_on(v->dev);
+    CUmemAccessDesc a[MAX_DEV + 1];
+    int na = valloc_access(v->dev, a);
     if ((r = REAL(r_map, "cuMemMap")(v->va, v->size, 0, h, 0)) == CUDA_SUCCESS &&
-        (r = REAL(r_set_access, "cuMemSetAccess")(v->va, v->size, &a, 1)) == CUDA_SUCCESS) {
+        (r = REAL(r_set_access, "cuMemSetAccess")(v->va, v->size, a, na)) == CUDA_SUCCESS) {
         if (!v->chunks) r = CU(cuMemcpyHtoD_v2, v->va, v->save, v->size);
         for (size_t o = 0; v->chunks && r == CUDA_SUCCESS && o < v->size; o += STAGE_SIZE) {
             size_t len = v->size - o < STAGE_SIZE ? v->size - o : STAGE_SIZE;
@@ -1714,19 +1808,25 @@ static CUresult w_ipc_open(CUdeviceptr *out, CUipcMemHandle hd, unsigned flags)
     if (r != CUDA_SUCCESS) return r;
     CUdevice dev;
     CUdeviceptr va = 0;
-    CUmemAccessDesc a;
+    CUmemAccessDesc a[MAX_DEV + 1];
+    int na;
     if ((r = CU(cuCtxGetDevice, &dev)) != CUDA_SUCCESS) goto release;
-    a = rw_on(dev);
+    pthread_mutex_lock(&mu);
+    na = valloc_access(dev, a);  /* opened in this context: its peers have access too */
+    pthread_mutex_unlock(&mu);
+    if (na > MAX_ACC) na = MAX_ACC;
     if ((r = CU(cuMemAddressReserve, &va, w.size, 0, 0, 0)) != CUDA_SUCCESS) goto release;
     if ((r = REAL(r_map, "cuMemMap")(va, w.size, 0, h, 0)) != CUDA_SUCCESS) goto free_va;
-    if ((r = REAL(r_set_access, "cuMemSetAccess")(va, w.size, &a, 1)) != CUDA_SUCCESS) {
+    if ((r = REAL(r_set_access, "cuMemSetAccess")(va, w.size, a, na)) != CUDA_SUCCESS) {
         REAL(r_unmap, "cuMemUnmap")(va, w.size);
         goto free_va;
     }
     pthread_mutex_lock(&mu);
     /* The mapping holds the memory: track it as released by the app. */
     PUSH(imps, ((struct imp){ .app_h = h, .cur_h = h, .peer = w.pid, .key = w.key, .app_released = 1 }));
-    PUSH(maps, ((struct map){ .va = va, .size = w.size, .imp = n_imps - 1, .ipc = 1, .acc = { a }, .nacc = 1 }));
+    struct map m = { .va = va, .size = w.size, .imp = n_imps - 1, .ipc = 1, .nacc = na };
+    memcpy(m.acc, a, na * sizeof(*a));
+    PUSH(maps, m);
     pthread_mutex_unlock(&mu);
     REAL(r_release, "cuMemRelease")(h);
     *out = va;
@@ -1926,6 +2026,60 @@ static CUresult w_host_unreg(void *p)
     return r;
 }
 
+/* cuCtxEnablePeerAccess gives the current context access to the cuMemAlloc
+ * memory of peer's, present and future; ours is cuMem memory, which needs
+ * cuMemSetAccess per allocation: grant (or revoke) it here, and on every
+ * allocation and re-creation after (valloc_access). Memory opened through
+ * CUDA IPC belongs to the opening context, as with the driver's own. */
+static __typeof__(&cuCtxEnablePeerAccess) r_peer_on;
+static __typeof__(&cuCtxDisablePeerAccess) r_peer_off;
+
+static CUresult peer_access(CUcontext peer, int on)
+{
+    CUdevice me, owner;
+    CUcontext c;
+    CUresult r = CU(cuCtxGetDevice, &me);
+    if (r != CUDA_SUCCESS || (r = CU(cuCtxPushCurrent, peer)) != CUDA_SUCCESS) return r;
+    r = CU(cuCtxGetDevice, &owner);
+    CU(cuCtxPopCurrent, &c);
+    if (r != CUDA_SUCCESS) return r;
+    if (me >= MAX_DEV || owner >= MAX_DEV) {
+        logf_("peer access between devices %d and %d: more than %d devices", me, owner, MAX_DEV);
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
+    CUmemAccessDesc a = rw_on(me);
+    if (!on) a.flags = CU_MEM_ACCESS_FLAGS_PROT_NONE;
+    pthread_mutex_lock(&mu);
+    peer_acc[owner][me] = on;
+    for (int i = 0; r == CUDA_SUCCESS && i < n_vallocs; i++)
+        if (vallocs[i].dev == owner && !vallocs[i].dropped)
+            r = REAL(r_set_access, "cuMemSetAccess")(vallocs[i].va, vallocs[i].size, &a, 1);
+    for (int i = 0; r == CUDA_SUCCESS && i < n_maps; i++) {
+        struct map *m = &maps[i];
+        if (!m->ipc || m->gone || m->acc[0].location.id != owner) continue;
+        int j = 1;
+        while (j < m->nacc && m->acc[j].location.id != me) j++;
+        if (on && j == m->nacc && m->nacc < MAX_ACC) m->acc[m->nacc++] = a;
+        if (!on && j < m->nacc) m->acc[j] = m->acc[--m->nacc];
+        if (!imps[m->imp].released) r = REAL(r_set_access, "cuMemSetAccess")(m->va, m->size, &a, 1);
+    }
+    pthread_mutex_unlock(&mu);
+    if (r != CUDA_SUCCESS) logf_("peer access %d -> %d: cuMemSetAccess: %s", me, owner, errstr(r));
+    return r;
+}
+
+static CUresult w_peer_on(CUcontext peer, unsigned flags)
+{
+    CUresult r = REAL(r_peer_on, "cuCtxEnablePeerAccess")(peer, flags);
+    return r == CUDA_SUCCESS ? peer_access(peer, 1) : r;
+}
+
+static CUresult w_peer_off(CUcontext peer)
+{
+    CUresult r = REAL(r_peer_off, "cuCtxDisablePeerAccess")(peer);
+    return r == CUDA_SUCCESS ? peer_access(peer, 0) : r;
+}
+
 /* Gated launches. Each has a default-stream and a per-thread-stream
  * (_ptsz) entry point, which cuGetProcAddress returns under one name. */
 #define GATED(name, params, args) \
@@ -1985,6 +2139,8 @@ static const struct { const char *name; void *wrapper; void **real; } hooks[] = 
     { "cuMulticastBindMem", w_mc_bind_mem, (void **)&r_mc_bind_mem },
     { "cuMulticastBindAddr", w_mc_bind_addr, (void **)&r_mc_bind_addr },
     { "cuMulticastUnbind", w_mc_unbind, (void **)&r_mc_unbind },
+    { "cuCtxEnablePeerAccess", w_peer_on, (void **)&r_peer_on },
+    { "cuCtxDisablePeerAccess", w_peer_off, (void **)&r_peer_off },
 #define G(name) { #name, w_##name, (void **)&r_##name }, { #name "_ptsz", w_##name##_ptsz, (void **)&r_##name##_ptsz }
     G(cuLaunchKernel), G(cuLaunchKernelEx), G(cuLaunchCooperativeKernel), G(cuGraphLaunch),
 #undef G
@@ -2043,6 +2199,8 @@ EXPORT(CUresult, cuMulticastAddDevice, w_mc_add, (CUmemGenericAllocationHandle h
 EXPORT(CUresult, cuMulticastBindMem, w_mc_bind_mem, (CUmemGenericAllocationHandle mh, size_t mo, CUmemGenericAllocationHandle h, size_t o, size_t s, unsigned long long f), (mh, mo, h, o, s, f))
 EXPORT(CUresult, cuMulticastBindAddr, w_mc_bind_addr, (CUmemGenericAllocationHandle mh, size_t mo, CUdeviceptr p, size_t s, unsigned long long f), (mh, mo, p, s, f))
 EXPORT(CUresult, cuMulticastUnbind, w_mc_unbind, (CUmemGenericAllocationHandle mh, CUdevice d, size_t mo, size_t s), (mh, d, mo, s))
+EXPORT(CUresult, cuCtxEnablePeerAccess, w_peer_on, (CUcontext c, unsigned f), (c, f))
+EXPORT(CUresult, cuCtxDisablePeerAccess, w_peer_off, (CUcontext c), (c))
 EXPORT(CUresult, cuGetProcAddress_v2, w_gpa2, (const char *s, void **p, int v, cuuint64_t f, CUdriverProcAddressQueryResult *q), (s, p, v, f, q))
 
 void *dlsym(void *handle, const char *name)

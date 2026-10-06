@@ -280,10 +280,11 @@ int main(int argc, char **argv)
                              MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     memset(sh, 0, sizeof(*sh));
 
-    pid_t pids[MAX_RANKS];
+    pid_t pids[MAX_RANKS] = {0};
     for (int r = 0; r < nranks; r++) {
         pids[r] = fork();
         if (pids[r] == 0) _exit(run_rank(r, r % ndev, sh));
+        if (pids[r] < 0) { perror("fork"); pids[r] = 0; goto fail; }
     }
 
     /* Wait for all ranks to be running. */
@@ -350,8 +351,9 @@ int main(int argc, char **argv)
     return failed ? 1 : 0;
 
 fail:
-    for (int r = 0; r < nranks; r++) kill(pids[r], SIGKILL);
-    for (int r = 0; r < nranks; r++) waitpid(pids[r], NULL, 0);
+    /* Only ranks that were forked: kill(0 or -1) would hit far more. */
+    for (int r = 0; r < nranks; r++) if (pids[r] > 0) kill(pids[r], SIGKILL);
+    for (int r = 0; r < nranks; r++) if (pids[r] > 0) waitpid(pids[r], NULL, 0);
     printf("\n=== FAIL ===\n");
     return 1;
 }
