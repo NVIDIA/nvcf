@@ -300,19 +300,23 @@ immediately.
 
 When queue-SLO fields are enabled or the primary is ineligible, the affinity
 group is the top `cache_affinity_backend_selection_count` clusters of the
-Pulsar ranking. The count defaults to `1`, the primary. WaitAndWiden selection
+Pulsar ranking. The count defaults to `1`, the primary, and `0` also means `1`.
+WaitAndWiden selection
 runs within the group, and `cache_affinity_input_tokens_scale` discounts the
 request prefill there. Until `cache_affinity_wait_ms` (X) has elapsed, the proxy
 waits and rechecks the group instead of falling back.
 
-After X, the open set grows through the ranking one band per
+After X, every attempt still checks the affinity group first, as above. If the
+group cannot serve, the open set grows through the ranking one band per
 `band_widen_interval_ms` (S): ranks 1 through k+2 at X, k+6 at X+S, k+14 at
 X+2S, and so on until it covers every cluster. Here k is the affinity group
 size. WaitAndWiden selection runs over the open set at full prefill cost, and
 bucket unlocks count from X. If no open candidate is selectable, the proxy
-waits for the next band or bucket. It does not skip ahead. S defaults to X.
-With S set to `0`, every cluster opens at X, which matches `wait-and-widen`
-global fallback.
+waits for the next band or bucket. It does not skip ahead, even when the
+unopened clusters are also full, so a saturated pool waits out the band
+schedule or the request's maximum wait. S defaults to X. With S set to `0`,
+every cluster opens at X, as in `wait-and-widen` global fallback, except that
+open-set selection uses `fallback_max_queued`.
 
 ```text
 elapsed < X          rank 1..k              (affinity group, discounted prefill)
@@ -425,7 +429,7 @@ and:
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
 | `band_widen_interval_ms` | unsigned integer | `cache_affinity_wait_ms` | Time between ranking-band openings after the affinity wait. `0` opens every cluster at the end of the wait. Rejected for `wait-and-widen`. |
-| `fallback_max_queued` | unsigned integer | `0` | `max_queued` for candidates selected after the affinity wait. At `0`, overflow goes only to clusters with a free engine slot, so it never queues behind another key's primary work. Raise it only when overflow queueing is acceptable. Rejected for `wait-and-widen`. |
+| `fallback_max_queued` | unsigned integer | `0` | `max_queued` for open-set selection after the affinity wait. The affinity group keeps `max_queued`. At `0`, overflow goes only to clusters whose reported stats show a free engine slot, so it does not deliberately queue behind another key's primary work. A cluster that reports no `max_engine_concurrency` counts as free. Raise it only when overflow queueing is acceptable. Rejected for `wait-and-widen`. |
 
 It rejects `comparator`.
 
