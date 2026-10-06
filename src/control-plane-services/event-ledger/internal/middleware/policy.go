@@ -43,6 +43,7 @@ const (
 	policyActorTypeContextKey contextKey = "policy_actor_type"
 	policyRolesContextKey     contextKey = "policy_roles"
 	policyClaimsContextKey    contextKey = "policy_claims"
+	policyScopesContextKey    contextKey = "policy_scopes"
 
 	defaultAuthSubjectField = "subject"
 	defaultAuthAPIKeyField  = "apiKey"
@@ -58,6 +59,9 @@ type PolicyAuthzResponse struct {
 	OrgName    string   `json:"orgName"`
 	ActorType  string   `json:"actorType"`
 	Roles      []string `json:"roles,omitempty"`
+	// Policy is the matching api-keys policy for the key's audience. Only its
+	// scopes are read, and only by the self-managed route scope check.
+	Policy json.RawMessage `json:"policy,omitempty"`
 }
 
 // UnmarshalJSON handles string or int for status code
@@ -90,6 +94,28 @@ func (u *PolicyAuthzResponse) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+// policyScopes returns the scopes of an api-keys policy, or nil when the policy
+// is absent or has no readable scopes list.
+func policyScopes(policy json.RawMessage) []string {
+	if len(policy) == 0 {
+		return nil
+	}
+	var parsed struct {
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.Unmarshal(policy, &parsed); err != nil {
+		return nil
+	}
+	return parsed.Scopes
+}
+
+// apiKeyScopesFromContext returns the scopes granted to an api-keys
+// authorized request, or nil when none were granted.
+func apiKeyScopesFromContext(ctx context.Context) []string {
+	scopes, _ := ctx.Value(policyScopesContextKey).([]string)
+	return scopes
 }
 
 // ContextError for error details
@@ -325,6 +351,7 @@ func newPolicyMiddleware(policyClient policy.Authorizer, serviceName string, log
 			logger.InfoContext(traceCtx, "policy: authorization successful")
 
 			var requestCtx = markPDPAuthorized(r.Context())
+			requestCtx = context.WithValue(requestCtx, policyScopesContextKey, policyScopes(authResponse.Policy))
 			// Create enriched context
 			if authResponse.ActorID != "" {
 				requestCtx = context.WithValue(requestCtx, policyActorIDContextKey, authResponse.ActorID)
