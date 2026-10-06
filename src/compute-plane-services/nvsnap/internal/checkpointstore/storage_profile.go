@@ -91,7 +91,11 @@ var builtinProfiles = map[string]StorageProfile{
 // overlaying `overlay` (from the ConfigMap) on the built-in table.
 // Lookup order: provisioner/type then bare provisioner, ConfigMap before
 // built-in at each. Returns (profile, matchedKey, true) on a hit, or
-// (_, "", false) when nothing matches (caller disables L2).
+// (_, "", false) when nothing matches. A miss means the provisioner has
+// qualified nothing, so the caller must disable L2 rather than assume a
+// shape. This comment used to say the caller disabled L2 while the caller
+// in fact fell back to snapshot-clone ROX -- which is how an unqualified
+// driver came to be promoted on assumed capability (nvsnap#2099).
 func ResolveStorageProfile(provisioner, volType string, overlay map[string]StorageProfile) (StorageProfile, string, bool) {
 	try := func(key string) (StorageProfile, bool) {
 		if p, ok := overlay[key]; ok {
