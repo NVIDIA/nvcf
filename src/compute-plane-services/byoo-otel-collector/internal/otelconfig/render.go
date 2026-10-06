@@ -78,8 +78,32 @@ const (
 	metricSubsetFilterProcessorID        = "filter/metric_subset"
 	metricSubsetBatchProcessorID         = "batch/metric_subset"
 	workloadMetricsDropLabelsProcessorID = "resource/workload_metrics_drop_labels"
+	dropEmptyLabelsProcessorID           = "transform/drop_empty_labels"
 	defaultMetricSubsetPort              = 19091
 )
+
+// dropEmptyLabelsContexts are the OTTL contexts filtered for empty attribute
+// values before export.
+//
+// A Prometheus-compatible receiver rejects the whole write request when any
+// series carries a label with an empty value, and the remote-write exporter
+// classifies the resulting 4xx as permanent, so one empty attribute silently
+// drops every unrelated metric batched with it.
+//
+// resource covers server.port and url.scheme, which the Prometheus receiver's
+// CreateResource writes unconditionally (unlike server.address, which it guards
+// behind isDiscernibleHost): a scrape target whose instance label carries no
+// port yields server.port="".
+//
+// scope covers the otel_scope_* labels, which the translator's createAttributes
+// writes without an empty check. This is the only path the exporter does not
+// already guard.
+//
+// datapoint is deliberately excluded. The exporter's createAttributes drops
+// empty datapoint attribute values itself, and that statement would run once
+// per datapoint rather than once per resource, allocating a replacement map for
+// every point in every batch for no additional coverage.
+var dropEmptyLabelsContexts = []string{"resource", "scope"}
 
 var defaultWorkloadMetricsDropLabels = []string{
 	"metric_subset_enabled",
@@ -248,6 +272,12 @@ func resolvedWorkloadMetricsDropLabels(configured string, metricSubsetEnabled bo
 
 	seen := map[string]struct{}{}
 	labels := []string{}
+	if metricSubsetEnabled {
+		for _, label := range defaultWorkloadMetricsDropLabels {
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+	}
 	for _, label := range strings.Split(configured, ",") {
 		label = strings.TrimSpace(label)
 		if label == "" {
@@ -540,6 +570,30 @@ func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labe
 	return workloadMetricsDropLabelsProcessorID
 }
 
+// addDropEmptyLabelsProcessor removes attributes that carry an empty value
+// before the metrics reach the exporter, so they never become an empty
+// Prometheus label. See dropEmptyLabelsContexts for the contexts and why.
+//
+// The Filter lambda requires the ottl.functions.enableLambda feature gate,
+// which the wrapper passes to the collector; see otelCollectorFeatureGates.
+func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
+	blocks := make([]map[string]interface{}, 0, len(dropEmptyLabelsContexts))
+	for _, ottlContext := range dropEmptyLabelsContexts {
+		blocks = append(blocks, map[string]interface{}{
+			"context": ottlContext,
+			"statements": []string{
+				fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
+					ottlContext, ottlContext),
+			},
+		})
+	}
+	otelConfig.Processors[dropEmptyLabelsProcessorID] = map[string]interface{}{
+		"error_mode":        "ignore",
+		"metric_statements": blocks,
+	}
+	return dropEmptyLabelsProcessorID
+}
+
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
 	otelConfig.Exporters[metricSubsetExporterID] = map[string]interface{}{
 		"endpoint":            fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
@@ -578,7 +632,7 @@ func cloneConfigValue(value interface{}) interface{} {
 	}
 }
 
-func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubsetConfig) {
+func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubsetConfig, workloadMetricsDropLabelsProcessor string) {
 	addMetricSubsetExporter(otelConfig)
 
 	filterConfig := config.FilterConfig
@@ -604,9 +658,15 @@ func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubse
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		addDropEmptyLabelsProcessor(otelConfig),
+	}
+	if workloadMetricsDropLabelsProcessor != "" {
+		metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors, workloadMetricsDropLabelsProcessor)
+	}
+	metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
-	}
+	)
 	otelConfig.Service.Pipelines["metrics/metric_subset"] = metricSubsetPipeline
 }
 
@@ -887,15 +947,21 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline := otelConfig.Service.Pipelines["metrics"]
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
-		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
-		if processorID := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels); processorID != "" {
-			metricPipeline.Processors = append(metricPipeline.Processors, processorID)
+		metricPipeline.Processors = []string{
+			"memory_limiter",
+			"filter/metrics",
+			"resource",
+			addDropEmptyLabelsProcessor(otelConfig),
+		}
+		workloadMetricsDropLabelsProcessor := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels)
+		if workloadMetricsDropLabelsProcessor != "" {
+			metricPipeline.Processors = append(metricPipeline.Processors, workloadMetricsDropLabelsProcessor)
 		}
 		metricPipeline.Processors = append(metricPipeline.Processors, "metrics_transform", "batch")
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline
 
 		if tmplConfig.MetricSubset.Enabled {
-			addMetricSubsetPipeline(otelConfig, tmplConfig.MetricSubset)
+			addMetricSubsetPipeline(otelConfig, tmplConfig.MetricSubset, workloadMetricsDropLabelsProcessor)
 		}
 	}
 

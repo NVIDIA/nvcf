@@ -23,17 +23,20 @@ CRIU restores process memory at the same virtual addresses, but **C extensions h
 **Problem**: uvloop statically links libuv, which holds C pointers to epoll/kqueue file descriptors and internal process/signal handlers. After CRIU restore, these pointers reference stale or invalid memory.
 
 **Symptoms**:
+
 - Segfault in `loop.cpython-*.so`
 - Crash on first async operation after restore
 - `UVProcess.__init__` segfault when spawning subprocesses
 
 **Mitigation**:
+
 ```python
 import asyncio
 asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 ```
 
 **Environment Variable**:
+
 ```bash
 UVICORN_LOOP=asyncio  # For uvicorn
 ```
@@ -47,11 +50,13 @@ UVICORN_LOOP=asyncio  # For uvicorn
 **Problem**: gRPC C core maintains connection state, completion queues, and thread pools that don't survive restore.
 
 **Symptoms**:
+
 - `grpc._channel._InactiveRpcError`
 - Connection timeouts after restore
 - Hangs on first RPC call
 
 **Mitigation**:
+
 ```python
 os.environ['GRPC_ENABLE_FORK_SUPPORT'] = '0'
 os.environ['GRPC_POLL_STRATEGY'] = 'epoll1'
@@ -67,11 +72,13 @@ os.environ['GRPC_DNS_RESOLVER'] = 'native'
 **Problem**: gevent uses greenlets (C extension) + libev for I/O. Both hold kernel-dependent state.
 
 **Symptoms**:
+
 - Greenlet crashes
 - Event loop hangs
 - Socket operations fail
 
 **Mitigation**:
+
 ```python
 os.environ['GEVENT_NO_MONKEY'] = '1'  # Disable monkey-patching
 ```
@@ -85,10 +92,12 @@ os.environ['GEVENT_NO_MONKEY'] = '1'  # Disable monkey-patching
 **Problem**: Similar to gevent - greenlets + epoll state.
 
 **Symptoms**:
+
 - Greenlet crashes
 - I/O hangs
 
 **Mitigation**:
+
 ```python
 os.environ['EVENTLET_NO_GREENDNS'] = '1'
 ```
@@ -102,10 +111,12 @@ os.environ['EVENTLET_NO_GREENDNS'] = '1'
 **Problem**: ZeroMQ contexts hold socket state, I/O threads, and connection pools.
 
 **Symptoms**:
+
 - `zmq.error.ZMQError: Context was terminated`
 - Socket operations fail
 
 **Mitigation**:
+
 ```python
 os.environ['ZMQ_IO_THREADS'] = '1'
 ```
@@ -119,11 +130,13 @@ os.environ['ZMQ_IO_THREADS'] = '1'
 **Problem**: CUDA contexts, GPU memory allocations, NCCL communicators, and cuBLAS handles are GPU kernel state.
 
 **Symptoms**:
+
 - `CUDA error: invalid device ordinal`
 - GPU memory access violations
 - NCCL timeout/hang
 
 **Mitigation**: Handled by `cuda-checkpoint` tool which:
+
 1. Quiesces CUDA operations
 2. Saves GPU memory to host
 3. Restores CUDA context on resume
@@ -135,17 +148,20 @@ os.environ['ZMQ_IO_THREADS'] = '1'
 ### ray
 
 **Problem**: Ray has multiple subsystems with state:
+
 - Plasma object store (shared memory)
 - GCS (gRPC connections)
 - Temp directories for worker communication
 - raylet connections
 
 **Symptoms**:
+
 - `RaySystemError: Plasma store not available`
 - Worker communication failures
 - Missing `/tmp/ray/session_*` directories
 
 **Mitigation**:
+
 ```python
 os.environ['RAY_OBJECT_STORE_MEMORY'] = '100000000'  # Reduce plasma usage
 os.environ['RAY_ENABLE_RECORD_ACTOR_TASK_LOGGING'] = '0'
@@ -160,17 +176,20 @@ os.environ['RAY_ENABLE_RECORD_ACTOR_TASK_LOGGING'] = '0'
 **Problem**: Uses shared memory (`/dev/shm`), semaphores, pipes, and Unix sockets for IPC.
 
 **Symptoms**:
+
 - `FileNotFoundError: /dev/shm/...`
 - `BrokenPipeError` to workers
 - Semaphore errors
 
 **Mitigation**:
+
 ```python
 import multiprocessing
 multiprocessing.set_start_method('spawn', force=True)
 ```
 
-**NVSNAP Handling**: 
+**NVSNAP Handling**:
+
 - Relink ghost shm files on restore
 - Preserve pipe IDs with `inherit-fd`
 - Restore `/dev/shm` entries
@@ -199,6 +218,7 @@ multiprocessing.set_start_method('spawn', force=True)
 **Problem**: Connection pool, pub/sub subscriptions, Lua script cache.
 
 **Symptoms**:
+
 - `ConnectionError: Connection closed`
 - Pub/sub stops receiving
 
@@ -248,7 +268,8 @@ multiprocessing.set_start_method('spawn', force=True)
 
 **Status**: ✅ Generally OK with `DefaultEventLoopPolicy`
 
-**Notes**: 
+**Notes**:
+
 - epoll fd is recreated by CRIU
 - Signal handlers may need re-registration
 - Running tasks resume normally
@@ -286,12 +307,14 @@ multiprocessing.set_start_method('spawn', force=True)
 **Problem**: Uvicorn defaults to uvloop + httptools (C extension).
 
 **Mitigation**:
+
 ```bash
 UVICORN_LOOP=asyncio
 UVICORN_HTTP=h11
 ```
 
 Or in code:
+
 ```python
 uvicorn.run(app, loop="asyncio", http="h11")
 ```
@@ -319,6 +342,7 @@ uvicorn.run(app, loop="asyncio", http="h11")
 **Problem**: Uses uvloop via Hypercorn.
 
 **Mitigation**:
+
 ```bash
 HYPERCORN_WORKER_CLASS=asyncio
 ```
@@ -329,7 +353,8 @@ HYPERCORN_WORKER_CLASS=asyncio
 
 **Problem**: Database connections, cache backends.
 
-**Mitigation**: 
+**Mitigation**:
+
 - Close DB connections: `django.db.connections.close_all()`
 - Reconnect cache: Usually automatic
 
@@ -348,6 +373,7 @@ HYPERCORN_WORKER_CLASS=asyncio
 ### vLLM
 
 **Problems**:
+
 1. uvloop (via FastAPI/uvicorn)
 2. CUDA contexts
 3. Ray workers
@@ -397,6 +423,7 @@ HYPERCORN_WORKER_CLASS=asyncio
 **Problem**: Batch span processors, exporters.
 
 **Mitigation**: Flush before checkpoint:
+
 ```python
 from opentelemetry.sdk.trace import TracerProvider
 provider.force_flush()
@@ -409,6 +436,7 @@ provider.force_flush()
 **Problem**: Background worker, transport.
 
 **Mitigation**:
+
 ```python
 import sentry_sdk
 sentry_sdk.flush()
@@ -564,6 +592,7 @@ Automatically inject into all pods in namespace:
 ### Option 3: Base Image
 
 Include in customer's base image:
+
 ```dockerfile
 COPY sitecustomize.py /opt/nvsnap/python/
 ENV PYTHONPATH=/opt/nvsnap/python

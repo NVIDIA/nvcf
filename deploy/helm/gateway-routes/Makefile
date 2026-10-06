@@ -25,4 +25,4 @@ test-vanity-gateway-route:
 	@sh ./scripts/test-vanity-gateway-route.sh
 
 check-llm-worker-routes:
-	@sh ./scripts/check-llm-worker-routes.sh
+	@bash ./scripts/check-llm-worker-routes.sh

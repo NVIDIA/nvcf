@@ -1,0 +1,455 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+tabs:
+  overview:
+    display-name: Overview
+    icon: house
+    slug: overview
+  self-managed:
+    display-name: Self-Managed
+    icon: server
+    slug: self-managed
+  compute-plane:
+    display-name: Compute Plane
+    icon: microchip
+    slug: compute-plane
+  observability:
+    display-name: Observability
+    icon: chart-line
+    slug: observability
+  manifest:
+    display-name: Manifest
+    icon: list
+    slug: manifest
+  release-notes:
+    display-name: Release Notes
+    icon: clock
+    slug: release-notes
+navigation:
+- tab: overview
+  layout:
+  - page: Overview
+    path: ../docs/overview/index.md
+    slug: overview
+  - page: Quickstart
+    path: ../docs/overview/quickstart.md
+    slug: quickstart
+  - section: Before You Deploy
+    skip-slug: true
+    contents:
+    - page: Infrastructure Sizing
+      path: ../docs/overview/infrastructure-sizing.md
+      slug: infrastructure-sizing
+    - page: Multi-Tenancy
+      path: ../docs/overview/multi-tenancy.md
+      slug: multi-tenancy
+  - section: Using Cloud Functions
+    skip-slug: true
+    contents:
+    - page: API
+      path: ../docs/overview/api.md
+      slug: api
+    - page: Function Creation
+      path: ../docs/overview/function-creation.md
+      slug: function-creation
+    - page: LLM Gateway
+      path: ../docs/overview/llm-gateway.md
+      slug: llm-gateway
+    - page: Generic HTTP Function Invocation
+      path: ../docs/overview/generic-http-function-invocation.md
+      slug: generic-http-function-invocation
+    - page: gRPC Function Invocation
+      path: ../docs/overview/grpc-function-invocation.md
+      slug: g-rpc-function-invocation
+    - page: Container Functions
+      path: ../docs/overview/container-functions.md
+      slug: container-functions
+    - page: Helm Functions
+      path: ../docs/overview/helm-functions.md
+      slug: helm-functions
+    - page: Streaming Functions
+      path: ../docs/overview/streaming-functions.md
+      slug: streaming-functions
+    - page: Configure Autoscaling
+      path: ../docs/overview/configure-autoscaling.md
+      slug: configure-autoscaling
+    - page: CLI
+      path: ../docs/overview/cli.md
+      slug: cli
+    - page: Task Creation
+      path: ../docs/overview/task-creation.md
+      slug: task-creation
+    - page: Container-Based Task Creation
+      path: ../docs/overview/container-tasks.md
+      slug: container-based-task-creation
+    - page: Helm-Based Task Creation
+      path: ../docs/overview/helm-tasks.md
+      slug: helm-based-task-creation
+  - section: Load Testing
+    skip-slug: true
+    contents:
+    - page: gRPC Load Testing
+      path: ../docs/dev/grpc-load-testing.md
+      slug: g-rpc-load-testing
+    - page: gRPC Load Test SLI Guide
+      path: ../docs/dev/grpc-load-test-sli-guide.md
+      slug: g-rpc-load-test-sli-guide
+    - page: HTTP Load Testing
+      path: ../docs/dev/http-load-testing.md
+      slug: http-load-testing
+    - page: HTTP Load Test SLI Guide
+      path: ../docs/dev/http-load-test-sli-guide.md
+      slug: http-load-test-sli-guide
+    - page: HTTP Soak Testing
+      path: ../docs/dev/http-soak-testing.md
+      slug: http-soak-testing
+  - section: Development
+    skip-slug: true
+    contents:
+    - page: Architecture Overview
+      path: ../docs/dev/architecture.md
+      slug: architecture-overview
+    - section: Local Development
+      skip-slug: true
+      contents:
+      - page: Local Development
+        path: ../docs/dev/local-development.md
+        slug: local-development
+      - page: Single-cluster (CLI)
+        path: ../docs/overview/local-development/single-cluster-cli.md
+        slug: single-cluster-cli
+      - page: Single-cluster (Helmfile)
+        path: ../docs/overview/local-development/single-cluster-helmfile.md
+        slug: single-cluster-helmfile
+      - page: Multi-cluster (CLI)
+        path: ../docs/overview/local-development/multi-cluster-cli.md
+        slug: multi-cluster-cli
+      - page: Multi-cluster (Helmfile)
+        path: ../docs/overview/local-development/multi-cluster-helmfile.md
+        slug: multi-cluster-helmfile
+  - section: Legacy
+    skip-slug: true
+    contents:
+    - page: Documentation Archive
+      path: ../docs/overview/documentation-archive.md
+      slug: documentation-archive
+    - section: Cluster Management
+      skip-slug: true
+      contents:
+      - page: NGC-Managed Clusters
+        path: ../docs/ngc-managed/cluster-management/ngc-managed.md
+        slug: ngc-managed-clusters
+      - page: Helm-Managed Clusters
+        path: ../docs/ngc-managed/cluster-management/helm-managed.md
+        slug: helm-managed-clusters
+      - page: GitOps Cluster Registration
+        path: ../docs/ngc-managed/cluster-management/gitops-registration.md
+        slug: git-ops-cluster-registration
+      - page: Configuration
+        path: ../docs/ngc-managed/cluster-management/configuration.md
+        slug: configuration
+      - page: Monitoring
+        path: ../docs/ngc-managed/cluster-management/monitoring.md
+        slug: monitoring
+      - page: Reference
+        path: ../docs/ngc-managed/cluster-management/reference.md
+        slug: reference
+      - page: Container Cache
+        path: ../docs/ngc-managed/cluster-management/container-cache.md
+        slug: container-cache
+      - page: GXCache
+        path: ../docs/ngc-managed/cluster-management/gxcache.md
+        slug: gx-cache
+      - page: KAI Scheduler
+        path: ../docs/ngc-managed/cluster-management/kai-scheduler.md
+        slug: kai-scheduler
+    - page: Function Lifecycle
+      path: ../docs/ngc-managed/function-lifecycle.md
+      slug: function-lifecycle
+    - page: Service Keys
+      path: ../docs/ngc-managed/service-keys.md
+      slug: service-keys
+    - page: Observability
+      slug: managed-observability
+      path: ../docs/ngc-managed/observability.md
+- tab: self-managed
+  layout:
+  - section: Deployment
+    skip-slug: true
+    contents:
+    - page: Installation Overview
+      path: ../docs/self-managed/installation.md
+      slug: installation-overview
+    - page: Helmfile Installation
+      path: ../docs/self-managed/helmfile-installation.md
+      slug: helmfile-installation
+    - page: CSP End-to-End Example
+      path: ../docs/self-managed/csp-end-to-end-example-installation.md
+      slug: csp-end-to-end-example
+  - section: Configuration
+    skip-slug: true
+    contents:
+    - page: NVCF UI
+      path: ../docs/self-managed/nvcf-ui.md
+      slug: nvcf-ui
+    - page: Pod Disruption Budgets
+      path: ../docs/self-managed/pod-disruption-budgets.md
+      slug: pod-disruption-budgets
+    - page: gRPC Invocation Enablement
+      path: ../docs/self-managed/grpc-invocation-enablement.md
+      slug: g-rpc-invocation-enablement
+    - page: High Availability
+      path: ../docs/self-managed/high-availability.md
+      slug: high-availability
+    - page: LLM Function Enablement
+      path: ../docs/self-managed/llm-function-enablement.md
+      slug: llm-function-enablement
+    - page: LLM Request Router Load Balancing
+      path: ../docs/self-managed/llm-request-router-load-balancing.md
+      slug: llm-request-router-load-balancing
+    - page: Gateway Routing
+      path: ../docs/self-managed/gateway-routing.md
+      slug: gateway-routing
+    - page: Third-Party Registries
+      path: ../docs/self-managed/third-party-registries.md
+      slug: third-party-registries
+    - page: Registry Allowlist
+      path: ../docs/self-managed/registry-allowlist.md
+      slug: registry-allowlist
+    - section: Low Latency Streaming
+      skip-slug: true
+      contents:
+      - page: LLS Installation
+        path: ../docs/self-managed/lls-installation.md
+        slug: lls-installation
+  - section: Function Autoscaling
+    skip-slug: true
+    contents:
+    - page: Function Autoscaling Overview
+      path: ../docs/self-managed/autoscaling/index.md
+      slug: function-autoscaling-overview
+    - page: Architecture
+      path: ../docs/self-managed/autoscaling/architecture.md
+      slug: architecture
+    - page: Operations
+      path: ../docs/self-managed/autoscaling/operations.md
+      slug: operations
+  - section: Operations
+    skip-slug: true
+    contents:
+    - page: Control Plane Operations
+      path: ../docs/self-managed/control-plane-operations.md
+      slug: control-plane-operations
+    - page: OpenBao Patch Upgrade
+      path: ../docs/self-managed/runbooks/openbao-patch-upgrade.md
+      slug: open-bao-patch-upgrade
+    - page: Troubleshooting
+      path: ../docs/self-managed/troubleshooting.md
+      slug: troubleshooting
+    - page: Key Rotation
+      path: ../docs/self-managed/runbooks/control-plane-key-rotation-mek.md
+      slug: key-rotation
+    - page: Transport TLS Rotation
+      path: ../docs/self-managed/runbooks/transport-tls-rotation.md
+      slug: transport-tls-rotation
+    - page: Quota Management
+      path: ../docs/self-managed/runbooks/update-nvcf-account-quota-limits.md
+      slug: quota-management
+- tab: compute-plane
+  layout:
+  - section: GPU Cluster Setup
+    skip-slug: true
+    contents:
+    - page: GPU Cluster Setup
+      path: ../docs/compute-plane/cluster-management/index.md
+      slug: gpu-cluster-setup
+    - page: Self-Managed Clusters
+      path: ../docs/compute-plane/cluster-management/self-managed.md
+      slug: self-managed-clusters
+    - page: Nsight Profiling
+      path: ../docs/compute-plane/cluster-management/nsight-profiling.md
+      slug: nsight-profiling
+    - page: Fake GPU Operator
+      path: ../docs/dev/fake-gpu-operator.md
+      slug: fake-gpu-operator
+  - section: Configuration
+    skip-slug: true
+    contents:
+    - page: Cluster Configuration
+      path: ../docs/compute-plane/cluster-management/configuration.md
+      slug: cluster-configuration
+    - page: KAI Scheduler
+      path: ../docs/compute-plane/cluster-management/kai-scheduler.md
+      slug: kai-scheduler
+    - page: Gang Scheduling
+      path: ../docs/compute-plane/cluster-management/gang-scheduling.md
+      slug: gang-scheduling
+    - page: Topology-Aware Scheduling
+      path: ../docs/compute-plane/cluster-management/topology-aware-scheduling.md
+      slug: topology-aware-scheduling
+  - section: Caching
+    skip-slug: true
+    contents:
+    - section: NVCF Caches
+      skip-slug: true
+      contents:
+      - page: Helm Model Caching
+        path: ../docs/compute-plane/cluster-management/model-cache.md
+        slug: helm-model-caching
+      - page: Container Cache
+        path: ../docs/compute-plane/cluster-management/container-cache.md
+        slug: container-cache
+      - page: GXCache
+        path: ../docs/compute-plane/cluster-management/gxcache.md
+        slug: gx-cache
+    - section: Physical Simulation Caches
+      skip-slug: true
+      contents:
+      - page: Simulation Caches
+        path: ../docs/compute-plane/caches.md
+        slug: simulation-caches
+      - section: DDCS
+        skip-slug: true
+        contents:
+        - link: DDCS
+          href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/
+        - link: DDCS Configuration
+          href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/configure.html
+        - link: DDCS Deployment
+          href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/deploy.html
+        - link: DDCS TLS
+          href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/tls.html
+      - section: UCC
+        skip-slug: true
+        contents:
+        - link: UCC
+          href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/
+        - link: UCC Configuration
+          href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/configure.html
+        - link: UCC Deployment
+          href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/deploy.html
+        - link: UCC TLS
+          href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/tls.html
+    - section: Cache Runbooks
+      skip-slug: true
+      contents:
+      - page: Caches Overview
+        path: ../docs/compute-plane/runbooks/caches.md
+        slug: caches-overview
+      - link: DDCS Cache Misses
+        href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/cache-misses.html
+      - link: DDCS Client Sharding
+        href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/client-sharding.html
+      - link: DDCS Disk Exhaustion
+        href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/disk-exhaustion.html
+      - link: DDCS Network Bottlenecks
+        href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/network-bottlenecks.html
+      - link: DDCS RocksDB Corruption
+        href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/rocksdb-corruption.html
+      - link: UCC Connection Saturation
+        href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/connection-saturation.html
+      - link: UCC Data Disk Bandwidth
+        href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/data-disk-bandwidth.html
+      - link: UCC Metadata Cache Undersizing
+        href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/metadata-cache-undersizing.html
+      - link: UCC Network Bandwidth Saturation
+        href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/network-bandwidth-saturation.html
+      - link: UCC Upstream S3 Connections
+        href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/upstream-s3-connections.html
+  - section: Operations
+    skip-slug: true
+    contents:
+    - page: Cluster Monitoring
+      path: ../docs/compute-plane/cluster-management/monitoring.md
+      slug: cluster-monitoring
+  - section: Reference
+    skip-slug: true
+    contents:
+    - page: Cluster Reference
+      path: ../docs/compute-plane/cluster-management/reference.md
+      slug: cluster-reference
+- tab: observability
+  layout:
+  - page: Observability
+    path: ../docs/observability/observability.md
+    slug: observability
+  - page: Example Dashboards
+    path: ../docs/observability/example-dashboards.md
+    slug: example-dashboards
+  - section: Metrics
+    skip-slug: true
+    contents:
+    - page: Metrics Overview
+      path: ../docs/observability/metrics/metrics-index.md
+      slug: metrics-overview
+    - page: Autoscaler
+      path: ../docs/observability/metrics/function-autoscaler/metrics.md
+      slug: autoscaler
+    - page: Cassandra
+      path: ../docs/observability/metrics/cassandra/metrics.md
+      slug: cassandra
+    - page: ESS
+      path: ../docs/observability/metrics/ess/metrics.md
+      slug: ess
+    - page: Init Container
+      path: ../docs/observability/metrics/init-container/metrics.md
+      slug: init-container
+    - page: Invocation Service
+      path: ../docs/observability/metrics/invocation-service/metrics.md
+      slug: invocation-service
+    - page: LLM API Gateway
+      path: ../docs/observability/metrics/llm-api-gateway/metrics.md
+      slug: llm-api-gateway
+    - page: LLM Function Invocation Metrics Report
+      path: ../docs/observability/metrics/llm-function-invocation-path.md
+      slug: llm-function-invocation-metrics-report
+    - page: LLM Request Router
+      path: ../docs/observability/metrics/llm-request-router/metrics.md
+      slug: llm-request-router
+    - page: NVCF API
+      path: ../docs/observability/metrics/nvcf-api/metrics.md
+      slug: nvcf-api
+    - page: SIS/Spot
+      path: ../docs/observability/metrics/sis-spot/metrics.md
+      slug: sis-spot
+    - page: State Metrics
+      path: ../docs/observability/metrics/state-metrics/metrics.md
+      slug: state-metrics
+    - page: Utils Container
+      path: ../docs/observability/metrics/utils-container/metrics.md
+      slug: utils-container
+    - page: Vault/OpenBao
+      path: ../docs/observability/metrics/vault-openbao/metrics.md
+      slug: vault-open-bao
+- tab: manifest
+  layout:
+  - page: Artifact Manifest
+    path: ../docs/overview/manifest.md
+    slug: artifacts
+  - page: Image Mirroring
+    path: ../docs/overview/image-mirroring.md
+    slug: image-mirroring
+- tab: release-notes
+  layout:
+  - changelog: ./changelog
+    title: Releases
+    slug: ""
+  - page: Compatibility Matrix
+    path: ../docs/overview/compatibility-matrix.md
+    slug: compatibility-matrix
+  - section: Upgrade Notes
+    skip-slug: true
+    contents:
+    - page: 0.6.2 to 1.0.1 Upgrade
+      path: ../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
+      slug: 0-6-1-to-1-0-1-upgrade
+    - page: (Legacy) 0.6.1 to 0.6.2 Upgrade
+      path: ../docs/overview/release-notes/0.6.1-to-0.6.2-upgrade.md
+      slug: 0-6-1-to-0-6-2-upgrade
+    - page: (Legacy) 0.6.0 to 0.6.1 Upgrade
+      path: ../docs/overview/release-notes/0.6.0-to-0.6.1-upgrade.md
+      slug: legacy-0-6-0-to-0-6-1-upgrade
+    - page: (Legacy) 0.5.0 to 0.6.0 Upgrade
+      path: ../docs/overview/release-notes/0.5.0-to-0.6.0-upgrade.md
+      slug: legacy-0-5-0-to-0-6-0-upgrade

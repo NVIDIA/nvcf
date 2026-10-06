@@ -1512,9 +1512,9 @@ func kubectxFor(phaseNum int) string {
 // `printRegistrationOutput` (cmd/cluster_registration.go, fixed in `ff9aaf7`):
 // top-level `clusterID`/`clusterGroupID`/`ncaID` with the mixed-case "ID" suffix
 // to match the nvca-operator chart's `## @param` annotations in
-// `nvca-operator/values.yaml`. `selfManaged.identitySource` and endpoint
-// values stay nested because they scope self-managed-only chart inputs alongside
-// the chart's other `selfManaged:` keys (`nvcaVersion`, `region`, etc.).
+// `nvca-operator/values.yaml`. Region and endpoint values stay nested because
+// the chart consumes them from `selfManaged:`. identitySource is retained there
+// as CLI lifecycle metadata for teardown even though the chart ignores it.
 //
 // The pre-`ff9aaf7` shape (nested `selfManaged.clusterId`, lowercase-d) left
 // the chart's `.Values.clusterID` empty → cluster-dto.yaml rendered with empty
@@ -1540,8 +1540,7 @@ func writeRegisterValuesYAML(req registerValuesWriteRequest) error {
 		ClusterID:      req.ClusterID,
 		ClusterGroupID: req.ClusterGroupID,
 		NcaID:          req.NCAID,
-		Region:         req.Region,
-		SelfManaged:    newSelfManagedValuesFromEndpoints(req.IdentitySource, req.Endpoints),
+		SelfManaged:    newSelfManagedValuesFromEndpoints(req.IdentitySource, req.Region, req.Endpoints),
 	}
 	body, err := yaml.Marshal(vals)
 	if err != nil {

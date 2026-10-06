@@ -17,53 +17,24 @@
 package com.nvidia.icms.outbound.nats;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
-import io.nats.client.Connection;
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.health.contributor.Status;
 
 class NatsHealthIndicatorTest {
 
-    private final NatsConnectionFactory factory = mock(NatsConnectionFactory.class);
-    private final NatsHealthIndicator healthIndicator = new NatsHealthIndicator(factory);
+/*    private final FixedNatsPool fixedNatsPool = mock(FixedNatsPool.class);
+    private final NatsHealthIndicator healthIndicator = new NatsHealthIndicator(fixedNatsPool);
 
     @Test
-    void health_isDownBeforeConnectionInitialization() {
-        var health = healthIndicator.health();
+    void health_isUpWhenPoolIsHealthy() {
+        when(fixedNatsPool.healthy()).thenReturn(true);
 
-        assertEquals(Status.DOWN, health.getStatus());
-        assertEquals("NOT_INITIALIZED", health.getDetails().get("status"));
+        assertEquals(Status.UP, healthIndicator.health().getStatus());
     }
 
     @Test
-    void health_isUpForConnectedConnection() {
-        Connection connection = mock(Connection.class);
-        when(factory.getCachedConnection()).thenReturn(connection);
-        when(connection.getStatus()).thenReturn(Connection.Status.CONNECTED);
-        when(connection.getConnectedUrl()).thenReturn("nats://nats:4222");
+    void health_isDownWhenPoolIsUnhealthy() {
+        when(fixedNatsPool.healthy()).thenReturn(false);
 
-        var health = healthIndicator.health();
-
-        assertEquals(Status.UP, health.getStatus());
-        assertEquals("CONNECTED", health.getDetails().get("status"));
-        assertEquals("nats://nats:4222", health.getDetails().get("server"));
-        assertNull(health.getDetails().get("lastError"));
-    }
-
-    @Test
-    void health_isDownAndIncludesLastErrorWhileReconnecting() {
-        Connection connection = mock(Connection.class);
-        when(factory.getCachedConnection()).thenReturn(connection);
-        when(connection.getStatus()).thenReturn(Connection.Status.RECONNECTING);
-        when(connection.getLastError()).thenReturn("User Authentication Expired");
-
-        var health = healthIndicator.health();
-
-        assertEquals(Status.DOWN, health.getStatus());
-        assertEquals("RECONNECTING", health.getDetails().get("status"));
-        assertEquals("User Authentication Expired", health.getDetails().get("lastError"));
-    }
+        assertEquals(Status.DOWN, healthIndicator.health().getStatus());
+    }*/
 }

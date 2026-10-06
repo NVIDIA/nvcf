@@ -136,15 +136,21 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(c.ErrOrStderr(), ">>> Resolving stack: %s\n", stackDescriptor(resolved))
 
+	helmRuntimeMode, err := resolveSelfHostedHelmRuntimeMode(c.Context())
+	if err != nil {
+		return fmt.Errorf("resolving helm runtime: %w", err)
+	}
+
 	if installControlPlane {
 		if err := selfhosted.Render(selfhosted.RenderOptions{
-			StackPath:   resolved.Path,
-			Env:         selfHostedEnv,
-			Apply:       !selfHostedNoApply,
-			KubeContext: selfHostedControlPlaneContext, // M+9: empty in single-cluster mode
-			Stdout:      c.OutOrStdout(),
-			Stderr:      c.ErrOrStderr(),
-			Ctx:         c.Context(),
+			StackPath:       resolved.Path,
+			Env:             selfHostedEnv,
+			Apply:           !selfHostedNoApply,
+			HelmRuntimeMode: helmRuntimeMode,
+			KubeContext:     selfHostedControlPlaneContext, // M+9: empty in single-cluster mode
+			Stdout:          c.OutOrStdout(),
+			Stderr:          c.ErrOrStderr(),
+			Ctx:             c.Context(),
 		}); err != nil {
 			return err
 		}
@@ -238,13 +244,14 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 	}
 
 	return selfhosted.Render(selfhosted.RenderOptions{
-		StackPath:   resolved.Path,
-		Env:         selfHostedEnv,
-		Apply:       !selfHostedNoApply,
-		KubeContext: selfHostedComputePlaneContext, // M+9: empty in single-cluster mode
-		Stdout:      c.OutOrStdout(),
-		Stderr:      c.ErrOrStderr(),
-		Ctx:         c.Context(),
+		StackPath:       resolved.Path,
+		Env:             selfHostedEnv,
+		Apply:           !selfHostedNoApply,
+		HelmRuntimeMode: helmRuntimeMode,
+		KubeContext:     selfHostedComputePlaneContext, // M+9: empty in single-cluster mode
+		Stdout:          c.OutOrStdout(),
+		Stderr:          c.ErrOrStderr(),
+		Ctx:             c.Context(),
 		ExtraEnv: []string{
 			"CLUSTER_NAME=" + installClusterName,
 			"CLUSTER_ID=" + resp.ClusterID,

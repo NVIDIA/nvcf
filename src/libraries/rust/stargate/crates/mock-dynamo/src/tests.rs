@@ -26,13 +26,11 @@ use axum::http::HeaderValue;
 use axum::routing::{get, post, put};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-fn request(max_tokens: Option<usize>) -> ChatRequest {
-    ChatRequest {
-        stream: Some(true),
-        model: Some("dummy-model".to_string()),
-        max_tokens,
-        messages: Vec::new(),
-    }
+fn request() -> ChatRequest {
+    serde_json::from_value(serde_json::json!({
+        "stream": true, "model": "dummy-model", "max_tokens": 1, "messages": []
+    }))
+    .unwrap()
 }
 
 fn test_stats_events() -> broadcast::Sender<StatsStreamEvent> {
@@ -43,9 +41,12 @@ fn test_stats_events() -> broadcast::Sender<StatsStreamEvent> {
 fn test_state() -> AppState {
     AppState {
         model_name: "dummy-model".to_string(),
-        num_tokens: 1,
-        token_delay: Duration::ZERO,
-        decode_jitter_ms: 0,
+        output_tokens: OutputTokenConfig::fixed(1),
+        context_length_tokens: 0,
+        decode_rate: DecodeRate::TokenDelay {
+            base_ms: 0,
+            jitter_ms: 0,
+        },
         ttft: Duration::ZERO,
         ttft_jitter_ms: 0,
         prefill_tokens_per_s: 0.0,
@@ -55,6 +56,146 @@ fn test_state() -> AppState {
         stats_events: test_stats_events(),
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
+}
+
+#[test]
+fn h100_llama_profile_selects_complete_behavior() {
+    let args = Args::try_parse_from(["mock-dynamo", "--profile", "h100-llama-3.1-8b"])
+        .expect("profile should parse");
+
+    assert_eq!(
+        args.behavior().expect("profile behavior should be valid"),
+        Behavior {
+            context_length_tokens: 131_072,
+            decode_rate: DecodeRate::Uniform {
+                min_tokens_per_s: 128.0,
+                max_tokens_per_s: 200.0,
+            },
+            ttft_ms: 10,
+            ttft_jitter_ms: 20,
+            prefill_tokens_per_s: 7000.0,
+            max_concurrent_requests: 25,
+            kv_cache_capacity_tokens: 400_000,
+        }
+    );
+    assert_eq!(
+        args.output_tokens()
+            .expect("profile output token defaults should be valid"),
+        OutputTokenConfig {
+            min: 128,
+            max: 8192,
+            distribution: OutputTokenDistribution::Gaussian,
+        }
+    );
+}
+
+#[test]
+fn h100_llama_profile_rejects_manual_overrides() {
+    let error = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--token-delay-ms",
+        "1",
+    ])
+    .expect_err("manual behavior overrides should conflict with a profile");
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn profile_output_token_defaults_can_be_overridden() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--output-tokens-min",
+        "64",
+        "--output-tokens-max",
+        "512",
+        "--output-token-distribution",
+        "uniform",
+    ])
+    .expect("profile output token defaults should be overridable");
+
+    assert_eq!(
+        args.output_tokens()
+            .expect("output token override should be valid"),
+        OutputTokenConfig {
+            min: 64,
+            max: 512,
+            distribution: OutputTokenDistribution::Uniform,
+        }
+    );
+}
+
+#[test]
+fn output_rate_range_is_complete_ordered_and_deterministic() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--output-tps-min",
+        "120",
+        "--output-tps-max",
+        "200",
+    ])
+    .expect("complete output rate bounds should parse");
+    assert_eq!(
+        args.behavior()
+            .expect("ordered bounds should be valid")
+            .decode_rate,
+        DecodeRate::Uniform {
+            min_tokens_per_s: 120.0,
+            max_tokens_per_s: 200.0,
+        }
+    );
+    assert!(
+        Args::try_parse_from(["mock-dynamo", "--output-tps-min", "120"]).is_err(),
+        "one output rate bound must not silently select a partial range"
+    );
+
+    let reversed = Args::try_parse_from([
+        "mock-dynamo",
+        "--output-tps-min",
+        "200",
+        "--output-tps-max",
+        "120",
+    ])
+    .expect("individual output rate bounds should parse");
+    assert!(reversed.behavior().is_err());
+
+    let first = distributed_output_rate("request-a", 120.0, 200.0);
+    assert_eq!(first, distributed_output_rate("request-a", 120.0, 200.0));
+    assert!((120.0..=200.0).contains(&first));
+}
+
+#[tokio::test]
+async fn pylon_canary_streams_one_correct_token() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig {
+            min: 100,
+            max: 200,
+            distribution: OutputTokenDistribution::Gaussian,
+        },
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "connection: close\r\nx-request-id: canary-00000000-0000-4000-8000-000000000000-g0-1",
+        r#"{"model":"dummy-model","messages":[{"role":"user","content":"1+1="}],"max_tokens":237,"stream":true}"#,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("content-type: text/event-stream"));
+    assert!(response.contains(r#""content":"2""#));
+    assert_eq!(response.matches(r#""content":""#).count(), 1);
+    assert!(response.contains("data: [DONE]"));
+    server.abort();
 }
 
 async fn spawn_test_app(app: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
@@ -439,11 +580,78 @@ fn chat_stream_chunks_preserve_delta_and_finish_shapes() {
         ),
     ] {
         let value: serde_json::Value =
-            serde_json::from_str(&chat_chunk_json("id", "model", chunk)).unwrap();
+            serde_json::from_str(&chat_chunk_json("id", "model", chunk, false)).unwrap();
         assert_eq!(value["choices"][0]["delta"], delta);
         assert_eq!(value["choices"][0]["finish_reason"], finish_reason);
         assert!(value.get("usage").is_none());
     }
+}
+
+#[tokio::test]
+async fn streaming_chat_usage_reports_actual_output_only_when_requested() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig {
+            min: 100,
+            max: 100,
+            distribution: OutputTokenDistribution::Uniform,
+        },
+        context_length_tokens: 5,
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state);
+    let (address, server) = spawn_test_app(app).await;
+    for include_usage in [None, Some(false), Some(true)] {
+        let mut body = serde_json::json!({
+            "model": "dummy-model", "messages": [], "stream": true, "max_tokens": 100
+        });
+        if let Some(include_usage) = include_usage {
+            body["stream_options"] = serde_json::json!({"include_usage": include_usage});
+        }
+        let response = json_response(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            "connection: close\r\nx-input-tokens: 2\r\nx-output-tokens: 100",
+            &body.to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        let data: Vec<_> = response
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .collect();
+        assert_eq!(data.last(), Some(&"[DONE]"));
+        let events: Vec<serde_json::Value> = data[..data.len() - 1]
+            .iter()
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["choices"][0]["delta"]["content"].is_string())
+                .count(),
+            3
+        );
+        if include_usage == Some(true) {
+            let (usage, output_events) = events.split_last().unwrap();
+            assert_eq!(usage["choices"], serde_json::json!([]));
+            assert_eq!(
+                usage["usage"],
+                serde_json::json!({"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5})
+            );
+            assert!(
+                output_events
+                    .iter()
+                    .all(|event| event.get("usage") == Some(&serde_json::Value::Null))
+            );
+        } else {
+            assert!(events.iter().all(|event| event.get("usage").is_none()));
+        }
+    }
+    server.abort();
+    let _ = server.await;
 }
 
 #[tokio::test]
@@ -479,19 +687,69 @@ async fn embeddings_endpoint_returns_json_without_stream() {
 }
 
 #[test]
-fn output_tokens_prefer_benchmark_header() {
+fn output_token_selection_supports_overrides_and_bounded_distributions() {
     let mut headers = HeaderMap::new();
     headers.insert("x-output-tokens", HeaderValue::from_static("64"));
+    let uniform = OutputTokenConfig {
+        min: 120,
+        max: 200,
+        distribution: OutputTokenDistribution::Uniform,
+    };
+    let gaussian = OutputTokenConfig {
+        distribution: OutputTokenDistribution::Gaussian,
+        ..uniform
+    };
 
-    assert_eq!(request_output_tokens(&headers, &request(Some(16)), 8), 64);
+    assert_eq!(
+        select_output_tokens(&headers, "request-a", uniform, Some(32)),
+        64
+    );
+    for config in [uniform, gaussian] {
+        let selected = select_output_tokens(&HeaderMap::new(), "request-a", config, None);
+        assert_eq!(
+            selected,
+            select_output_tokens(&HeaderMap::new(), "request-a", config, None)
+        );
+        assert!((120..=200).contains(&selected));
+        assert_eq!(
+            select_output_tokens(&HeaderMap::new(), "request-a", config, Some(16)),
+            16
+        );
+    }
 }
 
 #[test]
-fn max_tokens_is_capped_by_default_when_header_absent() {
+fn selected_output_tokens_are_bounded_by_remaining_context() {
     assert_eq!(
-        request_output_tokens(&HeaderMap::new(), &request(Some(128)), 8),
-        8
+        bounded_output_tokens(120_000, 20_000, 131_072),
+        Some(11_072)
     );
+    assert_eq!(bounded_output_tokens(131_072, 1, 131_072), None);
+    assert_eq!(bounded_output_tokens(usize::MAX, 64, 0), Some(64));
+}
+
+#[tokio::test]
+async fn chat_completion_saturates_total_tokens_at_usize_max() {
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(test_state());
+    let (addr, server) = spawn_test_app(app).await;
+
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        &format!(
+            "connection: close\r\nx-input-tokens: {}\r\nx-output-tokens: 1",
+            usize::MAX
+        ),
+        r#"{"model":"dummy-model","messages":[],"stream":false}"#,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains(&format!(r#""total_tokens":{}"#, usize::MAX)));
+    server.abort();
 }
 
 #[test]
@@ -600,7 +858,7 @@ async fn chat_completion_retains_prefix_only_after_modeled_prefill_completes() {
     headers.insert("x-input-tokens", HeaderValue::from_static("100"));
     headers.insert("x-cache-affinity-key", HeaderValue::from_static("cache-a"));
 
-    let mut chat_request = request(Some(1));
+    let mut chat_request = request();
     chat_request.messages = vec![serde_json::json!({ "content": "x".repeat(100) })];
     let request = tokio::spawn(chat_completions(State(state), headers, Json(chat_request)));
     tokio::time::timeout(Duration::from_millis(100), stats_events.recv())
@@ -687,7 +945,7 @@ async fn streaming_response_delays_first_data_frame_until_ttft() {
 #[tokio::test]
 async fn streaming_response_exposes_stats_stream_endpoint() {
     let state = AppState {
-        num_tokens: 2,
+        output_tokens: OutputTokenConfig::fixed(2),
         ..test_state()
     };
     let app = Router::new()
@@ -758,7 +1016,7 @@ fn stats_stream_events_are_ndjson() {
 #[tokio::test]
 async fn responses_endpoint_streams_response_events_without_private_stats_headers() {
     let state = AppState {
-        num_tokens: 2,
+        output_tokens: OutputTokenConfig::fixed(2),
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(10_000))),
         ..test_state()
     };
@@ -822,7 +1080,7 @@ async fn responses_endpoint_streams_response_events_without_private_stats_header
 #[tokio::test]
 async fn responses_endpoint_rejects_non_streaming_requests() {
     let state = AppState {
-        num_tokens: 2,
+        output_tokens: OutputTokenConfig::fixed(2),
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(10_000))),
         ..test_state()
     };

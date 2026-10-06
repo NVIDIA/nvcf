@@ -19,7 +19,6 @@ Feature: Install local Helmfile observability with the control profile
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
-      | functionAutoscaler.image.tag    | 1.18.10                              |
     # Set the shared observability stack environment.
     And I prepare Helmfile environment "local-bdd-observability-control" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -66,6 +65,7 @@ Feature: Install local Helmfile observability with the control profile
     Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
       | kind           | name                                             |
       | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-function-autoscaler        |
       | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
       | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
       | ServiceMonitor | nvcf-default-monitors-invocation-service          |

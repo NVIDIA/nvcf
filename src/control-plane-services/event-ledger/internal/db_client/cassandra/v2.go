@@ -1287,13 +1287,15 @@ func (c *CassandraHandler) upsertPartitionStatsV3(traceCtx context.Context, name
 	logger := logging.GetLogger(traceCtx)
 
 	return c.executeWithSessionRecreation(traceCtx, func() error {
-		selectQuery := `SELECT context, created_at FROM stats_v3 WHERE namespace = ?`
+		selectQuery := `SELECT context, created_at, timestamp FROM stats_v3 WHERE namespace = ?`
 		iter := c.session.Query(selectQuery, namespace).WithContext(traceCtx).Iter()
 		existingCreatedAt := make(map[string]time.Time)
+		existingTimestamp := make(map[string]time.Time)
 		var scannedContext string
-		var scannedCreatedAt time.Time
-		for iter.Scan(&scannedContext, &scannedCreatedAt) {
+		var scannedCreatedAt, scannedTimestamp time.Time
+		for iter.Scan(&scannedContext, &scannedCreatedAt, &scannedTimestamp) {
 			existingCreatedAt[scannedContext] = scannedCreatedAt
+			existingTimestamp[scannedContext] = scannedTimestamp
 		}
 		if err := iter.Close(); err != nil {
 			logger.ErrorContext(traceCtx, "Failed to fetch existing stats for namespace",
@@ -1305,12 +1307,37 @@ func (c *CassandraHandler) upsertPartitionStatsV3(traceCtx context.Context, name
 		insertQuery := `INSERT INTO stats_v3 (namespace, context, event_name, timestamp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
 		batch := c.session.NewBatch(gocql.UnloggedBatch).WithContext(traceCtx)
 		now := time.Now()
+		skipped := 0
 		for _, ev := range events {
+			// A stats row holds the latest event per context; skip events that are
+			// older than the row already stored so out-of-order delivery cannot
+			// overwrite a newer event. This read-then-write guard is best-effort:
+			// concurrent writers to the same (namespace, context) can still race.
+			// Full atomicity (conditional LWT) is tracked as a follow-up.
+			if ts, exists := existingTimestamp[ev.Context]; exists && ev.Timestamp.Before(ts) {
+				skipped++
+				// Context carries the identifying fields (cluster_id, instance_id,
+				// resource_id, ...), so log it to keep skipped rows traceable.
+				logger.DebugContext(traceCtx, "Skipping out-of-order stats event",
+					zap.String("namespace", ev.Namespace),
+					zap.String("context", ev.Context),
+					zap.String("event_name", ev.EventName),
+					zap.Time("event_timestamp", ev.Timestamp),
+					zap.Time("existing_timestamp", ts))
+				continue
+			}
 			createdAt := ev.Timestamp
 			if ca, exists := existingCreatedAt[ev.Context]; exists {
 				createdAt = ca
 			}
 			batch.Query(insertQuery, ev.Namespace, ev.Context, ev.EventName, ev.Timestamp, createdAt, now)
+		}
+
+		if batch.Size() == 0 {
+			logger.InfoContext(traceCtx, "No stats to insert after out-of-order filtering",
+				zap.String("namespace", namespace),
+				zap.Int("skipped", skipped))
+			return nil
 		}
 
 		if err := c.session.ExecuteBatch(batch); err != nil {
@@ -1322,7 +1349,8 @@ func (c *CassandraHandler) upsertPartitionStatsV3(traceCtx context.Context, name
 
 		logger.InfoContext(traceCtx, "Batch inserted stats",
 			zap.String("namespace", namespace),
-			zap.Int("count", len(events)))
+			zap.Int("count", batch.Size()),
+			zap.Int("skipped", skipped))
 		return nil
 	}, "upsertPartitionStatsV3")
 }
@@ -1339,23 +1367,16 @@ func (c *CassandraHandler) UpsertFilteredStatsV3(traceCtx context.Context, names
 	return c.upsertStatsRow(traceCtx, filteredStatsV3Table, namespace, eventContext, eventName, timestamp)
 }
 
-// upsertStatsRow is the shared LWT upsert for stats_v3-shaped tables.
+// upsertStatsRow is the shared latest-wins LWT upsert for stats_v3-shaped tables.
 // table must be a trusted, code-controlled identifier (not user input).
 func (c *CassandraHandler) upsertStatsRow(traceCtx context.Context, table, namespace, eventContext, eventName string, timestamp time.Time) error {
 	logger := logging.GetLogger(traceCtx)
 
 	err := c.executeWithSessionRecreation(traceCtx, func() error {
-		// Use LWT to atomically insert if not exists
 		insertQuery := fmt.Sprintf(`INSERT INTO %s (namespace, context, event_name, timestamp, created_at, updated_at)
 						VALUES (?, ?, ?, ?, ?, ?) IF NOT EXISTS`, table)
 
-		// Variables to scan existing row if IF NOT EXISTS fails.
-		// When CAS fails, Cassandra returns all columns in this order:
-		// PK: namespace, context
-		// Other (alphabetical): created_at, event_name, timestamp, updated_at
-		var existingNamespace, existingContext, existingEventName string
-		var existingCreatedAt, existingTimestamp, existingUpdatedAt time.Time
-
+		previous := make(map[string]any)
 		applied, err := c.session.Query(insertQuery,
 			namespace,
 			eventContext,
@@ -1363,15 +1384,7 @@ func (c *CassandraHandler) upsertStatsRow(traceCtx context.Context, table, names
 			timestamp,
 			timestamp, // created_at
 			timestamp, // updated_at
-		).WithContext(traceCtx).ScanCAS(
-			&existingNamespace,
-			&existingContext,
-			&existingCreatedAt,
-			&existingEventName,
-			&existingTimestamp,
-			&existingUpdatedAt,
-		)
-
+		).WithContext(traceCtx).MapScanCAS(previous)
 		if err != nil {
 			logger.ErrorContext(traceCtx, "Failed to insert stats",
 				zap.Error(err),
@@ -1379,33 +1392,48 @@ func (c *CassandraHandler) upsertStatsRow(traceCtx context.Context, table, names
 				zap.String("namespace", namespace),
 				zap.String("context", eventContext),
 				zap.String("event_name", eventName))
-			return err
+			return fmt.Errorf("failed to insert stats into %s: %w", table, err)
+		}
+
+		if applied {
+			return nil
+		}
+
+		updateQuery := fmt.Sprintf(`UPDATE %s
+						SET event_name = ?, timestamp = ?, updated_at = ?
+						WHERE namespace = ? AND context = ?
+						IF timestamp < ?`, table)
+
+		previous = make(map[string]any)
+		applied, err = c.session.Query(updateQuery,
+			eventName,
+			timestamp,
+			time.Now(),
+			namespace,
+			eventContext,
+			timestamp,
+		).WithContext(traceCtx).MapScanCAS(previous)
+		if err != nil {
+			logger.ErrorContext(traceCtx, "Failed to conditionally update stats",
+				zap.Error(err),
+				zap.String("table", table),
+				zap.String("namespace", namespace),
+				zap.String("context", eventContext),
+				zap.String("event_name", eventName))
+			return fmt.Errorf("failed to conditionally update stats in %s: %w", table, err)
 		}
 
 		if !applied {
-			// Record exists - update it preserving created_at, replacing event_name
-			updateQuery := fmt.Sprintf(`INSERT INTO %s (namespace, context, event_name, timestamp, created_at, updated_at)
-							VALUES (?, ?, ?, ?, ?, ?)`, table)
-
-			if err := c.session.Query(updateQuery,
-				namespace,
-				eventContext,
-				eventName,
-				timestamp,         // event timestamp
-				existingCreatedAt, // preserve original created_at
-				time.Now(),        // updated_at = current time
-			).WithContext(traceCtx).Exec(); err != nil {
-				logger.ErrorContext(traceCtx, "Failed to update stats",
-					zap.Error(err),
-					zap.String("table", table),
-					zap.String("namespace", namespace),
-					zap.String("context", eventContext),
-					zap.String("event_name", eventName))
-				return err
-			}
+			logger.DebugContext(traceCtx, "Skipped stale stats update",
+				zap.String("table", table),
+				zap.String("namespace", namespace),
+				zap.String("context", eventContext),
+				zap.String("event_name", eventName),
+				zap.Time("timestamp", timestamp))
+			return nil
 		}
 
-		logger.DebugContext(traceCtx, "Upserted stats",
+		logger.DebugContext(traceCtx, "Updated stats",
 			zap.String("table", table),
 			zap.String("namespace", namespace),
 			zap.String("context", eventContext),

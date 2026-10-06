@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-// The gateway forwards a re-marshalled request, so marshaller output is wire output.
+// Requests without a raw client body are forwarded re-marshalled, so marshaller output is wire output.
 func TestChatCompletionRequestRoundTrip(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -113,6 +113,8 @@ func TestChatMessageContentMarshalRejectsNilParts(t *testing.T) {
 	tests := map[string]ChatMessageContent{
 		"nil image_url": {ContentPartText("a"), (*ContentPartImageURL)(nil)},
 		"nil document":  {ContentPartText("a"), (*ContentPartDocument)(nil)},
+		"nil audio_url": {ContentPartText("a"), (*ContentPartAudioURL)(nil)},
+		"nil video_url": {ContentPartText("a"), (*ContentPartVideoURL)(nil)},
 	}
 
 	for name, content := range tests {
@@ -121,6 +123,42 @@ func TestChatMessageContentMarshalRejectsNilParts(t *testing.T) {
 				t.Fatal("expected error for nil content part")
 			}
 		})
+	}
+}
+
+func TestChatMediaContentRoundTrip(t *testing.T) {
+	for _, kind := range []string{"audio_url", "video_url"} {
+		t.Run(kind, func(t *testing.T) {
+			body := `[{"type":"text","text":"Describe this."},{"type":"` + kind + `","` + kind + `":{"url":"data:media;base64,AAAA"}}]`
+			var content ChatMessageContent
+			if err := json.Unmarshal([]byte(body), &content); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != body {
+				t.Fatalf("content = %s, want %s", encoded, body)
+			}
+			for _, member := range []string{"", `,"` + kind + `":null`, `,"` + kind + `":{}`, `,"` + kind + `":{"url":""}`} {
+				var invalid ChatMessageContent
+				if err := json.Unmarshal([]byte(`[{"type":"`+kind+`"`+member+`}]`), &invalid); err == nil {
+					t.Fatalf("accepted missing URL: %s", member)
+				}
+			}
+			var invalid ChatMessageContent
+			if err := json.Unmarshal([]byte(`[{"type":"text","text":"a","`+kind+`":{"url":"data:media;base64,AAAA"}}]`), &invalid); err == nil {
+				t.Fatal("accepted media member in text part")
+			}
+		})
+	}
+	encoded, err := json.Marshal(ChatMessageContent{ContentPartAudioURL{URL: "audio"}, ContentPartVideoURL{URL: "video"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"type":"audio_url","audio_url":{"url":"audio"}},{"type":"video_url","video_url":{"url":"video"}}]`; string(encoded) != want {
+		t.Fatalf("content = %s, want %s", encoded, want)
 	}
 }
 

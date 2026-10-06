@@ -24,7 +24,6 @@ Feature: Install local Helmfile observability with the compute profile
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | addons.llm.enabled              | false                                |
-      | observability.profile           | disabled                             |
     # Configure the shared observability stack for compute-plane monitors.
     And I prepare Helmfile environment "local-bdd-observability-compute" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -79,7 +78,20 @@ Feature: Install local Helmfile observability with the compute profile
 
     When I run command:
       """
-      make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local-compute-1 KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-compute-1-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+      ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd-observability-compute --control-plane-context k3d-ncp-local-cp --compute-plane-context k3d-ncp-local-compute-1 control-plane profile export --cluster-name ncp-local-cp
+      """
+    Then the command exit code should be 0
+    And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+    When I run command:
+      """
+      ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+      """
+    Then the command exit code should be 0
+
+    When I run command:
+      """
+      make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local-compute-1 CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-compute-1-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
       """
     Then the command exit code should be 0
     And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should exist
@@ -141,6 +153,7 @@ Feature: Install local Helmfile observability with the compute profile
     Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
       | kind           | name                                             |
       | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-function-autoscaler        |
       | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
       | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
       | ServiceMonitor | nvcf-default-monitors-invocation-service          |

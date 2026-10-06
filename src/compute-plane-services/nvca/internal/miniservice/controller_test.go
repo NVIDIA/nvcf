@@ -511,6 +511,7 @@ func assertHelmLLMTransportTLS(
 	assert.NotNil(t, findWorkloadVolume(utilsPod.Spec, transporttls.MergedCertsVolumeName))
 	assert.Equal(t, transporttls.SystemCertFile,
 		findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	assert.NotNil(t, findWorkloadVolumeMount(llmWorker, transporttls.MergedCertsVolumeName))
 
 	trustConfigMap := &corev1.ConfigMap{}

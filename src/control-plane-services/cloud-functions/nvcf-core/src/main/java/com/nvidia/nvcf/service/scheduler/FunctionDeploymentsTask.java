@@ -158,15 +158,20 @@ public class FunctionDeploymentsTask implements AutoCloseable {
     }
 
     private CompletableFuture<Void> submitDeployment(FunctionDeploymentContext deploymentContext) {
-        return CompletableFuture.runAsync(() -> {
+        var task = tracer.currentTraceContext().wrap(() -> {
             try {
                 handleFunctionDeployment(deploymentContext);
             } catch (Exception ex) {
                 var versionId = deploymentContext.deployment().getKey().getFunctionVersionId();
                 log.error(MESG_FAILED_PROCESS_DEPLOYMEMT,
-                          taskProperties.getCurrentRegion(), versionId, ex.getMessage(), ex);
+                          taskProperties.getCurrentRegion(),
+                          versionId,
+                          ex.getMessage(),
+                          ex);
             }
-        }, concurrentTaskExecutor);
+        });
+
+        return CompletableFuture.runAsync(task, concurrentTaskExecutor);
     }
 
     @VisibleForTesting

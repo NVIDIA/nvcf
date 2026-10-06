@@ -18,6 +18,7 @@ deliver that, we need the bytes replicated across clusters
 out-of-band.
 
 Goals:
+
 - Once any cluster checkpoints function-version V, every cluster that
   later needs V can restore without going cold.
 - Replication is asynchronous — pod creation never blocks on
@@ -29,6 +30,7 @@ Goals:
   fan-out.
 
 Non-goals:
+
 - Multi-region S3 (use S3 cross-region replication if needed; this
   design is replication-agnostic).
 - Live migration (this is for cold pod creation, not in-flight pod
@@ -38,7 +40,7 @@ Non-goals:
 
 ## 2. Architecture
 
-```
+```text
                 ┌─────────────────────────────────────────────┐
                 │  Cluster A (capture)                         │
                 │  nvsnap-agent → nvsnap-blobstore-A               │
@@ -116,7 +118,7 @@ only, not chunk writes. This avoids N+1 events per capture.
 
 The replicator in each cluster's blobstore decides per event:
 
-```
+```text
 on SNS notification:
   HEAD s3://nvsnap-checkpoints-prod/<hash>/manifest.json
   GET  s3://nvsnap-checkpoints-prod/<hash>/manifest.json   # small JSON
@@ -165,6 +167,7 @@ egress bill bounded.
 
 S3 `ObjectRemoved:*` events fan out the same way. Replicator on
 receipt:
+
 - Removes the local index entry.
 - Triggers local GC of chunks (subject to the existing TTL — recent
   chunks may be retained for in-flight restores).
@@ -187,6 +190,7 @@ retention loop.
 ## 8. Operational concerns
 
 **Metrics** (per cluster):
+
 - `nvsnap_replication_events_total{action="skip|eager_pull|lazy_record|fail"}`
 - `nvsnap_replication_pull_bytes_total`
 - `nvsnap_replication_pull_duration_seconds`
@@ -194,11 +198,13 @@ retention loop.
 - `nvsnap_replication_dlq_depth`
 
 **Alerts**:
+
 - DLQ depth > 0 → page (something fundamentally broken)
 - Replication lag P99 > 5 min → warn (S3 throttling or SNS issue)
 - Egress bytes/hour > budget → warn
 
 **Cost model**:
+
 - S3 storage: `sum(checkpoint_size) × $0.023/GB-month` in source region
 - Cross-region GET: `pull_bytes × $0.02/GB` (egress)
 - SNS publish: `events × $0.50/1M` (negligible)

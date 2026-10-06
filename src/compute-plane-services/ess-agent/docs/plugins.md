@@ -26,7 +26,7 @@ multiple instances.
 Consul Template plugins must have the following API:
 
 ```shell
-$ NAME [INPUT...]
+NAME [INPUT...]
 ```
 
 - `NAME` - the name of the plugin - this is also the name of the binary, either
@@ -52,7 +52,7 @@ $ NAME [INPUT...]
 
 - Always `exit 0` or Consul Template will assume the plugin failed to execute
 
-- Ensure the empty input case is handled correctly (see [Multi-phase execution](#multi-phase-execution))
+- Ensure the empty input case is handled correctly (see multi-phase execution)
 
 - Data piped into the plugin is appended after any parameters given explicitly (eg `{{ "sample-data" | plugin "my-plugin" "some-parameter"}}` will call `my-plugin some-parameter sample-data`)
 

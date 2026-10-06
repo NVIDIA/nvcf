@@ -95,6 +95,9 @@ yq eval '
 ' "${repo_root}/nvca-operator/values.yaml" > "${legacy_values}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -108,6 +111,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -123,6 +129,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${stage_manifest}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -138,6 +147,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest_with_byoo_override}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --values "${legacy_values}" \
   --set-string selfManaged.icmsServiceURL=http://sis.example.invalid:8080 \
@@ -149,6 +161,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${legacy_stage_manifest}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -163,6 +178,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest_without_byoo_default}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -177,6 +195,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest_without_nvca_image_override}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -189,6 +210,7 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
 
 nvca_image_repository="$(yq -r '.nvcaImage.repositoryOverride' "${repo_root}/values.release-sbom.yaml")"
 nvca_version="$(yq -r '.selfManaged.nvcaVersion' "${repo_root}/nvca-operator/values.yaml")"
+byoo_otel_collector_tag="$(yq -r '.agent.byooOtelCollector.imageTag' "${repo_root}/nvca-operator/values.yaml")"
 image_credential_helper_repository="$(yq -r '.selfManaged.imageCredHelper.imageRepository' "${repo_root}/values.release-sbom.yaml")"
 image_credential_helper_tag="$(yq -r '.selfManaged.imageCredHelper.imageTag' "${repo_root}/nvca-operator/values.yaml")"
 samba_repository="$(yq -r '.selfManaged.sharedStorage.imageRepository' "${repo_root}/values.release-sbom.yaml")"
@@ -207,12 +229,12 @@ if [[ "${byoo_function_image}" != "${byoo_task_image}" ]]; then
   exit 1
 fi
 
-if [[ "${byoo_function_image}" != "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.0-nv-0.1.1" ]]; then
+if [[ "${byoo_function_image}" != "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:${byoo_otel_collector_tag}" ]]; then
   echo "unexpected BYOO collector default: ${byoo_function_image}" >&2
   exit 1
 fi
 
-if [[ "${stage_byoo_function_image}" != "stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector:0.157.0-nv-0.1.1" || \
+if [[ "${stage_byoo_function_image}" != "stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector:${byoo_otel_collector_tag}" || \
   "${stage_byoo_task_image}" != "${stage_byoo_function_image}" ]]; then
   echo "expected BYOO collector defaults to use the staging image repository" >&2
   exit 1

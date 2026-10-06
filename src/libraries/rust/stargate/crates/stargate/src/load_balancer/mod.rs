@@ -51,7 +51,7 @@ pub use config::{
     MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
 };
 pub use factory::create_load_balancer_with_config;
-pub use request::{LoadBalancerCandidateChoice, LoadBalancerRequest};
+pub use request::{LoadBalancerCandidateChoice, LoadBalancerDecision, LoadBalancerRequest};
 pub use router::{
     LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRouter,
 };

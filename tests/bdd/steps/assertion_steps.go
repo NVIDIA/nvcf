@@ -32,8 +32,13 @@ import (
 // values from the feature file.
 func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the command exit code should be (\d+)$`, sc.commandExitCodeShouldBe)
+	ctx.Step(`^the command should fail$`, sc.commandShouldFail)
 	ctx.Step(`^the command output should contain "([^"]*)"$`, sc.commandOutputShouldContain)
 	ctx.Step(`^the command output should not contain "([^"]*)"$`, sc.commandOutputShouldNotContain)
+	ctx.Step(`^the command output should not match "([^"]*)"$`, sc.commandOutputShouldNotMatch)
+	ctx.Step(`^the command output should have exactly "(\d+)" distinct matches of "([^"]*)"$`, sc.commandOutputShouldHaveDistinctMatches)
+	ctx.Step(`^the command output should contain all:$`, sc.commandOutputShouldContainAll)
+	ctx.Step(`^the command output should contain one of:$`, sc.commandOutputShouldContainOneOf)
 	ctx.Step(`^file "([^"]*)" should exist$`, sc.fileShouldExist)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should equal "([^"]*)"$`, sc.yamlFileKeyShouldEqual)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should not be empty$`, sc.yamlFileKeyShouldNotBeEmpty)
@@ -45,6 +50,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
 	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
+	ctx.Step(`^the rendered manifests in "([^"]*)" should contain Kubernetes resource "([^"/]+)/([^"]+)"$`, sc.renderedManifestsShouldContainKubernetesResource)
+	ctx.Step(`^the rendered workloads in "([^"]*)" should have valid container images$`, sc.renderedWorkloadsShouldHaveValidContainerImages)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
 	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
@@ -52,6 +59,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^these Kubernetes resources should not exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldNotExist)
 	ctx.Step(`^Kubernetes resource "([^"/]+)/([^"]+)" in namespace "([^"]*)" using context "([^"]*)" should contain:$`, sc.kubernetesResourceShouldContain)
 	ctx.Step(`^deployment "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should complete rollout within "([^"]*)"$`, sc.deploymentShouldCompleteRollout)
+	ctx.Step(`^DNS name "([^"]*)" should resolve within "([^"]*)" seconds$`, sc.dnsNameShouldResolve)
+	ctx.Step(`^these Kubernetes workloads should complete rollout using context "([^"]*)" within "([^"]*)":$`, sc.kubernetesWorkloadsShouldCompleteRollout)
 	ctx.Step(`^NVCFBackend "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should report agent status "([^"]*)" within "([^"]*)"$`, sc.nvcfBackendShouldReportAgentStatus)
 	ctx.Step(`^these Gateway API routes should be accepted and resolved using context "([^"]*)" within "([^"]*)":$`, sc.gatewayAPIRoutesShouldBeAcceptedAndResolved)
 }
@@ -86,9 +95,19 @@ func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
 	return nil
 }
 
+func (sc *ScenarioContext) commandShouldFail() error {
+	if sc.LastResult.ExitCode == 0 {
+		return fmt.Errorf("exit code = 0, want non-zero (see %s for stdout/stderr)", sc.Suite.Config.CommandLogDir)
+	}
+	return nil
+}
+
 func (sc *ScenarioContext) commandOutputShouldContain(needle string) error {
 	combined := combinedOutput(sc.LastResult)
-	resolved := dsl.Interpolate(needle)
+	resolved, err := resolveOutputNeedle(needle)
+	if err != nil {
+		return err
+	}
 	if !strings.Contains(combined, resolved) {
 		return fmt.Errorf("output does not contain %q", resolved)
 	}
@@ -97,11 +116,93 @@ func (sc *ScenarioContext) commandOutputShouldContain(needle string) error {
 
 func (sc *ScenarioContext) commandOutputShouldNotContain(needle string) error {
 	combined := combinedOutput(sc.LastResult)
-	resolved := dsl.Interpolate(needle)
+	resolved, err := resolveOutputNeedle(needle)
+	if err != nil {
+		return err
+	}
 	if strings.Contains(combined, resolved) {
 		return fmt.Errorf("output contains %q", resolved)
 	}
 	return nil
+}
+
+// commandOutputShouldNotMatch fails when the interpolated regular
+// expression matches the combined stdout and stderr of the last command.
+// Use it for shapes a fixed string cannot express, such as a dashed
+// pod-IP hostname alias.
+func (sc *ScenarioContext) commandOutputShouldNotMatch(pattern string) error {
+	matched, err := dsl.OutputMatches(combinedOutput(sc.LastResult), pattern)
+	if err != nil {
+		return err
+	}
+	if matched {
+		return fmt.Errorf("output matches %q (see %s for stdout/stderr)", dsl.Interpolate(pattern), sc.Suite.Config.CommandLogDir)
+	}
+	return nil
+}
+
+// commandOutputShouldHaveDistinctMatches asserts how many unique
+// substrings the interpolated regular expression matches in the combined
+// stdout and stderr of the last command. Repeated occurrences of the same
+// substring count once.
+func (sc *ScenarioContext) commandOutputShouldHaveDistinctMatches(expected int, pattern string) error {
+	got, err := dsl.DistinctOutputMatches(combinedOutput(sc.LastResult), pattern)
+	if err != nil {
+		return err
+	}
+	if got != expected {
+		return fmt.Errorf("distinct matches of %q = %d, want %d (see %s for stdout/stderr)",
+			dsl.Interpolate(pattern), got, expected, sc.Suite.Config.CommandLogDir)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) commandOutputShouldContainAll(table *godog.Table) error {
+	needles, err := tableToSingleColumn(table, "text")
+	if err != nil {
+		return err
+	}
+	combined := combinedOutput(sc.LastResult)
+	for index, needle := range needles {
+		resolved, err := resolveOutputNeedle(needle)
+		if err != nil {
+			return fmt.Errorf("row %d: %w", index+1, err)
+		}
+		if !strings.Contains(combined, resolved) {
+			return fmt.Errorf("output does not contain %q", resolved)
+		}
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) commandOutputShouldContainOneOf(table *godog.Table) error {
+	needles, err := tableToSingleColumn(table, "text")
+	if err != nil {
+		return err
+	}
+	resolvedNeedles := make([]string, 0, len(needles))
+	for index, needle := range needles {
+		resolved, err := resolveOutputNeedle(needle)
+		if err != nil {
+			return fmt.Errorf("row %d: %w", index+1, err)
+		}
+		resolvedNeedles = append(resolvedNeedles, resolved)
+	}
+	combined := combinedOutput(sc.LastResult)
+	for _, resolved := range resolvedNeedles {
+		if strings.Contains(combined, resolved) {
+			return nil
+		}
+	}
+	return fmt.Errorf("output does not contain any of the %d expected values", len(needles))
+}
+
+func resolveOutputNeedle(needle string) (string, error) {
+	resolved := dsl.Interpolate(needle)
+	if strings.TrimSpace(resolved) == "" {
+		return "", fmt.Errorf("expected output text resolves to an empty value")
+	}
+	return resolved, nil
 }
 
 func (sc *ScenarioContext) yamlFileKeyShouldEqual(path, key, expected string) error {
@@ -181,6 +282,19 @@ func (sc *ScenarioContext) renderedManifestsShouldContain(path string, table *go
 		return err
 	}
 	return dsl.FilesContain(sc.resolvePath(dsl.Interpolate(path)), "", needles)
+}
+
+func (sc *ScenarioContext) renderedManifestsShouldContainKubernetesResource(path, kind, name string) error {
+	return dsl.RenderedManifestsContainResource(
+		sc.resolvePath(dsl.Interpolate(path)),
+		dsl.KubernetesResource{Kind: kind, Name: name},
+	)
+}
+
+// renderedWorkloadsShouldHaveValidContainerImages delegates manifest parsing
+// while the step handler resolves the repository-relative path.
+func (sc *ScenarioContext) renderedWorkloadsShouldHaveValidContainerImages(path string) error {
+	return dsl.RenderedWorkloadImagesAreValid(sc.resolvePath(dsl.Interpolate(path)))
 }
 
 func (sc *ScenarioContext) renderedManifestsUnderMatchingDirectoriesShouldContain(path, pattern string, table *godog.Table) error {
@@ -351,6 +465,45 @@ func (sc *ScenarioContext) deploymentShouldCompleteRollout(ctx context.Context, 
 	return nil
 }
 
+func (sc *ScenarioContext) dnsNameShouldResolve(ctx context.Context, hostname, timeout string) error {
+	command, err := dsl.DNSResolutionCommand(hostname, timeout)
+	if err != nil {
+		return err
+	}
+	if err := sc.runResolvedSuccessfully(ctx, command); err != nil {
+		return fmt.Errorf(
+			"DNS name %q did not resolve within %s seconds: %w",
+			strings.TrimSpace(dsl.Interpolate(hostname)),
+			strings.TrimSpace(dsl.Interpolate(timeout)),
+			err,
+		)
+	}
+	return nil
+}
+
+// kubernetesWorkloadsShouldCompleteRollout waits for every table row in
+// order with one explicit-context kubectl rollout status per workload. The
+// failure names the row, kind, name, and namespace without printing output.
+func (sc *ScenarioContext) kubernetesWorkloadsShouldCompleteRollout(ctx context.Context, kubeContext, timeout string, table *godog.Table) error {
+	workloads, err := tableToKubernetesWorkloads(table)
+	if err != nil {
+		return err
+	}
+	for index, workload := range workloads {
+		command, err := dsl.KubernetesWorkloadRolloutCommand(workload, kubeContext, timeout)
+		if err != nil {
+			return fmt.Errorf("row %d (%s/%s): %w", index+1, workload.Kind, workload.Name, err)
+		}
+		if err := sc.runResolvedSuccessfully(ctx, command); err != nil {
+			return fmt.Errorf(
+				"row %d: %s %q in namespace %q did not complete rollout: %w",
+				index+1, workload.Kind, workload.Name, workload.Namespace, err,
+			)
+		}
+	}
+	return nil
+}
+
 func (sc *ScenarioContext) nvcfBackendShouldReportAgentStatus(ctx context.Context, name, namespace, kubeContext, agentStatus, timeout string) error {
 	command, err := dsl.NVCFBackendAgentStatusCommand(name, namespace, kubeContext, agentStatus, timeout)
 	if err != nil {
@@ -416,6 +569,46 @@ func tableToKubernetesResources(table *godog.Table) ([]dsl.KubernetesResource, e
 		resources = append(resources, resource)
 	}
 	return resources, nil
+}
+
+// tableToKubernetesWorkloads converts a Godog table with kind, name, and
+// namespace headers into the workload list that
+// dsl.KubernetesWorkloadRolloutCommand consumes. Cells interpolate ${VAR}
+// and every cell must be non-empty; the row number is named in each error.
+func tableToKubernetesWorkloads(table *godog.Table) ([]dsl.KubernetesWorkload, error) {
+	if table == nil || len(table.Rows) < 2 {
+		return nil, fmt.Errorf("table must have kind, name, and namespace headers and at least one data row")
+	}
+	headers := table.Rows[0].Cells
+	if len(headers) != 3 ||
+		strings.TrimSpace(headers[0].Value) != "kind" ||
+		strings.TrimSpace(headers[1].Value) != "name" ||
+		strings.TrimSpace(headers[2].Value) != "namespace" {
+		return nil, fmt.Errorf("table headers must be kind, name, and namespace")
+	}
+
+	workloads := make([]dsl.KubernetesWorkload, 0, len(table.Rows)-1)
+	for index, row := range table.Rows[1:] {
+		if len(row.Cells) != len(headers) {
+			return nil, fmt.Errorf("row %d has %d cells, expected %d", index+1, len(row.Cells), len(headers))
+		}
+		workload := dsl.KubernetesWorkload{
+			Kind:      strings.TrimSpace(dsl.Interpolate(row.Cells[0].Value)),
+			Name:      strings.TrimSpace(dsl.Interpolate(row.Cells[1].Value)),
+			Namespace: strings.TrimSpace(dsl.Interpolate(row.Cells[2].Value)),
+		}
+		if workload.Kind == "" {
+			return nil, fmt.Errorf("row %d has an empty kind", index+1)
+		}
+		if workload.Name == "" {
+			return nil, fmt.Errorf("row %d has an empty name", index+1)
+		}
+		if workload.Namespace == "" {
+			return nil, fmt.Errorf("row %d has an empty namespace", index+1)
+		}
+		workloads = append(workloads, workload)
+	}
+	return workloads, nil
 }
 
 func tableToGatewayAPIRoutes(table *godog.Table) ([]dsl.GatewayAPIRoute, error) {

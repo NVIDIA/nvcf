@@ -23,7 +23,7 @@ spec:
       serviceAccountName: kai-operator
       containers:
       - name: operator
-        image: ghcr.io/kai-scheduler/kai-scheduler/operator:v0.16.7
+        image: ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1
         imagePullPolicy: IfNotPresent
         resources:
             limits:
@@ -51,7 +51,7 @@ spec:
         - name: MS_REPOSITORY
           value: ghcr.io/kai-scheduler/kai-scheduler
         - name: MS_TAG
-          value: v0.16.7
+          value: v0.17.1
         ports:
         - containerPort: 8080
           name: metrics

@@ -130,7 +130,7 @@ jobs:
         with:
           # The companion workflow parses this artifact as untrusted data only.
           name: codeql-pr-results-${{ matrix.language }}
-          path: results/${{ matrix.language }}.sarif
+          path: results/*.sarif
           if-no-files-found: error
           retention-days: 1
 

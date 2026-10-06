@@ -63,7 +63,9 @@ public class EssResponseTransformer implements ResponseTransformerV2 {
         return switch (request.getMethod().getName()) {
             case "PUT" -> saveOrUpdateSecrets(request, response);
             case "DELETE" -> deleteSecrets(request, response);
-            case "GET" -> fetchSecrets(request, response);
+            case "GET" -> url.contains("registry-credentials")
+                    ? fetchRegistryCredentialSecret(request, response)
+                    : fetchSecrets(request, response);
             default -> throw new BadRequestException("Unexpected HTTP Method");
         };
     }
@@ -101,6 +103,36 @@ public class EssResponseTransformer implements ResponseTransformerV2 {
             return Response.Builder.like(response).body(serialized).build();
         }
         return Response.response().status(404).build();
+    }
+
+    @SneakyThrows
+    private Response fetchRegistryCredentialSecret(Request request, Response response) {
+        var url = request.getAbsoluteUrl();
+        if (!url.contains("query_type=fetch_secret")) {
+            throw new BadRequestException("Only supports query_type=fetch_secret");
+        }
+
+        var credentialId = getRegistryCredentialId(request);
+        log.debug("Registry credential id '{}': Fetching Secret", credentialId);
+
+        var secret = TestConstants.REGISTRY_CRED_SECRETS_BY_ID.get(credentialId);
+        if (secret == null) {
+            return Response.response().status(404).build();
+        }
+
+        var payload = new FetchSecretsResponse(new FetchSecretsResponse.FetchSecretData(
+                Map.of(secret.name(), secret.value())));
+        var serialized = jsonMapper.writeValueAsString(payload);
+        return Response.Builder.like(response).body(serialized).build();
+    }
+
+    private UUID getRegistryCredentialId(Request request) {
+        var url = request.getAbsoluteUrl();
+        var marker = "registry-credentials/";
+        var start = url.indexOf(marker) + marker.length();
+        var end = url.indexOf('?', start);
+        var rawId = end < 0 ? url.substring(start) : url.substring(start, end);
+        return UUID.fromString(rawId);
     }
 
     private Response deleteSecrets(Request request, Response response) {

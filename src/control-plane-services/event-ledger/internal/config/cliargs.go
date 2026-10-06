@@ -45,6 +45,7 @@ func (c *CliArgs) Register(svcName string) {
 	c.SetupTracing()
 	c.SetupLogging(svcName)
 	c.SetupIndexer()
+	c.SetupCache()
 	c.SetupProfiling()
 	c.SetupPublisher()
 	c.SetupHTTP()
@@ -80,6 +81,10 @@ func (c *CliArgs) SetupAuth() {
 	c.int64("auth.policy.creds-refresh-interval", 300, "Interval in seconds to periodically refresh credentials from file (recommended: 300)", true)
 	c.string("auth.policy.subject-field", "subject", "Policy input field name for JWT subject", true)
 	c.string("auth.policy.api-key-field", "apiKey", "Policy input field name for API key tokens", true)
+	c.bool("auth.introspection.enabled", false, "Enable SIS introspection of NVCA's PSAT for callers without an OpenBao JWT", true)
+	c.string("auth.introspection.url", "", "SIS token introspection endpoint URL", true)
+	c.int("auth.introspection.timeout-seconds", 10, "SIS introspection call timeout in seconds", true)
+	c.int("auth.introspection.cache-ttl-seconds", 300, "SIS introspection result cache TTL in seconds", true)
 }
 
 // SetupDatabase defines database providers arguments and configuration settings
@@ -97,8 +102,10 @@ func (c *CliArgs) SetupDatabase() {
 	c.int("database.cassandra.num-conns", 2, "Connections per host", true)
 	c.string("database.cassandra.pub-key-b64", "", "Cassandra public key as base64-encoded string", true)
 	c.string("database.cassandra.priv-key-b64", "", "Cassandra private key as base64-encoded string", true)
+	c.string("database.cassandra.ca-cert-b64", "", "Cassandra CA certificate as base64-encoded string", true)
 	c.string("database.cassandra.pub-key-path", "", "Cassandra public key path", true)
 	c.string("database.cassandra.priv-key-path", "", "Cassandra private key path", true)
+	c.string("database.cassandra.ca-cert-path", "", "Cassandra CA certificate path", true)
 	c.bool("database.cassandra.insecure-skip-verify", false, "Insecurely skip certificate verification", true)
 }
 
@@ -137,6 +144,13 @@ func (c *CliArgs) SetupIndexer() {
 	c.bool("indexer.enabled", false, "Enable the indexer service", true)
 	c.int("indexer.channel-buffer-size", 1000, "Buffer size for indexer channels", true)
 	c.int("indexer.worker-count", 10, "Number of indexer workers", true)
+}
+
+func (c *CliArgs) SetupCache() {
+	defaults := GetDefaultCacheConfig()
+	c.bool("cache.enabled", defaults.Enabled, "Reserved for the local stats write cache. It has no effect until the cache is applied to writes", true)
+	c.int("cache.max-size", defaults.MaxSize, "Maximum number of entries in the stats write cache", true)
+	c.int("cache.flush-interval-seconds", defaults.FlushIntervalSeconds, "Seconds a pending stats entry waits before it is flushed", true)
 }
 
 func (c *CliArgs) SetupPublisher() {

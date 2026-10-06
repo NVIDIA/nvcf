@@ -293,7 +293,29 @@ public class FunctionDeploymentService {
                 functionDeploymentLookupService.getDeploymentContextByVersionIdOrThrow(
                         functionVersionId)
                 .deployment();
+        return deleteFunctionDeployment(function, deployment, payloadBuilder, graceful);
+    }
+
+    // Deletes a function deployment when one exists. This is used by function deletion,
+    // which must also support deployments that were already deleted or never deployed.
+    public void deleteFunctionDeploymentIfPresent(
+            FunctionEntity function,
+            AuditEventPayload.Builder payloadBuilder) {
+        var versionId = function.getFunctionVersionId();
+        functionDeploymentLookupService.getDeploymentContextByVersionId(versionId)
+                .map(FunctionDeploymentContext::deployment)
+                .ifPresent(deployment -> deleteFunctionDeployment(function, deployment,
+                                                                   payloadBuilder, false));
+    }
+
+    private FunctionDto deleteFunctionDeployment(
+            FunctionEntity function,
+            FunctionDeploymentEntity deployment,
+            AuditEventPayload.Builder payloadBuilder,
+            boolean graceful) {
         var functionJsonBefore = jsonMapper.valueToTree(function);
+        var functionId = function.getFunctionId();
+        var functionVersionId = function.getFunctionVersionId();
 
         log.info(MESG_FUNCTION_OPERATION, functionId, functionVersionId, "Deleting deployment");
 
@@ -333,13 +355,9 @@ public class FunctionDeploymentService {
         return functionMapperService.toFunctionDto(function, Optional.empty(), Optional.empty());
     }
 
-    /**
-     * Forcefully deletes function's deployment which includes corresponding NATS queues,
-     * the Workers, and the entry from the functions_deployment_v2 table.
-     *
-     * @param functionVersionId Version id of the function whose deployment is to be deleted
-     */
-    public void forceDeleteFunctionDeployment(UUID functionVersionId) {
+    // Forcefully deletes function's deployment which includes corresponding NATS queues,
+    // the Workers, and the entry from the functions_deployment_v2 table.
+    private void forceDeleteFunctionDeployment(UUID functionVersionId) {
         deleteFunctionRequestQueue(functionVersionId);
         var deploymentOpt = functionDeploymentLookupService
                 .getDeploymentContextByVersionId(functionVersionId)

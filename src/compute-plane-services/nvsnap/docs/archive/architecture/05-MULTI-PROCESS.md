@@ -13,7 +13,7 @@ Checkpointing these requires **coordinated, atomic snapshots** across all proces
 
 ## vLLM Process Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           vLLM PROCESS MODEL                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -206,7 +206,7 @@ func getVLLMConfig(procs []*Process) (*VLLMConfig, error) {
 
 ### Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    COORDINATED CHECKPOINT PROTOCOL                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -387,7 +387,7 @@ The key challenge: NCCL communicators are tied to network connections that can't
 
 ### Solution: Communicator Reconstruction
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      NCCL RESTORE STRATEGY                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤

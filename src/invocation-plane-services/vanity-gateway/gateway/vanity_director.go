@@ -167,8 +167,8 @@ type ProblemDetails struct {
 	Detail string `json:"detail"`
 }
 
-func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*VanityDirector, error) {
-	rp := &httputil.ReverseProxy{
+func newGatewayReverseProxy(transport http.RoundTripper) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
 		Director: func(request *http.Request) {
 			// already directed, needed to be able to error
 		},
@@ -178,6 +178,10 @@ func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*Vanity
 		ModifyResponse: modifyTooManyRequestsResponse,
 		ErrorHandler:   writeProxyError,
 	}
+}
+
+func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*VanityDirector, error) {
+	rp := newGatewayReverseProxy(transport)
 	nvcfApiUrl, err := url.Parse(nvcfApiHost)
 	if err != nil || nvcfApiUrl.Scheme == "" || nvcfApiUrl.Host == "" {
 		return nil, fmt.Errorf("invalid NVCF API host: %s", nvcfApiHost)
@@ -317,7 +321,9 @@ func appendTooManyRequestsMessage(body []byte, message string) []byte {
 		return body
 	}
 
-	if appendOpenAIErrorMessage(parsed, message) || appendProblemDetailsMessage(parsed, message) {
+	if appendOpenAIErrorMessage(parsed, message) ||
+		appendProblemDetailsMessage(parsed, message) ||
+		appendPlainMessage(parsed, message) {
 		if b, err := json.Marshal(parsed); err == nil {
 			return b
 		}
@@ -335,6 +341,17 @@ func appendOpenAIErrorMessage(parsed map[string]any, message string) bool {
 		return false
 	}
 	errorObj["message"] = msg + " " + message
+	return true
+}
+
+// appendPlainMessage handles a bare {"message": "..."} body, which is what echo
+// renders for the LLM Gateway's errors. Kept last so the two specific shapes win.
+func appendPlainMessage(parsed map[string]any, message string) bool {
+	msg, ok := parsed["message"].(string)
+	if !ok {
+		return false
+	}
+	parsed["message"] = msg + " " + message
 	return true
 }
 

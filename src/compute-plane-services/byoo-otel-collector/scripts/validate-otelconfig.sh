@@ -17,6 +17,11 @@
 
 OTEL_COLLECTOR_VERSION=${OTEL_COLLECTOR_VERSION:-}
 
+# The rendered metrics pipeline filters empty attribute values with an OTTL
+# lambda, which the collector rejects at config-parse time unless this gate
+# is enabled. The wrapper passes the same gate at runtime.
+OTEL_FEATURE_GATES="--feature-gates=ottl.functions.enableLambda"
+
 set -euo pipefail
 
 MODE="${1:-all}"
@@ -90,7 +95,7 @@ validate_otel_config() {
     fi
 
     set +e
-    timeout_output=$(run_with_timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
+    timeout_output=$(run_with_timeout 2 ./_output/bin/otelcol-contrib ${OTEL_FEATURE_GATES} --config="$config_path" 2>&1)
     exit_code=$?
     set -e
 
@@ -132,7 +137,7 @@ run_vm_container() {
         perl -0pi -e 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' _output/otelconfigs/config.task_vm_container.yaml
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.task_vm_container.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.task_vm_container.yaml
         validate_otel_config _output/otelconfigs/config.task_vm_container.yaml
         rm _output/otelconfigs/config.task_vm_container.yaml
 
@@ -141,7 +146,7 @@ run_vm_container() {
         perl -0pi -e 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' _output/otelconfigs/config.function_vm_container.yaml
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_vm_container.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.function_vm_container.yaml
         # Runtime startup validation is intentionally skipped here to
         # preserve the existing CI behavior for this config shape.
     done
@@ -161,7 +166,7 @@ run_vm_helm() {
         go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs vm helm task
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.task_vm_helm.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.task_vm_helm.yaml
         validate_otel_config _output/otelconfigs/config.task_vm_helm.yaml
         rm _output/otelconfigs/config.task_vm_helm.yaml
 
@@ -169,7 +174,7 @@ run_vm_helm() {
         go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs vm helm function
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_vm_helm.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.function_vm_helm.yaml
         validate_otel_config _output/otelconfigs/config.function_vm_helm.yaml
         rm _output/otelconfigs/config.function_vm_helm.yaml
     done
@@ -191,7 +196,7 @@ run_k8s_container() {
         go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s container task
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.task_k8s_container.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.task_k8s_container.yaml
         validate_otel_config _output/otelconfigs/config.task_k8s_container.yaml
         rm _output/otelconfigs/config.task_k8s_container.yaml
 
@@ -199,7 +204,7 @@ run_k8s_container() {
         go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s container function
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_k8s_container.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.function_k8s_container.yaml
         validate_otel_config _output/otelconfigs/config.function_k8s_container.yaml
         rm _output/otelconfigs/config.function_k8s_container.yaml
     done
@@ -221,7 +226,7 @@ run_k8s_helm() {
         go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s helm task
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.task_k8s_helm.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.task_k8s_helm.yaml
         validate_otel_config _output/otelconfigs/config.task_k8s_helm.yaml
         rm _output/otelconfigs/config.task_k8s_helm.yaml
 
@@ -229,7 +234,7 @@ run_k8s_helm() {
         go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s helm function
 
         echo "Validate configs ..."
-        ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_k8s_helm.yaml
+        ./_output/bin/otelcol-contrib validate ${OTEL_FEATURE_GATES} --config=_output/otelconfigs/config.function_k8s_helm.yaml
         validate_otel_config _output/otelconfigs/config.function_k8s_helm.yaml
         rm _output/otelconfigs/config.function_k8s_helm.yaml
     done

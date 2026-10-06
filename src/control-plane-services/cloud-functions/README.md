@@ -37,7 +37,7 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 On Linux, if Bazel tests fail because
 TestContainers are not starting, you may see an error like:
 
-```
+```text
 ContainerLaunchException: Timed out waiting for container port to open
 ```
 

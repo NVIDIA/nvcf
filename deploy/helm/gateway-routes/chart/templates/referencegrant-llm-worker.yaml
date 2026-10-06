@@ -13,7 +13,7 @@ metadata:
 spec:
   from:
     - group: gateway.networking.k8s.io
-      kind: TCPRoute
+      kind: {{ if .Values.llmRequestRouter.grpcTls.enabled }}GRPCRoute{{ else }}TCPRoute{{ end }}
       namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
     - group: gateway.networking.k8s.io
       kind: UDPRoute

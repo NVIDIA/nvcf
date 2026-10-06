@@ -18,11 +18,9 @@ package com.nvidia.icms.inbound.rest.controllers;
 
 import static com.nvidia.icms.inbound.rest.converters.ErrorDataConverter.toUnifiedErrorData;
 import static com.nvidia.icms.uec.IcmsUnifiedError.NVCF_INCORRECT_PARAMETER;
-import static com.nvidia.icms.uec.UnifiedErrorData.stringFromUuid;
 import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
 
 import com.nvidia.icms.errors.IcmsBadRequestException;
-import com.nvidia.icms.errors.IcmsConflictException;
 import com.nvidia.icms.inbound.rest.converters.CreateInstanceApiModelConverter;
 import com.nvidia.icms.inbound.rest.converters.InstanceModelConverter;
 import com.nvidia.icms.inbound.rest.model.CreateSpotInstanceRequestApiModel;
@@ -38,8 +36,8 @@ import com.nvidia.icms.inbound.rest.model.instance.TerminateInstanceRequestsResp
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
 import com.nvidia.icms.service.InstanceService;
 import com.nvidia.icms.uec.IcmsHttpUnifiedErrorException;
-import com.nvidia.icms.uec.UnifiedErrorException;
 import com.nvidia.icms.uec.UnifiedErrorData;
+import com.nvidia.icms.uec.UnifiedErrorException;
 import com.nvidia.icms.uec.UnifiedErrorReporter;
 import com.nvidia.icms.util.AuthUtils;
 import com.nvidia.icms.util.audit.AuditUtils;
@@ -52,8 +50,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Nullable;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import java.time.Instant;
+import jakarta.validation.constraints.Positive;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -518,6 +517,40 @@ public class InstanceController {
         return instanceService.instanceDeploymentTermination(ncaId, workloadId,null, auditProps);
     }
 
+    @DeleteMapping(value = "/accounts/{ncaId}/workloads/{workloadId}/instances",
+            params = "InstanceCount")
+    @PreAuthorize("hasAuthority('spot-request') or hasAuthority('instance-request')")
+    @Operation(summary = "Terminate specified number of instances",
+            description = "Terminates specified number of instances for the specified workload",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "OK"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "400", description = "Bad request"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "401", description = "Unauthorized"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "403", description = "Forbidden - invalid token provided"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "404", description = "Not Found"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "429", description = "Too many requests"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "500", description = "Internal server error")
+            })
+    public TerminateInstancesResponse deleteInstancesByWorkload(
+            HttpServletRequest request,
+            @Schema(description = "nca id of function owner")
+            @PathVariable("ncaId") @NotBlank String ncaId,
+            @Schema(description = "NVCF workload id")
+            @PathVariable("workloadId") @NotNull UUID workloadId,
+            @Schema(description = "Number of instances to terminate")
+            @RequestParam(name = "InstanceCount") @Positive int instanceCount) {
+
+        Map<String, Object> auditProps = AuditUtils.getAuditPropertiesFromRequest(request);
+        return instanceService.terminateInstances(
+                ncaId, workloadId, null, instanceCount, auditProps);
+    }
+
 
     @DeleteMapping({"/accounts/{ncaId}/deployments/{workloadId}/gpuSpecs/{gpuSpecId}",
             "/accounts/{ncaId}/tasks/{workloadId}/gpuSpecs/{gpuSpecId}",
@@ -559,6 +592,41 @@ public class InstanceController {
         Map<String, Object> auditProps = AuditUtils.getAuditPropertiesFromRequest(request);
 
         return instanceService.instanceDeploymentTermination(ncaId, workloadId,gpuSpecId, auditProps);
+    }
+
+    @DeleteMapping("/accounts/{ncaId}/workloads/{workloadId}/gpuSpecs/{gpuSpecId}/instances")
+    @PreAuthorize("hasAuthority('spot-request') or hasAuthority('instance-request')")
+    @Operation(summary = "Terminate specified number of instances",
+            description = "Terminates specified number of instances for the specified gpu-spec",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "OK"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "400", description = "Bad request"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "401", description = "Unauthorized"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "403", description = "Forbidden - invalid token provided"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "404", description = "Not Found"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "429", description = "Too many requests"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
+                            responseCode = "500", description = "Internal server error")
+            })
+    public TerminateInstancesResponse deleteInstancesByGpuSpec(
+            HttpServletRequest request,
+            @Schema(description = "nca id of function owner")
+            @PathVariable("ncaId") @NotBlank String ncaId,
+            @Schema(description = "NVCF workload id")
+            @PathVariable("workloadId") @NotNull UUID workloadId,
+            @Schema(description = "NVCF GPU Specification id")
+            @PathVariable("gpuSpecId") @NotNull UUID gpuSpecId,
+            @Schema(description = "Number of instances to terminate")
+            @RequestParam(name = "InstanceCount") @Positive int instanceCount) {
+
+        Map<String, Object> auditProps = AuditUtils.getAuditPropertiesFromRequest(request);
+        return instanceService.terminateInstances(
+                ncaId, workloadId, gpuSpecId, instanceCount, auditProps);
     }
 
     @PutMapping

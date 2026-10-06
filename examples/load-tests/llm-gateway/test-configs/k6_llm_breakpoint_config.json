@@ -1,0 +1,27 @@
+{
+  "scenarios": {
+    "breakpoint": {
+      "executor": "ramping-arrival-rate",
+      "startRate": 5,
+      "timeUnit": "1s",
+      "preAllocatedVUs": 50,
+      "maxVUs": 500,
+      "startTime": "0s",
+      "gracefulStop": "30s",
+      "stages": [
+        {
+          "duration": "2m",
+          "target": 25
+        },
+        {
+          "duration": "2m",
+          "target": 50
+        },
+        {
+          "duration": "5m",
+          "target": 50
+        }
+      ]
+    }
+  }
+}

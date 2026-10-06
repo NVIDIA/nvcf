@@ -41,11 +41,13 @@ alias(
 go_test(
     name = "cassandra_test",
     srcs = [
+        "common_test.go",
         "v2_resilience_test.go",
         "v2_test.go",
     ],
     embed = [":cassandra"],
     deps = [
+        "//src/control-plane-services/event-ledger/internal/config",
         "//src/control-plane-services/event-ledger/internal/data_access",
         "//src/control-plane-services/event-ledger/internal/observability/logging",
         "@com_github_gocql_gocql//:gocql",

@@ -37,8 +37,14 @@ spec:
         namespaces:
           from: All
     - name: llm-grpc
-      protocol: TCP
+      protocol: HTTPS
       port: 50071
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: llm-request-router-grpc-tls
       allowedRoutes:
         namespaces:
           from: All

@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvcav1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
@@ -114,4 +115,45 @@ func TestTranslateWorkloadLLMUsesCanonicalPylonArgs(t *testing.T) {
 	}
 	assert.Equal(t, []string{"--backend-connectivity=reverse"}, backendConnectivityArgs)
 	assert.Equal(t, []string{"--initial-input-tps=100"}, initialInputTPSArgs)
+}
+
+func TestMergeBYOOResources(t *testing.T) {
+	base := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
+		},
+	}
+
+	t.Run("nil override returns base unchanged", func(t *testing.T) {
+		got := mergeBYOOResources(base, nil)
+		assert.Equal(t, base, got)
+	})
+
+	t.Run("memory-only override keeps default cpu", func(t *testing.T) {
+		override := &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+		}
+		got := mergeBYOOResources(base, override)
+		assert.Equal(t, "1", got.Requests.Cpu().String())
+		assert.Equal(t, "4Gi", got.Requests.Memory().String())
+		assert.Equal(t, "1", got.Limits.Cpu().String())
+		assert.Equal(t, "4Gi", got.Limits.Memory().String())
+		// base must not be mutated
+		assert.Equal(t, "2Gi", base.Limits.Memory().String())
+	})
+
+	t.Run("request above limit clamps limit up", func(t *testing.T) {
+		override := &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+		}
+		got := mergeBYOOResources(base, override)
+		assert.Equal(t, "4Gi", got.Requests.Memory().String())
+		assert.Equal(t, "4Gi", got.Limits.Memory().String())
+	})
 }

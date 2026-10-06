@@ -32,9 +32,11 @@ import (
 )
 
 const (
-	requestLatencyMetricName  = "nvca_webhook_latency_seconds"
-	requestTotalMetricName    = "nvca_webhook_requests_total"
-	requestInFlightMetricName = "nvca_webhook_requests_in_flight"
+	requestLatencyMetricName        = "nvca_webhook_latency_seconds"
+	requestTotalMetricName          = "nvca_webhook_requests_total"
+	requestInFlightMetricName       = "nvca_webhook_requests_in_flight"
+	readCertificateTotalMetricName  = "nvca_webhook_read_certificate_total"
+	readCertificateErrorsMetricName = "nvca_webhook_read_certificate_errors_total"
 
 	webhookLabel  = "webhook"
 	httpCodeLabel = "code"
@@ -42,9 +44,11 @@ const (
 
 // Metrics holds Prometheus collectors for webhook instrumentation.
 type Metrics struct {
-	RequestLatency  *prometheus.HistogramVec
-	RequestTotal    *prometheus.CounterVec
-	RequestInFlight *prometheus.GaugeVec
+	RequestLatency        *prometheus.HistogramVec
+	RequestTotal          *prometheus.CounterVec
+	RequestInFlight       *prometheus.GaugeVec
+	ReadCertificateTotal  prometheus.Counter
+	ReadCertificateErrors prometheus.Counter
 
 	registerer prometheus.Registerer
 }
@@ -107,6 +111,20 @@ func newMetrics(opts ...Option) *Metrics {
 		Help: "Current number of admission requests being served.",
 	}, []string{webhookLabel})
 
+	// ReadCertificateTotal is a prometheus counter metrics which holds the total
+	// number of certificate reads.
+	m.ReadCertificateTotal = promFactory.NewCounter(prometheus.CounterOpts{
+		Name: readCertificateTotalMetricName,
+		Help: "Total number of certificate reads",
+	})
+
+	// ReadCertificateErrors is a prometheus counter metrics which holds the total
+	// number of errors from certificate read.
+	m.ReadCertificateErrors = promFactory.NewCounter(prometheus.CounterOpts{
+		Name: readCertificateErrorsMetricName,
+		Help: "Total number of certificate read errors",
+	})
+
 	return m
 }
 
@@ -115,6 +133,8 @@ func (m *Metrics) destroy() { //nolint:unused
 	m.registerer.Unregister(m.RequestLatency)
 	m.registerer.Unregister(m.RequestTotal)
 	m.registerer.Unregister(m.RequestInFlight)
+	m.registerer.Unregister(m.ReadCertificateTotal)
+	m.registerer.Unregister(m.ReadCertificateErrors)
 }
 
 // InstrumentedHook wraps an http.Handler with latency, counter, and in-flight metrics.

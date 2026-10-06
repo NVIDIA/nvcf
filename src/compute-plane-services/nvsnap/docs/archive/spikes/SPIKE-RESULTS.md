@@ -16,7 +16,7 @@ Per-file PUT of all 5,418 files to the blobstore:
 
 ## Spike 1 — tar + zstd-3, streaming upload (#74)
 
-```
+```bash
 tar -C <parent> -cf - <dump> | zstd -T0 -3 | tee >(sha256sum) | curl --upload-file -
 ```
 
@@ -33,7 +33,7 @@ Receiver side (separate run, GET + extract on the same node):
 | stage | time |
 |---|---|
 | GET from blobstore (4.2 GiB) | 12 s |
-| `zstd -T0 -d -c | tar -xf -` to disk | **70 s** |
+| `zstd -T0 -d -c \| tar -xf -` to disk | **70 s** |
 | **receiver total** | **82 s** |
 
 **Sender 2.9× faster than baseline. Receiver 0.8× slower than baseline
@@ -42,7 +42,7 @@ single-stream and disk-bound.**
 
 ## Spike 2 — mkfs.erofs + ship + mount (#75)
 
-```
+```text
 mkfs.erofs -zlz4hc,9 <out.erofs> <dump>     # Ubuntu 22.04 = erofs-utils 1.4
 sha256sum <out.erofs>
 curl --upload-file <out.erofs>

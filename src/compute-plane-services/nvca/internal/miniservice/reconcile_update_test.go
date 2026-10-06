@@ -206,7 +206,7 @@ func newUpdateTestReconciler(t *testing.T, c client.Client, scheme *runtime.Sche
 		},
 		Client:                c,
 		Decoder:               serializer.NewCodecFactory(scheme).UniversalDeserializer(),
-		eventRecorder:         record.NewFakeRecorder(20),
+		eventRecorder:         record.NewFakeRecorder(256),
 		tracer:                otel.NewTracer(),
 		chartCache:            chartcache.New(t.TempDir()),
 		newPermissionsChecker: newFakePermissionsChecker,

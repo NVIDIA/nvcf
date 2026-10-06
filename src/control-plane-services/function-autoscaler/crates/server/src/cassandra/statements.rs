@@ -15,14 +15,6 @@
  * limitations under the License.
  */
 
-// Default TTL values — now configurable via CassandraSettings
-
-#[derive(Debug, Clone, Copy)]
-pub enum ActiveFunctionTable {
-    RecentlyInvokedFunctions,
-    RunningFunctionsWithoutInvocations,
-}
-
 // locks table
 pub(crate) fn get_select_locks_stmt(keyspace: &str) -> String {
     format!(
@@ -54,35 +46,6 @@ pub(crate) fn get_select_recently_invoked_functions_in_token_range_stmt(keyspace
         "SELECT function_id, function_version_id, account_id \
          FROM {}.recently_invoked_functions \
          WHERE token(function_id, function_version_id) >= ? AND token(function_id, function_version_id) <= ?;",
-        keyspace
-    )
-}
-
-pub(crate) fn get_delete_recently_invoked_function_stmt(keyspace: &str) -> String {
-    format!(
-        "DELETE FROM {}.recently_invoked_functions \
-         WHERE function_id = ? AND function_version_id = ?;",
-        keyspace
-    )
-}
-
-// running_functions_without_invocations Table
-// account_id is a regular column, not part of PK
-pub(crate) fn get_select_running_functions_without_invocations_in_token_range_stmt(
-    keyspace: &str,
-) -> String {
-    format!(
-        "SELECT function_id, function_version_id, account_id \
-         FROM {}.running_functions_without_invocations \
-         WHERE token(function_id, function_version_id) >= ? AND token(function_id, function_version_id) <= ?;",
-        keyspace
-    )
-}
-
-pub(crate) fn get_delete_running_function_without_invocations_stmt(keyspace: &str) -> String {
-    format!(
-        "DELETE FROM {}.running_functions_without_invocations \
-         WHERE function_id = ? AND function_version_id = ?;",
         keyspace
     )
 }
@@ -133,22 +96,12 @@ pub(crate) fn get_stmt_insert_to_recently_invoked_functions(
     )
 }
 
-// Inserts to the running_functions_without_invocations table with a configurable row TTL (from CassandraSettings.recently_invoked_ttl_seconds, default 1800s).
-// If function discovery logic doesn't report the function as active, the row is pruned automatically after the TTL expires.
-pub(crate) fn get_stmt_insert_to_running_functions_without_invocations(
-    keyspace: &str,
-    ttl_seconds: i32,
-) -> String {
-    format!(
-        "INSERT INTO {}.running_functions_without_invocations (function_id, function_version_id, account_id, last_updated_at) VALUES (?, ?, ?, ?) USING TTL {}",
-        keyspace,
-        ttl_seconds
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::get_stmt_refresh_lock;
+    use super::{
+        get_select_recently_invoked_functions_in_token_range_stmt,
+        get_stmt_insert_to_recently_invoked_functions, get_stmt_refresh_lock,
+    };
 
     #[test]
     fn refresh_lock_renews_every_non_key_column() {
@@ -156,5 +109,15 @@ mod tests {
 
         assert!(statement.contains("SET node_id = ?, acquired_at = ?"));
         assert!(statement.contains("IF node_id = ?"));
+    }
+
+    #[test]
+    fn active_function_statements_preserve_table_and_ttl() {
+        let select = get_select_recently_invoked_functions_in_token_range_stmt("test_keyspace");
+        let insert = get_stmt_insert_to_recently_invoked_functions("test_keyspace", 1800);
+
+        assert!(select.contains("FROM test_keyspace.recently_invoked_functions"));
+        assert!(insert.contains("INTO test_keyspace.recently_invoked_functions"));
+        assert!(insert.ends_with("USING TTL 1800"));
     }
 }

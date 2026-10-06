@@ -193,28 +193,56 @@ func IsPodDegraded(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodDegraded, boo
 	}
 
 	if containersNotReady && podNotReady && podInitialized {
-		degradedContainers := []ContainerDegraded{}
 		isNonRestartableContainerTerminated := pod.Spec.RestartPolicy == corev1.RestartPolicyNever &&
-			slices.IndexFunc(status.ContainerStatuses, func(cs corev1.ContainerStatus) bool {
-				if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
-					degradedContainers = append(degradedContainers, ContainerDegraded{
-						Name:    cs.Name,
-						Reason:  cs.State.Terminated.Reason,
-						Message: cs.State.Terminated.Message,
-					})
-					return true
-				}
-				return false
-			}) != -1
+			slices.ContainsFunc(status.ContainerStatuses, func(cs corev1.ContainerStatus) bool {
+				return cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0
+			})
 		isWDPPassed := !podNotReadyCond.LastTransitionTime.IsZero() && time.Since(podNotReadyCond.LastTransitionTime.Time) > wdp
 		if isNonRestartableContainerTerminated || isWDPPassed {
 			return PodDegraded{
-				Containers: degradedContainers,
+				Containers: notReadyContainers(status.ContainerStatuses),
 				Reason:     containersNotReadyReason,
 			}, true
 		}
 	}
 	return PodDegraded{}, false
+}
+
+// notReadyContainers returns a ContainerDegraded entry for every container that is not
+// Ready, regardless of why: terminated with a non-zero exit code, stuck in a Waiting
+// state (e.g. ImagePullBackOff/CrashLoopBackOff), or otherwise Running but failing
+// readiness checks. This must not be restricted by the pod's RestartPolicy: a
+// RestartPolicy=Always worker stuck in ImagePullBackOff never terminates, so gating
+// container attribution on a Terminated state would leave this list permanently empty
+// for every function (only RestartPolicy=Never tasks can terminate a container).
+func notReadyContainers(statuses []corev1.ContainerStatus) []ContainerDegraded {
+	degraded := []ContainerDegraded{}
+	for _, cs := range statuses {
+		if cs.Ready {
+			continue
+		}
+		switch {
+		case cs.State.Terminated != nil:
+			if cs.State.Terminated.ExitCode == 0 {
+				continue
+			}
+			degraded = append(degraded, ContainerDegraded{
+				Name:    cs.Name,
+				Reason:  cs.State.Terminated.Reason,
+				Message: cs.State.Terminated.Message,
+			})
+		case cs.State.Waiting != nil:
+			degraded = append(degraded, ContainerDegraded{
+				Name:    cs.Name,
+				Reason:  cs.State.Waiting.Reason,
+				Message: cs.State.Waiting.Message,
+			})
+		default:
+			// Running but not Ready, e.g. a failing readiness probe.
+			degraded = append(degraded, ContainerDegraded{Name: cs.Name})
+		}
+	}
+	return degraded
 }
 
 func IsPodInInitialStartup(status corev1.PodStatus) bool {

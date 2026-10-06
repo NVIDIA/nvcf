@@ -510,6 +510,20 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 			FunctionVersionID: vid,
 		}
 		if !opts.DryRun {
+			// Deleting the ICMSRequest CR alone never evicts the workload
+			// (see evictInstances doc comment), so drive the real eviction
+			// ourselves first. A failure here must stop this item rather
+			// than fall through to delete: with --force in particular,
+			// proceeding would strip the finalizer and report success while
+			// the workload (pod or MiniService) may still be running.
+			if err := m.evictInstances(ctx, killed.Namespace, &items[i]); err != nil {
+				killed.Error = fmt.Sprintf("evicting instances: %v", err)
+				result.FailedCount++
+				failures = append(failures, fmt.Errorf("%s/%s (function=%s version=%s cluster=%s): evicting instances: %w",
+					killed.Namespace, killed.Name, killed.FunctionID, killed.FunctionVersionID, clusterLabel(target), err))
+				result.Affected = append(result.Affected, killed)
+				continue
+			}
 			terminating, err := m.deleteICMSRequest(ctx, killed.Namespace, killed.Name, opts.Force, timeout)
 			switch {
 			case err != nil:
@@ -532,6 +546,109 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 		result.Affected = append(result.Affected, killed)
 	}
 	return result, failures, nil
+}
+
+// evictInstances deletes the Pod or MiniService backing each instance an
+// ICMSRequest tracks in status.instances, and marks each one
+// lastReportedStatus: "terminated" on that same CR.
+//
+// NVCA's reconciler only removes the CR's finalizer once
+// AllInstancesTerminatedAndReported is true for that CR's own
+// status.instances; nothing else in NVCA ever makes that true for a
+// CLI-initiated kill, so deleting the CR alone leaves it (and the workload)
+// stuck behind the finalizer forever. Doing both steps here satisfies that
+// precondition, so NVCA's existing reconcile clears the finalizer itself.
+//
+// MiniService deletion needs no further cleanup step: its own controller
+// (internal/miniservice/reconcile.go) tears down the chart on delete.
+func (m *k8sMaintainer) evictInstances(ctx context.Context, namespace string, obj *unstructured.Unstructured) error {
+	instances, found, err := unstructured.NestedMap(obj.Object, "status", "instances")
+	if err != nil {
+		return fmt.Errorf("reading status.instances: %w", err)
+	}
+	if !found || len(instances) == 0 {
+		return nil
+	}
+
+	var errs []error
+	terminated := map[string]string{}
+	for id, raw := range instances {
+		inst, ok := raw.(map[string]interface{})
+		if !ok {
+			errs = append(errs, fmt.Errorf("instance %s: status.instances record is not an object", id))
+			continue
+		}
+		// instanceType is the current field; type is a legacy alias some
+		// older records still carry (see extractInstances in
+		// k8s_inspector.go, which reads both for the same reason).
+		instanceType, _, _ := unstructured.NestedString(inst, "instanceType")
+		if instanceType == "" {
+			instanceType, _, _ = unstructured.NestedString(inst, "type")
+		}
+		var delErr error
+		switch instanceType {
+		case "", "Pod":
+			delErr = m.cs.CoreV1().Pods(namespace).Delete(ctx, id, metav1.DeleteOptions{})
+		case "MiniService":
+			// Cluster-scoped: no .Namespace(...).
+			delErr = m.dc.Resource(miniServiceGVR).Delete(ctx, id, metav1.DeleteOptions{})
+		default:
+			// Unrecognized instance type: do not guess which resource kind
+			// to delete. Reported as a failure (rather than silently
+			// skipped) so the caller does not proceed to delete the CR
+			// while this instance's workload was never touched.
+			errs = append(errs, fmt.Errorf("instance %s: unsupported instance type %q", id, instanceType))
+			continue
+		}
+		if delErr != nil && !apierrors.IsNotFound(delErr) {
+			errs = append(errs, fmt.Errorf("deleting %s instance %s: %w", firstNonEmpty(instanceType, "Pod"), id, delErr))
+			continue
+		}
+		terminated[id] = "terminated"
+	}
+	if len(terminated) == 0 {
+		return errors.Join(errs...)
+	}
+
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest, err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		existing, _, _ := unstructured.NestedMap(latest.Object, "status", "instances")
+		if existing == nil {
+			existing = map[string]interface{}{}
+		}
+		// Merge lastReportedStatus into whatever is currently on the
+		// server, rather than overwriting the whole instance record with
+		// the pre-eviction snapshot: NVCA may have concurrently updated
+		// other instance fields (attributes, timestamps) since obj was read.
+		for id, status := range terminated {
+			cur, ok := existing[id].(map[string]interface{})
+			if !ok {
+				cur = map[string]interface{}{"id": id}
+			}
+			cur["lastReportedStatus"] = status
+			existing[id] = cur
+		}
+		if err := unstructured.SetNestedMap(latest.Object, existing, "status", "instances"); err != nil {
+			return err
+		}
+		latest.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   icmsRequestGVR.Group,
+			Version: icmsRequestGVR.Version,
+			Kind:    "ICMSRequest",
+		})
+		_, err = m.dc.Resource(icmsRequestGVR).Namespace(namespace).UpdateStatus(ctx, latest, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("patching instance status: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // deleteICMSRequest deletes one ICMSRequest and waits up to timeout for it to

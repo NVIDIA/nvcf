@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 {{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmWorker.enabled }}
+{{- include "nvcf-gateway.validateLLMWorkerGrpcTls" . }}
 {{- $backendNamespace := include "nvcf-gateway.llmWorkerBackendNamespace" . }}
-apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: TCPRoute
+{{- $tlsEnabled := .Values.llmRequestRouter.grpcTls.enabled }}
+apiVersion: gateway.networking.k8s.io/{{ if $tlsEnabled }}v1{{ else }}v1alpha2{{ end }}
+kind: {{ if $tlsEnabled }}GRPCRoute{{ else }}TCPRoute{{ end }}
 metadata:
   name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.name }}-grpc
   namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}

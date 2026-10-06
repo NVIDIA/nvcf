@@ -33,7 +33,7 @@ import com.nvidia.boot.registries.service.registry.helm.HelmRegistryService;
 import com.nvidia.boot.registries.service.registry.model.ModelRegistryService;
 import com.nvidia.boot.registries.service.registry.resource.ResourceRegistryService;
 import com.nvidia.nvct.persistence.task.entity.TaskEntity;
-import com.nvidia.nvct.service.account.dto.RegistryCredentialDto;
+import com.nvidia.nvct.service.account.dto.RegistryCredentialDetailsDto;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -194,7 +194,7 @@ public class RegistryArtifactValidationService {
     private void validateCredentialsExist(
             ArtifactTypeEnum artifactType,
             String hostname,
-            List<RegistryCredentialDto> credentials) {
+            List<RegistryCredentialDetailsDto> credentials) {
         if (!registryValidationService.isArtifactValidationEnabled(artifactType, hostname)) {
             return;
         }

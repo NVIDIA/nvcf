@@ -11,8 +11,9 @@ disabled="$(mktemp)"
 external_service_account="$(mktemp)"
 wildcard_certificate="$(mktemp)"
 zero_config="$(mktemp)"
+unaligned_shutdown="$(mktemp)"
 service_monitor_namespace_file="$(mktemp)"
-trap 'rm -f "$rendered" "$disabled" "$external_service_account" "$wildcard_certificate" "$zero_config" "$service_monitor_namespace_file"' EXIT
+trap 'rm -f "$rendered" "$disabled" "$external_service_account" "$wildcard_certificate" "$zero_config" "$unaligned_shutdown" "$service_monitor_namespace_file"' EXIT
 
 helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
@@ -20,7 +21,7 @@ helm template llm-request-router "$chart_dir" \
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.certificate.enabled=true \
   --set llmRequestRouter.certificate.issuerRef.name=test-issuer \
@@ -38,6 +39,19 @@ assert_contains() {
   local message="$2"
   if ! grep -Fq -- "$pattern" "$rendered"; then
     echo "FAIL: ${message}" >&2
+    exit 1
+  fi
+}
+
+assert_occurrences() {
+  local pattern="$1"
+  local expected="$2"
+  local message="$3"
+  local rendered_file="${4:-$rendered}"
+  local actual
+  actual="$(grep -Fc -- "$pattern" "$rendered_file" || true)"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "FAIL: ${message}; rendered ${actual} occurrence(s), expected ${expected}" >&2
     exit 1
   fi
 }
@@ -166,13 +180,13 @@ assert_zero_config_contains() {
   fi
 }
 
-assert_zero_config_contains "--grpc-pylon-dial-addr=llm-request-router-backend-router.nvcf.svc.cluster.local:50071" \
+assert_zero_config_contains "--grpc-pylon-dial-addr=http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071" \
   "gRPC dial address must default to the in-cluster backend-router Service"
 assert_zero_config_contains "--reverse-tunnel-pylon-dial-addr=llm-request-router-backend-router.nvcf.svc.cluster.local:50072" \
   "reverse-tunnel dial address must default to the in-cluster backend-router Service"
 
 # An explicitly configured address must still win over the default.
-assert_contains "--grpc-pylon-dial-addr=llm-router.example.invalid:443" \
+assert_contains "--grpc-pylon-dial-addr=https://llm-router.example.invalid:443" \
   "configured gRPC dial address must override the in-cluster default"
 
 # Each replica terminates QUIC itself and cannot resume another replica's
@@ -193,17 +207,35 @@ assert_contains "command:" \
   "backend router must override the Stargate image entrypoint"
 assert_contains "/usr/local/bin/stargate-k8s-router" \
   "Stargate image must include the Kubernetes router binary"
-assert_contains "--target-service-name=llm-request-router" \
-  "backend router must watch the readiness-respecting request-router Service"
+assert_occurrences "--shutdown-drain-timeout-ms=30000" "2" \
+  "both Stargate and the backend router must use the configured graceful shutdown budget"
+assert_occurrences "terminationGracePeriodSeconds: 35" "2" \
+  "both workloads must leave Kubernetes time beyond their configured drain budget"
+
+helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.shutdown.drainTimeoutMs=30001 \
+  >"$unaligned_shutdown"
+assert_occurrences "terminationGracePeriodSeconds: 36" "2" \
+  "pod grace must round a partial drain second up before adding its exit margin" \
+  "$unaligned_shutdown"
+assert_contains "--target-service-name=llm-request-router-headless" \
+  "backend router must watch the headless Service so warming pods accept pylon connections"
 assert_contains "--advertised-hostname-template={pod_name}.llm-request-router-headless.nvcf.svc.cluster.local" \
   "backend router authority and SNI template must match Stargate"
+assert_contains "--advertised-grpc-port=50071" \
+  "backend router Watch snapshots must advertise the Stargate gRPC port"
+assert_contains "--grpc-pylon-dial-addr=https://llm-router.example.invalid:443" \
+  "backend router Watch snapshots must preserve the Pylon dial endpoint"
 assert_contains "- '*.llm-request-router-headless.nvcf.svc.cluster.local'" \
   "request-router certificate must cover pod-specific backend routing hostnames"
 assert_contains "image: registry.example.invalid/nvcf/stargate:next" \
   "backend router must use its explicitly pinned Stargate image"
 assert_contains "app.kubernetes.io/version: \"next\"" \
   "backend router labels must identify the explicitly pinned image version"
-assert_contains "--grpc-pylon-dial-addr=llm-router.example.invalid:443" \
+assert_contains "--grpc-pylon-dial-addr=https://llm-router.example.invalid:443" \
   "Stargate must advertise the external gRPC endpoint to pylon"
 assert_contains "--reverse-tunnel-pylon-dial-addr=llm-router.example.invalid:8080" \
   "Stargate must advertise the external reverse-tunnel endpoint to pylon"
@@ -219,6 +251,7 @@ helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
   --set llmRequestRouter.image.registry=registry.example.invalid \
   --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=false \
   >"$disabled"
 
@@ -233,7 +266,7 @@ assert_render_fails "llmRequestRouter.kubernetes.advertisedHostnameTemplate must
   --set-string 'llmRequestRouter.kubernetes.advertisedHostnameTemplate=\{pod_name\}\{pod_name\}' \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080
 
 assert_render_fails "llmRequestRouter.transport.reverseTunnelListenAddr port 50073 must match llmRequestRouter.service.reverseTunnelPort 50072 when backend routing is enabled" \
@@ -266,7 +299,7 @@ assert_render_fails "llmRequestRouter.backendRouter.serviceAccount.name is requi
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.backendRouter.serviceAccount.create=false
 
@@ -275,7 +308,7 @@ assert_render_fails "llmRequestRouter.backendRouter.serviceAccount.name is requi
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.backendRouter.serviceAccount.create=false \
   --set llmRequestRouter.rbac.create=false
@@ -286,7 +319,7 @@ helm template llm-request-router "$chart_dir" \
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.backendRouter.serviceAccount.create=false \
   --set llmRequestRouter.backendRouter.serviceAccount.name=external-backend-router \
@@ -298,9 +331,9 @@ if ! grep -Fq -- "serviceAccountName: external-backend-router" "$external_servic
 fi
 assert_backend_router_role_binding_subject "$external_service_account" "external-backend-router"
 
-assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.11.1" \
+assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.18.0" \
   "backend router must inherit the released Stargate image with no router image configuration"
-assert_zero_config_contains 'app.kubernetes.io/version: "0.11.1"' \
+assert_zero_config_contains 'app.kubernetes.io/version: "0.18.0"' \
   "backend router labels must identify the inherited Stargate image version"
 
 helm template llm-request-router "$chart_dir" \
@@ -309,7 +342,7 @@ helm template llm-request-router "$chart_dir" \
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.certificate.enabled=true \
   --set llmRequestRouter.certificate.issuerRef.name=test-issuer \
@@ -326,6 +359,7 @@ fi
 assert_render_fails "llmRequestRouter.certificate.dnsNames is required when certificate.enabled is true" \
   --set llmRequestRouter.image.registry=registry.example.invalid \
   --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=false \
   --set llmRequestRouter.certificate.enabled=true \
   --set llmRequestRouter.certificate.issuerRef.name=test-issuer
@@ -336,7 +370,7 @@ assert_render_fails "llmRequestRouter.kubernetes.advertisedHostnameTemplate must
   --set llmRequestRouter.kubernetes.advertisedHostnameTemplate=llm-request-router.nvcf.svc.cluster.local \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080
 
 assert_render_fails "llmRequestRouter backend routing requires a TLS Secret and cert/key paths when tls.quicInsecure is false" \
@@ -344,7 +378,7 @@ assert_render_fails "llmRequestRouter backend routing requires a TLS Secret and 
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.tls.quicInsecure=false
 
@@ -353,7 +387,7 @@ assert_render_fails "llmRequestRouter backend routing requires tls.secretName (o
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt
 
@@ -362,7 +396,7 @@ assert_render_fails "llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyP
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.tls.secretName=stargate-quic-tls \
   --set llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
@@ -371,6 +405,7 @@ assert_render_fails "llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyP
 assert_render_fails "llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyPath must use the same directory" \
   --set llmRequestRouter.image.registry=registry.example.invalid \
   --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=false \
   --set llmRequestRouter.tls.secretName=stargate-quic-tls \
   --set llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
@@ -381,7 +416,7 @@ assert_render_fails "llmRequestRouter.tls.mountPath must match the directory con
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080 \
   --set llmRequestRouter.tls.secretName=stargate-quic-tls \
   --set llmRequestRouter.tls.mountPath=/var/run/stargate \
@@ -395,7 +430,7 @@ single_replica="$(helm template llm-request-router "$chart_dir" \
   --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=true \
   --set llmRequestRouter.backendRouter.image.tag=next \
-  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=llm-router.example.invalid:443 \
+  --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080)"
 if ! grep -Fq -- "--advertised-hostname-template={pod_name}.llm-request-router-headless.nvcf.svc.cluster.local" <<<"$single_replica"; then
   echo "FAIL: backend routing must retain per-pod authority and SNI for one replica" >&2

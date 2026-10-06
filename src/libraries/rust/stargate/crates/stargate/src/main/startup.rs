@@ -25,6 +25,7 @@ use stargate::discovery::{
 use stargate::proxy::{ProxyRetryConfig, ProxyTransportConfig, QuicTunnelConfig};
 use stargate::runtime::{
     BoundStargateListeners, ReverseTunnelConfig, StargateRuntime, StargateRuntimeConfig,
+    WarmupConfig,
 };
 use stargate_forwarding::{ForwardingResolver, HeadlessDnsResolver, render_hostname};
 use stargate_protocol::BackendConnectivity;
@@ -192,6 +193,11 @@ pub(super) fn runtime_config_from_args(
         metrics_prefix: args.metrics_prefix.clone(),
         forwarding: None,
         authenticator: Arc::new(OpenAuthenticator),
+        warmup: WarmupConfig {
+            warmup_duration: millis(args.readiness_warmup_ms),
+            sample_interval: millis(args.readiness_stabilization_sample_interval_ms),
+            stabilization_window: args.readiness_stabilization_window,
+        },
     })
 }
 
@@ -259,6 +265,14 @@ pub(super) fn make_discovery_with_resolver_and_addresses(
 }
 
 pub(super) fn validate_discovery_args(args: &Args) -> Result<()> {
+    ensure!(
+        args.allow_insecure_remote_watch_http
+            || !args
+                .remote_stargate_url
+                .iter()
+                .any(|url| url.starts_with("http://")),
+        "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
+    );
     ensure!(
         !(args.disable_dns_discovery && args.enable_dev_peer_forwarding),
         "--enable-dev-peer-forwarding cannot be combined with --disable-dns-discovery"

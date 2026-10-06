@@ -62,6 +62,9 @@ const (
 	headerPriority           = "X-Priority"
 	headerInputTokens        = "X-Input-Tokens"
 	headerTokenEstimate      = "X-Token-Estimate"
+	headerStargateErrorCode  = "X-Stargate-Error-Code"
+	overloadErrorCode        = "overloaded_error"
+	statusOverloaded         = 529
 
 	contentTypeJSON = "application/json"
 	contentTypeSSE  = "text/event-stream"
@@ -265,10 +268,9 @@ func (p *StargateProvider) newOutboundRequest(
 		return nil, errors.New("normalized chat request is required")
 	}
 
-	payload := outboundChatRequest(request, stream)
-	body, err := json.Marshal(payload)
+	body, err := outboundChatRequestBody(request, stream)
 	if err != nil {
-		return nil, fmt.Errorf("marshal stargate request: %w", err)
+		return nil, err
 	}
 
 	target := p.baseURL.ResolveReference(&url.URL{Path: stargateChatCompletionsPath})
@@ -353,10 +355,17 @@ func (p *StargateProvider) Proxy(
 	if request.Header != nil {
 		outbound.Header = request.Header.Clone()
 	}
+	// Send a fixed-length body, not chunked, so Stargate can reject a body over
+	// its size limit before it reads the body.
+	if request.ContentLength > 0 {
+		outbound.ContentLength = request.ContentLength
+	}
 	// X-Priority is gateway-owned: a client-supplied value cloned from the
 	// inbound request must never reach Stargate, even when no priority
 	// resolves for this request.
 	outbound.Header.Del(headerPriority)
+	// An inbound X-Routing-Method request header must never reach the router.
+	outbound.Header.Del(headerRoutingMethod)
 
 	if reqCtx != nil {
 		if reqCtx.RequestID != "" {
@@ -401,7 +410,7 @@ func (p *StargateProvider) Proxy(
 
 	p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, nil)
 	return &ProxyResponse{
-		StatusCode: resp.StatusCode,
+		StatusCode: clientStatusCode(resp),
 		Header:     resp.Header.Clone(),
 		Body:       &proxyResponseBody{ReadCloser: resp.Body, cancel: cancel},
 	}, nil
@@ -448,6 +457,106 @@ func outboundChatRequest(
 	return &outbound
 }
 
+// gatewayOwnedChatFields are replaced or removed in the forwarded client body.
+// Keys are matched case-insensitively because encoding/json binds them that way.
+var gatewayOwnedChatFields = []string{"model", "stream", "stream_options", "service_tier", "debug"}
+
+func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, error) {
+	outbound := outboundChatRequest(request, stream)
+	if len(bytes.TrimSpace(request.RawBody)) == 0 {
+		body, err := json.Marshal(outbound)
+		if err != nil {
+			return nil, fmt.Errorf("marshal stargate request: %w", err)
+		}
+		return body, nil
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(request.RawBody, &payload); err != nil {
+		return nil, fmt.Errorf("decode chat request body: %w", err)
+	}
+
+	var clientStreamOptions json.RawMessage
+	for key, value := range payload {
+		for _, owned := range gatewayOwnedChatFields {
+			if strings.EqualFold(key, owned) {
+				if owned == "stream_options" {
+					clientStreamOptions = value
+				}
+				delete(payload, key)
+				break
+			}
+		}
+	}
+
+	streamOptions, err := outboundStreamOptions(clientStreamOptions, outbound.StreamOptions, request, stream)
+	if err != nil {
+		return nil, err
+	}
+	if streamOptions != nil {
+		payload["stream_options"] = streamOptions
+	}
+	if err := setJSONField(payload, "model", outbound.Model); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(payload, "stream", outbound.Stream); err != nil {
+		return nil, err
+	}
+	if err := setJSONField(payload, "service_tier", outbound.ServiceTier); err != nil {
+		return nil, err
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal stargate request: %w", err)
+	}
+	return body, nil
+}
+
+// outboundStreamOptions keeps the client's stream_options object and only adds
+// include_usage when Complete forces upstream streaming.
+func outboundStreamOptions(
+	client json.RawMessage,
+	outbound *models.ChatCompletionStreamOptions,
+	request *NormalizedRequest,
+	stream bool,
+) (json.RawMessage, error) {
+	forcedUsage := stream && !ptr.Deref(request.ChatRequest.Stream) && outbound != nil
+	if !forcedUsage {
+		return client, nil
+	}
+
+	options := map[string]json.RawMessage{}
+	if trimmed := bytes.TrimSpace(client); len(trimmed) > 0 && trimmed[0] == '{' {
+		if err := json.Unmarshal(trimmed, &options); err != nil {
+			return nil, fmt.Errorf("decode stream_options: %w", err)
+		}
+	}
+	for key := range options {
+		if strings.EqualFold(key, "include_usage") {
+			delete(options, key)
+		}
+	}
+	if err := setJSONField(options, "include_usage", outbound.IncludeUsage); err != nil {
+		return nil, err
+	}
+
+	encoded, err := json.Marshal(options)
+	if err != nil {
+		return nil, fmt.Errorf("marshal stream_options: %w", err)
+	}
+	return encoded, nil
+}
+
+func setJSONField(payload map[string]json.RawMessage, key string, value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", key, err)
+	}
+	payload[key] = encoded
+	return nil
+}
+
 func routingTokenEstimate(request *NormalizedRequest) int {
 	if request == nil {
 		return 0
@@ -456,33 +565,51 @@ func routingTokenEstimate(request *NormalizedRequest) int {
 	return max(0, request.InputTokens)
 }
 
+func clientStatusCode(resp *http.Response) int {
+	codes := resp.Header.Values(headerStargateErrorCode)
+	if resp.StatusCode == http.StatusServiceUnavailable && len(codes) == 1 && codes[0] == overloadErrorCode {
+		return statusOverloaded
+	}
+	return resp.StatusCode
+}
+
 func checkHTTPError(resp *http.Response) error {
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		return nil
 	}
 
+	statusCode := clientStatusCode(resp)
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
 	message := string(body)
 
 	var errorResponse models.ErrorResponse
 	if err := json.Unmarshal(body, &errorResponse); err == nil && errorResponse.Error.Message != "" {
+		if statusCode == statusOverloaded && errorResponse.Error.Code == overloadErrorCode {
+			return echo.NewHTTPError(statusCode, errorResponse)
+		}
 		message = errorResponse.Error.Message
 	}
 	if message == "" {
 		message = http.StatusText(resp.StatusCode)
 	}
 
-	return echo.NewHTTPError(resp.StatusCode, message)
+	return echo.NewHTTPError(statusCode, message)
 }
 
 type chatCompletionChoiceAccumulator struct {
-	index        uint32
-	role         string
-	content      strings.Builder
-	reasoning    strings.Builder
-	finishReason string
-	functionCall *models.ChatCompletionFunctionCall
-	toolCalls    map[uint32]*chatCompletionToolCallAccumulator
+	index            uint32
+	role             string
+	content          strings.Builder
+	reasoning        strings.Builder
+	reasoningContent strings.Builder
+	logprobs         *models.ChatCompletionLogprobs
+	finishReason     string
+	functionCall     *models.ChatCompletionFunctionCall
+	toolCalls        map[uint32]*chatCompletionToolCallAccumulator
+	extensions       map[string]json.RawMessage
+	logprobsMembers  map[string]json.RawMessage
+	deltaText        map[string]*strings.Builder
+	deltaValues      map[string]json.RawMessage
 }
 
 type chatCompletionToolCallAccumulator struct {
@@ -499,6 +626,7 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 	}
 	choices := map[uint32]*chatCompletionChoiceAccumulator{}
 	var choiceIndexes []uint32
+	var usageRaw json.RawMessage
 	seenChunk := false
 
 	for event := range events {
@@ -534,7 +662,9 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 			}
 			acc.merge(choice)
 		}
+		mergeUnmodeledChunkMembers(event.Raw, response, choices, &usageRaw)
 	}
+	response.Usage.Raw = usageRaw
 
 	if !seenChunk {
 		return nil, errors.New("stargate stream ended without chat completion chunks")
@@ -553,6 +683,125 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 	return response, nil
 }
 
+// mergeUnmodeledChunkMembers carries upstream members the typed chunk structs
+// do not declare (for example nvext, choices[].stop_reason, or delta.refusal)
+// into the unary response, so unary clients see what streaming clients see.
+// The last upstream usage object is kept whole.
+func mergeUnmodeledChunkMembers(
+	raw json.RawMessage,
+	response *models.ChatCompletionResponse,
+	choices map[uint32]*chatCompletionChoiceAccumulator,
+	usageRaw *json.RawMessage,
+) {
+	if len(raw) == 0 {
+		return
+	}
+	response.Extensions = mergeLatestMembers(
+		response.Extensions,
+		models.UnmodeledMembers(raw, models.ChatCompletionChunk{}),
+	)
+
+	var chunk struct {
+		Choices []json.RawMessage `json:"choices"`
+		Usage   json.RawMessage   `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &chunk); err != nil {
+		return
+	}
+	if usage := bytes.TrimSpace(chunk.Usage); len(usage) > 0 && usage[0] == '{' {
+		*usageRaw = chunk.Usage
+	}
+	for _, rawChoice := range chunk.Choices {
+		var choice struct {
+			Index    uint32          `json:"index"`
+			Delta    json.RawMessage `json:"delta"`
+			Logprobs json.RawMessage `json:"logprobs"`
+		}
+		if err := json.Unmarshal(rawChoice, &choice); err != nil {
+			continue
+		}
+		acc, ok := choices[choice.Index]
+		if !ok {
+			continue
+		}
+		acc.extensions = mergeLatestMembers(
+			acc.extensions,
+			models.UnmodeledMembers(rawChoice, models.ChatCompletionChunkChoice{}),
+		)
+		acc.logprobsMembers = mergeLatestMembers(
+			acc.logprobsMembers,
+			models.UnmodeledMembers(choice.Logprobs, models.ChatCompletionLogprobs{}),
+		)
+		acc.mergeDeltaMembers(models.UnmodeledMembers(choice.Delta, models.ChatCompletionChunkDelta{}))
+	}
+}
+
+// mergeDeltaMembers applies the streaming merge rule to delta members the
+// typed delta does not declare: string values are concatenated in arrival
+// order like content, and any other value replaces the previous one. A null
+// does not erase an earlier value.
+func (a *chatCompletionChoiceAccumulator) mergeDeltaMembers(members map[string]json.RawMessage) {
+	for key, value := range members {
+		trimmed := bytes.TrimSpace(value)
+		if len(trimmed) > 0 && trimmed[0] == '"' {
+			var text string
+			if err := json.Unmarshal(trimmed, &text); err == nil {
+				if a.deltaText == nil {
+					a.deltaText = map[string]*strings.Builder{}
+				}
+				builder, ok := a.deltaText[key]
+				if !ok {
+					builder = &strings.Builder{}
+					a.deltaText[key] = builder
+				}
+				builder.WriteString(text)
+				delete(a.deltaValues, key)
+				continue
+			}
+		}
+		if string(trimmed) == "null" {
+			if _, ok := a.deltaText[key]; ok {
+				continue
+			}
+		}
+		a.deltaValues = mergeLatestMembers(a.deltaValues, map[string]json.RawMessage{key: value})
+		delete(a.deltaText, key)
+	}
+}
+
+func (a *chatCompletionChoiceAccumulator) messageExtensions() map[string]json.RawMessage {
+	if len(a.deltaText) == 0 && len(a.deltaValues) == 0 {
+		return nil
+	}
+	extensions := make(map[string]json.RawMessage, len(a.deltaText)+len(a.deltaValues))
+	for key, value := range a.deltaValues {
+		extensions[key] = value
+	}
+	for key, builder := range a.deltaText {
+		encoded, err := json.Marshal(builder.String())
+		if err != nil {
+			continue
+		}
+		extensions[key] = encoded
+	}
+	return extensions
+}
+
+// mergeLatestMembers keeps the latest value per member, except that a later
+// null does not erase an earlier value.
+func mergeLatestMembers(dst, src map[string]json.RawMessage) map[string]json.RawMessage {
+	for key, value := range src {
+		if _, ok := dst[key]; ok && string(bytes.TrimSpace(value)) == "null" {
+			continue
+		}
+		if dst == nil {
+			dst = make(map[string]json.RawMessage)
+		}
+		dst[key] = value
+	}
+	return dst
+}
+
 func (a *chatCompletionChoiceAccumulator) merge(choice models.ChatCompletionChunkChoice) {
 	if choice.Delta.Role != nil && *choice.Delta.Role != "" {
 		a.role = *choice.Delta.Role
@@ -562,6 +811,16 @@ func (a *chatCompletionChoiceAccumulator) merge(choice models.ChatCompletionChun
 	}
 	if choice.Delta.Reasoning != nil {
 		a.reasoning.WriteString(*choice.Delta.Reasoning)
+	}
+	if choice.Delta.ReasoningContent != nil {
+		a.reasoningContent.WriteString(*choice.Delta.ReasoningContent)
+	}
+	if choice.Logprobs != nil {
+		if a.logprobs == nil {
+			a.logprobs = &models.ChatCompletionLogprobs{}
+		}
+		a.logprobs.Content = append(a.logprobs.Content, choice.Logprobs.Content...)
+		a.logprobs.Refusal = append(a.logprobs.Refusal, choice.Logprobs.Refusal...)
 	}
 	if choice.FinishReason != nil {
 		a.finishReason = *choice.FinishReason
@@ -612,7 +871,8 @@ func (a *chatCompletionChoiceAccumulator) buildChoice() models.ChatCompletionCho
 	}
 
 	message := models.ChatCompletionMessage{
-		Role: role,
+		Role:       role,
+		Extensions: a.messageExtensions(),
 	}
 	if a.content.Len() > 0 {
 		message.Content = ptr.To(a.content.String())
@@ -620,8 +880,14 @@ func (a *chatCompletionChoiceAccumulator) buildChoice() models.ChatCompletionCho
 	if a.reasoning.Len() > 0 {
 		message.Reasoning = ptr.To(a.reasoning.String())
 	}
+	if a.reasoningContent.Len() > 0 {
+		message.ReasoningContent = ptr.To(a.reasoningContent.String())
+	}
 	if a.functionCall != nil {
 		message.FunctionCall = a.functionCall
+	}
+	if a.logprobs != nil {
+		a.logprobs.Extensions = a.logprobsMembers
 	}
 	if len(a.toolCalls) > 0 {
 		message.ToolCalls = ptr.To(a.buildToolCalls())
@@ -630,7 +896,9 @@ func (a *chatCompletionChoiceAccumulator) buildChoice() models.ChatCompletionCho
 	return models.ChatCompletionChoice{
 		Index:        a.index,
 		Message:      message,
+		Logprobs:     a.logprobs,
 		FinishReason: a.finishReason,
+		Extensions:   a.extensions,
 	}
 }
 
@@ -700,7 +968,7 @@ func (p *StargateProvider) readStream(
 			default:
 			}
 			return false
-		case events <- StreamEvent{Chunk: &chunk}:
+		case events <- StreamEvent{Chunk: &chunk, Raw: json.RawMessage(payload)}:
 			return true
 		}
 	}

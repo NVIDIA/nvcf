@@ -124,6 +124,7 @@ func (r *execRunner) run(ctx context.Context, commandText string, options runOpt
 		return Result{}, errors.New("empty command")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	configureCommandCancellation(cmd)
 	cmd.Dir = r.cwd
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

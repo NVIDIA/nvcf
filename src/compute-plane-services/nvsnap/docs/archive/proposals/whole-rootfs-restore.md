@@ -6,7 +6,7 @@ Today the rootfs path captures the entire container rootfs upperdir into
 `tree/rootfs/`, but the restore-side webhook only re-mounts a curated
 set of subpaths defined in `internal/rootfsonly/extract_paths.go`:
 
-```
+```text
 /root/.cache/huggingface
 /root/.triton
 /root/.cache/torch
@@ -19,7 +19,7 @@ Engine-specific caches outside this list are **captured but never
 exposed** on restore. Confirmed empirically 2026-06-06 on
 DeepSeek-V4-Flash + sglang TP=8:
 
-```
+```text
 $ ls tree/rootfs/root/.cache/
 deep_gemm       ← present, not exposed → sglang re-JIT compiles for ~15 min
 flashinfer      ← present, not exposed
@@ -88,7 +88,7 @@ Add to `internal/rootfsonly/capture.go` (or the treecopy.Copier
 exclude list passed in from the orchestrator) a precise EXCLUDE
 glob list applied as the rootfs upperdir is copied into `tree/rootfs/`:
 
-```
+```text
 /tmp                              # tmpfs — ephemeral by spec
 /run                              # kubelet-injected mounts (secrets, sa token)
 /proc                             # synthetic

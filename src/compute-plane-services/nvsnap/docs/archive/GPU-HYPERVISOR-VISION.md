@@ -26,7 +26,7 @@ A GPU hypervisor solves all five.
 
 ## Architecture
 
-```
+```text
 Application (PyTorch, vLLM, TensorFlow, etc.)
     |
     |  (unchanged — no application modifications)
@@ -103,7 +103,7 @@ What we already have for single-GPU, and are building for multi-GPU (#25):
 
 Checkpoint on node A, restore on node B, on a different physical GPU.
 
-```
+```text
 Node A (H100 #3)                    Node B (H100 #7)
 +------------------+                +------------------+
 | vLLM serving     |                | empty GPU        |
@@ -130,6 +130,7 @@ Node A (H100 #3)                    Node B (H100 #7)
 - **Memory capacity mismatch handling**: Source had 80GB H100, destination has 80GB H100. Same capacity — straightforward. But if destination has 40GB A100, the hypervisor could page some tensors to host RAM transparently (see oversubscription below).
 
 **Why this matters**: Kubernetes GPU scheduling today is "pin a pod to a GPU until it dies." Live migration enables:
+
 - **GPU defragmentation**: Consolidate workloads onto fewer nodes, free up GPUs for new jobs
 - **Maintenance without downtime**: Drain a GPU node for driver updates without killing serving workloads
 - **Cost optimization**: Move batch training to spot instances, migrate back to on-demand when preempted
@@ -140,7 +141,7 @@ Node A (H100 #3)                    Node B (H100 #7)
 
 Run workloads that need more GPU memory than physically available by transparently paging cold GPU memory to host RAM.
 
-```
+```text
 Application thinks it has 80GB GPU memory
                 |
 +----------------------------------+
@@ -170,11 +171,13 @@ Application thinks it has 80GB GPU memory
 4. **Transparent to application**: The application calls `cudaMalloc` and gets a pointer. It never knows some of its memory is on host. Performance degrades gracefully (PCIe bandwidth) rather than crashing with OOM.
 
 **Real-world value:**
+
 - Run Llama-3.1-70B (needs ~140GB for inference) on 2xA100-40GB instead of 2xA100-80GB
 - Run fine-tuning that normally needs 8xH100 on 4xH100 with host paging for optimizer states
 - Bin-pack multiple small models onto one GPU (3x 7B models on one 80GB GPU)
 
 **Prior art:**
+
 - **AntMan** (Alibaba, OSDI 2020): GPU memory oversubscription for DL training. Research prototype, not open-sourced for production use.
 - **NVIDIA Unified Memory**: Provides the kernel-level page fault mechanism we'd build on top of. But UVM alone doesn't give you policy control — the hypervisor adds the intelligence.
 
@@ -184,7 +187,7 @@ Application thinks it has 80GB GPU memory
 
 True GPU scheduling: pause a workload mid-execution, run another, resume the first.
 
-```
+```text
 Time →
 
 GPU without hypervisor:
@@ -212,6 +215,7 @@ GPU with hypervisor:
 4. **Cooperative scheduling** (faster): Instead of full checkpoint, ask the application to yield. The hypervisor sends a signal, the application's framework yields after the current batch/request. This is what MPS does, but the hypervisor makes it transparent.
 
 **Why not NVIDIA MPS?**
+
 - MPS gives concurrent execution but no preemption — if one process is hogging the GPU, others wait
 - MPS requires all processes to share one CUDA context — limits isolation
 - MPS has no memory isolation — one process can corrupt another's memory
@@ -249,6 +253,7 @@ Deep GPU metrics without CUPTI, without modifying the application, without NVIDI
 **Output**: Prometheus metrics endpoint, just like NvSnap agent already has. Drop-in for Grafana dashboards.
 
 **Why this matters**: Today, GPU observability requires either:
+
 - `nvidia-smi` (per-device only, no per-process kernel-level stats)
 - CUPTI (requires instrumenting the application, significant overhead)
 - Nsight Systems (profiling tool, not production monitoring)
@@ -261,7 +266,7 @@ The hypervisor gives production-grade, per-process, zero-instrumentation GPU obs
 
 Test GPU failure handling in training and serving frameworks.
 
-```
+```text
 Hypervisor fault injection modes:
   - Drop N% of kernel launches (return cudaSuccess but don't launch)
   - Corrupt random memory regions (bit flips in GPU tensors)
@@ -272,6 +277,7 @@ Hypervisor fault injection modes:
 ```
 
 **Why this matters**: Nobody tests GPU failures systematically. When an H100 has an ECC error mid-training, frameworks typically crash unrecoverably. With fault injection, you can:
+
 - Verify that training frameworks checkpoint correctly before crashes
 - Test that serving frameworks failover cleanly
 - Validate that NCCL timeout handling works in multi-node training
@@ -284,6 +290,7 @@ Hypervisor fault injection modes:
 ### Phase 0: NvSnap Multi-GPU (in progress, #25)
 
 What we're building now:
+
 - `cudaMalloc` / `cudaFree` interception and tracking
 - GPU memory save (D2H) and restore (H2D) with VA preservation
 - NCCL communicator destroy/reconstruct

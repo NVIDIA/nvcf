@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/validate ./cmd/validate
 
-FROM nvcr.io/nvidia/distroless/go:v4.0.3
+FROM nvcr.io/nvidia/distroless/go:v4.1.2
 WORKDIR /app
 ENV GOLDEN_DIR=/golden
 COPY --from=builder /out/validate /usr/local/bin/validate

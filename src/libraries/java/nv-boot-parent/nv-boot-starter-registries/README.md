@@ -31,7 +31,7 @@ Add to your application's `pom.xml`:
 
 ## Configuration
 
-Configure recognized registries under an app-specific path that is provided by 
+Configure recognized registries under an app-specific path that is provided by
 `RegistryConfigPathProvider` (e.g. `nvcf.registries` or `nvct.registries`):
 
 ```yaml
@@ -73,7 +73,7 @@ accounts/tenants that are using the registry.
 
 ## Required App Provided Beans
 
-The starter library relies on the app to register the following bean(s) with Spring application 
+The starter library relies on the app to register the following bean(s) with Spring application
 context to be able to use this library:
 
 | Bean | Type | Description |
@@ -96,7 +96,7 @@ public class RegistryConfig {
 
 ## Auto Configured Beans - Library Provided
 
-Using the app registered bean(s) shown above, the library autoconfigures and registers 
+Using the app registered bean(s) shown above, the library autoconfigures and registers
 following beans with the Spring application context:
 
 | Bean | Type | Description                                                                        |

@@ -7,7 +7,7 @@ on:
   push:
     branches: [main, 'release-**']
   pull_request:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'docs/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -23,8 +23,12 @@ jobs:
   docs:
     name: docs
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-go@v5
         with:
@@ -32,10 +36,37 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: fern/.node-version
 
       - name: Run docs validation
         run: ./tools/ci/check-docs
+
+      - name: Validate Development links
+        run: ./tools/ci/preview-docs --check
+
+      - name: Test changed-doc link selection
+        run: bash tools/scripts/test/test-check-doc-links
+
+      - name: Check links in changed Markdown
+        env:
+          DOCS_LINK_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./tools/ci/check-doc-links "$DOCS_LINK_BASE" "$RUNNER_TEMP/docs-link-report.md"
+
+      - name: Retain link report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-link-report
+          path: ${{ runner.temp }}/docs-link-report.md
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Check latest stack release
+        continue-on-error: true
+        env:
+          DOC_VERSION_SYNC_GITHUB_TOKEN: ${{ github.token }}
+        run: ./tools/ci/check-doc-version-current-release
 
   go-lib-codegen:
     name: go-lib codegen
@@ -98,8 +129,26 @@ jobs:
       - name: Lint and render every chart with a CI values file
         run: ./tools/ci/check-helm-charts
 
+      - name: Test NVCA chart schema and defaults
+        run: |
+          make -C deploy/helm/nvca-operator test-default-ownership
+          make -C deploy/helm/nvca-operator test-resource-quantity-schema
+          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
+
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
+
+      - name: Run observability Helmfile profile tests
+        run: make -C deploy/stacks/observability test
+
+      - name: Test OpenBao auto-unseal retry behavior
+        run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
+
+      - name: Test OpenBao plugin catalog refresh hook
+        run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
+
+      - name: Test ReVal authorization configuration
+        run: bash deploy/helm/helm-reval/tests/auth-config.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
@@ -118,6 +167,83 @@ jobs:
             exit 1
           fi
 
+  go-tools:
+    name: Go tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Run ncp-local-cluster Makefile tests
+        run: |
+          make -C tools/ncp-local-cluster test-cluster-lifecycle-make
+          make -C tools/ncp-local-cluster test-multicluster-make
+          make -C tools/ncp-local-cluster test-gateway-timeout-compatibility
+
+      # The repo tooling modules carry tests that no workflow ran, so a pull
+      # request could break them and still go green. tools/docs-version-sync
+      # reached main with three failing tests that way.
+      - name: Test the checker
+        run: tools/ci/test-check-go-tools
+
+      - name: Build, vet, and test the Go modules under tools/
+        run: tools/ci/check-go-tools
+
+  stack-upgrade-policy:
+    name: stack upgrade policy
+    # Pull requests only. The check weighs the migrations a candidate
+    # introduces against the version bump its commits imply, which needs two
+    # sides: a baseline to measure from, and a proposal to measure. A pull
+    # request has both -- origin/main is the baseline and the branch is the
+    # proposal. A push to main has already merged, so origin/main..HEAD is
+    # empty and there is no proposal left to judge.
+    #
+    # Concretely: a branch that adds
+    # migrations/cassandra/keyspaces/nvct_api/05_drop_health_info.up.sql and
+    # carries only `fix:` commits fails this job, because dropping a column
+    # cannot be skipped past and so needs a major, while `fix` asks for a
+    # patch. Once those same commits are on main, running here would compare
+    # main against itself and find nothing to report.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack:
+          - nvcf-self-managed-stack
+          - nvcf-compute-plane-stack
+          - nvcf-observability-stack
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # The check diffs against the stack's last published release tag, so
+          # it needs the tags and the history behind them.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      # Interpolations go through env, never into the script body: a ref name
+      # expanded inline is a shell injection.
+      - name: Check migrations against the proposed version bump
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          STACK: ${{ matrix.stack }}
+        run: |
+          bump="$(tools/ci/release-bump-type for-branch "origin/${BASE_REF}")"
+          echo "proposed bump: ${bump}"
+          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}"
+
   github-release-helper:
     name: GitHub release helper
     runs-on: ubuntu-latest
@@ -128,6 +254,9 @@ jobs:
 
       - name: Run release helper tests
         run: python3 tools/ci/test-github-release.py
+
+      - name: Test stack pin branch refresh
+        run: bash tools/ci/test-prepare-stack-pin-branch
 
       - name: Check Go toolchain declarations agree
         run: tools/ci/check-go-version

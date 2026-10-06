@@ -16,7 +16,6 @@
  */
 
 use crate::cassandra::distributed_lock::DistributedLockManager;
-use crate::cassandra::statements::ActiveFunctionTable;
 use crate::health::HealthStatus;
 use crate::metrics;
 use crate::models::NodeHealth;
@@ -30,7 +29,7 @@ use crate::{
     timeseries_db::timeseries_db_client::TimeseriesDbClient,
 };
 use anyhow::{Context, Result};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use moka::sync::Cache;
 
 use std::sync::Arc;
@@ -79,6 +78,7 @@ struct GatewayTarget {
 struct GatheredScalingInputs {
     inputs: ScalingInputs,
     gateway_target: Option<GatewayTarget>,
+    latest_utilization_timestamp_seconds: Option<i64>,
 }
 
 pub mod bucket;
@@ -88,6 +88,25 @@ use discovery::get_recently_invoked_functions;
 
 const TIMESERIES_DB_QUERY_STEP: StdDuration = StdDuration::from_secs(60); // 1 minute step for TimeseriesDb queries
 pub const CALCULATE_UTILIZATION_LOCK_PREFIX: &str = "util_lock";
+const ACTIVE_FUNCTION_SET_NAME: &str = "RecentlyInvokedFunctions";
+
+/// Return the previous complete TimeseriesDb step.
+///
+/// The current step may contain only a subset of the latest scrape cycle.
+fn settled_timeseries_end_time(now: DateTime<Utc>) -> DateTime<Utc> {
+    let step_seconds = TIMESERIES_DB_QUERY_STEP.as_secs() as i64;
+    let current_boundary = now.timestamp().div_euclid(step_seconds) * step_seconds;
+    let settled_timestamp = current_boundary.saturating_sub(step_seconds);
+
+    DateTime::from_timestamp(settled_timestamp, 0).unwrap_or(now)
+}
+
+fn scaling_lock_name(bucket_index: usize) -> String {
+    format!(
+        "{}_{}_{}",
+        CALCULATE_UTILIZATION_LOCK_PREFIX, bucket_index, ACTIVE_FUNCTION_SET_NAME
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MetricEnvironments {
@@ -123,11 +142,11 @@ async fn get_function_utilization_history(
     env: &str,
     metric_source: MetricSource,
     ignore_env: bool,
-    lookback_minutes: i64,
+    end_time: DateTime<Utc>,
+    lookback: StdDuration,
     utilization_window_seconds: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let end_time = Utc::now();
-    let start_time = end_time - Duration::minutes(lookback_minutes);
+    let start_time = end_time - Duration::from_std(lookback)?;
     let step = TIMESERIES_DB_QUERY_STEP;
 
     let metric_env = MetricEnvironments::from_config(env);
@@ -239,6 +258,19 @@ async fn get_function_utilization_history(
     Ok(utilization_data)
 }
 
+fn utilization_data_age_milliseconds(
+    utilization_timestamp_seconds: Option<i64>,
+    now_timestamp_milliseconds: i64,
+) -> Option<i64> {
+    let utilization_timestamp_milliseconds = utilization_timestamp_seconds?.saturating_mul(1_000);
+
+    Some(
+        now_timestamp_milliseconds
+            .saturating_sub(utilization_timestamp_milliseconds)
+            .max(0),
+    )
+}
+
 /// Get current instance count for BYOC functions from TimeseriesDb
 /// This queries the same metric used in utilization calculation for consistency
 async fn get_byoc_instance_count(
@@ -247,7 +279,8 @@ async fn get_byoc_instance_count(
     function_version_id: &Uuid,
     env: &str,
     ignore_env: bool,
-) -> Result<usize> {
+    end_time: DateTime<Utc>,
+) -> Result<Option<usize>> {
     let env_suffix = if ignore_env {
         String::new()
     } else {
@@ -262,14 +295,7 @@ async fn get_byoc_instance_count(
         env = env_suffix
     );
 
-    // Align end to the previous fully-settled step boundary (one step back from now).
-    // Reading the bleeding edge can pick up a partial scrape cycle and report a wrong count.
-    const STEP_SECS: i64 = 60;
-    let now_secs = Utc::now().timestamp();
-    let end_secs = (now_secs / STEP_SECS) * STEP_SECS - STEP_SECS;
-    let end_time = chrono::DateTime::from_timestamp(end_secs, 0).unwrap_or_else(Utc::now);
-    let start_time = end_time - chrono::Duration::seconds(STEP_SECS);
-    let step = std::time::Duration::from_secs(STEP_SECS as u64);
+    let start_time = end_time - Duration::from_std(TIMESERIES_DB_QUERY_STEP)?;
 
     tracing::info!(
         "BYOC instance count query for {}:{}: {}",
@@ -279,7 +305,7 @@ async fn get_byoc_instance_count(
     );
 
     let response = timeseries_db_client
-        .query_range(&query, start_time, end_time, step)
+        .query_range(&query, start_time, end_time, TIMESERIES_DB_QUERY_STEP)
         .await?;
 
     tracing::info!(
@@ -316,20 +342,14 @@ async fn get_byoc_instance_count(
                             timestamp,
                             value_str
                         );
-                        return Ok(count.round() as usize);
+                        return Ok(Some(count.round() as usize));
                     }
                 }
             }
         }
     }
 
-    tracing::debug!(
-        "No instance count data from TimeseriesDb for BYOC function {}:{}, returning 0",
-        function_id,
-        function_version_id
-    );
-    // No data found - return 0
-    Ok(0)
+    Ok(None)
 }
 
 async fn llm_gateway_metrics_present(
@@ -470,12 +490,12 @@ async fn get_gateway_target(
 async fn llm_gateway_recently_invoked(
     timeseries_db_client: &TimeseriesDbClient,
     function_id: &Uuid,
-    lookback_seconds: u64,
+    lookback: StdDuration,
     env: &str,
     ignore_env: bool,
 ) -> Result<bool> {
     let end_time = Utc::now();
-    let lookback_seconds = lookback_seconds.max(1);
+    let lookback_seconds = lookback.as_secs().max(1);
     let env_suffix = if ignore_env {
         String::new()
     } else {
@@ -488,7 +508,7 @@ async fn llm_gateway_recently_invoked(
     let response = timeseries_db_client
         .query_range(
             &query,
-            end_time - Duration::minutes(1),
+            end_time,
             end_time,
             TIMESERIES_DB_QUERY_STEP,
         )
@@ -497,10 +517,6 @@ async fn llm_gateway_recently_invoked(
 }
 
 /// Get current worker count for non-BYOC functions from TimeseriesDb.
-/// We use this instead of details.num_workers because the history table is only updated when
-/// discovery adds or moves a function; if a function stays in the same table, num_workers is
-/// never refreshed and scaling would report stale counts (e.g. 2 when TimeseriesDb shows 3).
-///
 /// Returns `Ok(None)` when no worker series matched the query at all. Callers use that as the
 /// signal to try gateway metrics before control-plane metrics. `Ok(Some(0))` would mean
 /// "series exists but count parsed as 0," which we don't
@@ -577,11 +593,11 @@ async fn gather_scaling_inputs(
     ignore_env: bool,
     scaling_settings: &ScalingSettings,
     routing_cache: &MetricRoutingCache,
-) -> Result<GatheredScalingInputs> {
+) -> Result<Option<GatheredScalingInputs>> {
     let key = (*function_id, *function_version_id);
     let cached_source = routing_cache.sources.get(&key);
     let mut metric_source = cached_source.unwrap_or(MetricSource::WorkerThreads);
-    let mut current_instances = 0;
+    let mut current_instances = None;
     let mut gateway_target = None;
     let mut cache_source = cached_source.is_none();
 
@@ -596,7 +612,7 @@ async fn gather_scaling_inputs(
         )
         .await
         {
-            Ok(Some(count)) => current_instances = count,
+            Ok(Some(count)) => current_instances = Some(count),
             Ok(None) if cached_source.is_none() => {
                 metric_source = if llm_gateway_metrics_present(
                     timeseries_db_client,
@@ -614,7 +630,7 @@ async fn gather_scaling_inputs(
             Ok(None) => {}
             Err(error) => {
                 tracing::warn!(
-                    "TimeseriesDb worker count failed for {}:{} (nca_id={}), using 0: {}",
+                    "TimeseriesDb worker count failed for {}:{} (nca_id={}): {}",
                     function_id,
                     function_version_id,
                     nca_id,
@@ -624,6 +640,12 @@ async fn gather_scaling_inputs(
             }
         }
     }
+
+    // Control-plane instance count and utilization must describe the same settled snapshot.
+    // Otherwise a running-instance transition can combine an old count with new utilization
+    // and produce contradictory targets.
+    let control_plane_query_end_time = (metric_source == MetricSource::ControlPlane)
+        .then(|| settled_timeseries_end_time(Utc::now()));
 
     match metric_source {
         MetricSource::WorkerThreads => {}
@@ -636,7 +658,7 @@ async fn gather_scaling_inputs(
                 routing_cache,
             )
             .await?;
-            current_instances = target.total_current_instances;
+            current_instances = Some(target.total_current_instances);
             gateway_target = Some(target);
         }
         MetricSource::ControlPlane => {
@@ -646,23 +668,36 @@ async fn gather_scaling_inputs(
                 function_version_id,
                 env,
                 ignore_env,
+                control_plane_query_end_time.expect("control-plane query end time must be present"),
             )
             .await
             .unwrap_or_else(|error| {
                 tracing::warn!(
-                    "CP instance count failed for {}:{}, using 0: {}",
+                    "CP instance count failed for {}:{}: {}",
                     function_id,
                     function_version_id,
                     error
                 );
-                0
+                None
             });
         }
     }
 
-    if cache_source {
+    // ControlPlane is inferred from metric absence, so a scrape race must be re-probed next cycle.
+    if cache_source && metric_source != MetricSource::ControlPlane {
         routing_cache.sources.insert(key, metric_source);
     }
+
+    let Some(current_instances) = current_instances else {
+        metrics::record_missing_current_instances();
+        tracing::warn!(
+            "Skipping scaling cycle for {}:{} because current instance data is unavailable from {:?}",
+            function_id,
+            function_version_id,
+            metric_source,
+        );
+        return Ok(None);
+    };
 
     let raw_utilization = get_function_utilization_history(
         timeseries_db_client,
@@ -671,17 +706,22 @@ async fn gather_scaling_inputs(
         env,
         metric_source,
         ignore_env,
-        scaling_settings.lookback.as_secs() as i64 / 60,
+        control_plane_query_end_time.unwrap_or_else(Utc::now),
+        scaling_settings.lookback,
         scaling_settings.utilization_window_seconds,
     )
     .await?;
+    let latest_utilization_timestamp_seconds = raw_utilization
+        .iter()
+        .map(|(timestamp, _)| *timestamp)
+        .max();
     let utilization_samples = sanitize_utilization(raw_utilization);
 
     let recently_invoked = if metric_source == MetricSource::LlmGateway {
         llm_gateway_recently_invoked(
             timeseries_db_client,
             function_id,
-            scaling_settings.scale_to_zero_idle_timeout.as_secs(),
+            scaling_settings.scale_to_zero_idle_timeout,
             env,
             ignore_env,
         )
@@ -690,7 +730,7 @@ async fn gather_scaling_inputs(
         !get_recently_invoked_functions(
             timeseries_db_client,
             Some(*function_version_id),
-            scaling_settings.scale_to_zero_idle_timeout.as_secs() as i64 / 60,
+            scaling_settings.scale_to_zero_idle_timeout,
             env,
             ignore_env,
         )
@@ -698,7 +738,7 @@ async fn gather_scaling_inputs(
         .is_empty()
     };
 
-    Ok(GatheredScalingInputs {
+    Ok(Some(GatheredScalingInputs {
         inputs: ScalingInputs {
             metric_source,
             current_instances,
@@ -706,7 +746,8 @@ async fn gather_scaling_inputs(
             recently_invoked,
         },
         gateway_target,
-    })
+        latest_utilization_timestamp_seconds,
+    }))
 }
 
 // Function that creates or removes our node entry in Cassandra based on readiness.
@@ -751,12 +792,10 @@ pub async fn run_autoscaling_logic_p0(
 ) -> Result<()> {
     tracing::info!("Starting P0 autoscaling logic for env: {}", env);
 
-    // Process recently invoked functions (P0 priority)
-    make_scaling_requests_for_table(
+    make_scaling_requests(
         cassandra_service,
         timeseries_db_client,
         nvcf_api_service,
-        ActiveFunctionTable::RecentlyInvokedFunctions,
         scaling_settings,
         env,
         ignore_env,
@@ -770,13 +809,11 @@ pub async fn run_autoscaling_logic_p0(
     Ok(())
 }
 
-// Function that makes scaling requests for a specific table
 #[allow(clippy::too_many_arguments)]
-async fn make_scaling_requests_for_table(
+async fn make_scaling_requests(
     cassandra_service: Arc<CassandraServiceManager>,
     timeseries_db_client: Arc<TimeseriesDbClient>,
     nvcf_api_service: Arc<NvcfApiService>,
-    table: ActiveFunctionTable,
     scaling_settings: Arc<ScalingSettings>,
     env: &str,
     ignore_env: bool,
@@ -799,14 +836,13 @@ async fn make_scaling_requests_for_table(
     for (bucket_index, (start_token, end_token)) in bucket_ranges.iter() {
         let token_range = [*start_token, *end_token];
         let functions_in_bucket = cassandra_service
-            .get_active_functions_with_token_range(&token_range, page_size, table)
+            .get_active_functions_with_token_range(&token_range, page_size)
             .await?;
 
         tracing::info!(
-            "Processing {} functions in bucket {} for table {:?}",
+            "Processing {} recently invoked functions in bucket {}",
             functions_in_bucket.len(),
-            bucket_index,
-            table
+            bucket_index
         );
 
         if functions_in_bucket.is_empty() {
@@ -814,10 +850,7 @@ async fn make_scaling_requests_for_table(
         }
 
         // Try to acquire distributed lock for this bucket
-        let lock_name = format!(
-            "{}_{}_{:?}",
-            CALCULATE_UTILIZATION_LOCK_PREFIX, bucket_index, table
-        );
+        let lock_name = scaling_lock_name(*bucket_index);
         if let Ok(Some(_lock_guard)) = lock_manager
             .try_acquire(
                 lock_name,
@@ -881,6 +914,9 @@ async fn make_scaling_requests_for_table(
                             function.function_id, function.function_version_id
                         )
                     })?;
+                    let Some(gathered) = gathered else {
+                        return Ok(());
+                    };
 
                     if gathered.gateway_target.as_ref().is_some_and(|target| {
                         target.function_version_id != function.function_version_id
@@ -928,6 +964,13 @@ async fn make_scaling_requests_for_table(
                         );
                         return Ok(());
                     };
+
+                    if let Some(data_age_milliseconds) = utilization_data_age_milliseconds(
+                        gathered.latest_utilization_timestamp_seconds,
+                        Utc::now().timestamp_millis(),
+                    ) {
+                        metrics::record_utilization_data_age(data_age_milliseconds);
+                    }
 
                     let desired_instance_count = if let Some(target) = &gathered.gateway_target {
                         gateway_target_desired_instances(
@@ -1049,7 +1092,7 @@ async fn make_scaling_requests_for_table(
 
     if let Some((bucket_index, error)) = first_task_error {
         Err(error.context(format!(
-            "{task_failures} per-function scaling task(s) failed for table {table:?}; first failure was in bucket {bucket_index}"
+            "{task_failures} per-function scaling task(s) failed; first failure was in bucket {bucket_index}"
         )))
     } else {
         Ok(())
@@ -1121,6 +1164,35 @@ mod tests {
     use crate::timeseries_db::TimeseriesDbSettings;
     use uuid::Uuid;
 
+    #[test]
+    fn scaling_lock_name_preserves_existing_coordination_key() {
+        assert_eq!(scaling_lock_name(7), "util_lock_7_RecentlyInvokedFunctions");
+    }
+
+    #[test]
+    fn settled_timeseries_end_time_uses_previous_complete_step() {
+        let now = DateTime::from_timestamp(1_700_000_123, 456_000_000)
+            .expect("valid timestamp");
+
+        assert_eq!(
+            settled_timeseries_end_time(now),
+            DateTime::from_timestamp(1_700_000_040, 0).expect("valid timestamp"),
+        );
+    }
+
+    #[test]
+    fn utilization_data_age_never_goes_negative() {
+        assert_eq!(
+            utilization_data_age_milliseconds(Some(1_700_000_005), 1_700_000_007_500),
+            Some(2_500)
+        );
+        assert_eq!(
+            utilization_data_age_milliseconds(Some(1_700_000_005), 1_700_000_004_000),
+            Some(0)
+        );
+        assert_eq!(utilization_data_age_milliseconds(None, 0), None);
+    }
+
     // ---- Helpers for the metric-acquisition tests ----
 
     /// Tiny retry budget so error paths resolve in milliseconds, not seconds.
@@ -1161,8 +1233,9 @@ mod tests {
         client: &TimeseriesDbClient,
         function_id: &Uuid,
         function_version_id: &Uuid,
-    ) -> GatheredScalingInputs {
-        gather_scaling_inputs(
+    ) -> (GatheredScalingInputs, MetricRoutingCache) {
+        let routing_cache = new_metric_routing_cache();
+        let gathered = gather_scaling_inputs(
             client,
             function_id,
             function_version_id,
@@ -1170,10 +1243,12 @@ mod tests {
             "stg",
             true,
             &ScalingSettings::default(),
-            &new_metric_routing_cache(),
+            &routing_cache,
         )
         .await
         .expect("gather scaling inputs")
+        .expect("current instance data");
+        (gathered, routing_cache)
     }
 
     fn gateway_version(function_version_id: Uuid, current_instances: usize) -> GatewayTarget {
@@ -1274,7 +1349,8 @@ mod tests {
             "stg",
             MetricSource::ControlPlane,
             true,
-            5,
+            Utc::now(),
+            StdDuration::from_secs(5 * 60),
             60,
         )
         .await
@@ -1316,7 +1392,8 @@ mod tests {
                 configured_env,
                 MetricSource::ControlPlane,
                 false,
-                5,
+                Utc::now(),
+                StdDuration::from_secs(5 * 60),
                 60,
             )
             .await
@@ -1388,9 +1465,14 @@ mod tests {
             .create_async()
             .await;
 
-        let gathered = gather_for_test(&ts_client(server.url()), &fid, &idle_version).await;
+        let (gathered, routing_cache) =
+            gather_for_test(&ts_client(server.url()), &fid, &idle_version).await;
 
         assert_eq!(gathered.inputs.metric_source, MetricSource::LlmGateway);
+        assert_eq!(
+            routing_cache.sources.get(&(fid, idle_version)),
+            Some(MetricSource::LlmGateway)
+        );
         assert_eq!(gathered.inputs.current_instances, 2);
         assert_eq!(gathered.inputs.utilization_samples, vec![25.0]);
         assert!(gathered.inputs.recently_invoked);
@@ -1465,7 +1547,8 @@ mod tests {
                 "prod",
                 MetricSource::LlmGateway,
                 false,
-                5,
+                Utc::now(),
+                StdDuration::from_secs(5 * 60),
                 70,
             )
             .await
@@ -1485,15 +1568,22 @@ mod tests {
             .create_async()
             .await;
         assert!(
-            llm_gateway_recently_invoked(&ts_client(server.url()), &fid, 0, "prod", false)
+            llm_gateway_recently_invoked(
+                &ts_client(server.url()),
+                &fid,
+                StdDuration::ZERO,
+                "prod",
+                false,
+            )
                 .await
                 .expect("gateway recent invocation query")
         );
     }
 
-    /// No worker or gateway series -> fall back to control-plane metrics.
+    /// No worker or gateway series -> fall back to control-plane metrics without
+    /// caching that absence-based classification.
     #[tokio::test]
-    async fn test_gather_falls_back_to_control_plane_when_other_sources_are_absent() {
+    async fn test_control_plane_fallback_is_not_cached() {
         let fid = Uuid::new_v4();
         let fvid = Uuid::new_v4();
         let mut server = mockito::Server::new_async().await;
@@ -1539,10 +1629,12 @@ mod tests {
             .create_async()
             .await;
 
-        let gathered = gather_for_test(&ts_client(server.url()), &fid, &fvid).await;
+        let (gathered, routing_cache) =
+            gather_for_test(&ts_client(server.url()), &fid, &fvid).await;
 
         assert_eq!(gathered.inputs.current_instances, 7);
         assert_eq!(gathered.inputs.metric_source, MetricSource::ControlPlane);
+        assert_eq!(routing_cache.sources.get(&(fid, fvid)), None);
     }
 
     #[tokio::test]
@@ -1573,17 +1665,127 @@ mod tests {
         let client = ts_client(server.url());
 
         assert_eq!(
-            get_byoc_instance_count(&client, &fid, &fvid, "prd", false)
+            get_byoc_instance_count(&client, &fid, &fvid, "prd", false, Utc::now())
                 .await
                 .expect("prod cp instance count"),
-            3
+            Some(3)
         );
         assert_eq!(
-            get_byoc_instance_count(&client, &fid, &fvid, "stg", false)
+            get_byoc_instance_count(&client, &fid, &fvid, "stg", false, Utc::now())
                 .await
                 .expect("stage cp instance count"),
-            3
+            Some(3)
         );
+    }
+
+    #[tokio::test]
+    async fn test_byoc_instance_count_distinguishes_missing_from_zero() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+
+        let mut empty_server = mockito::Server::new_async().await;
+        let _empty = empty_server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "nvcf_function_instances_current".into(),
+            ))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+
+        assert_eq!(
+            get_byoc_instance_count(
+                &ts_client(empty_server.url()),
+                &fid,
+                &fvid,
+                "stg",
+                true,
+                Utc::now(),
+            )
+            .await
+            .expect("missing cp instance count"),
+            None
+        );
+
+        let mut zero_server = mockito::Server::new_async().await;
+        let _zero = zero_server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "nvcf_function_instances_current".into(),
+            ))
+            .with_status(200)
+            .with_body(vm_series(
+                &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
+                "0",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+
+        assert_eq!(
+            get_byoc_instance_count(
+                &ts_client(zero_server.url()),
+                &fid,
+                &fvid,
+                "stg",
+                true,
+                Utc::now(),
+            )
+            .await
+            .expect("zero cp instance count"),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gather_scaling_inputs_skips_when_instance_count_is_missing() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+
+        let _worker = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("worker_thread_count_total".into()))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+        let _gateway = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("http_requests_total".into()))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+        let _control_plane = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "nvcf_function_instances_current".into(),
+            ))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let gathered = gather_scaling_inputs(
+            &ts_client(server.url()),
+            &fid,
+            &fvid,
+            "nca",
+            "stg",
+            true,
+            &ScalingSettings::default(),
+            &new_metric_routing_cache(),
+        )
+        .await
+        .expect("gather scaling inputs");
+
+        assert!(gathered.is_none());
     }
 
     /// Happy path: worker count, utilization, and recent invocations are gathered
@@ -1621,7 +1823,12 @@ mod tests {
             &routing_cache,
         )
         .await
-        .expect("gather inputs");
+        .expect("gather inputs")
+        .expect("current instance data");
+        assert_eq!(
+            gathered.latest_utilization_timestamp_seconds,
+            Some(1_700_000_000)
+        );
         let inputs = gathered.inputs;
 
         assert_eq!(inputs.current_instances, 5);
@@ -1709,6 +1916,18 @@ mod tests {
 
         // Should not skip when desired count differs
         assert!(!should_skip_scaling_request(id, vid, Some(&cached), 3));
+    }
+
+    #[test]
+    fn test_should_retry_scaling_request_after_failure() {
+        let id = Uuid::new_v4();
+        let vid = Uuid::new_v4();
+        let cached = FunctionCachedState {
+            last_predicted_desired_instance_count: None,
+            last_predicted_error_code: Some(NvcfApiError::UnknownError.to_string()),
+        };
+
+        assert!(!should_skip_scaling_request(id, vid, Some(&cached), 5));
     }
 
     #[test]

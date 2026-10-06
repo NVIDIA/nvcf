@@ -29,6 +29,7 @@ const DEFAULT_SERIAL_CONSISTENCY: &str = "LOCAL_SERIAL";
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_millis(10000); // 10 seconds
 const DEFAULT_MAX_RETRY_COUNT: u32 = 3;
 const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_millis(1000); // 1 second
+
 #[serde_as]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]

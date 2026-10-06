@@ -24,6 +24,212 @@ tolerations:
 {{- end -}}
 {{- end -}}
 
+{{/*
+highAvailability helpers.
+
+Maps highAvailability.mode onto chart values (replicaCount, affinity, topology
+spread, PDB, update strategy). Sizing and placement are derived from mode for
+every in-scope release; there is no per-component HA subtree.
+
+mode:
+  none       keep chart/env defaults.
+  preferred  HA sizing; soft (ScheduleAnyway) anti-affinity and zone spread.
+  enforced   HA sizing; hard (DoNotSchedule) anti-affinity and zone spread.
+
+global.affinity / global.topologySpreadConstraints override placement per class
+-> "all" -> mode default. An explicit {} / [] suppresses the generated policy
+for that class. Component values remain the final escape hatch.
+
+Replica-safe Deployments get 2 replicas, anti-affinity, zone spread, and a PDB
+with minAvailable 1. invocation-service and grpc-proxy stay single-replica for
+now (placement still applied, no-op at 1 replica, no PDB).
+
+Quorum services (Cassandra, NATS, OpenBao) get 3 replicas, anti-affinity, zone
+spread, and a PDB tolerating one disruption at any replica count.
+
+Charts must expose the matching value hooks.
+*/}}
+{{- define "nvcf.ha.replicaSafeReplicaCount" -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}2{{- end -}}
+{{- end -}}
+
+{{/* Deployment rollout strategy for the scaled replica-safe services. A PDB only
+     protects evictions (drains), not rolling updates; maxUnavailable 0 / maxSurge 1
+     keeps the current Ready count during a rollout. Empty under mode none. */}}
+{{- define "nvcf.ha.updateStrategy" -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
+type: RollingUpdate
+rollingUpdate:
+  maxUnavailable: 0
+  maxSurge: 1
+{{- end -}}
+{{- end -}}
+
+{{/* PDB body (enabled + minAvailable), empty under mode none. */}}
+{{- define "nvcf.ha._podDisruptionBudget" -}}
+{{- if ne .haMode "none" -}}
+enabled: true
+minAvailable: {{ .minAvailable }}
+{{- end -}}
+{{- end -}}
+
+{{/* PDB for a replica-safe Deployment: minAvailable 1. */}}
+{{- define "nvcf.ha.replicaSafePodDisruptionBudget" -}}
+{{- include "nvcf.ha._podDisruptionBudget" (dict "haMode" (dig "highAvailability" "mode" "none" . | toString) "minAvailable" 1) -}}
+{{- end -}}
+
+{{/* PDB for a quorum StatefulSet: maxUnavailable 1, so a drain removes at most one
+     member whatever the replica count. A fixed minAvailable would allow more
+     evictions as replicas grow above 3. */}}
+{{- define "nvcf.ha.quorumPodDisruptionBudget" -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
+enabled: true
+maxUnavailable: 1
+{{- end -}}
+{{- end -}}
+
+{{/* PDB for the NATS quorum, in the NATS chart's merge.spec shape: maxUnavailable 1.
+     The upstream PDB already sets maxUnavailable, and merging in minAvailable would
+     produce a spec the API server rejects. */}}
+{{- define "nvcf.ha.natsQuorumPodDisruptionBudget" -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
+enabled: true
+merge:
+  spec:
+    maxUnavailable: 1
+{{- end -}}
+{{- end -}}
+
+{{/* JetStream stream replicas for the stream creators (nvcf-api, invocation, icms),
+     derived from the NATS server count and capped at 3 as NATS recommends. Empty
+     for a single server so the services keep their own default. Override per
+     service with api.env.NVCF_NATS_REPLICAS or invocation.env.NATS_PROPERTIES__REPLICAS. */}}
+{{- define "nvcf.natsStreamReplicas" -}}
+{{- $servers := 1 -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
+{{- $servers = max 3 (dig "nats" "config" "cluster" "replicas" 3 . | int) -}}
+{{- else if dig "nats" "config" "cluster" "enabled" false . -}}
+{{- $servers = dig "nats" "config" "cluster" "replicas" 1 . | int -}}
+{{- end -}}
+{{- if gt $servers 1 }}{{ min $servers 3 }}{{ end -}}
+{{- end -}}
+
+{{/* Hostname anti-affinity body: hard under enforced, soft under preferred. */}}
+{{- define "nvcf.ha._generatedPodAntiAffinity" -}}
+{{- if eq .haMode "enforced" -}}
+requiredDuringSchedulingIgnoredDuringExecution:
+  - labelSelector:
+      matchExpressions:
+        - key: app.kubernetes.io/instance
+          operator: In
+          values:
+            - {{ .instance | quote }}
+        {{- range $key, $value := .matchLabels }}
+        - key: {{ $key }}
+          operator: In
+          values:
+            - {{ $value | quote }}
+        {{- end }}
+    topologyKey: kubernetes.io/hostname
+{{- else if eq .haMode "preferred" -}}
+preferredDuringSchedulingIgnoredDuringExecution:
+  - weight: 100
+    podAffinityTerm:
+      labelSelector:
+        matchExpressions:
+          - key: app.kubernetes.io/instance
+            operator: In
+            values:
+              - {{ .instance | quote }}
+          {{- range $key, $value := .matchLabels }}
+          - key: {{ $key }}
+            operator: In
+            values:
+              - {{ $value | quote }}
+          {{- end }}
+      topologyKey: kubernetes.io/hostname
+{{- end -}}
+{{- end -}}
+
+{{/* Zone spread items: DoNotSchedule under enforced, ScheduleAnyway under preferred. */}}
+{{- define "nvcf.ha._generatedTopologySpread" -}}
+{{- if or (eq .haMode "preferred") (eq .haMode "enforced") -}}
+- maxSkew: 1
+  topologyKey: topology.kubernetes.io/zone
+  whenUnsatisfiable: {{ if eq .haMode "enforced" }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
+  labelSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .instance | quote }}
+      {{- range $key, $value := .matchLabels }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/* Resolves a workload's affinity content: global.affinity.<class> ->
+     global.affinity.all -> mode default. Emits content only (no affinity: key),
+     so callers control nesting (map or string form). An operator override is
+     used as-is; the generated default emits only podAntiAffinity. */}}
+{{- define "nvcf.ha.podAntiAffinity" -}}
+{{- $byClass := dig "global" "affinity" dict .Values -}}
+{{- if hasKey $byClass .class -}}
+{{- with index $byClass .class -}}{{- toYaml . -}}{{- end -}}
+{{- else if hasKey $byClass "all" -}}
+{{- with index $byClass "all" -}}{{- toYaml . -}}{{- end -}}
+{{- else -}}
+{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
+{{- with include "nvcf.ha._generatedPodAntiAffinity" (dict "haMode" $haMode "instance" .instance "matchLabels" (dig "matchLabels" dict .)) }}
+podAntiAffinity:
+{{- . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Resolves zone spread items: global.topologySpreadConstraints.<class> -> all
+     -> mode default. Emits list items only, same nesting contract as above. */}}
+{{- define "nvcf.ha.topologySpreadItems" -}}
+{{- $byClass := dig "global" "topologySpreadConstraints" dict .Values -}}
+{{- if hasKey $byClass .class -}}
+{{- with index $byClass .class -}}{{- toYaml . -}}{{- end -}}
+{{- else if hasKey $byClass "all" -}}
+{{- with index $byClass "all" -}}{{- toYaml . -}}{{- end -}}
+{{- else -}}
+{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
+{{- include "nvcf.ha._generatedTopologySpread" (dict "haMode" $haMode "instance" .instance "matchLabels" (dig "matchLabels" dict .)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* affinity: block wrapper around nvcf.ha.podAntiAffinity. */}}
+{{- define "nvcf.ha.affinity" -}}
+{{- with include "nvcf.ha.podAntiAffinity" . -}}
+affinity:
+{{- . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/* topologySpreadConstraints: block wrapper around nvcf.ha.topologySpreadItems. */}}
+{{- define "nvcf.ha.topologySpreadConstraints" -}}
+{{- with include "nvcf.ha.topologySpreadItems" . -}}
+topologySpreadConstraints:
+{{- . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString }}
+{{- if not (kindIs "string" $haMode) }}
+{{- fail "highAvailability.mode must be a string" }}
+{{- end }}
+{{- if not (has $haMode (list "none" "preferred" "enforced")) }}
+{{- fail (printf "highAvailability.mode must be none, preferred, or enforced, got %q" $haMode) }}
+{{- end }}
+{{- $haEnabled := or (eq $haMode "preferred") (eq $haMode "enforced") }}
+{{- range $key := list "affinity" "topologySpreadConstraints" }}
+{{- $byClass := dig "global" $key dict $.Values }}
+{{- if not (kindIs "map" $byClass) }}
+{{- fail (printf "global.%s must be a map keyed by workload class (or \"all\")" $key) }}
+{{- end }}
+{{- end }}
+
 cassandra:
   global:
     {{- if .Values.global.imagePullSecrets }}
@@ -36,12 +242,19 @@ cassandra:
     defaultStorageClass: {{ .Values.global.storageClass }}
     {{- end }}
 
-  replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
+  replicaCount: {{ if $haEnabled }}{{ max 3 (dig "cassandra" "replicaCount" 3 .Values | int) }}{{ else }}{{ dig "cassandra" "replicaCount" 3 .Values }}{{ end }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.quorumPodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
@@ -49,6 +262,14 @@ cassandra:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "cassandra" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "cassandra" "class" "cassandra") }}
+  affinity:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "cassandra" "class" "cassandra") }}
+  topologySpreadConstraints:
+    {{- . | nindent 4 }}
   {{- end }}
   persistence:
     size: {{ .Values.global.storageSize | default "10Gi" }}
@@ -83,10 +304,9 @@ cassandra:
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
-# `cert-manager` key. `image.repository` is a full-path override that wins
-# over the upstream `imageRegistry`/`imageNamespace`/`name` construction,
-# so each component pulls from the nvcr.io mirror (regsync-configs !140)
-# instead of quay.io/jetstack.
+# `cert-manager` key. The controller components use the nvcr.io mirror. The
+# ACME solver keeps the chart's quay.io/jetstack default unless an operator
+# supplies certManager.acmesolver.image for a private mirror.
 cert-manager:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -101,9 +321,26 @@ cert-manager:
   cainjector:
     image:
       repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-cainjector
+  {{- $acmeSolverRepository := dig "certManager" "acmesolver" "image" "repository" "" .Values }}
+  {{- $acmeSolverTag := dig "certManager" "acmesolver" "image" "tag" "" .Values }}
+  {{- $acmeSolverDigest := dig "certManager" "acmesolver" "image" "digest" "" .Values }}
+  {{- $acmeSolverPullPolicy := dig "certManager" "acmesolver" "image" "pullPolicy" "" .Values }}
+  {{- if or $acmeSolverRepository $acmeSolverTag $acmeSolverDigest $acmeSolverPullPolicy }}
   acmesolver:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-acmesolver
+      {{- with $acmeSolverRepository }}
+      repository: {{ . }}
+      {{- end }}
+      {{- with $acmeSolverTag }}
+      tag: {{ . | quote }}
+      {{- end }}
+      {{- with $acmeSolverDigest }}
+      digest: {{ . | quote }}
+      {{- end }}
+      {{- with $acmeSolverPullPolicy }}
+      pullPolicy: {{ . }}
+      {{- end }}
+  {{- end }}
   startupapicheck:
     image:
       repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
@@ -155,7 +392,7 @@ openbao:
     {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
     {{- . | nindent 4 }}
     {{- end }}
-    replicas: {{ .Values.openbao.injector.replicas }}
+    replicas: {{ if $haEnabled }}{{ max 2 (.Values.openbao.injector.replicas | int) }}{{ else }}{{ .Values.openbao.injector.replicas }}{{ end }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
     {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
@@ -176,6 +413,17 @@ openbao:
     podDisruptionBudget:
       minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
+    {{- /* The agent injector shares the release's instance label; select server Pods only. */}}
+    {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "openbao-server" "class" "vault" "matchLabels" (dict "component" "server")) }}
+    # String form: OpenBao tpl-renders server.affinity.
+    affinity: |
+      {{- . | nindent 6 }}
+    {{- end }}
+    {{- with include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "openbao-server" "class" "vault" "matchLabels" (dict "component" "server")) }}
+    # String form: OpenBao tpl-renders server.topologySpreadConstraints.
+    topologySpreadConstraints: |
+      {{- . | nindent 6 }}
+    {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
@@ -193,12 +441,24 @@ openbao:
       size: {{ .Values.global.storageSize | default "10Gi" }}
 
     ha:
-      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      {{- if $haEnabled }}
+      enabled: true
+      replicas: {{ max 3 (dig "openbao" "server" "ha" "replicas" 3 .Values | int) }}
+      {{- end }}
+      {{- $openbaoDisruptionBudget := dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      {{- if $haEnabled }}
+      {{/* HA always protects the Raft peers: at most 1 disrupted at a time unless
+           configured otherwise. base.yaml disables the budget for single-node
+           installs, so the configured enabled flag is not honoured here. */}}
+      {{- $openbaoDisruptionBudget = dict "enabled" true "maxUnavailable" (dig "maxUnavailable" 1 $openbaoDisruptionBudget) }}
+      {{- end }}
+      {{- with $openbaoDisruptionBudget }}
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 
 nats:
+  {{- $natsServerTags := dig "nats" "config" "merge" "server_tags" (list "dc:ncp" "aws-region:ncp") .Values }}
   {{- if .Values.global.imagePullSecrets }}
   global:
     image:
@@ -211,17 +471,23 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
-      tag: 2.11.17-alpine3.22
-  # The config reloader is not republished under the public nvidia/nvcf
-  # catalog, so it defaults to its upstream Docker Hub source and a
-  # public-catalog install needs no override. If you mirror the image into
-  # your own registry, set registry and repository below in your environment
-  # file instead of editing this template.
+      tag: 2.14.6-alpine3.22
+  {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
+  {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
+  {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
+  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
   reloader:
     image:
-      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default "docker.io" }}
-      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default "natsio/nats-server-config-reloader" }}
-      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.23.0" | quote }}
+      {{- with $natsReloaderRegistry }}
+      registry: {{ . }}
+      {{- end }}
+      {{- with $natsReloaderRepository }}
+      repository: {{ . }}
+      {{- end }}
+      {{- with $natsReloaderTag }}
+      tag: {{ . | quote }}
+      {{- end }}
+  {{- end }}
   natsBox:
     container:
       image:
@@ -234,7 +500,11 @@ nats:
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
-  {{- if or $natsNs $natsTol }}
+  {{- /* nats-box shares the release's instance label; select server Pods only. */}}
+  {{- $natsServers := dict "app.kubernetes.io/component" "nats" -}}
+  {{- $natsAffinity := include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
+  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
+  {{- if or $natsNs $natsTol $natsAffinity $natsTopoSpread }}
   podTemplate:
     merge:
       spec:
@@ -244,23 +514,75 @@ nats:
         {{- with $natsTol }}
         {{- . | nindent 8 }}
         {{- end }}
+        {{- with $natsAffinity }}
+        affinity:
+          {{- . | nindent 10 }}
+        {{- end }}
+        {{- with $natsTopoSpread }}
+        topologySpreadConstraints:
+          {{- . | nindent 10 }}
+        {{- end }}
   {{- end }}
 
-  {{- if .Values.global.storageClass }}
+  # One merged config: block -- a second config: key under nats: would be
+  # silently collapsed. Surfaces server TLS for split-plane workers that reach
+  # NATS over an L4-passthrough LB: TLS must terminate at the server (an LB
+  # can't -- the INFO-first client deadlocks a terminated handshake), and
+  # allow_non_tls keeps in-cluster plaintext clients on :4222. Emitted only when
+  # set, so an env file that sets neither renders identical.
+  {{- $natsTls := dig "nats" "config" "nats" "tls" dict .Values }}
+  {{- $allowNonTls := dig "nats" "config" "merge" "allow_non_tls" nil .Values }}
   config:
+    merge:
+      server_tags:
+        {{- toYaml $natsServerTags | nindent 8 }}
+      {{- if kindIs "bool" $allowNonTls }}
+      allow_non_tls: {{ $allowNonTls }}
+      {{- end }}
+    {{- if $haEnabled }}
+    cluster:
+      enabled: true
+      replicas: {{ max 3 (dig "nats" "config" "cluster" "replicas" 3 .Values | int) }}
+    {{- end }}
+    {{- if .Values.global.storageClass }}
     jetstream:
       fileStore:
         pvc:
           storageClassName: {{ .Values.global.storageClass }}
-  {{- end }}
+    {{- end }}
+    {{- with $natsTls }}
+    nats:
+      tls:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
 
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.natsQuorumPodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- end }}
 
 apikeys:
   fullnameOverride: api-keys
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "apikeys" "replicaCount" 1 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "api-keys" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "api-keys" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -274,14 +596,47 @@ apikeys:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "apikeys" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
   {{- with dig "apikeys" "startupProbe" dict .Values }}
   startupProbe:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with dig "apikeys" "env" dict .Values }}
+  env:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+{{- /* The nats-auth-callout chart reads flat, top-level values, so its HA keys are
+       emitted at the top level for that release only. */}}
+{{- if eq .Release.Name "nats-auth-callout-service" }}
+{{- if $haEnabled }}
+replicaCount: {{ max 2 (dig "natsAuthCalloutService" "replicaCount" 1 .Values | int) }}
+{{- end }}
+{{- with include "nvcf.ha.updateStrategy" .Values }}
+strategy:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+podDisruptionBudget:
+  {{- . | nindent 2 }}
+{{- end }}
+{{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
+{{- . | nindent 0 }}
+{{- end }}
+{{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
+{{- . | nindent 0 }}
+{{- end }}
+{{- end }}
 
 natsAuthCalloutService:
   {{- if .Values.global.imagePullSecrets }}
@@ -293,28 +648,50 @@ natsAuthCalloutService:
     repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
 
 {{- $workerEndpoints := dig "global" "workerEndpoints" dict .Values }}
+{{- /* Worker sidecar registry host/repository, shared by the NVCF and NVCT env
+       below. Unset inherits global.image; global.sidecars.* sources the worker
+       sidecars from a separate registry/org while control-plane images stay put. */}}
+{{- $sidecarsHost := dig "global" "sidecars" "hostname" "" .Values | default .Values.global.image.registry }}
+{{- $sidecarsRepo := dig "global" "sidecars" "repository" "" .Values | default .Values.global.image.repository }}
 {{- $nvcfWorkerServiceURL := dig "nvcfServiceURL" "" $workerEndpoints }}
 {{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
 {{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default "nats://nats.nats-system.svc.cluster.local:4222" }}
 {{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
+{{- /* In-cluster ESS base URL for the API's/NVCT's own ESS calls. Defaults to
+       the worker-advertised ESS URL so existing installs are unchanged; set it
+       to the in-cluster ess-api Service in split-plane deployments so control-
+       plane ESS calls do not hairpin out to the public edge. */}}
+{{- $essApiBaseURL := dig "api" "essBaseURL" "" .Values | default $essWorkerBaseURL }}
+{{- $essNvctApiBaseURL := dig "nvctApi" "essBaseURL" "" .Values | default $essWorkerBaseURL }}
 {{- $nvctWorkerServiceURL := dig "nvctServiceURL" "" $workerEndpoints }}
 {{- $nvctWorkerGrpcServiceURL := dig "nvctGrpcServiceURL" "" $workerEndpoints }}
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
-{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
-{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
+{{- $backendRouterGrpcPort := dig "addons" "llm" "requestRouter" "backendRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
-{{- if $llmEnabled }}
-{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
+{{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
+{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- if $backendRouterEnabled }}
+{{- $llmRequestRouterDefaultAddress = printf "llm-request-router-backend-router.nvcf.svc.cluster.local:%v" $backendRouterGrpcPort }}
+{{- end }}
+{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
+{{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
+{{- if hasPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- else if hasPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- end }}
+{{- if $llmEnabled }}
+{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
 {{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
-{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAddress }}
-{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAddress }}
-{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAddress | trimPrefix "[" | trimSuffix "]" }}
+{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAuthority }}
+{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAuthority | trimPrefix "[" | trimSuffix "]" }}
 {{- $llmRequestRouterIPv6Valid := true }}
 {{- $llmRequestRouterIPv6CompressionCount := len (regexFindAll `::` $llmRequestRouterIPv6Host -1) }}
 {{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
@@ -358,15 +735,97 @@ natsAuthCalloutService:
 {{- if not $llmRequestRouterWorkerAddressValid }}
 {{- fail $llmRequestRouterWorkerAddressError }}
 {{- end }}
-{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAddress | atoi }}
+{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAuthority | atoi }}
 {{- if or (lt $llmRequestRouterWorkerPort 1) (gt $llmRequestRouterWorkerPort 65535) }}
 {{- fail $llmRequestRouterWorkerAddressError }}
 {{- end }}
 {{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
+{{- $configuredApiEnv := dig "api" "env" dict .Values }}
+{{- if not (kindIs "map" $configuredApiEnv) }}
+{{- fail "api.env must be a map" }}
+{{- end }}
+{{- $renderedApiEnv := deepCopy $configuredApiEnv }}
+{{- $legacyPylonEnvKey := "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" }}
+{{- $legacyPylonImageConfigured := hasKey $renderedApiEnv $legacyPylonEnvKey }}
+{{- $legacyPylonImage := "" }}
+{{- if $legacyPylonImageConfigured }}
+{{- $legacyPylonImage = index $renderedApiEnv $legacyPylonEnvKey }}
+{{- if not (kindIs "string" $legacyPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a string" }}
+{{- end }}
+{{- if eq (trim $legacyPylonImage) "" }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a non-empty string" }}
+{{- end }}
+{{- $legacyPylonImage = trim $legacyPylonImage }}
+{{- $_ := unset $renderedApiEnv $legacyPylonEnvKey }}
+{{- end }}
+{{- $configuredApiRemoteConfigData := dig "api" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredApiRemoteConfigData) }}
+{{- fail "api.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $apiRemoteConfigData := deepCopy $configuredApiRemoteConfigData }}
+{{- $configuredNvcfRemoteConfig := dict }}
+{{- if hasKey $apiRemoteConfigData "nvcf" }}
+{{- $configuredNvcfRemoteConfig = index $apiRemoteConfigData "nvcf" }}
+{{- if not (kindIs "map" $configuredNvcfRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf must be a map" }}
+{{- end }}
+{{- end }}
+{{- $configuredSidecarsRemoteConfig := dict }}
+{{- if hasKey $configuredNvcfRemoteConfig "sidecars" }}
+{{- $configuredSidecarsRemoteConfig = index $configuredNvcfRemoteConfig "sidecars" }}
+{{- if not (kindIs "map" $configuredSidecarsRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars must be a map" }}
+{{- end }}
+{{- end }}
+{{- $pylonRemoteConfigKey := "llm-router-client-image" }}
+{{- $configuredPylonImagePresent := hasKey $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- $configuredPylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $configuredPylonImage = index $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- if not (kindIs "string" $configuredPylonImage) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a string" }}
+{{- end }}
+{{- if eq (trim $configuredPylonImage) "" }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a non-empty string" }}
+{{- end }}
+{{- $configuredPylonImage = trim $configuredPylonImage }}
+{{- $_ := set $configuredSidecarsRemoteConfig $pylonRemoteConfigKey $configuredPylonImage }}
+{{- end }}
+{{- if and $legacyPylonImageConfigured $configuredPylonImagePresent (ne $legacyPylonImage $configuredPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE is deprecated and conflicts with api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image" }}
+{{- end }}
+{{- $effectivePylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $effectivePylonImage = $configuredPylonImage }}
+{{- else if $legacyPylonImageConfigured }}
+{{- $effectivePylonImage = $legacyPylonImage }}
+{{- else if $llmEnabled }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.18.0" $sidecarsHost $sidecarsRepo }}
+{{- end }}
+{{- $stackApiRemoteConfigData := dict }}
+{{- $stackNvcfRemoteConfig := dict }}
+{{- if or $llmEnabled $legacyPylonImageConfigured }}
+{{- $_ := set $stackNvcfRemoteConfig "sidecars" (dict $pylonRemoteConfigKey $effectivePylonImage) }}
+{{- end }}
+{{- if $llmEnabled }}
+{{- $_ := set $stackNvcfRemoteConfig "llm-request-router" (dict "worker-address" $llmRequestRouterWorkerAddress) }}
+{{- end }}
+{{- if $stackNvcfRemoteConfig }}
+{{- $_ := set $stackApiRemoteConfigData "nvcf" $stackNvcfRemoteConfig }}
+{{- end }}
+{{- $apiRemoteConfigData = mergeOverwrite $apiRemoteConfigData $stackApiRemoteConfigData }}
 api:
   fullnameOverride: nvcf-api
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "api" "replicaCount" 1 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -385,24 +844,48 @@ api:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if $llmEnabled }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
+  {{- with dig "api" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if $apiRemoteConfigData }}
   remoteConfig:
     configData:
-      nvcf:
-        llm-request-router:
-          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
+      {{- toYaml $apiRemoteConfigData | nindent 6 }}
   {{- end }}
-  # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
-  # defaults to its upstream Docker Hub source and a public-catalog install
-  # needs no override. If you mirror the image into your own registry, set
-  # registry and repository below in your environment file instead of editing
-  # this template.
+  {{- $accountBootstrapRegistry := dig "api" "accountBootstrap" "image" "registry" "" .Values }}
+  {{- $accountBootstrapRepository := dig "api" "accountBootstrap" "image" "repository" "" .Values }}
+  {{- $accountBootstrapTag := dig "api" "accountBootstrap" "image" "tag" "" .Values }}
+  {{- $accountBootstrapPullPolicy := dig "api" "accountBootstrap" "image" "pullPolicy" "" .Values }}
   accountBootstrap:
+    {{- if or $accountBootstrapRegistry $accountBootstrapRepository $accountBootstrapTag $accountBootstrapPullPolicy }}
     image:
-      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default "docker.io" }}
-      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
-      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.36.1" | quote }}
-      pullPolicy: IfNotPresent
+      {{- with $accountBootstrapRegistry }}
+      registry: {{ . }}
+      {{- end }}
+      {{- with $accountBootstrapRepository }}
+      repository: {{ . }}
+      {{- end }}
+      {{- with $accountBootstrapTag }}
+      tag: {{ . | quote }}
+      {{- end }}
+      {{- with $accountBootstrapPullPolicy }}
+      pullPolicy: {{ . }}
+      {{- end }}
+    {{- end }}
 
     registryCredentials: []
 
@@ -431,41 +914,78 @@ api:
       {{- end }}
       maxRegistryCreds: {{ $maxRegistryCreds }}
 
+  {{- /* Build the fixed API environment first, then merge configured api.env
+         last so operators can override a default without emitting duplicate
+         YAML keys. toYaml provides deterministic key ordering and treats
+         configured values as data rather than evaluating them as templates. */}}
+  {{- $apiEnv := dict
+        "NVCF_NATS_REGION_PLACEMENT_TAG" "dc"
+        "NVCF_SIDECARS_HOSTNAME" $sidecarsHost
+        "NVCF_SIDECARS_REPOSITORY" $sidecarsRepo
+        "MANAGEMENT_TRACING_ENABLED" (printf "%v" .Values.global.observability.tracing.enabled) -}}
+  {{- with $nvcfWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_FQDN" . }}
+  {{- end }}
+  {{- with $nvcfWorkerGrpcServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_GLOBAL_FQDN_GRPC" . }}
+  {{- end }}
+  {{- with $nvcfNatsWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_NATS_WORKER_URL" . }}
+  {{- end }}
+  {{- with $essWorkerBaseURL }}
+  {{- /* Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly. */}}
+  {{- $_ := set $apiEnv "NVCF_ESS_WORKER_BASE_URL" . }}
+  {{- end }}
+  {{- with $essApiBaseURL }}
+  {{- $_ := set $apiEnv "NVCF_ESS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "icmsBaseUrl" nil .Values }}
+  {{- $_ := set $apiEnv "NVCF_ICMS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "issuerUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI" . }}
+  {{- end }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- end }}
+  {{- with include "nvcf.natsStreamReplicas" .Values }}
+  {{- $_ := set $apiEnv "NVCF_NATS_REPLICAS" . }}
+  {{- end }}
+  {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
-    NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
-    NVCF_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
-    NVCF_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
-    {{- with $nvcfWorkerServiceURL }}
-    NVCF_FQDN: {{ . | quote }}
-    {{- end }}
-    {{- with $nvcfWorkerGrpcServiceURL }}
-    NVCF_GLOBAL_FQDN_GRPC: {{ . | quote }}
-    {{- end }}
-    {{- with $nvcfNatsWorkerServiceURL }}
-    NVCF_NATS_WORKER_URL: {{ . | quote }}
-    {{- end }}
-    {{- with $essWorkerBaseURL }}
-    # Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly.
-    NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
-    NVCF_ESS_BASE_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "icmsBaseUrl" nil .Values }}
-    NVCF_ICMS_BASE_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "jwt" "issuerUri" nil .Values }}
-    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
-    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
-    {{- end }}
-    # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
-    {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
-    {{- end }}
+    {{- toYaml $apiEnv | nindent 4 }}
 
 invocation:
+  {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredInvocationEnv) }}
+  {{- fail "invocation.env must be a map" }}
+  {{- end }}
+  {{- $invocationEnv := dict }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_IP" (printf "%s://%s" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint) }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_PORT" .Values.global.observability.tracing.collectorPort }}
+  {{- else }}
+  {{- $_ := set $invocationEnv "SERVER__ENVFILTER_DIRECTIVE" "otel::tracing=off,otel=off,server=trace,info" }}
+  {{- end }}
+  {{- if .Values.rateLimiter.enabled }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" "http://ratelimiter.nvcf.svc.cluster.local:7777" }}
+  {{- end }}
+  {{- with $invocationWorkerBaseURL }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
+  {{- end }}
+  {{- with include "nvcf.natsStreamReplicas" .Values }}
+  {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" . }}
+  {{- end }}
+  {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
+  {{- if $haEnabled }}
+  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  replicaCount: 1
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -479,34 +999,58 @@ invocation:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "invocation-service" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "invocation-service" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+
+  metrics:
+    enabled: {{ or (eq (dig "observability" "profile" "disabled" .Values) "control") (eq (dig "observability" "profile" "disabled" .Values) "all") }}
+    # The observability stack owns the shared ServiceMonitor resources.
+    serviceMonitor:
+      enabled: false
 
   env:
-    # Observability
-    {{- if .Values.global.observability.tracing.enabled }}
-    SERVER__TRACING__ENDPOINT_IP: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}"
-    SERVER__TRACING__ENDPOINT_PORT: {{ .Values.global.observability.tracing.collectorPort }}
-    {{- else }}
-    SERVER__ENVFILTER_DIRECTIVE: "otel::tracing=off,otel=off,server=trace,info"
-    {{- end }}
-    {{- if .Values.rateLimiter.enabled }}
-    RATE_LIMIT_ENABLED: "true"
-    RATE_LIMIT_ADDRESS: "http://ratelimiter.nvcf.svc.cluster.local:7777"
-    {{- end }}
-    {{- with $invocationWorkerBaseURL }}
-    WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
-    {{- end }}
+    {{- toYaml $invocationEnv | nindent 4 }}
   {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
   tracing:
     baggageAttributeAllowlist:
     {{- toYaml . | nindent 6 }}
   {{- end }}
+  {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+{{- $configuredNvctApiRemoteConfigData := dig "nvctApi" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredNvctApiRemoteConfigData) }}
+{{- fail "nvctApi.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $nvctApiRemoteConfigData := deepCopy $configuredNvctApiRemoteConfigData }}
 nvctApi:
   fullnameOverride: nvct-api
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "nvctApi" "replicaCount" 1 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "nvct-api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "nvct-api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -514,18 +1058,30 @@ nvctApi:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvct-service-oss
+    {{- with dig "nvctApi" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+
+  {{- if $nvctApiRemoteConfigData }}
+  remoteConfig:
+    configData:
+      {{- toYaml $nvctApiRemoteConfigData | nindent 6 }}
+  {{- end }}
 
   env:
-    NVCT_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
-    NVCT_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
+    NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
+    NVCT_SIDECARS_REPOSITORY: {{ $sidecarsRepo }}
     {{- with $nvctWorkerServiceURL }}
     NVCT_FQDN: {{ . | quote }}
     {{- end }}
     {{- with $nvctWorkerGrpcServiceURL }}
     NVCT_GLOBAL_FQDN_GRPC: {{ . | quote }}
     {{- end }}
-    {{- with $essWorkerBaseURL }}
+    {{- with $essNvctApiBaseURL }}
     NVCT_ESS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with $essWorkerBaseURL }}
+    {{- /* Keep the legacy worker alias until all NVCT builds consume the base URL directly. */}}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
     {{- end }}
     {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}
@@ -545,6 +1101,10 @@ nvctApi:
 
 grpcproxy:
   fullnameOverride: grpc-proxy
+  {{- if $haEnabled }}
+  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  replicaCount: 1
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -557,6 +1117,19 @@ grpcproxy:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- $grpcAffinity := include "nvcf.ha.affinity" (dict "Values" .Values "instance" "grpc-proxy" "class" "controlplane") }}
+  {{- $grpcTopologySpread := include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "grpc-proxy" "class" "controlplane") }}
+  {{- if or $grpcAffinity $grpcTopologySpread }}
+  deployment:
+    {{- with $grpcAffinity }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- with $grpcTopologySpread }}
+    {{- . | nindent 4 }}
+    {{- end }}
+  {{- end }}
   {{- end }}
   {{- with $grpcProxyWorkerConnectBaseURL }}
   workerConnectBaseURL: {{ . | quote }}
@@ -579,6 +1152,7 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
+  {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
@@ -596,18 +1170,52 @@ rateLimiter:
   nodeSelector:
     {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
   {{- end }}
-  replicaCount: {{ .Values.rateLimiter.replicaCount }}
+  replicaCount: {{ if $haEnabled }}{{ max 2 (.Values.rateLimiter.replicaCount | int) }}{{ else }}{{ .Values.rateLimiter.replicaCount }}{{ end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "ratelimiter" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "ratelimiter" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
   {{- if .Values.global.observability.tracing.enabled }}
   env:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
   {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- end }}
 
 ess:
   fullnameOverride: ess-api
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "ess" "replicaCount" 1 .Values | int) }}
+  {{- $essMinReplicas := max 2 (dig "ess" "autoscaling" "minReplicas" 1 .Values | int) }}
+  autoscaling:
+    minReplicas: {{ $essMinReplicas }}
+    maxReplicas: {{ max $essMinReplicas (dig "ess" "autoscaling" "maxReplicas" 12 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "ess-api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "ess-api" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -628,20 +1236,46 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "ess" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- end }}
 
 notary:
   fullnameOverride: notary-service
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "notary" "replicaCount" 1 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "notary-service" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "notary-service" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/notary-service
+    repository: {{ .Values.global.image.repository }}/nvcf-notary
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -658,6 +1292,25 @@ notary:
 
 sis:
   fullnameOverride: spot-instance-service
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "sis" "replicaCount" 1 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "sis" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "sis" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -694,9 +1347,19 @@ sis:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+    {{- with include "nvcf.natsStreamReplicas" .Values }}
+    ICMS_NATS_REPLICAS: {{ . | quote }}
+    {{- end }}
 
 adminIssuerProxy:
   fullnameOverride: admin-token-issuer-proxy
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "adminIssuerProxy" "replicaCount" 1 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -704,10 +1367,19 @@ adminIssuerProxy:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/admin-token-issuer-proxy
+    {{- with dig "adminIssuerProxy" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "admin-issuer-proxy" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "admin-issuer-proxy" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
   gateway:
@@ -717,9 +1389,16 @@ adminIssuerProxy:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
     hostname: "api-keys.{{ .Values.global.domain }}"
     path: "/v1/admin/keys"
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 stateMetrics:
@@ -731,6 +1410,10 @@ stateMetrics:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-state-metrics-service
+  {{- with dig "stateMetrics" "resources" dict .Values }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -750,6 +1433,32 @@ stateMetrics:
 {{- $bundledPromqlEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428" $victoriaMetricsNamespace }}
 {{- $promqlEndpoint := ternary $bundledPromqlEndpoint (dig "metricsBackend" "promqlEndpoint" "" .Values) (eq $metricsBackendMode "install") }}
 functionautoscaler:
+  {{- $configuredFunctionAutoscalerEnv := dig "functionAutoscaler" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredFunctionAutoscalerEnv) }}
+  {{- fail "functionAutoscaler.env must be a map" }}
+  {{- end }}
+  {{- $functionAutoscalerEnv := dict
+        "CONFIG" "/etc/server/config/settings-local.yaml"
+        "SECRETS_PATH" "/vault/secrets/secrets.json"
+        "REGION" (dig "functionAutoscaler" "region" "local" .Values)
+        "CASSANDRA__CONTACT_POINTS" (dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values)
+        "CASSANDRA__IS_DEVELOPMENT" (printf "%v" (dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values))
+        "NVCF_API__NVCF_API_GRPC_ADDRESS" (dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values)
+        "NVCF_API__DISABLE_AUTH" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values))
+        "NVCF_API__DRY_RUN" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values))
+        "TIMESERIES_DB__TIMESERIES_DB_URL" (required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint)
+        "TIMESERIES_DB__AUTH_MODE" (dig "metricsBackend" "authentication" "mode" "none" .Values)
+        "TIMESERIES_DB__IGNORE_ENV" (printf "%v" (dig "functionAutoscaler" "timeseriesDb" "ignoreEnv" true .Values)) -}}
+  {{- with dig "metricsBackend" "authentication" "authnEndpoint" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__AUTHN_URL" . }}
+  {{- end }}
+  {{- with dig "metricsBackend" "authentication" "clientCertificatePath" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__CLIENT_CERTIFICATE_PATH" . }}
+  {{- end }}
+  {{- with dig "metricsBackend" "authentication" "clientPrivateKeyPath" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__CLIENT_PRIVATE_KEY_PATH" . }}
+  {{- end }}
+  {{- $functionAutoscalerEnv = mergeOverwrite $functionAutoscalerEnv (deepCopy $configuredFunctionAutoscalerEnv) }}
   namespace: nvcf
   fullnameOverride: function-autoscaler
   {{- if .Values.global.imagePullSecrets }}
@@ -763,26 +1472,7 @@ functionautoscaler:
     tag: {{ . | quote }}
     {{- end }}
   env:
-    CONFIG: /etc/server/config/settings-local.yaml
-    SECRETS_PATH: /vault/secrets/secrets.json
-    REGION: {{ dig "functionAutoscaler" "region" "local" .Values | quote }}
-    CASSANDRA__CONTACT_POINTS: {{ dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values | quote }}
-    CASSANDRA__IS_DEVELOPMENT: {{ dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values | quote }}
-    NVCF_API__NVCF_API_GRPC_ADDRESS: {{ dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values | quote }}
-    NVCF_API__DISABLE_AUTH: {{ dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values | quote }}
-    NVCF_API__DRY_RUN: {{ dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values | quote }}
-    TIMESERIES_DB__TIMESERIES_DB_URL: {{ required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint | quote }}
-    TIMESERIES_DB__AUTH_MODE: {{ dig "metricsBackend" "authentication" "mode" "none" .Values | quote }}
-    TIMESERIES_DB__IGNORE_ENV: {{ dig "functionAutoscaler" "timeseriesDb" "ignoreEnv" true .Values | quote }}
-    {{- with dig "metricsBackend" "authentication" "authnEndpoint" "" .Values }}
-    TIMESERIES_DB__AUTHN_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "metricsBackend" "authentication" "clientCertificatePath" "" .Values }}
-    TIMESERIES_DB__CLIENT_CERTIFICATE_PATH: {{ . | quote }}
-    {{- end }}
-    {{- with dig "metricsBackend" "authentication" "clientPrivateKeyPath" "" .Values }}
-    TIMESERIES_DB__CLIENT_PRIVATE_KEY_PATH: {{ . | quote }}
-    {{- end }}
+    {{- toYaml $functionAutoscalerEnv | nindent 4 }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -797,6 +1487,23 @@ functionautoscaler:
 
 reval:
   fullnameOverride: reval
+  {{- if $haEnabled }}
+  replicaCount: {{ max 2 (dig "reval" "replicaCount" 1 .Values | int) }}
+  {{- $revalMinReplicas := max 2 (dig "reval" "autoscaling" "minReplicas" 1 .Values | int) }}
+  autoscaling:
+    minReplicas: {{ $revalMinReplicas }}
+    maxReplicas: {{ max $revalMinReplicas (dig "reval" "autoscaling" "maxReplicas" 100 .Values | int) }}
+  {{- end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "reval" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "reval" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -813,15 +1520,26 @@ reval:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+  {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "reval" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 llmApiGateway:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-api-gateway
-  replicaCount: {{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}
+  replicaCount: {{ if $haEnabled }}{{ max 2 (dig "addons" "llm" "gateway" "replicaCount" 3 .Values | int) }}{{ else }}{{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}{{ end }}
+  {{- with include "nvcf.ha.updateStrategy" .Values }}
+  strategy:
+  {{- . | nindent 4 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -841,10 +1559,14 @@ llmApiGateway:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if dig "addons" "llm" "gateway" "auth" "grpcInsecure" false .Values }}
-  config:
-    nvcfGrpcInsecure: true
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "llm-api-gateway" "class" "controlplane") }}
+  {{- . | nindent 2 }}
   {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "llm-api-gateway" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  config:
+    nvcfGrpcInsecure: {{ dig "addons" "llm" "gateway" "auth" "grpcInsecure" true .Values }}
   metrics:
     enabled: {{ dig "addons" "llm" "gateway" "metrics" "enabled" true .Values }}
     serviceMonitor:
@@ -855,17 +1577,78 @@ llmApiGateway:
       {{- if .Values.global.observability.tracing.enabled }}
       endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
       {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "llmApiGateway" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- end }}
+
+{{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
+{{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
+{{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
+{{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
+{{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}
+{{- $grpcTlsMode := dig "addons" "llm" "requestRouter" "grpcTls" "mode" "certManager" .Values }}
+{{- $grpcTlsDNSNames := dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values }}
+{{- /* The advertised HTTPS endpoint is the certificate's primary identity.
+       Operators may add SANs for other regional endpoints; the derived name is
+       prepended once so fixtures do not have to repeat the dial hostname. */}}
+{{- if and $grpcTlsEnabled (eq $grpcTlsMode "certManager") (hasPrefix "https://" $llmRequestRouterWorkerAddress) (regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAuthority) }}
+{{- $llmRequestRouterWorkerHost := regexReplaceAll `:[0-9]{1,5}$` $llmRequestRouterWorkerAuthority "" }}
+{{- $llmRequestRouterIPv4LiteralPattern := `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` }}
+{{- if and (not (regexMatch $llmRequestRouterIPv4LiteralPattern $llmRequestRouterWorkerHost)) (not (has $llmRequestRouterWorkerHost $grpcTlsDNSNames)) }}
+{{- $grpcTlsDNSNames = prepend $grpcTlsDNSNames $llmRequestRouterWorkerHost }}
+{{- end }}
+{{- end }}
+{{- if and $llmEnabled $backendRouterEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
+{{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled $grpcTlsAllowInsecureHttp }}
+{{- fail "addons.llm.requestRouter.grpcTls.enabled and addons.llm.requestRouter.grpcTls.allowInsecureHttp cannot both be true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (not $grpcTlsEnabled) (not $grpcTlsAllowInsecureHttp) }}
+{{- fail "addons.llm.requestRouter.grpcTls.allowInsecureHttp must be true for an explicitly plaintext external LLM worker route" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (empty $pylonGrpcDialAddress) }}
+{{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress is required when ingress.gatewayApi.routes.llmWorker.enabled is true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (ne $llmRequestRouterWorkerAddress $pylonGrpcDialAddress) }}
+{{- fail "global.workerEndpoints.llmRequestRouterAddress and addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress must use the same explicit URI when LLM worker routing is enabled" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled (not (hasPrefix "https://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "secure LLM worker routing requires an explicit https:// global.workerEndpoints.llmRequestRouterAddress" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsAllowInsecureHttp (not (hasPrefix "http://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "development plaintext LLM worker routing requires an explicit http:// global.workerEndpoints.llmRequestRouterAddress" }}
+{{- end }}
 
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
-  replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  {{- $requestRouterValues := dig "addons" "llm" "requestRouter" dict .Values }}
+  {{- if hasKey $requestRouterValues "replicaCount" }}
+  replicaCount: {{ index $requestRouterValues "replicaCount" }}
+  {{- end }}
+  {{- with dig "addons" "llm" "requestRouter" "workload" dict .Values }}
+  workload:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "addons" "llm" "requestRouter" "discovery" dict .Values }}
+  discovery:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
+  {{- with dig "addons" "llm" "requestRouter" "readiness" dict .Values }}
+  readiness:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -873,6 +1656,9 @@ llmRequestRouter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/stargate
+    {{- with dig "addons" "llm" "requestRouter" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- /*
   Backend routing follows the LLM addon rather than being separately opted into.
   A worker holds one registration stream and one reverse tunnel per replica, and
@@ -887,21 +1673,39 @@ llmRequestRouter:
   reachable addresses.
   */}}
   backendRouter:
-    enabled: {{ dig "addons" "llm" "requestRouter" "backendRouter" "enabled" (dig "addons" "llm" "enabled" false .Values) .Values }}
-    replicaCount: {{ dig "addons" "llm" "requestRouter" "backendRouter" "replicaCount" 2 .Values }}
+    enabled: {{ $backendRouterEnabled }}
+    service:
+      grpcPort: {{ $backendRouterGrpcPort }}
+    {{- $backendRouterValues := dig "addons" "llm" "requestRouter" "backendRouter" dict .Values }}
+    {{- if hasKey $backendRouterValues "replicaCount" }}
+    replicaCount: {{ index $backendRouterValues "replicaCount" }}
+    {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/stargate
-    {{- with dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values }}
+    {{- with $pylonGrpcDialAddress }}
     pylonGrpcDialAddress: {{ . | quote }}
     {{- end }}
-    {{- with dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values }}
+    {{- with $pylonReverseTunnelDialAddress }}
     pylonReverseTunnelDialAddress: {{ . | quote }}
     {{- end }}
     {{- if .Values.global.imagePullSecrets }}
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  grpcTls:
+    enabled: {{ $grpcTlsEnabled }}
+    allowInsecureHttp: {{ $grpcTlsAllowInsecureHttp }}
+    mode: {{ $grpcTlsMode | quote }}
+    secretName: {{ dig "addons" "llm" "requestRouter" "grpcTls" "secretName" "llm-request-router-grpc-tls" .Values | quote }}
+    dnsNames:
+      {{- $grpcTlsDNSNames | toYaml | nindent 6 }}
+    issuerRef:
+      kind: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "kind" "" .Values | default (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) | quote }}
+      name: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values | default (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) | quote }}
+      {{- with dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "group" "" .Values }}
+      group: {{ . | quote }}
+      {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1045,7 +1849,7 @@ llmRequestRouter:
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
        PKI tag, then the OpenBao migrations tag, and finally the compatible
        stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.16.2" }}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.5" }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -1084,6 +1888,7 @@ vanityGateway:
   config:
     mappingPath: {{ dig "addons" "vanityGateway" "config" "mappingPath" "/etc/vanity-gateway/config/config.yaml" .Values | quote }}
     nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "http://invocation.nvcf.svc.cluster.local:8080" .Values | quote }}
+    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "http://llm-api-gateway.nvcf.svc.cluster.local:8080" .Values | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     otelExporterOtlpEndpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
     {{- else }}
@@ -1162,12 +1967,15 @@ vanityGateway:
 {{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" "nvcf" "port" 8080) }}
 {{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" "ess" "port" 8080) }}
 {{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
-{{/* openbao-migrations image tag: 0.16.2 is the floor. An operator may pin a
+{{/* openbao-migrations image tag: 0.19.5 is the floor. An operator may pin a
      newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
-     than the floor is ignored (the migrations job needs >= 0.16.2). */}}
-{{- $nvcfUiOpenbaoMigrationsTag := "0.16.2" }}
+     than the floor is ignored (the migrations job needs >= 0.19.5). */}}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.19.5" }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
-{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.16.2" $nvcfUiMigrationsTagOverride) }}
+{{- if and $nvcfUiMigrationsTagOverride (not (regexMatch "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" $nvcfUiMigrationsTagOverride)) }}
+{{- fail "addons.nvcfUi.openbaoMigrations.image.tag must be a valid OCI image tag" }}
+{{- end }}
+{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.19.5" $nvcfUiMigrationsTagOverride) }}
 {{- $nvcfUiOpenbaoMigrationsTag = $nvcfUiMigrationsTagOverride }}
 {{- end }}
 nvcfUi:
@@ -1224,8 +2032,8 @@ nvcfUi:
       - name: llm-request-router
         namespace: nvcf
         endpoints:
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/healthz
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/readyz
+          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
       {{- end }}
       - name: reval
         namespace: nvcf
@@ -1312,7 +2120,6 @@ nvcfUi:
 nvcfGatewayRoutes:
   {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}
   {{- $essRouteEnabled := dig "ingress" "gatewayApi" "routes" "ess" "enabled" false .Values }}
-  {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
   domain: "{{ .Values.global.domain }}"
   gateways:
     shared:
@@ -1325,17 +2132,26 @@ nvcfGatewayRoutes:
     nats:
       name: {{ required "ingress.gatewayApi.gateways.nats.name is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.name }}
       namespace: {{ required "ingress.gatewayApi.gateways.nats.namespace is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.namespace }}
-      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "nats" "listenerName" "nats" .Values }}
+      {{- $natsGateway := dig "ingress" "gatewayApi" "gateways" "nats" dict .Values }}
+      {{- if hasKey $natsGateway "listenerName" }}
+      listenerName: {{ $natsGateway.listenerName }}
+      {{- end }}
     {{- end }}
     {{- if $llmWorkerRouteEnabled }}
     llmGrpc:
       name: {{ required "ingress.gatewayApi.gateways.llmGrpc.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.name }}
       namespace: {{ required "ingress.gatewayApi.gateways.llmGrpc.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.namespace }}
-      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmGrpc" "listenerName" "llm-grpc" .Values }}
+      {{- $llmGrpcGateway := dig "ingress" "gatewayApi" "gateways" "llmGrpc" dict .Values }}
+      {{- if hasKey $llmGrpcGateway "listenerName" }}
+      listenerName: {{ $llmGrpcGateway.listenerName }}
+      {{- end }}
     llmQuic:
       name: {{ required "ingress.gatewayApi.gateways.llmQuic.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.name }}
       namespace: {{ required "ingress.gatewayApi.gateways.llmQuic.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.namespace }}
-      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmQuic" "listenerName" "llm-quic" .Values }}
+      {{- $llmQuicGateway := dig "ingress" "gatewayApi" "gateways" "llmQuic" dict .Values }}
+      {{- if hasKey $llmQuicGateway "listenerName" }}
+      listenerName: {{ $llmQuicGateway.listenerName }}
+      {{- end }}
     {{- end }}
   routes:
     nvcfApi:
@@ -1356,9 +2172,35 @@ nvcfGatewayRoutes:
         hostnames:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+    # apiKeys, sis, and reval attach to the shared Gateway (backend and hostname
+    # come from the chart defaults); only the enable flag and annotations are
+    # environment-driven. The gateway-routes chart owns the default (enabled: true
+    # for all three), so the stack forwards enabled only when an environment file
+    # sets it -- leaving it unset renders the route exactly as before, and a future
+    # chart release that changes a default is not silently overridden. Set it to
+    # false to drop the route (for example, to keep api-keys off the public edge in
+    # a split/multi-cluster deployment).
     apiKeys:
+      {{- $apiKeysRoute := dig "ingress" "gatewayApi" "routes" "apiKeys" dict .Values }}
+      {{- if hasKey $apiKeysRoute "enabled" }}
+      enabled: {{ $apiKeysRoute.enabled }}
+      {{- end }}
       routeAnnotations:
-        {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+        {{ dig "routeAnnotations" dict $apiKeysRoute | toYaml | nindent 8 | trim }}
+    sis:
+      {{- $sisRoute := dig "ingress" "gatewayApi" "routes" "sis" dict .Values }}
+      {{- if hasKey $sisRoute "enabled" }}
+      enabled: {{ $sisRoute.enabled }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "routeAnnotations" dict $sisRoute | toYaml | nindent 8 | trim }}
+    reval:
+      {{- $revalRoute := dig "ingress" "gatewayApi" "routes" "reval" dict .Values }}
+      {{- if hasKey $revalRoute "enabled" }}
+      enabled: {{ $revalRoute.enabled }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "routeAnnotations" dict $revalRoute | toYaml | nindent 8 | trim }}
     invocation:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
@@ -1387,12 +2229,19 @@ nvcfGatewayRoutes:
       enabled: {{ dig "addons" "nvcfUi" "enabled" false .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    eventLedger:
+      enabled: {{ dig "addons" "eventLedger" "enabled" false .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpcWorker:
       enabled: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "enabled" false .Values }}
-      listenerName: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "listenerName" "worker-tcp" .Values }}
+      {{- $grpcWorkerRoute := dig "ingress" "gatewayApi" "routes" "grpcWorker" dict .Values }}
+      {{- if hasKey $grpcWorkerRoute "listenerName" }}
+      listenerName: {{ $grpcWorkerRoute.listenerName }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     nats:
@@ -1418,3 +2267,7 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "ess" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
   podMonitors:
     enabled: {{ .Values.global.observability.metrics.enabled }}
+  {{- with dig "ingress" "gatewayApi" "hostnameConflictPolicy" dict .Values }}
+  hostnameConflictPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}

@@ -6,12 +6,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
   register and install the NVCA operator on a separate compute cluster, and
   verify that the compute cluster agent becomes healthy.
 
-  # This feature is values-driven (not profile-driven); see
-  # AGENTS.md "CLI vs Helmfile install paths". It authors the nvcf-cli
-  # config from the gateway address at runtime, then uses the
-  # compute-plane Makefile register-cluster target. That target runs
-  # nvcf-cli init before cluster register and writes the registration
-  # values consumed by Helmfile.
+  # Helmfile installs the control plane from the operator-authored
+  # environment. Registration exports that installed environment as a
+  # control-plane profile, initializes the CLI explicitly, and passes the
+  # profile and CLI config to the compute-plane Make target.
   #
   # Required environment variables (user-supplied):
   #   NVCF_CLI                   built CLI path (harness)
@@ -84,8 +82,13 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
     # EKS_GATEWAY_ADDR, and patch eks-bdd-multi.yaml with the
     # EKS-specific values.
 
-    # 1. Install the envoy-gateway controller in envoy-gateway-system.
-    When I run command "helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version v1.1.3 --kube-context ${EKS_CONTEXT} -n envoy-gateway-system --create-namespace --wait --timeout 5m"
+    # 1. Install the same timeout-capable Envoy Gateway release used by the
+    # supported local-cluster setup; that script is the version authority.
+    When I run command "tests/bdd/scripts/read-envoy-gateway-version.sh"
+    Then the command exit code should be 0
+    When I export command output to environment variable "ENVOY_GATEWAY_VERSION"
+
+    When I run command "helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version ${ENVOY_GATEWAY_VERSION} --kube-context ${EKS_CONTEXT} -n envoy-gateway-system --create-namespace --wait --timeout 5m"
     Then the command exit code should be 0
 
     # 2. Apply the Gateway, GatewayClass, and envoy-gateway namespace.
@@ -106,8 +109,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
     # 5. Wait for the ELB hostname to be resolvable from the host's
     #    DNS resolver before installing.
-    When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
-    Then the command exit code should be 0
+    Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
 
     # Route hostnames such as api.<domain> must resolve independently. Derive
     # a nip.io wildcard domain from one NLB address so worker pods on the
@@ -115,8 +117,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
     When I run command "tests/bdd/scripts/resolve-gateway-domain.sh ${EKS_GATEWAY_ADDR}"
     Then the command exit code should be 0
     When I export command output to environment variable "EKS_GATEWAY_DOMAIN"
-    When I run command "tests/bdd/scripts/wait-for-dns.sh api.${EKS_GATEWAY_DOMAIN} 180"
-    Then the command exit code should be 0
+    Then DNS name "api.${EKS_GATEWAY_DOMAIN}" should resolve within "180" seconds
 
     # 6. Copy base.yaml -> eks-bdd-multi.yaml and patch with the EKS
     #    knobs, including the resolvable Gateway domain.
@@ -302,23 +303,35 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         | invoke_host          | invocation.${EKS_GATEWAY_DOMAIN} |
         | icms_host            | sis.${EKS_GATEWAY_DOMAIN}        |
 
-      # Register the compute cluster with the control plane. The Makefile
-      # runs nvcf-cli init, then cluster register, and writes the returned
-      # Helm values under registration/.
-      When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
+      # Export the installed control plane with compute-reachable endpoints.
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env eks-bdd-multi --control-plane-context ${EKS_CONTEXT} --compute-plane-context ${EKS_COMPUTE_CONTEXT} control-plane profile export --region ${EKS_REGION}
+        """
       Then the command exit code should be 0
+      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
 
       When I run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_COMPUTE_CLUSTER_NAME} NCA_ID=nvcf-default CLUSTER_REGION=${EKS_REGION} ICMS_URL=http://${EKS_GATEWAY_ADDR} KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/eks-compute-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml init
+        """
+      Then the command exit code should be 0
+
+      # Register the compute cluster and write the returned Helm values under
+      # registration/.
+      Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
+
+      When I run command:
+        """
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_COMPUTE_CLUSTER_NAME} CLUSTER_REGION=${EKS_REGION} CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=${EKS_COMPUTE_CONTEXT} KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/eks-compute-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml
         """
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should exist
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should contain:
         """
         ncaID: nvcf-default
-        region: ${EKS_REGION}
         selfManaged:
+          region: ${EKS_REGION}
           identitySource: psat
         """
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should have non-empty keys:
@@ -395,8 +408,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       # AWS can briefly return NXDOMAIN for a newly provisioned ELB even after
       # earlier successful lookups. Reconfirm system-resolver stability before
       # the CLI performs its function-details lookup and invocation.
-      When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
-      Then the command exit code should be 0
+      Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
 
       When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
         """

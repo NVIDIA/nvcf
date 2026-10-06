@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "configutil",
@@ -11,4 +11,11 @@ alias(
     name = "go_default_library",
     actual = ":configutil",
     visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+)
+
+go_test(
+    name = "configutil_test",
+    srcs = ["utils_test.go"],
+    embed = [":configutil"],
+    deps = ["@com_github_stretchr_testify//require"],
 )

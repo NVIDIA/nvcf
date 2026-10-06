@@ -46,6 +46,83 @@ pub use webtransport_http::{
 pub const HTTP3_ALPN: &[u8] = b"h3";
 pub const WEBTRANSPORT_BIDI_STREAM_TYPE: u64 = 0x41;
 
+const EXPLICIT_HTTP_URI_ERROR: &str = "URI must be an explicit http:// or https:// authority";
+
+/// Parses an HTTP(S) dial URI without inventing a transport scheme.
+///
+/// gRPC control-plane endpoints are authorities, not HTTP resource paths. Keeping this
+/// validation shared prevents a scheme-less remote Watch address from silently becoming
+/// plaintext in one component while another component treats it as TLS.
+pub fn parse_explicit_http_uri(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    let uri = value
+        .parse::<http::Uri>()
+        .map_err(|_| EXPLICIT_HTTP_URI_ERROR.to_string())?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    let authority = uri
+        .authority()
+        .filter(|authority| !authority.host().is_empty())
+        .ok_or_else(|| EXPLICIT_HTTP_URI_ERROR.to_string())?;
+    if authority.as_str().contains('@') {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    let authority_value = authority.as_str();
+    let has_explicit_port = if authority_value.starts_with('[') {
+        authority_value
+            .split_once(']')
+            .is_some_and(|(_, suffix)| suffix.starts_with(':'))
+    } else {
+        authority_value.contains(':')
+    };
+    if has_explicit_port && authority.port_u16().filter(|port| *port > 0).is_none() {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    if uri
+        .path_and_query()
+        .is_some_and(|path_and_query| path_and_query.as_str() != "/")
+    {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    Ok(value.to_string())
+}
+
+#[cfg(test)]
+mod explicit_http_uri_tests {
+    use super::parse_explicit_http_uri;
+
+    #[test]
+    fn accepts_only_explicit_http_authority_uris() {
+        for valid in [
+            "https://region-b.example.test:50071",
+            "http://127.0.0.1:50071",
+            "https://[::1]",
+            "https://[::1]:50071/",
+        ] {
+            assert_eq!(parse_explicit_http_uri(valid).as_deref(), Ok(valid));
+        }
+
+        for invalid in [
+            "region-b.example.test:50071",
+            "ftp://region-b.example.test:50071",
+            "https://",
+            "https://user@region-b.example.test:50071",
+            "https://region-b.example.test:50071/watch",
+            "https://region-b.example.test:50071?region=b",
+            "https://region-b.example.test:0",
+            "https://[::1]:0",
+            "https://region-b.example.test:",
+            "https://region-b.example.test:65536",
+        ] {
+            assert!(
+                parse_explicit_http_uri(invalid).is_err(),
+                "unexpected valid URI: {invalid}"
+            );
+        }
+    }
+}
+
 /// Which side establishes the long-lived tunnel connection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BackendConnectivity {
@@ -79,7 +156,7 @@ impl<'de> Deserialize<'de> for BackendConnectivity {
     where
         D: serde::Deserializer<'de>,
     {
-        let value = <&str>::deserialize(deserializer)?;
+        let value = String::deserialize(deserializer)?;
         value.parse().map_err(serde::de::Error::custom)
     }
 }
@@ -130,7 +207,7 @@ impl<'de> Deserialize<'de> for TunnelTransportProtocol {
     where
         D: serde::Deserializer<'de>,
     {
-        let value = <&str>::deserialize(deserializer)?;
+        let value = String::deserialize(deserializer)?;
         value.parse().map_err(serde::de::Error::custom)
     }
 }
@@ -172,27 +249,43 @@ pub enum ProtocolError {
 }
 
 #[cfg(test)]
-mod build_plan;
-
-#[cfg(test)]
-#[path = "../build.rs"]
-mod build_script;
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build_plan::capnp_build_plan;
 
     #[test]
-    fn capnp_build_plan_tracks_schema_and_rerun_trigger() {
-        let plan = capnp_build_plan();
-
-        assert_eq!(plan.schema_file, "quic.capnp");
-        assert_eq!(plan.rerun_if_changed, "quic.capnp");
+    fn transport_and_connectivity_deserialize_from_owned_and_escaped_inputs() {
+        for protocol in [
+            TunnelTransportProtocol::RawQuic,
+            TunnelTransportProtocol::Http3,
+            TunnelTransportProtocol::WebTransport,
+        ] {
+            assert_eq!(
+                serde_json::from_value::<TunnelTransportProtocol>(
+                    serde_json::to_value(protocol).unwrap()
+                )
+                .unwrap(),
+                protocol
+            );
+        }
+        for mode in [BackendConnectivity::Direct, BackendConnectivity::Reverse] {
+            let json = serde_json::to_string(&mode).unwrap();
+            assert_eq!(
+                serde_json::from_reader::<_, BackendConnectivity>(json.as_bytes()).unwrap(),
+                mode
+            );
+        }
         assert_eq!(
-            crate::build_script::planned_capnp_schema_file(),
-            "quic.capnp"
+            serde_json::from_str::<TunnelTransportProtocol>(r#""http\u0033""#).unwrap(),
+            TunnelTransportProtocol::Http3
         );
+        assert_eq!(
+            serde_json::from_str::<BackendConnectivity>(r#""rev\u0065rse""#).unwrap(),
+            BackendConnectivity::Reverse
+        );
+        for invalid in [serde_json::json!("unsupported"), serde_json::json!(3)] {
+            assert!(serde_json::from_value::<TunnelTransportProtocol>(invalid.clone()).is_err());
+            assert!(serde_json::from_value::<BackendConnectivity>(invalid).is_err());
+        }
     }
 
     #[test]

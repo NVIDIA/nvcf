@@ -84,16 +84,53 @@ invocation:
 EOF
 }
 
+write_disabled_environment() {
+  cat >"$environment_file" <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+observability:
+  profile: disabled
+EOF
+}
+
 default_values="$work_dir/default-values.yaml"
 configured_values="$work_dir/configured-values.yaml"
 changed_values="$work_dir/changed-values.yaml"
+disabled_values="$work_dir/disabled-values.yaml"
 default_render="$work_dir/default-render.yaml"
 configured_render="$work_dir/configured-render.yaml"
 changed_render="$work_dir/changed-render.yaml"
+disabled_render="$work_dir/disabled-render.yaml"
 
 write_default_environment
 render_invocation_values "$default_values" >/dev/null
 render_chart "$default_values" "$default_render"
+assert_yq_eq \
+  "$default_values" \
+  '.invocation.metrics.enabled' \
+  true
+assert_yq_eq \
+  "$default_values" \
+  '.invocation.metrics.serviceMonitor.enabled' \
+  false
+assert_yq_eq \
+  "$default_render" \
+  'select(.kind == "ConfigMap" and .metadata.name == "invocation-service-env") | .data.APP_CONFIG' \
+  /etc/nvcf-invocation/settings.yaml
+assert_yq_eq \
+  "$default_render" \
+  'select(.kind == "ConfigMap" and .metadata.name == "invocation-service-env") | .data.APP_CONFIG_YAML | from_yaml | .server.metrics.exporters[0].endpoint' \
+  http://0.0.0.0:41337
+assert_yq_eq \
+  "$default_render" \
+  'select(.kind == "Deployment" and .metadata.name == "invocation-service") | .spec.template.spec.containers[] | select(.name == "helm-nvcf-invocation-service") | .volumeMounts[] | select(.name == "app-config") | .mountPath' \
+  /etc/nvcf-invocation
+assert_yq_eq \
+  "$default_render" \
+  'select(.kind == "Deployment" and .metadata.name == "invocation-service") | .spec.template.spec.volumes[] | select(.name == "token") | .projected.sources[0].serviceAccountToken.audience' \
+  http://openbao-server.vault-system.svc.cluster.local:8200
 assert_yq_eq \
   "$default_render" \
   'select(.kind == "ConfigMap" and .metadata.name == "invocation-service-env") | .data."SERVER__TRACING__BAGGAGE_ATTRIBUTE_ALLOWLIST" // "absent"' \
@@ -126,5 +163,21 @@ fi
 if [ "$configured_checksum" = "$changed_checksum" ]; then
   fail "deployment checksum did not change when the baggage allowlist changed"
 fi
+
+write_disabled_environment
+render_invocation_values "$disabled_values" >/dev/null
+render_chart "$disabled_values" "$disabled_render"
+assert_yq_eq \
+  "$disabled_values" \
+  '.invocation.metrics.enabled' \
+  false
+assert_yq_eq \
+  "$disabled_render" \
+  'select(.kind == "ConfigMap" and .metadata.name == "invocation-service-env") | .data.APP_CONFIG // "absent"' \
+  absent
+assert_yq_eq \
+  "$disabled_render" \
+  '[select(.kind == "Service" and .metadata.name == "invocation") | .spec.ports[] | select(.name == "metrics")] | length' \
+  0
 
 echo "invocation-tracing-baggage: all checks passed"

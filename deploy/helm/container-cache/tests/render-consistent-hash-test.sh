@@ -48,7 +48,7 @@ echo "5. enabled: N peer Services + N owner upstreams on the listener port (1412
 [ "$(count 'port: 14128' "$TMP/on.yaml")" = 3 ] || fail "each peer Service must expose port 14128"
 
 echo "6. enabled: routing key == proxy_cache_key; marker emitted AND inbound marker rejected"
-grep -q 'set $cc_hash_key "$request_method|$uri|$arg_versionId|$http_range"' "$TMP/on.yaml" || fail "routing key must equal the proxy_cache_key"
+grep -q 'set $cc_hash_key "$request_method|$uri|$arg_versionId|$safe_range"' "$TMP/on.yaml" || fail "routing key must equal the proxy_cache_key"
 grep -q 'proxy_set_header X-NVCF-CC-Relayed "1"' "$TMP/on.yaml" || fail "relay hop must emit the one-hop marker"
 grep -q 'ngx.req.get_headers()\["X-NVCF-CC-Relayed"\]' "$TMP/on.yaml" || fail "cc-route.lua must reject an inbound relay marker (serve locally, prevents relay loops)"
 
