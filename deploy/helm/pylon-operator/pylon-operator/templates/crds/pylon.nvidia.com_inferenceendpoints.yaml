@@ -70,6 +70,27 @@ spec:
           spec:
             description: InferenceEndpointSpec is the desired state of an InferenceEndpoint.
             properties:
+              canary:
+                description: Canary optionally overrides inference check timing for
+                  this endpoint.
+                properties:
+                  intervalSeconds:
+                    description: |-
+                      IntervalSeconds is the period between active inference checks.
+                      When omitted, Pylon uses its default interval. Checks cannot be disabled.
+                    format: int32
+                    maximum: 3600
+                    minimum: 1
+                    type: integer
+                  timeoutSeconds:
+                    description: |-
+                      TimeoutSeconds bounds a canary request, including backend queue time.
+                      When omitted, Pylon uses its default timeout.
+                    format: int32
+                    maximum: 300
+                    minimum: 1
+                    type: integer
+                type: object
               gpu:
                 description: GPU optionally overrides the GPU type derived from node
                   labels.

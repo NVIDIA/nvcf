@@ -1,0 +1,218 @@
+{{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- if has .Values.phase (list "qualify" "download" "serve") }}
+{{- if .Values.rpc.cache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-rpc-cache
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.rpc.cache.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.rpc.cache.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-artifacts
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: artifacts}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: artifacts}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: {{ (index .Values.targets 0).node | quote }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: artifacts
+          image: {{ .Values.image | quote }}
+          command: [python3, -u, /checks/artifact-server.py]
+          env: [{name: NVIDIA_VISIBLE_DEVICES, value: void}, {name: PYTHONDONTWRITEBYTECODE, value: '1'}]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /runtime.tar.gz.sha256, port: http}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: '1', memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: artifacts, mountPath: /artifacts, readOnly: true}
+            - {name: checks, mountPath: /checks, readOnly: true}
+      volumes:
+        - name: checks
+          configMap: {name: {{ .Release.Name }}-runtime}
+        - name: artifacts
+          persistentVolumeClaim: {claimName: {{ .Release.Name }}-artifacts}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-artifacts
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: artifacts}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-private-runtime
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [artifacts, rpc-leader, rpc-worker]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}}
+      ports: [{protocol: TCP, port: 8080}, {protocol: TCP, port: 50052}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-runtime
+data:
+  runtime_guard.py: |
+{{ .Files.Get "files/runtime_guard.py" | indent 4 }}
+  rpc-health.py: |
+{{ .Files.Get "files/rpc-health.py" | indent 4 }}
+  artifact-server.py: |
+{{ .Files.Get "files/artifact-server.py" | indent 4 }}
+  fetch-runtime.py: |
+{{ .Files.Get "files/fetch-runtime.py" | indent 4 }}
+{{- range $target := .Values.targets }}
+{{- if or (ne $.Values.phase "serve") (eq $target.id "worker") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-rpc-{{ $target.id }}
+spec:
+  replicas: {{ $.Values.rpc.replicas }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: rpc-{{ $target.id }}}
+  template:
+    metadata:
+      annotations:
+        checksum/runtime: {{ required "runtime.sha256 is required" $.Values.runtime.sha256 | quote }}
+        checksum/guard: {{ $.Files.Get "files/runtime_guard.py" | sha256sum | quote }}
+        checksum/health: {{ $.Files.Get "files/rpc-health.py" | sha256sum | quote }}
+      labels: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: rpc-{{ $target.id }}}
+    spec:
+      automountServiceAccountToken: false
+      runtimeClassName: {{ $.Values.runtimeClassName }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ $target.node | quote }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: runtime
+          image: {{ $.Values.image | quote }}
+          command: [python3, -u, /checks/fetch-runtime.py]
+          env:
+            - {name: NVIDIA_VISIBLE_DEVICES, value: void}
+            - {name: RUNTIME_URL, value: "http://{{ $.Release.Name }}-artifacts:8080/runtime.tar.gz"}
+            - {name: RUNTIME_SHA256, value: {{ $.Values.runtime.sha256 | quote }}}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: '1', memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: runtime, mountPath: /work}
+            - {name: checks, mountPath: /checks, readOnly: true}
+      containers:
+        - name: rpc
+          image: {{ $.Values.image | quote }}
+          command:
+            - python3
+            - -u
+            - /checks/runtime_guard.py
+            - /work/runtime/ggml-rpc-server
+            - --host
+            - '0.0.0.0'
+            - --port
+            - '50052'
+            - --device
+            - CUDA0
+{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+            - --cache
+{{- end }}
+          env:
+            - {name: HOME, value: /tmp}
+{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+            - {name: LLAMA_CACHE, value: /rpc-cache}
+{{- end }}
+{{- range $name, $value := $.Values.runtime.env }}
+            - {name: {{ $name }}, value: {{ $value | quote }}}
+{{- end }}
+          ports: [{name: rpc, containerPort: 50052}]
+          startupProbe:
+            exec: {command: [python3, /checks/rpc-health.py]}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            exec: {command: [python3, /checks/rpc-health.py]}
+            periodSeconds: 10
+          resources: {{ toJson $.Values.rpc.resources }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: runtime, mountPath: /work, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            - {name: checks, mountPath: /checks, readOnly: true}
+{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+            - {name: rpc-cache, mountPath: /rpc-cache}
+{{- end }}
+      volumes:
+        - name: runtime
+          emptyDir: {sizeLimit: 2Gi}
+        - name: checks
+          configMap: {name: {{ $.Release.Name }}-runtime}
+        - name: tmp
+          emptyDir: {sizeLimit: 2Gi}
+{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+        - name: rpc-cache
+          persistentVolumeClaim: {claimName: {{ $.Release.Name }}-rpc-cache}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-rpc-{{ $target.id }}
+spec:
+  selector: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: rpc-{{ $target.id }}}
+  ports: [{name: rpc, port: 50052, targetPort: rpc}]
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,72 @@
+{
+  "model": "unsloth/GLM-5.3-GGUF",
+  "revision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+  "quantization": "UD-IQ2_M",
+  "weightFiles": 6,
+  "weightFileBytes": 238577585701,
+  "weightGB": 238.577585701,
+  "weightGiB": 222.1926913606003,
+  "files": [
+    {
+      "rfilename": "UD-IQ2_M/GLM-5.3-UD-IQ2_M-00001-of-00006.gguf",
+      "blobId": "3ab26a3bed7c17b175bfa183aef34bd7463ce5b5",
+      "size": 9428677,
+      "lfs": {
+        "sha256": "88ec1b9e924bbfe2f5e210bcedb5146aefca41567cdc021c344b253cb733b21d",
+        "size": 9428677,
+        "pointerSize": 132
+      }
+    },
+    {
+      "rfilename": "UD-IQ2_M/GLM-5.3-UD-IQ2_M-00002-of-00006.gguf",
+      "blobId": "7f6200b94f282872e3e3c92b8de28d967b370cbd",
+      "size": 49223976800,
+      "lfs": {
+        "sha256": "fc036c1c96f30d0b8fa334339cd1f9c68b1a3ab7fbc9440ee92df2a65b2a5e11",
+        "size": 49223976800,
+        "pointerSize": 136
+      }
+    },
+    {
+      "rfilename": "UD-IQ2_M/GLM-5.3-UD-IQ2_M-00003-of-00006.gguf",
+      "blobId": "9e13ecaac451858e1530da77371562abfeaf8ba5",
+      "size": 49143176640,
+      "lfs": {
+        "sha256": "684b069f8e7a6b28ba04dc2a4d63757db4270bdad95ac931cd013394c638b4da",
+        "size": 49143176640,
+        "pointerSize": 136
+      }
+    },
+    {
+      "rfilename": "UD-IQ2_M/GLM-5.3-UD-IQ2_M-00004-of-00006.gguf",
+      "blobId": "ced5ebf4845d9304cd40878453a546ad57f133eb",
+      "size": 49143176640,
+      "lfs": {
+        "sha256": "10c735d4af5d923adff14edb9bfbef63e5dce6187720c5db08a45f630638eccb",
+        "size": 49143176640,
+        "pointerSize": 136
+      }
+    },
+    {
+      "rfilename": "UD-IQ2_M/GLM-5.3-UD-IQ2_M-00005-of-00006.gguf",
+      "blobId": "7a741f81c72712e13043e917664c1e53171ebc99",
+      "size": 49143176640,
+      "lfs": {
+        "sha256": "69ee92423d65605f3b7b07744492d42fd85c0fd898127cb23a44f213823f4cff",
+        "size": 49143176640,
+        "pointerSize": 136
+      }
+    },
+    {
+      "rfilename": "UD-IQ2_M/GLM-5.3-UD-IQ2_M-00006-of-00006.gguf",
+      "blobId": "688b8319e9ad9c7f0086f806b68941a4acbf324a",
+      "size": 41914650304,
+      "lfs": {
+        "sha256": "b8f96f7183eba431e047c52adab9091b3e465819c83c8c42ed94697b63507708",
+        "size": 41914650304,
+        "pointerSize": 136
+      }
+    }
+  ],
+  "metadataURL": "https://huggingface.co/api/models/unsloth/GLM-5.3-GGUF?blobs=true"
+}

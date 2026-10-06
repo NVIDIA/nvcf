@@ -170,6 +170,14 @@ func Args(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) []string {
 	if ep.Spec.MaxEngineConcurrency != nil {
 		args = append(args, fmt.Sprintf("--max-engine-concurrency=%d", *ep.Spec.MaxEngineConcurrency))
 	}
+	if ep.Spec.Canary != nil {
+		if timeout := ep.Spec.Canary.TimeoutSeconds; timeout != nil {
+			args = append(args, fmt.Sprintf("--bringup-canary-timeout-ms=%d", int64(*timeout)*1000))
+		}
+		if interval := ep.Spec.Canary.IntervalSeconds; interval != nil {
+			args = append(args, fmt.Sprintf("--active-canary-interval-ms=%d", int64(*interval)*1000))
+		}
+	}
 	args = append(args, "--initial-input-tps="+strconv.FormatFloat(cfg.InitialInputTPS, 'f', -1, 64))
 	if cfg.DevInsecureTransport {
 		args = append(args, "--quic-insecure")

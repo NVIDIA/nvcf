@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+replicaCount: 1
+image: openai-compatible-sample:e2e
+imagePullPolicy: IfNotPresent
+nodeSelector: {}
+modelName: test-model
