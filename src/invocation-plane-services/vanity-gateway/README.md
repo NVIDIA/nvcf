@@ -524,11 +524,23 @@ dropped before replay. The `openai_model_name` label identifies the shadow
 target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,
 or `concurrency_limit`.
 
-`gateway_proxy_outcome` is present only on Gateway server metrics emitted when
-the ReverseProxy ErrorHandler writes an error response. Its value is
-`client_canceled` when the inbound request is canceled before upstream response
-headers are written, or `gateway_proxy_error` for another ErrorHandler failure.
-Successful requests and upstream HTTP responses omit this label.
+`gateway_proxy_outcome` labels the origin of non-2xx responses on the Gateway
+server metric (`http_server_request_duration_seconds`) and as the
+`gateway.proxy.outcome` span attribute. Successful requests omit it. Values:
+
+- `gateway_rejected`: the gateway answered itself with no dependency involved
+  (offline `503`, end-of-life `410`, reserved-header `400`, request validation
+  `400`/`404`/`500`).
+- `client_canceled`: the inbound request was canceled before upstream response
+  headers were written (`499`).
+- `gateway_proxy_error`: another ReverseProxy ErrorHandler failure (`502`).
+- `upstream_status`: a non-2xx status passed through from the upstream,
+  including `429` responses whose body the gateway rewrites.
+
+Non-2xx responses also carry an `NVCF-Error-Source` header with the same value.
+Any `NVCF-Error-Source` header sent by the upstream is removed first. Status
+codes and bodies are unchanged. Because the metric label set depends on the
+response status, the label values cannot be pre-initialized on the first scrape.
 
 ## Running a Local OpenAI-compatible Model
 

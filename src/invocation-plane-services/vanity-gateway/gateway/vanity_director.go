@@ -48,8 +48,9 @@ const statusClientClosedRequest = 499
 // writeFunctionStatusError writes a 503 or 410 response if the function is offline or expired.
 // name is used in the EOL detail message; pass empty string for vanity/path-based endpoints.
 // Returns true if an error response was written and the caller should return early.
-func writeFunctionStatusError(writer http.ResponseWriter, offlineMessage string, eol time.Time, name string) bool {
+func writeFunctionStatusError(writer http.ResponseWriter, request *http.Request, offlineMessage string, eol time.Time, name string) bool {
 	if offlineMessage != "" {
+		markGatewayRejected(writer, request)
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.Header().Set("Retry-After", "10800")
 		writer.WriteHeader(http.StatusServiceUnavailable)
@@ -68,6 +69,7 @@ func writeFunctionStatusError(writer http.ResponseWriter, offlineMessage string,
 		} else {
 			detail = fmt.Sprintf("This endpoint has reached its end of life on %s and is no longer available.", eol.Format(time.RFC3339))
 		}
+		markGatewayRejected(writer, request)
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.WriteHeader(http.StatusGone)
 		_ = json.NewEncoder(writer).Encode(ProblemDetails{
@@ -92,8 +94,43 @@ func addGatewayProxyOutcome(request *http.Request, outcome middleware.GatewayPro
 	if request == nil {
 		return
 	}
-	middleware.AddGatewayProxyOutcomeMetricAttribute(request.Context(), outcome)
-	trace.SpanFromContext(request.Context()).SetAttributes(traceAttrGatewayProxyOutcome.String(string(outcome)))
+	middleware.RecordGatewayProxyOutcome(request.Context(), outcome)
+}
+
+// markGatewayRejected labels a response the gateway writes itself with no
+// dependency involved. Call it before the status is written.
+func markGatewayRejected(writer http.ResponseWriter, request *http.Request) {
+	addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeRejected)
+	writer.Header().Set(middleware.ErrorSourceHeader, string(middleware.GatewayProxyOutcomeRejected))
+}
+
+// markUpstreamResponse drops any error source header the upstream sent so a
+// dependency cannot spoof it, then labels non-2xx upstream responses. request
+// is the inbound request, which carries the server metric labeler and span.
+func markUpstreamResponse(request *http.Request, resp *http.Response) {
+	resp.Header.Del(middleware.ErrorSourceHeader)
+	if resp.StatusCode < http.StatusMultipleChoices {
+		return
+	}
+	addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeUpstreamStatus)
+	resp.Header.Set(middleware.ErrorSourceHeader, string(middleware.GatewayProxyOutcomeUpstreamStatus))
+}
+
+// requestProxy returns a per-request copy of base that labels upstream
+// responses against the inbound request and records the first proxy error.
+func requestProxy(base *httputil.ReverseProxy, request *http.Request, proxyErr *error) *httputil.ReverseProxy {
+	rp := *base
+	rp.ModifyResponse = func(resp *http.Response) error {
+		markUpstreamResponse(request, resp)
+		return modifyTooManyRequestsResponse(resp)
+	}
+	rp.ErrorHandler = func(writer http.ResponseWriter, request *http.Request, err error) {
+		if proxyErr != nil {
+			*proxyErr = err
+		}
+		writeProxyError(writer, request, err)
+	}
+	return &rp
 }
 
 // writeProxyError maps a canceled inbound request to 499; all other ReverseProxy
@@ -101,6 +138,7 @@ func addGatewayProxyOutcome(request *http.Request, outcome middleware.GatewayPro
 func writeProxyError(writer http.ResponseWriter, request *http.Request, err error) {
 	if clientClosedRequest(request) {
 		addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeClientCanceled)
+		writer.Header().Set(middleware.ErrorSourceHeader, string(middleware.GatewayProxyOutcomeClientCanceled))
 		zap.L().Debug("proxy request canceled",
 			zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeClientCanceled)),
 			zap.Error(err),
@@ -124,6 +162,7 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 
 func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, err error) {
 	addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeProxyError)
+	writer.Header().Set(middleware.ErrorSourceHeader, string(middleware.GatewayProxyOutcomeProxyError))
 	zap.L().Warn("proxy request failed",
 		zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeProxyError)),
 		zap.Error(err),
@@ -279,7 +318,7 @@ func (d *VanityDirector) ServeExec(target VanityExecRequest, writer http.Respons
 		traceAttrFunctionVersionID.String(target.FunctionVersionID),
 	)
 
-	if writeFunctionStatusError(writer, target.OfflineMessage, target.EOL, "") {
+	if writeFunctionStatusError(writer, request, target.OfflineMessage, target.EOL, "") {
 		return nil
 	}
 
@@ -291,12 +330,7 @@ func (d *VanityDirector) ServeExec(target VanityExecRequest, writer http.Respons
 	}
 
 	var proxyErr error
-	rp := *d.rp
-	rp.ErrorHandler = func(writer http.ResponseWriter, request *http.Request, err error) {
-		proxyErr = err
-		writeProxyError(writer, request, err)
-	}
-	rp.ServeHTTP(writer, request)
+	requestProxy(d.rp, request, &proxyErr).ServeHTTP(writer, request)
 	return proxyErr
 }
 
@@ -305,6 +339,7 @@ func (d *VanityDirector) ServePolling(writer http.ResponseWriter, request *http.
 	nvcfUrl, _ := url.Parse(d.nvcfApiScheme + "://" + d.nvcfApiHost + "/v2/nvcf/pexec/status/" + requestId)
 	if nvcfUrl == nil {
 		request.Body.Close()
+		markGatewayRejected(writer, request)
 		http.NotFound(writer, request)
 		return
 	}
@@ -312,7 +347,7 @@ func (d *VanityDirector) ServePolling(writer http.ResponseWriter, request *http.
 	request.Host = ""
 	setPollingHeaderIfNotPresent(request, 0)
 
-	d.rp.ServeHTTP(writer, request)
+	requestProxy(d.rp, request, nil).ServeHTTP(writer, request)
 }
 
 func setPollingHeaderIfNotPresent(request *http.Request, sessionTimeout config.SessionTimeoutSeconds) {

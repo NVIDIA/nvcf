@@ -108,8 +108,10 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 		return nil, err
 	}
 
+	serverTelemetry := middleware.ServerTelemetryMiddleware()
+
 	r := chi.NewRouter()
-	r.Use(middleware.RejectSpoofedShadowRequests(shadowHeader))
+	r.Use(middleware.RejectSpoofedShadowRequests(shadowHeader, serverTelemetry))
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(requestTimeout))
@@ -121,7 +123,6 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 	}))
 
 	hostRouter := &middleware.HostRouter{}
-	serverTelemetry := middleware.ServerTelemetryMiddleware()
 
 	registerModelAPIs(hostRouter, mappings, modelDirector, healthManager, serverTelemetry)
 	registerVanity(hostRouter, mappings, vanityDirector, healthManager, serverTelemetry)

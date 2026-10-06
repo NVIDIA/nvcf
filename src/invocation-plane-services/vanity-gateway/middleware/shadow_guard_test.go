@@ -30,7 +30,7 @@ func TestRejectSpoofedShadowRequests_RejectsHeaderPresent(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := RejectSpoofedShadowRequests("NVCF-Shadow")(inner)
+	handler := RejectSpoofedShadowRequests("NVCF-Shadow", nil)(inner)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	req.Header.Set("NVCF-Shadow", "true")
@@ -48,7 +48,7 @@ func TestRejectSpoofedShadowRequests_AllowsNormalRequests(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	handler := RejectSpoofedShadowRequests("NVCF-Shadow")(inner)
+	handler := RejectSpoofedShadowRequests("NVCF-Shadow", nil)(inner)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	rec := httptest.NewRecorder()
@@ -64,7 +64,7 @@ func TestRejectSpoofedShadowRequests_RejectsAnyHeaderValue(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := RejectSpoofedShadowRequests("NVCF-Shadow")(inner)
+	handler := RejectSpoofedShadowRequests("NVCF-Shadow", nil)(inner)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	req.Header.Set("NVCF-Shadow", "false")

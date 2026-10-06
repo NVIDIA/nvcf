@@ -22,11 +22,22 @@ import "net/http"
 // RejectSpoofedShadowRequests returns middleware that rejects any external
 // request carrying the given header. Internal shadow replay requests bypass
 // the router middleware chain entirely, so this only affects external traffic.
-func RejectSpoofedShadowRequests(shadowHeaderName string) func(http.Handler) http.Handler {
+// The guard runs ahead of the server telemetry middleware, so the rejection is
+// served through observe (when non-nil) to land on the server request metric
+// with the gateway_rejected outcome.
+func RejectSpoofedShadowRequests(shadowHeaderName string, observe func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	reject := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		RecordGatewayProxyOutcome(r.Context(), GatewayProxyOutcomeRejected)
+		w.Header().Set(ErrorSourceHeader, string(GatewayProxyOutcomeRejected))
+		http.Error(w, "reserved header in external request", http.StatusBadRequest)
+	}))
+	if observe != nil {
+		reject = observe(reject)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get(shadowHeaderName) != "" {
-				http.Error(w, "reserved header in external request", http.StatusBadRequest)
+				reject.ServeHTTP(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)
