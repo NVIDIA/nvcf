@@ -207,11 +207,13 @@ func onRevision(objs []runtime.Object, name, rev string, ready bool, created tim
 	return objs
 }
 
-// A rollout is dated by its update revision, and since then by the pods it
-// replaces. A write to the spec that starts no rollout does not restart the
-// bound: helm re-dates its entry on a chart-version-only upgrade, and so does
-// a revisionHistoryLimit edit, as do the controller's status updates, an
-// autoscaler's scale and a label change.
+// A rollout is dated by its update revision, the last write to its template
+// or update strategy, and since then by the pods it replaces. A write by a
+// manager that owns neither does not restart the bound: a revisionHistoryLimit
+// edit, the controller's status updates, an autoscaler's scale and a label
+// change. The apiserver re-dates a manager's entry on any write by it, so a
+// chart-version-only helm upgrade re-dates helm's entry, which owns the
+// template, and grants the rollout one more bound but no more.
 func TestCheckTier2StatefulSets_SpecWritesDoNotRestartTheBound(t *testing.T) {
 	longAgo, recent := installedAt, time.Now().Add(-time.Minute)
 	wedged := func(writes ...metav1.ManagedFieldsEntry) []runtime.Object {
@@ -222,12 +224,12 @@ func TestCheckTier2StatefulSets_SpecWritesDoNotRestartTheBound(t *testing.T) {
 		return objs
 	}
 	for name, objs := range map[string][]runtime.Object{
-		"chart-version-only upgrade": wedged(specWrite(installManager, recent)),
 		"revisionHistoryLimit edit": wedged(managedFields("kubectl-edit", "",
 			`{"f:spec":{"f:revisionHistoryLimit":{}}}`, recent)),
 		"status, scale and label writes": wedged(statusWrite(recent),
 			managedFields("hpa", "scale", `{"f:spec":{"f:replicas":{}}}`, recent),
 			managedFields("kubectl-label", "", `{"f:metadata":{"f:labels":{"f:team":{}}}}`, recent)),
+		"helm upgrade 16 minutes ago": wedged(specWrite(installManager, time.Now().Add(-16*time.Minute))),
 	} {
 		state, log := runTier2Logged(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)
@@ -235,16 +237,77 @@ func TestCheckTier2StatefulSets_SpecWritesDoNotRestartTheBound(t *testing.T) {
 		assert.Contains(t, log, "rolling update is not progressing: no progress for", name)
 	}
 
+	state := runTier2(wedged(specWrite(installManager, recent)))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "a write by the template's manager a minute ago")
+
 	// With the update revision unreadable, the spec write is all that dates
 	// the rollout.
-	state := runTier2(withoutRevision(wedged(specWrite(installManager, recent)), "nats-r2"))
+	state = runTier2(withoutRevision(wedged(specWrite(installManager, recent)), "nats-r2"))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK)
+	state = runTier2(withoutRevision(wedged(managedFields("kubectl-edit", "",
+		`{"f:spec":{"f:revisionHistoryLimit":{}}}`, recent)), "nats-r2"))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK, "a history-limit edit does not date it either")
 }
 
 // A rollback reuses a ControllerRevision created long ago, and lowering a
-// partition creates none, so the pods they replace date them: a replacement
-// on the update revision created, or a pod deleted.
+// partition creates none, so the revision alone dates neither: the write to
+// the spec's template or update strategy that started it does. Writes by
+// managers that own neither field do not count: the controller's status
+// updates, an autoscaler's scale, a label change or a revisionHistoryLimit
+// edit.
+func TestCheckTier2StatefulSets_RollbackAndLoweredPartitionAreDatedBySpecWrite(t *testing.T) {
+	longAgo, recent := installedAt, time.Now().Add(-time.Minute)
+	// The old pod is deleted and its replacement not yet created, and every
+	// remaining pod and the revision rolled back to date from the install.
+	between := func() []runtime.Object {
+		return rollTo(createdAt(makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"}),
+			longAgo), "nats-r0", longAgo)
+	}
+	writes := func(objs []runtime.Object, entries ...metav1.ManagedFieldsEntry) []runtime.Object {
+		sts := objs[0].(*appsv1.StatefulSet)
+		sts.ManagedFields = append(sts.ManagedFields, entries...)
+		return objs
+	}
+
+	rolledBack := between()
+	sts := rolledBack[0].(*appsv1.StatefulSet)
+	for i := range sts.ManagedFields {
+		if sts.ManagedFields[i].Manager == installManager {
+			sts.ManagedFields[i] = specWrite(installManager, recent)
+		}
+	}
+	state := runTier2(rolledBack)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "a helm rollback a minute ago is a rollout a minute old")
+
+	lowered := writes(between(), managedFields("kubectl-patch", "",
+		`{"f:spec":{"f:updateStrategy":{"f:rollingUpdate":{"f:partition":{}}}}}`, recent))
+	partition := int32(0)
+	lowered[0].(*appsv1.StatefulSet).Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
+		Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
+	}
+	state = runTier2(lowered)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "a partition lowered a minute ago starts a new step")
+
+	unrelated := writes(between(), statusWrite(recent),
+		managedFields("hpa", "scale", `{"f:spec":{"f:replicas":{}}}`, recent),
+		managedFields("kubectl-label", "", `{"f:metadata":{"f:labels":{"f:team":{}}}}`, recent),
+		managedFields("kubectl-edit", "", `{"f:spec":{"f:revisionHistoryLimit":{}}}`, recent))
+	state, log := runTier2Logged(unrelated)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK, "status, scale, label and history-limit writes start no rollout")
+	assert.Contains(t, log, "rolling update is not progressing: no progress for 24h")
+}
+
+// A rollback reuses a ControllerRevision created long ago, and lowering a
+// partition creates none. Once the write that started them is long past, the
+// pods they replace date them: a replacement on the update revision created,
+// or a pod deleted.
 func TestCheckTier2StatefulSets_RollbackAndLoweredPartitionAreDatedByTheirPods(t *testing.T) {
 	longAgo, recent := installedAt, time.Now().Add(-time.Minute)
 	rollback := func(replacementCreated time.Time) []runtime.Object {

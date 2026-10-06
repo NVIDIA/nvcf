@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -4456,6 +4457,40 @@ func specWrittenAt(obj metav1.Object) (latest time.Time, recorded bool) {
 	return latest, recorded
 }
 
+// rolloutSpecFields are the StatefulSet spec fields a write to which can start
+// a rollout step: the pod template, which a rollback rewrites, and the update
+// strategy, whose partition a staged rollout lowers.
+var rolloutSpecFields = []string{"f:template", "f:updateStrategy"}
+
+// rolloutSpecWrittenAt is when sts was last written by a manager that owns
+// one of rolloutSpecFields: the latest such managedFields entry for the object
+// itself. recorded is false when none exists. Entries of managers that own
+// none of them, such as a label edit, an autoscaler's scale or a
+// revisionHistoryLimit edit, are left out. The apiserver re-dates an entry on
+// any write by its manager, so a write by one that owns the template, such as
+// helm, dates a rollout even when it changed only metadata: that grants the
+// rollout at most one more stalledRolloutAfter.
+func rolloutSpecWrittenAt(sts *appsv1.StatefulSet) (latest time.Time, recorded bool) {
+	for _, mf := range sts.ManagedFields {
+		if mf.Subresource != "" || mf.Time == nil || mf.FieldsV1 == nil {
+			continue
+		}
+		var owned struct {
+			Spec map[string]json.RawMessage `json:"f:spec"`
+		}
+		if err := json.Unmarshal(mf.FieldsV1.Raw, &owned); err != nil {
+			continue
+		}
+		for _, field := range rolloutSpecFields {
+			if _, ok := owned.Spec[field]; ok {
+				latest, recorded = laterOf(latest, mf.Time.Time), true
+				break
+			}
+		}
+	}
+	return latest, recorded
+}
+
 // hasProgressDeadline reports whether the Deployment controller tracks a
 // progress deadline for d. MaxInt32 is the API's "no deadline" sentinel.
 func hasProgressDeadline(d *appsv1.Deployment) bool {
@@ -5654,13 +5689,14 @@ func (s *tier2Scan) assessMembers(
 	// evidence: one the rollout will not replace or that can never start, or
 	// no progress at all for too long.
 	if oneDownRolling {
-		// The update revision dates the rollout. A spec write is only the
-		// fallback when that cannot be read: it is re-dated by writes that
-		// start no rollout. Without a recorded one, the StatefulSet's
-		// creation would date the rollout from before it began.
+		// A new template starts a rollout with a new update revision. A
+		// rollback reuses an old revision and a lowered partition creates
+		// none, so the write to the template or the update strategy that
+		// started either dates it. Without either, the StatefulSet's creation
+		// would date the rollout from before it began.
 		started, revErr := updateRevisionCreated(ctx, client, ns, sts)
-		if written, recorded := specWrittenAt(sts); revErr != nil && recorded {
-			started = written
+		if written, recorded := rolloutSpecWrittenAt(sts); recorded {
+			started = laterOf(started, written)
 		}
 		reason, undated := stalledRollout(sts, pods.Items, started, time.Now())
 		switch {
@@ -6245,7 +6281,8 @@ func podOrdinal(sts *appsv1.StatefulSet, p *corev1.Pod) int {
 // updateRevisionCreated is when the StatefulSet's update revision was
 // created, or the zero time and why the revision could not be read. A rollout
 // to a new template begins then; a rollback reuses an older revision and a
-// lowered partition creates none, so their pods date them.
+// lowered partition creates none, so the spec write that started them dates
+// them (rolloutSpecWrittenAt).
 func updateRevisionCreated(
 	ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet,
 ) (time.Time, error) {
