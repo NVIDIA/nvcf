@@ -23,6 +23,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2502,9 +2503,19 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 // one-downloader election. nil kube client (tests, offline) yields a
 // releaser whose methods are no-ops.
 func (s *Server) electionReleaser() *electionReleaser {
-	return &electionReleaser{
+	r := &electionReleaser{
 		kube:    s.kubeClient,
 		leaseNS: captureManifestNamespace,
 		log:     s.log.WithField("subsys", "election"),
 	}
+	if s.catalog != nil {
+		r.promoteState = func(hash string) (string, error) {
+			state, _, err := s.catalog.GetPVCPromoteStateByHash(hash)
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", nil
+			}
+			return state, err
+		}
+	}
+	return r
 }
