@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "hostlibs",
+    srcs = ["hostlibs.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+)
+
+go_test(
+    name = "hostlibs_test",
+    srcs = ["hostlibs_test.go"],
+    embed = [":hostlibs"],
+)
