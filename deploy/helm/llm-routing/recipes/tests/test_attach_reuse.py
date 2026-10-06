@@ -34,7 +34,7 @@ class AttachReuseTests(unittest.TestCase):
         key.write_text('test-only-key\n')
         recipe.state = {
             'identity': recipe.identity,
-            'inventory': {'nodes': {name: name+'-uid' for name in config['nodes'].values()}},
+            'inventory': {'nodes': {name: name+'-uid' for name in tool.all_nodes(config)}},
             'runtimeSha256': 'a'*64, 'download': True, 'qualify': True,
             'stack': {'source': recipe.source_identity(), 'apiKeyFile': str(key)},
             'serve': True, 'registered': True, 'direct': True, 'gateway': True,
@@ -115,7 +115,8 @@ class AttachReuseTests(unittest.TestCase):
     def test_live_identity_and_runtime_mismatches_preserve_local_state(self):
         changes = {
             'context': 'another-context', 'namespace': 'another-namespace',
-            'clusterId': 'another-cluster', 'nodes': {'control': 'c', 'leader': 'a', 'worker': 'b'},
+            'clusterId': 'another-cluster', 'nodes': {'control': 'c', 'model': ['a', 'b']},
+            'gpu': {'name': 'NVIDIA GB300', 'computeCapability': '10.3', 'memoryGiB': 268.0, 'unifiedMemory': False, 'cudaArchitectures': None},
             'runtimeClass': 'another-runtime', 'runtimeImage': 'example.com/another:runtime',
             'storageClass': 'another-storage', 'caConfigMap': 'another-ca',
         }
@@ -149,7 +150,7 @@ class AttachReuseTests(unittest.TestCase):
         recipe, _ = self.installation()
         before = recipe.state_path.read_bytes()
         nodes = {'items': [{'metadata': {'name': name, 'uid': name+'-replacement'}}
-                           for name in recipe.c['nodes'].values()]}
+                           for name in tool.all_nodes(recipe.c)]}
         with patch.object(tool, 'output', return_value=json.dumps(nodes)) as output, \
              patch.object(tool, 'discover_config') as discover, patch.object(tool, 'save') as save:
             with self.assertRaisesRegex(RuntimeError, 'identities changed|another cluster'):

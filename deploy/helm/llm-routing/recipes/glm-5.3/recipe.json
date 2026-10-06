@@ -53,5 +53,18 @@
   "runtimeEnv": {
     "GGML_CUDA_DISABLE_GRAPHS": "1",
     "GGML_RPC_NO_RDMA": "1"
+  },
+  "memory": {
+    "unified": {
+      "reservedGiB": 4,
+      "checkOverShareGiB": 1,
+      "requestUnderShareGiB": 1,
+      "limitOverShareGiB": 2
+    },
+    "discrete": {
+      "gpuHeadroomGiB": 16,
+      "hostRequestGiB": 32,
+      "hostLimitGiB": 64
+    }
   }
 }

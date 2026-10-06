@@ -14,7 +14,7 @@ class ReinitializationTests(unittest.TestCase):
         self.prefix = self.config['releasePrefix']
         self.resources = {
             'namespaces': [{'metadata': {'name': self.namespace}}],
-            'nodes': [node(name) for name in self.config['nodes'].values()],
+            'nodes': [node(name) for name in sorted({self.config['nodes']['control'], *self.config['nodes']['model']})],
             'pods': [], 'inferenceendpoints.pylon.nvidia.com': [],
             'deployments,statefulsets,daemonsets,jobs,cronjobs,pods,services,ingresses': [],
             'persistentvolumeclaims': [], 'persistentvolumes': [], 'secrets': [],
@@ -22,7 +22,8 @@ class ReinitializationTests(unittest.TestCase):
                       'spec': {'group': 'pylon.nvidia.com', 'scope': 'Namespaced', 'names': {'kind': 'InferenceEndpoint'},
                                'versions': [{'name': 'v1alpha1', 'served': True, 'storage': True}]}}],
         }
-        for suffix, role in [('artifacts', 'leader'), ('rpc-cache', 'worker')]:
+        model = self.config['nodes']['model']
+        for suffix, placed in [('artifacts', model[0]), ('rpc-cache-n1', model[1])]:
             name = self.prefix+'-glm-'+suffix
             self.resources['persistentvolumeclaims'].append({
                 'metadata': self.metadata(name, self.prefix+'-glm'), 'status': {'phase': 'Bound'},
@@ -31,7 +32,7 @@ class ReinitializationTests(unittest.TestCase):
             self.resources['persistentvolumes'].append({'metadata': {'name': name}, 'spec': {
                 'claimRef': {'uid': name, 'name': name, 'namespace': self.namespace},
                 'nodeAffinity': {'required': {'nodeSelectorTerms': [{'matchExpressions': [
-                    {'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [self.config['nodes'][role]]}]}]}}}})
+                    {'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [placed]}]}]}}}})
 
     def metadata(self, name, release):
         return {'name': name, 'uid': name, 'annotations': {'meta.helm.sh/release-name': release,
@@ -105,7 +106,7 @@ class ReinitializationTests(unittest.TestCase):
             self.validate()
 
     def test_busy_gpu_and_terminating_namespace_are_rejected(self):
-        self.resources['pods'] = [gpu_pod(self.config['nodes']['leader'])]
+        self.resources['pods'] = [gpu_pod(self.config['nodes']['model'][0])]
         with self.assertRaisesRegex(setup.ClusterSetupError, 'occupied'):
             self.validate()
         self.resources['pods'] = []

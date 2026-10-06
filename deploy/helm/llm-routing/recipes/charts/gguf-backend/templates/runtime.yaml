@@ -1,20 +1,23 @@
 {{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
 {{- if has .Values.phase (list "qualify" "download" "serve") }}
+{{- $leader := (index (required "targets are required" .Values.targets) 0).id }}
 {{- if .Values.rpc.cache.enabled }}
+{{- range $target := rest .Values.targets }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Release.Name }}-rpc-cache
+  name: {{ $.Release.Name }}-rpc-cache-{{ $target.id }}
   annotations:
     helm.sh/resource-policy: keep
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: {{ .Values.rpc.cache.storageClassName | quote }}
+  storageClassName: {{ $.Values.rpc.cache.storageClassName | quote }}
   resources:
     requests:
-      storage: {{ .Values.rpc.cache.size }}
+      storage: {{ $.Values.rpc.cache.size }}
 ---
+{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -79,7 +82,7 @@ spec:
   podSelector:
     matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}}
     matchExpressions:
-      - {key: app.kubernetes.io/component, operator: In, values: [artifacts, rpc-leader, rpc-worker]}
+      - {key: app.kubernetes.io/component, operator: In, values: [artifacts{{ range .Values.targets }}, rpc-{{ .id }}{{ end }}]}
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -101,7 +104,7 @@ data:
   fetch-runtime.py: |
 {{ .Files.Get "files/fetch-runtime.py" | indent 4 }}
 {{- range $target := .Values.targets }}
-{{- if or (ne $.Values.phase "serve") (eq $target.id "worker") }}
+{{- if or (ne $.Values.phase "serve") (ne $target.id $leader) }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -163,12 +166,12 @@ spec:
             - '50052'
             - --device
             - CUDA0
-{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+{{- if and $.Values.rpc.cache.enabled (ne $target.id $leader) }}
             - --cache
 {{- end }}
           env:
             - {name: HOME, value: /tmp}
-{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+{{- if and $.Values.rpc.cache.enabled (ne $target.id $leader) }}
             - {name: LLAMA_CACHE, value: /rpc-cache}
 {{- end }}
 {{- range $name, $value := $.Values.runtime.env }}
@@ -191,7 +194,7 @@ spec:
             - {name: runtime, mountPath: /work, readOnly: true}
             - {name: tmp, mountPath: /tmp}
             - {name: checks, mountPath: /checks, readOnly: true}
-{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+{{- if and $.Values.rpc.cache.enabled (ne $target.id $leader) }}
             - {name: rpc-cache, mountPath: /rpc-cache}
 {{- end }}
       volumes:
@@ -201,9 +204,9 @@ spec:
           configMap: {name: {{ $.Release.Name }}-runtime}
         - name: tmp
           emptyDir: {sizeLimit: 2Gi}
-{{- if and $.Values.rpc.cache.enabled (eq $target.id "worker") }}
+{{- if and $.Values.rpc.cache.enabled (ne $target.id $leader) }}
         - name: rpc-cache
-          persistentVolumeClaim: {claimName: {{ $.Release.Name }}-rpc-cache}
+          persistentVolumeClaim: {claimName: {{ $.Release.Name }}-rpc-cache-{{ $target.id }}}
 {{- end }}
 ---
 apiVersion: v1

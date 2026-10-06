@@ -30,7 +30,7 @@ class DiscoveryTests(unittest.TestCase):
         self.resources = {('deployment', 'llm-api-gateway'): self.gateway,
                           ('deployment', 'llm-request-router'): self.router,
                           ('deployment', 'team-glm'): owned('team-glm', 'team-glm', 'leader'),
-                          ('deployment', 'team-glm-rpc-worker'): owned('team-glm-rpc-worker', 'team-glm', 'worker'),
+                          ('deployment', 'team-glm-rpc-n1'): owned('team-glm-rpc-n1', 'team-glm', 'worker'),
                           ('deployment', 'operator'): owned('operator', 'operator', 'control'),
                           ('service', 'team-glm'): owned('team-glm', 'team-glm'),
                           ('inferenceendpoint', 'glm53-iq2'): endpoint}
@@ -42,7 +42,9 @@ class DiscoveryTests(unittest.TestCase):
                            'llm-api-gateway': {'llmApiGateway': {'image': {'registry': 'registry.example.com', 'repository': 'gateway', 'tag': 'current', 'pullPolicy': 'Never'},
                                'auth': {'mode': 'staticKeys', 'staticKeys': {'existingSecret': 'caller-keys'}}}},
                            'llm-request-router': {'llmRequestRouter': {'image': {'registry': 'other.example.com', 'repository': 'router', 'tag': 'previous'}}}},
-            'team-glm': {'targets': [{'id': 'leader', 'node': 'leader'}, {'id': 'worker', 'node': 'worker'}],
+            'team-glm': {'targets': [{'id': 'n0', 'node': 'leader'}, {'id': 'n1', 'node': 'worker'}],
+                         'gpu': {'name': 'NVIDIA GB10', 'computeCapability': '12.1', 'memoryGiB': 121.6,
+                                 'unifiedMemory': True, 'cudaArchitectures': None, 'product': 'NVIDIA-GB10'},
                          'artifacts': {'storageClassName': 'storage'}, 'runtimeClassName': 'gpu', 'image': 'cuda/runtime:pinned'},
             'operator': {'clusterId': 'demo', 'watchNamespaces': ['demo'], 'router': {'grpcAddress': 'http://llm-request-router.demo.svc.cluster.local:50071'},
                          'fullnameOverride': 'operator', 'trustBundle': {'configMap': 'public-ca'},
@@ -87,6 +89,22 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(config['releasePrefix'], 'shared')
         self.assertIsNone(config['apiKeyFile'])
         self.assertNotIn('DO-NOT-COPY', json.dumps(config))
+        self.assertEqual(config['recipe'], 'glm-5.3')
+        self.assertEqual(config['nodes'], {'control': 'control', 'model': ['leader', 'worker']})
+        self.assertEqual(config['gpu'], {'name': 'NVIDIA GB10', 'computeCapability': '12.1', 'memoryGiB': 121.6,
+                                         'unifiedMemory': True, 'cudaArchitectures': None})
+
+    def test_single_node_installation_has_no_rpc_workers(self):
+        self.values['team-glm']['targets'] = [{'id': 'n0', 'node': 'leader'}]
+        del self.resources[('deployment', 'team-glm-rpc-n1')]
+        config = self.discover()
+        self.assertEqual(config['nodes'], {'control': 'control', 'model': ['leader']})
+        self.assertFalse(any('-rpc-' in part for command in self.commands for part in command))
+
+    def test_unknown_endpoint_is_not_adopted(self):
+        self.resources[('inferenceendpoint', 'glm53-iq2')]['spec']['modelName'] = 'another-model'
+        with self.assertRaisesRegex(RuntimeError, 'does not match a recipe'):
+            self.discover()
 
     def test_legacy_archive_directory_is_not_carried_into_new_configuration(self):
         self.values['shared-images']['archiveDirectory'] = '/unused/old-user-directory'

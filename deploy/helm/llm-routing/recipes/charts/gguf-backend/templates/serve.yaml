@@ -18,7 +18,7 @@ kind: Deployment
 metadata:
   name: {{ .Release.Name }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.model.replicas }}
   progressDeadlineSeconds: 3660
   strategy: {type: Recreate}
   selector:
@@ -51,7 +51,7 @@ spec:
             - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
             - {name: FIRST_SHARD, value: {{ required "model.firstShard is required" .Values.model.firstShard | quote }}}
             - {name: SERVED_MODEL, value: {{ required "model.servedName is required" .Values.model.servedName | quote }}}
-            - {name: RPC_ENDPOINT, value: "{{ .Release.Name }}-rpc-worker:50052"}
+            - {name: RPC_ENDPOINTS, value: "{{ range $i, $target := rest .Values.targets }}{{ if $i }},{{ end }}{{ $.Release.Name }}-rpc-{{ $target.id }}:50052{{ end }}"}
             - {name: SERVER_ARGS, value: {{ toJson .Values.model.args | quote }}}
 {{- range $name, $value := .Values.runtime.env }}
             - {name: {{ $name }}, value: {{ $value | quote }}}
@@ -103,6 +103,6 @@ spec:
   canary: {{ toJson . }}
 {{- end }}
   maxEngineConcurrency: 1
-  gpu: {product: NVIDIA-GB10}
+  gpu: {product: {{ required "gpu.product is required" .Values.gpu.product | quote }}}
 {{- end }}
 {{- end }}

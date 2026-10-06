@@ -41,7 +41,7 @@ spec:
             - {name: NVIDIA_VISIBLE_DEVICES, value: none}
             - {name: NVIDIA_DRIVER_CAPABILITIES, value: 'compute,utility'}
             - {name: GGML_RPC_NO_RDMA, value: '1'}
-            - {name: RPC_ENDPOINTS, value: "{{ .Release.Name }}-rpc-leader:50052,{{ .Release.Name }}-rpc-worker:50052"}
+            - {name: RPC_ENDPOINTS, value: "{{ range $i, $target := .Values.targets }}{{ if $i }},{{ end }}{{ $.Release.Name }}-rpc-{{ $target.id }}:50052{{ end }}"}
           resources:
             requests: {cpu: '1', memory: 512Mi}
             limits: {cpu: '2', memory: 2Gi}

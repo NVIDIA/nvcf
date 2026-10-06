@@ -19,36 +19,44 @@ class LoadResumeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='recipe-resume-')
         self.addCleanup(self.tmp.cleanup)
-        config = json.loads((HERE/'config.example.json').read_text())
+        self.build(json.loads((HERE/'config.example.json').read_text()))
+
+    def build(self, config):
         self.recipe = tool.Recipe(config, self.tmp.name)
         self.recipe.state = {'download': True, 'runtimeSha256': 'a'*64}
         self.values = self.recipe.backend_values('serve')
         self.release = {'name': self.recipe.backend, 'namespace': config['namespace'],
                         'version': 6, 'info': {'status': 'deployed'}}
         self.resources = []
-        for suffix, role, container, component in [('', 'leader', 'llama', 'model-server'),
-                ('-rpc-worker', 'worker', 'rpc', 'rpc-worker'), ('-artifacts', 'leader', 'artifacts', 'artifacts')]:
+        leader = config['nodes']['model'][0]
+        deployments = [('', leader, 'llama', 'model-server')]
+        deployments += [('-rpc-'+w['id'], w['node'], 'rpc', 'rpc-'+w['id']) for w in self.recipe.workers]
+        deployments += [('-artifacts', leader, 'artifacts', 'artifacts')]
+        for suffix, node, container, component in deployments:
             name = self.recipe.backend+suffix
             labels = {'app.kubernetes.io/instance': self.recipe.backend, 'app.kubernetes.io/component': component}
             self.resources.append({'kind': 'Deployment', 'metadata': self.metadata(name, generation=2),
                 'spec': {'replicas': 1, 'selector': {'matchLabels': labels}, 'template': {
                     'metadata': {'labels': labels, 'annotations': {'checksum/runtime': self.recipe.state['runtimeSha256']}},
                     'spec': {'runtimeClassName': config['runtimeClass'],
-                             'nodeSelector': {'kubernetes.io/hostname': config['nodes'][role]},
+                             'nodeSelector': {'kubernetes.io/hostname': node},
                              'containers': [{'name': container, 'image': config['runtimeImage'],
                                 'resources': {'requests': {'nvidia.com/gpu': '1'}, 'limits': {'nvidia.com/gpu': '1'}}}]}}},
                 'status': {'observedGeneration': 2, 'replicas': 1, 'updatedReplicas': 1,
                            'readyReplicas': 1, 'availableReplicas': 1}})
         for resource in self.resources:
             pod = resource['spec']['template']['spec']
-            volume = 'rpc-cache' if resource['metadata']['name'].endswith('-rpc-worker') else 'artifacts'
-            pod['volumes'] = [{'name': volume, 'persistentVolumeClaim': {'claimName': self.recipe.backend+'-'+volume}}]
+            name = resource['metadata']['name']
+            worker = name[len(self.recipe.backend+'-rpc-'):] if name.startswith(self.recipe.backend+'-rpc-') else None
+            volume, claim = ('rpc-cache', self.recipe.backend+'-rpc-cache-'+worker) if worker else ('artifacts', self.recipe.backend+'-artifacts')
+            pod['volumes'] = [{'name': volume, 'persistentVolumeClaim': {'claimName': claim}}]
             pod['containers'][0]['volumeMounts'] = [{'name': volume, 'mountPath': '/'+volume}]
         env = {'FIRST_SHARD': self.values['model']['firstShard'], 'SERVED_MODEL': self.values['model']['servedName'],
-               'RPC_ENDPOINT': self.recipe.backend+'-rpc-worker:50052', 'SERVER_ARGS': json.dumps(self.values['model']['args'])}
+               'RPC_ENDPOINTS': ','.join(self.recipe.backend+'-rpc-'+w['id']+':50052' for w in self.recipe.workers),
+               'SERVER_ARGS': json.dumps(self.values['model']['args'])}
         self.resources[0]['spec']['template']['spec']['containers'][0]['env'] = [
             {'name': key, 'value': value} for key, value in env.items()]
-        for suffix in ('-artifacts', '-rpc-cache'):
+        for suffix in ['-artifacts'] + ['-rpc-cache-'+w['id'] for w in self.recipe.workers]:
             name = self.recipe.backend+suffix
             self.resources.append({'kind': 'PersistentVolumeClaim', 'metadata': self.metadata(name),
                 'spec': {'volumeName': name+'-volume', 'storageClassName': config['storageClass']},
@@ -116,8 +124,31 @@ class LoadResumeTests(unittest.TestCase):
                                     self.recipe.backend_values('serve'), '70m', jobs=False)
         memory = [command for command in self.commands if 'exec' in command]
         self.assertEqual(len(memory), 2)
-        self.assertTrue(any('deploy/'+self.recipe.backend+'-rpc-leader' in command for command in memory))
+        self.assertEqual([command[command.index('exec')+1] for command in memory],
+                         ['deploy/'+self.recipe.backend+'-rpc-n0', 'deploy/'+self.recipe.backend+'-rpc-n1'])
         self.assertTrue(self.recipe.state['serve'])
+
+    def test_single_node_load_resumes_without_rpc_workers(self):
+        config = json.loads((HERE/'config.example.json').read_text())
+        config['nodes']['model'] = ['model-0']
+        config['gpu'] = {'name': 'NVIDIA GB300', 'computeCapability': '10.3', 'memoryGiB': 268.0,
+                         'unifiedMemory': False, 'cudaArchitectures': None}
+        self.build(config)
+        self.attempt().assert_not_called()
+        evidence = json.loads((self.recipe.work/'evidence/load-resume.json').read_text())
+        self.assertEqual(sorted(evidence['resources']), ['Deployment/'+self.recipe.backend, 'Deployment/'+self.recipe.backend+'-artifacts',
+                                                         'PersistentVolumeClaim/'+self.recipe.backend+'-artifacts'])
+
+    def test_first_single_node_load_checks_only_the_leader_memory(self):
+        config = json.loads((HERE/'config.example.json').read_text())
+        config['nodes']['model'] = ['model-0']
+        config['gpu'] = {'name': 'NVIDIA GB300', 'computeCapability': '10.3', 'memoryGiB': 268.0,
+                         'unifiedMemory': False, 'cudaArchitectures': None}
+        self.build(config)
+        self.values = self.recipe.backend_values('download')
+        self.attempt()
+        memory = [command[command.index('exec')+1] for command in self.commands if 'exec' in command]
+        self.assertEqual(memory, ['deploy/'+self.recipe.backend+'-rpc-n0'])
 
     def test_pending_and_failed_release_never_adopts_ready_resources(self):
         for status in ('pending-upgrade', 'pending-install', 'pending-rollback', 'failed', 'uninstalling'):

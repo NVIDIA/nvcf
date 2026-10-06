@@ -13,6 +13,11 @@ spec = importlib.util.spec_from_file_location('cluster_setup', HERE/'cluster_set
 setup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(setup)
 
+GLM = json.loads((HERE/'glm-5.3/recipe.json').read_text())
+GLM['lock'] = json.loads((HERE/'glm-5.3/model.lock.json').read_text())
+GB10 = {'name': 'NVIDIA GB10', 'computeCapability': '12.1', 'memoryGiB': 121.6, 'unifiedMemory': True, 'cudaArchitectures': None}
+GB300 = {'name': 'NVIDIA GB300', 'computeCapability': '10.3', 'memoryGiB': 268.0, 'unifiedMemory': False, 'cudaArchitectures': None}
+
 
 def node(name, control=False):
     labels = {'kubernetes.io/hostname': name, 'kubernetes.io/arch': 'arm64', 'kubernetes.io/os': 'linux'}
@@ -41,7 +46,13 @@ class ClusterSetupTests(unittest.TestCase):
                                {'metadata': {'name': 'nvidia-experimental'}, 'handler': 'nvidia-experimental'}],
         }
         self.calls = []
+        self.probed = []
+        self.gpus = {}
         self.template = json.loads((HERE/'config.example.json').read_text())
+
+    def probe(self, names):
+        self.probed.append(list(names))
+        return {name: copy.deepcopy(self.gpus.get(name, GB10)) for name in names}
 
     def query(self, command, **kwargs):
         self.calls.append(command)
@@ -56,11 +67,14 @@ class ClusterSetupTests(unittest.TestCase):
 
     def discover(self, namespace=None):
         with patch.object(setup.subprocess, 'check_output', side_effect=self.query):
-            return setup.discover_config('test-context', namespace)
+            return setup.discover_config('test-context', namespace, GLM, self.probe)
 
     def test_unambiguous_setup_uses_live_metadata_and_public_pins(self):
         config = self.discover()
-        self.assertEqual(config['nodes'], {'control': 'routing', 'leader': 'gpu-a', 'worker': 'gpu-b'})
+        self.assertEqual(config['nodes'], {'control': 'routing', 'model': ['gpu-a', 'gpu-b']})
+        self.assertEqual(config['gpu'], GB10)
+        self.assertEqual(config['recipe'], 'glm-5.3')
+        self.assertEqual(self.probed, [['gpu-a', 'gpu-b']])
         self.assertEqual(config['context'], 'test-context')
         self.assertEqual(config['storageClass'], 'local-storage')
         self.assertEqual(config['runtimeClass'], 'nvidia')
@@ -81,20 +95,20 @@ class ClusterSetupTests(unittest.TestCase):
         for item in self.resources['nodes']:
             item['metadata']['labels']['node-role.kubernetes.io/control-plane'] = 'true'
         self.resources['pods'] = [gpu_pod('routing')]
-        self.assertEqual(self.discover()['nodes'], {'control': 'routing', 'leader': 'gpu-a', 'worker': 'gpu-b'})
+        self.assertEqual(self.discover()['nodes'], {'control': 'routing', 'model': ['gpu-a', 'gpu-b']})
 
     def test_three_idle_gpus_with_shared_labels_choose_stable_placement(self):
         for item in self.resources['nodes']:
             item['metadata']['labels']['node-role.kubernetes.io/control-plane'] = 'true'
         config = self.discover()
-        self.assertEqual(config['nodes'], {'control': 'routing', 'leader': 'gpu-a', 'worker': 'gpu-b'})
+        self.assertEqual(config['nodes'], {'control': 'routing', 'model': ['gpu-a', 'gpu-b']})
         self.resources['nodes'].reverse()
         self.assertEqual(self.discover()['nodes'], config['nodes'])
 
     def test_more_gpu_workers_do_not_require_an_extra_manual_choice(self):
         self.resources['nodes'].append(node('gpu-c'))
         config = self.discover()
-        self.assertEqual(config['nodes'], {'control': 'routing', 'leader': 'gpu-a', 'worker': 'gpu-b'})
+        self.assertEqual(config['nodes'], {'control': 'routing', 'model': ['gpu-a', 'gpu-b']})
         self.assertEqual(config['containerd']['nodeNames'], ['gpu-a', 'gpu-b', 'gpu-c', 'routing'])
 
     def test_missing_role_labels_can_use_two_idle_gpus_and_non_gpu_routing(self):
@@ -107,12 +121,12 @@ class ClusterSetupTests(unittest.TestCase):
         for init in (False, True):
             with self.subTest(init=init):
                 self.resources['pods'] = [gpu_pod('gpu-a', init=init)]
-                with self.assertRaisesRegex(setup.ClusterSetupError, 'Free the required GPUs'):
+                with self.assertRaisesRegex(setup.ClusterSetupError, 'needs 2 idle NVIDIA GB10 nodes'):
                     self.discover()
 
     def test_completed_gpu_pods_do_not_block(self):
         self.resources['pods'] = [gpu_pod('gpu-a', 'Succeeded'), gpu_pod('gpu-b', 'Failed')]
-        self.assertEqual(self.discover()['nodes']['leader'], 'gpu-a')
+        self.assertEqual(self.discover()['nodes']['model'][0], 'gpu-a')
 
     def test_pending_and_terminating_gpu_allocations_still_block(self):
         self.resources['nodes'][0]['status']['allocatable']['nvidia.com/gpu'] = '0'
@@ -140,8 +154,32 @@ class ClusterSetupTests(unittest.TestCase):
             with self.subTest(change=index):
                 self.resources['nodes'][1] = node('gpu-b')
                 change(self.resources['nodes'][1])
-                with self.assertRaises(setup.ClusterSetupError):
-                    self.discover()
+                config = self.discover()
+                self.assertNotIn('gpu-b', [config['nodes']['control'], *config['nodes']['model']])
+
+    def test_gb300_pair_serves_from_one_node_and_routes_from_the_control_plane(self):
+        self.resources['nodes'] = [node('server', True), node('agent')]
+        self.gpus = {'server': GB300, 'agent': GB300}
+        config = self.discover()
+        self.assertEqual(config['nodes'], {'control': 'server', 'model': ['agent']})
+        self.assertEqual(config['gpu'], GB300)
+        self.assertEqual(self.probed, [['agent', 'server']])
+
+    def test_two_gb10_nodes_split_the_model_and_share_routing_with_the_leader(self):
+        self.resources['nodes'] = [node('spark-a', True), node('spark-b')]
+        config = self.discover()
+        self.assertEqual(config['nodes'], {'control': 'spark-b', 'model': ['spark-b', 'spark-a']})
+
+    def test_mixed_gpu_types_are_not_combined(self):
+        self.gpus = {'gpu-b': GB300}
+        with self.assertRaisesRegex(setup.ClusterSetupError, 'Mixed GPU types'):
+            self.discover()
+
+    def test_model_that_fits_nowhere_is_rejected_with_its_requirement(self):
+        small = dict(GB300, memoryGiB=80.0)
+        self.gpus = {name: small for name in ('gpu-a', 'gpu-b', 'routing')}
+        with self.assertRaisesRegex(setup.ClusterSetupError, 'does not fit on 2 nodes'):
+            self.discover()
 
     def test_custom_unused_namespace_needs_no_prior_private_settings(self):
         self.resources['namespaces'] = [{'metadata': {'name': self.template['namespace']}}]
@@ -192,18 +230,67 @@ class ClusterSetupTests(unittest.TestCase):
         with patch.object(setup.subprocess, 'check_output') as query:
             for value in ('Bad Namespace', '../other', 'x'*64):
                 with self.subTest(value=value), self.assertRaises(setup.ClusterSetupError):
-                    setup.discover_config('test-context', value)
+                    setup.discover_config('test-context', value, GLM, self.probe)
             with self.assertRaises(setup.ClusterSetupError):
-                setup.discover_config('')
+                setup.discover_config('', None, GLM, self.probe)
             query.assert_not_called()
 
     def test_failed_queries_hide_stderr_and_return_actionable_error(self):
         failure = subprocess.CalledProcessError(1, ['kubectl'], stderr='credential-fixture')
         with patch.object(setup.subprocess, 'check_output', side_effect=failure), \
              self.assertRaises(setup.ClusterSetupError) as result:
-            setup.discover_config('test-context')
+            setup.discover_config('test-context', None, GLM, self.probe)
         self.assertIn('Check Kubernetes access', str(result.exception))
         self.assertNotIn('credential-fixture', str(result.exception))
+
+
+class ProbeTests(unittest.TestCase):
+    def test_discrete_gpu_memory_comes_from_nvidia_smi(self):
+        gpu = setup.parse_probe('NVIDIA GB300, 10.3, 281250\nMemTotal:       503316480 kB\n')
+        self.assertEqual(gpu, dict(GB300, memoryGiB=274.7))
+
+    def test_unified_gpu_memory_comes_from_host_memory(self):
+        for reported in ('[N/A]', '[Not Supported]'):
+            with self.subTest(reported=reported):
+                gpu = setup.parse_probe('NVIDIA GB10, 12.1, ' + reported + '\nMemTotal: 127526000 kB\n')
+                self.assertEqual(gpu, GB10)
+
+    def test_unexpected_probe_output_is_rejected(self):
+        for text in ('MemTotal: 1 kB\n', 'NVIDIA GB300, 10.3, 1\nNVIDIA GB300, 10.3, 1\nMemTotal: 1 kB\n',
+                     'NVIDIA GB300, 10.3\nMemTotal: 1 kB\n', 'NVIDIA GB300, 10.3, lots\nMemTotal: 1 kB\n',
+                     'NVIDIA GB300, 103, 1\nMemTotal: 1 kB\n', 'NVIDIA GB300, 10.3, 1\n'):
+            with self.subTest(text=text), self.assertRaises(setup.ClusterSetupError):
+                setup.parse_probe(text)
+
+    def test_probe_runs_gpu_pods_in_a_temporary_namespace_and_always_deletes_it(self):
+        for fail in (False, True):
+            calls = []
+
+            def kubectl(context, *args, stdin=None, timeout=60):
+                calls.append((args, json.loads(stdin) if stdin else None))
+                if args[:1] == ('create',) and fail and stdin:
+                    raise setup.ClusterSetupError('quota exceeded')
+                if 'logs' in args:
+                    return 'NVIDIA GB300, 10.3, 281250\nMemTotal: 503316480 kB\n'
+                return ''
+
+            with self.subTest(fail=fail), patch.object(setup, 'kubectl', side_effect=kubectl):
+                if fail:
+                    with self.assertRaisesRegex(setup.ClusterSetupError, 'quota'):
+                        setup.probe_gpus('test-context', ['agent'], 'runtime:pinned', 'nvidia')
+                else:
+                    self.assertEqual(setup.probe_gpus('test-context', ['agent'], 'runtime:pinned', 'nvidia'),
+                                     {'agent': dict(GB300, memoryGiB=274.7)})
+                namespace = calls[0][0][2]
+                self.assertRegex(namespace, r'^llm-routing-probe-[a-f0-9]{6}$')
+                self.assertEqual(calls[-1][0][:3], ('delete', 'namespace', namespace))
+                pods = [manifest for _, manifest in calls if manifest]
+                self.assertEqual(len(pods), 1)
+                spec = pods[0]['spec']
+                self.assertEqual(spec['runtimeClassName'], 'nvidia')
+                self.assertEqual(spec['nodeSelector'], {'kubernetes.io/hostname': 'agent'})
+                self.assertEqual(spec['containers'][0]['image'], 'runtime:pinned')
+                self.assertEqual(spec['containers'][0]['resources']['limits']['nvidia.com/gpu'], 1)
 
 
 if __name__ == '__main__':

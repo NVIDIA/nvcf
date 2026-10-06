@@ -25,6 +25,7 @@ sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
 import console_output
+import sizing
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
               'router': 'src/libraries/rust/stargate', 'pylon': 'src/libraries/rust/stargate',
               'operator': 'src/compute-plane-services/pylon-operator'}
@@ -52,7 +53,7 @@ def output(command, **kwargs):
 
 
 RECIPE_KEYS = ('name', 'releaseName', 'llamaCppRevision', 'servedName', 'endpointName', 'firstShard',
-               'artifactsSize', 'rpcCacheSize', 'canary', 'serverArgs', 'runtimeEnv')
+               'artifactsSize', 'rpcCacheSize', 'canary', 'serverArgs', 'runtimeEnv', 'memory')
 # The tool derives these from nodes.model; a recipe that sets them would conflict.
 PLACEMENT_FLAGS = ('--device', '-dev', '--tensor-split', '-ts', '--rpc')
 QUALIFICATION_ATTEMPT = 2
@@ -98,8 +99,17 @@ def validate(c):
     for key in ('namespace', 'releasePrefix', 'clusterId'):
         require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', c[key]) is not None, 'Invalid ' + key)
     require(len(c['releasePrefix']) <= 30, 'releasePrefix must be at most 30 characters.')
-    require(all(c['nodes'].get(role) for role in ('leader', 'worker', 'control')), 'All three placement roles are required.')
-    require(c['nodes']['leader'] != c['nodes']['worker'], 'The model needs two distinct GPU nodes.')
+    nodes = c.get('nodes', {})
+    require(set(nodes) == {'control', 'model'}, 'Set nodes.control and nodes.model.')
+    require(isinstance(nodes['control'], str) and bool(nodes['control'].strip()), 'nodes.control must name a node.')
+    model = nodes['model']
+    require(isinstance(model, list) and all(isinstance(n, str) and n.strip() for n in model), 'nodes.model must list node names.')
+    require(len(model) in sizing.MODEL_NODE_COUNTS, 'nodes.model must list 1 or 2 nodes.')
+    require(len(set(model)) == len(model), 'nodes.model must not repeat a node.')
+    try:
+        sizing.check_gpu(c.get('gpu') or {})
+    except ValueError as error:
+        raise RuntimeError(str(error)) from None
     require(c['images']['pullPolicy'] in ('Never', 'IfNotPresent', 'Always'), 'Invalid pull policy.')
     require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', c['images']['tag']) is not None, 'Invalid image tag.')
     require('/' in c['images']['prefix'] and not c['images']['prefix'].endswith('/'), 'Use registry/path as image prefix.')
@@ -108,6 +118,10 @@ def validate(c):
     require(not c.get('retainedModels'), 'Verification targets the recipe model. Remove retainedModels from the configuration.')
     require(not c.get('testFixture'), 'The recipe deploys its own model. Remove testFixture from the configuration.')
 
+
+
+def all_nodes(c):
+    return sorted({c['nodes']['control'], *c['nodes']['model']})
 
 
 def default_work_dir(context):
@@ -224,14 +238,18 @@ def discover_config(context, namespace=None):
     require(len(matches) == 1, 'Existing endpoint does not match a recipe in this checkout: '+endpoint['metadata']['name'])
     model = owner(endpoint)
     require(endpoint['spec']['service']['name'] == model, 'Existing endpoint does not serve its own Helm release.')
-    leader = get('deployment', model)
-    worker = get('deployment', model+'-rpc-worker')
-    service = get('service', model)
-    require(all(owner(d) == model for d in (leader, worker, service)), 'Unexpected model resource ownership.')
     backend = values(model)
-    nodes = {'control': control, 'leader': placement(leader), 'worker': placement(worker)}
-    targets = {t['id']: t['node'] for t in backend['targets']}
-    require(all(targets.get(role) == nodes[role] for role in ('leader', 'worker')), 'Model placement differs from Helm values.')
+    targets = backend['targets']
+    require(targets and [t['id'] for t in targets] == ['n'+str(i) for i in range(len(targets))],
+            'Model release targets are not in the recipe format.')
+    leader = get('deployment', model)
+    workers = [get('deployment', model+'-rpc-'+t['id']) for t in targets[1:]]
+    service = get('service', model)
+    require(all(owner(d) == model for d in [leader, service, *workers]), 'Unexpected model resource ownership.')
+    require([placement(d) for d in [leader, *workers]] == [t['node'] for t in targets],
+            'Model placement differs from Helm values.')
+    nodes = {'control': control, 'model': [t['node'] for t in targets]}
+    gpu = {key: backend.get('gpu', {}).get(key) for key in ('name', 'computeCapability', 'memoryGiB', 'unifiedMemory', 'cudaArchitectures')}
     releases = json.loads(output(hm+['list', '-o', 'json']))
     operators = []
     for release in releases:
@@ -283,7 +301,7 @@ def discover_config(context, namespace=None):
         image_prefix += '/attached'
     # TLS private material and existing caller/cluster key hashes are intentionally omitted.
     config = {'context': context, 'namespace': namespace, 'recipe': matches[0], 'releasePrefix': prefix, 'clusterId': v['clusterId'],
-              'releases': {'stack': stack, 'operator': operator, 'model': model}, 'nodes': nodes,
+              'releases': {'stack': stack, 'operator': operator, 'model': model}, 'nodes': nodes, 'gpu': gpu,
               'storageClass': backend['artifacts']['storageClassName'], 'runtimeClass': backend['runtimeClassName'],
               'images': {'prefix': image_prefix, 'tag': image['tag'], 'pullPolicy': image['pullPolicy'],
                          'pullSecrets': [], 'repositories': images},
@@ -311,6 +329,10 @@ class Recipe:
         self.kc = ['kubectl', '--context', config['context'], '-n', config['namespace']]
         self.hm = ['helm', '--kube-context', config['context'], '-n', config['namespace']]
         self.definition = load_recipe(recipe_name(config))
+        # targets[0] (n0) is the leader that runs the model server; later targets run RPC workers.
+        self.targets = [{'id': 'n'+str(index), 'node': node} for index, node in enumerate(config['nodes']['model'])]
+        self.workers = self.targets[1:]
+        self.plan = sizing.memory_plan(self.definition, config['gpu'], len(self.targets))
         releases = config.get('releases', {})
         self.backend = releases.get('model', config['releasePrefix'] + '-' + self.definition['releaseName'])
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
@@ -383,25 +405,30 @@ class Recipe:
         print('Using source checkout:', self.source)
 
     def backend_values(self, phase='serve', register=False, render=False):
-        d = self.definition
+        d, plan, gpu = self.definition, self.plan, self.c['gpu']
+        memory = {'requests': str(plan['requestGiB'])+'Gi', 'limits': str(plan['limitGiB'])+'Gi'}
         if phase == 'serve':
-            rpc_resources = {'requests': {'cpu': '2', 'memory': '110Gi', 'nvidia.com/gpu': 1},
-                             'limits': {'cpu': '8', 'memory': '114Gi', 'nvidia.com/gpu': 1}}
+            rpc_resources = {'requests': {'cpu': '2', 'memory': memory['requests'], 'nvidia.com/gpu': 1},
+                             'limits': {'cpu': '8', 'memory': memory['limits'], 'nvidia.com/gpu': 1}}
         else:
             rpc_resources = {'requests': {'cpu': '2', 'memory': '2Gi', 'nvidia.com/gpu': 1},
                              'limits': {'cpu': '8', 'memory': '8Gi', 'nvidia.com/gpu': 1}}
         return {
             'phase': phase, 'image': self.c['runtimeImage'], 'runtimeClassName': self.c['runtimeClass'],
-            'targets': [{'id': r, 'node': self.c['nodes'][r]} for r in ('leader', 'worker')],
+            # The chart reads only gpu.product; attach-existing reads the rest back from the release.
+            'targets': copy.deepcopy(self.targets), 'gpu': dict(gpu, product=sizing.gpu_product(gpu)),
             'artifacts': {'storageClassName': self.c['storageClass'], 'size': d['artifactsSize']},
-            'build': {'revision': d['llamaCppRevision'], 'cudaArchitectures': '121a-real', 'parallel': 8},
+            'build': {'revision': d['llamaCppRevision'], 'cudaArchitectures': sizing.cuda_architectures(gpu), 'parallel': 8},
             'runtime': {'sha256': self.state.get('runtimeSha256', 'a'*64 if render else ''), 'env': dict(d['runtimeEnv'])},
             'qualification': {'attempt': self.state.get('qualificationAttempt', QUALIFICATION_ATTEMPT)},
             'model': {'lock': d['lock'], 'servedName': d['servedName'], 'firstShard': d['firstShard'],
                       'endpointName': d['endpointName'], 'register': register, 'canary': dict(d['canary']),
-                      'args': d['serverArgs'] + ['--device', 'CUDA0,RPC0', '--tensor-split', '1,1']},
+                      'args': d['serverArgs'] + sizing.placement_args(len(self.targets)),
+                      'resources': {'requests': {'cpu': '4', 'memory': memory['requests'], 'nvidia.com/gpu': 1},
+                                    'limits': {'cpu': '12', 'memory': memory['limits'], 'nvidia.com/gpu': 1}}},
             'rpc': {'resources': rpc_resources,
-                    'cache': {'enabled': phase == 'serve', 'size': d['rpcCacheSize'], 'storageClassName': self.c['storageClass']}},
+                    'cache': {'enabled': phase == 'serve' and bool(self.workers), 'size': d['rpcCacheSize'],
+                              'storageClassName': self.c['storageClass']}},
             'chain': {'runtimeRelease': self.backend, 'artifactClaim': self.backend+'-artifacts',
                       'attempt': self.state.get('chainAttempt', 1)},
         }
@@ -444,20 +471,20 @@ class Recipe:
         nodes = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
         pods = json.loads(output(self.kc+['get', 'pods', '-A', '-o', 'json']))['items']
         crds = json.loads(output(self.kc+['get', 'crds', '-o', 'json']))['items']
-        selected = self.c['nodes']
         if self.c['images']['pullPolicy'] == 'Never':
             eligible = {n['metadata']['name'] for n in nodes if n['metadata']['labels'].get('kubernetes.io/arch') == 'arm64'}
-            imports = set(self.c['containerd'].get('nodeNames', selected.values()))
+            imports = set(self.c['containerd'].get('nodeNames', all_nodes(self.c)))
             require(eligible <= imports, 'Pre-import Pylon on every ARM64 node where it can schedule. Set containerd.nodeNames explicitly.')
-        for role in ('control', 'leader', 'worker'):
-            found = [n for n in nodes if n['metadata']['name'] == selected[role]]
-            require(len(found) == 1, 'Missing node for '+role)
+        roles = [('control', self.c['nodes']['control'])] + [('model', target['node']) for target in self.targets]
+        for role, name in roles:
+            found = [n for n in nodes if n['metadata']['name'] == name]
+            require(len(found) == 1, 'Missing '+role+' node: '+name)
             node = found[0]
             require(node['metadata']['labels'].get('kubernetes.io/arch') == 'arm64', 'Selected nodes must be ARM64.')
             require(any(c['type'] == 'Ready' and c['status'] == 'True' for c in node['status']['conditions']), 'Node is not Ready.')
-            if role != 'control':
-                require(int(node['status']['allocatable'].get('nvidia.com/gpu', 0)) >= 1, 'GPU device plugin has not advertised a GPU.')
-                busy = [p['metadata']['name'] for p in pods if p['spec'].get('nodeName') == selected[role]
+            if role == 'model':
+                require(int(node['status']['allocatable'].get('nvidia.com/gpu', 0)) >= 1, 'GPU device plugin has not advertised a GPU on '+name+'.')
+                busy = [p['metadata']['name'] for p in pods if p['spec'].get('nodeName') == name
                         and cluster_setup.requests_gpu(p)]
                 require(not busy, 'Selected model GPU is occupied: '+', '.join(busy))
         for crd in crds:
@@ -478,7 +505,7 @@ class Recipe:
             require(all(self.state.get(phase) for phase in ('stack', 'serve', 'registered')),
                     'Saved installation is incomplete. Finish installing and registering model before attaching.')
             live = discover_config(self.c['context'], self.c['namespace'])
-            for field in ('context', 'namespace', 'clusterId', 'nodes', 'runtimeClass',
+            for field in ('context', 'namespace', 'clusterId', 'nodes', 'gpu', 'runtimeClass',
                           'runtimeImage', 'storageClass', 'caConfigMap'):
                 require(live[field] == self.c[field], 'Existing installation differs from saved configuration: '+field)
             require(live['releases'] == {'stack': self.stack, 'operator': self.operator, 'model': self.backend},
@@ -496,9 +523,10 @@ class Recipe:
         key = pathlib.Path(self.c['apiKeyFile']).expanduser().resolve(strict=True) if self.c.get('apiKeyFile') else None
         nodes = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
         names = {n['metadata']['name'] for n in nodes}
-        require(set(self.c['nodes'].values()) <= names, 'Configured placement nodes do not exist.')
+        require(set(all_nodes(self.c)) <= names, 'Configured placement nodes do not exist.')
         owners = {'llm-api-gateway': self.stack, 'llm-request-router': self.stack,
-                  self.operator: self.operator, self.backend: self.backend, self.backend+'-rpc-worker': self.backend}
+                  self.operator: self.operator, self.backend: self.backend}
+        owners.update({self.backend+'-rpc-'+worker['id']: self.backend for worker in self.workers})
         for deployment, release in owners.items():
             obj = json.loads(output(self.kc+['get', 'deployment', deployment, '-o', 'json']))
             annotations = obj['metadata'].get('annotations', {})
@@ -525,7 +553,7 @@ class Recipe:
         live = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
         old = self.state['inventory']['nodes']
         current = {n['metadata']['name']: n['metadata']['uid'] for n in live}
-        require(all(current.get(name) == old.get(name) for name in self.c['nodes'].values()), 'The selected node identities changed or the context points to another cluster.')
+        require(all(current.get(name) == old.get(name) for name in all_nodes(self.c)), 'The selected node identities changed or the context points to another cluster.')
 
     def logs(self, component, release=None, job=None):
         selector = 'app.kubernetes.io/instance='+(release or self.backend)+',app.kubernetes.io/component='+component
@@ -604,13 +632,17 @@ class Recipe:
             require(release() == revision, 'Model Helm revision changed while checking load. Retry after the operation completes.')
             return False
         require(values == self.backend_values('serve'), 'Deployed model values differ from this load configuration.')
+        leader = self.targets[0]['node']
+        # (node, container, component, volume name, claim) for each Deployment; PVCs map to None.
         expected = {
-            ('Deployment', self.backend): ('leader', 'llama', 'model-server'),
-            ('Deployment', self.backend+'-rpc-worker'): ('worker', 'rpc', 'rpc-worker'),
-            ('Deployment', self.backend+'-artifacts'): ('leader', 'artifacts', 'artifacts'),
+            ('Deployment', self.backend): (leader, 'llama', 'model-server', 'artifacts', self.backend+'-artifacts'),
+            ('Deployment', self.backend+'-artifacts'): (leader, 'artifacts', 'artifacts', 'artifacts', self.backend+'-artifacts'),
             ('PersistentVolumeClaim', self.backend+'-artifacts'): None,
-            ('PersistentVolumeClaim', self.backend+'-rpc-cache'): None,
         }
+        for worker in self.workers:
+            expected[('Deployment', self.backend+'-rpc-'+worker['id'])] = (
+                worker['node'], 'rpc', 'rpc-'+worker['id'], 'rpc-cache', self.backend+'-rpc-cache-'+worker['id'])
+            expected[('PersistentVolumeClaim', self.backend+'-rpc-cache-'+worker['id'])] = None
         names = [('deployment/' if kind == 'Deployment' else 'pvc/')+name for kind, name in expected]
 
         def ready_resources():
@@ -641,32 +673,31 @@ class Recipe:
                                 ('replicas', 'updatedReplicas', 'readyReplicas', 'availableReplicas'))
                         and not status.get('unavailableReplicas', 0),
                         'Model Deployment is not ready at its current generation: '+name+'. Wait, then rerun load.')
-                role, container, component = expected[(kind, name)]
+                node, container, component, volume, claim = expected[(kind, name)]
                 template = spec['template']
                 labels = {'app.kubernetes.io/instance': self.backend, 'app.kubernetes.io/component': component}
                 require(all(template['metadata'].get('labels', {}).get(key) == value for key, value in labels.items())
                         and spec.get('selector', {}).get('matchLabels') == labels,
                         'Unexpected model Deployment selector: '+name)
                 pod = template['spec']
-                require(pod.get('nodeSelector', {}).get('kubernetes.io/hostname') == self.c['nodes'][role],
+                require(pod.get('nodeSelector', {}).get('kubernetes.io/hostname') == node,
                         'Model Deployment targets another node: '+name)
                 containers = pod.get('containers', [])
                 require(len(containers) == 1 and containers[0].get('name') == container
                         and containers[0].get('image') == self.c['runtimeImage'],
                         'Model Deployment image differs: '+name)
-                volume = 'rpc-cache' if component == 'rpc-worker' else 'artifacts'
                 volumes = {item['name']: item for item in pod.get('volumes', [])}
                 mounts = {item['name']: item for item in containers[0].get('volumeMounts', [])}
-                require(volumes.get(volume, {}).get('persistentVolumeClaim', {}).get('claimName') == self.backend+'-'+volume
+                require(volumes.get(volume, {}).get('persistentVolumeClaim', {}).get('claimName') == claim
                         and mounts.get(volume, {}).get('mountPath') == '/'+volume,
                         'Model Deployment storage differs: '+name)
                 if component == 'model-server':
                     env = {item['name']: item.get('value') for item in containers[0].get('env', [])}
                     require(env.get('FIRST_SHARD') == values['model']['firstShard']
                             and env.get('SERVED_MODEL') == values['model']['servedName']
-                            and env.get('RPC_ENDPOINT') == self.backend+'-rpc-worker:50052'
+                            and env.get('RPC_ENDPOINTS') == ','.join(self.backend+'-rpc-'+w['id']+':50052' for w in self.workers)
                             and json.loads(env.get('SERVER_ARGS') or 'null') == values['model']['args'],
-                            'Model model or RPC connection differs: '+name)
+                            'Model server settings or RPC connection differ: '+name)
                 if component != 'artifacts':
                     require(pod.get('runtimeClassName') == self.c['runtimeClass']
                             and template['metadata'].get('annotations', {}).get('checksum/runtime') == self.state['runtimeSha256']
@@ -693,10 +724,15 @@ class Recipe:
         if phase == 'serve':
             if self.resume_load():
                 return
-            for role in ('leader', 'worker'):
-                raw = output(self.kc+['exec', 'deploy/'+self.backend+'-rpc-'+role, '-c', 'rpc', '--', 'cat', '/proc/meminfo'])
+            for target in self.targets:
+                raw = output(self.kc+['exec', 'deploy/'+self.backend+'-rpc-'+target['id'], '-c', 'rpc', '--', 'cat', '/proc/meminfo'])
                 available = next(int(line.split()[1])*1024 for line in raw.splitlines() if line.startswith('MemAvailable:'))
-                require(available > 113*1024**3, 'Insufficient actual host memory on '+role)
+                require(available > self.plan['hostAvailableGiB']*1024**3,
+                        'Insufficient host memory on '+target['node']+': '+str(available//1024**3)+' GiB available, more than '+
+                        str(self.plan['hostAvailableGiB'])+' GiB required.')
+        if phase == 'preflight':
+            require(self.plan['fits'], self.definition['name']+' does not fit on '+str(len(self.targets))+' node(s) of '+
+                    self.c['gpu']['name']+' per gpu.memoryGiB. Add a model node to nodes.model or fix the gpu settings.')
         if phase == 'qualify':
             require(re.fullmatch(r'[a-f0-9]{64}', self.state['runtimeSha256']) is not None, 'Invalid built runtime checksum.')
             if retry:
@@ -710,8 +746,7 @@ class Recipe:
             records = self.logs(phase)
             require(bool(records), phase+' did not record PASS.')
             if phase == 'preflight':
-                require(len(records) == 2, 'Both GPU nodes must pass actual CUDA preflight.')
-                require(all(r['memoryBefore']['MemAvailable'] > 113*1024**3 for r in records), 'Insufficient actual host memory before CUDA allocation.')
+                self.check_preflight(records)
             if phase == 'build':
                 self.stamp('runtimeSha256', records[-1]['runtimeSHA256'])
             if phase == 'download':
@@ -720,11 +755,33 @@ class Recipe:
         elif phase == 'qualify':
             records = self.logs('qualification', job=self.backend+'-qualify-'+str(values['qualification']['attempt']))
             require(bool(records), 'RPC qualification did not record PASS.')
+            if not self.workers:
+                self.stamp(phase)
+                return
             chain = self.backend_values('chain')
             self.helm_apply(self.backend+'-chain', HERE/'charts/gguf-backend', chain, '15m', jobs=True)
             records = self.logs('chain-check', job=self.backend+'-chain-'+str(chain['chain']['attempt']))
             require(bool(records), 'RPC chain check did not record PASS.')
         self.stamp(phase)
+
+    def check_preflight(self, records):
+        """Compare each model node's measured GPU and memory with the configuration."""
+        gpu = self.c['gpu']
+        require(len(records) == len(self.targets),
+                'Every model node must pass CUDA preflight: '+str(len(records))+' of '+str(len(self.targets))+' passed.')
+        for record in records:
+            capability = '.'.join(str(part) for part in record['capability'])
+            require(sizing.gpu_product({'name': record['gpu']}) == sizing.gpu_product(gpu) and capability == gpu['computeCapability'],
+                    'Detected GPU '+record['gpu']+' ('+capability+') differs from gpu settings '+gpu['name']+' ('+
+                    gpu['computeCapability']+'). Run init again or correct the gpu section.')
+            available = record['memoryBefore']['MemAvailable']
+            require(available > self.plan['hostAvailableGiB']*1024**3,
+                    'Insufficient host memory before CUDA allocation: '+str(available//1024**3)+' GiB available, more than '+
+                    str(self.plan['hostAvailableGiB'])+' GiB required.')
+            if self.plan['gpuFreeGiB'] is not None:
+                free = record['cudaFreeBytes']
+                require(free >= self.plan['gpuFreeGiB']*1024**3,
+                        'Insufficient GPU memory: '+str(free//1024**3)+' GiB free, '+str(self.plan['gpuFreeGiB'])+' GiB required.')
 
     def deploy_stack(self):
         require(not self.state.get('attachedExisting'), 'Existing installations support verification and image iteration, not fresh stack deployment.')
@@ -873,7 +930,7 @@ class Recipe:
             require(bool(tags & aliases), 'Archive is missing the configured image: '+image)
         cfg = self.c.get('containerd')
         require(cfg, 'No image importer was discovered. Use registry distribution or configure containerd import settings.')
-        nodes = [self.c['nodes']['control']] if component in ('gateway', 'router') else cfg.get('nodeNames', sorted(set(self.c['nodes'].values())))
+        nodes = [self.c['nodes']['control']] if component in ('gateway', 'router') else cfg.get('nodeNames', all_nodes(self.c))
         with archive.open('rb') as stream:
             archive_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
         release = self.c['releasePrefix']+'-images'
@@ -1019,7 +1076,13 @@ finally:
         require(confirm and self.state.get('registered'), 'Recovery requires a registered model and --confirm-model-interruption.')
         values = self.backend_values(register=True)
         down = copy.deepcopy(values)
-        down['rpc']['replicas'] = 0
+        # Split models lose their RPC workers; a single-node model loses its model server.
+        if self.workers:
+            down['rpc']['replicas'] = 0
+            stopped = {'rpc-'+worker['id'] for worker in self.workers}
+        else:
+            down['model']['replicas'] = 0
+            stopped = {'model-server'}
         # Validate the same direct path before making an intentional interruption.
         self.verify(False, port)
         started = time.monotonic()
@@ -1029,7 +1092,10 @@ finally:
             time.sleep(15)
             down_pods = json.loads(output(self.kc+['get', 'pods', '-o', 'json']))
             save(self.work/'evidence/recovery-down.json', down_pods)
-            require(not any(p['metadata']['name'].startswith(self.backend+'-rpc-worker-') and p['status']['phase'] == 'Running' for p in down_pods['items']), 'Worker is still running. Restore and inspect the rollout.')
+            require(not any(p['metadata'].get('labels', {}).get('app.kubernetes.io/instance') == self.backend
+                            and p['metadata'].get('labels', {}).get('app.kubernetes.io/component') in stopped
+                            and p['status']['phase'] == 'Running' for p in down_pods['items']),
+                    'Interrupted model pods are still running. Restore and inspect the rollout.')
             try:
                 with self.forward(False, port):
                     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
@@ -1037,7 +1103,7 @@ finally:
                         connection.request('POST', '/v1/chat/completions', json.dumps({'model': values['model']['servedName'], 'messages': [{'role': 'user', 'content': 'What is 31 plus 17?'}], 'max_tokens': 32}), {'Content-Type': 'application/json'})
                         response = connection.getresponse()
                         response.read()
-                        observation['statusWhileWorkerDown'] = response.status
+                        observation['statusWhileInterrupted'] = response.status
                         observation['interruptionObserved'] = response.status != 200
                     finally:
                         connection.close()
@@ -1048,7 +1114,7 @@ finally:
             self.helm_apply(self.backend, HERE/'charts/gguf-backend', values, '70m')
             observation['restoreSeconds'] = time.monotonic() - started
             save(self.work/'evidence/recovery.json', observation)
-        require(observation['interruptionObserved'], 'Worker interruption was not demonstrated. Recovery restored the model but this test did not prove the failure path.')
+        require(observation['interruptionObserved'], 'Model interruption was not demonstrated. Recovery restored the model but this test did not prove the failure path.')
         self.verify(False, port)
         self.verify(True, port+1)
 
@@ -1056,7 +1122,8 @@ finally:
         self.prepare()
         renders = [('stack', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', self.stack_values('a'*64, 'b'*64, 'offline-demo-ui-placeholder')),
                    ('operator', self.source/'deploy/helm/pylon-operator/pylon-operator', self.operator_values())]
-        for phase in ('preflight', 'build', 'qualify', 'chain', 'download', 'serve'):
+        phases = ('preflight', 'build', 'qualify', 'chain', 'download', 'serve') if self.workers else ('preflight', 'build', 'qualify', 'download', 'serve')
+        for phase in phases:
             renders.append((self.definition['releaseName']+'-'+phase, HERE/'charts/gguf-backend', self.backend_values(phase, register=phase=='serve', render=True)))
         for name, chart, values in renders:
             path = self.work/'render'/(name+'-values.json')
@@ -1074,6 +1141,7 @@ def main(argv=None, console=None):
     parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
+    parser.add_argument('--recipe', help='Recipe folder for init; defaults to the only recipe present. Available: '+', '.join(available_recipes())+'.')
     parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
@@ -1090,6 +1158,7 @@ def main(argv=None, console=None):
         console.phase = args.phase
     require(args.phase == 'chat' or (args.prompt is None and not args.stream), 'Prompt and --stream are supported only for chat.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
+    require(not args.recipe or args.phase == 'init', '--recipe is supported only for init. Later commands use the saved configuration.')
     try:
         context, work, config_path, config = cli_settings(args)
     except ContextSelectionError as error:
@@ -1115,7 +1184,8 @@ def execute(args, parser, context, work, config_path, config):
                 'Saved state is missing its configuration. Init does not overwrite an installation.')
         require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
         try:
-            config = cluster_setup.discover_config(context, args.namespace)
+            definition = load_recipe(args.recipe or recipe_name({}))
+            config = cluster_setup.discover_config(context, args.namespace, definition)
         except cluster_setup.ClusterSetupError as error:
             parser.exit(2, 'error: ' + str(error) + '\n')
         validate(config)
@@ -1124,7 +1194,10 @@ def execute(args, parser, context, work, config_path, config):
         with os.fdopen(fd, 'w') as file:
             file.write(json.dumps(config, indent=2) + '\n')
         print('Configuration created:', config_path)
-        print('Model GPUs:', config['nodes']['leader'], 'and', config['nodes']['worker'])
+        print('Recipe:', config['recipe'])
+        print('GPU:', config['gpu']['name'], '('+config['gpu']['computeCapability']+',',
+              str(config['gpu']['memoryGiB'])+' GiB', 'shared with the CPU)' if config['gpu']['unifiedMemory'] else 'GPU memory)')
+        print('Model nodes:', ', '.join(config['nodes']['model']))
         print('Routing node:', config['nodes']['control'])
         print('Run render, inventory, then preflight.')
         return

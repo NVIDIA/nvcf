@@ -319,7 +319,7 @@ class CliTests(unittest.TestCase):
              patch.object(tool.cluster_setup, 'discover_config', return_value=self.config) as discover:
             tool.main(['init'])
         recipe.assert_not_called()
-        discover.assert_called_once_with('team-context', None)
+        discover.assert_called_once_with('team-context', None, tool.load_recipe('glm-5.3'))
         expected = self.config
         path = self.work/'config.json'
         self.assertEqual(json.loads(path.read_text()), expected)
@@ -381,7 +381,7 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), patch.object(tool.cluster_setup, 'discover_config', \
                 return_value=dict(self.config, namespace='my-stack')) as discover:
             tool.main(['--config', str(path), '--namespace', 'my-stack', 'init'])
-        discover.assert_called_once_with('team-context', 'my-stack')
+        discover.assert_called_once_with('team-context', 'my-stack', tool.load_recipe('glm-5.3'))
         config = json.loads(path.read_text())
         self.assertEqual(config['context'], 'team-context')
         self.assertEqual(config['namespace'], 'my-stack')
@@ -390,9 +390,9 @@ class CliTests(unittest.TestCase):
     def test_repeated_attach_checks_existing_node_bindings_before_refresh(self):
         recipe = tool.Recipe(self.config, self.work)
         recipe.state = {'identity': recipe.identity, 'attachedExisting': True,
-                        'inventory': {'nodes': {name: name+'-old' for name in self.config['nodes'].values()}}}
+                        'inventory': {'nodes': {name: name+'-old' for name in tool.all_nodes(self.config)}}}
         original = copy.deepcopy(recipe.state)
-        live = {'items': [{'metadata': {'name': name, 'uid': name+'-new'}} for name in self.config['nodes'].values()]}
+        live = {'items': [{'metadata': {'name': name, 'uid': name+'-new'}} for name in tool.all_nodes(self.config)]}
         with patch.object(tool, 'output', return_value=json.dumps(live)) as output, \
              self.assertRaisesRegex(RuntimeError, 'node identities changed'):
             recipe.attach_existing()

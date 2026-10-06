@@ -3,7 +3,10 @@
 phase: preflight
 image: ""
 runtimeClassName: nvidia
+# targets[0] is the leader that runs the model server; later targets run RPC workers.
 targets: []
+gpu:
+  product: ""
 artifacts:
   storageClassName: local-path
   size: 400Gi
@@ -28,6 +31,7 @@ rpc:
 qualification:
   attempt: 1
 model:
+  replicas: 1
   lock: {}
   servedName: ""
   firstShard: ""

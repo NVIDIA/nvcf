@@ -6,8 +6,17 @@
   "clusterId": "llm-routing-poc",
   "nodes": {
     "control": "control",
-    "leader": "model-0",
-    "worker": "model-1"
+    "model": [
+      "model-0",
+      "model-1"
+    ]
+  },
+  "gpu": {
+    "name": "NVIDIA GB10",
+    "computeCapability": "12.1",
+    "memoryGiB": 121.6,
+    "unifiedMemory": true,
+    "cudaArchitectures": null
   },
   "storageClass": "local-path",
   "runtimeClass": "nvidia",

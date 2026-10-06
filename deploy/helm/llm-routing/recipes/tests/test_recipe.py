@@ -244,10 +244,10 @@ class RecipeTests(unittest.TestCase):
             self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/tool.COMPONENTS['operator']))
 
     def test_duplicate_model_nodes_and_missing_context_are_rejected(self):
-        self.config['nodes']['worker'] = self.config['nodes']['leader']
-        with self.assertRaisesRegex(RuntimeError, 'distinct GPU'):
+        self.config['nodes']['model'] = ['model-0', 'model-0']
+        with self.assertRaisesRegex(RuntimeError, 'must not repeat'):
             tool.validate(self.config)
-        self.config['nodes']['worker'] = 'another-node'
+        self.config['nodes']['model'] = ['model-0', 'another-node']
         self.config['context'] = ''
         with self.assertRaisesRegex(RuntimeError, 'context'):
             tool.validate(self.config)
@@ -310,7 +310,7 @@ class RecipeTests(unittest.TestCase):
     def test_inventory_rejects_all_gpu_allocations_on_model_nodes(self):
         nodes = [{'metadata': {'name': name, 'uid': name, 'labels': {'kubernetes.io/arch': 'arm64'}},
                   'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
-                             'allocatable': {'nvidia.com/gpu': '1'}}} for name in self.config['nodes'].values()]
+                             'allocatable': {'nvidia.com/gpu': '1'}}} for name in tool.all_nodes(self.config)]
         allocations = [
             {'containers': [{'resources': {'requests': {'nvidia.com/gpu': '1'}}}]},
             {'containers': [{'resources': {'limits': {'nvidia.com/gpu': '1'}}}]},
@@ -318,10 +318,10 @@ class RecipeTests(unittest.TestCase):
             {'resourceClaims': [{'name': 'gpu', 'resourceClaimName': 'gpu-claim'}]},
         ]
         for allocation in allocations:
-            for phase, node, busy in [('Pending', self.config['nodes']['leader'], True),
-                                      ('Running', self.config['nodes']['worker'], True),
-                                      ('Succeeded', self.config['nodes']['leader'], False),
-                                      ('Failed', self.config['nodes']['leader'], False),
+            for phase, node, busy in [('Pending', self.config['nodes']['model'][0], True),
+                                      ('Running', self.config['nodes']['model'][1], True),
+                                      ('Succeeded', self.config['nodes']['model'][0], False),
+                                      ('Failed', self.config['nodes']['model'][0], False),
                                       ('Running', 'another-node', False)]:
                 pod = {'metadata': {'name': 'gpu-consumer', 'namespace': 'another-namespace'},
                        'spec': {'nodeName': node, **allocation}, 'status': {'phase': phase}}
@@ -434,7 +434,7 @@ class RecipeTests(unittest.TestCase):
 
     def test_model_config_keeps_two_gpus_and_scoped_canary(self):
         values = self.recipe.backend_values(register=True, render=True)
-        self.assertEqual([t['id'] for t in values['targets']], ['leader', 'worker'])
+        self.assertEqual(values['targets'], [{'id': 'n0', 'node': 'model-0'}, {'id': 'n1', 'node': 'model-1'}])
         self.assertEqual(values['model']['canary'], {'timeoutSeconds': 180, 'intervalSeconds': 60})
         self.assertEqual(values['model']['args'][values['model']['args'].index('--parallel')+1], '1')
         self.assertEqual(values['model']['args'][values['model']['args'].index('--ctx-size')+1], '2048')
@@ -765,7 +765,7 @@ class RecipeTests(unittest.TestCase):
         key.write_text('test-only-key')
         self.config['apiKeyFile'] = str(key)
         recipe = tool.Recipe(self.config, self.tmp.name)
-        nodes = {'items': [{'metadata': {'name': name, 'uid': name}} for name in self.config['nodes'].values()]}
+        nodes = {'items': [{'metadata': {'name': name, 'uid': name}} for name in tool.all_nodes(self.config)]}
         foreign = {'metadata': {'annotations': {'meta.helm.sh/release-name': 'another-owner'}}}
         with patch.object(tool, 'output', side_effect=[json.dumps(nodes), json.dumps(foreign)]), patch.object(recipe, 'helm_apply') as helm:
             with self.assertRaisesRegex(RuntimeError, 'ownership'):

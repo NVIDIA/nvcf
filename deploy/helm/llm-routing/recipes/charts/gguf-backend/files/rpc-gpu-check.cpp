@@ -12,7 +12,7 @@
 #include <vector>
 
 int main(int argc, char ** argv) {
-    if (argc != 3) throw std::runtime_error("Two RPC endpoints are required");
+    if (argc < 2) throw std::runtime_error("At least one RPC endpoint is required");
     constexpr int k = 256, m = 128, n = 64;
     std::vector<float> a(k*m), b(k*n), expected(m*n), actual(m*n);
     for (int i = 0; i < k*m; ++i) a[i] = float(i % 17 - 8) / 8;

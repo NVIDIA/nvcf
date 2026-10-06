@@ -7,9 +7,16 @@ import pathlib
 import re
 import secrets
 import subprocess
+import time
+
+import sizing
 
 HERE = pathlib.Path(__file__).resolve().parent
 CONTROL_LABELS = ('node-role.kubernetes.io/control-plane', 'node-role.kubernetes.io/master')
+PROBE_COMMAND = ("nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader,nounits"
+                 " && grep '^MemTotal:' /proc/meminfo")
+# nvidia-smi reports no dedicated GPU memory when the GPU shares system memory, as on GB10.
+UNREPORTED_MEMORY = {'[N/A]', 'N/A', '[Not Supported]', 'Not Supported'}
 
 
 class ClusterSetupError(RuntimeError):
@@ -66,8 +73,80 @@ def requests_gpu(pod):
     return bool(spec.get('resourceClaims'))
 
 
-def discover_config(context, namespace=None):
-    """Return fresh settings using eligible nodes and the cluster defaults."""
+def parse_probe(text):
+    """Turn GPU probe output into the configuration's gpu section."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    meminfo = [line for line in lines if line.startswith('MemTotal:')]
+    gpus = [line for line in lines if not line.startswith('MemTotal:')]
+    require(len(meminfo) == 1, 'The GPU probe did not report host memory.')
+    require(len(gpus) == 1, 'Expected one GPU per model node. The probe reported ' + str(len(gpus)) + '.')
+    fields = [field.strip() for field in gpus[0].split(',')]
+    require(len(fields) == 3, 'Unexpected nvidia-smi output: ' + gpus[0])
+    name, capability, memory = fields
+    unified = memory in UNREPORTED_MEMORY
+    if unified:
+        memory_gib = int(meminfo[0].split()[1]) / 1024**2
+    else:
+        require(memory.isdigit(), 'Unexpected GPU memory value from nvidia-smi: ' + memory)
+        memory_gib = int(memory) / 1024
+    gpu = {'name': name, 'computeCapability': capability, 'memoryGiB': round(memory_gib, 1),
+           'unifiedMemory': unified, 'cudaArchitectures': None}
+    try:
+        sizing.check_gpu(gpu)
+    except ValueError as error:
+        raise ClusterSetupError('GPU probe: ' + str(error)) from None
+    return gpu
+
+
+def kubectl(context, *args, stdin=None, timeout=60):
+    try:
+        return subprocess.run(['kubectl', '--context', context, *args], input=stdin, text=True, check=True,
+                              capture_output=True, timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = getattr(error, 'stderr', '') or str(error)
+        raise ClusterSetupError('kubectl ' + ' '.join(args[:2]) + ' failed: ' + detail.strip()[-500:]) from None
+
+
+def probe_gpus(context, names, image, runtime_class):
+    """Run one short GPU pod per node in a temporary namespace, then delete the namespace."""
+    namespace = 'llm-routing-probe-' + secrets.token_hex(3)
+    kubectl(context, 'create', 'namespace', namespace)
+    try:
+        pods = {}
+        for index, name in enumerate(names):
+            pod = 'gpu-probe-' + str(index)
+            manifest = {'apiVersion': 'v1', 'kind': 'Pod', 'metadata': {'name': pod, 'namespace': namespace},
+                        'spec': {'restartPolicy': 'Never', 'automountServiceAccountToken': False,
+                                 'runtimeClassName': runtime_class, 'nodeSelector': {'kubernetes.io/hostname': name},
+                                 'securityContext': {'runAsUser': 1000, 'runAsGroup': 1000, 'runAsNonRoot': True,
+                                                     'seccompProfile': {'type': 'RuntimeDefault'}},
+                                 'containers': [{'name': 'probe', 'image': image, 'command': ['sh', '-c', PROBE_COMMAND],
+                                                 'env': [{'name': 'NVIDIA_DRIVER_CAPABILITIES', 'value': 'compute,utility'}],
+                                                 'resources': {'requests': {'cpu': '100m', 'memory': '128Mi', 'nvidia.com/gpu': 1},
+                                                               'limits': {'cpu': '1', 'memory': '512Mi', 'nvidia.com/gpu': 1}},
+                                                 'securityContext': {'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True,
+                                                                     'capabilities': {'drop': ['ALL']}}}]}}
+            kubectl(context, 'create', '-f', '-', stdin=json.dumps(manifest))
+            pods[name] = pod
+        results = {}
+        for name, pod in pods.items():
+            # The first pull of the runtime image can take several minutes.
+            kubectl(context, '-n', namespace, 'wait', 'pod/' + pod, '--for=jsonpath={.status.phase}=Succeeded',
+                    '--timeout=20m', timeout=1260)
+            results[name] = parse_probe(kubectl(context, '-n', namespace, 'logs', pod))
+        return results
+    finally:
+        try:
+            kubectl(context, 'delete', 'namespace', namespace, '--wait=true', '--timeout=3m', timeout=200)
+        except ClusterSetupError:
+            print('Warning: delete the temporary GPU probe namespace manually:', namespace)
+
+
+def discover_config(context, namespace=None, recipe=None, probe=None):
+    """Return fresh settings using eligible nodes, a GPU probe and the cluster defaults.
+
+    probe(names) returns {node: gpu}; tests replace it to avoid touching a cluster.
+    """
     require(isinstance(context, str) and bool(context.strip()), 'Select a Kubernetes context first.')
     config = json.loads((HERE/'config.example.json').read_text())
     namespace = namespace or config['namespace']
@@ -86,18 +165,7 @@ def discover_config(context, namespace=None):
     idle = [node for node in candidates
             if int(node.get('status', {}).get('allocatable', {}).get('nvidia.com/gpu', 0)) >= 1
             and node['metadata']['name'] not in busy]
-    controls = [node for node in candidates if control_plane(node)]
-    workers = [node for node in idle if not control_plane(node)]
-    if len(controls) != 1 or len(workers) < 2:
-        workers = idle
-        selected = {node['metadata']['name'] for node in sorted(workers, key=lambda item: item['metadata']['name'])[:2]}
-        controls = [node for node in candidates if node['metadata']['name'] not in selected]
-    workers = sorted(workers, key=lambda item: item['metadata']['name'])[:2]
-    controls = sorted(controls, key=lambda item: item['metadata']['name'])
-    require(len(workers) == 2 and controls,
-            'Need two idle GPU nodes and one separate Ready ARM64 routing node. Free the required GPUs or set placement nodes explicitly in the configuration.')
-    control = controls[0]['metadata']['name']
-    worker_names = sorted(node['metadata']['name'] for node in workers)
+    require(idle, 'No idle Ready ARM64 GPU node found. Free a GPU or set placement explicitly in the configuration.')
     imports = [node for node in nodes if node.get('metadata', {}).get('labels', {}).get('kubernetes.io/arch') == 'arm64']
     require(all(node['metadata'].get('labels', {}).get('kubernetes.io/hostname') == node['metadata']['name'] for node in imports),
             'Node hostname labels differ from node names. Configure placement and image import targets explicitly.')
@@ -117,9 +185,30 @@ def discover_config(context, namespace=None):
     selected_runtime = named if named else nvidia
     require(len(selected_runtime) == 1,
             'Expected an NVIDIA RuntimeClass with handler nvidia. Set runtimeClass explicitly for this cluster.')
-    config.update(context=context, namespace=namespace, clusterId=namespace,
-                  nodes={'control': control, 'leader': worker_names[0], 'worker': worker_names[1]},
-                  storageClass=selected_storage[0]['metadata']['name'], runtimeClass=selected_runtime[0]['metadata']['name'])
+    runtime_class = selected_runtime[0]['metadata']['name']
+    # Prefer GPU nodes outside the control plane so the control plane can host routing.
+    ordered = [node['metadata']['name'] for node in sorted(idle, key=lambda n: (control_plane(n), n['metadata']['name']))]
+    probe = probe or (lambda names: probe_gpus(context, names, config['runtimeImage'], runtime_class))
+    detected = probe(ordered[:max(sizing.MODEL_NODE_COUNTS)])
+    gpu = detected[ordered[0]]
+    try:
+        count = sizing.model_node_count(recipe, gpu)
+    except ValueError as error:
+        raise ClusterSetupError(str(error)) from None
+    require(len(ordered) >= count, recipe['name'] + ' needs ' + str(count) + ' idle ' + gpu['name'] +
+            ' nodes. Found ' + str(len(ordered)) + '. Free GPUs or set placement explicitly in the configuration.')
+    model = ordered[:count]
+    require(all((detected[name]['name'], detected[name]['computeCapability']) == (gpu['name'], gpu['computeCapability'])
+                for name in model),
+            'Mixed GPU types are not supported: ' + ', '.join(n + '=' + detected[n]['name'] for n in model) +
+            '. Set nodes.model explicitly to matching nodes.')
+    others = sorted((node for node in candidates if node['metadata']['name'] not in model),
+                    key=lambda n: (not control_plane(n), n['metadata']['name']))
+    # With no spare node, routing shares the leader; it needs no GPU.
+    control = others[0]['metadata']['name'] if others else model[0]
+    config.update(context=context, namespace=namespace, clusterId=namespace, recipe=recipe['name'],
+                  nodes={'control': control, 'model': model}, gpu=gpu,
+                  storageClass=selected_storage[0]['metadata']['name'], runtimeClass=runtime_class)
     config['images'].update(prefix='localhost/' + namespace,
                             tag='dev-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S') + '-' + secrets.token_hex(3),
                             pullPolicy='Never', pullSecrets=[])
@@ -174,16 +263,16 @@ def validate_reinitialization(config, backend):
     require(not any(item['metadata'].get('deletionTimestamp') for item in namespaces),
             'The saved namespace is terminating.')
     nodes = {item['metadata']['name']: item for item in items(context, 'nodes')}
-    for role, name in config['nodes'].items():
+    model = config['nodes']['model']
+    for name in sorted({config['nodes']['control'], *model}):
         require(name in nodes and eligible(nodes[name]), 'Saved node is unavailable: ' + name)
         require(nodes[name]['metadata']['labels'].get('kubernetes.io/hostname') == name,
                 'Saved node hostname no longer matches placement: ' + name)
-        if role in ('leader', 'worker'):
+        if name in model:
             require(int(nodes[name]['status'].get('allocatable', {}).get('nvidia.com/gpu', 0)) >= 1,
                     'Saved model node has no advertised GPU: ' + name)
     pods = items(context, 'pods', all_namespaces=True)
-    require(not any(requests_gpu(pod) and pod.get('spec', {}).get('nodeName') in
-                    (config['nodes']['leader'], config['nodes']['worker']) for pod in pods),
+    require(not any(requests_gpu(pod) and pod.get('spec', {}).get('nodeName') in model for pod in pods),
             'A saved model GPU is occupied.')
     if not namespaces:
         require(not crds, 'Retained CRD without the saved namespace requires ownership review.')
@@ -192,12 +281,14 @@ def validate_reinitialization(config, backend):
             'Workloads still exist in the saved namespace. Finish uninstalling before init.')
     claims = items(context, 'persistentvolumeclaims', namespace=namespace)
     volumes = {item['metadata']['name']: item for item in items(context, 'persistentvolumes')} if claims else {}
-    expected = {backend + '-artifacts': (backend, 'leader'), backend + '-rpc-cache': (backend, 'worker'),
-                prefix + '-monitoring-metrics': (prefix + '-monitoring', 'control')}
+    # claim name -> (owning release, node it must stay on)
+    expected = {backend + '-artifacts': (backend, model[0]),
+                prefix + '-monitoring-metrics': (prefix + '-monitoring', config['nodes']['control'])}
+    expected.update({backend + '-rpc-cache-n' + str(index): (backend, name) for index, name in enumerate(model) if index})
     for claim in claims:
         name = claim['metadata']['name']
         require(name in expected, 'Unexpected retained PVC: ' + name)
-        release, role = expected[name]
+        release, node = expected[name]
         owned(claim, release)
         spec = claim['spec']
         require(claim.get('status', {}).get('phase') == 'Bound'
@@ -212,13 +303,13 @@ def validate_reinitialization(config, backend):
                 and ref.get('name') == name and ref.get('namespace') == namespace,
                 'Retained PVC binding changed: ' + name)
         selected = claim['metadata'].get('annotations', {}).get('volume.kubernetes.io/selected-node')
-        require(not selected or selected == config['nodes'][role], 'Retained PVC placement changed: ' + name)
+        require(not selected or selected == node, 'Retained PVC placement changed: ' + name)
         terms = volume.get('spec', {}).get('nodeAffinity', {}).get('required', {}).get('nodeSelectorTerms')
         if terms is not None:
             # Fail closed for affinity shapes that this K3s recipe cannot validate.
             require(any(not term.get('matchFields') and term.get('matchExpressions') and
                         all(expr.get('key') == 'kubernetes.io/hostname' and expr.get('operator') == 'In'
-                            and config['nodes'][role] in expr.get('values', [])
+                            and node in expr.get('values', [])
                             for expr in term['matchExpressions']) for term in terms),
                     'Retained PV affinity does not match saved placement: ' + name)
     secrets_by_name = {operator + '-cluster-credential': operator, config['caConfigMap']: stack}
