@@ -76,6 +76,17 @@ if helm status "${release}" --namespace "${namespace}" >/dev/null 2>&1; then
   yq eval-all -i '. as $item ireduce ({}; . *+ $item )' "${output_file}" "${tmp_existing}"
 fi
 
+# The probe image an earlier render wrote on a mirror, busybox:1.36 under the
+# release's own image prefix, read before that prefix is rendered again below.
+earlier_probe_default=""
+if [ -f "${tmp_existing}" ] &&
+  [ -z "$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${root_dir}/values.local.yml")" ]; then
+  earlier_operator_repository="$(yq -r '.image.repository // ""' "${tmp_existing}")"
+  case "${earlier_operator_repository}" in
+    */nvca-operator) earlier_probe_default="${earlier_operator_repository%/nvca-operator}/busybox:1.36" ;;
+  esac
+fi
+
 export REPO_PREFIX="${repo_prefix}"
 yq eval -i '
   .image.repository = strenv(REPO_PREFIX) + "/nvca-operator" |
@@ -158,9 +169,11 @@ yq eval -i '.clusterValidator.externalComponents = (strenv(EXTERNAL_COMPONENTS) 
 # busybox:1.36 from the stack's repository, where it must be mirrored and
 # pullable without a secret. No NGC registry (nvcr.io or a subdomain) has
 # busybox, so there the chart's default stays. A probe image the release or
-# values.local.yml already sets is the user's, and is kept. So is an
+# values.local.yml already sets is the user's, and is kept, as is an
 # enforcement test image, which the probe falls back to and a mirror default
-# would shadow. NODE_TO_NODE_PROBE_IMAGE overrides all of these.
+# would shadow. The default an earlier render wrote is not the user's: it
+# follows the registry, as the other images do. NODE_TO_NODE_PROBE_IMAGE
+# overrides all of these.
 registry_host="${stack_image_registry#*://}"
 registry_host="${registry_host%%/*}"
 registry_host="$(printf '%s' "${registry_host%%:*}" | tr '[:upper:]' '[:lower:]')"
@@ -168,9 +181,13 @@ case "${registry_host}" in
   nvcr.io | *.nvcr.io) ngc_registry=true ;;
   *) ngc_registry=false ;;
 esac
+existing_probe_image="$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${output_file}")"
+if [ -n "${earlier_probe_default}" ] && [ "${existing_probe_image}" = "${earlier_probe_default}" ]; then
+  existing_probe_image=""
+  yq eval -i '.clusterValidator.nodeToNodeProbeImage = ""' "${output_file}"
+fi
 PROBE_IMAGE="${NODE_TO_NODE_PROBE_IMAGE:-}"
-if [ -z "${PROBE_IMAGE}" ] && [ "${ngc_registry}" = "false" ] &&
-  [ -z "$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${output_file}")" ] &&
+if [ -z "${PROBE_IMAGE}" ] && [ "${ngc_registry}" = "false" ] && [ -z "${existing_probe_image}" ] &&
   [ -z "$(yq -r '.clusterValidator.networkChecks.enforcement.testImage // ""' "${output_file}")" ]; then
   PROBE_IMAGE="${repo_prefix}/busybox:1.36"
 fi

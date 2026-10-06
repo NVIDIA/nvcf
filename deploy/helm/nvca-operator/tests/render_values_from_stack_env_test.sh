@@ -149,12 +149,13 @@ clusterValidator:
   externalComponents: [cassandra]
 EOF
 
+script_root="${repo_root}"
 render_upgrade() {
   PATH="${stub_bin_dir}:$PATH" \
   STUB_EXISTING_VALUES="${existing_values_file}" \
   STACK_ENV_FILE="${stack_env_file}" \
   OUTPUT_FILE="${output_file}" \
-  "${repo_root}/scripts/render_values_from_stack_env.sh" >/dev/null
+  "${script_root}/scripts/render_values_from_stack_env.sh" >/dev/null
 }
 
 render_upgrade
@@ -229,5 +230,56 @@ done
 expect_probe_image "" registry.example.com \
   "  networkChecks: {enforcement: {enabled: true, testImage: tools.example.com/busybox:1.36}}" \
   "the enforcement test image stands in"
+
+# expect_rerendered_probe_image WANT REGISTRY EARLIER_PREFIX PROBE [VALUES]
+# renders with REGISTRY over a release an earlier render installed under
+# EARLIER_PREFIX, holding probe image PROBE and any further clusterValidator
+# VALUES, and expects probe image WANT.
+expect_rerendered_probe_image() {
+  local want="$1" registry="$2" earlier="$3" probe="$4" values="${5:-}" got
+  cat > "${stack_env_file}" <<EOF
+global:
+  image:
+    registry: "${registry}"
+    repository: nvidia/nvcf
+EOF
+  printf 'image:\n  repository: %s/nvca-operator\nclusterValidator:\n  nodeToNodeProbeImage: %s\n%s\n' \
+    "${earlier}" "${probe}" "${values}" > "${existing_values_file}"
+  render_upgrade
+  got="$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${output_file}")"
+  if [[ "${got}" != "${want}" ]]; then
+    echo "registry ${registry} over ${probe}: expected probe image '${want}', got '${got}'" >&2
+    exit 1
+  fi
+}
+
+# The default an earlier render wrote is not the user's: it follows the
+# registry as the other images do, to another mirror or to NGC, where an
+# earlier render may also have written a busybox no NGC host has. Nor does it
+# shadow an enforcement test image set since.
+mirror_a="registry-a.example.com/nvidia/nvcf"
+expect_rerendered_probe_image "registry-b.example.com/nvidia/nvcf/busybox:1.36" registry-b.example.com \
+  "${mirror_a}" "${mirror_a}/busybox:1.36"
+expect_rerendered_probe_image "" nvcr.io "${mirror_a}" "${mirror_a}/busybox:1.36"
+expect_rerendered_probe_image "" stg.nvcr.io stg.nvcr.io/nvidia/nvcf stg.nvcr.io/nvidia/nvcf/busybox:1.36
+expect_rerendered_probe_image "" registry-a.example.com "${mirror_a}" "${mirror_a}/busybox:1.36" \
+  "  networkChecks: {enforcement: {enabled: true, testImage: tools.example.com/busybox:1.36}}"
+
+# Any other probe image is the user's, on the same registry too.
+expect_rerendered_probe_image "registry-a.example.com/tools/busybox:1.36" registry-b.example.com \
+  "${mirror_a}" "registry-a.example.com/tools/busybox:1.36"
+expect_rerendered_probe_image "${mirror_a}/busybox:1.37" registry-b.example.com \
+  "${mirror_a}" "${mirror_a}/busybox:1.37"
+
+# So is one values.local.yml sets, even where it matches the earlier default.
+script_root="${tmp_dir}/root"
+mkdir -p "${script_root}/scripts"
+cp "${repo_root}/scripts/render_values_from_stack_env.sh" "${script_root}/scripts/"
+cp "${repo_root}/values.local.yml" "${script_root}/values.local.yml"
+export MIRROR_A_PROBE="${mirror_a}/busybox:1.36"
+yq eval -i '.clusterValidator.nodeToNodeProbeImage = strenv(MIRROR_A_PROBE)' "${script_root}/values.local.yml"
+expect_rerendered_probe_image "${mirror_a}/busybox:1.36" registry-b.example.com \
+  "${mirror_a}" "${mirror_a}/busybox:1.36"
+script_root="${repo_root}"
 
 echo "render_values_from_stack_env.sh keeps upgrade versions and stack-derived validator values aligned with the stack"
