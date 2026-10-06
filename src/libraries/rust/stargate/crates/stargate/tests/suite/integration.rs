@@ -41,7 +41,7 @@ use pylon_lib::{
 };
 use stargate::routing::RoutingTargetKey;
 use stargate::test_support::StargateState;
-use stargate_proto::{dynamo_kv_dc_relay as stats_proto, pb::InferenceServerStatus};
+use stargate_proto::{dynamo_pool_relay as stats_proto, pb::InferenceServerStatus};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -515,7 +515,7 @@ async fn start_engine_stats_inst(
         model: model.to_string(),
         connected_tx,
     };
-    let grpc = tonic::service::Routes::new(stats_proto::kv_dc_relay_server::KvDcRelayServer::new(
+    let grpc = tonic::service::Routes::new(stats_proto::pool_relay_server::PoolRelayServer::new(
         EngineStatsGrpc {
             state: state.clone(),
         },
@@ -574,21 +574,20 @@ struct EngineStatsGrpc {
 }
 
 #[tonic::async_trait]
-impl stats_proto::kv_dc_relay_server::KvDcRelay for EngineStatsGrpc {
-    type WatchKvCuckooFilterStream = Pin<
-        Box<dyn Stream<Item = Result<stats_proto::KvCuckooFilterUpdate, tonic::Status>> + Send>,
-    >;
+impl stats_proto::pool_relay_server::PoolRelay for EngineStatsGrpc {
+    type WatchKvBlockIndexStream =
+        Pin<Box<dyn Stream<Item = Result<stats_proto::KvBlockIndexUpdate, tonic::Status>> + Send>>;
     type WatchKvUsageStream =
         Pin<Box<dyn Stream<Item = Result<stats_proto::KvUsageSnapshot, tonic::Status>> + Send>>;
     type WatchLoadStream =
         Pin<Box<dyn Stream<Item = Result<stats_proto::LoadSnapshot, tonic::Status>> + Send>>;
 
-    async fn watch_kv_cuckoo_filter(
+    async fn watch_kv_block_index(
         &self,
         _request: tonic::Request<()>,
-    ) -> Result<tonic::Response<Self::WatchKvCuckooFilterStream>, tonic::Status> {
+    ) -> Result<tonic::Response<Self::WatchKvBlockIndexStream>, tonic::Status> {
         Err(tonic::Status::unimplemented(
-            "the Pylon integration fixture does not model CKF data",
+            "the Pylon integration fixture does not model KV block index data",
         ))
     }
 
@@ -604,7 +603,7 @@ impl stats_proto::kv_dc_relay_server::KvDcRelay for EngineStatsGrpc {
                     pools: vec![stats_proto::PoolKvUsage {
                         pool: Some(stats_pool_identity()),
                         models: vec![stats_model_registration(&model)],
-                        role: stats_proto::WorkerRole::Aggregated as i32,
+                        roles: vec![stats_proto::WorkerRole::Aggregated as i32],
                         block_size_tokens: 1,
                         expected_ranks: 1,
                         observed_ranks: 1,
@@ -632,35 +631,51 @@ impl stats_proto::kv_dc_relay_server::KvDcRelay for EngineStatsGrpc {
                 sample += 1;
                 yield Ok(stats_proto::LoadSnapshot {
                     metadata: Some(relay_metadata()),
-                    pools: vec![stats_proto::PoolLoad {
+                    pools: vec![stats_proto::PoolView {
                         pool: Some(stats_pool_identity()),
-                        role: stats_proto::WorkerRole::Aggregated as i32,
-                        live_workers: Some(1),
-                        active_prefill_tokens: Some(17),
-                        active_decode_blocks: Some(3),
-                        max_concurrency: Some(8),
-                        scheduler_status: stats_proto::DataStatus::Complete as i32,
-                        scheduler_observed_at_unix_ms: 1,
+                        load: Some(stats_proto::LoadView {
+                            requests: None,
+                            tokens: Some(stats_proto::TokenLoadStats {
+                                active_prefill_tokens: Some(17),
+                                active_decode_blocks: Some(3),
+                                ..Default::default()
+                            }),
+                            status: stats_proto::DataStatus::Complete as i32,
+                            source_observed_at_unix_ms: 1,
+                        }),
+                        deployment: Some(stats_proto::PoolDeploymentStatus {
+                            roles: vec![stats_proto::WorkerRole::Aggregated as i32],
+                            live_workers: Some(1),
+                            max_concurrency: Some(8),
+                        }),
                     }],
-                    models: vec![stats_proto::ModelLoad {
+                    models: vec![stats_proto::ModelView {
                         model: Some(stats_model_registration(&model)),
-                        ready_frontends: Some(1),
-                        pending_first_output_requests: Some(2),
-                        pending_first_output_input_tokens: Some(17),
-                        live_input_tokens: Some(31),
-                        input_processing_requests: Some(1),
-                        output_generation_requests: Some(2),
-                        serving_pools: vec![stats_pool_identity()],
-                        requests_started_total: Some(sample.saturating_mul(4)),
-                        requests_completed_total: Some(sample),
-                        requests_failed_total: Some(0),
-                        requests_cancelled_total: Some(0),
-                        input_tokens_total: Some(sample.saturating_mul(4)),
-                        output_tokens_total: Some(sample.saturating_mul(2)),
-                        status: stats_proto::DataStatus::Complete as i32,
-                        expected_frontends: 1,
-                        observed_frontends: 1,
-                        source_observed_at_unix_ms: sample.saturating_mul(100),
+                        load: Some(stats_proto::LoadView {
+                            requests: Some(stats_proto::RequestLifecycleStats {
+                                requests_started_total: sample.saturating_mul(4),
+                                requests_completed_total: sample,
+                                requests_failed_total: 0,
+                                requests_cancelled_total: 0,
+                                requests_awaiting_first_token: Some(2),
+                                requests_generating: Some(2),
+                            }),
+                            tokens: Some(stats_proto::TokenLoadStats {
+                                awaiting_first_token_input_tokens: Some(17),
+                                inflight_input_tokens: Some(31),
+                                input_tokens_total: Some(sample.saturating_mul(4)),
+                                output_tokens_total: Some(sample.saturating_mul(2)),
+                                ..Default::default()
+                            }),
+                            status: stats_proto::DataStatus::Complete as i32,
+                            source_observed_at_unix_ms: sample.saturating_mul(100),
+                        }),
+                        deployment: Some(stats_proto::ModelDeploymentStatus {
+                            expected_frontends: 1,
+                            observed_frontends: 1,
+                            ready_frontends: 1,
+                            serving_pools: vec![stats_pool_identity()],
+                        }),
                     }],
                 });
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -672,9 +687,8 @@ impl stats_proto::kv_dc_relay_server::KvDcRelay for EngineStatsGrpc {
 
 fn relay_metadata() -> stats_proto::RelayMessageMetadata {
     stats_proto::RelayMessageMetadata {
-        drt_instance_id: 1,
         relay_incarnation: 1,
-        observed_at_unix_ms: 1,
+        emitted_at_unix_ms: 1,
     }
 }
 
@@ -684,7 +698,7 @@ fn stats_pool_identity() -> stats_proto::PoolIdentity {
         cache_semantics_source: stats_proto::IdentitySource::DefaultDerived as i32,
         routing_scope_digest: vec![2; 16],
         routing_scope_source: stats_proto::IdentitySource::DefaultDerived as i32,
-        dc_id: 1,
+        locality_id: 1,
     }
 }
 
@@ -740,10 +754,10 @@ async fn wait_for_engine_stats_stream_stats(
             stats.output_tps == 20.0
                 && stats.queue_size == 2
                 && stats.queued_input_size == 17
-                && stats.num_running_queries == 3
+                && stats.num_running_queries == 4
                 && stats.max_engine_concurrency == 8
                 && stats.total_query_input_size == 31
-                && stats.input_processing_queries == 1
+                && stats.input_processing_queries == 2
                 && stats.output_generation_queries == 2
                 && stats.kv_cache_capacity_tokens == 1_000
                 && stats.kv_cache_used_tokens == 400

@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use stargate_proto::dynamo_kv_dc_relay as proto;
+use stargate_proto::dynamo_pool_relay as proto;
 use stargate_runtime::OwnedTask;
 use tokio_util::sync::CancellationToken;
 
@@ -104,15 +104,9 @@ pub fn start_engine_stats_stream(
     Some(EngineStatsStreamHandle { task })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RelayIdentity {
-    drt_instance_id: u64,
-    relay_incarnation: u64,
-}
-
 #[derive(Default)]
 struct RelayEpoch {
-    load: Option<RelayIdentity>,
+    load: Option<u64>,
 }
 
 async fn run_engine_stats_stream(
@@ -139,14 +133,13 @@ async fn run_load_stream(
     stop: CancellationToken,
 ) {
     let mut backoff = config.initial_reconnect_backoff;
-    let mut last_identity = None;
     let mut translator = RelayLoadTranslator::default();
     loop {
         if stop.is_cancelled() {
             return;
         }
         mark_load_unavailable(&config, &updates, &epoch, &stop).await;
-        let connect = proto::kv_dc_relay_client::KvDcRelayClient::connect(config.endpoint.clone());
+        let connect = proto::pool_relay_client::PoolRelayClient::connect(config.endpoint.clone());
         let mut client = match stop.run_until_cancelled(connect).await {
             None => return,
             Some(Ok(client)) => client,
@@ -189,25 +182,21 @@ async fn run_load_stream(
                     break;
                 }
             };
-            let identity = match metadata_identity(snapshot.metadata.as_ref()) {
-                Ok(identity) => identity,
+            let incarnation = match relay_incarnation(snapshot.metadata.as_ref()) {
+                Ok(incarnation) => incarnation,
                 Err(error) => {
                     invalid_event(&config, "load_metadata", error);
                     mark_load_unavailable(&config, &updates, &epoch, &stop).await;
                     continue;
                 }
             };
-            let identity_changed = {
+            let incarnation_changed = {
                 let mut epoch = epoch.lock().expect("Relay epoch mutex poisoned");
-                let changed = epoch.load.is_some_and(|current| current != identity);
-                epoch.load = Some(identity);
+                let changed = epoch.load.is_some_and(|current| current != incarnation);
+                epoch.load = Some(incarnation);
                 changed
             };
-            if last_identity.is_some_and(|current| current != identity) {
-                translator = RelayLoadTranslator::default();
-            }
-            last_identity = Some(identity);
-            if identity_changed {
+            if incarnation_changed {
                 send_update(
                     &updates,
                     StatsAggregatorUpdate::KvCache(Default::default()),
@@ -260,7 +249,7 @@ async fn run_kv_stream(
             &stop,
         )
         .await;
-        let connect = proto::kv_dc_relay_client::KvDcRelayClient::connect(config.endpoint.clone());
+        let connect = proto::pool_relay_client::PoolRelayClient::connect(config.endpoint.clone());
         let mut client = match stop.run_until_cancelled(connect).await {
             None => return,
             Some(Ok(client)) => client,
@@ -301,15 +290,15 @@ async fn run_kv_stream(
                     break;
                 }
             };
-            let identity = match metadata_identity(snapshot.metadata.as_ref()) {
-                Ok(identity) => identity,
+            let incarnation = match relay_incarnation(snapshot.metadata.as_ref()) {
+                Ok(incarnation) => incarnation,
                 Err(error) => {
                     invalid_event(&config, "kv_metadata", error);
                     clear_kv(&updates, &stop).await;
                     continue;
                 }
             };
-            if epoch.lock().expect("Relay epoch mutex poisoned").load != Some(identity) {
+            if epoch.lock().expect("Relay epoch mutex poisoned").load != Some(incarnation) {
                 clear_kv(&updates, &stop).await;
                 continue;
             }
@@ -360,16 +349,10 @@ async fn clear_kv(updates: &flume::Sender<StatsAggregatorUpdate>, stop: &Cancell
     .await;
 }
 
-fn metadata_identity(
-    metadata: Option<&proto::RelayMessageMetadata>,
-) -> anyhow::Result<RelayIdentity> {
+fn relay_incarnation(metadata: Option<&proto::RelayMessageMetadata>) -> anyhow::Result<u64> {
     let metadata = metadata.ok_or_else(|| anyhow::anyhow!("Relay metadata is missing"))?;
-    anyhow::ensure!(metadata.drt_instance_id != 0, "DRT instance ID is zero");
     anyhow::ensure!(metadata.relay_incarnation != 0, "Relay incarnation is zero");
-    Ok(RelayIdentity {
-        drt_instance_id: metadata.drt_instance_id,
-        relay_incarnation: metadata.relay_incarnation,
-    })
+    Ok(metadata.relay_incarnation)
 }
 
 async fn reconnect_delay(
@@ -434,7 +417,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_zero_relay_incarnation() {
-        assert!(metadata_identity(None).is_err());
-        assert!(metadata_identity(Some(&proto::RelayMessageMetadata::default())).is_err());
+        assert!(relay_incarnation(None).is_err());
+        assert!(relay_incarnation(Some(&proto::RelayMessageMetadata::default())).is_err());
     }
 }

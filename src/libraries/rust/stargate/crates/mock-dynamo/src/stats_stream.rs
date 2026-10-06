@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use futures::Stream;
-use stargate_proto::dynamo_kv_dc_relay as proto;
+use stargate_proto::dynamo_pool_relay as proto;
 use tokio::sync::broadcast;
 use tonic::{Request, Response, Status};
 
@@ -25,29 +25,29 @@ pub(crate) struct StatsStreamEvent {
 }
 
 pub(crate) fn grpc_router(state: AppState) -> axum::Router {
-    let service = proto::kv_dc_relay_server::KvDcRelayServer::new(MockKvDcRelay { state });
+    let service = proto::pool_relay_server::PoolRelayServer::new(MockPoolRelay { state });
     tonic::service::Routes::new(service).into_axum_router()
 }
 
 #[derive(Clone)]
-struct MockKvDcRelay {
+struct MockPoolRelay {
     state: AppState,
 }
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
 #[tonic::async_trait]
-impl proto::kv_dc_relay_server::KvDcRelay for MockKvDcRelay {
-    type WatchKvCuckooFilterStream = ResponseStream<proto::KvCuckooFilterUpdate>;
+impl proto::pool_relay_server::PoolRelay for MockPoolRelay {
+    type WatchKvBlockIndexStream = ResponseStream<proto::KvBlockIndexUpdate>;
     type WatchKvUsageStream = ResponseStream<proto::KvUsageSnapshot>;
     type WatchLoadStream = ResponseStream<proto::LoadSnapshot>;
 
-    async fn watch_kv_cuckoo_filter(
+    async fn watch_kv_block_index(
         &self,
         _request: Request<()>,
-    ) -> Result<Response<Self::WatchKvCuckooFilterStream>, Status> {
+    ) -> Result<Response<Self::WatchKvBlockIndexStream>, Status> {
         Err(Status::unimplemented(
-            "mock Dynamo does not model the CKF stream",
+            "mock Dynamo does not model the KV block index stream",
         ))
     }
 
@@ -181,54 +181,66 @@ impl LoadAccumulator {
                     .values()
                     .filter(|request| request.model == model)
                     .collect::<Vec<_>>();
-                let input_processing = live
+                let awaiting_first_token = live
                     .iter()
                     .filter(|request| request.output_tokens == 0)
                     .count() as u64;
-                let output_generation = live.len() as u64 - input_processing;
-                let pending_input_tokens = live
+                let awaiting_input_tokens = live
                     .iter()
                     .filter(|request| request.output_tokens == 0)
                     .map(|request| request.input_tokens)
                     .sum();
-                let live_input_tokens = live.iter().map(|request| request.input_tokens).sum();
-                proto::ModelLoad {
+                let inflight_input_tokens = live.iter().map(|request| request.input_tokens).sum();
+                proto::ModelView {
                     model: Some(model_registration(&model)),
-                    ready_frontends: Some(1),
-                    pending_first_output_requests: Some(input_processing),
-                    pending_first_output_input_tokens: Some(pending_input_tokens),
-                    live_input_tokens: Some(live_input_tokens),
-                    input_processing_requests: Some(input_processing),
-                    output_generation_requests: Some(output_generation),
-                    serving_pools: vec![pool_identity()],
-                    requests_started_total: Some(
-                        totals.map_or(0, |totals| totals.requests_started),
-                    ),
-                    requests_completed_total: Some(
-                        totals.map_or(0, |totals| totals.requests_completed),
-                    ),
-                    requests_failed_total: Some(0),
-                    requests_cancelled_total: Some(0),
-                    input_tokens_total: Some(totals.map_or(0, |totals| totals.input_tokens)),
-                    output_tokens_total: Some(totals.map_or(0, |totals| totals.output_tokens)),
-                    status: proto::DataStatus::Complete as i32,
-                    expected_frontends: 1,
-                    observed_frontends: 1,
-                    source_observed_at_unix_ms: crate::openai::unix_millis(),
+                    load: Some(proto::LoadView {
+                        requests: Some(proto::RequestLifecycleStats {
+                            requests_started_total: totals
+                                .map_or(0, |totals| totals.requests_started),
+                            requests_completed_total: totals
+                                .map_or(0, |totals| totals.requests_completed),
+                            requests_failed_total: 0,
+                            requests_cancelled_total: 0,
+                            requests_awaiting_first_token: Some(awaiting_first_token),
+                            requests_generating: Some(live.len() as u64 - awaiting_first_token),
+                        }),
+                        tokens: Some(proto::TokenLoadStats {
+                            awaiting_first_token_input_tokens: Some(awaiting_input_tokens),
+                            inflight_input_tokens: Some(inflight_input_tokens),
+                            input_tokens_total: Some(
+                                totals.map_or(0, |totals| totals.input_tokens),
+                            ),
+                            output_tokens_total: Some(
+                                totals.map_or(0, |totals| totals.output_tokens),
+                            ),
+                            ..Default::default()
+                        }),
+                        status: proto::DataStatus::Complete as i32,
+                        source_observed_at_unix_ms: crate::openai::unix_millis(),
+                    }),
+                    deployment: Some(proto::ModelDeploymentStatus {
+                        expected_frontends: 1,
+                        observed_frontends: 1,
+                        ready_frontends: 1,
+                        serving_pools: vec![pool_identity()],
+                    }),
                 }
             })
             .collect();
         proto::LoadSnapshot {
             metadata: Some(metadata()),
-            pools: vec![proto::PoolLoad {
+            pools: vec![proto::PoolView {
                 pool: Some(pool_identity()),
-                role: proto::WorkerRole::Aggregated as i32,
-                live_workers: Some(1),
-                active_prefill_tokens: None,
-                active_decode_blocks: None,
-                max_concurrency: Some(1),
-                scheduler_status: proto::DataStatus::Complete as i32,
-                scheduler_observed_at_unix_ms: crate::openai::unix_millis(),
+                load: Some(proto::LoadView {
+                    status: proto::DataStatus::Complete as i32,
+                    source_observed_at_unix_ms: crate::openai::unix_millis(),
+                    ..Default::default()
+                }),
+                deployment: Some(proto::PoolDeploymentStatus {
+                    roles: vec![proto::WorkerRole::Aggregated as i32],
+                    live_workers: Some(1),
+                    max_concurrency: Some(1),
+                }),
             }],
             models,
         }
@@ -242,7 +254,7 @@ async fn usage_snapshot(state: &AppState) -> proto::KvUsageSnapshot {
         pools: vec![proto::PoolKvUsage {
             pool: Some(pool_identity()),
             models: vec![model_registration(&state.model_name)],
-            role: proto::WorkerRole::Aggregated as i32,
+            roles: vec![proto::WorkerRole::Aggregated as i32],
             block_size_tokens: 1,
             expected_ranks: 1,
             observed_ranks: 1,
@@ -256,9 +268,8 @@ async fn usage_snapshot(state: &AppState) -> proto::KvUsageSnapshot {
 
 fn metadata() -> proto::RelayMessageMetadata {
     proto::RelayMessageMetadata {
-        drt_instance_id: 1,
         relay_incarnation: 1,
-        observed_at_unix_ms: crate::openai::unix_millis(),
+        emitted_at_unix_ms: crate::openai::unix_millis(),
     }
 }
 
@@ -277,7 +288,7 @@ fn pool_identity() -> proto::PoolIdentity {
         cache_semantics_source: proto::IdentitySource::DefaultDerived as i32,
         routing_scope_digest: vec![2; 16],
         routing_scope_source: proto::IdentitySource::DefaultDerived as i32,
-        dc_id: 1,
+        locality_id: 1,
     }
 }
 
@@ -296,16 +307,15 @@ mod tests {
             finished: false,
         });
 
-        let first = accumulator.snapshot("model-a");
-        assert_eq!(first.models[0].requests_started_total, Some(1));
-        assert_eq!(first.models[0].input_tokens_total, Some(10));
-        assert_eq!(first.models[0].output_tokens_total, Some(2));
-        assert_eq!(first.models[0].output_generation_requests, Some(1));
-
-        let second = accumulator.snapshot("model-a");
-        assert_eq!(second.models[0].requests_started_total, Some(1));
-        assert_eq!(second.models[0].input_tokens_total, Some(10));
-        assert_eq!(second.models[0].output_tokens_total, Some(2));
-        assert_eq!(second.models[0].output_generation_requests, Some(1));
+        for _ in 0..2 {
+            let snapshot = accumulator.snapshot("model-a");
+            let load = snapshot.models[0].load.as_ref().unwrap();
+            let requests = load.requests.as_ref().unwrap();
+            let tokens = load.tokens.as_ref().unwrap();
+            assert_eq!(requests.requests_started_total, 1);
+            assert_eq!(requests.requests_generating, Some(1));
+            assert_eq!(tokens.input_tokens_total, Some(10));
+            assert_eq!(tokens.output_tokens_total, Some(2));
+        }
     }
 }
