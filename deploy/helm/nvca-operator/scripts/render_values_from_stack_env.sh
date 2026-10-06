@@ -90,10 +90,11 @@ yq eval -i '
   .fullnameOverride = "nvca-operator"
 ' "${output_file}"
 
-# The clusterValidator keys below describe the stack, so they are written on
-# every render, empty included. Values reused from the release would otherwise
-# keep a Gateway, a StorageClass or an external component the stack no longer
-# has, and the validator would judge the cluster against it.
+# The clusterValidator keys below, but for the probe image, describe the
+# stack, so they are written on every render, empty included. Values reused
+# from the release would otherwise keep a Gateway, a StorageClass or an
+# external component the stack no longer has, and the validator would judge
+# the cluster against it.
 
 # The control-plane validator judges only the NVCF Gateways, so name them as
 # the stack wires its routes (base.yaml defaults: gatewayApi enabled, optional
