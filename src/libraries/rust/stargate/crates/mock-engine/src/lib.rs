@@ -92,8 +92,12 @@ impl EngineConfig {
         if self.max_num_seqs == 0 {
             return Err("max_num_seqs must be at least 1".to_string());
         }
-        if self.max_batched_tokens == 0 {
-            return Err("max_batched_tokens must be at least 1".to_string());
+        // Each running sequence decodes one token per step.
+        if self.max_batched_tokens < self.max_num_seqs as u64 {
+            return Err("max_batched_tokens must be at least max_num_seqs".to_string());
+        }
+        if self.kv_cache_capacity_tokens == 0 {
+            return Err("kv_cache_capacity_tokens must be at least 1".to_string());
         }
         for (name, value) in [
             ("step_fixed_ms", self.step_fixed_ms),

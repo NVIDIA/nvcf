@@ -286,6 +286,31 @@ fn oversized_request_runs_alone_instead_of_blocking() {
 }
 
 #[test]
+fn cancel_during_prefill_returns_all_memory() {
+    for cache_key in [None, Some(10)] {
+        let mut engine = Engine::new(
+            EngineConfig {
+                max_batched_tokens: 100,
+                ..config(1)
+            },
+            false,
+        )
+        .unwrap();
+        engine.submit(0, 1, spec(cache_key, 1000, 50));
+        engine.advance_to(engine.next_event_time().unwrap());
+        assert!(engine.worker_stats()[0].kv_cache_used_tokens > 0);
+
+        assert!(engine.cancel(engine.next_event_time().unwrap() - 1, 1));
+        drain(&mut engine);
+        assert_eq!(
+            engine.worker_stats()[0].kv_cache_used_tokens,
+            0,
+            "cache key {cache_key:?}"
+        );
+    }
+}
+
+#[test]
 fn cancel_frees_a_slot_for_waiting_work() {
     let mut engine = Engine::new(
         EngineConfig {
@@ -340,6 +365,14 @@ fn invalid_configs_are_rejected() {
         },
         EngineConfig {
             max_batched_tokens: 0,
+            ..config(1)
+        },
+        EngineConfig {
+            max_batched_tokens: 3,
+            ..config(1)
+        },
+        EngineConfig {
+            kv_cache_capacity_tokens: 0,
             ..config(1)
         },
         EngineConfig {

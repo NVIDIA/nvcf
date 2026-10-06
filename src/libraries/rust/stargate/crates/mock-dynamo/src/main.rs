@@ -145,9 +145,9 @@ struct Args {
     /// Delay /health responses to create deterministic RTT differences in tests
     #[arg(long, default_value_t = 0, value_name = "MS")]
     health_delay_ms: u64,
-    /// Total mock KV-cache capacity in tokens. 0 disables cache tracking.
-    /// With the batched engine this is the capacity of each worker, and 0
-    /// keeps the profile's per-worker capacity
+    /// Mock KV-cache capacity in tokens. Legacy model: the total, and 0
+    /// disables cache tracking. Batched engine: each worker's capacity, and 0
+    /// uses the engine default
     #[arg(long, default_value_t = 0, value_name = "TOKENS")]
     kv_cache_capacity_tokens: u64,
     /// Engine timing model. Defaults to `batched` with --profile and `legacy` otherwise
