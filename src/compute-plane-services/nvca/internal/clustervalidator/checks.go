@@ -3936,9 +3936,10 @@ func (s gatewayAPISurface) servedVersion(resource string) string {
 
 // gatewayOwnership says which Gateways, proxies and proxy Services are NVCF's.
 // Run resolves it once and hands it to the Envoy, LoadBalancer and Tier-1
-// rows, which share its Gateway, GatewayClass and controller lookups: resolved
+// rows, which share its Gateway and GatewayClass lookups: resolved
 // separately, minutes apart, the rows could judge different Gateways in one
-// run.
+// run. Tier-1 reads the Envoy Gateway controller again (forgetControllers),
+// since it judges the controller's readiness.
 type gatewayOwnership struct {
 	// gateways are the NVCF Gateways as namespace/name, and source says where
 	// they came from. An empty set with a nil err means no NVCF route exists.
@@ -4186,6 +4187,17 @@ func (o *gatewayOwnership) envoyControllers(ctx context.Context) ([]corev1.Pod, 
 		o.controllerNS[pods.Items[i].Namespace] = true
 	}
 	return o.controllerPods, o.controllerNS, nil
+}
+
+// forgetControllers drops the Envoy Gateway controllers read so far, so the
+// next lookup reads them again. Tier-1 runs after the External LB row and the
+// node-to-node probe, minutes after the Envoy row read them, and judges the
+// controller's readiness: a stale Deployment status beside fresh ReplicaSet
+// and pod reads would fail a controller that restarted since and pass one
+// that died.
+func (o *gatewayOwnership) forgetControllers() {
+	o.controllersListed = false
+	o.controllerDeploys, o.controllerPods, o.controllerNS, o.controllerErr = nil, nil, nil, nil
 }
 
 // envoyControllerDeployments returns the Envoy Gateway controller Deployments
@@ -4759,6 +4771,7 @@ func checkTier1DeploymentsFor(
 ) {
 	printHeader(state.Log, "Tier-1 Deployment Readiness")
 	own.reportInvalid(state.Log, state)
+	own.forgetControllers()
 	scan := newTier1Scan(own, state)
 	scan.judgeController = state.PostInstall && own.envoyNotApplicable(ctx) == ""
 	scan.dates = &rolloutDating{ctx: ctx, client: client}

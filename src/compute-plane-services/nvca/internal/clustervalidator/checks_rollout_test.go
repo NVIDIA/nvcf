@@ -1153,6 +1153,47 @@ func TestCheckTier1Deployments_PostInstallJudgesTheEnvoyController(t *testing.T)
 	assert.Contains(t, state.Warnings, tier1ControllerUnknown)
 }
 
+// Tier-1 judges the Envoy Gateway controller as it is when Tier-1 runs, not
+// as the Envoy row saw it minutes earlier, before the External LB row and the
+// node-to-node probe: one that went down since fails, and one that came back
+// passes.
+func TestCheckTier1Deployments_JudgesTheEnvoyControllerAsItIsNow(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+	labels := map[string]string{owningGatewayNameLabel: "nvcf-gw", owningGatewayNamespaceLabel: "nvcf"}
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		before, now int32
+		ok          bool
+	}{
+		"went down after the Envoy row": {before: 1, now: 0},
+		"came back after the Envoy row": {before: 0, now: 1, ok: true},
+	} {
+		client := gatewayDiscoveryClient(gatewayAPIGroup+"/v1/httproutes", gatewayAPIGroup+"/v1/gateways",
+			gatewayAPIGroup+"/v1/gatewayclasses")
+		setReady := func(ready int32) {
+			d, err := client.AppsV1().Deployments(envoyGatewayNamespace).Get(ctx, "envoy-gateway", metav1.GetOptions{})
+			require.NoError(t, err)
+			d.Status.ReadyReplicas = ready
+			_, err = client.AppsV1().Deployments(envoyGatewayNamespace).UpdateStatus(ctx, d, metav1.UpdateOptions{})
+			require.NoError(t, err)
+		}
+		for _, o := range []runtime.Object{envoyProxyAt(envoyGatewayNamespace, "envoy-nvcf", labels, 2, 2),
+			nvcfAPI()} {
+			require.NoError(t, client.Tracker().Add(o))
+		}
+		setReady(tc.before)
+		own := resolveGatewayOwnership(ctx, client, envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg")))
+		checkEnvoyGatewayFor(ctx, client, own, &ValidationState{Log: testLog(), PostInstall: true})
+
+		setReady(tc.now)
+		state := &ValidationState{Log: testLog(), PostInstall: true}
+		checkTier1DeploymentsFor(ctx, client, own, state)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		assert.Equal(t, tc.ok, *state.Tier1DeploymentsOK, name)
+	}
+}
+
 // A proxy Deployment with no Ready pod does not cover its Gateway, wherever
 // the controller runs, including a namespace Tier-1 does not otherwise scan.
 func TestCheckTier1Deployments_ProxyDeploymentWithoutReadyPodIsAGap(t *testing.T) {
