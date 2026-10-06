@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -426,28 +427,47 @@ func TestValidatorRunWatcher_BacksOffWhileFailing(t *testing.T) {
 	assert.Len(t, validatorJobs(t, client), 1)
 }
 
-// A run the API server rejects as invalid would be rejected again, so the
-// spec is not retried every poll; the next spec is tried.
-func TestValidatorRun_RejectedRunIsNotRetried(t *testing.T) {
-	client, _ := validatorClient(validatorCronJobWithSpec("a"))
-	var creates atomic.Int32
-	client.PrependReactor("create", "jobs", func(a ktesting.Action) (bool, runtime.Object, error) {
-		creates.Add(1)
-		if a.(ktesting.CreateAction).GetObject().(*batchv1.Job).Annotations[validatorSpecAnnotation] == "a" {
-			return true, nil, apierrors.NewInvalid(batchv1.SchemeGroupVersion.WithKind("Job").GroupKind(), "run", nil)
-		}
-		return false, nil, nil
-	})
-	w := newValidatorWatcher(client)
-	require.False(t, w.reconcile(context.Background()))
-	require.False(t, w.reconcile(context.Background()))
-	assert.Equal(t, int32(1), creates.Load())
-	assert.Zero(t, w.failures)
+// An admission webhook that denies without a code answers 400, and a
+// ValidatingAdmissionPolicy 422. Either can pass once the policy is fixed, so
+// a rejected run is retried with the backoff of any other failed poll, and
+// the spec's run starts without waiting for the next spec change or the
+// CronJob's schedule.
+func TestValidatorRun_PolicyRejectionIsRetried(t *testing.T) {
+	for name, rejection := range map[string]error{
+		"webhook without a code": &apierrors.StatusError{ErrStatus: metav1.Status{
+			Status: metav1.StatusFailure, Code: http.StatusBadRequest,
+			Message: `admission webhook "validate.kyverno.svc" denied the request: image not allowed`,
+		}},
+		"admission policy": &apierrors.StatusError{ErrStatus: metav1.Status{
+			Status: metav1.StatusFailure, Code: http.StatusUnprocessableEntity, Reason: metav1.StatusReasonInvalid,
+			Message: `jobs.batch "run" is forbidden: ValidatingAdmissionPolicy 'restrict-jobs' with binding ` +
+				`'restrict-jobs' denied request: not now`,
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, _ := validatorClient(validatorCronJobWithSpec("a"))
+			var creates atomic.Int32
+			client.PrependReactor("create", "jobs", func(ktesting.Action) (bool, runtime.Object, error) {
+				if creates.Add(1) <= 2 {
+					return true, nil, rejection
+				}
+				return false, nil, nil
+			})
+			w := newValidatorWatcher(client)
+			require.False(t, w.reconcile(context.Background()))
+			require.False(t, w.reconcile(context.Background()))
+			assert.Equal(t, int32(2), creates.Load())
+			assert.Equal(t, 2*validatorRunPollInterval, w.nextPoll(), "it backs off while rejected")
+			assert.Empty(t, validatorJobs(t, client))
 
-	setCronJob(t, client, validatorCronJobWithSpec("b"))
-	require.False(t, w.reconcile(context.Background()))
-	assert.Equal(t, int32(2), creates.Load())
-	assert.Len(t, validatorJobs(t, client), 1)
+			require.False(t, w.reconcile(context.Background()))
+			assert.Equal(t, int32(3), creates.Load())
+			assert.Len(t, validatorJobs(t, client), 1, "the run starts once the policy admits it")
+			assert.Equal(t, validatorRunPollInterval, w.nextPoll())
+			require.False(t, w.reconcile(context.Background()))
+			assert.Equal(t, int32(3), creates.Load(), "and none after it")
+		})
+	}
 }
 
 // A reinstalled CronJob starts its own run even while a run of the same spec

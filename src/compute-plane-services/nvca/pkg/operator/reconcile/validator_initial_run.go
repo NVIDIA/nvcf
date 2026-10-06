@@ -184,10 +184,6 @@ func (w *validatorRunWatcher) start(
 			w.log.Warnf("Job %s exists but the cluster-validator CronJob does not own it; not starting a run "+
 				"for validator spec %s", job.Name, spec)
 		}
-	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
-		// The same Job would be rejected again, so this spec is not retried.
-		w.log.WithError(err).Warnf("the API server rejected cluster-validator run %s; not starting another "+
-			"for validator spec %s", job.Name, spec)
 	default:
 		return w.apiError("start a cluster-validator run", "create", err)
 	}
@@ -197,7 +193,8 @@ func (w *validatorRunWatcher) start(
 
 // apiError logs err and reports whether to stop. Only RBAC refusing verb stops
 // the watch, since retrying cannot fix it. A ResourceQuota, an admission
-// webhook or a policy also answers 403, and an expired token 401, and those
+// webhook or a policy also answers 403, a webhook that denies without a code
+// 400, a ValidatingAdmissionPolicy 422, and an expired token 401, and those
 // can pass on a later poll.
 func (w *validatorRunWatcher) apiError(action, verb string, err error) (stop, failed bool) {
 	log := w.log.WithError(err)
