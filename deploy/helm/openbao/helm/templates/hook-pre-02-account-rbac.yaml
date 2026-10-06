@@ -39,10 +39,21 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 rules:
-  # create unseal and jwt secrets
+  # create is required for the root-token, recovery-keys, and jwt Secrets.
+  # Kubernetes RBAC cannot restrict create by resourceName, but create alone
+  # cannot read existing Secrets.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "patch", "get"]
+    verbs: ["create"]
+  # read and update only the Secrets this job manages, so a compromised init
+  # pod cannot read arbitrary Secrets (such as the root token) in the namespace.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ $serverFullname }}-unseal
+      - {{ $serverFullname }}-root-token
+      - cluster-jwt
+    verbs: ["get", "patch"]
   # for determining when cluster pods are in ready state
   - apiGroups: [""]
     resources: ["pods"]
