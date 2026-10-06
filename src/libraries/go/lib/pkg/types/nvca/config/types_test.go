@@ -304,6 +304,91 @@ func TestBYOOOTelCollectorConfig_ValidateSampling(t *testing.T) {
 	}
 }
 
+func TestAgentTimeConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     AgentTimeConfig
+		wantErr string
+	}{
+		{name: "accepts zero values", cfg: AgentTimeConfig{}},
+		{name: "accepts positive values", cfg: AgentTimeConfig{HeartbeatInterval: 30 * time.Second}},
+		{
+			name:    "rejects negative HeartbeatInterval",
+			cfg:     AgentTimeConfig{HeartbeatInterval: -1 * time.Second},
+			wantErr: "agent.heartbeatInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative CredRenewInterval",
+			cfg:     AgentTimeConfig{CredRenewInterval: -1 * time.Second},
+			wantErr: "agent.credRenewInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncQueueInterval",
+			cfg:     AgentTimeConfig{SyncQueueInterval: -1 * time.Second},
+			wantErr: "agent.syncQueueInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncRequestStatusInterval",
+			cfg:     AgentTimeConfig{SyncRequestStatusInterval: -1 * time.Second},
+			wantErr: "agent.syncRequestStatusInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncAcknowledgeRequestInterval",
+			cfg:     AgentTimeConfig{SyncAcknowledgeRequestInterval: -1 * time.Second},
+			wantErr: "agent.syncAcknowledgeRequestInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative PeriodicInstanceStatusInterval",
+			cfg:     AgentTimeConfig{PeriodicInstanceStatusInterval: -1 * time.Second},
+			wantErr: "agent.periodicInstanceStatusInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative ICMSRequestAckInterval",
+			cfg:     AgentTimeConfig{ICMSRequestAckInterval: -1 * time.Second},
+			wantErr: "agent.icmsRequestAckInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative ICMSRequestAckRetryTimeout",
+			cfg:     AgentTimeConfig{ICMSRequestAckRetryTimeout: -1 * time.Second},
+			wantErr: "agent.icmsRequestAckRetryTimeout: must not be negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestConfig_Validate_RejectsNegativeHeartbeatInterval is a regression test for
+// NVBug 6843414: worker.timeouts.heartbeatInterval=-1s was accepted by the Helm
+// update and the merged agent config, then reached time.NewTicker unvalidated,
+// panicking the replacement agent at startup with "non-positive interval for
+// NewTicker" and blocking rollout. Config.Validate() must now reject it before
+// Complete() or any ticker construction.
+func TestConfig_Validate_RejectsNegativeHeartbeatInterval(t *testing.T) {
+	cfg := Config{
+		Agent: AgentConfig{
+			AgentTimeConfig: AgentTimeConfig{HeartbeatInterval: -1 * time.Second},
+		},
+	}
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "agent.heartbeatInterval: must not be negative")
+
+	// A zero HeartbeatInterval must continue to pass validation and be
+	// defaulted by Complete(), unaffected by the new negative-value check.
+	zeroCfg := Config{}
+	require.NoError(t, zeroCfg.Validate())
+	completed := zeroCfg.Agent.AgentTimeConfig.Complete()
+	assert.Equal(t, defaultHeartbeatInterval, completed.HeartbeatInterval)
+}
+
 func TestAgentTimeConfig_Complete(t *testing.T) {
 	t.Run("sets_all_defaults", func(t *testing.T) {
 		cfg := AgentTimeConfig{}

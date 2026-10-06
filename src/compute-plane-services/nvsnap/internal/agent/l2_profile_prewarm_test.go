@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -26,7 +27,10 @@ func TestResolveL2Promoter_ReturnsProfileWithPrewarmPolicy(t *testing.T) {
 	}
 
 	kc := fake.NewSimpleClientset(sc)
-	promoter, profile := resolveL2Promoter(context.Background(), kc, nil, "nvcf-sc", "nvsnap-system", log)
+	promoter, profile, err := resolveL2Promoter(context.Background(), kc, nil, "nvcf-sc", "nvsnap-system", log)
+	if err != nil {
+		t.Fatalf("built-in NVMesh profile: %v", err)
+	}
 	if promoter == nil || profile == nil {
 		t.Fatalf("built-in NVMesh profile: promoter=%v profile=%v, want both", promoter, profile)
 	}
@@ -46,7 +50,10 @@ nvmesh-csi.excelero.com:
 `},
 	}
 	kc = fake.NewSimpleClientset(sc, cm)
-	promoter, profile = resolveL2Promoter(context.Background(), kc, nil, "nvcf-sc", "nvsnap-system", log)
+	promoter, profile, err = resolveL2Promoter(context.Background(), kc, nil, "nvcf-sc", "nvsnap-system", log)
+	if err != nil {
+		t.Fatalf("ConfigMap overlay: %v", err)
+	}
 	if promoter == nil || profile == nil {
 		t.Fatalf("ConfigMap overlay: promoter=%v profile=%v, want both", promoter, profile)
 	}
@@ -54,9 +61,14 @@ nvmesh-csi.excelero.com:
 		t.Errorf("ConfigMap prewarm policy lost on the way to the webhook: enabled=%v workers=%d, want off/2 (overlay flips the NVMesh default)", profile.PrewarmEnabled(), profile.PrewarmWorkers())
 	}
 
-	// No match: nothing to hand the webhook, it falls back to defaults.
+	// No match: L2 is disabled and there is nothing to hand the webhook,
+	// so it falls back to defaults.
 	unknown := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "weka"}, Provisioner: "csi.weka.io"}
-	if _, profile := resolveL2Promoter(context.Background(), fake.NewSimpleClientset(unknown), nil, "weka", "nvsnap-system", log); profile != nil {
+	_, profile, err = resolveL2Promoter(context.Background(), fake.NewSimpleClientset(unknown), nil, "weka", "nvsnap-system", log)
+	if !errors.Is(err, errUnqualifiedStorage) {
+		t.Errorf("unmatched provisioner: err=%v, want errUnqualifiedStorage", err)
+	}
+	if profile != nil {
 		t.Errorf("unmatched provisioner must yield a nil profile, got %+v", profile)
 	}
 }

@@ -11,10 +11,13 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 const uri = "hf://Qwen/Qwen2.5-32B-Instruct"
@@ -479,5 +482,127 @@ func TestProvisioner_RecordBytes(t *testing.T) {
 	}
 	if err := p.RecordBytes(ctx, "pv-sized", 0); err != nil {
 		t.Error("a zero count is a no-op, not an error")
+	}
+}
+
+// A conflicting PV update (a CSI controller or another agent wrote the PV
+// between our Get and Update) must not release the writer claim: with a
+// Delete reclaim policy, releasing the last claim would destroy the
+// completed model. Completion retries against a fresh PV, and releases
+// the claim only once the labels and Retain are persisted.
+func TestMarkComplete_ConflictKeepsClaimUntilPersisted(t *testing.T) {
+	ctx := context.Background()
+	setup := func() (*fake.Clientset, *Provisioner) {
+		pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-model"}, Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:v:fn-a"}}}}
+		kc := fake.NewSimpleClientset(pv)
+		p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc", Size: resource.MustParse("1Gi")}}
+		if _, err := p.EnsureWriterClaim(ctx, uri, "fn-a"); err != nil {
+			t.Fatal(err)
+		}
+		pvc, _ := kc.CoreV1().PersistentVolumeClaims("fn-a").Get(ctx, ClaimName(uri), metav1.GetOptions{})
+		pvc.Spec.VolumeName = "pv-model"
+		if _, err := kc.CoreV1().PersistentVolumeClaims("fn-a").Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		return kc, p
+	}
+	conflict := apierrors.NewConflict(corev1.Resource("persistentvolumes"), "pv-model", nil)
+
+	// One conflict: retried against a fresh PV, then released.
+	kc, p := setup()
+	var updates atomic.Int32
+	kc.PrependReactor("update", "persistentvolumes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if updates.Add(1) == 1 {
+			return true, nil, conflict
+		}
+		return false, nil, nil
+	})
+	if err := p.MarkComplete(ctx, uri, "fn-a"); err != nil {
+		t.Fatalf("one conflict must be retried: %v", err)
+	}
+	got, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pv-model", metav1.GetOptions{})
+	if got.Labels[CompleteLabel] != "true" || got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Errorf("completion must be persisted after the retry: %+v %s", got.Labels, got.Spec.PersistentVolumeReclaimPolicy)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("fn-a").Get(ctx, ClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("claim must be released once completion is persisted")
+	}
+
+	// Conflicts every time: an error, and the claim stays.
+	kc, p = setup()
+	kc.PrependReactor("update", "persistentvolumes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, conflict
+	})
+	if err := p.MarkComplete(ctx, uri, "fn-a"); err == nil {
+		t.Error("completion that never persisted must be an error")
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("fn-a").Get(ctx, ClaimName(uri), metav1.GetOptions{}); err != nil {
+		t.Errorf("claim must stay while the PV is not complete and retained: %v", err)
+	}
+	got, _ = kc.CoreV1().PersistentVolumes().Get(ctx, "pv-model", metav1.GetOptions{})
+	if got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete {
+		t.Fatalf("precondition: the fake kept Delete, got %s", got.Spec.PersistentVolumeReclaimPolicy)
+	}
+}
+
+// One namespace owns a model's download cluster-wide. A second namespace
+// admitting the same model sees the owner and must not start its own
+// writer; an owner whose Job is gone past the grace period is replaced,
+// and a failure or completion releases the record.
+func TestClaimDownload_OneOwnerAcrossNamespaces(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeRWX, StorageClass: "sc", Size: resource.MustParse("1Gi")}, Now: func() time.Time { return now }}
+
+	// Concurrent first admissions in two namespaces: exactly one owner.
+	owners := make([]string, 2)
+	var wg sync.WaitGroup
+	for i, ns := range []string{"fn-a", "fn-b"} {
+		wg.Add(1)
+		go func(i int, ns string) {
+			defer wg.Done()
+			o, err := p.ClaimDownload(ctx, uri, ns)
+			if err != nil {
+				t.Error(err)
+			}
+			owners[i] = o
+		}(i, ns)
+	}
+	wg.Wait()
+	if owners[0] == "" || owners[0] != owners[1] {
+		t.Fatalf("both namespaces must agree on one owner, got %v", owners)
+	}
+	owner := owners[0]
+	other := map[string]string{"fn-a": "fn-b", "fn-b": "fn-a"}[owner]
+
+	// The owner's Job is gone but the grace period has not passed: kept.
+	if o, _ := p.ClaimDownload(ctx, uri, other); o != owner {
+		t.Errorf("an owner within its grace period is kept, got %q", o)
+	}
+	// Its Job runs: kept however old the record is.
+	now = now.Add(2 * DownloadOwnerGrace)
+	if _, err := kc.BatchV1().Jobs(owner).Create(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: JobName(uri), Namespace: owner}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := p.ClaimDownload(ctx, uri, other); o != owner {
+		t.Errorf("an owner whose Job exists is kept, got %q", o)
+	}
+	// Its Job is gone past the grace period: the next namespace takes over.
+	if err := kc.BatchV1().Jobs(owner).Delete(ctx, JobName(uri), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := p.ClaimDownload(ctx, uri, other); err != nil || o != other {
+		t.Errorf("a stale owner is replaced, got %q %v", o, err)
+	}
+
+	// A recorded failure releases ownership.
+	if err := p.RecordFailure(ctx, uri, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kc.CoordinationV1().Leases(p.Cfg.SystemNamespace()).Get(ctx, p.Cfg.DownloadOwnerName(uri), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("failure must release the owner record: %v", err)
 	}
 }
