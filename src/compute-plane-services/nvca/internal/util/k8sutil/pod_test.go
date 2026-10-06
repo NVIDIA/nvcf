@@ -540,7 +540,8 @@ func TestIsPodDegraded(t *testing.T) {
 						},
 					},
 					{
-						Name: "bar",
+						Name:  "bar",
+						Ready: true,
 						State: corev1.ContainerState{
 							Running: &corev1.ContainerStateRunning{},
 						},
@@ -550,8 +551,50 @@ func TestIsPodDegraded(t *testing.T) {
 			workerDegradationPeriod: time.Hour,
 			startupTimeoutPeriod:    time.Hour,
 			want: PodDegraded{
-				Containers: []ContainerDegraded{},
+				Containers: []ContainerDegraded{{Name: "foo"}},
 				Reason:     "ContainersNotReady",
+			},
+			wantDegraded: true,
+		},
+		{
+			name: "degraded - RestartPolicy Always worker stuck in ImagePullBackOff beyond threshold",
+			status: corev1.PodStatus{
+				StartTime: &metav1.Time{Time: now.Add(-2 * time.Hour)},
+				Conditions: []corev1.PodCondition{
+					{
+						Type:   corev1.ContainersReady,
+						Status: corev1.ConditionFalse,
+						Reason: "ContainersNotReady",
+					},
+					{
+						Type:               corev1.PodReady,
+						Status:             corev1.ConditionFalse,
+						LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Hour)},
+					},
+					{Type: corev1.PodInitialized, Status: corev1.ConditionTrue},
+				},
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: "utils",
+						State: corev1.ContainerState{
+							Waiting: &corev1.ContainerStateWaiting{
+								Reason:  "ImagePullBackOff",
+								Message: "Back-off pulling image",
+							},
+						},
+					},
+				},
+			},
+			workerDegradationPeriod: time.Hour,
+			startupTimeoutPeriod:    time.Hour,
+			restartPolicy:           corev1.RestartPolicyAlways,
+			want: PodDegraded{
+				Containers: []ContainerDegraded{{
+					Name:    "utils",
+					Reason:  "ImagePullBackOff",
+					Message: "Back-off pulling image",
+				}},
+				Reason: "ContainersNotReady",
 			},
 			wantDegraded: true,
 		},
@@ -621,7 +664,8 @@ func TestIsPodDegraded(t *testing.T) {
 						},
 					},
 					{
-						Name: "bar",
+						Name:  "bar",
+						Ready: true,
 						State: corev1.ContainerState{
 							Running: &corev1.ContainerStateRunning{},
 						},
