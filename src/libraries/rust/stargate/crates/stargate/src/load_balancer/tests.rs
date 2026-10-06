@@ -3115,32 +3115,49 @@ fn pulsar_returns_none_when_all_candidates_are_excluded() {
 }
 
 #[test]
-fn pulsar_ranking_cache_invalidates_when_capacity_weight_changes() {
-    let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
-    let target = target();
+fn pulsar_ranking_cache_invalidates_when_the_selected_weight_changes() {
+    for rendezvous_weight in [
+        PulsarRendezvousWeight::MaxInputTps,
+        PulsarRendezvousWeight::LastMeanInputTps,
+    ] {
+        let mut config = seeded_pulsar_algorithm_config("seed-1");
+        config.rendezvous_weight = rendezvous_weight;
+        let pulsar = PulsarLoadBalancer::new(config);
+        let target = target();
+        // Only the selected weight field swaps between the two snapshots.
+        let with_weights = |a: f64, b: f64| {
+            let mut candidates = vec![
+                work_candidate("inst-a", 5, 100.0, 0),
+                work_candidate("inst-b", 5, 100.0, 0),
+            ];
+            for (candidate, weight) in candidates.iter_mut().zip([a, b]) {
+                match rendezvous_weight {
+                    PulsarRendezvousWeight::MaxInputTps => {
+                        candidate.stats.max_input_tps = Some(weight);
+                    }
+                    PulsarRendezvousWeight::LastMeanInputTps => {
+                        candidate.stats.last_mean_input_tps = weight;
+                    }
+                }
+            }
+            candidates
+        };
+        let initial = with_weights(10_000.0, 1.0);
+        let changed = with_weights(1.0, 10_000.0);
 
-    for idx in 0..1024 {
-        let key = format!("affinity-{idx}");
-        let request = request(&target, Some(&key), Some(128));
-        let initial = vec![
-            work_candidate("inst-a", 5, 10_000.0, 0),
-            work_candidate("inst-b", 5, 1.0, 0),
-        ];
-        let changed = vec![
-            work_candidate("inst-a", 5, 1.0, 0),
-            work_candidate("inst-b", 5, 10_000.0, 0),
-        ];
-
-        let first = choose(&pulsar, &request, &initial).candidate.cluster_id;
-        let second = choose(&pulsar, &request, &changed).candidate.cluster_id;
-        if first != second {
-            assert_eq!(first, "inst-a");
-            assert_eq!(second, "inst-b");
-            return;
-        }
+        let changed_key = (0..1024).find_map(|idx| {
+            let key = format!("affinity-{idx}");
+            let request = request(&target, Some(&key), Some(128));
+            let first = choose(&pulsar, &request, &initial).candidate.cluster_id;
+            let second = choose(&pulsar, &request, &changed).candidate.cluster_id;
+            (first != second).then_some((first, second))
+        });
+        assert_eq!(
+            changed_key,
+            Some(("inst-a".to_string(), "inst-b".to_string())),
+            "{rendezvous_weight:?}: some key's ranking follows the selected weight"
+        );
     }
-
-    panic!("expected to find an affinity key whose ranking changes after capacity changes");
 }
 
 #[test]
@@ -3283,7 +3300,8 @@ fn pulsar_excludes_candidate_with_invalid_max_input_tps() {
     let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
 
     let target = target();
-    let invalid = work_candidate("inst-a", 5, 0.0, 0);
+    let mut invalid = work_candidate("inst-a", 5, 100.0, 0);
+    invalid.stats.max_input_tps = Some(0.0);
     let valid = candidate("inst-b", 1024);
 
     let choice = choose(
@@ -3299,8 +3317,11 @@ fn pulsar_returns_none_when_all_candidates_lack_valid_max_input_tps() {
     let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
 
     let target = target();
-    let invalid_a = work_candidate("inst-a", 5, 0.0, 0);
-    let invalid_b = work_candidate("inst-b", 5, f64::NAN, 0);
+    // Valid means do not make up for invalid maxima.
+    let mut invalid_a = work_candidate("inst-a", 5, 100.0, 0);
+    invalid_a.stats.max_input_tps = Some(0.0);
+    let mut invalid_b = work_candidate("inst-b", 5, 100.0, 0);
+    invalid_b.stats.max_input_tps = Some(f64::NAN);
 
     let choice = pulsar.choose_for_test(
         &request(&target, Some("prefix-1"), Some(128)),
