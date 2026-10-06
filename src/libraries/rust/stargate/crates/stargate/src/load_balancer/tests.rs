@@ -145,12 +145,6 @@ fn seeded_pulsar_algorithm_config(seed: &str) -> LoadBalancerAlgorithmConfig {
     config
 }
 
-fn max_weight_pulsar_algorithm_config(seed: &str) -> LoadBalancerAlgorithmConfig {
-    parse_json(&format!(
-        r#"{{"algorithm":"pulsar","seed":"{seed}","rendezvous_weight":"max-input-tps"}}"#
-    ))
-}
-
 #[test]
 fn set_seed_reports_unsupported_algorithms_without_panicking() {
     for algorithm in [
@@ -688,7 +682,7 @@ fn input_work_seconds_for_pulsar_excludes_low_free_kv_when_considered() {
 
 #[test]
 fn max_rendezvous_weight_keeps_mean_input_work_capacity() {
-    let config = max_weight_pulsar_algorithm_config("seed-1");
+    let config = seeded_pulsar_algorithm_config("seed-1");
     let target = target();
     let request = request(&target, Some("prefix-a"), Some(100));
     let mut backend = work_candidate("backend", 5, 50.0, 50);
@@ -3151,7 +3145,7 @@ fn pulsar_ranking_cache_invalidates_when_capacity_weight_changes() {
 
 #[test]
 fn pulsar_max_ranking_cache_tracks_only_the_selected_weight() {
-    let pulsar = PulsarLoadBalancer::new(max_weight_pulsar_algorithm_config("seed-1"));
+    let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
     let target = target();
     let first_key = "max-cache-a";
     let second_key = "max-cache-b";
@@ -3265,7 +3259,7 @@ fn pulsar_uses_last_mean_input_tps_as_weight() {
 
 #[test]
 fn pulsar_can_use_generation_max_input_tps_as_weight() {
-    let pulsar = PulsarLoadBalancer::new(max_weight_pulsar_algorithm_config("seed-1"));
+    let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
     let mut candidate = work_candidate("inst-a", 5, 123.0, 0);
     candidate.stats.max_input_tps = Some(456.0);
 
@@ -3277,7 +3271,7 @@ fn pulsar_can_use_generation_max_input_tps_as_weight() {
 
 #[test]
 fn pulsar_max_weight_does_not_fall_back_to_mean() {
-    let pulsar = PulsarLoadBalancer::new(max_weight_pulsar_algorithm_config("seed-1"));
+    let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
     let mut candidate = work_candidate("inst-a", 5, 123.0, 0);
     candidate.stats.max_input_tps = None;
 

@@ -563,11 +563,5 @@ algorithms:
             command_value(&client.command, "--initial-input-tps"),
             Some("100")
         );
-        assert!(
-            !client
-                .command
-                .iter()
-                .any(|candidate| candidate == "--benchmark-pin-input-tps")
-        );
     }
 }

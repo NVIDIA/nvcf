@@ -39,8 +39,8 @@ pub(super) struct PulsarLoadBalancer {
 impl PulsarLoadBalancer {
     pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> Self {
         Self {
+            rankings: PulsarRankingStore::new(config.rendezvous_weight),
             config,
-            rankings: PulsarRankingStore::default(),
         }
     }
 
@@ -58,12 +58,11 @@ impl LoadBalancer for PulsarLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
-        let (lookup, cached_choice) = self.rankings.lookup_choice(
-            self.config.rendezvous_weight,
-            request,
-            candidates,
-            |ranking| self.choose_from_ranked_indices(request, candidates, ranking),
-        )?;
+        let (lookup, cached_choice) =
+            self.rankings
+                .lookup_choice(request, candidates, |ranking| {
+                    self.choose_from_ranked_indices(request, candidates, ranking)
+                })?;
         match lookup {
             PulsarRankingLookup::Hit => cached_choice,
             PulsarRankingLookup::MissCacheable => {
@@ -73,13 +72,9 @@ impl LoadBalancer for PulsarLoadBalancer {
                 }
                 let choice = self.choose_from_ranked_indices(request, candidates, &ranking);
                 self.rankings
-                    .insert_or_choose_existing(
-                        self.config.rendezvous_weight,
-                        request,
-                        candidates,
-                        ranking,
-                        |cached| self.choose_from_ranked_indices(request, candidates, cached),
-                    )
+                    .insert_or_choose_existing(request, candidates, ranking, |cached| {
+                        self.choose_from_ranked_indices(request, candidates, cached)
+                    })
                     .or(choice)
             }
             PulsarRankingLookup::MissBypass => self.choose_by_score_scan(request, candidates),
