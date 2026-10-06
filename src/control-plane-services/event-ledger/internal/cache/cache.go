@@ -22,6 +22,7 @@ package cache
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
 	"time"
 
@@ -88,10 +89,25 @@ type CachingDBHandler struct {
 	entries   map[key]*entry
 }
 
+// isNilHandler reports whether handler is nil, including a nil pointer stored
+// in a non-nil interface, which would panic on the first promoted call.
+func isNilHandler(handler data_access.DBHandlerV2) bool {
+	if handler == nil {
+		return true
+	}
+	handlerValue := reflect.ValueOf(handler)
+	switch handlerValue.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice:
+		return handlerValue.IsNil()
+	default:
+		return false
+	}
+}
+
 // NewCachingDBHandler wraps inner with an empty cache. It returns an error if
-// inner is nil or cfg has a non-positive field.
+// inner is nil, including a typed nil, or cfg has a non-positive field.
 func NewCachingDBHandler(inner data_access.DBHandlerV2, cfg Config) (*CachingDBHandler, error) {
-	if inner == nil {
+	if isNilHandler(inner) {
 		return nil, errNilInnerHandler
 	}
 	if cfg.MaxSize <= 0 {

@@ -250,6 +250,15 @@ func TestNewCachingDBHandler_NilInnerHandlerFails(t *testing.T) {
 	assert.Nil(t, h)
 }
 
+func TestNewCachingDBHandler_TypedNilInnerHandlerFails(t *testing.T) {
+	var typedNilHandler *fakeDB
+
+	handler, err := NewCachingDBHandler(typedNilHandler, testConfig())
+
+	require.ErrorIs(t, err, errNilInnerHandler)
+	assert.Nil(t, handler)
+}
+
 func TestNewCachingDBHandler_KeepsInnerHandler(t *testing.T) {
 	inner := &fakeDB{}
 
