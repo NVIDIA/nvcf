@@ -245,6 +245,32 @@ class ClusterSetupTests(unittest.TestCase):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_a_failed_probe_pod_is_reported_without_waiting(self):
+        phases = iter(['Pending', 'Failed'])
+
+        def kubectl(context, *args, stdin=None, timeout=60):
+            if 'jsonpath={.status.phase}' in args:
+                return next(phases)
+            if 'logs' in args:
+                return 'Failed to initialize NVML: Driver/library version mismatch'
+            return ''
+
+        with patch.object(setup, 'kubectl', side_effect=kubectl), patch.object(setup.time, 'sleep') as sleep, \
+                self.assertRaisesRegex(setup.ClusterSetupError, 'GPU probe failed on agent: Failed to initialize NVML'):
+            setup.probe_gpus('test-context', ['agent'], 'runtime:pinned', 'nvidia')
+        sleep.assert_called_once()
+
+    def test_a_probe_that_never_finishes_times_out(self):
+        clock = iter([0, 0, setup.PROBE_TIMEOUT_SECONDS + 1])
+
+        def kubectl(context, *args, stdin=None, timeout=60):
+            return 'Pending' if 'jsonpath={.status.phase}' in args else ''
+
+        with patch.object(setup, 'kubectl', side_effect=kubectl), patch.object(setup.time, 'sleep'), \
+                patch.object(setup.time, 'monotonic', side_effect=lambda: next(clock)), \
+                self.assertRaisesRegex(setup.ClusterSetupError, 'did not finish within 20 minutes. Last phase: Pending'):
+            setup.probe_gpus('test-context', ['agent'], 'runtime:pinned', 'nvidia')
+
     def test_discrete_gpu_memory_comes_from_nvidia_smi(self):
         gpu = setup.parse_probe('NVIDIA GB300, 10.3, 281250\nMemTotal:       503316480 kB\n')
         self.assertEqual(gpu, dict(GB300, memoryGiB=274.7))
@@ -272,6 +298,8 @@ class ProbeTests(unittest.TestCase):
                     raise setup.ClusterSetupError('quota exceeded')
                 if 'logs' in args:
                     return 'NVIDIA GB300, 10.3, 281250\nMemTotal: 503316480 kB\n'
+                if 'jsonpath={.status.phase}' in args:
+                    return 'Succeeded'
                 return ''
 
             with self.subTest(fail=fail), patch.object(setup, 'kubectl', side_effect=kubectl):

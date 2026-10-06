@@ -17,6 +17,7 @@ PROBE_COMMAND = ("nvidia-smi --query-gpu=name,compute_cap,memory.total --format=
                  " && grep '^MemTotal:' /proc/meminfo")
 # nvidia-smi reports no dedicated GPU memory when the GPU shares system memory, as on GB10.
 UNREPORTED_MEMORY = {'[N/A]', 'N/A', '[Not Supported]', 'Not Supported'}
+PROBE_TIMEOUT_SECONDS = 20 * 60
 
 
 class ClusterSetupError(RuntimeError):
@@ -130,10 +131,18 @@ def probe_gpus(context, names, image, runtime_class):
             pods[name] = pod
         results = {}
         for name, pod in pods.items():
-            # The first pull of the runtime image can take several minutes.
-            kubectl(context, '-n', namespace, 'wait', 'pod/' + pod, '--for=jsonpath={.status.phase}=Succeeded',
-                    '--timeout=20m', timeout=1260)
-            results[name] = parse_probe(kubectl(context, '-n', namespace, 'logs', pod))
+            # The first pull of the runtime image can take several minutes; a failed pod is reported at once.
+            deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS
+            while True:
+                phase = kubectl(context, '-n', namespace, 'get', 'pod', pod, '-o', 'jsonpath={.status.phase}').strip()
+                if phase in ('Succeeded', 'Failed'):
+                    break
+                require(time.monotonic() < deadline, 'GPU probe on ' + name + ' did not finish within ' +
+                        str(PROBE_TIMEOUT_SECONDS // 60) + ' minutes. Last phase: ' + (phase or 'unknown') + '.')
+                time.sleep(5)
+            logs = kubectl(context, '-n', namespace, 'logs', pod)
+            require(phase == 'Succeeded', 'GPU probe failed on ' + name + ': ' + logs.strip()[-500:])
+            results[name] = parse_probe(logs)
         return results
     finally:
         try:
@@ -148,6 +157,7 @@ def discover_config(context, namespace=None, recipe=None, probe=None):
     probe(names) returns {node: gpu}; tests replace it to avoid touching a cluster.
     """
     require(isinstance(context, str) and bool(context.strip()), 'Select a Kubernetes context first.')
+    require(isinstance(recipe, dict) and recipe.get('name'), 'Select a recipe first.')
     config = json.loads((HERE/'config.example.json').read_text())
     namespace = namespace or config['namespace']
     require(isinstance(namespace, str) and len(namespace) <= 63
