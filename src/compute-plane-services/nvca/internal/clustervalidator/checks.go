@@ -2332,7 +2332,8 @@ type n2nProbe struct {
 	checker string
 	// checkers counts the checker pods created, which names the next one.
 	checkers int
-	// dialled is the path the first checker that reported dialled.
+	// dialled is the path the first checker that reported dialled, with
+	// those a follow-up checker on its node dialled.
 	dialled *n2nPath
 	// reachedBefore counts the nodes a checker already reached when a
 	// follow-up checker dials the probe pods that started after it.
@@ -2632,14 +2633,29 @@ func (p *n2nProbe) runChecker(ctx context.Context, servers []corev1.Pod, checker
 			return run, fmt.Sprintf("checker pod did not report a result: %v", err)
 		}
 		if run.succeeded || !checkerRefused(run.pod) {
-			if p.dialled == nil {
-				p.dialled = &n2nPath{checker: run.node, targets: slices.Sorted(maps.Values(run.nodeOf))}
-			}
+			p.addDialled(run)
 			return run, ""
 		}
 		refusals = append(refusals, fmt.Sprintf("%s (%s)", run.node, run.pod.Status.Reason))
 	}
 	return checkerRun{}, "the kubelet refused the checker pod on " + strings.Join(refusals, ", ")
+}
+
+// addDialled adds the paths run dialled to those of the first checker that
+// reported, which a follow-up checker on its node extends.
+func (p *n2nProbe) addDialled(run checkerRun) {
+	if p.dialled == nil {
+		p.dialled = &n2nPath{checker: run.node}
+	}
+	if p.dialled.checker != run.node {
+		return
+	}
+	for _, n := range run.nodeOf {
+		if !slices.Contains(p.dialled.targets, n) {
+			p.dialled.targets = append(p.dialled.targets, n)
+		}
+	}
+	slices.Sort(p.dialled.targets)
 }
 
 // judge turns the checker's result into the row. The checker names the

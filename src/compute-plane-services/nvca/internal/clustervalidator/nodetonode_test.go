@@ -1073,9 +1073,13 @@ func TestCheckNodeToNode_SilentPodThatStartsLateIsDialledFromTheSameNode(t *test
 		}
 		return checkerPod(0)
 	})
-	state = runN2N(unreachable.f)
+	state = &ValidationState{Log: testLog()}
+	path := probeNodeToNode(context.Background(), unreachable.f.client, state, enforcementDefaultImg, nil)
 	require.NotNil(t, state.NodeToNodeOK, "warnings: %v", state.Warnings)
 	assert.False(t, *state.NodeToNodeOK, "the follow-up could not reach the pod that started late")
+	require.NotNil(t, path)
+	assert.Equal(t, unreachable.f.checkerNodes[0], path.checker)
+	assert.Contains(t, path.targets, "node-3", "a recheck of the failure dials the pod that started late too")
 }
 
 // A probe pod that started late is unknown, as having started late and with
