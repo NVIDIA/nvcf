@@ -1,0 +1,47 @@
+{
+  "context": "llm-routing-demo",
+  "namespace": "llm-routing-poc",
+  "recipe": "glm-5.3",
+  "releasePrefix": "llm-poc",
+  "clusterId": "llm-routing-poc",
+  "nodes": {
+    "control": "control",
+    "model": [
+      "model-0",
+      "model-1"
+    ]
+  },
+  "gpu": {
+    "name": "NVIDIA GB10",
+    "computeCapability": "12.1",
+    "memoryGiB": 121.6,
+    "unifiedMemory": true,
+    "cudaArchitectures": null
+  },
+  "storageClass": "local-path",
+  "runtimeClass": "nvidia",
+  "images": {
+    "prefix": "registry.example.com/team/llm-poc",
+    "tag": "dev-1",
+    "pullPolicy": "IfNotPresent",
+    "pullSecrets": []
+  },
+  "runtimeImage": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+  "tls": {
+    "selfSigned": {
+      "enabled": true
+    }
+  },
+  "caConfigMap": "llm-gateway-stack-ca",
+  "apiKeyFile": null,
+  "containerd": {
+    "socketPath": "/run/k3s/containerd/containerd.sock",
+    "archiveNode": "control",
+    "runAsUser": 1000,
+    "nodeNames": [
+      "control",
+      "model-0",
+      "model-1"
+    ]
+  }
+}
