@@ -112,7 +112,7 @@ class Console:
         with self.log_path.open() as saved_log:
             lines = [line.rstrip() for line in saved_log
                      if line.startswith(('Helm lint/render passed for', 'Configuration created:', 'Reusing configuration:',
-                                         'Previous progress archived:', 'Model GPUs:', 'Routing node:', 'Run render,',
+                                         'Previous progress archived:', 'Recipe:', 'GPU:', 'Model nodes:', 'Routing node:', 'Run render,',
                                          'Image archive:', 'Update recorded:')) or re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line)]
         for line in lines:
             if re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line):
@@ -124,7 +124,7 @@ class Console:
             print(phase + ' passed.', file=self.terminal)
         prefixes = {
             'init': ('Configuration created:', 'Reusing configuration:', 'Previous progress archived:',
-                     'Model GPUs:', 'Routing node:', 'Run render,'),
+                     'Recipe:', 'GPU:', 'Model nodes:', 'Routing node:', 'Run render,'),
             'export-images': ('Image archive:',),
             'update': ('Update recorded:',),
         }.get(phase, ())

@@ -199,6 +199,17 @@ class RenderedChartTests(TopologyTests):
                 qualify = next(doc for doc in docs if 'name: RPC_ENDPOINTS' in doc)
                 self.assertIn('{name: RPC_ENDPOINTS, value: "'+endpoints+'"}', qualify)
 
+    def test_build_job_name_changes_with_the_build_inputs(self):
+        def job(shape, **gpu):
+            if gpu:
+                SHAPES[shape]['gpu'].update(gpu)
+                self.addCleanup(SHAPES[shape]['gpu'].update, {key: GB300[key] for key in gpu})
+            docs = self.render(shape, 'build')
+            return [name for name in self.names(docs, 'Job') if '-build-' in name][0]
+        first = job('gb300-single')
+        self.assertEqual(job('gb300-single'), first)
+        self.assertNotEqual(job('gb300-single', cudaArchitectures='103f'), first)
+
     def test_build_compiles_for_the_configured_architecture(self):
         docs = self.render('gb300-single', 'build')
         self.assertTrue(any('{name: CUDA_ARCHITECTURES, value: "103a-real"}' in doc for doc in docs))

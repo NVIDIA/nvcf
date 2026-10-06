@@ -319,11 +319,11 @@ python3 recipe.py verify-gateway
 
 ## Local validation
 
-From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks.
+From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks. The render uses the example configuration, so it needs no cluster, context or `init`.
 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s charts/gguf-backend/tests -v
-python3 recipe.py render
+python3 recipe.py --context llm-routing-demo --config config.example.json --work-dir "$(mktemp -d)" render
 git diff --check
 ```

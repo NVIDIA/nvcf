@@ -29,7 +29,8 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}-build-{{ .Files.Get "files/build.py" | sha256sum | trunc 8 }}
+  # Job templates are immutable, so any change to the build inputs needs a new Job name.
+  name: {{ .Release.Name }}-build-{{ list (.Files.Get "files/build.py") .Values.build.revision .Values.build.cudaArchitectures | join "\n" | sha256sum | trunc 8 }}
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 7200

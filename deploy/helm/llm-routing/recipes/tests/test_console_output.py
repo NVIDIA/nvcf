@@ -123,6 +123,17 @@ class ConsoleOutputTests(unittest.TestCase):
         self.assertIn('Helm lint/render passed for 8 configurations.', self.stdout.getvalue())
         self.assertNotIn('render passed.\n', self.stdout.getvalue())
 
+    def test_init_shows_the_recipe_gpu_and_placement(self):
+        config = json.loads((HERE/'config.example.json').read_text())
+        config['context'] = 'console-test'
+        work = self.work/'init'
+        with self.captured(), patch.object(tool.cluster_setup, 'discover_config', return_value=config):
+            self.console.run('init', work, lambda: tool.main(['--context', 'console-test', '--work-dir', str(work), 'init']))
+        shown = self.stdout.getvalue()
+        for line in ('Recipe: glm-5.3', 'GPU: NVIDIA GB10 (12.1, 121.6 GiB shared with the CPU)',
+                     'Model nodes: model-0, model-1', 'Routing node: control', 'Configuration created:'):
+            self.assertIn(line, shown)
+
     def cli_arguments(self):
         config = json.loads((HERE/'config.example.json').read_text())
         config['context'] = 'console-test'
