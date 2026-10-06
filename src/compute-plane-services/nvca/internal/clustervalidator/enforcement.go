@@ -95,6 +95,11 @@ func (e *enforcementEnv) probeWithDelay(role string, delay int) (bool, error) {
 	)
 }
 
+// enforcementNSSelector matches the two labels every validator version has
+// stamped on its enforcement test namespace. The orphan sweep deletes
+// namespaces cluster-wide, so it requires both, and the name prefix too.
+const enforcementNSSelector = "app=netpol-validation,purpose=enforcement-test"
+
 // orphanNamespaceTTL is the age beyond which a netpol-validation-* namespace
 // is considered orphaned (deferred cleanup in a previous run didn't fire
 // because the pod was SIGKILLed / OOMed / force-deleted) and is eligible for
@@ -476,11 +481,13 @@ func cleanupTestNamespace(log *logrus.Entry, client kubernetes.Interface, ns str
 	}
 }
 
-// sweepOrphanTestNamespaces lists all netpol-validation-* namespaces and
-// deletes any whose age exceeds ttl. Used to reclaim leaks from prior runs
-// that died before their deferred cleanup could fire (SIGKILL, OOM,
-// force-delete, node failure) or lost their RBAC first. Namespaces younger
-// than ttl are left alone in case they belong to a concurrent run. It reports
+// sweepOrphanTestNamespaces lists the netpol-validation-* namespaces that carry
+// both enforcementNSSelector labels and deletes any whose age exceeds ttl. One
+// with the prefix and only one of the labels is not a validator's and is never
+// deleted. Used to reclaim leaks from prior runs that died before their
+// deferred cleanup could fire (SIGKILL, OOM, force-delete, node failure) or
+// lost their RBAC first. Namespaces younger than ttl are left alone in case
+// they belong to a concurrent run. It reports
 // whether it found any, or could not list them: until a namespace is gone, a
 // later sweep may still have to delete it.
 func sweepOrphanTestNamespaces(
@@ -490,7 +497,7 @@ func sweepOrphanTestNamespaces(
 	defer cancel()
 
 	nsList, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{
-		LabelSelector: "app=netpol-validation",
+		LabelSelector: enforcementNSSelector,
 	})
 	if err != nil {
 		log.Warnf("Orphan sweep: failed to list namespaces: %v", err)

@@ -675,3 +675,36 @@ func TestWaitForPodReady_NotFoundClearsAnEarlierTransientError(t *testing.T) {
 	assert.Greater(t, calls, 1)
 	assert.NotContains(t, err.Error(), "slow down")
 }
+
+// The sweep matches the labels the run's own create stamps, and nothing less:
+// the prefix with one of the labels, or with none, is someone else's namespace.
+func TestSweepOrphanTestNamespaces_RequiresBothLabels(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset()
+	require.NoError(t, createTestNamespace(ctx, client, "netpol-validation-abc123", "abc123"))
+	created, err := client.CoreV1().Namespaces().Get(ctx, "netpol-validation-abc123", metav1.GetOptions{})
+	require.NoError(t, err)
+	created.CreationTimestamp = metav1.NewTime(time.Now().Add(-48 * time.Hour))
+	_, err = client.CoreV1().Namespaces().Update(ctx, created, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	foreign := map[string]map[string]string{
+		"netpol-validation-prod":    {"app": "netpol-validation"},
+		"netpol-validation-staging": {"purpose": "enforcement-test"},
+		"netpol-validation-team":    nil,
+	}
+	for name, labels := range foreign {
+		_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Labels: labels, CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
+		}}, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+
+	sweepOrphanTestNamespaces(ctx, testLog(), client, orphanNamespaceTTL)
+
+	_, err = client.CoreV1().Namespaces().Get(ctx, "netpol-validation-abc123", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "the run's own namespace is swept, got %v", err)
+	for name := range foreign {
+		_, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		assert.NoError(t, err, "%s was deleted", name)
+	}
+}

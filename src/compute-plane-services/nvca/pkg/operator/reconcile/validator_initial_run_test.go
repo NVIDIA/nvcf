@@ -611,3 +611,38 @@ func TestSweepValidatorProbes_EnabledSweepsOnce(t *testing.T) {
 	_, err = client.CoreV1().Namespaces().Get(ctx, "nvcf-n2n-validation-live", metav1.GetOptions{})
 	assert.NoError(t, err)
 }
+
+// The operator sweeps at every start, validator enabled or not, so it deletes
+// only a namespace a validator run created: the enforcement probe's name
+// prefix and both labels every validator version stamps on it. A namespace
+// that shares the prefix and one label is someone else's, however old.
+func TestSweepValidatorProbes_LeavesNamespacesNoValidatorCreated(t *testing.T) {
+	prev := validatorProbeSweepInterval
+	validatorProbeSweepInterval = 10 * time.Millisecond
+	t.Cleanup(func() { validatorProbeSweepInterval = prev })
+	old := metav1.NewTime(time.Now().Add(-48 * time.Hour))
+	foreign := []*corev1.Namespace{
+		{ObjectMeta: metav1.ObjectMeta{Name: "netpol-validation-prod", CreationTimestamp: old,
+			Labels: map[string]string{"app": "netpol-validation"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "netpol-validation-staging", CreationTimestamp: old,
+			Labels: map[string]string{"purpose": "enforcement-test"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "netpol-validation-team", CreationTimestamp: old}},
+	}
+	validatorOwned := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "netpol-validation-abc123", CreationTimestamp: old,
+		Labels: map[string]string{"app": "netpol-validation", "purpose": "enforcement-test"},
+	}}
+	for _, untilClean := range []bool{false, true} {
+		t.Run(fmt.Sprintf("validator disabled %v", untilClean), func(t *testing.T) {
+			ctx := context.Background()
+			client := fake.NewSimpleClientset(foreign[0], foreign[1], foreign[2], validatorOwned)
+			sweepValidatorProbes(ctx, client, untilClean)
+			for _, ns := range foreign {
+				_, err := client.CoreV1().Namespaces().Get(ctx, ns.Name, metav1.GetOptions{})
+				assert.NoError(t, err, "%s was deleted", ns.Name)
+			}
+			_, err := client.CoreV1().Namespaces().Get(ctx, validatorOwned.Name, metav1.GetOptions{})
+			assert.True(t, apierrors.IsNotFound(err), "got %v", err)
+		})
+	}
+}
