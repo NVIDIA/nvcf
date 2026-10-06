@@ -83,6 +83,9 @@ enum Command {
         /// Output file with one JSON record per request.
         #[arg(long)]
         records: PathBuf,
+        /// Client token, sent as a bearer token.
+        #[arg(long, env = "STARGATE_API_KEY", hide_env_values = true)]
+        api_key: Option<String>,
     },
     /// Summarize fleet driver records from every region of one or more runs.
     SummarizeFleet {
@@ -115,6 +118,7 @@ fn main() -> anyhow::Result<()> {
             run_label,
             start_at_unix_ms,
             records,
+            api_key,
         } => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
@@ -128,6 +132,7 @@ fn main() -> anyhow::Result<()> {
                 run_label,
                 start_at_unix_ms,
                 records,
+                api_key,
             })),
         Command::SummarizeFleet {
             config,

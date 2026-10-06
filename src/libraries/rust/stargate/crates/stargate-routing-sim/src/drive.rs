@@ -55,6 +55,8 @@ pub struct DriveArgs {
     /// Shared start time in Unix milliseconds for drivers in all regions.
     pub start_at_unix_ms: u64,
     pub records: PathBuf,
+    /// Client token sent as a bearer token.
+    pub api_key: Option<String>,
 }
 
 /// One request attempt as observed by the client.
@@ -299,6 +301,9 @@ impl Driver {
         if let Some(method) = &args.routing_method {
             builder = builder.header("x-routing-method", method);
         }
+        if let Some(api_key) = &args.api_key {
+            builder = builder.bearer_auth(api_key);
+        }
 
         let response = match builder.send().await {
             Ok(response) => response,
@@ -417,6 +422,7 @@ mod tests {
         assert!(header("x-output-tokens").parse::<u64>().unwrap() >= 2);
         assert!(header("x-cache-affinity-key").starts_with("run-1-session-"));
         assert_eq!(header("x-routing-method"), "round-robin");
+        assert_eq!(header("authorization"), "Bearer client-token");
         let request_id = header("x-request-id");
         seen.request_ids.lock().unwrap().push(request_id.clone());
         if request_id.contains("-t1-a0") {
@@ -471,6 +477,7 @@ mod tests {
             run_label: "run-1".to_string(),
             start_at_unix_ms,
             records: records.clone(),
+            api_key: Some("client-token".to_string()),
         })
         .await
         .unwrap();
