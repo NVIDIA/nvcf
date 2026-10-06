@@ -25,10 +25,11 @@ for platform in ${PLATFORMS:-linux/amd64 linux/arm64}; do
     echo "check-gpushare-build: $platform ($image)"
     docker run --rm --platform "$platform" -e MAX_GLIBC="$max_glibc" \
         -v "$root:/src:ro" "$image" bash -ceu '
+        # -B: copied-in local build outputs must not let make skip a compile.
         cp -r /src/docker/agent/gpushare /tmp/gpushare
         cp -r /src/tests/gpushare /tmp/tests
-        make -C /tmp/gpushare CFLAGS="-O2 -Wall -Wextra -Werror"
-        make -C /tmp/tests CFLAGS="-O2 -Wall -Werror" CUDA_STUBS=/usr/local/cuda/lib64/stubs
+        make -B -C /tmp/gpushare CFLAGS="-O2 -Wall -Wextra -Werror"
+        make -B -C /tmp/tests CFLAGS="-O2 -Wall -Werror" CUDA_STUBS=/usr/local/cuda/lib64/stubs
         for bin in /tmp/gpushare/libnvsnap_gpushare.so /tmp/gpushare/nvsnap-gpu-suspend; do
             need="$(objdump -T "$bin" | grep -o "GLIBC_[0-9.]*" | sed "s/GLIBC_//" | sort -V | tail -1)"
             if [ "$(printf "%s\n%s\n" "$need" "$MAX_GLIBC" | sort -V | tail -1)" != "$MAX_GLIBC" ]; then
