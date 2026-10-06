@@ -278,3 +278,17 @@ func TestSuccessfulResponsesHaveNoErrorSourceOrOutcome(t *testing.T) {
 		"http.response.status_code": attribute.Int64Value(http.StatusOK),
 	}, middleware.GatewayProxyOutcomeMetricAttribute))
 }
+
+// Shadow replays share the primary request's labeler and span; their errors
+// must not label the primary response.
+func TestShadowRequestsDoNotRecordOutcome(t *testing.T) {
+	director := upstreamReturning(t, http.StatusServiceUnavailable, `{}`, nil)
+	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	req.Header.Set(shadowHeader, shadowHeaderValue)
+	labeler := &otelhttp.Labeler{}
+	req = req.WithContext(otelhttp.ContextWithLabeler(req.Context(), labeler))
+
+	require.NoError(t, director.ServeExec(VanityExecRequest{FunctionID: "f"}, httptest.NewRecorder(), req))
+	require.NoError(t, director.ServeExec(VanityExecRequest{FunctionID: "f", OfflineMessage: "down"}, httptest.NewRecorder(), req))
+	require.Empty(t, labeler.Get())
+}

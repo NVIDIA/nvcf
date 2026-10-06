@@ -538,7 +538,9 @@ server metric (`http_server_request_duration_seconds`) and as the
   including `429` responses whose body the gateway rewrites.
 
 Non-2xx responses also carry an `NVCF-Error-Source` header with the same value.
-Any `NVCF-Error-Source` header sent by the upstream is removed first. Status
+Any `NVCF-Error-Source` header sent by the upstream is removed first. Shadow
+replays never set the label, because they share the primary request's metric
+labels and would mislabel the primary response. Status
 codes and bodies are unchanged. Because the metric label set depends on the
 response status, the label values cannot be pre-initialized on the first scrape.
 

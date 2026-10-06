@@ -90,8 +90,10 @@ func clientClosedRequest(request *http.Request) bool {
 	return request != nil && errors.Is(request.Context().Err(), context.Canceled)
 }
 
+// addGatewayProxyOutcome skips shadow replays: they share the primary request's
+// metric labeler and span, so their errors would mislabel the primary response.
 func addGatewayProxyOutcome(request *http.Request, outcome middleware.GatewayProxyOutcome) {
-	if request == nil {
+	if request == nil || isShadowRequest(request) {
 		return
 	}
 	middleware.RecordGatewayProxyOutcome(request.Context(), outcome)
