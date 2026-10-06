@@ -216,6 +216,7 @@ fn active_runtime(model: &str) -> PylonRuntimeState {
         model,
         CurrentModelStats {
             last_mean_input_tps: 1000.0,
+            max_input_tps: Some(1000.0),
             ..CurrentModelStats::default()
         },
     );
@@ -227,6 +228,7 @@ fn set_model_queue(runtime: &PylonRuntimeState, model: &str, queued_input_size: 
         model,
         CurrentModelStats {
             last_mean_input_tps: 1000.0,
+            max_input_tps: Some(1000.0),
             queued_input_size,
             ..CurrentModelStats::default()
         },

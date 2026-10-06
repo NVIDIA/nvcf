@@ -83,6 +83,10 @@ Cluster latest-wins fields:
 - `queue_time_estimate_ms_by_priority`
 
 - `last_mean_input_tps` is the sum of active backend reports.
+- `max_input_tps` is the greatest active backend generation maximum, available
+  only when every active backend reports a positive finite value. Historical
+  peaks from Pylons observing the same engine are not summed. Missing maximum
+  data makes the cluster ineligible for default Pulsar ranking.
 
 `RoutedClusterSnapshot.rtt` is the unweighted arithmetic mean of the latest
 forwarded `/health` RTT publication from every current active backend in the

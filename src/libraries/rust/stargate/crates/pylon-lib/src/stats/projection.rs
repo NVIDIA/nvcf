@@ -150,10 +150,12 @@ impl StatsAggregator {
                 event.input_tokens_explicit(),
                 config,
             )
-            && model_state.last_mean_input_tps != input_tps
         {
-            model_state.last_mean_input_tps = input_tps;
-            input_tps_changed = true;
+            input_tps_changed = model_state.observe_max_input_tps(input_tps);
+            if model_state.last_mean_input_tps != input_tps {
+                model_state.last_mean_input_tps = input_tps;
+                input_tps_changed = true;
+            }
         }
         let mut completed_sample_recorded = false;
         if observation.state == RequestObservationState::Complete {

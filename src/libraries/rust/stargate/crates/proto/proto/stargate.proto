@@ -123,6 +123,12 @@ message ModelStats {
   // Sticky source labels for stat observations seen by this backend since the
   // model metrics state was initialized.
   repeated string stats_sources = 17;
+  // Maximum input tokens per second recorded for the current backend model
+  // generation. Absent until a valid value is configured or observed.
+  // For a shared-engine cluster, Stargate uses the greatest backend maximum
+  // only when every active backend reports a valid value. Historical peaks
+  // from Pylons observing the same engine are not additive.
+  optional double max_input_tps = 18;
 }
 
 enum InferenceServerStatus {

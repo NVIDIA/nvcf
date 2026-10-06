@@ -26,7 +26,6 @@ use crate::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
 use stargate_runtime::OwnedTask;
 
 use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregator};
-
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
 const DEFAULT_MIN_INPUT_TOKENS: u64 = 1;
@@ -1492,7 +1491,7 @@ mod tests {
         aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
         let updates = aggregator.stream("req-a", (10, 4), false, milliseconds(100));
         let stats = published_stats(updates);
-        assert_stats!(stats; output_tps: 40.0, max_output_tps: 40.0, stats_sources: ["engine_stats_stream"]);
+        assert_stats!(stats; max_input_tps: Some(100.0), output_tps: 40.0, max_output_tps: 40.0, stats_sources: ["engine_stats_stream"]);
         for tick in 2..=5 {
             let updates =
                 aggregator.stream("req-a", (tick * 10, 4), false, milliseconds(tick * 100));
@@ -1510,12 +1509,27 @@ mod tests {
             StatsCollectorConfig::default(),
             ModelStatsInitialization::ConfiguredInputTps { input_tps: 100.0 },
         );
-        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
+        let bootstrapped = aggregator.snapshot("model-a");
+        assert_eq!(bootstrapped.last_mean_input_tps, 100.0);
+        assert_eq!(bootstrapped.max_input_tps, Some(100.0));
         aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
 
         let stats = published_stats(aggregator.stream("req-a", (20, 0), false, milliseconds(100)));
 
         assert!((stats.last_mean_input_tps - (700.0 / 6.0)).abs() < f64::EPSILON);
+        assert_eq!(stats.max_input_tps, Some(200.0));
+    }
+
+    #[test]
+    fn max_input_tps_persists_for_the_generation() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
+        aggregator.stream("req-a", (20, 0), false, milliseconds(100));
+        aggregator.stream("req-a", (30, 0), false, milliseconds(200));
+
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(200.0));
+        aggregator.sweep(seconds(24 * 60 * 60));
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(200.0));
     }
 
     #[test]
@@ -1569,12 +1583,13 @@ mod tests {
                 .is_empty(),
             "second output counter is still below the duration floor"
         );
-        let input_only_updates =
-            aggregator.partial_stream("req-partial", (Some(1), None), false, milliseconds(11));
-        assert!(
-            input_only_updates.is_empty(),
-            "input-only updates must not publish a stale output TPS sample"
-        );
+        let input_only_stats = aggregator
+            .partial_stream("req-partial", (Some(1), None), false, milliseconds(11))
+            .pop()
+            .expect("first input counter should publish max input TPS")
+            .1;
+        assert_eq!(input_only_stats.output_tps, 100.0);
+        assert!(input_only_stats.max_input_tps.is_some());
     }
 
     #[test]
@@ -2114,6 +2129,28 @@ mod tests {
     }
 
     #[test]
+    fn stats_aggregator_publishes_generation_max_input_tps() {
+        let mut aggregator = test_aggregator(config!(
+            engine_stats_request_ttl: Duration::ZERO,
+            engine_stats_model_ttl: Duration::ZERO,
+        ));
+        aggregator.stream("req-generation-max", (0, 0), false, Duration::ZERO);
+
+        let stats = published_stats(aggregator.stream(
+            "req-generation-max",
+            (10, 0),
+            false,
+            milliseconds(100),
+        ));
+        assert_eq!(stats.last_mean_input_tps, 0.0);
+        assert_eq!(stats.max_input_tps, Some(100.0));
+
+        let updates = aggregator.stream("req-generation-max", (15, 0), false, milliseconds(200));
+        assert!(updates.is_empty());
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(100.0));
+    }
+
+    #[test]
     fn stats_aggregator_tombstones_stale_request_before_late_finish() {
         let config = config!(
             engine_stats_request_ttl: seconds(1),
@@ -2333,6 +2370,55 @@ mod tests {
         }
 
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 1_000.0);
+    }
+
+    #[test]
+    fn fallback_max_input_tps_retains_the_peak_when_the_window_mean_falls() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        let start = std::time::Instant::now();
+        for (index, (input_tokens, maximum)) in [(200, 200.0), (50, 200.0), (300, 300.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let submitted_at = start + seconds(index as u64 * 3);
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &RequestObservation {
+                    input_tokens,
+                    ..observation(
+                        RequestObservationEndpoint::ChatCompletions,
+                        &format!("max-input-{index}"),
+                        RequestObservationState::OutputGeneration,
+                    )
+                },
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at,
+                    first_generated_output_at: submitted_at + seconds(1),
+                },
+                true,
+            );
+            let stats = aggregator.snapshot("model-a");
+            assert_eq!(stats.last_mean_input_tps, input_tokens as f64);
+            assert_eq!(stats.max_input_tps, Some(maximum));
+        }
+        aggregator.sweep(seconds(600));
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(300.0));
+    }
+
+    #[test]
+    fn max_input_tps_ignores_invalid_and_nonincreasing_observations() {
+        let mut metrics = super::super::aggregator::ModelMetricsState::default();
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(!metrics.observe_max_input_tps(invalid));
+            assert_eq!(metrics.max_input_tps, None);
+        }
+        assert!(metrics.observe_max_input_tps(200.0));
+        for input_tps in [0.0, -1.0, f64::NAN, f64::INFINITY, 50.0, 200.0] {
+            assert!(!metrics.observe_max_input_tps(input_tps));
+            assert_eq!(metrics.max_input_tps, Some(200.0));
+        }
+        assert!(metrics.observe_max_input_tps(300.0));
+        assert_eq!(metrics.max_input_tps, Some(300.0));
     }
 
     #[test]
@@ -2649,6 +2735,7 @@ mod tests {
             )
         };
         apply_fallback_observation_with_interval(&mut aggregator, &estimated, old_interval, false);
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(100.0));
         let mut late_exact =
             aggregator
                 .runtime_state
@@ -2682,6 +2769,7 @@ mod tests {
                 .begin_generation(replacement, ModelStatsInitialization::Empty)
                 .is_some()
         );
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, None);
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
@@ -2713,6 +2801,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(50.0));
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
@@ -3782,6 +3871,7 @@ mod tests {
             r#"pylon_requests_total{model="model-a",routing_key="rk-1",status="complete"} 1"#
         ));
         assert!(body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 10"#));
+        assert!(body.contains(r#"pylon_model_max_input_tps{model="model-a"} 10"#));
         assert!(body.contains(r#"pylon_model_output_tps{model="model-a"} 5"#));
     }
 

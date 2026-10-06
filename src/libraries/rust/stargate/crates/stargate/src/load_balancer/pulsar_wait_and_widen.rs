@@ -325,6 +325,7 @@ mod tests {
             stats: ModelStats {
                 output_tps: 0.0,
                 last_mean_input_tps: 100.0,
+                max_input_tps: Some(100.0),
                 max_output_tps: 100.0,
                 queue_size: 0,
                 queued_input_size: 0,
