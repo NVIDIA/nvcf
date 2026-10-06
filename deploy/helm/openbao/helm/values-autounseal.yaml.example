@@ -28,8 +28,9 @@
 # the HSM vendor's PKCS#11 library (lib, token_label, key_label), which must be
 # present in the server container. PKCS#11 support itself comes from either an
 # HSM-enabled OpenBao build with PKCS#11 compiled in via cgo, or the external
-# PKCS#11 KMS provider plugin (openbao-plugins). The stock image here ships
-# neither; see the OpenBao pkcs11 seal docs.
+# PKCS#11 KMS provider plugin (openbao-plugins). Make sure the OpenBao image you
+# run provides one of these; the seal stanza alone does not. See the OpenBao
+# pkcs11 seal docs.
 #
 # The server pod needs the provider's unwrap permission on the key, granted out
 # of band. For AWS KMS that is kms:Encrypt, kms:Decrypt and kms:DescribeKey, for
