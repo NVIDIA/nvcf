@@ -307,28 +307,29 @@ immediately.
 When queue-SLO fields are enabled or the primary is ineligible, the affinity
 group is the top `cache_affinity_backend_selection_count` clusters of the
 Pulsar ranking. The count defaults to `1`, the primary, and `0` also means `1`.
-WaitAndWiden selection
-runs within the group, and `cache_affinity_input_tokens_scale` discounts the
-request prefill there. Until `cache_affinity_wait_ms` (X) has elapsed, the proxy
+WaitAndWiden selection runs within the group, and
+`cache_affinity_input_tokens_scale` discounts the request prefill there. Until `cache_affinity_wait_ms` (X) has elapsed, the proxy
 waits and rechecks the group instead of falling back.
 
 After X, every attempt still checks the affinity group first, as above. If the
 group cannot serve, the open set grows through the ranking one band per
 `band_widen_interval_ms` (S): ranks 1 through k+2 at X, k+6 at X+S, k+14 at
-X+2S, and so on until it covers every cluster. Here k is the affinity group
-size. WaitAndWiden selection runs over the open set at full prefill cost, and
+X+2S, and so on until it covers every ranked cluster. Here k is the affinity
+group size. The ranking contains only clusters with a valid Pulsar weight, and
+Pulsar feasibility checks still filter it. WaitAndWiden selection runs over the open set at full prefill cost, and
 bucket unlocks count from X. If no open candidate is selectable, the proxy
 waits for the next band or bucket. It does not skip ahead, even when the
 unopened clusters are also full, so a saturated pool waits out the band
 schedule or the request's maximum wait. S defaults to X. With S set to `0`,
-every cluster opens at X, as in `wait-and-widen` global fallback, except that
-open-set selection uses `fallback_max_queued`.
+every ranked cluster opens at X. That resembles `wait-and-widen` global
+fallback, except that open-set selection uses `fallback_max_queued` and only
+ranked, feasible clusters are candidates.
 
 ```text
 elapsed < X          rank 1..k              (affinity group, discounted prefill)
 X <= elapsed < X+S   rank 1..k+2
 X+S <= ...  < X+2S   rank 1..k+6
-...                  every cluster
+...                  every ranked cluster
 ```
 
 Minimal configuration:
@@ -395,8 +396,9 @@ that algorithm's detailed configuration prevents startup.
 `pulsar-wait-and-widen` accepts `cache_affinity_virtual_nodes` but ignores it,
 because the Pulsar ranking supplies affinity. It uses
 `cache_affinity_backend_selection_count` as the affinity group size, defaulting
-to `1`, and applies `cache_affinity_wait_ms` and
-`cache_affinity_input_tokens_scale` as `wait-and-widen` does.
+to `1`. Because the group always exists, `cache_affinity_wait_ms` and
+`cache_affinity_input_tokens_scale` always apply, even when the selection count
+is unset. In `wait-and-widen`, they apply only when the selection count is set.
 
 `wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
 

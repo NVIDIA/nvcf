@@ -669,6 +669,32 @@ mod tests {
     }
 
     #[test]
+    fn widen_interval_defaults_to_the_affinity_wait() {
+        let target = target();
+        let affinity_key = "hybrid-default-interval";
+        let mut candidates = single_slot_candidates(5);
+        let ranked = pulsar_ranked_indices("interval-seed", &target, affinity_key, 0, &candidates);
+        // Only rank 4 is free. It opens with the second band, one interval
+        // after the affinity wait.
+        for rank in [0, 1, 2, 4] {
+            candidates[ranked[rank]].stats.num_running_queries = 1;
+        }
+        let hybrid = affinity_wait_config("interval-seed", |settings| {
+            settings.cache_affinity_wait_ms = Some(300);
+        });
+        let request = request(&target, Some(affinity_key), Some(0));
+
+        assert_eq!(
+            hybrid.decide_at(&request, &candidates, Duration::from_millis(300)),
+            LoadBalancerDecision::Wait(Duration::from_millis(300))
+        );
+        assert_eq!(
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(600))),
+            4
+        );
+    }
+
+    #[test]
     fn affinity_group_size_widens_the_group_before_fallback() {
         let target = target();
         let affinity_key = "hybrid-affinity-group";
