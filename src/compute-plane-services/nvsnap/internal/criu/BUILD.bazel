@@ -9,6 +9,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/hostlibs",
         "@com_github_balajinvda_go_criu_v8//:go-criu",
         "@com_github_balajinvda_go_criu_v8//rpc",
         "@com_github_sirupsen_logrus//:logrus",
