@@ -62,6 +62,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 )
 
 // CatalogStateWriter is the minimal interface PerCapturePVCBackend
@@ -370,6 +371,10 @@ func (b *PerCapturePVCBackend) Put(ctx context.Context, hash string, sources []C
 	// deadlock.
 	if existing, getErr := b.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roxName, metav1.GetOptions{}); getErr == nil && existing != nil {
 		log.WithField("pvc", roxName).WithField("phase", existing.Status.Phase).Info("rox PVC already exists; treating as idempotent success")
+		if err := b.ensureClaimsForStampedPods(ctx, hash, ns); err != nil {
+			_ = b.setState(hash, pvcStateFailed, "")
+			return Manifest{}, fmt.Errorf("claims for stamped followers: %w", err)
+		}
 		_ = b.setState(hash, pvcStateReady, roxName)
 		m.Hash = hash
 		return m, nil
@@ -428,7 +433,10 @@ func (b *PerCapturePVCBackend) Put(ctx context.Context, hash string, sources []C
 	}
 	// Gated followers in other namespaces were admitted against
 	// rox-<hash> in their own namespace; make it exist before ready.
-	b.ensureClaimsForStampedPods(ctx, hash, ns)
+	if err := b.ensureClaimsForStampedPods(ctx, hash, ns); err != nil {
+		_ = b.setState(hash, pvcStateFailed, "")
+		return Manifest{}, fmt.Errorf("claims for stamped followers: %w", err)
+	}
 	if err := b.setState(hash, pvcStateReady, publishName); err != nil {
 		return Manifest{}, fmt.Errorf("publish ready: %w", err)
 	}
@@ -922,35 +930,56 @@ func (b *PerCapturePVCBackend) Mount(ctx context.Context, hash string, vol Volum
 	return b.Promoter.MountSpec(ctx, hash, vol)
 }
 
+// claimRetryBackoff bounds the retries of a follower namespace's claim
+// before the promote gives up on publishing ready.
+var claimRetryBackoff = wait.Backoff{Steps: 5, Duration: 500 * time.Millisecond, Factor: 2, Jitter: 0.1}
+
 // ensureClaimsForStampedPods mints the namespace-local claim in every
 // namespace that already holds pods stamped with hash (election
 // followers waiting on their gate, admitted before the promote existed),
-// so they find rox-<hash> bound when nvsnap-server releases them.
-// Best-effort: a failure is logged, the promote still publishes ready,
-// and the affected pod's own Mount path retries on its next admission.
-func (b *PerCapturePVCBackend) ensureClaimsForStampedPods(ctx context.Context, hash, captureNS string) {
-	pods, err := b.KubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: "nvsnap.io/hash=" + ShortHash(hash)})
+// so they find rox-<hash> when nvsnap-server releases them. Existence is
+// the bar, not Bound: under WaitForFirstConsumer the claim binds only
+// once a released pod consumes it.
+//
+// It must succeed before ready is published. Ready ungates those
+// followers, and an existing Pending pod is never admitted again, so no
+// later Mount would mint a missing claim: the pod would stay Pending.
+// Transient errors are retried; what still fails is returned, and the
+// caller publishes failed instead, which evicts the followers so their
+// controller recreates them through a fresh admission.
+func (b *PerCapturePVCBackend) ensureClaimsForStampedPods(ctx context.Context, hash, captureNS string) error {
+	var pods *corev1.PodList
+	err := retry.OnError(claimRetryBackoff, func(error) bool { return ctx.Err() == nil }, func() error {
+		var lerr error
+		pods, lerr = b.KubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: "nvsnap.io/hash=" + ShortHash(hash)})
+		return lerr
+	})
 	if err != nil {
-		b.log().WithError(err).WithField("hash", ShortHash(hash)).Warn("list stamped pods for cross-namespace claims failed")
-		return
+		return fmt.Errorf("list stamped pods for cross-namespace claims: %w", err)
 	}
 	seen := map[string]bool{captureNS: true}
+	var errs []error
 	for i := range pods.Items {
 		ns := pods.Items[i].Namespace
 		if seen[ns] {
 			continue
 		}
 		seen[ns] = true
-		if err := b.Promoter.EnsureClaim(ctx, hash, ns); err != nil {
-			if errors.Is(err, ErrUnsupported) {
-				continue
-			}
+		err := retry.OnError(claimRetryBackoff, func(err error) bool {
+			return ctx.Err() == nil && !errors.Is(err, ErrUnsupported)
+		}, func() error { return b.Promoter.EnsureClaim(ctx, hash, ns) })
+		if errors.Is(err, ErrUnsupported) {
+			continue
+		}
+		if err != nil {
 			b.log().WithError(err).WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": ns}).
-				Warn("cross-namespace claim for stamped pods failed")
+				Error("cross-namespace claim for stamped pods failed after retries")
+			errs = append(errs, fmt.Errorf("claim in %s: %w", ns, err))
 			continue
 		}
 		b.log().WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": ns}).Info("L2 claim minted for stamped pods")
 	}
+	return errors.Join(errs...)
 }
 
 // Delete removes the rox PVC + any leftover rwx PVC + snapshot from

@@ -43,7 +43,7 @@ on:
         description: Publish an isolated hosted preview from this branch
         type: choice
         default: none
-        options: [none, edition]
+        options: [none, edition, canonical]
 
 permissions:
   contents: read
@@ -108,6 +108,7 @@ jobs:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
           DOCS_PREVIEW_ID: nvcf-${{ github.run_id }}
           DOCS_PREVIEW_SKIP_COMMENT: '1'
+          DOCS_PREVIEW_CONFIG: ${{ inputs.preview == 'canonical' && 'fern/docs.yml' || '' }}
         run: |
           set -euo pipefail
           ./tools/ci/preview-docs | tee "$RUNNER_TEMP/docs-preview.log"

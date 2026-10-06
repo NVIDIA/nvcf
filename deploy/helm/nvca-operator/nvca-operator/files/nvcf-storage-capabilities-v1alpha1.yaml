@@ -21,6 +21,14 @@
 #   ReadWriteMany              one shared claim; readers mount it read-only
 #   ReadWriteOnce+ReadOnlyMany writer takes the claim; readers get their own
 #
+# writerIdentity is the one optional override. The Job that populates a shared
+# claim runs non-root and relies on the pod fsGroup, which Kubernetes applies
+# to a ReadWriteMany claim only when the driver's CSIDriver fsGroupPolicy is
+# File. NVCA reads that object when it selects storage and runs the writer as
+# root only when the policy is ReadWriteOnceWithFSType or None. Set
+# writerIdentity to fsGroup to forbid root on a driver, or to root to require
+# it when no CSIDriver object is registered. Leave it unset otherwise.
+#
 # An access mode a driver merely accepts is not a qualification. A claim that
 # binds is not either. An empty accessModes list means nothing is qualified
 # yet, so caching stays off for that driver, and a provisioner absent from this

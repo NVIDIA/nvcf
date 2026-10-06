@@ -1160,6 +1160,45 @@ func TestModelVolumeController_FailedJobRecordsFailureAndRetiresWriterView(t *te
 	}
 }
 
+// Readers admitted while a shared-filesystem download ran mount the
+// read-only view and cannot fall back in place. When the download fails,
+// the agent on the Job's node recreates every waiting reader; admitted
+// again, they see the failure record and keep their own download. A
+// Ready reader is left alone.
+func TestModelVolumeController_FailedSharedDownloadRecreatesWaitingReaders(t *testing.T) {
+	ctx := context.Background()
+	kc, p, minter := sharedFilesystemFixture(t)
+	reader := func(ns, name string, ready bool) *corev1.Pod {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+			Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "reader"}}}
+		if ready {
+			pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		}
+		if _, err := kc.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		return pod
+	}
+	reader("sr-fn", "waiting-a", false)
+	reader("sr-other", "waiting-b", false)
+	reader("sr-fn", "serving", true)
+	job := downloadJob(0)
+	job.UID = "job-uid-readers"
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
+	c.markFailed = func(context.Context, string, string, string, string) error { return nil }
+	c.HandleJob(ctx, job)
+	for _, ns := range []string{"sr-fn", "sr-other"} {
+		name := map[string]string{"sr-fn": "waiting-a", "sr-other": "waiting-b"}[ns]
+		if _, err := kc.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			t.Errorf("waiting reader %s/%s must be recreated after the shared download failed", ns, name)
+		}
+	}
+	if _, err := kc.CoreV1().Pods("sr-fn").Get(ctx, "serving", metav1.GetOptions{}); err != nil {
+		t.Errorf("a Ready reader is left alone: %v", err)
+	}
+}
+
 // The failure marker is written on the primary through a mount on this
 // node and carries the reason, so readers can log it.
 func TestModelVolumeController_FailureMarkerWrittenThroughTheMount(t *testing.T) {

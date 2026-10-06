@@ -155,6 +155,25 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // it is already bound, so readers admitted now can view it.
 func (m *Mutator) ensureDownload(ctx context.Context, pod *corev1.Pod, uri string, step modelvolume.DownloadStep, log logrus.FieldLogger) (string, error) {
 	cfg := m.ModelVolume.Cfg
+	// One namespace downloads a model, cluster-wide. Every other namespace
+	// is a reader of the same primary: two Jobs writing one volume through
+	// separate views could leave the marker beside a file the slower
+	// writer is still truncating.
+	owner, err := m.ModelVolume.ClaimDownload(ctx, uri, pod.Namespace)
+	if err != nil {
+		return "", err
+	}
+	if owner != pod.Namespace {
+		pv := ""
+		if cfg.SharedWhileWriting() {
+			// Readers mount the in-flight primary on a shared filesystem.
+			if bound, err := m.ModelVolume.WaitBound(ctx, cfg.SystemNamespace(), cfg.ClaimName(uri), primaryBindWait); err == nil {
+				pv = bound
+			}
+		}
+		log.WithFields(logrus.Fields{"owner": owner, "pv": pv}).Info("model volume: another namespace downloads this model; pod reads")
+		return pv, nil
+	}
 	if !cfg.SharedWhileWriting() {
 		job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, "", step)
 		if err != nil {
@@ -497,7 +516,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 			orig := shellJoin(append(append([]string{}, init.Command...), init.Args...))
 			script := writerScript(orig, imarker)
 			if !writer {
-				script = readerScript(orig, imarker, deadline)
+				script = readerScript(orig, imarker, deadline, m.readerFallsBackInPlace())
 			}
 			return []PatchOp{
 				{Op: "replace", Path: fmt.Sprintf("/spec/initContainers/%d/command", i), Value: []string{"/bin/sh", "-c"}},
@@ -520,7 +539,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 	// The injected init sees the landing at downloadMount (see there); the
 	// marker is the same file in the volume whatever path it is read at.
 	marker = path.Join(downloadMount, modelvolume.MarkerFile)
-	script := readerScript(download, marker, deadline)
+	script := readerScript(download, marker, deadline, m.readerFallsBackInPlace())
 	if writer {
 		if download == "" {
 			return nil // engine writes; completion is Ready, marked by the agent
@@ -592,15 +611,30 @@ func writerScript(download, marker string) string {
 	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[4]srm -f %[5]s\n%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir), wait, failed)
 }
 
-// readerScript waits for the marker; past the deadline it runs the
-// download itself (decided: always fall back, never deadlock).
-func readerScript(download, marker string, deadline int) string {
+// readerScript waits for the marker. With inPlace, past the deadline or
+// on a recorded failure it runs the download itself (decided: always fall
+// back, never deadlock). Without it the landing is the read-only view of
+// the shared primary, where nothing can be written: the init stops with
+// the reason, and the agent recreates the pod, which admission then
+// leaves on its own download.
+func readerScript(download, marker string, deadline int, inPlace bool) string {
 	fallback := "echo 'nvsnap: no download step to fall back to'; exit 0"
 	if download != "" {
 		fallback = download
 	}
+	if !inPlace {
+		fallback = "echo 'nvsnap: the shared model volume is read-only here; the pod is recreated on its own download'; exit 1"
+	}
 	failed := shellQuote(path.Join(path.Dir(marker), modelvolume.FailedMarkerFile))
 	return fmt.Sprintf("set -e\nd=0\nwhile [ ! -f %[1]s ]; do if [ -f %[4]s ]; then echo \"nvsnap: shared download failed: $(cat %[4]s 2>/dev/null)\"; %[3]s; exit 0; fi; if [ $d -ge %[2]d ]; then echo 'nvsnap: marker deadline passed; downloading locally'; %[3]s; exit 0; fi; sleep 5; d=$((d+5)); done\necho 'nvsnap: model complete, skipping download'\n", shellQuote(marker), deadline, fallback, failed)
+}
+
+// readerFallsBackInPlace reports whether a reader's landing can take its
+// own fallback download: a PVC reader's landing is the read-only view of
+// the primary, a hostPath landing is a writable directory until the agent
+// binds the volume over it.
+func (m *Mutator) readerFallsBackInPlace() bool {
+	return m.ModelVolume == nil || m.ModelVolume.Cfg.ReaderMode() != modelvolume.ReaderPVC
 }
 
 func (m *Mutator) waitDeadlineSeconds() int {
@@ -644,19 +678,38 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	for _, e := range m.cacheEnvFor(root, "") {
 		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
+	// The cache env moves HOME, and an engine that relies on the Hugging
+	// Face default finds its cache through HOME: it would look under the
+	// cachedir and miss the model mounted at the default path
+	// (LocalEntryNotFoundError under HF_HUB_OFFLINE). Pin the cache to
+	// where the model is mounted.
+	pinned := pinsHFHome(main, land)
+	if pinned {
+		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_HOME", Value: land.Path}))
+	}
 	// transformers writes trust_remote_code module sources to
 	// HF_MODULES_CACHE, which defaults to $HF_HOME/modules. Charts that
 	// point HF_HOME at the model directory then write into the shared
 	// volume, which is read-only for every reader (GB300, 2026-09-30:
 	// "Read-only file system: /config/models/modules"). Keep that cache
 	// with the other per-pod caches unless the chart placed it itself.
-	if hfHomeUnderLanding(main, land) && !hasEnv(main, "HF_MODULES_CACHE") {
+	if (pinned || hfHomeUnderLanding(main, land)) && !hasEnv(main, "HF_MODULES_CACHE") {
 		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: path.Join(root, "hf_modules")}))
 	}
 	// The local cachedir the capture reads, and the per-key cache set
 	// that shares the compile caches between pods of one configuration.
 	patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
 	return m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
+}
+
+// pinsHFHome reports whether the engine reads its model through the Hugging
+// Face default cache, which nvsnap mounted at the default path: the
+// container names no cache location of its own, by value or by reference.
+func pinsHFHome(main *corev1.Container, land modelid.Landing) bool {
+	if path.Clean(land.Path) != modelid.DefaultHFHome {
+		return false
+	}
+	return !hasEnv(main, "HF_HOME") && !hasEnv(main, "HF_HUB_CACHE")
 }
 
 // hfHomeUnderLanding reports whether the container's literal HF_HOME is

@@ -1341,6 +1341,42 @@ func TestStargateProviderProxyOmitsPriorityWhenUnset(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.StatusCode)
 }
 
+// Stargate checks its size limit against the declared length, so a known body
+// length must reach it as Content-Length, not chunked.
+func TestStargateProviderProxy_ContentLength_SendsFixedLengthBody(t *testing.T) {
+	t.Parallel()
+
+	body := `{"model":"proxy-model","input":"hello"}`
+	var gotContentLength int64
+	var gotTransferEncoding []string
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentLength = r.ContentLength
+		gotTransferEncoding = r.TransferEncoding
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set(headerContentType, contentTypeJSON)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: server.URL})
+	require.NoError(t, err)
+
+	response, err := provider.Proxy(context.Background(), &requestctx.RequestContext{RequestID: "req-proxy"}, &ProxyRequest{
+		Method:        http.MethodPost,
+		Path:          "/v1/responses",
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	})
+	require.NoError(t, err)
+	defer response.Body.Close()
+
+	require.Empty(t, gotTransferEncoding)
+	require.Equal(t, int64(len(body)), gotContentLength)
+	require.Equal(t, body, gotBody)
+}
+
 func sseChatBody(t *testing.T, chunks ...models.ChatCompletionChunk) string {
 	t.Helper()
 

@@ -611,6 +611,43 @@ func TestModelVolume_SharedFilesystem_FirstPodWritesThroughView(t *testing.T) {
 	}
 }
 
+// Two namespaces admitting the same incomplete model on a shared
+// filesystem: one download Job writes the primary, cluster-wide. The other
+// namespace gets no writer view and no Job; its pod reads the primary
+// through its read-only view and waits for the marker like any reader.
+func TestModelVolume_SharedFilesystem_OneWriterAcrossNamespaces(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	bindClaims(kc, "fss.csi.oraclecloud.com")
+	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, "", election.RoleFollower, kc)
+	ctx := context.Background()
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	cfg := m.ModelVolume.Cfg
+	for _, ns := range []string{"sr-fn", "sr-other"} {
+		pod := ngcFunctionPod()
+		pod.Namespace = ns
+		patches, err := m.Mutate(ctx, pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := viewMV(pod, patches)
+		if vol := v.volumes["ngc-models"]; vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) {
+			t.Errorf("%s: the pod reads through its read-only view: %+v", ns, vol)
+		}
+	}
+	jobs := 0
+	for _, ns := range []string{"sr-fn", "sr-other"} {
+		if _, err := kc.BatchV1().Jobs(ns).Get(ctx, modelvolume.JobName(uri), metav1.GetOptions{}); err == nil {
+			jobs++
+		}
+	}
+	if jobs != 1 {
+		t.Errorf("exactly one download Job cluster-wide, got %d", jobs)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-other").Get(ctx, cfg.WriterViewClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("the second namespace must not get a read-write view of the primary")
+	}
+}
+
 func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	bindClaims(kc, "fss.csi.oraclecloud.com")
@@ -1039,6 +1076,45 @@ func TestModelVolume_HFHomeOnLanding_ModulesCacheMovedOffVolume(t *testing.T) {
 	}
 }
 
+// An engine that names no Hugging Face cache reads the default under
+// HOME, where nvsnap mounts the model. The cache env moves HOME to the
+// cachedir, so without a pinned HF_HOME the engine looks there and, with
+// the hub offline, fails with LocalEntryNotFoundError.
+func TestModelVolume_DefaultHFCache_PinsHFHomeToLanding(t *testing.T) {
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, fake.NewSimpleClientset())
+	pod := stockVLLMPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	if v.env["HOME"] != "/opt/nvsnap/cache" {
+		t.Fatalf("precondition: HOME is moved to the cachedir, got %q (env %v)", v.env["HOME"], v.env)
+	}
+	if v.env["HF_HOME"] != "/root/.cache/huggingface" {
+		t.Errorf("HF_HOME must pin the cache to the mounted model, got %q (env %v)", v.env["HF_HOME"], v.env)
+	}
+	if v.env["HF_MODULES_CACHE"] != "/opt/nvsnap/cache/hf_modules" {
+		t.Errorf("a pinned HF_HOME is on the read-only landing; HF_MODULES_CACHE must leave it, got %q", v.env["HF_MODULES_CACHE"])
+	}
+
+	for name, env := range map[string]corev1.EnvVar{
+		"HF_HOME by value":     {Name: "HF_HOME", Value: "/data/hf"},
+		"HF_HOME by reference": {Name: "HF_HOME", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{Key: "hf"}}},
+		"HF_HUB_CACHE":         {Name: "HF_HUB_CACHE", Value: "/data/hub"},
+	} {
+		own := stockVLLMPod()
+		own.Spec.Containers[0].Env = append(own.Spec.Containers[0].Env, env)
+		patches, err := m.Mutate(context.Background(), own)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := viewMV(own, patches).env["HF_HOME"]; ok {
+			t.Errorf("%s: the chart's cache location is respected, got HF_HOME patch %q", name, got)
+		}
+	}
+}
+
 // The sweep is for the default single-thread loader: an engine that reads
 // in parallel (fastsafetensors, the Run:ai streamer) gets none, whatever
 // the volume size.
@@ -1285,8 +1361,44 @@ func TestWriterScript_WaitsForWritableLanding(t *testing.T) {
 // A reader waiting on the completion marker falls back the moment the
 // failure marker appears, with the reason in its log, instead of waiting
 // out its deadline; the deadline fallback stays as the last resort.
+// A reader whose landing is the read-only view of the shared primary
+// cannot download into it: on a failure or past its deadline it stops
+// with the reason instead of writing, and the agent recreates it on its
+// own download path.
+func TestReaderScript_NoInPlaceFallbackOnReadOnlyView(t *testing.T) {
+	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800, false)
+	if strings.Contains(script, "hf download org/model") {
+		t.Errorf("a read-only landing must not run the download:\n%s", script)
+	}
+	if strings.Count(script, "exit 1") != 2 || !strings.Contains(script, "cat /model/.nvsnap-failed") {
+		t.Errorf("both branches stop with an error, the failure branch with the reason:\n%s", script)
+	}
+}
+
+// On a shared filesystem the reader's landing is the read-only view, so
+// its wait init carries no in-place fallback download.
+func TestModelVolume_SharedFilesystem_ReaderHasNoInPlaceFallback(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	bindClaims(kc, "fss.csi.oraclecloud.com")
+	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := stockVLLMPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait string
+	for _, c := range viewMV(pod, patches).newInits {
+		if c.Name == injectedDownloadInit {
+			wait = c.Args[0]
+		}
+	}
+	if wait == "" || strings.Contains(wait, "hf download") || strings.Contains(wait, "snapshot_download") {
+		t.Errorf("the reader's wait must not download into the read-only view:\n%s", wait)
+	}
+}
+
 func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
-	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800)
+	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800, true)
 	failed := strings.Index(script, "if [ -f /model/.nvsnap-failed ]")
 	deadline := strings.Index(script, "if [ $d -ge 1800 ]")
 	if failed < 0 || deadline < 0 || failed > deadline {
@@ -1298,7 +1410,7 @@ func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
 	if !strings.Contains(script, "cat /model/.nvsnap-failed") {
 		t.Errorf("the reader logs the recorded reason:\n%s", script)
 	}
-	none := readerScript("", "/model/.nvsnap-complete", 60)
+	none := readerScript("", "/model/.nvsnap-complete", 60, true)
 	if strings.Count(none, "no download step to fall back to") != 2 {
 		t.Errorf("without a download step both branches exit cleanly:\n%s", none)
 	}

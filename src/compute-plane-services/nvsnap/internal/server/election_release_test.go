@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,8 +14,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
@@ -31,7 +34,8 @@ func quietLog() logrus.FieldLogger {
 func gatedFollower(name string, owned bool) *corev1.Pod {
 	p := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "fn", UID: types.UID("uid-" + name),
-			Labels: map[string]string{election.HashLabel: checkpointstore.ShortHash(electTestHash), election.GatedLabel: "true"}},
+			Labels:      map[string]string{election.HashLabel: checkpointstore.ShortHash(electTestHash), election.GatedLabel: "true"},
+			Annotations: map[string]string{election.HashAnnotation: electTestHash, election.RoleAnnotation: string(election.RoleFollower)}},
 		Spec: corev1.PodSpec{SchedulingGates: []corev1.PodSchedulingGate{{Name: election.GateName}}},
 	}
 	if owned {
@@ -132,4 +136,150 @@ func TestElectionRelease_NilClientIsNoop(t *testing.T) {
 	r.onPromoteState(context.Background(), electTestHash, "ready")
 	r.reconcile(context.Background())
 	(&electionReleaser{log: quietLog()}).onPromoteState(context.Background(), electTestHash, "failed")
+}
+
+// gatedWithoutLease lists the gated followers of the test hash when no
+// election Lease exists for it: pods nothing will ever release.
+func gatedWithoutLease(t *testing.T, kc *fake.Clientset) []string {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := kc.CoordinationV1().Leases("nvsnap-system").Get(ctx, election.LeaseName(electTestHash), metav1.GetOptions{}); err == nil {
+		return nil
+	}
+	pods, err := kc.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: election.GatedLabel + "=true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for i := range pods.Items {
+		out = append(out, pods.Items[i].Name)
+	}
+	return out
+}
+
+// A follower elected before the manifest is visible can persist after
+// the ready notification listed the gated pods and deleted the Lease.
+// Reconcile must still release it from the durable promote state, even
+// past the election deadline and with no Lease left.
+func TestElectionRelease_ReconcileReleasesFollowerPersistedAfterReady(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	kc := fake.NewSimpleClientset(electionLease("L", now.Add(time.Minute)))
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog(), now: func() time.Time { return now.Add(time.Hour) }}
+	setPromoteState(r, map[string]string{electTestHash: "ready"})
+	ctx := context.Background()
+	r.onPromoteState(ctx, electTestHash, "ready")
+	if _, err := kc.CoreV1().Pods("fn").Create(ctx, gatedFollower("late", true), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile(ctx)
+	p, err := kc.CoreV1().Pods("fn").Get(ctx, "late", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("a follower of a promoted capture must be released, not evicted: %v", err)
+	}
+	if p.Labels[election.GatedLabel] != "false" || len(p.Spec.SchedulingGates) != 0 {
+		t.Errorf("late follower still gated: labels %v gates %v", p.Labels, p.Spec.SchedulingGates)
+	}
+}
+
+// When the leader is gone the followers are evicted. Their controller
+// replaces each deleted pod at once; a replacement admitted while the
+// failed Lease still exists becomes a follower of an election nobody can
+// finish. Retiring the Lease first makes the replacement start a new
+// election instead, so no gated pod is ever left without one.
+func TestElectionRelease_EvictRetiresLeaseBeforeDeletingFollowers(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	kc := fake.NewSimpleClientset(gatedFollower("f1", true), gatedFollower("f2", true), electionLease("L", now.Add(time.Hour)))
+	leaseGVR := coordinationv1.SchemeGroupVersion.WithResource("leases")
+	podGVR := corev1.SchemeGroupVersion.WithResource("pods")
+	n := 0
+	// The ReplicaSet and the webhook, reacting to each follower deletion:
+	// the replacement is a gated follower while the Lease exists, and the
+	// new leader (with a new Lease) once it is gone. Reactors run under
+	// the fake's lock, so this talks to the tracker directly.
+	kc.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		n++
+		name := fmt.Sprintf("repl-%d", n)
+		if _, err := kc.Tracker().Get(leaseGVR, "nvsnap-system", election.LeaseName(electTestHash)); err == nil {
+			return false, nil, kc.Tracker().Create(podGVR, gatedFollower(name, true), "fn")
+		}
+		lead := leaderPod(corev1.PodPending)
+		lead.Name = name
+		if err := kc.Tracker().Create(podGVR, lead, "fn"); err != nil {
+			return false, nil, err
+		}
+		return false, nil, kc.Tracker().Create(leaseGVR, electionLease("new", now.Add(time.Hour)), "nvsnap-system")
+	})
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog(), now: func() time.Time { return now }}
+	r.reconcile(context.Background()) // leader pod "L" does not exist: evict
+	if left := gatedWithoutLease(t, kc); len(left) > 0 {
+		t.Errorf("gated followers left with no election: %v", left)
+	}
+}
+
+// setPromoteState gives the releaser a catalog of promote states by hash.
+func setPromoteState(r *electionReleaser, states map[string]string) {
+	r.promoteState = func(hash string) (string, error) { return states[hash], nil }
+}
+
+// Retiring a failed election must never delete the Lease of a newer one
+// that took the same name: the delete is preconditioned on the failed
+// Lease's UID, and the followers listed for it are then left alone.
+func TestElectionRelease_EvictLeavesNewerElectionAlone(t *testing.T) {
+	failed := electionLease("L", time.Now().Add(-time.Minute))
+	failed.UID = "old"
+	newer := electionLease("N", time.Now().Add(time.Hour))
+	newer.UID = "new"
+	kc := fake.NewSimpleClientset(gatedFollower("f", true), newer)
+	leaseGVR := coordinationv1.SchemeGroupVersion.WithResource("leases")
+	// The API server's precondition check, which the fake does not do.
+	kc.PrependReactor("delete", "leases", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		d := a.(k8stesting.DeleteActionImpl)
+		obj, err := kc.Tracker().Get(leaseGVR, d.GetNamespace(), d.GetName())
+		if err != nil {
+			return false, nil, nil
+		}
+		if pre := d.DeleteOptions.Preconditions; pre != nil && pre.UID != nil && *pre.UID != obj.(*coordinationv1.Lease).UID {
+			return true, nil, apierrors.NewConflict(leaseGVR.GroupResource(), d.GetName(), fmt.Errorf("precondition failed: UID"))
+		}
+		return false, nil, nil
+	})
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog()}
+	if _, err := r.evict(context.Background(), electTestHash, "deadline passed", failed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kc.CoordinationV1().Leases("nvsnap-system").Get(context.Background(), election.LeaseName(electTestHash), metav1.GetOptions{}); err != nil {
+		t.Errorf("the newer election's Lease must survive: %v", err)
+	}
+	if _, err := kc.CoreV1().Pods("fn").Get(context.Background(), "f", metav1.GetOptions{}); err != nil {
+		t.Errorf("followers that may belong to the newer election must not be evicted: %v", err)
+	}
+}
+
+// Gated followers with no election left: the durable promote state
+// decides between release, eviction for re-election, and waiting.
+func TestElectionRelease_ReconcileOrphansByPromoteState(t *testing.T) {
+	for state, want := range map[string]string{
+		"ready":   "released",
+		"failed":  "evicted",
+		"":        "evicted",
+		"writing": "gated",
+	} {
+		kc := fake.NewSimpleClientset(gatedFollower("f", true))
+		r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog()}
+		setPromoteState(r, map[string]string{electTestHash: state})
+		r.reconcile(context.Background())
+		got := "gated"
+		p, err := kc.CoreV1().Pods("fn").Get(context.Background(), "f", metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			got = "evicted"
+		case err != nil:
+			t.Fatal(err)
+		case p.Labels[election.GatedLabel] == "false":
+			got = "released"
+		}
+		if got != want {
+			t.Errorf("promote state %q: follower %s, want %s", state, got, want)
+		}
+	}
 }

@@ -339,7 +339,7 @@ between them. Everything after that first start is a full hit.
 
 | Failure | Effect | Recovery |
 |---|---|---|
-| download Job fails or never completes | Job retries with backoff; readers' wait reaches the deadline | readers download locally (NVMesh) or into the volume (DFS; per-file atomic); the next admission recreates a missing Job |
+| download Job fails or never completes | Job retries with backoff; readers' wait reaches the deadline | hostPath readers download locally; `pvc` readers mount a read-only view and cannot, so on a failed Job the agent records the failure and recreates every waiting reader, which admission then leaves on its own download; the next admission after the record expires recreates a missing Job |
 | volume full | writer's download fails, init restarts | same as above; retention by last use with a size budget is part of this design's follow-up, since a full volume fails every writer |
 | agent down on a reader node (NVMesh) | no bind arrives | wait deadline, local download |
 | writer pod restarts after complete | volume immutable, unaffected | none needed |
@@ -667,7 +667,9 @@ container's last words, with the writer view retired and the primary
 claim kept for the retry. Readers already admitted hold views and wait
 on the completion marker; the Job's node now writes a failure marker
 next to it with the reason, the reader's wait init sees it through the
-view and runs its fallback at once instead of at its deadline, and the
-next writer removes the marker before it downloads. A successful retry
+view and logs the reason, and the agent recreates every waiting reader:
+their landing is a read-only view, so a fallback download cannot run in
+place, and admitted again they see the failure record and keep their own
+download. The next writer removes the marker before it downloads. A successful retry
 clears the failure record. The engine-capture path never saw any of
 this because the agent copies as root.
