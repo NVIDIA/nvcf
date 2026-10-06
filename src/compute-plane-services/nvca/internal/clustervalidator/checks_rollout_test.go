@@ -1153,6 +1153,87 @@ func TestCheckTier1Deployments_PostInstallJudgesTheEnvoyController(t *testing.T)
 	assert.Contains(t, state.Warnings, tier1ControllerUnknown)
 }
 
+// After install only the Envoy Gateway controller that runs the NVCF Gateways
+// is judged: the one in the configured namespace, or one where NVCF's proxies
+// run. Another team's, or a retired one, elsewhere is not, whatever its state.
+// When which controller is NVCF's cannot be told, one that is not Ready
+// leaves the row unknown and never fails it.
+func TestCheckTier1Deployments_JudgesOnlyTheNVCFEnvoyController(t *testing.T) {
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+	t.Setenv(nvcfGatewayNamesEnv, "nvcf/nvcf-gw")
+	deployments := appsv1.SchemeGroupVersion.WithResource("deployments")
+	proxyIn := func(ns string) *appsv1.Deployment {
+		return envoyProxyAt(ns, "envoy-nvcf",
+			map[string]string{owningGatewayNameLabel: "nvcf-gw", owningGatewayNamespaceLabel: "nvcf"}, 2, 2)
+	}
+	controllerIn := func(ns string, ready int32) *appsv1.Deployment {
+		c := envoyController(ns)
+		c.Status.ReadyReplicas = ready
+		return c
+	}
+	// run holds objs in place of the fixture's controller, beside an NVCF
+	// service, and runs Tier-1 after install.
+	run := func(routes dynamic.Interface, objs ...runtime.Object) (*ValidationState, string) {
+		client := gatewayDiscoveryClient(gatewayAPIGroup+"/v1/httproutes", gatewayAPIGroup+"/v1/gateways",
+			gatewayAPIGroup+"/v1/gatewayclasses")
+		require.NoError(t, client.Tracker().Delete(deployments, envoyGatewayNamespace, "envoy-gateway"))
+		for _, o := range append(objs, nvcfAPI()) {
+			require.NoError(t, client.Tracker().Add(o))
+		}
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{Log: logrus.NewEntry(l), PostInstall: true}
+		checkTier1Deployments(context.Background(), client, routes, state)
+		return state, buf.String()
+	}
+	nvcfGateway := func() dynamic.Interface {
+		return envoyGatewayClient(t, gatewayObject("nvcf", "nvcf-gw", "eg"))
+	}
+
+	// team-b's retired Envoy Gateway sits at 0/1 beside NVCF's, which runs
+	// the NVCF proxy.
+	state, log := run(nvcfGateway(), controllerIn(envoyGatewayNamespace, 1), controllerIn("team-b-envoy", 0),
+		proxyIn(envoyGatewayNamespace))
+	require.NotNil(t, state.Tier1DeploymentsOK, log)
+	assert.True(t, *state.Tier1DeploymentsOK, log)
+	assert.Contains(t, log, "team-b-envoy/envoy-gateway")
+	assert.NotContains(t, strings.Join(state.Warnings, "; "), "team-b-envoy")
+
+	state, log = run(nvcfGateway(), controllerIn(envoyGatewayNamespace, 0), controllerIn("team-b-envoy", 1),
+		proxyIn(envoyGatewayNamespace))
+	require.NotNil(t, state.Tier1DeploymentsOK, log)
+	assert.False(t, *state.Tier1DeploymentsOK, "NVCF's own controller is down")
+
+	// The namespace the launcher named holds NVCF's controller, wherever the
+	// proxies run.
+	t.Setenv(envoyGatewayNamespaceEnv, "eg-pinned")
+	state, log = run(nvcfGateway(), controllerIn("eg-pinned", 0), proxyIn("nvcf"))
+	require.NotNil(t, state.Tier1DeploymentsOK, log)
+	assert.False(t, *state.Tier1DeploymentsOK, "the configured namespace's controller is down")
+	t.Setenv(envoyGatewayNamespaceEnv, "")
+
+	// GatewayNamespace mode runs the proxy beside its Gateway, so no
+	// controller's namespace says which is NVCF's. One that is not Ready
+	// leaves the row unknown; all Ready, whichever is NVCF's is Ready.
+	state, log = run(nvcfGateway(), controllerIn(envoyGatewayNamespace, 1), controllerIn("team-b-envoy", 0),
+		proxyIn("nvcf"))
+	assert.Nil(t, state.Tier1DeploymentsOK, log)
+	assert.Contains(t, state.Warnings, tier1ControllerUndecided)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "team-b-envoy/envoy-gateway")
+	state, log = run(nvcfGateway(), controllerIn(envoyGatewayNamespace, 1), controllerIn("team-b-envoy", 1),
+		proxyIn("nvcf"))
+	require.NotNil(t, state.Tier1DeploymentsOK, log)
+	assert.True(t, *state.Tier1DeploymentsOK, log)
+
+	// With no NVCF Gateway found after install, whether Envoy Gateway runs
+	// one is unknown, so a controller that is not Ready leaves the row unknown.
+	t.Setenv(nvcfGatewayNamesEnv, "")
+	state, log = run(routeClient(), controllerIn(envoyGatewayNamespace, 0))
+	assert.Nil(t, state.Tier1DeploymentsOK, log)
+	assert.Contains(t, state.Warnings, tier1ControllerUndecided)
+}
+
 // Tier-1 judges the Envoy Gateway controller as it is when Tier-1 runs, not
 // as the Envoy row saw it minutes earlier, before the External LB row and the
 // node-to-node probe: one that went down since fails, and one that came back

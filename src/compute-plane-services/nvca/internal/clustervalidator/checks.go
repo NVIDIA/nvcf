@@ -4132,12 +4132,23 @@ func (o *gatewayOwnership) envoyNotApplicable(ctx context.Context) string {
 // envoyRuns returns the NVCF Gateways Envoy Gateway is seen to run, none when
 // that cannot be told.
 func (o *gatewayOwnership) envoyRuns(ctx context.Context) []string {
-	if o.err != nil || len(o.gateways) == 0 {
-		return nil
+	runs, _ := o.envoyRunsKnown(ctx)
+	return runs
+}
+
+// envoyRunsKnown returns, after install, the NVCF Gateways Envoy Gateway runs,
+// or why that cannot be told: the NVCF Gateways or their GatewayClasses could
+// not be read, or no NVCF Gateway was found.
+func (o *gatewayOwnership) envoyRunsKnown(ctx context.Context) ([]string, error) {
+	if o.err != nil {
+		return nil, o.err
+	}
+	if len(o.gateways) == 0 {
+		return nil, errNoNVCFGatewaysPostInstall
 	}
 	impls, err := o.implementations(ctx)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var runs []string
 	for _, e := range o.gateways.sorted() {
@@ -4145,7 +4156,7 @@ func (o *gatewayOwnership) envoyRuns(ctx context.Context) []string {
 			runs = append(runs, e)
 		}
 	}
-	return runs
+	return runs, nil
 }
 
 // envoyControllers returns the Envoy Gateway controller pods and the
@@ -4757,8 +4768,8 @@ func stackOwned(ns string, obj metav1.Object) bool {
 
 // checkTier1DeploymentsFor verifies that every NVCF Deployment in the
 // control-plane namespaces, every Envoy proxy of an NVCF Gateway wherever it
-// runs, and after install the Envoy Gateway controller, has all its pods
-// Ready. Any under-replicated one means HA headroom is gone and a second
+// runs, and after install the Envoy Gateway controller that runs the NVCF
+// Gateways, has all its pods Ready. Any under-replicated one means HA headroom is gone and a second
 // failure causes a full outage.
 //
 // The check is generic; no hardcoded Deployment names. New services added to
@@ -4778,8 +4789,10 @@ func checkTier1DeploymentsFor(
 	for _, ns := range scan.namespaces {
 		scan.scanNamespace(ctx, client, ns)
 	}
-	scan.assessEnvoyController(ctx)
+	// The proxies come first: where NVCF's run tells which controller is
+	// NVCF's.
 	scan.assessProxies(ctx, client)
+	scan.assessEnvoyController(ctx)
 	proxiesUnobserved := scan.reportProxyAttribution()
 	coverageUndecided := scan.checkGatewayCoverage(ctx)
 	scan.verdict(proxiesUnobserved, coverageUndecided)
@@ -4806,11 +4819,15 @@ type tier1Scan struct {
 	// Deployment, and controllerErr is why it could not be read.
 	// controllerMissing says no controller Deployment exists for the NVCF
 	// Gateways Envoy Gateway runs; controllerUnconfirmed, that the Gateways it
-	// was missing for were found only from the NVCF routes.
+	// was missing for were found only from the NVCF routes. controllerUndecided
+	// holds the controllers not Ready when which one is NVCF's could not be
+	// told, and nvcfProxyNamespaces where NVCF's proxies run.
 	judgeController       bool
 	controllerErr         error
 	controllerMissing     []string
 	controllerUnconfirmed bool
+	controllerUndecided   []string
+	nvcfProxyNamespaces   map[string]bool
 	dates                 *rolloutDating
 
 	underReplicated []string
@@ -4851,6 +4868,7 @@ func newTier1Scan(own *gatewayOwnership, state *ValidationState) *tier1Scan {
 		namespaces:            controlPlaneNamespaceSet(),
 		proxyOnly:             map[string]bool{},
 		shared:                sharedTier1Namespaces(),
+		nvcfProxyNamespaces:   map[string]bool{},
 		noGatewaysPostInstall: own.err == nil && len(own.gateways) == 0 && state.PostInstall,
 	}
 	for _, ns := range own.gateways.namespaces() {
@@ -4896,7 +4914,7 @@ func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 		case isEnvoyProxy(d.Labels), s.proxyOnly[ns]:
 			// Proxies are assessed with every other proxy, wherever they run.
 		case s.judgeController && isEnvoyController(d.Labels):
-			// Judged with every controller Deployment, wherever it runs.
+			// Judged apart, where NVCF's controller is told from the others.
 		case s.shared[ns] && !stackOwned(ns, d):
 			s.notAssessed = append(s.notAssessed, ns+"/"+d.Name)
 		default:
@@ -4913,6 +4931,13 @@ func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 // changes and every new or restarted proxy go unprogrammed. Before install
 // the non-critical Envoy row alone reports it, since the stack does not
 // install it.
+//
+// Only NVCF's controller is judged, and only when Envoy Gateway runs an NVCF
+// Gateway: the controller in the configured namespace, or one where an NVCF
+// proxy runs, since Envoy Gateway creates the proxies of the Gateways it runs
+// in its own namespace. Another team's controller, or a retired one, elsewhere
+// is not. When none can be told to be NVCF's, one that is not Ready leaves
+// the row unknown: it may be another team's.
 func (s *tier1Scan) assessEnvoyController(ctx context.Context) {
 	if !s.judgeController {
 		return
@@ -4923,12 +4948,64 @@ func (s *tier1Scan) assessEnvoyController(ctx context.Context) {
 		s.warn(readFailure("the Envoy Gateway controller", err))
 		return
 	}
-	for i := range deploys {
-		s.assess(deploymentReadiness(&deploys[i], s.dates))
-	}
 	if len(deploys) == 0 {
 		s.noController(ctx)
+		return
 	}
+	runs, unknown := s.own.envoyRunsKnown(ctx)
+	if unknown == nil && len(runs) == 0 {
+		return
+	}
+	pinned := strings.TrimSpace(os.Getenv(envoyGatewayNamespaceEnv)) != ""
+	var others []*appsv1.Deployment
+	judged := false
+	for i := range deploys {
+		d := &deploys[i]
+		if unknown == nil && (pinned || s.nvcfProxyNamespaces[d.Namespace]) {
+			s.assess(deploymentReadiness(d, s.dates))
+			judged = true
+		} else {
+			others = append(others, d)
+		}
+	}
+	if judged {
+		if len(others) > 0 {
+			var refs []string
+			for _, d := range others {
+				refs = append(refs, d.Namespace+"/"+d.Name)
+			}
+			printInfo(s.log, fmt.Sprintf("  Not assessed: Envoy Gateway controller(s) %s, which run no NVCF "+
+				"proxy", strings.Join(refs, ", ")))
+		}
+		return
+	}
+	s.assessUndecidedControllers(others, unknown)
+}
+
+// assessUndecidedControllers judges Envoy Gateway controllers none of which
+// could be told to be NVCF's. A Ready one says nothing bad about the tier
+// whoever owns it; one that is not Ready leaves the row unknown. unknown is
+// why Envoy Gateway's NVCF Gateways could not be told, nil when they could
+// but no controller runs where their proxies do.
+func (s *tier1Scan) assessUndecidedControllers(deploys []*appsv1.Deployment, unknown error) {
+	for _, d := range deploys {
+		r := deploymentReadiness(d, s.dates)
+		if !r.healthy() {
+			s.controllerUndecided = append(s.controllerUndecided, r.String())
+			continue
+		}
+		s.assess(r)
+	}
+	if len(s.controllerUndecided) == 0 {
+		return
+	}
+	why := "no controller runs in a namespace with an NVCF proxy; set clusterValidator.envoyGatewayNamespace " +
+		"(env " + envoyGatewayNamespaceEnv + ") to the namespace of the one that runs the NVCF Gateways"
+	if unknown != nil {
+		why = fmt.Sprintf("whether Envoy Gateway runs an NVCF Gateway is unknown: %v", unknown)
+	}
+	s.warn(fmt.Sprintf("Envoy Gateway controller(s) not Ready, and whether they run the NVCF Gateways could not "+
+		"be told: %s (%s)", strings.Join(s.controllerUndecided, ", "), why))
 }
 
 // noController reports that no Envoy Gateway controller Deployment exists
@@ -5203,6 +5280,9 @@ func (s *tier1Scan) assessProxy(ctx context.Context, p *envoyProxy) {
 		return
 	}
 	credited, decided := s.own.creditedEntries(ctx, entries, p.namespace)
+	if known && !s.noGatewaysPostInstall && decided && len(credited) > 0 {
+		s.nvcfProxyNamespaces[p.namespace] = true
+	}
 	switch {
 	case !known || s.noGatewaysPostInstall || !decided:
 		// Ready, or a tolerated rollout, says nothing bad about the tier
@@ -5393,6 +5473,8 @@ const (
 	tier1ControllerUnknown     = "Tier-1 Deployments: status unknown (the Envoy Gateway controller could not be read)"
 	tier1ControllerUnconfirmed = "Tier-1 Deployments: status unknown (no Envoy Gateway controller was found " +
 		"for Gateways found from the NVCF routes)"
+	tier1ControllerUndecided = "Tier-1 Deployments: status unknown (an Envoy Gateway controller is not Ready, " +
+		"and whether it runs the NVCF Gateways could not be told)"
 )
 
 func (s *tier1Scan) deniedWarning() string {
@@ -5423,7 +5505,7 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 	case s.reportFindings():
 		s.setOK(false)
 	case proxiesUnobserved || coverageUndecided || len(s.unread) > 0 || s.controllerErr != nil ||
-		s.controllerUnconfirmed:
+		s.controllerUnconfirmed || len(s.controllerUndecided) > 0:
 		// Something was never observed, so "all ready" is not a claim we can
 		// make even though everything we could see passed.
 		if len(s.unread) > 0 {
@@ -5435,6 +5517,9 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 		}
 		if s.controllerUnconfirmed {
 			s.state.Warnings = append(s.state.Warnings, tier1ControllerUnconfirmed)
+		}
+		if len(s.controllerUndecided) > 0 {
+			s.state.Warnings = append(s.state.Warnings, tier1ControllerUndecided)
 		}
 		if proxiesUnobserved {
 			s.state.Warnings = append(s.state.Warnings, tier1ProxiesUnknown)

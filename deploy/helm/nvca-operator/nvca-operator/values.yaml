@@ -556,7 +556,9 @@ clusterValidator:
   # LoadBalancer check needs an address on each one exposed through a
   # LoadBalancer, and reports no value when all are exposed by NodePort or
   # ClusterIP. Tier-1 needs each one Envoy Gateway runs to have a fully Ready
-  # proxy and, after install, the Envoy Gateway controller to be fully Ready.
+  # proxy and, after install, the Envoy Gateway controller that runs them to
+  # be fully Ready: the one in envoyGatewayNamespace when set, else one in the
+  # namespace of their proxies. Other Envoy Gateway controllers are not judged.
   gatewayNames: []
   # Quorum components the stack runs outside this cluster: any of nats,
   # openbao and cassandra. After install the Tier-2 check reports a known
