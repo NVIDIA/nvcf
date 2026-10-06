@@ -104,6 +104,13 @@ openbao:
       enabled: false
       # Recovery keys replace unseal keys under an auto-unseal seal. They do not
       # unseal; they authorize root regeneration and rekey.
+      #
+      # Required post-init step. The init hook writes all shares into one Secret,
+      # <statefulset>-recovery-keys, so anyone who can read that Secret holds the
+      # full quorum and the threshold below protects nothing against them. After
+      # init, distribute the shares to separate custodians and delete the Secret;
+      # the hook logs the same reminder. Until that is done the threshold is
+      # advisory only.
       recovery:
         shares: 5
         threshold: 3

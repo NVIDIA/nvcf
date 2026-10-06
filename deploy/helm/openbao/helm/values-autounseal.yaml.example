@@ -20,15 +20,36 @@
 # unseal Secret volume. The init hook then initializes with recovery keys.
 #
 # The seal block below uses AWS KMS as a concrete example. For Azure Key Vault,
-# GCP KMS, HashiCorp/OpenBao Transit, or a PKCS#11 HSM, replace just the seal
-# stanza with that provider's block (see the OpenBao seal documentation); the
-# rest of this overlay is identical.
+# GCP KMS, or HashiCorp/OpenBao Transit, replace just the seal stanza with that
+# provider's block (see the OpenBao seal documentation); the rest of this overlay
+# is identical.
+#
+# A PKCS#11 HSM is not a drop-in stanza swap. The seal "pkcs11" block points at
+# the HSM vendor's PKCS#11 library (lib, token_label, key_label), which must be
+# present in the server container. PKCS#11 support itself comes from either an
+# HSM-enabled OpenBao build with PKCS#11 compiled in via cgo, or the external
+# PKCS#11 KMS provider plugin (openbao-plugins). The stock image here ships
+# neither; see the OpenBao pkcs11 seal docs.
 #
 # The server pod needs the provider's unwrap permission on the key, granted out
 # of band. For AWS KMS that is kms:Encrypt, kms:Decrypt and kms:DescribeKey, for
 # example through an EKS Pod Identity or IRSA role. Automatic key rotation is
 # safe where the provider keeps the key id and can still decrypt the previously
 # wrapped root key.
+#
+# Required post-install step, before treating the cluster as production. The init
+# hook stores all recovery shares in one Secret, <statefulset>-recovery-keys.
+# While it exists, any reader of that Secret holds the full recovery quorum, so
+# the shares/threshold below give no protection. Finish the install by exporting
+# the shares, splitting them among separate custodians offline, and deleting the
+# Secret:
+#
+#   kubectl get secret <statefulset>-recovery-keys -n <namespace> \
+#     -o jsonpath='{.data.recovery_keys_b64}' | base64 -d   # then split offline
+#   kubectl delete secret <statefulset>-recovery-keys -n <namespace>
+#
+# Only after the delete does the threshold protect the quorum. deploy.sh logs the
+# same reminder at the end of init.
 
 openbao:
   server:
