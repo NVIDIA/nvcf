@@ -209,6 +209,10 @@ build_base() {
     # (the wrapper that the CRIU plugin actually invokes via PATH).
     cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/cuda-checkpoint-wrapper.sh"
 
+    # gpushare sources (Dockerfile.base's gpushare-builder stage builds
+    # libnvsnap_gpushare.so and nvsnap-gpu-suspend from them).
+    cp -r "${PROJECT_ROOT}/docker/agent/gpushare" "${BUILD_CTX}/gpushare"
+
     # PLATFORMS with a comma builds a multi-arch manifest with buildx and
     # pushes it straight to the registry (multi-platform images cannot be
     # loaded into the local daemon); the CRIU verification below then runs

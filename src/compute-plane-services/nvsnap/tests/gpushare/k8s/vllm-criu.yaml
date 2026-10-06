@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM TP=2 pod that can be CRIU-dumped and restored into a NEW pod.
+# Used by tests/k8s/vllm_criu_migrate.sh; run criu-build.yaml on the node first.
+#
+# vLLM runs with default settings — NCCL cuMem P2P and custom all-reduce
+# (CUDA IPC) between the TP workers — under LD_PRELOAD=libnvsnap_gpushare.so,
+# which releases/re-maps that shared GPU memory around the checkpoint. It is built at start from the ConfigMap:
+#   kubectl create configmap gpushare-src -n <ns> \
+#     --from-file=docker/agent/gpushare/gpushare.c --from-file=docker/agent/gpushare/gpushare.h
+# into the shared node dir, so a restore pod maps the identical file.
+#
+# Differences from vllm-tp2.yaml, each needed for CRIU restore elsewhere:
+#  - CRIU capabilities (SYS_ADMIN, SYS_PTRACE, NET_ADMIN, CHECKPOINT_RESTORE,
+#    SYS_TIME for the restored time namespace offsets).
+#    NOT privileged: that exposes every GPU on the node, not just ours.
+#    AppArmor/seccomp unconfined: the runtime default profile denies the
+#    mount() calls CRIU uses.
+#  - vLLM runs under a bash init (PID 1) with PIDs > 2000, so the restore
+#    pod's own processes (kubectl exec, criu) never occupy the PIDs CRIU
+#    must recreate.
+#  - HOME and TMPDIR on the shared node-local dir: files vLLM keeps open/mapped (model,
+#    compile caches, ipc sockets) must exist identically in the restore pod.
+#  - NCCL/gloo/vLLM on loopback: no socket may depend on the old pod IP.
+#  - No TCP connection may be bound to the pod IP (the new pod has another):
+#    exec readiness probe on localhost instead of an httpGet from the kubelet,
+#    no usage-stats reporting, and the model is fetched by an initContainer
+#    so vLLM runs with HF_HUB_OFFLINE=1 (no lingering HTTPS keep-alives).
+#  - MODE=restore runs only the init; CRIU restores vLLM into it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-criu
+  labels:
+    app: vllm-criu
+spec:
+  restartPolicy: Never
+  initContainers:
+  - name: fetch-model
+    image: vllm/vllm-openai:v0.20.0
+    command: [python3, -c, "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-7B-Instruct')"]
+    env:
+    - {name: HOME, value: /ckpt/home}
+    volumeMounts:
+    - {name: ckpt, mountPath: /ckpt}
+  containers:
+  - name: vllm
+    image: vllm/vllm-openai:v0.20.0
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      mkdir -p "$HOME" "$TMPDIR"
+      if [ "$MODE" = serve ]; then
+        mkdir -p /ckpt/wc
+        gcc -O2 -fPIC -shared -I/ckpt/wc -I/usr/local/cuda/include -o /ckpt/wc/libnvsnap_gpushare.so \
+          /wc-src/gpushare.c -ldl -lpthread || exit 1
+        export LD_PRELOAD=/ckpt/wc/libnvsnap_gpushare.so
+        for i in $(seq 2000); do /bin/true; done  # push vLLM PIDs past 2000
+        vllm serve --model=Qwen/Qwen2.5-7B-Instruct --tensor-parallel-size=2 \
+          --gpu-memory-utilization=0.3 --max-model-len=4096 --port=8000 &
+      fi
+      while true; do wait; sleep 1; done  # reap, and parent restored trees
+    env:
+    - {name: MODE, value: serve}
+    - {name: HOME, value: /ckpt/home}
+    - {name: TMPDIR, value: /ckpt/tmp}
+    - {name: NCCL_SOCKET_IFNAME, value: lo}
+    - {name: GLOO_SOCKET_IFNAME, value: lo}
+    - {name: VLLM_HOST_IP, value: 127.0.0.1}
+    - {name: VLLM_NO_USAGE_STATS, value: "1"}
+    - {name: DO_NOT_TRACK, value: "1"}
+    - {name: HF_HUB_OFFLINE, value: "1"}
+    - {name: PYTHONFAULTHANDLER, value: "1"}
+    ports:
+    - containerPort: 8000
+    readinessProbe:
+      exec:
+        command: [python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      periodSeconds: 5
+      timeoutSeconds: 3
+    resources:
+      requests: {nvidia.com/gpu: 2, cpu: "8", memory: 64Gi}
+      limits: {nvidia.com/gpu: 2, memory: 200Gi}
+    securityContext:
+      capabilities:
+        add: [SYS_ADMIN, SYS_PTRACE, NET_ADMIN, CHECKPOINT_RESTORE, SYS_TIME]
+      appArmorProfile: {type: Unconfined}
+      seccompProfile: {type: Unconfined}
+    volumeMounts:
+    - {name: dshm, mountPath: /dev/shm}
+    - {name: ckpt, mountPath: /ckpt}
+    - {name: wc-src, mountPath: /wc-src}
+  volumes:
+  - name: wc-src
+    configMap: {name: gpushare-src}
+  - name: dshm
+    emptyDir: {medium: Memory, sizeLimit: 16Gi}
+  - name: ckpt
+    # Node-local disk shared by every pod on the node (dump and restore pods
+    # must run on the same node). Remove /var/lib/nvsnap-gpushare when done.
+    hostPath: {path: /var/lib/nvsnap-gpushare, type: DirectoryOrCreate}
