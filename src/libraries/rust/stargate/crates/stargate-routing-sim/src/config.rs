@@ -273,7 +273,38 @@ impl SimConfig {
             bail!("seeds, rates_rps and policies must be non-empty");
         }
         self.engine.validate().map_err(anyhow::Error::msg)?;
+        if !(self.pylon.heartbeat_ms.is_finite() && self.pylon.heartbeat_ms > 0.0) {
+            bail!("pylon.heartbeat_ms must be positive");
+        }
+        if self
+            .workload
+            .rates_rps
+            .iter()
+            .any(|rate| !(rate.is_finite() && *rate > 0.0))
+        {
+            bail!("rates_rps must be positive");
+        }
+        if self
+            .topology
+            .regions
+            .iter()
+            .any(|region| !(region.traffic_weight.is_finite() && region.traffic_weight >= 0.0))
+        {
+            bail!("traffic_weight must be non-negative");
+        }
+        if self
+            .topology
+            .regions
+            .iter()
+            .filter(|region| region.stargates > 0)
+            .all(|region| region.traffic_weight == 0.0)
+        {
+            bail!("regions with Stargates need a positive total traffic_weight");
+        }
         for region in &self.topology.regions {
+            if region.gpu_workers == Some(0) {
+                bail!("region {}: gpu_workers must be positive", region.name);
+            }
             if !(region.backend_speed.is_finite() && region.backend_speed > 0.0) {
                 bail!("region {}: backend_speed must be positive", region.name);
             }

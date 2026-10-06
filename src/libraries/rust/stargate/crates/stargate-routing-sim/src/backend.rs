@@ -91,9 +91,17 @@ impl Backend {
         self.input_phase_requests + self.output_phase_requests
     }
 
-    /// Whether Pylon tracks no live requests or prompt work.
+    /// Whether Pylon tracks no live requests or prompt work and the engine
+    /// holds no sequences.
     pub fn is_idle(&self) -> bool {
-        self.live_requests() == 0 && self.prompt_work_tokens == 0 && self.total_input_tokens == 0
+        self.live_requests() == 0
+            && self.prompt_work_tokens == 0
+            && self.total_input_tokens == 0
+            && self
+                .engine
+                .worker_stats()
+                .iter()
+                .all(|worker| worker.waiting == 0 && worker.running == 0)
     }
 
     /// Pylon queue-estimate mismatch admission. Returns true when Pylon would

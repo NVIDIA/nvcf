@@ -240,7 +240,7 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     simulation.run_to_completion();
     debug_assert!(
         simulation.backends.iter().all(Backend::is_idle),
-        "every resolved request left Pylon"
+        "every resolved request left Pylon and the engine"
     );
     let records = simulation
         .requests
@@ -309,6 +309,7 @@ impl Simulation<'_> {
             self.now = next.at;
             self.handle(next.event);
         }
+        debug_assert_eq!(self.unresolved, 0, "every request resolved");
     }
 
     fn handle(&mut self, event: Event) {
@@ -855,26 +856,38 @@ mod tests {
         config
     }
 
-    fn assert_runs_resolve_every_request(config: &SimConfig, rate_rps: f64) {
-        for policy in &config.policies {
-            let summary = run(&RunSpec {
-                config,
-                policy,
-                rate_rps,
-                seed: 1,
+    /// Runs every policy and checks that each measured request has exactly
+    /// one outcome.
+    fn run_policies(config: &SimConfig, rate_rps: f64) -> Vec<RunSummary> {
+        config
+            .policies
+            .iter()
+            .map(|policy| {
+                let summary = run(&RunSpec {
+                    config,
+                    policy,
+                    rate_rps,
+                    seed: 1,
+                })
+                .expect("run completes");
+                assert!(summary.offered > 0, "{}", policy.name);
+                assert_eq!(
+                    summary.succeeded
+                        + summary.failed_no_route
+                        + summary.failed_retries_exhausted
+                        + summary.failed_timeout,
+                    summary.offered,
+                    "{}: every measured request has one outcome",
+                    policy.name
+                );
+                summary
             })
-            .expect("run completes");
-            assert!(summary.offered > 0, "{}", policy.name);
-            assert_eq!(
-                summary.succeeded
-                    + summary.failed_no_route
-                    + summary.failed_retries_exhausted
-                    + summary.failed_timeout,
-                summary.offered,
-                "{}: every measured request has one outcome",
-                policy.name
-            );
-            assert!(summary.goodput_rps > 0.0, "{}", policy.name);
+            .collect()
+    }
+
+    fn assert_runs_resolve_every_request(config: &SimConfig, rate_rps: f64) {
+        for summary in run_policies(config, rate_rps) {
+            assert!(summary.goodput_rps > 0.0, "{}", summary.policy);
         }
     }
 
@@ -902,6 +915,60 @@ mod tests {
             }
         }));
         assert_runs_resolve_every_request(&config, 60.0);
+    }
+
+    #[test]
+    fn short_client_timeouts_cancel_engine_work_and_retry_turns() {
+        let mut config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
+            "growing": {
+                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
+                "output_tokens_min": 16, "output_tokens_max": 64,
+                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
+                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
+            }
+        }));
+        config.client.timeout_ms = 250;
+        config.client.max_wait_ms = Some(100);
+        let summaries = run_policies(&config, 60.0);
+        // The debug assertions in `run` check that every cancelled request
+        // also left Pylon and the engine.
+        for summary in &summaries {
+            assert!(summary.failed_timeout > 0, "{}", summary.policy);
+            assert!(summary.retried_requests > 0, "{}", summary.policy);
+        }
+        assert!(
+            summaries
+                .iter()
+                .any(|summary| summary.abandoned_sessions > 0)
+        );
+    }
+
+    #[test]
+    fn configs_that_would_hang_or_misroute_are_rejected() {
+        let valid = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 0.0, "measure_s": 1.0,
+            "fixed": {"sessions": 1, "input_tokens_min": 1, "input_tokens_max": 1, "output_tokens": 1}
+        }));
+        type Breakage = (&'static str, fn(&mut SimConfig));
+        let breakages: [Breakage; 4] = [
+            ("heartbeat_ms", |config| config.pylon.heartbeat_ms = 0.0),
+            ("rates_rps", |config| config.workload.rates_rps = vec![-1.0]),
+            ("traffic_weight", |config| {
+                for region in &mut config.topology.regions {
+                    region.traffic_weight = 0.0;
+                }
+            }),
+            ("gpu_workers", |config| {
+                config.topology.regions[0].gpu_workers = Some(0);
+            }),
+        ];
+        for (field, break_config) in breakages {
+            let mut config = valid.clone();
+            break_config(&mut config);
+            let error = config.validate().expect_err(field);
+            assert!(error.to_string().contains(field), "{field}: {error}");
+        }
     }
 
     #[test]
